@@ -27,10 +27,10 @@ import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } fro
 /** The time limit of one ask, in minutes (the contract's "Limits"). */
 export const TIME_LIMIT = Object.freeze({ default: 30, min: 1, max: 120 })
 /** The app's raw output over which a run fails, and the answer kept. */
-export const OUTPUT_LIMIT = 64 * 1024 * 1024
+const OUTPUT_LIMIT = 64 * 1024 * 1024
 export const ANSWER_LIMIT = 1024 * 1024
 /** What OpenCode recorded of an ask's sessions, read after the run (72.5): their info alone, never their messages. */
-export const OPENCODE_SESSION_INFO = 'session-info.json'
+const OPENCODE_SESSION_INFO = 'session-info.json'
 /** Each final state and its exit code (the contract's "Exit codes"). */
 export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, interrupted: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
 /**
@@ -70,7 +70,7 @@ const fileHash = (path) => {
  * The project's commit and whether its tree is clean, as Git says it, read without taking Git's
  * optional locks so the reading writes nothing (R72-FR5, 72.9 AC6). Null fields where Git cannot say.
  */
-export function projectState(root, { now = new Date() } = {}) {
+function projectState(root, { now = new Date() } = {}) {
   const git = (args) => spawnSync('/usr/bin/git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-C', root, ...args], {
     encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024, env: { PATH: '/usr/bin:/bin', HOME: homedir(), GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' }
   })
@@ -88,7 +88,7 @@ export function projectState(root, { now = new Date() } = {}) {
  * its folder, the prompt and the message on standard input, the inputs' manifest and each picture it
  * names, and BMN's git where the form runs it, each against the receipt's hashes.
  */
-export function judgedChange(prepared) {
+function judgedChange(prepared) {
   const receipt = prepared.verdict.receipt
   const folder = prepared.folder
   if (sha256(canonicalJson(prepared.argv)) !== receipt.argv_sha256) return 'the command is not the one the check judged'
@@ -114,7 +114,7 @@ export function judgedChange(prepared) {
  * saw them, then everything `judgedChange` compares. The start calls it, and the supervisor again
  * immediately before the app (72.3 AC1).
  */
-export function startChange(prepared) {
+function startChange(prepared) {
   const receipt = prepared.verdict.receipt
   let generation
   try {
@@ -795,7 +795,7 @@ export function stopAsk(folder) {
 // The export
 
 /** What an export carries (the contract's record table): never the app's raw error stream or a session record of the app's own. */
-export const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'project-start.json', 'browser.json', 'browser', 'answer.md', 'outcome.json'])
+const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'project-start.json', 'browser.json', 'browser', 'answer.md', 'outcome.json'])
 
 /** The launch with every environment value the app is given left out: names only. */
 function launchWithoutValues(launch) {

@@ -16,7 +16,7 @@ export interface TelegramFormFields {
   healthAlerts?: TelegramHealthAlerts
 }
 
-export type TelegramFormResult = { ok: true; value: TelegramSettings } | { ok: false; message: string }
+type TelegramFormResult = { ok: true; value: TelegramSettings } | { ok: false; message: string }
 
 type OptionalIntegerResult = { ok: true; value: number | null } | { ok: false; message: string }
 

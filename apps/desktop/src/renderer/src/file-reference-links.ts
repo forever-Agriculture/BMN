@@ -22,7 +22,7 @@ export interface LinkBuffer {
 /** Rows joined above and below the requested one; a longer wrapped line is not read further. */
 const MAX_WRAPPED_ROWS = 16
 
-export interface FileReferenceLink {
+interface FileReferenceLink {
   text: string
   range: IBufferRange
 }
@@ -67,7 +67,7 @@ export function fileReferenceLinks(buffer: LinkBuffer, row: number): FileReferen
   })
 }
 
-export interface FileReferenceLinkHost {
+interface FileReferenceLinkHost {
   buffer(): LinkBuffer
   /** False while the program reads the mouse (vim, htop): clicks belong to it and links stay off. */
   enabled(): boolean
@@ -75,7 +75,7 @@ export interface FileReferenceLinkHost {
   open(reference: string): void
 }
 
-export interface FileReferenceLinkProvider extends ILinkProvider {
+interface FileReferenceLinkProvider extends ILinkProvider {
   /** Ctrl went down or up: show or hide the hovered link's underline and pointer. */
   modifierChanged(held: boolean): void
   /** A mouse button went down in the terminal; each press opens at most one file. */

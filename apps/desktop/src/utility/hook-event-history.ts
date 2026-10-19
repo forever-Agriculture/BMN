@@ -7,7 +7,7 @@ import { HOOK_EVENT_EFFECTS, HOOK_EVENT_LOG_LIMIT, HOOK_EVENT_RECORD_AGENTS, typ
 
 export const HOOK_HISTORY_FILE = 'hook-events.json'
 export const HOOK_HISTORY_MAX_BYTES = 1024 * 1024
-export const HOOK_HISTORY_MAX_ROWS = 1024
+const HOOK_HISTORY_MAX_ROWS = 1024
 const EVENTS = new Set(['other', 'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
   'PermissionRequest', 'Notification', 'Stop', 'SubagentStop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact',
   'sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd', 'session.created', 'session.idle',

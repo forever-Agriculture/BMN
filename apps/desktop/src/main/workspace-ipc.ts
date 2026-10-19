@@ -39,7 +39,7 @@ interface WorkspaceIpcRegistrar {
   handle(channel: string, listener: (event: IpcMainInvokeEvent, params?: unknown) => unknown): void
 }
 
-export interface WorkspaceIpcActions {
+interface WorkspaceIpcActions {
   client(): WorkspaceHostClient
   createSession(params: unknown): Promise<unknown>
 }

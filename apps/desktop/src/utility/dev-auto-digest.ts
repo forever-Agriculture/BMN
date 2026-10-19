@@ -21,7 +21,7 @@ const decisionPrint = (run: DevAutoRunsResult['runs'][number], index: number): s
 interface RunFingerprint { path: string; status: string; finished: boolean; decisions: string[] }
 interface DigestState { version: 1; day: string | null; runs: RunFingerprint[] }
 export interface DigestSnapshot { result: DevAutoRunsResult; workspaceNames: Record<string, string> }
-export interface DigestDependencies {
+interface DigestDependencies {
   read(): Promise<unknown>
   write(value: unknown): Promise<void>
   settings(): TelegramMorningDigest

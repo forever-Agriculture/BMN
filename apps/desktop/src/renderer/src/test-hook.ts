@@ -3,7 +3,7 @@ import type { FileReferenceFlowProbe } from './file-reference-probe'
 import type { ProgressEvidenceProbe } from './progress-evidence-probe'
 import type { VoiceFlowProbe } from './voice-probe'
 
-export interface TerminalTestSnapshot {
+interface TerminalTestSnapshot {
   bufferLines: string[]
   cols: number
   rows: number
@@ -30,7 +30,7 @@ export interface TerminalTestSnapshot {
 }
 
 /** Where a view's images sit: buffer lines holding an image cell, and the cells they are cut into. */
-export interface TerminalImageCells {
+interface TerminalImageCells {
   lines: number[]
   cssCellHeight: number
   deviceCellHeight: number
@@ -39,7 +39,7 @@ export interface TerminalImageCells {
 }
 
 /** Test-only reads and actions a view offers beyond its snapshot. */
-export interface TerminalViewProbe {
+interface TerminalViewProbe {
   imageCells(): TerminalImageCells
   /** Selects a buffer range as a user drag would and returns the selected text. */
   select(column: number, row: number, length: number): string
@@ -130,7 +130,7 @@ export interface TerminalIntegrationProbe {
   voiceFlow: VoiceFlowProbe
 }
 
-export interface TerminalTestHook {
+interface TerminalTestHook {
   snapshot(sessionId?: string): TerminalTestSnapshot
   snapshots(): Record<string, TerminalTestSnapshot>
   sixelFixture(sessionId: string): Promise<{ storageMB: number; layer: boolean }>
@@ -142,7 +142,7 @@ interface TerminalLine {
   translateToString(trimRight?: boolean): string
 }
 
-export interface TestableTerminal {
+interface TestableTerminal {
   cols: number
   rows: number
   modes: {

@@ -37,7 +37,7 @@ export function readsWords(reads: TeamAskLine['reads'], data: 'public' | 'privat
 }
 
 /** One page a browser ask visited: its address and the title the app gave it, both the app's own text. */
-export function pageWords(page: NonNullable<TeamAskDetail['browser']>['pages'][number]): string {
+function pageWords(page: NonNullable<TeamAskDetail['browser']>['pages'][number]): string {
   return page.title === null || page.title === '' ? page.url : `${page.url} · ${page.title}`
 }
 
@@ -67,7 +67,7 @@ export function shortTook(ms: number): string {
 }
 
 /** "2 minutes 4 seconds": the opened ask's time. */
-export function longTook(ms: number): string {
+function longTook(ms: number): string {
   const seconds = Math.max(1, Math.round(ms / 1000))
   const minutes = Math.floor(seconds / 60)
   if (minutes === 0) return plural(seconds, 'second')
@@ -81,7 +81,7 @@ export function elapsedMs(line: TeamAskLine): number | null {
   return Number.isFinite(started) && Number.isFinite(until) ? Math.max(0, until - started) : null
 }
 
-export function billingWords(billing: string): string {
+function billingWords(billing: string): string {
   return billing === 'subscription' ? 'subscription' : billing === 'per_token' ? 'paid per token' : 'billing unknown'
 }
 
@@ -117,7 +117,7 @@ export function sizeWords(bytes: number | null): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`
 }
 
-export interface TeamAsksState {
+interface TeamAsksState {
   snapshot: TeamAsksSnapshot | null
   loadError: string | null
   /** A Stop, a removal or an export is on its way. */

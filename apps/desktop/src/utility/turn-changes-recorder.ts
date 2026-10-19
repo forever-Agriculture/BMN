@@ -49,7 +49,7 @@ export interface TurnObservation {
   nested: boolean
 }
 
-export interface TurnRecorderDatabase {
+interface TurnRecorderDatabase {
   putTurn: (input: { turn: TurnRow; captures?: TurnCaptureRow[] }) => Promise<unknown>
   nextTurnNumber: (sessionId: string) => Promise<number>
   listUnclosedTurns: () => Promise<TurnRow[]>
@@ -80,7 +80,7 @@ export interface TurnRecorderOptions {
 }
 
 /** The pauses kept on disk: by session, then by the work tree's key. */
-export type KeptTurnPauses = Record<string, Record<string, TurnPause>>
+type KeptTurnPauses = Record<string, Record<string, TurnPause>>
 
 interface LiveTurn {
   row: TurnRow
@@ -133,7 +133,7 @@ interface SessionTurns {
 }
 
 /** A pause of one work tree: why, when the next eligible turn is scanned as its probe, and how many probes it had. */
-export interface TurnPause {
+interface TurnPause {
   reason: TurnPauseReason
   retryAt: number
   probes: number

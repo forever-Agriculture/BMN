@@ -17,7 +17,7 @@ export function terminalSurfaceClass(savedOutputOpen: boolean): string {
     : 'terminal-surface'
 }
 
-export type SavedOutputContent =
+type SavedOutputContent =
   | { kind: 'captured'; presentation: SavedOutputPresentation }
   | { kind: 'never-captured'; message: typeof NEVER_CAPTURED_MESSAGE | typeof SELECT_CAPTURE_MESSAGE }
 

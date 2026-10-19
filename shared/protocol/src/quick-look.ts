@@ -70,7 +70,7 @@ export type QuickLookSaveResult =
   | { status: 'failed'; message: string }
 
 /** What is known about a file that is not shown as text. */
-export interface QuickLookFileFacts {
+interface QuickLookFileFacts {
   byteLength: number
   modifiedAt: string
 }

@@ -23,7 +23,7 @@ function megabytes(bytes: number): string {
   return `${Math.round(bytes / 1_000_000)} MB`
 }
 
-export type VocabularySuggestion = { ok: true; words: string[] } | { ok: false; reason: string }
+type VocabularySuggestion = { ok: true; words: string[] } | { ok: false; reason: string }
 
 /** A suggested word the owner can edit before approving; a refused edit keeps its text and shows why. */
 interface Candidate {

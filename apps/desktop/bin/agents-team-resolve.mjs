@@ -27,7 +27,7 @@ const refuse = (code, message, alternatives) => {
  * can run this ask (`proven`, or the words of why not: pictures it is not given, a missing sign-in); `context.allowed(agent)`
  * whether it may get this data (`{ allowed, reason }`).
  */
-export function notEligible(data, role, agent, context) {
+function notEligible(data, role, agent, context) {
   if (agent === undefined) return 'is not on the approved team'
   const state = agentState(agent)
   if (state !== 'active') return `is ${state}`
@@ -43,7 +43,7 @@ export function notEligible(data, role, agent, context) {
 }
 
 /** The efforts an agent may be asked at in a phase of a role. */
-export function phaseEfforts(role, agent, phase) {
+function phaseEfforts(role, agent, phase) {
   if (phase === 'recheck' && role.recheck !== undefined && Object.hasOwn(role.recheck, agent.id) && agent.id !== 'same_reviewer') return [role.recheck[agent.id]]
   if (phase === 'small-work') {
     const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
@@ -67,7 +67,7 @@ function pickEffort(efforts, asked, agent, phase) {
 }
 
 /** The role's candidates that could answer this ask now, each as `id@effort|effort`. */
-export function alternatives(data, role, context) {
+function alternatives(data, role, context) {
   const byId = new Map(data.agents.map((agent) => [agent.id, agent]))
   const texts = [...role.candidates, ...(role.small_work === undefined ? [] : [role.small_work])]
   const seen = new Set()

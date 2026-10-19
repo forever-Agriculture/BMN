@@ -18,7 +18,7 @@ export interface SpaceHoldHost {
   stopTalking(): void
 }
 
-export interface SpaceHold {
+interface SpaceHold {
   /**
    * `sessionId` is the live session whose terminal has focus and allows hold to talk, or null to leave Space alone.
    * Returns true when the event must not reach the terminal.

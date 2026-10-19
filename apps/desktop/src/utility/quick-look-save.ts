@@ -14,7 +14,7 @@ import {
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf])
 
-export interface QuickLookSaveSeams {
+interface QuickLookSaveSeams {
   /** Runs with the new text staged, before the last check and the rename; tests change the target here. */
   beforeRename?: () => Promise<void> | void
   /** The user the file must belong to; the process's own otherwise. */

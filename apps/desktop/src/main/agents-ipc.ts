@@ -96,7 +96,7 @@ interface AgentsIpcRegistrar {
   handle(channel: `aiterm:${string}`, listener: (event: IpcMainInvokeEvent, params?: unknown) => unknown): void
 }
 
-export interface AgentsIpcOptions {
+interface AgentsIpcOptions {
   senderIsAllowed(event: IpcMainInvokeEvent): boolean
   /** The bmn CLI script the Rules section runs for check, install, restore and probe. */
   cliScript(): string
@@ -259,7 +259,7 @@ function versionSummary(entry: AgentsSnapshot['history'][number]): string | unde
 }
 
 /** Everything the Team pages show, read fresh from the roster file and approved state. */
-export function agentsSnapshot(): AgentsSnapshot {
+function agentsSnapshot(): AgentsSnapshot {
   const path = rosterPath()
   let text: string | null
   try {
@@ -477,7 +477,7 @@ function renderAll(path: string, text: string, generation: Generation | null): R
   })
 }
 
-export interface RulesIpcContext {
+interface RulesIpcContext {
   script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date
   /** Why the shell's settings could not be read, when BMN's own environment stands in for them. */
   ownEnvironment?: string
@@ -713,7 +713,7 @@ async function rulesHealth(context: RulesIpcContext): Promise<RulesSnapshot['hea
   return { state: 'checked', checkedAt, ok: report.ok, targets }
 }
 
-export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnapshot> {
+async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnapshot> {
   const path = masterPath()
   let text: string | null
   let savedAt: string | null = null
@@ -768,7 +768,7 @@ function andList(names: readonly string[]): string {
  * Story 75.9: what a save says, a failure first: "Codex not written: … · Saved and installed to Claude Code and OpenCode".
  * A save of the same text writes only the apps' files, and says Installed.
  */
-export function savedWords(result: Pick<SaveResult, 'written' | 'failed' | 'blocked' | 'master'>): string {
+function savedWords(result: Pick<SaveResult, 'written' | 'failed' | 'blocked' | 'master'>): string {
   const failures = [
     ...result.failed.map((entry) => `${ROSTER_APP_NAMES[entry.harness]} not written: ${entry.message}`),
     ...result.blocked.map((entry) => `${ROSTER_APP_NAMES[entry.harness]} not written: ${entry.reason}`)
@@ -794,7 +794,7 @@ function savePlanFrom(result: SavePlan, text: string, generation: Generation | n
 }
 
 /** What `hooks install --absent --json` printed, as Health › Hooks shows it; a report BMN cannot read is a failed check. */
-export function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
+function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
   const report = parseJson(result.stdout)
   const failed = (reason: string): HooksAtStart => ({ state: 'failed', checkedAt, reason })
   if (result.failed) return failed(`The hook install ${result.failed}`)

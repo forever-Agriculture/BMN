@@ -7,18 +7,11 @@ export declare const LINE: number
 export declare const NEAR: number
 export declare const NO_ANSWER: 'no answer'
 export declare const SYSTEM_ONE_PATH: string
-export declare const DEADLINE_MS: number
-export declare const DEADLINE_MAX_MS: number
 export declare const MAX_CHOICES: number
-export declare const MIN_LEVELS: number
 export declare const MAX_LEVELS: number
 export declare const STATE_MAX_BYTES: number
-export declare const REQUEST_MAX_BYTES: number
-export declare const MAX_QUESTIONS: number
 export declare const CALLS_KEPT: number
-export declare const NO_PURPOSE: string
 export declare const EXIT: { ok: 0; usage: 2; refusal: 10; timeout: 11; failed: 12; shape: 13 }
-export declare const JUDGE_USAGE: string
 
 export type JudgeQuestion =
   | { type: 'noul'; instructions: string }

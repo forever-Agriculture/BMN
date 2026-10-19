@@ -9,11 +9,11 @@ import {
   type TerminalActivationResult
 } from '@bmn/protocol'
 
-export interface ConversationHostClient {
+interface ConversationHostClient {
   request<Result>(method: ProtocolMethod, params: object): Promise<Result>
 }
 
-export type ResumedAttachment = SessionResumeResult
+type ResumedAttachment = SessionResumeResult
 
 export function loadConversationBinding(
   client: ConversationHostClient,

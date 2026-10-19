@@ -20,7 +20,7 @@ export interface SplitText {
   open: boolean
 }
 
-export interface LineDifference {
+interface LineDifference {
   a: SplitText
   b: SplitText
   /** 1 where a line of the earlier text is not in the later one. */

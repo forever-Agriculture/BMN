@@ -5,12 +5,12 @@ import { activeHookOrigin } from './session-presentation'
 /** A model name an app reported in a session that is running now, with the host it reported beside it. */
 export interface ReportedModel { harness: RosterHarness; model: string; host: string | null }
 
-export type ModelSource = 'team' | 'reported' | 'research'
+type ModelSource = 'team' | 'reported' | 'research'
 
 /** What the last research found, and the day it ran, for the Model field's third group. */
-export interface ResearchedModels { models: readonly ResearchModelView[]; day: string | null }
+interface ResearchedModels { models: readonly ResearchModelView[]; day: string | null }
 
-export interface ModelSuggestion {
+interface ModelSuggestion {
   /** The name exactly as it was recorded or reported; a pick writes these characters. */
   name: string
   source: ModelSource

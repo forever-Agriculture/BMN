@@ -79,7 +79,7 @@ export function workspaceRoot(directory) {
   }
 }
 
-export function visibilityDirectory() {
+function visibilityDirectory() {
   return `${stateDirectory()}/visibility`
 }
 
@@ -106,7 +106,7 @@ function git(workspace, args, options = {}) {
 }
 
 /** The workspace's `origin` as git would use it: `{ origin }`, or `{ reason }` when there is none or it is not GitHub. */
-export function workspaceOrigin(workspace) {
+function workspaceOrigin(workspace) {
   let url
   try {
     url = git(workspace, ['remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim()

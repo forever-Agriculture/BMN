@@ -1,7 +1,7 @@
 // MODULE: quick-look-env.ts - a `.env` file as rows and a draft written back byte for byte: only changed values and added lines differ (Story 68.1)
 
 /** A line of a `.env` file as Quick look shows it; offsets are into the file's text as read. */
-export type EnvRow =
+type EnvRow =
   | { kind: 'comment'; line: number; text: string }
   | { kind: 'blank'; line: number }
   | {
@@ -16,7 +16,7 @@ export type EnvRow =
       valueTo: number
     }
 
-export type EnvQuote = 'none' | 'single' | 'double'
+type EnvQuote = 'none' | 'single' | 'double'
 
 export type EnvModel =
   | { status: 'rows'; rows: EnvRow[]; keys: number; lineEnding: '\n' | '\r\n'; finalNewline: boolean }
@@ -111,7 +111,7 @@ export function readEnvFile(text: string): EnvModel {
   }
 }
 
-export type EnvWritten = { status: 'written'; text: string } | { status: 'refused'; message: string }
+type EnvWritten = { status: 'written'; text: string } | { status: 'refused'; message: string }
 
 export const ENV_UNSAFE_VALUE = 'BMN cannot write this value safely; edit it in the terminal'
 
@@ -138,7 +138,7 @@ export function envNameProblem(name: string, taken: readonly string[]): string |
   return null
 }
 
-export interface EnvDraft {
+interface EnvDraft {
   /** New values by the line of the key they replace. */
   changed: ReadonlyMap<number, string>
   added: ReadonlyArray<{ name: string; value: string }>

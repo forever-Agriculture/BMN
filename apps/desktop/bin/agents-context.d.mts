@@ -84,17 +84,14 @@ export declare const CONTEXT_APPS: ContextApp[]
 export declare const CODEX_CONTEXT_KEYS: string[]
 export declare const CLAUDE_CONTEXT_KEY: string
 export declare const CONTEXT_TEST_SIZE: Record<ContextApp, number>
-export declare const CONTEXT_USAGE: string
 export declare function wholeNumber(raw: unknown): number | null
 export declare function contextTestsPath(): string
 export declare function contextTests(): ContextTestEntry[]
-export declare function lastContextTest(harness: string, tests?: ContextTestEntry[]): ContextTestEntry | null
 export declare function provenControls(harness: string, version: string | null, tests?: ContextTestEntry[]): ContextProven
 export declare function provenPrecedence(harness: string, version: string | null, tests?: ContextTestEntry[]): ContextPrecedence[]
 export declare function contextItems(agent: { id: string; harness: string; context_limit?: number; compact_at?: number }, proven: ContextProven): ContextItems
 export declare function checkContext(agent: { id: string; harness: string; context_limit?: number; compact_at?: number }, resolved: ContextResolved | undefined, proven: ContextProven, precedence?: ContextPrecedence[]):
   { applied: number | null; note: string; refusal?: undefined } | { refusal: string; why: ContextRefusalReason }
-export declare function contextFile(harness: string, environment?: NodeJS.ProcessEnv): string
 export declare function readCodexContext(text: string | null): { limit: number | null; compact: number | null; unreadable: string | null }
 export declare function readClaudeContext(text: string | null): { limit: number | null; compact: number | null; unreadable: string | null }
 export declare function setTomlTopLevelKey(text: string, key: string, value: number | null): string

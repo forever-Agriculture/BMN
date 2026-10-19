@@ -1,7 +1,5 @@
 // MODULE: plan-cli.d.mts - types for plan-cli.mjs (Epic 77: bmn plan status|check|set)
-export declare const PLAN_USAGE: string
 export declare const KEPT_VERSIONS: number
-export declare const SET_RETRIES: number
 type Environment = NodeJS.ProcessEnv | Record<string, string>
 export declare function versionsDirectory(boardPath: string, environment?: Environment): string
 export declare function keepVersion(boardPath: string, text: string, environment?: Environment): string

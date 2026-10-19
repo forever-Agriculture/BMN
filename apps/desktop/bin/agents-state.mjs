@@ -37,14 +37,14 @@ export function historyLogPath() {
 }
 
 /** The hash a generation carries: SHA-256 of its canonical JSON without the `hash` field. */
-export function generationHash(generation) {
+function generationHash(generation) {
   const rest = { ...generation }
   delete rest.hash
   return sha256(canonicalJson(rest))
 }
 
 /** The roster file's bytes and hash, or ROSTER_MISSING (exit 3). */
-export function readRosterFile(path = rosterPath()) {
+function readRosterFile(path = rosterPath()) {
   let text
   try {
     text = readFileSync(path, 'utf8')
@@ -180,7 +180,7 @@ export function generationNumbers() {
   return names.map((name) => /^(\d{6})\.json$/.exec(name)).filter(Boolean).map((match) => Number(match[1])).sort((a, b) => b - a)
 }
 
-export function lastGoodGeneration() {
+function lastGoodGeneration() {
   for (const number of generationNumbers()) {
     if (readGeneration(number) !== null) return number
   }
@@ -331,7 +331,7 @@ function sameValue(a, b) {
 }
 
 /** The id the skills folder's difference carries: no skill can be named so. */
-export const SKILLS_SOURCE_ID = '.source'
+const SKILLS_SOURCE_ID = '.source'
 
 /** The keyed lists machine data is made of: the scope a difference names, the key and the fields compared. */
 const DIFF_SCOPES = [

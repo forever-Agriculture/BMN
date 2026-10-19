@@ -11,7 +11,7 @@
 /** The agents whose hooks can report model facts; `terminal` notices never carry any. */
 export type ModelOriginAgent = 'claude' | 'codex' | 'opencode'
 
-export interface ModelOriginFacts {
+interface ModelOriginFacts {
   agent: ModelOriginAgent
   /** Hostname only, as `bmn hook` parsed it from the agent's base-URL variable; null when unset. */
   apiHost: string | null

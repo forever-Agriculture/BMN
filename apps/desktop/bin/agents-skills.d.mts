@@ -6,29 +6,16 @@ export type SkillsHarness = 'claude' | 'codex' | 'opencode'
 export type SkillState = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
 export type SkillsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 
-export declare class SkillsError extends Error {
-  code: string
-  constructor(code: string, message: string)
-}
-
 /** `list` is the command that names the skills an app sees, or for OpenCode 2 the operation its server answers. */
 export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | { server: string } | null; prompt: boolean }>
-export declare const SETTLED_STATES: SkillState[]
-export declare function rootPath(root: string, environment?: Environment): string
 export declare function skillsTestsPath(): string
 
-export interface TreeEntry { path: string; kind: 'file' | 'folder' | 'link' | 'other'; mode?: number; hash?: string; target?: string }
-export declare function treeEntries(root: string): TreeEntry[]
 export declare function treeHash(root: string): string
 export declare function copyTree(from: string, to: string): void
 export type SkillEntry = { kind: 'missing'; directory: string } | { kind: 'link'; target: string; directory: string } | { kind: 'tree'; hash: string; folder: boolean; directory: string }
 export declare function entryOf(path: string): SkillEntry
 
-export declare function skillsSource(data: { skills_source?: string } | null, environment?: Environment): string
 export declare function skillDescription(text: string): string
-export interface SourceSkill { name: string; path: string; readable: boolean; description?: string; hash?: string; detail?: string }
-export declare function sourceSkills(source: string): { path: string; readable: boolean; detail?: string; skills: SourceSkill[] }
-export declare function eligible(mark: { public?: true; only?: string[] } | undefined, harness: string, kind: 'full' | 'public'): boolean
 
 export interface SkillsRoot { root: string; folder: boolean; link: boolean }
 export interface SkillsTestEntry {
@@ -118,5 +105,4 @@ export declare function testSkills(harness: string, options?: SkillsTestOptions)
 export interface SkillsAutoPlanEntry { harness: SkillsHarness; version: string; key: string; reason: 'untested' | 'retry' }
 export declare function skillsAutoPlan(options?: { versions?: SkillsVersions; tests?: SkillsTestEntry[]; generation?: Generation | null }): SkillsAutoPlanEntry[]
 export declare function skillsLoadingAutoPlan(options?: { versions?: SkillsVersions; tests?: SkillsTestEntry[]; environment?: Environment; generation?: Generation | null }): SkillsAutoPlanEntry[]
-export declare const SKILLS_USAGE: string
 export declare function runSkillsCommand(argv: string[]): Promise<number>

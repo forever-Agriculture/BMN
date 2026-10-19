@@ -23,7 +23,7 @@ import { ConfigWriteError, pathState, replaceFileSafely } from './safe-config-wr
  * BMN prints of an entry it did not write has every such value masked.
  */
 
-export class ToolsError extends Error {
+class ToolsError extends Error {
   constructor(code, message) {
     super(message)
     this.code = code
@@ -59,7 +59,7 @@ export const TOOL_APPS = {
 }
 
 /** States that need nothing done: the tool is where it should be, or is rightly absent. */
-export const SETTLED_STATES = ['current', 'excluded']
+const SETTLED_STATES = ['current', 'excluded']
 
 export function toolsTestsPath() {
   return `${agentsDirectory()}/state/tools-tests.jsonl`
@@ -160,7 +160,7 @@ export function appTools(harness, { version, tests = toolsTests() }) {
 const isMap = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /** What a tool is, apart from who gets it: the program or the address, and the variables it names. */
-export function definitionOf(tool) {
+function definitionOf(tool) {
   return tool.url !== undefined
     ? { url: tool.url, ...(tool.headers && Object.keys(tool.headers).length > 0 ? { headers: tool.headers } : {}) }
     : { command: tool.command, ...(tool.args?.length ? { args: tool.args } : {}), ...(tool.env && Object.keys(tool.env).length > 0 ? { env: tool.env } : {}) }
@@ -440,7 +440,7 @@ function written() {
 const recordKey = (harness, id) => `${harness}|${id}`
 
 /** Whether an app may have a tool installed: the tool's own scope, and Public on a destination that gets public work only. */
-export function eligible(tool, harness, kind) {
+function eligible(tool, harness, kind) {
   if (tool.agents !== undefined) return false
   if (tool.apps !== undefined && !tool.apps.includes(harness)) return false
   return kind === 'full' || tool.public === true
@@ -915,11 +915,6 @@ export function proposeTools({ environment = process.env, generation = approvedI
 // ---------------------------------------------------------------------------------------------
 // The tools of one agent's run (60.12 AC5)
 
-/** The tools kept to this agent. */
-export function agentTools(data, agentId) {
-  return (data?.tools ?? []).filter((tool) => tool.agents?.includes(agentId))
-}
-
 /**
  * Every tool a run of this agent may carry, the one set that the role answer, the check and the
  * receipt share: the tools for all apps or for its app, and the tools kept to this agent. Where
@@ -947,7 +942,7 @@ export function runTools(data, agent) {
  */
 export const RUN_TEST_APPS = ['claude']
 /** The two signs a run test goes by; a record that lacks either was judged by less and grants nothing. */
-export const RUN_SIGNS = ['start-line', 'tool-start']
+const RUN_SIGNS = ['start-line', 'tool-start']
 const noRunTest = (app) => `BMN has no test that shows which tools a run of ${app} starts with, so it gives one no tools of its own and does not judge the ones it has`
 
 /** The app's entries for a run's tools, or the first tool the app cannot take. */
@@ -1425,7 +1420,7 @@ export async function testTools(harness, { environment = process.env, now = new 
 // ---------------------------------------------------------------------------------------------
 // CLI
 
-export const TOOLS_USAGE = `Usage: bmn tools check [--json]                              One state per app and per tool; exit 0 only when every supported app has its tools and nothing is exposed
+const TOOLS_USAGE = `Usage: bmn tools check [--json]                              One state per app and per tool; exit 0 only when every supported app has its tools and nothing is exposed
        bmn tools install [app…] [--plan] [--remove-unlisted] [--yes]   Set each app's entries, and remove what an app may no longer have, as one transaction
        bmn tools install --absent [--plan] [--yes]   The same, leaving an entry BMN did not write or one changed outside it: what BMN runs by itself
        bmn tools import [--json] [--yes]                       Propose the entries the apps already hold as tools in the team file; you approve them in BMN

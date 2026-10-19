@@ -40,7 +40,7 @@ import { maskedSlice } from './quick-look-secrets'
  * 67.1 AC7). A definition is full text, a literal the one straw tint (owner 2026-10-18, Fable's "ink and one tint"),
  * a name, a keyword, punctuation and a comment each a grey step down; no weight or slant in code.
  */
-export const greys = tagHighlighter([
+const greys = tagHighlighter([
   { tag: [tags.definition(tags.variableName), tags.function(tags.definition(tags.variableName)), tags.definition(tags.propertyName),
     tags.definition(tags.typeName), tags.className, tags.heading, tags.macroName], class: 'ql-syn-def' },
   { tag: [tags.string, tags.special(tags.string), tags.number, tags.bool, tags.null, tags.regexp, tags.atom, tags.escape,
@@ -102,7 +102,7 @@ export function codeTokens(text: string, language: QuickLookLanguage | null, fro
   return tokens
 }
 
-export interface CodeViewInput {
+interface CodeViewInput {
   content: string
   language: QuickLookLanguage | null
   /** The line he came for, 1-based; marked in gold and scrolled to the middle. */
@@ -329,11 +329,6 @@ function copyMasked(event: ClipboardEvent, view: EditorView): boolean {
   return true
 }
 
-/** The line the caret is on. */
-export function caretLine(view: EditorView): number {
-  return view.state.doc.lineAt(view.state.selection.main.head).number
-}
-
 /** Moves the caret to a line and column and puts that line in the middle. */
 export function goToPosition(view: EditorView, line: number, column: number | null): void {
   const at = positionOf(view.state, line, column)
@@ -341,7 +336,7 @@ export function goToPosition(view: EditorView, line: number, column: number | nu
 }
 
 /** The document position of a 1-based line and column, clamped into the document. */
-export function positionOf(state: EditorState, line: number, column: number | null): number {
+function positionOf(state: EditorState, line: number, column: number | null): number {
   const target = state.doc.line(Math.min(Math.max(1, line), state.doc.lines))
   return Math.min(target.from + Math.max(0, (column ?? 1) - 1), target.to)
 }

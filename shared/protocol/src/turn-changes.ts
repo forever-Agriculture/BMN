@@ -26,8 +26,6 @@ export const TURN_SWITCH_FOLDER = 'turn-marks'
 
 /** How long everything a mark adds to a prompt may take: waiting for an earlier capture, listing, reading, the answer and its confirmation (R69-NFR5). */
 export const TURN_MARK_LIMIT_MS = 300
-/** How long a capture nobody waits for may take, and a comparison (R69-NFR5). */
-export const TURN_CAPTURE_LIMIT_MS = 2_000
 
 export const TURN_MARK_EDGES = ['start', 'confirm', 'end'] as const
 export type TurnMarkEdge = (typeof TURN_MARK_EDGES)[number]
@@ -47,17 +45,6 @@ export type TurnMarkStatus = (typeof TURN_MARK_STATUSES)[number]
 /** The statuses after which the hook sends its confirmation. */
 export const TURN_MARK_CONFIRMED_STATUSES: readonly TurnMarkStatus[] = Object.freeze(['captured', 'incomplete'])
 
-/** The word for how a turn ended, as its record keeps it. */
-export const TURN_ENDS = ['finished', 'error', 'interrupted', 'not-observed', 'switched-off'] as const
-export type TurnEnd = (typeof TURN_ENDS)[number]
-
-export const TURN_END_WORDS: Readonly<Record<TurnEnd, string>> = Object.freeze({
-  finished: 'finished',
-  error: 'error',
-  interrupted: 'interrupted',
-  'not-observed': 'End not observed',
-  'switched-off': 'Recording was switched off'
-})
 
 /**
  * Why a turn has no complete totals: exactly one of these nine, and no other (Story 69.4, criterion 9). When
@@ -128,17 +115,6 @@ export interface TurnRecordingState {
   retryAt: number | null
 }
 
-export function isTurnRecordingState(value: unknown): value is TurnRecordingState {
-  if (typeof value !== 'object' || value === null) return false
-  const state = value as Record<string, unknown>
-  return typeof state.sessionId === 'string' &&
-    ['recording', 'off', 'paused', 'not-supported'].includes(state.state as string) &&
-    (state.app === null || typeof state.app === 'string') &&
-    (state.pausedRoot === null || typeof state.pausedRoot === 'string') &&
-    (state.pauseReason === null || Object.hasOwn(TURN_PAUSE_REASONS, state.pauseReason as string)) &&
-    (state.retryAt === null || (typeof state.retryAt === 'number' && Number.isFinite(state.retryAt)))
-}
-
 // ---- what the window reads (Story 69.5) -------------------------------------------------------------
 //
 // These reach the window through its own channels only. No token reads them: the control socket has no
@@ -153,7 +129,7 @@ export const TURN_FILES_LIMIT = 2_000
 /** What stands in a shown line where a secret value is: one plate, the same whatever the value's length. */
 export const TURN_SECRET_PLATE = '••••••••••'
 
-export type TurnTotalsWord = 'complete' | 'partial' | 'not-complete' | 'none'
+type TurnTotalsWord = 'complete' | 'partial' | 'not-complete' | 'none'
 
 /** One kept turn as the list shows it. Nothing here can hold a file's name or content. */
 export interface TurnSummary {
@@ -163,7 +139,7 @@ export interface TurnSummary {
   appVersion: string | null
   startedAt: string
   endedAt: string | null
-  /** How it ended, one of `TURN_ENDS`; null while it runs. */
+  /** How it ended (finished, error, interrupted, not-observed or switched-off); null while it runs. */
   end: string | null
   state: 'open' | 'provisional' | 'closed'
   totalsState: TurnTotalsWord
@@ -221,7 +197,7 @@ export interface TurnShownLine {
   cut: boolean
 }
 /** The mark after a last line that has no line ending. */
-export interface TurnShownMark { kind: '\\' }
+interface TurnShownMark { kind: '\\' }
 
 export interface TurnShownHunk {
   aStart: number

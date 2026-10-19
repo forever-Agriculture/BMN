@@ -6,14 +6,14 @@ export interface MouseClipboardButton {
   ctrlKey: boolean
 }
 
-export interface MouseClipboardHost {
+interface MouseClipboardHost {
   hasSelection(): boolean
   getSelection(): string
   copy(text: string): void
   paste(): void
 }
 
-export interface MouseClipboard {
+interface MouseClipboard {
   /** A press inside the terminal surface. */
   mouseDown(event: MouseClipboardButton): void
   /** A release anywhere in the window, after the terminal has finished its selection. */

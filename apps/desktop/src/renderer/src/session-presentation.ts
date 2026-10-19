@@ -23,11 +23,11 @@ import {
   type UsageReading
 } from '@bmn/protocol'
 
-export type SessionDot = 'running' | 'running-idle' | 'needs-you' | 'exited' | 'idle'
+type SessionDot = 'running' | 'running-idle' | 'needs-you' | 'exited' | 'idle'
 
 export type SessionAttention = 'response' | 'update' | null
 
-export interface SessionStatusPresentation {
+interface SessionStatusPresentation {
   dot: SessionDot
   word: string
 }
@@ -171,7 +171,7 @@ const USAGE_SOURCE_WORDS: Readonly<Record<UsageAgent, string>> = {
   codex: "Codex's session file"
 }
 
-export interface PlanWindowView {
+interface PlanWindowView {
   /** "5-hour", "Week". */
   name: string
   percent: number
@@ -487,7 +487,7 @@ export function requestsAnsweredByTyping(records: readonly AttentionRecord[], se
   return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review' && record.kind !== 'handoff')
 }
 
-export type OpenAttentionAction = 'dismiss-reminder' | null
+type OpenAttentionAction = 'dismiss-reminder' | null
 
 /** An explicit owner action clears the reminder; it does not answer or approve the underlying task. */
 export function attentionActionWhenOpened(

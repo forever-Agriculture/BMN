@@ -3,7 +3,7 @@ import { hasDisallowedHandoffControl } from './companion'
 import { stripFormatCharacters } from './file-reference'
 
 /** The longest message text, counted after invisible and direction-changing characters are removed. */
-export const SESSION_MESSAGE_MAX_CHARACTERS = 2000
+const SESSION_MESSAGE_MAX_CHARACTERS = 2000
 /** How long BMN hands a waiting message over by itself; afterwards no route delivers it. */
 export const SESSION_MESSAGE_EXPIRY_MS = 2 * 60 * 60 * 1000
 /** The shortest time between two sends a session is allowed. */
@@ -54,7 +54,7 @@ export const SESSION_MESSAGE_HANDOVER: Readonly<Record<string, { event: string; 
  * hook hand-over (Story 66.4). `paste-uncertain` and `pasted` were the owner's Paste, gone in Story 75.4: a message
  * stored with either still reads as it did.
  */
-export const SESSION_MESSAGE_STATES = ['waiting', 'paste-uncertain', 'pasted', 'taken', 'printed'] as const
+const SESSION_MESSAGE_STATES = ['waiting', 'paste-uncertain', 'pasted', 'taken', 'printed'] as const
 export type SessionMessageState = (typeof SESSION_MESSAGE_STATES)[number]
 
 export function isSessionMessageState(value: unknown): value is SessionMessageState {
@@ -65,7 +65,7 @@ export function isSessionMessageState(value: unknown): value is SessionMessageSt
  * What a stored message carries (Story 75.5): a short message, or the pointer of a handoff to its stored text. A
  * handoff may go to a session of another workspace; it is a handoff by its record, never by what its text says.
  */
-export type SessionMessageKind = 'message' | 'handoff'
+type SessionMessageKind = 'message' | 'handoff'
 
 export interface SessionMessageRecord {
   messageId: string
@@ -294,13 +294,13 @@ export function sessionHandoffStamp(sender: { sessionId: string; name: string; f
 }
 
 /** A file a handoff names: its name as its sender published it, and the path its receiver reads it at. */
-export interface SessionHandoffFile {
+interface SessionHandoffFile {
   name: string
   path: string
 }
 
 /** The list of a handoff's attached files, as its stored file ends with it and its pointer carries it when it fits. */
-export function sessionHandoffFileList(files: readonly SessionHandoffFile[]): string {
+function sessionHandoffFileList(files: readonly SessionHandoffFile[]): string {
   return ['Files attached to this handoff:', ...files.map((file) => `- ${cleanSessionMessageName(file.name)}: ${file.path}`)].join('\n')
 }
 

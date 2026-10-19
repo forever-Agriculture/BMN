@@ -125,7 +125,7 @@ export async function readFileReference(
   }
 }
 
-export type LocalTextFileRead =
+type LocalTextFileRead =
   | {
       status: 'ready'
       canonicalPath: string

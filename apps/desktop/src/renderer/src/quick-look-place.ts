@@ -10,7 +10,7 @@ export function parseGoToLine(text: string, lineCount: number): { line: number; 
   return { line: Math.min(line, Math.max(1, lineCount)), column }
 }
 
-export interface TrailEntry {
+interface TrailEntry {
   path: string
   /** The line he came for, marked in gold whenever the file is shown again. */
   line: number | null
@@ -62,7 +62,7 @@ export function trailStep(trail: Trail, direction: -1 | 1, currentTop: number | 
 }
 
 /** What a root keeps while BMN runs: the last file and its top line, the open folders and the last search. */
-export interface RootPlace {
+interface RootPlace {
   file: { path: string; topLine: number } | null
   expanded: readonly string[]
   find: { query: string; matchCase: boolean } | null
@@ -89,7 +89,7 @@ export function forgetPlaces(): void {
 
 export type EscapeStep = 'keep-editing' | 'leave-field' | 'close-menu' | 'clear-typed' | 'hide-secret' | 'close-goto' | 'close-find' | 'stop-search' | 'clear-search' | 'back-to-results' | 'close-sheet'
 
-export interface EscapeState {
+interface EscapeState {
   focus: 'field' | 'tree' | 'file'
   typed: boolean
   /** A hidden value is shown for its ten seconds (Story 67.3). */

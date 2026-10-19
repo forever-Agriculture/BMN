@@ -3,11 +3,11 @@
 export const FOCUS_IN = '\x1b[I'
 export const FOCUS_OUT = '\x1b[O'
 
-export interface OwnerPresence {
+interface OwnerPresence {
   away: boolean
 }
 
-export interface FocusReports {
+interface FocusReports {
   /** True for a report xterm wrote itself; the caller drops it so only these reports reach the process. */
   isFocusReport(data: string): boolean
   paneFocus(focused: boolean): void

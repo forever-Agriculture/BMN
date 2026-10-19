@@ -2,7 +2,7 @@
 import { listeningPortLabel, type ListeningPort, type SessionPorts } from '@bmn/protocol'
 
 /** The pane header shows this many chips; the rest are one "+N" that names them in its tooltip. */
-export const PANE_PORT_CHIPS = 3
+const PANE_PORT_CHIPS = 3
 
 export const STOPPED_PORT_NOTE = 'still running after the session stopped'
 

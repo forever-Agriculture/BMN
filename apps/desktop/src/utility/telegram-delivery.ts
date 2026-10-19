@@ -7,7 +7,7 @@ export function telegramSendDefinitelyUnsent(error: unknown): boolean {
     (error.status !== undefined && error.status !== null && [400, 401, 403, 404, 429].includes(error.status)))
 }
 
-export type TelegramDeliveryPhase =
+type TelegramDeliveryPhase =
   | 'scheduled' | 'timer-fired' | 'held-at-desk' | 'held-quiet' | 'departure-window-expired'
   | 'quiet-history-unavailable'
   | 'quiet-backlog' | 'quiet-capacity' | 'quiet-restarting'

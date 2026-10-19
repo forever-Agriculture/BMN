@@ -8,7 +8,7 @@ import {
 import type { AgentBriefEvent } from './agent-briefs'
 
 /** Conversations remembered per process; past it the oldest go, and one of them is at most told again. */
-export const GRANT_NOTICES_REMEMBERED = 2_000
+const GRANT_NOTICES_REMEMBERED = 2_000
 /** SessionStart sources after which the conversation has lost what it was told. */
 const LOST_SOURCES: readonly string[] = Object.freeze(['compact', 'clear'])
 

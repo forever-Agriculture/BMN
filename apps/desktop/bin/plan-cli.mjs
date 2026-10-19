@@ -7,7 +7,7 @@ import {
   BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, readBoard, resolvePlan, rowToken
 } from './plan-board.mjs'
 
-export const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
+const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan check [--json] [--project P]
        bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P] [--json]
 
@@ -180,7 +180,7 @@ async function check(argv) {
 // One row, safely (77.2)
 
 export const KEPT_VERSIONS = 20
-export const SET_RETRIES = 5
+const SET_RETRIES = 5
 const LOCK_WAIT_MS = 5_000
 
 export function versionsDirectory(boardPath, environment = process.env) {

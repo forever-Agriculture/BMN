@@ -4,8 +4,8 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { FileReferenceSearchResult } from '@bmn/protocol'
 
 export const FILE_SEARCH_MAX_DEPTH = 6
-export const FILE_SEARCH_MAX_ENTRIES = 20_000
-export const FILE_SEARCH_MAX_RESULTS = 50
+const FILE_SEARCH_MAX_ENTRIES = 20_000
+const FILE_SEARCH_MAX_RESULTS = 50
 /** Folders the walk never enters, besides `.git` and `node_modules`. */
 export const GENERATED_DIRECTORIES: ReadonlySet<string> = new Set(['dist', 'build', 'out', 'coverage', '.next', '.cache'])
 

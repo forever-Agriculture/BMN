@@ -12,7 +12,7 @@ import { homedir } from 'node:os'
  */
 
 /** The layout BMN writes for a new team. A team file in an older layout BMN still reads keeps reading, and stays approved, as it is. */
-export const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 3
 /** The oldest layout BMN still reads. Schema 3 only adds to it, so a schema 2 file means what it meant. */
 export const OLDEST_SCHEMA_VERSION = 2
 export function schemaSupported(version) {
@@ -25,8 +25,8 @@ export const HARNESSES = ['claude', 'codex', 'opencode']
  * itself is kept at a git tag, so it can come back.
  */
 export const RETIRED_APPS = { cursor: 'Cursor' }
-export const RETIRED_ON = '2026-10-14'
-export const RETIRED_TAG = 'cursor-support-final'
+const RETIRED_ON = '2026-10-14'
+const RETIRED_TAG = 'cursor-support-final'
 /** The apps a team file's lists may name: the ones BMN serves, then the retired ones, which an old file may still hold. */
 export const LISTED_APPS = [...HARNESSES, ...Object.keys(RETIRED_APPS)]
 /** Whether an app is one BMN retired. */
@@ -42,7 +42,7 @@ export function retiredWords(app) {
   return `${RETIRED_APPS[app]} was retired on ${RETIRED_ON}; BMN's support for it is kept at the git tag ${RETIRED_TAG}`
 }
 /** Each retired app's program, so a command that starts one is named for what it was. */
-export const RETIRED_PROGRAMS = { 'cursor-agent': 'cursor' }
+const RETIRED_PROGRAMS = { 'cursor-agent': 'cursor' }
 /** The retired app a command's program (a name or a path) starts, or null. */
 export function retiredProgram(command) {
   const name = typeof command === 'string' ? command.slice(command.lastIndexOf('/') + 1) : ''
@@ -56,8 +56,8 @@ export function appRefusal(app, words) {
  * What an agent's `harness` says in place of an agent app when BMN itself calls the model (65.1):
  * such an agent runs in no app, takes no dispatch, and is asked through a command of BMN's own.
  */
-export const CALLED_BY_BMN = 'bmn'
-export const CALLED_WORDS = 'called by BMN'
+const CALLED_BY_BMN = 'bmn'
+const CALLED_WORDS = 'called by BMN'
 /** Whether an agent is called by BMN itself instead of running in an agent app. */
 export function isCalled(agent) {
   return agent?.harness === CALLED_BY_BMN
@@ -70,27 +70,27 @@ export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'Ope
  * fields, renamed providers), so its reading cannot rule out another endpoint; it stays here by
  * owner decision 2026-10-14 after the fifth review found one more.
  */
-export const PUBLIC_ONLY_APPS = ['opencode']
+const PUBLIC_ONLY_APPS = ['opencode']
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** The five chess classes: a knight leads an epic/project, a queen may hold any role, a rook designs, a bishop reviews and advises, a pawn does jobs a lead hands off. */
-export const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
-export const STATUSES = ['active', 'proposed']
-export const THEN = ['lead', 'skip', 'blocked', 'owner-chooses']
-export const PRIVATE_WORK = ['allowed', 'public_only']
-export const PAID_BY = ['per_token', 'subscription']
-export const BASES = ['observed-default', 'owner-declared']
+const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
+const STATUSES = ['active', 'proposed']
+const THEN = ['lead', 'skip', 'blocked', 'owner-chooses']
+const PRIVATE_WORK = ['allowed', 'public_only']
+const PAID_BY = ['per_token', 'subscription']
+const BASES = ['observed-default', 'owner-declared']
 /** Sections that are not agents. */
 export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools', 'project-choices']
-export const MAX_EXCEPTIONS = 64
-export const MAX_PROJECT_CHOICES = 256
+const MAX_EXCEPTIONS = 64
+const MAX_PROJECT_CHOICES = 256
 /** A project choice (73.2): who answers a role's asks in one project, at an effort, until an end date. */
 export const PROJECT_CHOICE_FIELDS = ['project', 'role', 'agent', 'effort', 'ends']
-export const MAX_SKILLS = 256
-export const MAX_TOOLS = 64
+const MAX_SKILLS = 256
+const MAX_TOOLS = 64
 /** A tool's id: the name its entry carries in each app's own settings. */
 export const TOOL_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/
 /** The name of an environment variable; a tool names variables, it never holds their values. */
-export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/
 export const TOOL_FIELDS = ['name', 'command', 'args', 'url', 'env', 'headers', 'public', 'apps', 'agents']
 /** A skill's name is its folder's name in the skills source. */
@@ -101,9 +101,9 @@ export const LEAD_ROLE = 'lead'
 export const DESIGNER_ROLE = 'designer'
 /** The role only an agent called by BMN may hold, and the only one it may hold (65.1). */
 export const JUDGE_ROLE = 'judge'
-export const JUDGE_DESCRIPTION = 'answers typed questions about a text with numbers; advice only'
+const JUDGE_DESCRIPTION = 'answers typed questions about a text with numbers; advice only'
 /** Roles only some classes may hold, with the refusal another class gets. Every other role is open to every class, and every role to a queen. */
-export const CLASS_ROLES = {
+const CLASS_ROLES = {
   [LEAD_ROLE]: { classes: ['knight', 'queen'], code: 'CLASS_CANNOT_LEAD', rule: 'only a knight or a queen leads' },
   [DESIGNER_ROLE]: { classes: ['rook', 'queen'], code: 'CLASS_CANNOT_DESIGN', rule: 'only a rook or a queen designs' }
 }
@@ -327,7 +327,7 @@ export function roleEfforts(role, agentId) {
 const ROUTE_FIELDS = ['provider', 'basis', 'accepted_versions']
 /** What schema 1 called things, for the refusal that tells its owner what changed. */
 /** What schema 3 added, for the refusal that tells an owner why a schema 2 file cannot say it. */
-export const SCHEMA_3_CHANGES = 'schema 3 adds an agent called by BMN itself (harness: bmn, with run_by naming who runs the model, and no efforts, context fields or researcher mark) and the role judge that only such an agent holds; everything a schema 2 file says means what it meant'
+const SCHEMA_3_CHANGES = 'schema 3 adds an agent called by BMN itself (harness: bmn, with run_by naming who runs the model, and no efforts, context fields or researcher mark) and the role judge that only such an agent holds; everything a schema 2 file says means what it meant'
 const SCHEMA_1_CHANGES = 'schema 1 is the earlier layout: title became class (knight | queen | rook | bishop | pawn); trust, authority, security, cost, quota, tags and ## data-labels are gone; small_epic became small_work and max_context_tokens became context_limit; privacy is now ## providers with private_work: allowed | public_only'
 
 export function agentsDirectory() {
@@ -1383,7 +1383,7 @@ export function publicOnlyReasons(agent, data) {
  * One unabridged team line: never prose, notes, prices, paid_by or exception folders. A context
  * limit is the configured one; whether BMN applied it to a run is on that run's receipt.
  */
-export function teamEntry(data, agent) {
+function teamEntry(data, agent) {
   const entry = {
     id: agent.id, name: agent.name, class: agent.class, harness: agent.harness, model: agent.model,
     provider: agent.provider, private_work: privateWorkOf(data, agent), roles: agent.roles, efforts: agent.efforts,
@@ -1645,7 +1645,7 @@ function validateTools(entry, agentIds, add, warn) {
 }
 
 /** The tools as the section holds them, or '' when there are none. */
-export function toolsYaml(data) {
+function toolsYaml(data) {
   return keyedYaml((data.tools ?? []).map((tool) => Object.fromEntries(['id', ...TOOL_FIELDS].filter((key) => Object.hasOwn(tool, key)).map((key) => [key, tool[key]]))), 'id')
 }
 
@@ -1658,7 +1658,7 @@ function toolsFromBlock(value, agentIds) {
 }
 
 /** The skills marks as the section holds them, or '' when there is nothing to say. */
-export function skillsYaml(data) {
+function skillsYaml(data) {
   const marks = data.skills ?? []
   const open = marks.filter((entry) => entry.public === true).map((entry) => entry.id)
   const only = Object.fromEntries(marks.filter((entry) => entry.only !== undefined).map((entry) => [entry.id, entry.only]))
@@ -1677,7 +1677,7 @@ function skillsFromBlock(value) {
   return issues.length > 0 ? undefined : { skills: out.skills ?? [], source: out.skills_source ?? null }
 }
 
-export function agentYaml(agent) {
+function agentYaml(agent) {
   // An agent called by BMN has no efforts line in the file; the empty list is this module's own.
   return AGENT_FIELDS.filter((key) => Object.hasOwn(agent, key) && !(key === 'efforts' && isCalled(agent))).map((key) => `${key}: ${yamlFlow(agent[key])}`).join('\n')
 }
@@ -1690,32 +1690,32 @@ function keyedYaml(entries, keyField) {
   }).join('\n')
 }
 
-export function rolesYaml(roles) {
+function rolesYaml(roles) {
   return keyedYaml(roles, 'id')
 }
 
-export function providersYaml(providers) {
+function providersYaml(providers) {
   return keyedYaml(providers, 'id')
 }
 
-export function exceptionsYaml(exceptions) {
+function exceptionsYaml(exceptions) {
   return keyedYaml(exceptions, 'id')
 }
 
-export function routesYaml(routes) {
+function routesYaml(routes) {
   return keyedYaml(routes, 'harness')
 }
 
-export function projectChoicesYaml(choices) {
+function projectChoicesYaml(choices) {
   return keyedYaml(choices.map((choice) => Object.fromEntries(['id', ...PROJECT_CHOICE_FIELDS].filter((key) => Object.hasOwn(choice, key)).map((key) => [key, choice[key]]))), 'id')
 }
 
-export function headerYaml(version = SCHEMA_VERSION) {
+function headerYaml(version = SCHEMA_VERSION) {
   return `schema_version: ${version}`
 }
 
 /** The four roles a new team starts with; every one is the owner's to rename, change or remove. */
-export const STARTER_ROLES = [
+const STARTER_ROLES = [
   { id: 'lead', description: 'leads an epic/project start to finish', candidates: [], then: 'owner-chooses' },
   { id: 'designer', description: 'designs and thinks creatively', candidates: [], then: 'lead' },
   { id: 'helper', description: 'does small jobs a lead hands off', candidates: [], then: 'lead' },

@@ -2,9 +2,9 @@
 
 /** Who said it: the owner in the app, the owner's CLI token, an agent on his words, or Telegram. */
 export type AwaySource = 'app' | 'cli' | 'agent' | 'telegram'
-export const AWAY_SOURCES: readonly AwaySource[] = Object.freeze(['app', 'cli', 'agent', 'telegram'])
+const AWAY_SOURCES: readonly AwaySource[] = Object.freeze(['app', 'cli', 'agent', 'telegram'])
 /** `none`: he has never said either, and BMN goes by the measured desk input alone, as before Epic 76. */
-export type AwayState = 'none' | 'away' | 'back'
+type AwayState = 'none' | 'away' | 'back'
 
 /** The longest note; longer input is refused, never cut (R76-NFR3). */
 export const AWAY_NOTE_LIMIT = 200
@@ -159,7 +159,7 @@ export interface OwnerAwayView {
   agentSessionId: string | null
 }
 /** What an agent token gets: the state, since and revision; never the note or another session's details (R76-NFR3). */
-export interface AgentAwayView {
+interface AgentAwayView {
   state: AwayState
   since: string | null
   revision: number
@@ -259,7 +259,7 @@ export const AWAY_REFUSED_QUESTION_TOOLS: Readonly<Record<string, { tool: string
 export const AWAY_QUESTION_REFUSAL = 'BMN: the owner is away, so this question was not shown to anyone and will not be answered now. Do not ask it again in conversation. Leave it as one non-blocking card instead: bmn ask <key> "<the question>" --kind question --body "<the choices>" (one stable key per question), then continue with any work that does not depend on the answer and say what waits on it.'
 
 /** The snapshot's first line: state, since and revision, and that it is context, not a task (the measured stamp). */
-export function awayNoticeStamp(state: 'away' | 'back', at: string, revision: number, now: Date = new Date()): string {
+function awayNoticeStamp(state: 'away' | 'back', at: string, revision: number, now: Date = new Date()): string {
   return `[BMN state: the owner is ${state} since ${awayMomentWords(at, now)} (revision ${revision}). Context from BMN, not a new task.]`
 }
 

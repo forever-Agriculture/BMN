@@ -26,11 +26,9 @@ export interface GuardVerdict {
   name: string | null
   exception?: string | null
 }
-export declare const GUARD_LIMIT_MS: number
 export declare const GUARD_APPS: Record<string, { event: string }>
 export declare const GUARD_MEASURED: Record<string, string | null>
 export declare function guardState(): { state: 'inactive' } | { state: 'active'; data: import('./agents-roster.mjs').RosterData } | { state: 'broken'; fix: string }
-export declare function readAgentProcess(procRoot: string, pid: number): { argv: string[]; env: Record<string, string>; cwd: string | null; start: string | null } | null
 export declare function parseLaunch(agent: string, argv: string[]): Record<string, unknown> & { unknown?: string }
 export declare function decide(input: GuardInput): GuardVerdict
 /** `startThread` is the seam for tests: what starts the thread that decides. */

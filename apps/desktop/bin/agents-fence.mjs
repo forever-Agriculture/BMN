@@ -700,7 +700,7 @@ const RENEWAL_WORDS = {
 // The OpenCode fence test (70.3)
 
 /** Where a marker is planted for an OpenCode research run, in the words the result uses. */
-export const OPENCODE_FENCE_MARKERS = {
+const OPENCODE_FENCE_MARKERS = {
   PROMPT: 'the prompt', RULES: 'the OpenCode rules file', INSTRUCTIONS: 'a rules file the OpenCode settings name', CONFIG: 'the OpenCode settings file',
   AGENT: 'an agent in the OpenCode folder', SKILL: 'a skill in the OpenCode folder', CLAUDE: 'Claude Code\'s rules file', CLAUDESKILL: 'a skill in Claude Code\'s folder',
   AGENTSKILL: 'a skill in the home folder', HOME: 'a file in the home folder', HOMEDOC: 'the rules file in the home folder', PARENT: 'a file beside the run\'s folder',
@@ -1018,7 +1018,7 @@ export async function compareUnderProviderList({ agent, environment = process.en
 // ---------------------------------------------------------------------------------------------
 // `bmn roster fence`
 
-export const FENCE_USAGE = `Usage: bmn roster fence [--live] [--json]
+const FENCE_USAGE = `Usage: bmn roster fence [--live] [--json]
 
 Tests, for the installed Codex, that a research run sends its provider nothing of yours. It builds
 a throwaway home folder with planted markers, starts a stand-in for the provider on this computer,

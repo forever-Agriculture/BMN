@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const doc = join(repoRoot, 'docs/agent-control.md')
-export const BEGIN = '<!-- BEGIN `bmn help` (generated: pnpm run docs:bmn-help) -->'
-export const END = '<!-- END `bmn help` -->'
+const BEGIN = '<!-- BEGIN `bmn help` (generated: pnpm run docs:bmn-help) -->'
+const END = '<!-- END `bmn help` -->'
 
 const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_')))
 const help = execFileSync(process.execPath, [join(repoRoot, 'apps/desktop/bin/bmn'), 'help'], { env, encoding: 'utf8' })

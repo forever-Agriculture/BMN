@@ -9,7 +9,7 @@ export const ERROR_CODES = Object.freeze({
 
 export type ProtocolErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]
 
-export interface ProtocolErrorData {
+interface ProtocolErrorData {
   code: ProtocolErrorCode
   retryable: boolean
 }

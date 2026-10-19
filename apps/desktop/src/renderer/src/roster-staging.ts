@@ -165,7 +165,7 @@ export function dayWords(date: string): string {
 }
 
 /** A recorded price as a review shows it: the two amounts, the cached one when there is one, and where and when it was read. */
-export function priceReview(price: RosterPriceShape): string {
+function priceReview(price: RosterPriceShape): string {
   const read = [price.source ? siteOf(price.source) : null, price.as_of ? dayWords(String(price.as_of)) : null].filter(Boolean).join(', ')
   return [priceText(price), price.cached_input === undefined ? null : `cached $${money(price.cached_input)}`, read === '' ? null : read].filter(Boolean).join(' · ')
 }
@@ -435,7 +435,7 @@ export function teamUpdateWords(count: number): string | null {
 // ---------------------------------------------------------------------------------------------
 // Edits: every helper returns new data and never mutates its input.
 
-export type AgentPatch = { [Key in Exclude<keyof RosterAgentShape, 'id' | 'roles' | 'class'>]?: RosterAgentShape[Key] | undefined }
+type AgentPatch = { [Key in Exclude<keyof RosterAgentShape, 'id' | 'roles' | 'class'>]?: RosterAgentShape[Key] | undefined }
 
 /** Optional fields set to `undefined` leave the file. */
 export function updateAgent(data: RosterDataShape, id: string, patch: AgentPatch): RosterDataShape {
@@ -450,7 +450,7 @@ export function updateAgent(data: RosterDataShape, id: string, patch: AgentPatch
   }
 }
 
-export interface Candidate { agent: string; efforts: RosterEffort[]; choice: boolean }
+interface Candidate { agent: string; efforts: RosterEffort[]; choice: boolean }
 
 export function parseCandidate(text: string): Candidate {
   const [agent = '', efforts = ''] = text.split('@')
@@ -692,7 +692,7 @@ export function setProviderAnswer(data: RosterDataShape, providerId: string, ans
 }
 
 /** The id the skills folder's difference carries; no skill can be named so. */
-export const SKILLS_SOURCE_ID = '.source'
+const SKILLS_SOURCE_ID = '.source'
 
 /** A skill's marks in the team, or none: every app that may receive private work has it, and it is not public. */
 export function skillMark(data: Pick<RosterDataShape, 'skills'>, name: string): RosterSkillShape {
@@ -908,7 +908,7 @@ const APP_PROVIDERS: Readonly<Record<RosterHarness, { id: string; name: string }
   opencode: { id: 'opencode-go', name: 'OpenCode Go' }
 }
 
-export interface Landing {
+interface Landing {
   /** The provider a new agent would run on. */
   provider: { id: string; name: string }
   /** True when the roster has no such provider yet, so its private-work answer must be asked. */
@@ -1049,10 +1049,6 @@ export function addRole(data: RosterDataShape, name: string, line: string, candi
   let next: RosterDataShape = { ...data, roles: [...data.roles, { id, ...(line.trim() === '' ? {} : { description: line.trim() }), candidates: [], then: 'lead' }] }
   for (const agent of candidates) next = toggleAgentRole(next, agent, id)
   return next
-}
-
-export function updateRoute(data: RosterDataShape, harness: RosterHarness, patch: Partial<Omit<RosterRouteShape, 'harness'>>): RosterDataShape {
-  return { ...data, harness_routes: data.harness_routes.map((route) => (route.harness === harness ? { ...route, ...patch } : route)) }
 }
 
 /**

@@ -32,15 +32,15 @@ export const VOICE_MODELS: readonly VoiceModel[] = Object.freeze([
   }
 ])
 
-export const VOICE_MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/'
-export const VOICE_SAMPLE_RATE = 16_000
-export const VOICE_MAX_SECONDS = 120
+const VOICE_MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/'
+const VOICE_SAMPLE_RATE = 16_000
+const VOICE_MAX_SECONDS = 120
 /** Two minutes of 16 kHz mono 16-bit PCM plus a generous header allowance. */
 export const VOICE_MAX_WAV_BYTES = VOICE_MAX_SECONDS * VOICE_SAMPLE_RATE * 2 + 4_096
-export const VOICE_TRANSCRIBE_TIMEOUT_MS = 180_000
+const VOICE_TRANSCRIBE_TIMEOUT_MS = 180_000
 const MAX_TRANSCRIPT_OUTPUT_BYTES = 1024 * 1024
 
-export class VoiceError extends Error {
+class VoiceError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'VoiceError'
@@ -179,7 +179,7 @@ export const SPEECH_MODEL_FILE = 'ggml-silero-v6.2.0.bin'
  */
 export const SPEECH_THRESHOLD = 0.3
 
-export interface EngineFiles {
+interface EngineFiles {
   whisper: string
   speechDetector: string
   speechModel: string
@@ -224,7 +224,7 @@ export function transcriptFromOutput(stdout: string): string {
     .trim()
 }
 
-export interface WhisperRun {
+interface WhisperRun {
   binary: string
   args: string[]
   timeoutMs?: number | undefined

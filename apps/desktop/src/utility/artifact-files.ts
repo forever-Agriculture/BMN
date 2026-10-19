@@ -19,8 +19,8 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 
-export const ARTIFACT_MAX_IMPORT_BYTES = 250 * 1024 * 1024
-export const ARTIFACT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024
+const ARTIFACT_MAX_IMPORT_BYTES = 250 * 1024 * 1024
+const ARTIFACT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024
 
 export type ArtifactFileErrorCode =
   | 'source-missing'

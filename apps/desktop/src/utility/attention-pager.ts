@@ -14,7 +14,7 @@ export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.fre
 /** A request that fell due while the owner was at the desk is still sent if they leave this soon after it opened. */
 export const LEFT_WITHIN_MS = 10 * 60_000
 
-export interface AttentionPagerOptions {
+interface AttentionPagerOptions {
   /** The request as stored now, or null when it is gone. */
   current(requestId: string): Promise<AttentionRecord | null>
   /** False only when nothing was attempted and recovery may safely retry. */

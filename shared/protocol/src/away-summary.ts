@@ -29,7 +29,7 @@ export type AwaySourceGap =
   | { kind: 'expired' }
 
 /** A gap in Fable's reason words. */
-export function awayGapWords(gap: AwaySourceGap): string {
+function awayGapWords(gap: AwaySourceGap): string {
   switch (gap.kind) {
     case 'missing': return 'not recorded'
     case 'unreadable': return 'unreadable'
@@ -129,7 +129,7 @@ export interface AwaySummaryInput extends AwaySummaryPayload {
   devAuto: { result: DevAutoRunsResult; workspaceNames: Record<string, string> } | null
 }
 
-export interface AwayWaitingRow {
+interface AwayWaitingRow {
   requestId: string
   sessionId: string
   age: string
@@ -139,7 +139,7 @@ export interface AwayWaitingRow {
   command: boolean
   before: boolean
 }
-export interface AwayWentOnRow {
+interface AwayWentOnRow {
   requestId: string
   sessionId: string
   /** When it closed. */
@@ -152,11 +152,11 @@ export interface AwayWentOnRow {
 }
 /** A link opens a session, a published file or a dev-auto run BMN validated; anything else stays words. */
 export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact' | 'workflow'; id: string; text: string }> }
-export interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
+interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
 /** One dev-auto run, once: a short title, its state and one line; the rest opens in place (Fable's redesign 2026-10-18). */
-export interface AwayRunRow { key: string; title: string; state: 'blocked' | 'finished'; text: string; full: string; rows: AwayDecisionRow[] }
+interface AwayRunRow { key: string; title: string; state: 'blocked' | 'finished'; text: string; full: string; rows: AwayDecisionRow[] }
 /** One session's activity as one line; every count it holds is in `lines`. */
-export interface AwayActivityRow { sessionId: string; where: string; text: string; lines: string[] }
+interface AwayActivityRow { sessionId: string; where: string; text: string; lines: string[] }
 
 export interface AwaySummaryView {
   label: 'While you were away' | 'While you are away'
@@ -224,13 +224,13 @@ export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolve
 }
 
 /** An app's name from its harness id; another id stands as itself. */
-export function awayAppName(app: string | null): string | null {
+function awayAppName(app: string | null): string | null {
   if (app === null) return null
   return (ROSTER_APP_NAMES as Record<string, string>)[app as RosterHarness] ?? app
 }
 
 /** How long a request has waited: "now", "5 min", "3 h", "2 d". */
-export function awayAgeWords(openedAt: string, now: Date): string {
+function awayAgeWords(openedAt: string, now: Date): string {
   const minutes = Math.floor((now.getTime() - Date.parse(openedAt)) / 60_000)
   if (!Number.isFinite(minutes) || minutes < 1) return 'now'
   if (minutes < 60) return `${minutes} min`
@@ -250,7 +250,7 @@ function sourceWords(source: OwnerAwayView['source'], verb: 'set' | 'ended', age
 }
 
 /** The head line: duration, period, source; while away "so far" and since. */
-export function awayHeadWords(away: Pick<OwnerAwayView, 'state' | 'since' | 'endedAt' | 'source' | 'endedBy' | 'agentSessionId'>, now: Date, sessionName: (sessionId: string) => string | null): string {
+function awayHeadWords(away: Pick<OwnerAwayView, 'state' | 'since' | 'endedAt' | 'source' | 'endedBy' | 'agentSessionId'>, now: Date, sessionName: (sessionId: string) => string | null): string {
   if (away.since === null) return 'Not away'
   const agent = away.agentSessionId === null ? null : sessionName(away.agentSessionId)
   const set = sourceWords(away.source, 'set', agent)

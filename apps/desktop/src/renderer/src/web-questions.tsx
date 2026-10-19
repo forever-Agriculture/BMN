@@ -56,7 +56,7 @@ export function whenWords(at: string, now: Date = new Date()): string {
   return sameDay ? `Today ${clockWords(at)}` : shortDate(at)
 }
 
-export function clockWords(at: string): string {
+function clockWords(at: string): string {
   return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
@@ -67,7 +67,7 @@ export function askWaits(snapshot: Pick<WebQuestionsSnapshot, 'holder'>, researc
   return snapshot.holder.kind === 'question' ? 'One question at a time: the one below is under way.' : 'Models research is running, so a question cannot start yet.'
 }
 
-export interface WebQuestionsState {
+interface WebQuestionsState {
   snapshot: WebQuestionsSnapshot | null
   loadError: string | null
   /** A Stop, a removal or the switch is on its way. */

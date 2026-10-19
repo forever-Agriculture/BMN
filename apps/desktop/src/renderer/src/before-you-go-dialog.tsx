@@ -22,7 +22,7 @@ import { Dialog } from './dialog'
 import { Segmented } from './history-preferences'
 import './before-you-go.css'
 
-export interface GrantAnswerReply {
+interface GrantAnswerReply {
   outcome: 'granted' | 'repeated' | 'refused'
   reason?: GrantRefusalReason
   detail?: string

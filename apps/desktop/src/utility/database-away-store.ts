@@ -59,10 +59,10 @@ export function markAwaySummaryShown(database: DatabaseConnection, periodId: str
 }
 
 /** Which conversation was handed which away state (Story 76.4), kept so a resume after a restart is told back. */
-export const AWAY_NOTICES_KEY = 'away-notices-v1'
+const AWAY_NOTICES_KEY = 'away-notices-v1'
 export interface StoredAwayTold { revision: number; state: 'away' | 'back'; status: 'claimed' | 'printed'; incarnationId: string; claimedAt?: string; claimId?: string }
 
-export function getAwayNotices(database: DatabaseConnection): Array<[string, StoredAwayTold]> {
+function getAwayNotices(database: DatabaseConnection): Array<[string, StoredAwayTold]> {
   const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(AWAY_NOTICES_KEY) as { value_json: string } | undefined
   let value: unknown
   try { value = row ? JSON.parse(row.value_json) : null } catch { value = null }
@@ -75,7 +75,7 @@ export function getAwayNotices(database: DatabaseConnection): Array<[string, Sto
   })
 }
 
-export function putAwayNotices(database: DatabaseConnection, entries: Array<[string, StoredAwayTold]>, now: string): void {
+function putAwayNotices(database: DatabaseConnection, entries: Array<[string, StoredAwayTold]>, now: string): void {
   database.prepare(
     `INSERT INTO app_setting(key, value_json, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`

@@ -48,7 +48,7 @@ export function pushPolicyRepository(value: unknown): string | null {
   return REPOSITORY.test(lower) && lower.split('/')[1] !== '.' && lower.split('/')[1] !== '..' ? lower : null
 }
 
-export interface PushPolicyRecord {
+interface PushPolicyRecord {
   version: 1
   /** Grows by one with every change; Health names the one it saw. */
   revision: number
@@ -61,7 +61,7 @@ export interface PushPolicyRecord {
 /** The record as stored, or `unknown` when a row exists that cannot be read: unknown counts as denied and is never re-initialised by itself. */
 export type PushPolicyRead = { state: 'read'; record: PushPolicyRecord } | { state: 'unknown'; reason: string }
 
-export const EMPTY_PUSH_POLICY: PushPolicyRecord = Object.freeze({ version: 1, revision: 0, owners: [], levels: [] }) as PushPolicyRecord
+const EMPTY_PUSH_POLICY: PushPolicyRecord = Object.freeze({ version: 1, revision: 0, owners: [], levels: [] }) as PushPolicyRecord
 
 const isIso = (value: unknown): value is string => typeof value === 'string' && !Number.isNaN(Date.parse(value))
 
@@ -134,7 +134,7 @@ export function applyPushPolicyChange(current: PushPolicyRead, change: PushPolic
 }
 
 /** Whether the policy is in force: read, at least one owner allowed, and the master carrying the pointer. */
-export interface PushPolicyStanding {
+interface PushPolicyStanding {
   authorizes: boolean
   /** Why nothing is authorized, in a few words; null while it authorizes. */
   why: string | null

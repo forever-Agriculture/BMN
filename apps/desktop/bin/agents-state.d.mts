@@ -27,12 +27,9 @@ export declare function currentPointerPath(): string
 export declare function generationPath(number: number): string
 export declare function approvalLockPath(): string
 export declare function historyLogPath(): string
-export declare function generationHash(generation: Omit<Generation, 'hash'> & { hash?: string }): string
-export declare function readRosterFile(path?: string): { path: string; text: string; hash: string }
 export declare function readValidRoster(path?: string): { path: string; text: string; hash: string; data: RosterData; errors: RosterIssue[]; warnings: RosterIssue[]; sections: RosterSection[] }
 export declare function readGeneration(number: number): Generation | null
 export declare function generationNumbers(): number[]
-export declare function lastGoodGeneration(): number | null
 export declare function readApproved(): Generation
 export declare function everApproved(): boolean
 export declare function approvedIfAny(): Generation | null

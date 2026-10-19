@@ -14,7 +14,7 @@ import {
 // OpenCode 1.18.31 session IDs (bin/bmn OPENCODE_REFERENCE); OpenCode 2.0.28 keeps the same form.
 const SESSION_ID = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 
-export interface OpenCodeHistoryOptions {
+interface OpenCodeHistoryOptions {
   home: string
   open: OpenReadOnly
   env?: NodeJS.ProcessEnv

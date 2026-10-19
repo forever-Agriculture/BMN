@@ -22,7 +22,7 @@ import {
 export const DAY_MS = 86_400_000
 export const RUN_INTERVAL_MS = DAY_MS
 /** OpenCode deletes a session a live process holds (docs/agent-history.md), so anything this recent is left alone. */
-export const RECENT_SESSION_MS = DAY_MS
+const RECENT_SESSION_MS = DAY_MS
 
 export interface HistoryCandidate {
   id: string
@@ -33,7 +33,7 @@ export interface HistoryCandidate {
 }
 
 /** `absent`: the agent is not installed here, so History does not list it. */
-export type AdapterAvailability =
+type AdapterAvailability =
   /**
    * `pass`: what this look found that the same pass's candidates and deletes must use (OpenCode's layout),
    * so a look taken meanwhile for another reader cannot change it; the runner hands it back as it came.
@@ -120,7 +120,7 @@ export function runningCommandLines(procRoot = '/proc'): string {
   return lines.join('\n')
 }
 
-export interface AgentHistoryOptions {
+interface AgentHistoryOptions {
   home: string
   adapters: readonly AgentHistoryAdapter[]
   readSettings(): Promise<AgentHistorySettings>

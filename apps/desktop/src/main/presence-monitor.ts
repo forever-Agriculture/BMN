@@ -8,7 +8,7 @@ export interface OwnerPresence {
 }
 
 /** Claude Code treats a terminal interaction within the last minute as the owner watching; this matches it. */
-export const AWAY_AFTER_MS = 60_000
+const AWAY_AFTER_MS = 60_000
 /** While away, the return is noticed within this long. */
 const AWAY_CHECK_MS = 2_000
 /** Checks again this often while the idle time cannot be read. */

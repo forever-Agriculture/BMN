@@ -14,21 +14,21 @@ import { createInterface } from 'node:readline'
  * never a quiet fall back to BMAD.
  */
 export const FORMAT = 'bmn-plan'
-export const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 1
 export const NOTE_LIMIT = 160
-export const PLAN_LIMIT = 20 * 1024
-export const VISION_LIMIT = 8 * 1024
-export const EPIC_LIMIT = 60 * 1024
+const PLAN_LIMIT = 20 * 1024
+const VISION_LIMIT = 8 * 1024
+const EPIC_LIMIT = 60 * 1024
 export const STATUSES = ['backlog', 'ready', 'in-progress', 'review', 'blocked', 'paused', 'done', 'dropped']
-export const REASON_STATUSES = ['blocked', 'paused', 'dropped']
-export const FINISHED = ['done', 'dropped']
+const REASON_STATUSES = ['blocked', 'paused', 'dropped']
+const FINISHED = ['done', 'dropped']
 export const BMAD_STATUSES = ['backlog', 'ready-for-dev', 'in-progress', 'review', 'done', 'optional', 'contexted', 'drafted']
-export const LEGACY_MARKER = /^<!--\s*bmn-plan:\s*bmad-legacy\b([^>]*)-->\s*$/u
-export const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signals', 'Standing constraints', 'Architecture', 'Decisions', 'Truth documents']
+const LEGACY_MARKER = /^<!--\s*bmn-plan:\s*bmad-legacy\b([^>]*)-->\s*$/u
+const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signals', 'Standing constraints', 'Architecture', 'Decisions', 'Truth documents']
 /** The foundation every plan builds on (owner, 2026-10-17): what the project is for and its numbered principles. */
-export const VISION_SECTIONS = ['Vision', 'Principles']
-export const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
-export const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
+const VISION_SECTIONS = ['Vision', 'Principles']
+const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
+const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }
 
 export class PlanError extends Error {
@@ -44,18 +44,18 @@ export function rowToken(key, status, note) {
 }
 
 /** Epic number of a row key: `epic-77`, `77-1-slug`, `epic-77-retrospective`. */
-export function rowEpic(key) {
+function rowEpic(key) {
   const match = /^(?:epic-)?(\d+)(?:[-.]|$)/u.exec(key)
   return match ? Number(match[1]) : null
 }
 
 /** Story number of a row key: `77-1-slug` gives `77.1`; an epic row gives null. */
-export function rowStory(key) {
+function rowStory(key) {
   const match = /^(\d+)-(\d+)(?:-|$)/u.exec(key)
   return match ? `${Number(match[1])}.${Number(match[2])}` : null
 }
 
-export function insideDirectory(root, path) {
+function insideDirectory(root, path) {
   const part = relative(root, path)
   return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`))
 }
@@ -260,7 +260,7 @@ export function readEpicFile(path) {
   return { path, bytes: Buffer.byteLength(text), legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, sections, stories }
 }
 
-export function epicFiles(planRoot) {
+function epicFiles(planRoot) {
   const directory = join(planRoot, 'epics')
   let names
   try { names = readdirSync(directory) } catch { return [] }

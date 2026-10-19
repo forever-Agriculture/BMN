@@ -1,20 +1,18 @@
 // MODULE: agents-check.mjs - Epic 60.3: `bmn roster check|explain|route|visibility|bind`, the fail-closed check before work leaves for another agent
-import { RosterError, publicOnlyReasons } from './agents-roster.mjs'
+import { RosterError } from './agents-roster.mjs'
 import { readApprovedWithFile } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 import { bindSession, canonicalDirectory, refreshVisibility, workspaceVisibility } from './agents-check-workspace.mjs'
 import { evaluate, evaluateResearch } from './agents-check-evaluate.mjs'
 import { inspectRoute, verifyReceipt } from './agents-check-team-ask.mjs'
-export { BINDING_WINDOW_MS, OPENCODE_NEXT_STEP, REFUSALS, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, TESTED_HARNESS_VERSIONS, VISIBILITY_MAX_AGE_MS, WEB_NEXT_STEP, WEB_QUESTION_COMMAND, WEB_TOOLS_NOTE, setReadTracer } from './agents-check-base.mjs'
+export { BINDING_WINDOW_MS, OPENCODE_NEXT_STEP, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, TESTED_HARNESS_VERSIONS, VISIBILITY_MAX_AGE_MS, WEB_NEXT_STEP, WEB_TOOLS_NOTE, setReadTracer } from './agents-check-base.mjs'
 export { parseDispatch, readCodexConfig } from './agents-check-argv.mjs'
 export { contextTestSources, limitStanding, resolveClaudeRoute, resolveCodexRoute, resolveOpenCodeRoute } from './agents-check-routes.mjs'
-export { bindSession, bindingPath, destinationOf, harnessVersion, normalizedGithubOrigin, privateWorkAnswer, receiptHash, refreshVisibility, sessionRecord, sessionRecordAt, sessionRecordFiles, visibilityDirectory, visibilityPath, workspaceOrigin, workspaceRoot, workspaceVisibility } from './agents-check-workspace.mjs'
+export { bindSession, bindingPath, destinationOf, harnessVersion, normalizedGithubOrigin, privateWorkAnswer, receiptHash, refreshVisibility, sessionRecord, sessionRecordAt, sessionRecordFiles, visibilityPath, workspaceRoot, workspaceVisibility } from './agents-check-workspace.mjs'
 export { consequences } from './agents-check-consequences.mjs'
-export { CLAUDE_READ_ONLY_TESTED, CLAUDE_READ_ONLY_TOOLS, CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, OPENCODE_RESEARCH_TOOLS_SEEN, READ_ONLY_ITEMS, RESEARCH_TOOLS, codexSignInFile, evaluate, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, removeResearchCodexFolders, researchFormHash, researchFormProblem, researchRunsDirectory, versionStanding } from './agents-check-evaluate.mjs'
+export { CLAUDE_READ_ONLY_TESTED, CLAUDE_READ_ONLY_TOOLS, CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, CODEX_RESEARCH_TOOLS_SEEN, CODEX_SIGN_IN, OPENCODE_RESEARCH_TOOLS_SEEN, READ_ONLY_ITEMS, RESEARCH_TOOLS, evaluate, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, removeResearchCodexFolders, researchFormHash, researchFormProblem, researchRunsDirectory, versionStanding } from './agents-check-evaluate.mjs'
 export { askConsent, askRequest, evaluateAsk, expectedDestination, inspectRoute, modeInput, teamRunsDirectory, verifyReceipt } from './agents-check-team-ask.mjs'
-
-export { publicOnlyReasons }
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from

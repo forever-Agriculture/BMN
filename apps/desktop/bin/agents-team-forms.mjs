@@ -56,10 +56,10 @@ export const ASK_READS = Object.freeze({
 })
 
 /** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
-export const OPENCODE_ASK_TITLE = 'BMN ask'
+const OPENCODE_ASK_TITLE = 'BMN ask'
 
 /** Codex logs the turn span that names each thread's model and effort only at this level; the log holds no prompt or answer text (72.1 AC2). */
-export const CODEX_ASK_LOG = 'codex_core=info,codex_core::stream_events_utils=debug'
+const CODEX_ASK_LOG = 'codex_core=info,codex_core::stream_events_utils=debug'
 
 /** Claude Code's read tools, web search and sub-agents; Bash only for Git's four read commands, through BMN's git first on PATH (72.9 AC1). A browser ask replaces the empty MCP configuration and allows its browser tools (74.3). */
 export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent',
@@ -197,7 +197,7 @@ function programFile(path) {
 }
 
 /** What changes when a file is replaced or written: its device, inode, size and times, through any link to it. */
-export function programStat(path) {
+function programStat(path) {
   const link = lstatSync(path, { bigint: true })
   const stat = statSync(path, { bigint: true })
   return {

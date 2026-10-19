@@ -14,7 +14,7 @@ export interface ReportedResumeCommand {
 
 export const REPORTED_RESUME_MAX_ARGUMENTS = 64
 export const REPORTED_RESUME_MAX_ARGUMENT_BYTES = 1024
-export const REPORTED_RESUME_MAX_TOTAL_BYTES = 8 * 1024
+const REPORTED_RESUME_MAX_TOTAL_BYTES = 8 * 1024
 
 const utf8 = new TextEncoder()
 

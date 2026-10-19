@@ -2,18 +2,18 @@
 import { failureDetail } from './bridge-error'
 import { userScrollUpdate, type SessionView, type SessionViewUpdate } from './workspace-layout'
 
-export interface TrackedTerminal {
+interface TrackedTerminal {
   readonly buffer: { readonly active: { readonly viewportY: number; readonly baseY: number } }
   onScroll(listener: (line: number) => void): { dispose(): void }
   scrollToLine(line: number): void
 }
 
-export interface TrackedCapture {
+interface TrackedCapture {
   write(bytes: Uint8Array, settled: () => void): void
   schedule(): void
 }
 
-export interface TerminalViewTracking {
+interface TerminalViewTracking {
   /** Writes one output chunk. Output never reports a view change; settle and capture always run. */
   write(bytes: Uint8Array, settled: () => void): void
   /** Runs a programmatic viewport change (restore, fit, scroll to bottom) without reporting it. */

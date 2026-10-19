@@ -40,7 +40,7 @@ export const INTERACT_TOOLS = Object.freeze(['browser_click', 'browser_type', 'b
 /** What the record keeps of a browser ask: its pages and screenshots, bounded. */
 export const BROWSER_LIMITS = Object.freeze({ pages: 200, url: 2000, pageTitle: 300, screenshots: 20, screenshot: 5 * 1024 * 1024 })
 /** A browser ask's parts of its run folder: the server's own folder, and the record BMN writes from it. */
-export const BROWSER_FILES = Object.freeze({ folder: 'browser', record: 'browser.json' })
+const BROWSER_FILES = Object.freeze({ folder: 'browser', record: 'browser.json' })
 const SCREENSHOT = /^[A-Za-z0-9._-]{1,200}\.(png|jpe?g)$/u
 
 /** BMN's relay between the app and the server: it starts the server in the run's browser folder, without the app's workspace roots. */
@@ -51,7 +51,7 @@ export const BROWSER_CONFIG = fileURLToPath(new URL('./ask-browser-config.json',
 export const BROWSER_LIMIT_WORDS = 'Playwright keeps the browser\'s requests to this address, but it is not a security boundary: a redirect can leave it. Downloads are refused.'
 
 /** The owner's private runtime folder, where each browser ask's temporary folder goes. */
-export function browserRuntime() {
+function browserRuntime() {
   return join('/run/user', String(process.getuid()))
 }
 

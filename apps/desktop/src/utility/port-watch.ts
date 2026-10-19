@@ -16,7 +16,7 @@ export const HINT_SCAN_SPACING_MS = BUSY_SCAN_MS
  * Lines a dev server prints when it starts listening. They stay narrow on purpose: looser ones matched ssh banners
  * and timestamps in Superset's scanner. Matched against the output with escape sequences removed.
  */
-export const HINT_PATTERNS: readonly RegExp[] = [
+const HINT_PATTERNS: readonly RegExp[] = [
   /\blistening on\b/i,
   /\bLocal:\s+https?:\/\//,
   /\bServing HTTP on\b/,
@@ -30,7 +30,7 @@ const HINT_CARRY_CHARS = 160
 // eslint-disable-next-line no-control-regex
 const ESCAPES = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])/g
 
-export interface PortWatchOptions {
+interface PortWatchOptions {
   /** One pass over /proc for these sessions; throws when the socket tables cannot be read. */
   scan(sessionIds: ReadonlySet<string>): Promise<Map<string, ListeningPort[]>>
   /** Every session BMN knows, live or stopped: a stopped session's leftover server stays under it. */

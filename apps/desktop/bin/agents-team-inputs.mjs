@@ -36,7 +36,7 @@ const mib = (bytes) => `${Math.round((bytes / 1024 / 1024) * 10) / 10} MiB`
 
 /** Each pattern by the name a refusal gives; the key block's own pattern spans lines, the rest are read a line at a time. */
 const KEY_BLOCK = ['a private key block', /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----\r?\n(?:[A-Za-z0-9+/=]{40,}\r?\n){2,}/gu]
-export const CREDENTIAL_PATTERNS = Object.freeze([
+const CREDENTIAL_PATTERNS = Object.freeze([
   KEY_BLOCK,
   ['an Anthropic key', /\bsk-ant-[A-Za-z0-9_-]{20,}/gu],
   ['an OpenAI key', /\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}/gu],
@@ -62,7 +62,7 @@ export const CREDENTIAL_PATTERNS = Object.freeze([
  * turns up in about one random key block in five hundred). Only the value counts, never a
  * variable's name. Every other match counts.
  */
-export const SYNTHETIC_WORDS = /(synthetic|planted|sentinel|example|made-?up|placeholder|redacted|sample|fixture|0123456789|abcdefghij)/iu
+const SYNTHETIC_WORDS = /(synthetic|planted|sentinel|example|made-?up|placeholder|redacted|sample|fixture|0123456789|abcdefghij)/iu
 
 /** Each match's value: the pattern's `value` group where it has one, else the whole match. */
 function matches(pattern, text) {
@@ -176,13 +176,13 @@ export function maskCredentials(text, { jsonLines = false } = {}) {
 /** File names that are key stores or sign-in files whatever they hold. */
 const SECRET_NAMES = new Set(['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.git-credentials', '.netrc', '.pgpass', '.credentials.json'])
 const SECRET_SUFFIXES = ['.p12', '.pfx', '.jks', '.keystore']
-export function secretName(path) {
+function secretName(path) {
   const name = basename(path)
   return SECRET_NAMES.has(name) || SECRET_SUFFIXES.some((suffix) => name.endsWith(suffix))
 }
 
 /** The folders of the home that hold credentials or an app's configuration: never an input, never a project. */
-export function credentialLocations(home = homedir()) {
+function credentialLocations(home = homedir()) {
   return ['.ssh', '.gnupg', '.aws', '.azure', '.kube', '.docker', '.codex', '.claude', '.claude.json', '.config/opencode', '.local/share/opencode', '.local/state/opencode',
     '.config/bmn', '.config/gh', '.config/gcloud', '.netrc', '.git-credentials', '.npmrc', '.pypirc', '.cursor', '.gemini'].map((entry) => join(home, entry))
 }
@@ -190,7 +190,7 @@ export function credentialLocations(home = homedir()) {
 const within = (path, folder) => path === folder || path.startsWith(`${folder}${sep}`)
 
 /** Why a real path is a credential or configuration location, or null. */
-export function credentialLocation(real, home = homedir()) {
+function credentialLocation(real, home = homedir()) {
   const location = credentialLocations(home).find((folder) => within(real, folder))
   if (location !== undefined) return `${location} holds credentials or an app's configuration`
   if (secretName(real)) return `${basename(real)} is a key store or sign-in file`
@@ -201,7 +201,7 @@ export function credentialLocation(real, home = homedir()) {
 // Text, files and pictures
 
 /** Whether bytes are UTF-8 text: valid UTF-8 and no NUL. */
-export function isText(bytes) {
+function isText(bytes) {
   if (bytes.includes(0)) return false
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(bytes)
@@ -267,7 +267,7 @@ const git = (cwd, args, options = {}) => execFileSync('git', args, {
 })
 
 /** The Git working tree a folder belongs to, or null when it is in none. */
-export function workingTreeRoot(folder) {
+function workingTreeRoot(folder) {
   try {
     const root = git(folder, ['rev-parse', '--show-toplevel']).trim()
     return root === '' ? null : realpathSync(root)
@@ -305,7 +305,7 @@ export function canonicalProject(folder) {
 }
 
 /** Why a folder can never be a project: the home folder, `/`, or the apps' and BMN's configuration folders. */
-export function notAProject(real, home = homedir()) {
+function notAProject(real, home = homedir()) {
   if (real === '/') return '/ is not a project'
   if (real === realpathSafe(home)) return 'the home folder is not a project'
   const locations = credentialLocations(realpathSafe(home))

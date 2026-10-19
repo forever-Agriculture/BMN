@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
  * kernel started it makes a recycled PID visibly different. The token is opaque and compared only
  * for equality.
  */
-export type ProcessStartIdentity = (pid: number) => Promise<string>
+type ProcessStartIdentity = (pid: number) => Promise<string>
 
 /** Field 22 of /proc/<pid>/stat, in clock ticks since boot; the command in field 2 may hold spaces. */
 async function linuxProcessStartIdentity(pid: number): Promise<string> {

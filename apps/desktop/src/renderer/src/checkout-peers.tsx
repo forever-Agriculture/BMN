@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RepositoryIdentity, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 
-export interface CheckoutPeer {
+interface CheckoutPeer {
   sessionId: string
   sessionName: string
   workspaceName: string
 }
 
-export interface CheckoutComparison {
+interface CheckoutComparison {
   /** A non-Git selection has no checkout to compare. */
   outsideGit: boolean
   /** An unreadable selected directory or live peer leaves the comparison inconclusive. */

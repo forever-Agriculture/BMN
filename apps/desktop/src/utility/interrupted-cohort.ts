@@ -23,7 +23,7 @@ export interface InterruptedIncarnationRow {
   offeredAt: string | null
 }
 
-export interface InterruptionCohortSelection {
+interface InterruptionCohortSelection {
   cohortId: string
   cause: ResumableStopCause
   stoppedAt: string

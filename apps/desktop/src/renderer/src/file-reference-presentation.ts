@@ -13,7 +13,7 @@ export function baseDescription(base: FileReferenceBase | null): { label: string
     : { label: 'Chosen folder, this opening only', path: base.path }
 }
 
-export interface PreviewLines {
+interface PreviewLines {
   /** Line numbers for the gutter, one per line. */
   gutter: string
   before: string

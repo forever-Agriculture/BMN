@@ -200,7 +200,7 @@ const TEXT_MEDIA = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|toml)
 
 export const UNROUTED = Symbol('unrouted')
 
-export interface CompanionServiceOptions {
+interface CompanionServiceOptions {
   database: DatabaseWorkerClient
   manager: SessionManager
   roots: ApplicationRoots
@@ -266,7 +266,7 @@ function turnFilesFrom(params: Record<string, unknown>, key: string): number {
 }
 
 /** Paste text as one bracketed paste; the end marker is removed from the payload so it cannot close the paste early. */
-export function bracketedPaste(payload: string, submit: boolean): Uint8Array {
+function bracketedPaste(payload: string, submit: boolean): Uint8Array {
   const safe = payload.split(BRACKETED_PASTE_END).join('')
   return new TextEncoder().encode(`${BRACKETED_PASTE_START}${safe}${BRACKETED_PASTE_END}${submit ? '\r' : ''}`)
 }

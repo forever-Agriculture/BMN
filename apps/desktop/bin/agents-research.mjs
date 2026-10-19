@@ -25,9 +25,8 @@ export { processStart }
  * Scores, cost per task and recommendations are a later release.
  */
 
-export { RESEARCH_APPS }
 /** One research ends after this long, whatever it has found. */
-export const RESEARCH_LIMIT_MS = 20 * 60 * 1000
+const RESEARCH_LIMIT_MS = 20 * 60 * 1000
 /** How many models that are not on the team one research may list. */
 export const MAX_LISTED = 20
 /** How many of the team's models one run is asked about. */
@@ -38,8 +37,6 @@ const MAX_ANSWER_BYTES = 4 * 1024 * 1024
 const MAX_RUNS_KEPT = 12
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,99}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
-/** The sources a value may come from, best first (first release: prices and capacity only). */
-export const SOURCE_RANKS = ['Provider pages', 'Other sites']
 
 export function researchDirectory() {
   return `${stateDirectory()}/research`
@@ -872,7 +869,7 @@ export function mergeResearch(store, run, found) {
   return { version: 1, runs: [...store.runs, run].slice(-MAX_RUNS_KEPT), models }
 }
 
-export function saveResearch(store) {
+function saveResearch(store) {
   writePrivate(researchResultsPath(), `${JSON.stringify(store, null, 1)}\n`)
 }
 

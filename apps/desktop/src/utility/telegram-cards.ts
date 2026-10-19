@@ -23,7 +23,7 @@ const COMMAND_CHARS = 3000
 const OUTCOME_QUESTION_CHARS = 200
 const MIN_QUESTION_CHARS = 40
 
-export interface InlineButton {
+interface InlineButton {
   text: string
   callback_data: string
 }
@@ -143,7 +143,7 @@ function keyboardFor(labels: string[], tokens: string[], marked: number | null =
   return buttons.length <= ONE_ROW_OPTIONS && total <= ONE_ROW_CHARS ? [buttons] : buttons.map((button) => [button])
 }
 
-export interface QuestionCardInput {
+interface QuestionCardInput {
   header: CardHeader
   prompt: AttentionQuestionsPrompt
   /** The question on the card now, and the labels chosen for the ones before it. */
@@ -344,7 +344,7 @@ export function commandNeedsFile(prompt: AttentionPermissionPrompt): boolean {
     !permissionCleaned(prompt)
 }
 
-export interface PermissionCardInput {
+interface PermissionCardInput {
   header: CardHeader
   prompt: AttentionPermissionPrompt
   /** Allow once and Deny tokens; Deny is null when it would answer more than this request. */

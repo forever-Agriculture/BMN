@@ -9,13 +9,13 @@ export const ROSTER_APP_UPDATE_ARGUMENTS: Readonly<Record<RosterHarness, readonl
  * Apps BMN retired (Epic 71), named as they always were. An old team file or a stored record may
  * still name one: it is read and shown by this name, and nothing runs on it.
  */
-export const ROSTER_RETIRED_HARNESSES = ['cursor'] as const
+const ROSTER_RETIRED_HARNESSES = ['cursor'] as const
 export type RosterRetiredHarness = (typeof ROSTER_RETIRED_HARNESSES)[number]
 /** What a team file's app fields and lists may hold: an app BMN serves, or one it retired. */
 export type RosterListedApp = RosterHarness | RosterRetiredHarness
 export const RETIRED_APP_NAMES: Readonly<Record<RosterRetiredHarness, string>> = { cursor: 'Cursor' }
 /** Each retired app's program, so a saved command that starts one is recognised. */
-export const RETIRED_APP_PROGRAMS: Readonly<Record<string, RosterRetiredHarness>> = { 'cursor-agent': 'cursor' }
+const RETIRED_APP_PROGRAMS: Readonly<Record<string, RosterRetiredHarness>> = { 'cursor-agent': 'cursor' }
 /** The one sentence a screen gives where an old record names a retired app (71.1 design notes). */
 export const RETIRED_APP_LINE = 'Cursor was retired on 14 Oct 2026.'
 
@@ -51,7 +51,7 @@ export const ROSTER_CALLED_BY_BMN = 'bmn'
 export const ROSTER_JUDGE_ROLE = 'judge'
 /** The team file's layout now, and the one before it, which BMN still reads. */
 export const ROSTER_SCHEMA_VERSION = 3
-export type RosterSchemaVersion = 2 | 3
+type RosterSchemaVersion = 2 | 3
 export type RosterPrivateWork = 'allowed' | 'public_only'
 
 export interface RosterPriceShape { input: number; output: number; cached_input?: number; source?: string; as_of?: string }
@@ -101,10 +101,10 @@ export interface RosterRoleShape {
 
 export interface RosterProviderShape { id: string; name: string; hosts: string[]; sites?: string[]; private_work: RosterPrivateWork }
 
-export interface RosterExceptionShape { id: string; provider: string; folder: string }
+interface RosterExceptionShape { id: string; provider: string; folder: string }
 
 /** The owner's teammate for one role in one project (73.2): the project's real folder, the role, the agent, an optional effort and end date. */
-export interface RosterProjectChoiceShape { id: string; project: string; role: string; agent: string; effort?: RosterEffort; ends?: string }
+interface RosterProjectChoiceShape { id: string; project: string; role: string; agent: string; effort?: RosterEffort; ends?: string }
 
 /**
  * BMN's first OpenCode agent (70.4; the owner's card "Luna via Go", 2026-10-14): Luna's model through
@@ -436,7 +436,7 @@ export interface SkillsView {
   exposed: number
 }
 
-export interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
+interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
 /** What a skills install would do, before it does it (R60-NFR2), and what stays exposed whatever is installed. */
 export interface SkillsPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: SkillsPlanTarget[]; exposed: { harness: RosterHarness; skill: string; fix: string }[] }
 
@@ -496,7 +496,7 @@ export interface ToolsView {
 }
 
 /** One entry an install would set or remove, with what the file holds there now (values masked) and what it would hold. */
-export interface ToolsPlanTarget { harness: RosterHarness; tool: string; path: string; action: 'set' | 'remove'; words: string; before: string | null; after: string | null }
+interface ToolsPlanTarget { harness: RosterHarness; tool: string; path: string; action: 'set' | 'remove'; words: string; before: string | null; after: string | null }
 /** What a tools install would do, before it does it (R60-NFR2), and what stays exposed or blocked whatever is installed. */
 export interface ToolsPlan {
   ok: boolean
@@ -521,9 +521,9 @@ export interface ToolProposalView {
 }
 
 /** Whether BMN's own read of the cited page shows a researched value beside the model, and which source list the page is on (1 provider pages, 2 other sites). */
-export interface ResearchChecked { rank: 1 | 2; verified: boolean; why?: string }
+interface ResearchChecked { rank: 1 | 2; verified: boolean; why?: string }
 export interface ResearchPrice extends ResearchChecked { input: number; output: number; cached_input?: number; source: string; as_of: string }
-export interface ResearchWindow extends ResearchChecked { tokens: number; source: string; as_of: string }
+interface ResearchWindow extends ResearchChecked { tokens: number; source: string; as_of: string }
 /** One model as research found it (Story 60.10). `fresh`: the last research of the team saw it for the first time. */
 export interface ResearchModelView {
   id: string
@@ -537,7 +537,7 @@ export interface ResearchModelView {
   fresh: boolean
   foundLast: boolean
 }
-export type ResearchRunState = 'complete' | 'partial' | 'stopped' | 'failed'
+type ResearchRunState = 'complete' | 'partial' | 'stopped' | 'failed'
 /** An active agent and whether it could research now; `why` says why not in a few words, `reason` in the check's own. */
 export interface ResearcherView { id: string; name: string; harness: RosterHarness; ok: boolean; why?: string; reason?: string
   /** For a Codex researcher: the tools its fence test saw offered, and whether they were compared under the provider's own model list yet. */
@@ -604,12 +604,12 @@ export interface WebQuestionsSnapshot {
 export interface WebQuestionAsked { ok: boolean; message: string | null; snapshot: WebQuestionsSnapshot }
 
 /** Story 73.1: who asked a teammate, as the run recorded it: a BMN session (with its agent app), a shell, or the owner. */
-export type TeamAskAsker = { kind: 'owner' } | { kind: 'shell' } | { kind: 'session'; session: string; app?: string }
+type TeamAskAsker = { kind: 'owner' } | { kind: 'shell' } | { kind: 'session'; session: string; app?: string }
 /**
  * Story 72.9: how far a teammate's own app could read, by the mode it ran in: `computer` (any file the owner's user can read),
  * `folder` (its working folder), `text` (only the question and the files' text). A run made before 72.9 says `text`, or `folder` for its copy of the project.
  */
-export type TeamAskScope = 'computer' | 'folder' | 'text'
+type TeamAskScope = 'computer' | 'folder' | 'text'
 /** What a run's teammate could read: the mode its app ran in, in its own words, where it worked, and what went with the question. */
 export interface TeamAskReads {
   /** The app's mode (`codex-read-only`, `claude-read-tools`, `opencode-reader`, `opencode-asker`); null for a run made before 72.9. */

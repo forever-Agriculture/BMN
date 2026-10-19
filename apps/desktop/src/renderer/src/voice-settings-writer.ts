@@ -1,7 +1,7 @@
 // MODULE: voice-settings-writer.ts - one queue for whole-section voice saves, each built from the latest settings when sent
 import type { AppSettings, VoiceSettings } from '@bmn/protocol'
 
-export interface VoiceSettingsWriter {
+interface VoiceSettingsWriter {
   /**
    * Saves the voice section that `change` makes from the settings current when this save's turn comes, after every
    * earlier save has settled, so one field never writes back an older model, language or vocabulary. A `change`

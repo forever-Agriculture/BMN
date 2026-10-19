@@ -43,7 +43,6 @@ export declare function setAgentsMayAsk(on: boolean): void
 
 export declare function parseAskAnswer(answer: unknown): { ok: true; answer: string; claims: Omit<MarkedClaim, 'mark' | 'why'>[]; notFound: string[] } | { ok: false; reason: string }
 export declare function markClaims(claims: Omit<MarkedClaim, 'mark' | 'why'>[], options?: { fetchPage?: FetchPage; signal?: AbortSignal; deadline?: number }): Promise<MarkedClaim[]>
-export declare function markCounts(claims: Pick<MarkedClaim, 'mark'>[]): MarkCounts
 export declare function noResearcherWords(named: readonly string[] | null): string
 
 export interface AskResult {

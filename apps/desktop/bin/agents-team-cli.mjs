@@ -18,7 +18,7 @@ import { nestedAsk } from './agents-team-nested.mjs'
 import { BROWSER_LIMIT_WORDS, BROWSER_ROLE } from './agents-team-browser.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
-export const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
+const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
          [--small-work] [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]...
          [--data public] [--time-limit MINUTES] [--background] [--json]
        bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K
@@ -58,7 +58,7 @@ const FLAGS = ['small-work', 'background', 'json', 'help', 'features', 'disposab
 const GONE = { access: ACCESS_GONE, 'wide-read': WIDE_READ_GONE }
 
 /** The options of `team ask`: values once each, `--file` as often as needed, nothing positional. */
-export function readAskOptions(argv) {
+function readAskOptions(argv) {
   const options = Object.create(null)
   for (const name of REPEATED) options[name] = []
   for (let index = 0; index < argv.length; index += 1) {
@@ -215,14 +215,14 @@ function recordRefusal(prepared) {
 }
 
 /** Exit 14: the capacity limit is reached and nothing is queued (the contract's "Exit codes"). */
-export const BUSY_EXIT = 14
+const BUSY_EXIT = 14
 
 /**
  * What BMN's control service says of a session's token: `{ session }` it names, `{ invalid }` when
  * BMN does not know it, or `{ unreachable }` with why the service did not answer. The token goes only
  * to the service, as every BMN command sends it.
  */
-export function verifySessionToken(socketPath, token, { timeoutMs = 3000 } = {}) {
+function verifySessionToken(socketPath, token, { timeoutMs = 3000 } = {}) {
   return new Promise((resolve) => {
     let settled = false
     let buffer = ''
@@ -260,7 +260,7 @@ export function verifySessionToken(socketPath, token, { timeoutMs = 3000 } = {})
  * found by the precedence src/utility/roots.ts uses (BMN_RUNTIME_HOME, then XDG_RUNTIME_DIR/bmn, then
  * the temporary folder's bmn-<uid>/bmn).
  */
-export function bmnControlSocket(environment = process.env) {
+function bmnControlSocket(environment = process.env) {
   const runtime = environment.BMN_RUNTIME_HOME ?? environment.AITERM_RUNTIME_HOME ?? join(environment.XDG_RUNTIME_DIR ?? join(tmpdir(), `bmn-${process.getuid?.() ?? 'user'}`), 'bmn')
   return join(runtime, 'control', 'control.sock')
 }
@@ -635,4 +635,3 @@ export async function runTeamAsks(argv, { environment = process.env, cwd = proce
   }
 }
 
-export { OUTCOME_EXIT }

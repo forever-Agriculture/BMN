@@ -162,7 +162,7 @@ function liftLimitPauses(database: DatabaseConnection, workspaceId: string, now:
  * Who the caller may message: every other unarchived session of its own workspace that is not paused with the
  * caller. Nothing about a peer's activity is read here; what runs in a peer's terminal is the host's question.
  */
-export function messagePeers(database: DatabaseConnection, callerSessionId: string, now: string): MessagePeers {
+function messagePeers(database: DatabaseConnection, callerSessionId: string, now: string): MessagePeers {
   const caller = member(database, callerSessionId)
   if (!caller || caller.archived_at !== null || caller.workspace_archived_at !== null) {
     return { on: false, paused: false, peers: [] }
@@ -215,7 +215,7 @@ export type SendOutcome =
  * it caused and says so. Only messages still waiting and unexpired count as waiting: an expired one is delivered
  * by no route and holds nobody back.
  */
-export function sendSessionMessage(database: DatabaseConnection, p: {
+function sendSessionMessage(database: DatabaseConnection, p: {
   messageId: string
   senderSessionId: string
   receiverSessionId: string
@@ -349,7 +349,7 @@ function insertMessage(database: DatabaseConnection, p: {
  * The sender's own messages, newest first: where each went and where it stands. Nothing of the receiver's
  * activity. A handoff is listed by `bmn handoff status`, not here (Story 75.5).
  */
-export function listSentMessages(
+function listSentMessages(
   database: DatabaseConnection, senderSessionId: string, messageId: string | null
 ): Array<Pick<SessionMessageRecord, 'messageId' | 'receiverSessionId' | 'state' | 'sentAt' | 'expiresAt'>> {
   const rows = (messageId === null
@@ -383,7 +383,7 @@ function stillMembers(database: DatabaseConnection, row: MessageRow): boolean {
  * since, and what the hourly limit holds there now, with when it lets go. A handoff to one of its sessions from
  * another workspace is listed here too (Story 75.5).
  */
-export function listWorkspaceMessages(database: DatabaseConnection, workspaceId: string, now: string): SessionMessageListing {
+function listWorkspaceMessages(database: DatabaseConnection, workspaceId: string, now: string): SessionMessageListing {
   liftLimitPauses(database, workspaceId, now)
   const workspace = database.prepare(
     'SELECT session_messages_paused_at AS at, session_messages_counted_from AS counted FROM workspace WHERE workspace_id = ?'
@@ -462,7 +462,7 @@ export interface MessageTakeCandidate {
 }
 
 /** The receiver's messages a hook may be handed, oldest first, with the root each sender's work lies in. */
-export function messageTakeCandidates(
+function messageTakeCandidates(
   database: DatabaseConnection, receiverSessionId: string, now: string
 ): MessageTakeCandidate[] {
   liftReceiverPauses(database, receiverSessionId, now)
@@ -501,7 +501,7 @@ function liftReceiverPauses(database: DatabaseConnection, receiverSessionId: str
  * `waiting` only if it is still there. From here the message reads "taken, not confirmed" and no route offers it
  * again by itself, whatever becomes of the answer.
  */
-export function claimMessageForHook(database: DatabaseConnection, p: {
+function claimMessageForHook(database: DatabaseConnection, p: {
   messageId: string
   receiverSessionId: string
   incarnationId: string
@@ -527,7 +527,7 @@ export function claimMessageForHook(database: DatabaseConnection, p: {
  * Gives back a hook's claim for which nothing was printed: the message waits again, as it did. Only the claim's
  * own id does it, and the take that made the claim is the only one that knows it until BMN has answered.
  */
-export function releaseMessageClaim(database: DatabaseConnection, p: { messageId: string; claimId: string }): { released: boolean } {
+function releaseMessageClaim(database: DatabaseConnection, p: { messageId: string; claimId: string }): { released: boolean } {
   const updated = database.prepare(
     `UPDATE session_message
      SET state = 'waiting', claim_id = NULL, claimed_incarnation_id = NULL, claimed_pid = NULL, claimed_app = NULL, claimed_at = NULL
@@ -540,7 +540,7 @@ export function releaseMessageClaim(database: DatabaseConnection, p: { messageId
  * The hook's word that it printed what it took. Accepted only with the claim's own id, from the session and
  * process that claimed; it means printed, never read.
  */
-export function reportMessagePrinted(database: DatabaseConnection, p: {
+function reportMessagePrinted(database: DatabaseConnection, p: {
   messageId: string
   claimId: string
   receiverSessionId: string
@@ -559,7 +559,7 @@ export function reportMessagePrinted(database: DatabaseConnection, p: {
  * Deletes messages sent before `cutoff`, whatever their state, and returns how many went. A handoff's delivery
  * record goes with its message (Story 75.5); its stored files stay with the session that sent it.
  */
-export function deleteMessagesSentBefore(database: DatabaseConnection, cutoff: string): number {
+function deleteMessagesSentBefore(database: DatabaseConnection, cutoff: string): number {
   database.prepare(
     `DELETE FROM input_draft WHERE origin_key IN (
        SELECT '${HANDOFF_MESSAGE_KEY}' || message_id FROM session_message WHERE sent_at < ?)`

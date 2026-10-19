@@ -30,7 +30,7 @@ export type RemoteAnswer =
   | { type: 'permission'; decision: 'allow' | 'deny' }
 
 /** The longest typed answer sent; the spike's Claude took 2,699 characters intact (docs/remote-answers.md). */
-export const TYPED_ANSWER_CHARS = 2_000
+const TYPED_ANSWER_CHARS = 2_000
 
 /**
  * A typed answer as it is sent: every control character and whitespace run folded to one space (so it is one
@@ -85,7 +85,7 @@ export interface AnswerRequest {
   answer: RemoteAnswer
 }
 
-export type AnswerRoute = 'claude-keys' | 'claude-hook' | 'codex-keys' | 'opencode-api' | 'codex-message'
+type AnswerRoute = 'claude-keys' | 'claude-hook' | 'codex-keys' | 'opencode-api' | 'codex-message'
 
 /**
  * What an OpenCode plugin collects through `answer.take` and posts to its own server, or what Claude's waiting
@@ -101,7 +101,7 @@ export interface ScreenLike {
   onChange(listener: () => void): () => void
 }
 
-export interface RemoteAnswerDependencies {
+interface RemoteAnswerDependencies {
   getAttention(requestId: string): Promise<AttentionRecord | null>
   liveIncarnationId(sessionId: string): string | undefined
   /** The session's screen mirror, started if needed; undefined when that process is not live. */
@@ -119,7 +119,7 @@ export interface RemoteAnswerDependencies {
   timing?: Partial<AnswerTiming>
 }
 
-export interface AnswerTiming {
+interface AnswerTiming {
   /** How long a stepped dialog may take to show its next question after a key. */
   stepMs: number
   /** How long an attributable report may take before the answer is `sent-unconfirmed`. */
@@ -346,7 +346,7 @@ interface Pending {
 }
 
 /** What an OpenCode plugin says became of an answer it collected: its own server accepted or rejected the reply. */
-export interface PluginReport {
+interface PluginReport {
   requestRef: string
   delivered: boolean
 }
@@ -1165,7 +1165,7 @@ export class RemoteAnswers {
 }
 
 /** Whether the dialog of a keystroke-answered prompt is on screen, at any of its steps. */
-export function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): boolean {
+function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): boolean {
   if (prompt.harness === 'opencode') return false
   if (prompt.type === 'permission') {
     return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null

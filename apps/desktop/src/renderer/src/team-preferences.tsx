@@ -222,7 +222,7 @@ function EffortChips(props: { efforts: readonly RosterEffort[]; onToggle(effort:
 }
 
 /** A whole number of tokens from what the owner typed ("272 000"), `undefined` for empty, `null` when it is not one. */
-export function tokens(text: string): number | undefined | null {
+function tokens(text: string): number | undefined | null {
   const digits = text.replace(/[\s,_]/g, '')
   if (digits === '') return undefined
   return /^\d{1,9}$/.test(digits) && Number(digits) > 0 ? Number(digits) : null
@@ -378,7 +378,7 @@ export function openCodeSignInWords(approved: RosterDataShape | null | undefined
 }
 
 /** What OpenCode on this computer says of Luna through OpenCode Go (70.4), and the press that copies a sign-in. */
-export interface OpenCodeGoState { view: OpenCodeGoView | null; copying: boolean; copy(): void }
+interface OpenCodeGoState { view: OpenCodeGoView | null; copying: boolean; copy(): void }
 
 /** Asks the main process about Luna through OpenCode Go while Agents shows and after each approval; it starts OpenCode, so never before. */
 export function useOpenCodeGo(team: TeamState, shown: boolean): OpenCodeGoState {
@@ -431,7 +431,7 @@ export function retiredAppClause(removed: RetiredRemoval): string {
 }
 
 /** BMN's pending proposals taken in one go (Story 75.10), each said as one clause in the order they are taken. */
-export interface TeamProposals { data: RosterDataShape; clauses: string[] }
+interface TeamProposals { data: RosterDataShape; clauses: string[] }
 
 /**
  * Every proposal BMN has pending for this team, taken one after the other in the order BMN applies
@@ -463,7 +463,7 @@ export function teamProposals(data: RosterDataShape, pending: { lunaListed: bool
 }
 
 /** The one card's paragraph: every pending proposal, or with nothing approved yet the first approval that carries them. */
-export function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null): string {
+function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null): string {
   const count = proposals.clauses.length
   const list = proposals.clauses.join(' · ')
   if (nothingInEffect !== null) return `${nothingInEffect} BMN's proposal${count === 1 ? ' is' : 's are'} included: ${list}.`
@@ -582,7 +582,7 @@ function PrivateWorkRow(props: { team: TeamState; data: RosterDataShape; agent: 
  * AC5). One is added from the card a stopped prompt raises; taking one away here is a staged
  * change, approved like any other. `provider` limits the list to one provider's.
  */
-export function AllowedWorkspaces(props: { team: TeamState; data: RosterDataShape; provider?: string }): React.JSX.Element | null {
+function AllowedWorkspaces(props: { team: TeamState; data: RosterDataShape; provider?: string }): React.JSX.Element | null {
   const { team, data } = props
   const entries = data.exceptions.filter((entry) => props.provider === undefined || entry.provider === props.provider)
   const nameOf = (id: string): string => data.providers.find((provider) => provider.id === id)?.name ?? id
@@ -1131,10 +1131,10 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
 }
 
 /** What the role Judge is, where its order is edited: no app runs for it, so nothing of a run applies. */
-export const JUDGE_ROLE_HELP = 'BMN calls a judge itself: no agent app runs for this role, and an answer is advice. Ask with bmn judge ask.'
+const JUDGE_ROLE_HELP = 'BMN calls a judge itself: no agent app runs for this role, and an answer is advice. Ask with bmn judge ask.'
 
 /** What holding a role to read-only means, wherever a page says it. */
-export const READ_ONLY_HELP = 'A run for this role is refused unless it is started so that it cannot write.'
+const READ_ONLY_HELP = 'A run for this role is refused unless it is started so that it cannot write.'
 
 /** What the Researcher switch on an agent's page means as the team stands (63.3): who researches is part of the team. */
 export function researcherWords(data: Pick<RosterDataShape, 'agents'>, agent: Pick<RosterAgentShape, 'name' | 'researcher'>): string {

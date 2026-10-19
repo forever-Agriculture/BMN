@@ -14,9 +14,9 @@ export interface SessionForeground {
   folder: (identity: string) => string | null
 }
 
-export type SessionCaptureRequest = Omit<TurnCaptureRequest, 'folder'>
+type SessionCaptureRequest = Omit<TurnCaptureRequest, 'folder'>
 
-export type SessionCaptureAnswer = TurnCaptureAnswer & {
+type SessionCaptureAnswer = TurnCaptureAnswer & {
   /** The foreground process the capture was taken for; absent when there was none. */
   foreground?: string
 }

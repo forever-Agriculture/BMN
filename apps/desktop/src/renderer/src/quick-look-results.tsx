@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import { quickLookCount, type QuickLookContentsResult, type QuickLookSearchResult } from '@bmn/protocol'
 import { contentsHeader, filesHeader, resultFolder, rowPieces, type QuickLookSearchMode } from './quick-look-search'
 
-export interface SearchView {
+interface SearchView {
   mode: QuickLookSearchMode
   /** Why there is nothing to search yet ("Type at least 2 characters"), or null. */
   waiting: string | null

@@ -3,13 +3,13 @@ import { hasExactKeys } from './closed-shape'
 import { stripFormatCharacters } from './file-reference'
 
 /** The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). */
-export type AttentionPromptHarness = 'claude' | 'codex' | 'opencode'
+type AttentionPromptHarness = 'claude' | 'codex' | 'opencode'
 
 /**
  * Which row of the remote-answer shape matrix this prompt is. `choice` covers one or several
  * single-choice questions; a dialog with any multi-select question is `multi-select`.
  */
-export type AttentionPromptShape =
+type AttentionPromptShape =
   | 'choice'
   | 'async-choice'
   | 'multi-select'

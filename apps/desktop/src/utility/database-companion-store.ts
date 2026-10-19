@@ -128,7 +128,7 @@ export function listArtifacts(database: DatabaseConnection, sessionId: string | 
 }
 
 /** Every artifact, unbounded, for maintenance that must not stop at the listing cap. */
-export function listAllArtifacts(database: DatabaseConnection): ArtifactRecord[] {
+function listAllArtifacts(database: DatabaseConnection): ArtifactRecord[] {
   return (database.prepare('SELECT * FROM artifact ORDER BY created_at, rowid').all() as ArtifactRow[]).map(artifactFromRow)
 }
 
@@ -138,7 +138,7 @@ export function listReadyArtifacts(database: DatabaseConnection): ArtifactRecord
     .map(artifactFromRow)
 }
 
-export function getArtifact(database: DatabaseConnection, artifactId: string): ArtifactRecord {
+function getArtifact(database: DatabaseConnection, artifactId: string): ArtifactRecord {
   const row = database.prepare('SELECT * FROM artifact WHERE artifact_id = ?').get(artifactId) as
     | ArtifactRow
     | undefined
@@ -210,7 +210,7 @@ function attentionFromRow(row: AttentionRow): AttentionRecord {
   }
 }
 
-export interface AttentionOpenParams {
+interface AttentionOpenParams {
   sessionId: string
   incarnationId: string | null
   requestKey: string
@@ -234,7 +234,7 @@ const CLAUDE_PERMISSION_NOTICE = 'hook:claude:Notification'
  * The record, plus whether this open changed anything. A caller that repeats an identical request needs to
  * be able to say "nothing changed" rather than claim it opened one; `changed` is reported, never stored.
  */
-export type AttentionOpenResult = AttentionRecord & { changed: boolean }
+type AttentionOpenResult = AttentionRecord & { changed: boolean }
 
 /** The kinds whose dialog, replaced by the agent's next one in its slot, is kept as closed without an answer. */
 const REPLACEABLE_KINDS: ReadonlySet<AttentionKind> = new Set(['question', 'permission', 'review'])
@@ -400,7 +400,7 @@ export function closeAttention(
  * A phone answer that its harness confirmed only after one of the harness's own hooks had already closed the
  * request (OpenCode reports busy or idle as fast as the replied event). Only a hook's close is re-attributed.
  */
-export function creditTelegramAnswer(
+function creditTelegramAnswer(
   database: DatabaseConnection,
   requestId: string,
   resolution: string,
@@ -688,7 +688,7 @@ export function listProgress(database: DatabaseConnection): ProgressRecord[] {
     .map((row) => progressFromRow(row, evidence.get(`${row.session_id}\u0000${row.source}`) ?? []))
 }
 
-export interface StoredReceipt {
+interface StoredReceipt {
   key: string
   paramsHash: string
   state: 'staged' | 'done' | 'failed'
@@ -831,7 +831,7 @@ export function getDraft(database: DatabaseConnection, draftId: string): InputDr
 }
 
 /** Only a definite pre-write draft may change its message before a retry claims it. */
-export function replaceDraftText(database: DatabaseConnection, draftId: string, expectedUpdatedAt: string, text: string, now: string): InputDraftRecord {
+function replaceDraftText(database: DatabaseConnection, draftId: string, expectedUpdatedAt: string, text: string, now: string): InputDraftRecord {
   const updated = database.prepare("UPDATE input_draft SET text = ?, updated_at = ? WHERE draft_id = ? AND state = 'draft' AND updated_at = ?")
     .run(text, monotonicDraftTime(expectedUpdatedAt, now), draftId, expectedUpdatedAt)
   if (updated.changes !== 1) throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The draft was already claimed or changed')
@@ -926,7 +926,7 @@ export function queueAgentHandoff(database: DatabaseConnection, p: {
 }
 
 /** A token reads only its own agent-prepared metadata, never the owner's edits or other sessions. */
-export interface AgentHandoffSummary {
+interface AgentHandoffSummary {
   draftId: string
   destinationSessionId: string
   /** Where a handoff queued since Story 75.5 stands by its message; one from before keeps its draft's state. */
@@ -1054,7 +1054,7 @@ export interface TelegramCardRecord {
   card: TelegramCardData
 }
 
-export function putTelegramCard(database: DatabaseConnection, card: TelegramCardRecord, now: string): void {
+function putTelegramCard(database: DatabaseConnection, card: TelegramCardRecord, now: string): void {
   database.prepare(
     `INSERT OR REPLACE INTO telegram_message(
        message_id, session_id, request_id, incarnation_id, sent_at, revision, card_state, card_json
@@ -1063,7 +1063,7 @@ export function putTelegramCard(database: DatabaseConnection, card: TelegramCard
     JSON.stringify(card.card))
 }
 
-export function updateTelegramCard(
+function updateTelegramCard(
   database: DatabaseConnection,
   messageId: number,
   revision: number | null,
@@ -1075,13 +1075,13 @@ export function updateTelegramCard(
   ).run(revision, state, JSON.stringify(card), messageId)
 }
 
-export function hasTelegramCard(database: DatabaseConnection, requestId: string, revision: number): boolean {
+function hasTelegramCard(database: DatabaseConnection, requestId: string, revision: number): boolean {
   return database.prepare('SELECT 1 FROM telegram_message WHERE request_id = ? AND revision = ? AND card_json IS NOT NULL LIMIT 1')
     .get(requestId, revision) !== undefined
 }
 
 /** Cards in these states, oldest first; rows without a card (plain notices before 30.3) never appear. */
-export function listTelegramCards(database: DatabaseConnection, states: TelegramCardState[]): TelegramCardRecord[] {
+function listTelegramCards(database: DatabaseConnection, states: TelegramCardState[]): TelegramCardRecord[] {
   if (states.length === 0) return []
   const rows = database.prepare(
     `SELECT message_id, session_id, request_id, incarnation_id, revision, card_state, card_json
@@ -1150,7 +1150,7 @@ const LEGACY_THEMES: ReadonlyMap<string, Pick<AppearanceSettings, 'identity' | '
 ])
 
 /** Validates one settings section; an invalid value throws and the stored value stays unchanged. */
-export function validateSettingsSection(section: string, value: unknown): AppSettings[SettingsSection] {
+function validateSettingsSection(section: string, value: unknown): AppSettings[SettingsSection] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('Settings must be an object')
   const candidate = value as Record<string, unknown>
   switch (section) {
@@ -1365,20 +1365,20 @@ function fileReferenceSessionAddress(database: DatabaseConnection, sessionId: st
 }
 
 /** Used immediately before an owner-confirmed PTY write; no cached session may authorize it. */
-export function fileReferenceTargetAvailability(database: DatabaseConnection, sessionId: string): boolean {
+function fileReferenceTargetAvailability(database: DatabaseConnection, sessionId: string): boolean {
   const address = fileReferenceSessionAddress(database, sessionId)
   return address !== null && address.session.archivedAt === null && address.workspace.archivedAt === null
 }
 
 /** One transactional snapshot for the last ordinary-message boundary. */
-export function telegramMessageBoundary(database: DatabaseConnection, sessionId: string): {
+function telegramMessageBoundary(database: DatabaseConnection, sessionId: string): {
   available: boolean; settings: AppSettings; attention: AttentionRecord[]
 } {
   return { available: fileReferenceTargetAvailability(database, sessionId), settings: getSettings(database), attention: listAttention(database) }
 }
 
 /** A selected session owns its root even when shown in another workspace's split pane. */
-export function fileReferenceSearchAddress(
+function fileReferenceSearchAddress(
   database: DatabaseConnection,
   workspaceId: string,
   sessionId: string | null

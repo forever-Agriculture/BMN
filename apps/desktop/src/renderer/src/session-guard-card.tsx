@@ -43,7 +43,7 @@ export function guardNote(stop: GuardStop): string {
 }
 
 /** What a stop is, and what is known about it. */
-export function guardCaveat(stop: GuardStop): string {
+function guardCaveat(stop: GuardStop): string {
   const app = ROSTER_APP_NAMES[stop.agent]
   const measured = GUARD_MEASURED[stop.agent]
   return measured === undefined

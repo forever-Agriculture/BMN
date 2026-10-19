@@ -125,7 +125,7 @@ export function secretFileKind(path: string): SecretFileKind {
   return 'text'
 }
 
-export interface SecretSearchOptions {
+interface SecretSearchOptions {
   /** Called again and again while the search runs. It stops the search by throwing. */
   check?: () => void
   /**

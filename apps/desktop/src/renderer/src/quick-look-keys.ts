@@ -4,12 +4,12 @@ import { ESCAPE_LABELS, type EscapeStep } from './quick-look-place'
 /** Where the keys go: the top field, the tree, the open file, or the file's find or go-to-line row. */
 export type QuickLookFocus = 'field' | 'tree' | 'file' | 'find' | 'goto'
 
-export interface QuickLookHint {
+interface QuickLookHint {
   keys: string[]
   label: string
 }
 
-export interface QuickLookFooterState {
+interface QuickLookFooterState {
   focus: QuickLookFocus
   fileOpen: boolean
   /** What Esc does now, innermost first. */

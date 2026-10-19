@@ -22,7 +22,7 @@ export interface MarkdownPageHandle {
   focus(): void
 }
 
-export interface MarkdownPageProps {
+interface MarkdownPageProps {
   page: MarkdownPage
   path: string
   ranges: readonly SecretRange[]

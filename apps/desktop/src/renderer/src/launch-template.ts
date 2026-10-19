@@ -25,9 +25,9 @@ export const INITIAL_SESSION_FORM: SessionLaunchForm = Object.freeze({
   terminalGraphics: null
 })
 
-export type LaunchAgentId = 'terminal' | 'claude' | 'codex' | 'opencode'
+type LaunchAgentId = 'terminal' | 'claude' | 'codex' | 'opencode'
 
-export interface LaunchAgent {
+interface LaunchAgent {
   id: LaunchAgentId
   label: string
   /** Session name the choice suggests. */
@@ -37,7 +37,7 @@ export interface LaunchAgent {
 }
 
 /** The shell every choice runs in, so the session survives the agent exiting. */
-export const LAUNCH_SHELL = '/bin/bash'
+const LAUNCH_SHELL = '/bin/bash'
 
 export const LAUNCH_AGENTS: ReadonlyArray<LaunchAgent> = [
   { id: 'terminal', label: 'Terminal', name: 'Shell', command: null },

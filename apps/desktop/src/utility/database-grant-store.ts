@@ -94,7 +94,7 @@ export function useGrantRecord(database: DatabaseConnection, use: Parameters<typ
 }
 
 /** An agent's report of a step (Story 84.7): kept for the morning; an unreadable record is never written over by one. */
-export function reportGrantRecord(database: DatabaseConnection, report: GrantReportInput, now: string): GrantReportOutcome {
+function reportGrantRecord(database: DatabaseConnection, report: GrantReportInput, now: string): GrantReportOutcome {
   const read = readGrantRow(database)
   const result = reportGrant(read, report, now)
   if (read.state === 'read' && result.outcome === 'recorded') writeGrantRow(database, result.record, now)
@@ -109,7 +109,7 @@ export function markGrantTold(database: DatabaseConnection, periodId: string, se
   return result
 }
 
-export function setGrantPhoneMessage(database: DatabaseConnection, periodId: string, runId: string, phone: GrantRun['phone'], now: string): GrantLifecycleResult {
+function setGrantPhoneMessage(database: DatabaseConnection, periodId: string, runId: string, phone: GrantRun['phone'], now: string): GrantLifecycleResult {
   const read = readGrantRow(database)
   if (read.state === 'unknown') return { outcome: 'unchanged', record: grantBase(read) }
   const result = setGrantPhone(read.record, periodId, runId, phone)

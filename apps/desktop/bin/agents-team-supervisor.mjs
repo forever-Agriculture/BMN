@@ -28,7 +28,7 @@ const NAME = 'agents-team-supervisor.mjs'
 const RUN_MODULE = fileURLToPath(new URL('./agents-team-run.mjs', import.meta.url))
 const SUPERVISE = '--supervise-ask'
 /** How long a run asked to end may take before its scope is killed. */
-export const KILL_AFTER_MS = 3000
+const KILL_AFTER_MS = 3000
 /** How often the supervisor looks for the run's Stop file. */
 const STOP_POLL_MS = 250
 /** How often it calls the run's watch step (a token ceiling), in Stop polls. */
@@ -81,7 +81,7 @@ const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
 /** The environment systemd-run needs to reach the owner's own systemd: his runtime folder and session bus, nothing else of the asker's. */
-export function scopeEnvironment(environment = process.env) {
+function scopeEnvironment(environment = process.env) {
   return {
     PATH: '/usr/bin:/bin', HOME: environment.HOME ?? homedir(),
     ...(environment.XDG_RUNTIME_DIR ? { XDG_RUNTIME_DIR: environment.XDG_RUNTIME_DIR } : {}),
@@ -109,7 +109,7 @@ export function scopeStarts({ environment = process.env, timeoutMs = 10_000, sys
 }
 
 /** The cgroup folder a process is in, or null once it is gone. */
-export function cgroupOf(pid) {
+function cgroupOf(pid) {
   try {
     const line = readFileSync(`/proc/${pid}/cgroup`, 'utf8').split('\n').find((entry) => entry.startsWith('0::'))
     return line === undefined ? null : `/sys/fs/cgroup${line.slice(3)}`
@@ -142,7 +142,7 @@ function scopeProcesses(cgroup) {
 }
 
 /** Where this file lies as a program, as agents-supervised.mjs finds its own. */
-export function teamSupervisorScript() {
+function teamSupervisorScript() {
   const own = dirname(fileURLToPath(import.meta.url))
   const places = [join(own, NAME), ...(typeof process.resourcesPath === 'string' ? [join(process.resourcesPath, 'bin', NAME)] : []), join(own, '..', '..', 'bin', NAME)]
   return places.find((place) => existsSync(place)) ?? null
@@ -205,7 +205,7 @@ export function runState(folder) {
 }
 
 /** Whether a run's supervisor still runs: the very process its state names, and not one that has died but not yet been reaped. */
-export function supervisorLives(identity) {
+function supervisorLives(identity) {
   if (!processLives(identity)) return false
   try {
     const stat = readFileSync(`/proc/${identity.pid}/stat`, 'utf8')

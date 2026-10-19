@@ -13,9 +13,7 @@ export declare const BROWSER_LIMITS: Readonly<{ pages: number; url: number; page
 export declare const BROWSER_RELAY: string
 export declare const BROWSER_CONFIG: string
 export declare const BROWSER_LIMIT_WORDS: string
-export declare function browserRuntime(): string
 export declare function browserTemporary(folder: string): string
-export declare const BROWSER_FILES: Readonly<{ folder: string; record: string }>
 export declare function browserOrigin(value: string | undefined): { origin: string } | { reason: string }
 export declare function browserInstalled(environment: { PATH?: string; HOME?: string }, options?: { timeoutMs?: number }): { reason?: string }
 export declare function browserTools(interact: boolean): string[]

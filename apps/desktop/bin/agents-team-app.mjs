@@ -132,7 +132,7 @@ const reasonOf = (outcome) => text(outcome.reason, 2000) ?? text(outcome.refusal
  * supervisor died, or whose asking command ended before its supervisor started, is recorded as
  * interrupted when it is looked at, as the next ask would record it.
  */
-export function askLine(folder, names = new Map(), now = new Date()) {
+function askLine(folder, names = new Map(), now = new Date()) {
   const before = askOutcome(folder)
   if (before.state === 'interrupted' && !existsSync(join(folder, ASK_RUN_FILES.outcome))) {
     recordInterrupted(folder, 'its supervisor ended with no record of the run\'s end; BMN never starts it again')

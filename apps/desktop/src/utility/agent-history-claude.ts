@@ -8,11 +8,11 @@ import {
   writeConfigSafely
 } from './safe-config-write'
 
-export type ClaudeFolderRead =
+type ClaudeFolderRead =
   | { ok: true; currentDays: number | null; text: string | null }
   | { ok: false; failure: string }
 
-export type ClaudeFolderWrite =
+type ClaudeFolderWrite =
   | { ok: true; backup: string | null }
   | { ok: false; failure: string }
 

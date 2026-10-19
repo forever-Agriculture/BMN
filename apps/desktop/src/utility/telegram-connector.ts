@@ -27,7 +27,7 @@ export function testTelegramOrigin(argv: readonly string[], env: NodeJS.ProcessE
   return /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(origin) ? origin : null
 }
 
-export type ConnectorState = 'disabled' | 'starting' | 'polling' | 'backoff' | 'conflict' | 'unauthorized' | 'stopped'
+type ConnectorState = 'disabled' | 'starting' | 'polling' | 'backoff' | 'conflict' | 'unauthorized' | 'stopped'
 
 export interface ConnectorHealth {
   state: ConnectorState
@@ -76,7 +76,7 @@ export interface InboundTap {
   data: string
 }
 
-export interface InlineKeyboardButton {
+interface InlineKeyboardButton {
   text: string
   callback_data: string
 }
@@ -108,7 +108,7 @@ export interface TelegramConnectorOptions {
   sleep?: (ms: number) => Promise<void>
 }
 
-export type TelegramErrorKind =
+type TelegramErrorKind =
   | 'conflict'
   | 'unauthorized'
   | 'http'

@@ -50,14 +50,6 @@ export interface SavedOutputCatalogPresentation {
 
 export const SAVED_OUTPUT_CAPTURE_INTERVAL_MS = 30_000
 
-export function isLiveSearchShortcut(event: {
-  ctrlKey: boolean
-  shiftKey: boolean
-  key: string
-}): boolean {
-  return event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'f'
-}
-
 export function liveTerminalOptions(): Pick<ITerminalOptions, 'scrollback'> {
   return { scrollback: TERMINAL_SCROLLBACK_LINES }
 }

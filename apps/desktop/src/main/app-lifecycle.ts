@@ -123,7 +123,7 @@ export async function stopAndDisposeCurrentTarget(
   }
 }
 
-export function runningTargetDetails(targets: readonly RunningSessionTarget[]): string {
+function runningTargetDetails(targets: readonly RunningSessionTarget[]): string {
   return targets
     .map(
       (target) =>

@@ -11,7 +11,7 @@ export type RepositoryIdentity =
   | { state: 'not-repository'; directory: string; observedAt: string }
   | { state: 'unavailable'; directory: string; observedAt: string; reason: string }
 
-export interface RepositoryInspectParams {
+interface RepositoryInspectParams {
   directory: string
 }
 

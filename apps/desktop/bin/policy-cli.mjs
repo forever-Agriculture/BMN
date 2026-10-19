@@ -12,7 +12,7 @@ const TIMEOUT_MS = 8_000
 /** The words of each level; control-cli.test.ts fails when they differ from @bmn/protocol's PUSH_LEVEL_WORDS. */
 export const LEVEL_WORDS = Object.freeze({ 'prs-only': 'PRs only', 'merge-when-green': 'Merge when green', 'merge-and-push-main': 'Merge and push main' })
 
-export const POLICY_USAGE = `Usage: bmn policy [--repo OWNER/NAME] [--json]
+const POLICY_USAGE = `Usage: bmn policy [--repo OWNER/NAME] [--json]
 
 The owner's push and merge policy (Epic 83), read before each push, merge and pull-request write.
 Without --repo it reads the checkout's GitHub remote (origin), if there is one. It prints whether the
@@ -96,7 +96,7 @@ function mayWords(level, branch) {
 }
 
 /** The policy for one repository: its level, and whether the policy authorizes anything there and why not. */
-export function repositoryVerdict(status, asked, facts) {
+function repositoryVerdict(status, asked, facts) {
   if ('unread' in facts) {
     return { repository: asked, owner: null, defaultBranch: null, level: 'prs-only', authorizes: false, why: facts.unread }
   }
@@ -109,12 +109,12 @@ export function repositoryVerdict(status, asked, facts) {
 }
 
 /** The night's granted merges and pushes in the repository asked about (Story 84.9); none without a grant. */
-export function grantedHere(status, verdict) {
+function grantedHere(status, verdict) {
   if (verdict === null || !Array.isArray(status.granted)) return []
   return status.granted.filter((entry) => entry.repository === verdict.repository)
 }
 
-export function describePolicy(status, verdict) {
+function describePolicy(status, verdict) {
   const lines = []
   lines.push(status.standing.authorizes ? `Push policy: in force (revision ${status.revision}).` : `Push policy: authorizes nothing: ${status.standing.why}.`)
   if (status.state === 'read') {

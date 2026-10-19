@@ -508,7 +508,7 @@ export async function markClaims(claims, { fetchPage = fetchPublicPage, signal =
   return marked
 }
 
-export function markCounts(claims) {
+function markCounts(claims) {
   return {
     found: claims.filter((claim) => claim.mark === MARKS.found).length,
     not_found: claims.filter((claim) => claim.mark === MARKS.missing).length,

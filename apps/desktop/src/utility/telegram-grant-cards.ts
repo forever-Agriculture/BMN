@@ -27,7 +27,7 @@ import type { InboundTap, TelegramConnector } from './telegram-connector'
 /** Departure-card buttons start with this, so a tap reaches this keeper and never the request cards' one. */
 export const GRANT_TOKEN_PREFIX = 'g:'
 /** A card asked within this long after Away is set goes at once, quiet hours or not (owner card, the notes' question 1). */
-export const GRANT_SEND_AFTER_AWAY_MS = 30 * 60_000
+const GRANT_SEND_AFTER_AWAY_MS = 30 * 60_000
 const BUTTON_CHARS = 28
 const ONE_ROW_CHARS = 30
 const STALE_TOKENS = 500
@@ -57,7 +57,7 @@ interface Drawn {
 
 type Connector = Pick<TelegramConnector, 'sendMessage' | 'editMessageText' | 'answerCallbackQuery'>
 
-export interface GrantCardDependencies {
+interface GrantCardDependencies {
   /** The connector while Telegram is polling, else undefined. */
   connector(): Connector | undefined
   /** The grant record as BMN last saved it. */
@@ -89,7 +89,7 @@ function overviewLine(term: GrantTerm, index: number): string {
  * One run's card as the phone shows it (the notes §1 On Telegram). Reasons are cut first, then the scope, so the term
  * lines, the rule line and the buttons always fit.
  */
-export function grantCardText(input: {
+function grantCardText(input: {
   header: CardHeader; run: GrantRun; view: View; note: string | null; now: Date; ending?: string
 }): string {
   const { run, view, now } = input
@@ -136,7 +136,7 @@ function rows(buttons: Array<{ text: string; callback_data: string }>, oneRow: b
 }
 
 /** What a run's card says once it asks nothing more of him (the notes §1 After answering). */
-export function grantEnding(period: GrantPeriod, run: GrantRun, now: Date): string | null {
+function grantEnding(period: GrantPeriod, run: GrantRun, now: Date): string | null {
   const card = run.card
   if (card.state === 'withdrawn') return card.withdrawnFor === 'back' ? 'Withdrawn: you are back.' : 'Withdrawn: you did not leave.'
   if (card.state === 'nothing') return 'The run now needs nothing; nothing to answer.'

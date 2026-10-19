@@ -19,13 +19,13 @@ import {
 export const AWAY_GRANT_LIMITS = Object.freeze({ boundaries: 10, refusals: 10, runs: 20 })
 
 /** Who a line comes from: BMN wrote it itself, or an agent told BMN about the world (the split Epic 76 draws). */
-export type AwayGrantSource = 'BMN\'s record' | 'the agent\'s report'
-export const AWAY_GRANT_RECORD: AwayGrantSource = 'BMN\'s record'
-export const AWAY_GRANT_REPORT: AwayGrantSource = 'the agent\'s report'
+type AwayGrantSource = 'BMN\'s record' | 'the agent\'s report'
+const AWAY_GRANT_RECORD: AwayGrantSource = 'BMN\'s record'
+const AWAY_GRANT_REPORT: AwayGrantSource = 'the agent\'s report'
 
 export interface AwayGrantLine { label: string; text: string; source: AwayGrantSource }
 /** One run, once: its title, used, unused or none, and one line of BMN's record; the lines open in place. */
-export interface AwayGrantRow { key: string; title: string; state: 'used' | 'unused' | 'none'; text: string; lines: AwayGrantLine[] }
+interface AwayGrantRow { key: string; title: string; state: 'used' | 'unused' | 'none'; text: string; lines: AwayGrantLine[] }
 export interface AwayGrantSection { count: number; rows: AwayGrantRow[]; more: string | null; empty: string | null }
 
 const pad = (value: number): string => String(value).padStart(2, '0')
@@ -68,7 +68,7 @@ function doneWords(term: GrantActionTerm | undefined): string {
 }
 
 /** BMN's refusal reason in the notes' words; one BMN words otherwise stands as it was kept. */
-export function awayGrantRefusalWords(reason: string): string {
+function awayGrantRefusalWords(reason: string): string {
   if (/^the owner is back since/u.test(reason) || reason === 'the away state no longer carries this period') return 'you were back'
   if (reason === 'the owner did not leave; that departure was cancelled') return 'you did not leave'
   if (reason === 'that use id was recorded for another use') return 'its use id was another use\'s'

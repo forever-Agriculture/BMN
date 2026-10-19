@@ -15,17 +15,17 @@ import { fileURLToPath } from 'node:url'
  * Text several epics share (the front matter, an extension before more than one epic) moves verbatim to
  * `shared/`, linked from each epic it precedes. The board becomes `status.yaml` by an explicit status table.
  */
-export const STATUS_TABLE = { done: 'done', backlog: 'backlog', 'ready-for-dev': 'backlog', drafted: 'backlog', contexted: 'backlog', 'in-progress': 'in-progress', review: 'review' }
-export const NOTE_LIMIT = 160
-export const MARKER = (contracts) => `<!-- bmn-plan: bmad-legacy${contracts.length ? `; contracts: ${contracts.join(', ')}` : ''} -->`
+const STATUS_TABLE = { done: 'done', backlog: 'backlog', 'ready-for-dev': 'backlog', drafted: 'backlog', contexted: 'backlog', 'in-progress': 'in-progress', review: 'review' }
+const NOTE_LIMIT = 160
+const MARKER = (contracts) => `<!-- bmn-plan: bmad-legacy${contracts.length ? `; contracts: ${contracts.join(', ')}` : ''} -->`
 const PARKED = /\bpark(?:ed|s)?\b/iu
 
-export const sha256 = (data) => createHash('sha256').update(data).digest('hex')
+const sha256 = (data) => createHash('sha256').update(data).digest('hex')
 const slugOf = (title) => title.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 48) || 'epic'
 const pad = (number) => String(number).padStart(3, '0')
 
 /** Every file under a folder, without following links; a link is listed as a link. */
-export function filesUnder(root, base = root) {
+function filesUnder(root, base = root) {
   const out = []
   if (!existsSync(root)) return out
   for (const name of readdirSync(root).sort()) {
@@ -38,7 +38,7 @@ export function filesUnder(root, base = root) {
 }
 
 /** The sources: `_bmad-output/`, `_bmad/` and every app's `bmad-*` skill folder, as repository-relative paths. */
-export function sources(repo) {
+function sources(repo) {
   const roots = ['_bmad-output', '_bmad']
   for (const app of readdirSync(repo).filter((name) => name.startsWith('.') && existsSync(join(repo, name, 'skills')))) {
     for (const skill of readdirSync(join(repo, app, 'skills')).filter((name) => name.startsWith('bmad-'))) roots.push(`${app}/skills/${skill}`)
@@ -85,7 +85,7 @@ export function segmentEpics(text) {
 }
 
 /** The headings of a Markdown text outside code fences, in order. */
-export function headingsOf(text) {
+function headingsOf(text) {
   const out = []
   let fence = false
   for (const line of text.split('\n')) {
@@ -98,7 +98,7 @@ export function headingsOf(text) {
 }
 
 /** The anchor GitHub gives a heading, numbered after an earlier heading of the same text (`counter` per file). */
-export function headingAnchor(heading, counter) {
+function headingAnchor(heading, counter) {
   const base = heading.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, '').replace(/ /gu, '-')
   const seen = counter.get(base) ?? 0
   counter.set(base, seen + 1)
@@ -106,13 +106,13 @@ export function headingAnchor(heading, counter) {
 }
 
 /** Every anchor a Markdown text's headings give. */
-export function anchorsOf(text) {
+function anchorsOf(text) {
   const counter = new Map()
   return new Set(headingsOf(text).map((heading) => headingAnchor(heading, counter)))
 }
 
 /** Markdown link destinations in a text: `](dest)` and `](dest "title")`, with their offsets. */
-export function linksIn(text) {
+function linksIn(text) {
   const links = []
   const pattern = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/gu
   for (const match of text.matchAll(pattern)) links.push({ dest: match[1], offset: match.index + 2 })
@@ -178,7 +178,7 @@ export function reverseRewrites(text, rewrites) {
 }
 
 /** The board: header lines before `development_status:` and each row with its line, status and comment. */
-export function parseBoard(text) {
+function parseBoard(text) {
   const lines = text.split('\n')
   const header = []
   const rows = []
@@ -461,7 +461,7 @@ export function stagePlan({ repo, stage, date = new Date().toISOString().slice(0
 }
 
 /** The note the links whose targets were gone before the move point to: each path, where it last was, who linked it. */
-export function goneLinkTargets({ repo, date, targets, anchors }) {
+function goneLinkTargets({ repo, date, targets, anchors }) {
   const lastSeen = (named) => {
     const path = named.replace(/:\d+(?::\d+)?$/u, '')
     try {
@@ -487,7 +487,7 @@ ${sections.join('\n')}${anchorLines.length ? `\n## Anchors that were gone\n\n${[
 }
 
 /** PLAN.md: today's purpose and scope from the vision and the board, the standing rules, and the index of docs/; the old front matter stays history in shared/. */
-export function planText({ repo, date, docs, vision = '', provisional = false, rows = [] }) {
+function planText({ repo, date, docs, vision = '', provisional = false, rows = [] }) {
   const visionLead = /^## Vision\s*\n+([\s\S]*?)(?:\n\s*\n|\n## |$(?![\s\S]))/mu.exec(vision)?.[1]?.replace(/\s+/gu, ' ').trim() ?? ''
   const epics = rows.filter((row) => /^epic-\d+$/u.test(row.key)).map((row) => ({ number: Number(row.key.slice(5)), status: row.status }))
   const numbers = epics.map((epic) => epic.number)
@@ -549,7 +549,7 @@ ${docList.map((doc) => `- [${doc}](../${doc})`).join('\n')}
 }
 
 /** VISION.md as the move drafts it when no approved vision is given: the overview as the vision, and the goals the plan already holds as provisional principles. */
-export function visionDraft({ repo, segments, date }) {
+function visionDraft({ repo, segments, date }) {
   const front = segments.find((segment) => segment.kind === 'front')?.text ?? ''
   const overview = new RegExp('^## Overview\\s*\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))', 'mu').exec(front)?.[1].trim() ?? ''
   const first = overview.split(/\n\s*\n/u)[0]?.replace(/\s+/gu, ' ').trim() ?? ''

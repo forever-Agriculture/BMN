@@ -32,7 +32,7 @@ export function installBundledTerminfo(dataRoot: string, source: string): Termin
   return { directory, source }
 }
 
-export function terminfoDirectories(
+function terminfoDirectories(
   directory: string,
   environment: Readonly<Record<string, string | undefined>>
 ): string {

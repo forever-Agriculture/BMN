@@ -35,7 +35,7 @@ export function quietHoursAllow(quiet: TelegramQuietHours, kind: AttentionKind, 
   return quiet.allowKinds.includes(kind) || quiet.allowSessions.includes(sessionId)
 }
 
-export interface QuietWindow {
+interface QuietWindow {
   active: boolean
   /** Local start date, zone and configured times; the repeated DST hour is the same window. */
   key: string | null

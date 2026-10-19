@@ -3,11 +3,6 @@ import { closeSync, openSync, readFileSync, readSync, readdirSync } from 'node:f
 
 export { NEXT_STEP, Refusal, firstLine, listDirectory, namesWebTool, optionalNames, optionalText, reachedForWeb, readBytes, readText, refuse, traceRead }
 
-/** Refusals, checked in this order; the first one found is reported (shared contract). */
-export const REFUSALS = ['UNKNOWN_AGENT', 'APP_RETIRED', 'PROPOSED', 'DISABLED', 'NOT_A_RESEARCHER', 'ROLE_UNKNOWN', 'ROLE_INELIGIBLE', 'CLASS_CANNOT_LEAD', 'CLASS_CANNOT_DESIGN',
-  'ROUTE_UNSUPPORTED', 'MODEL_MISMATCH', 'EFFORT_UNSUPPORTED', 'READ_ONLY_REQUIRED', 'CONTEXT_MISMATCH', 'TOOL_MISMATCH', 'HOST_UNKNOWN', 'HOST_MISMATCH',
-  'WORKSPACE_UNKNOWN', 'WORKSPACE_MISMATCH', 'RESUME_UNBOUND', 'HARNESS_UNKNOWN', 'DATA_FORBIDDEN', 'PACKET_INVALID']
-
 /**
  * Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike,
  * 2026-10-09; OpenCode 2.0.28 on 2026-10-14, whose `opencode debug config` read the model from the
@@ -65,7 +60,7 @@ const NEXT_STEP = {
 export const OPENCODE_NEXT_STEP = 'use the OpenCode form `bmn roster role <role> --json` gives (env -i with BMN\'s folders, then opencode run --standalone --format json --agent bmn-helper -m <model>#<effort> --title <title>, the prompt on standard input), exactly as documented'
 
 /** The one checked way to the web (64.1), in the words every hint uses. */
-export const WEB_QUESTION_COMMAND = 'bmn research ask'
+const WEB_QUESTION_COMMAND = 'bmn research ask'
 /** What a refusal says next when the command reached for the web in a way the check cannot pass (64.2 AC1). */
 export const WEB_NEXT_STEP = `to search the web, ask with \`${WEB_QUESTION_COMMAND}\` (the question on standard input, or --question-file); for anything else ${NEXT_STEP.ROUTE_UNSUPPORTED}`
 /** One more line on a PASS whose tool list names a web tool outside a research run (64.2 AC2). */

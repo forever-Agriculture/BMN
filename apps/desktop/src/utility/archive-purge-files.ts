@@ -1,7 +1,7 @@
 // MODULE: archive-purge-files.ts - what the host removes from disk once the archive purge has committed
 import type { ArchivePurgeResult } from './database-archive-purge'
 
-export interface PurgeFileSteps {
+interface PurgeFileSteps {
   savedOutput(sessionIds: readonly string[]): Promise<void>
   originals(originals: ArchivePurgeResult['originals']): Promise<{ removed: number; failed: number }>
 }

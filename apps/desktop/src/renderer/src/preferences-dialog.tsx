@@ -96,11 +96,11 @@ const QUIET_ALLOW_KINDS: ReadonlyArray<{ kind: AttentionKind; label: string }> =
 ]
 
 /** The six pages, one flat list in the left column (Story 75.10). */
-export type PreferencesPage = 'general' | 'agents' | 'integrations' | 'notifications' | 'voice' | 'data'
+type PreferencesPage = 'general' | 'agents' | 'integrations' | 'notifications' | 'voice' | 'data'
 /** The views of Agents; it opens on Team. */
-export type AgentsView = 'team' | 'roles' | 'models' | 'changes' | 'asks'
+type AgentsView = 'team' | 'roles' | 'models' | 'changes' | 'asks'
 /** The views of Integrations; it opens on Health, whose last section is Local control. */
-export type IntegrationsView = 'health' | 'rules' | 'skills' | 'tools'
+type IntegrationsView = 'health' | 'rules' | 'skills' | 'tools'
 /** Where Preferences opens: a page, one view of Agents or Integrations, or Health's Hooks section (Session details' link). */
 export type PreferencesPlace = PreferencesPage | AgentsView | IntegrationsView | 'hooks'
 
@@ -116,13 +116,13 @@ export const INTEGRATIONS_VIEWS: ReadonlyArray<{ view: IntegrationsView; label: 
 ]
 
 /** The page Preferences shows and the view each of Agents and Integrations was left on. */
-export interface PreferencesShown { page: PreferencesPage; agents: AgentsView; integrations: IntegrationsView }
+interface PreferencesShown { page: PreferencesPage; agents: AgentsView; integrations: IntegrationsView }
 
 /** What Preferences last showed, kept while BMN runs; a new start opens on Agents › Team. */
 let lastShown: PreferencesShown = { page: 'agents', agents: 'team', integrations: 'health' }
 
 /** Whether the rules, skills or tools need the owner: the Needs-you dot on Integrations. */
-export function rulesNeedOwner(snapshot: RulesSnapshot): boolean {
+function rulesNeedOwner(snapshot: RulesSnapshot): boolean {
   return (snapshot.health.state === 'checked' && snapshot.master.exists && snapshot.health.targets.some((target) => target.state !== 'current'))
     || snapshot.skills.pending > 0 || snapshot.skills.exposed > 0 || snapshot.tools.pending > 0 || snapshot.tools.exposed > 0
 }

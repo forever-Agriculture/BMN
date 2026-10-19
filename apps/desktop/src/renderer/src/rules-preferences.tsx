@@ -56,7 +56,7 @@ import {
 
 export { diffSummary, endedSince, undoWords }
 
-export type RulesPage = 'editor' | 'skills' | 'tools' | 'health'
+type RulesPage = 'editor' | 'skills' | 'tools' | 'health'
 
 const PLAN_DELAY_MS = 300
 
@@ -97,9 +97,9 @@ export function lineCount(text: string): number {
   return text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
 }
 
-export const KIND_WORDS: Readonly<Record<RulesRenderingKind, string>> = { full: 'Full rules', public: 'Public sections only' }
+const KIND_WORDS: Readonly<Record<RulesRenderingKind, string>> = { full: 'Full rules', public: 'Public sections only' }
 
-export const STATE_WORDS: Readonly<Record<RulesTargetState, string>> = {
+const STATE_WORDS: Readonly<Record<RulesTargetState, string>> = {
   current: 'Current',
   stale: 'Differs from the rules',
   'edited-outside': 'Edited outside BMN',
@@ -109,7 +109,7 @@ export const STATE_WORDS: Readonly<Record<RulesTargetState, string>> = {
   unreadable: 'Cannot be read'
 }
 
-export const TEST_WORDS: Readonly<Record<NonNullable<RulesProbeView['outcome']>, string>> = {
+const TEST_WORDS: Readonly<Record<NonNullable<RulesProbeView['outcome']>, string>> = {
   pass: 'Passed',
   fail: 'Failed',
   inconclusive: 'Inconclusive',
@@ -117,7 +117,7 @@ export const TEST_WORDS: Readonly<Record<NonNullable<RulesProbeView['outcome']>,
 }
 
 /** Said after a test that sent the app's provider one prompt, unlike the checks that send none (Story 75.8 AC2). */
-export const PROMPT_SENT = ' · one prompt sent'
+const PROMPT_SENT = ' · one prompt sent'
 
 /** The last loading test in words: its result, date and version, whether BMN ran it by itself, whether the rules or the app changed since, and the prompt it sent. */
 export function testLine(test: RulesProbeView | undefined): string {
@@ -143,7 +143,7 @@ export function destinationWords(app: Pick<AgentAppView, 'basis' | 'provider' | 
   return 'Where it sends data is unknown'
 }
 
-export const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', newer: 'newer than tested', other: 'not tested', unknown: 'not checked' }
+const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', newer: 'newer than tested', other: 'not tested', unknown: 'not checked' }
 
 /** The reason a skills install records, which tells it from a rules install. */
 const SKILLS_INSTALL = 'skills install'
@@ -151,7 +151,7 @@ const SKILLS_INSTALL = 'skills install'
 const TOOLS_INSTALL = 'tools install'
 
 /** Saves and installs, newest first, as Earlier versions lists them: a save with Undo…, a version kept from before with Restore…. */
-export type Earlier =
+type Earlier =
   | { kind: 'install'; id: string; at: string | undefined; title: string; detail: string; usable: boolean }
   | { kind: 'save'; revision: number; at: string; title: string; detail: string; usable: boolean }
 
@@ -196,7 +196,7 @@ export function targetStateWords(state: RulesTargetState): string {
 }
 
 /** Why BMN left a hook event as it is, in words (Story 75.9). */
-export const HOOK_LEFT_WORDS: Readonly<Record<HookLeftWhy, string>> = {
+const HOOK_LEFT_WORDS: Readonly<Record<HookLeftWhy, string>> = {
   gated: 'inside a matcher', changed: 'changed', foreign: 'not BMN\'s', unreadable: 'the file cannot be read', unparsable: 'the file is not valid JSON',
   unusable: 'not a hook file BMN can add to', numbers: 'holds a number BMN cannot write back unchanged', failed: 'could not be written'
 }
@@ -223,14 +223,14 @@ export function hookRows(hooks: Extract<HooksAtStart, { state: 'checked' }>): Ho
 
 // Which Health rows carry the Needs-you dot, one test per section: the rows and the page status count alike (Story 75.10).
 /** A rules file: not current, or its loading test offers Test again. */
-export function rulesRowState(snapshot: RulesSnapshot, target: RulesTargetHealth): { again: boolean; needs: boolean } {
+function rulesRowState(snapshot: RulesSnapshot, target: RulesTargetHealth): { again: boolean; needs: boolean } {
   const test = snapshot.probes.find((entry) => entry.harness === target.harness)
   const again = target.kind === 'full' && offersTestAgain(snapshot.autoTests, 'rules', target.harness, test?.outcome === 'fail' && test.stale !== true)
   return { again, needs: target.state !== 'current' || again }
 }
 
 /** An app's skills: not as it may be, or a listing or loading test offers Test again. */
-export function skillsRowState(snapshot: RulesSnapshot, app: SkillsAppView): { again: boolean; loadAgain: boolean; needs: boolean } {
+function skillsRowState(snapshot: RulesSnapshot, app: SkillsAppView): { again: boolean; loadAgain: boolean; needs: boolean } {
   const again = offersTestAgain(snapshot.autoTests, 'skills', app.harness, skillsFailed(app, 'skills'))
   const loadAgain = app.supported && app.kind === 'full' && offersTestAgain(snapshot.autoTests, 'skills-loading', app.harness, skillsFailed(app, 'skills-loading'))
   const off = app.supported && app.state !== 'Linked' && app.state !== 'Copied' && app.state !== 'Reads the source'
@@ -238,13 +238,13 @@ export function skillsRowState(snapshot: RulesSnapshot, app: SkillsAppView): { a
 }
 
 /** An app's tools: not as they may be, or its tools test offers Test again. */
-export function toolsRowState(snapshot: RulesSnapshot, app: ToolsAppView): { again: boolean; needs: boolean } {
+function toolsRowState(snapshot: RulesSnapshot, app: ToolsAppView): { again: boolean; needs: boolean } {
   const again = offersTestAgain(snapshot.autoTests, 'tools', app.harness, app.test !== null && app.test.version === app.version && app.test.outcome === 'fail')
   return { again, needs: (app.supported && app.state !== 'Set up' && app.state !== 'None') || again }
 }
 
 /** An app's context limit: its setting cannot be read, or an agent's limit is not applied. */
-export function contextRowNeeds(row: ContextLimitView): boolean {
+function contextRowNeeds(row: ContextLimitView): boolean {
   return row.unreadable !== undefined || row.limits.some((entry) => entry.state !== 'applied')
 }
 
@@ -272,7 +272,7 @@ type Pending =
   | { kind: 'tools'; plan: ToolsPlan }
 
 /** A notice under a page's head; `undo` names the save it can undo (Story 75.9). */
-export interface RulesNotice { ok: boolean; text: string; undo?: string }
+interface RulesNotice { ok: boolean; text: string; undo?: string }
 
 export interface RulesState {
   snapshot: RulesSnapshot | null
@@ -534,7 +534,7 @@ function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | nu
 }
 
 /** Saving writes a regular file in place of a link, never through it (R60-NFR2): say so before it happens. */
-export function LinkNote(props: { link: string | null | undefined; home: string | null; what: string }): React.JSX.Element | null {
+function LinkNote(props: { link: string | null | undefined; home: string | null; what: string }): React.JSX.Element | null {
   if (props.link === null || props.link === undefined) return null
   return (
     <p className="preferences-help">
@@ -866,7 +866,7 @@ function updateRunEnded(): void {
 }
 
 /** What the sheet says about a press on Update now that did not run the command; null while there is nothing to say. */
-export function pressWords(press: CommandPress, session: string): string | null {
+function pressWords(press: CommandPress, session: string): string | null {
   if (press === 'opening') return `Opening ${session} and waiting for its shell…`
   if (press === 'not-reading') return `The shell in ${session} did not get ready for a command, so BMN typed nothing there. Copy the command and run it yourself.`
   return press === 'failed' ? 'BMN could not open a session, so nothing ran. Press Update now again, or copy the command.' : null

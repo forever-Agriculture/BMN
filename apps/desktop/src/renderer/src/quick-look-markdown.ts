@@ -31,13 +31,13 @@ export type MarkdownInline =
   | { kind: 'image'; alt: string; altFrom: number; source: string; sourceFrom: number; target: MarkdownTarget }
   | { kind: 'break' }
 
-export interface MarkdownListItem {
+interface MarkdownListItem {
   /** A task's box: checked or not; null for an item that is no task. */
   task: boolean | null
   blocks: MarkdownBlock[]
 }
 
-export type MarkdownAlign = 'left' | 'center' | 'right' | null
+type MarkdownAlign = 'left' | 'center' | 'right' | null
 
 export type MarkdownBlock =
   | { kind: 'heading'; line: number; level: 1 | 2 | 3 | 4 | 5 | 6; slug: string; children: MarkdownInline[] }
@@ -82,7 +82,7 @@ function entityText(source: string): string {
 }
 
 /** GitHub's heading anchor: small letters, spaces to dashes, punctuation dropped; repeats get -1, -2. */
-export function headingSlug(text: string, taken: Map<string, number>): string {
+function headingSlug(text: string, taken: Map<string, number>): string {
   const base = text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/gu, '-')
   const count = taken.get(base) ?? 0
   taken.set(base, count + 1)

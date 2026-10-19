@@ -12,10 +12,10 @@ const BEL = 0x07
 const BACKSLASH = 0x5c
 const PREFIX = [0x5d, 0x35, 0x32, 0x3b] // "]52;" after ESC
 
-export type Osc52Target = ProgramCopyTarget
+type Osc52Target = ProgramCopyTarget
 
 /** A write BMN may carry out; reads (`?`) and anything malformed produce nothing. */
-export interface Osc52Write {
+interface Osc52Write {
   targets: Osc52Target[]
   text: string
 }

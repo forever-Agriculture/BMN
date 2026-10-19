@@ -249,7 +249,7 @@ export function scheduleTerminalViewRecovery(
   return { recovering: true }
 }
 
-export function preserveLiveWindowOnClose(
+function preserveLiveWindowOnClose(
   event: { preventDefault(): void },
   window: { hide(): void },
   keepResident: boolean

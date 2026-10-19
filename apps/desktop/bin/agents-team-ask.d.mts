@@ -2,10 +2,7 @@
 import type { AskResult } from './agents-check.mjs'
 export declare function askRunId(now?: Date): string
 export declare class AskUsageError extends Error {}
-export declare function earlierRun(id: string, runs?: string): { role: string; project: string | null; agent: string } | null
 export declare function filePrompt(question: string, files: { label: string; sha256: string; bytes: Buffer }[]): string
-export declare function picturePrompt(prompt: string, pictures: { label: string; media_type: string; width: number; height: number }[]): string
-export declare function projectPrompt(prompt: string, root: string): string
 export declare const ACCESS_GONE: string
 export declare const WIDE_READ_GONE: string
 export interface AskAsked {
@@ -22,5 +19,4 @@ export interface PreparedAsk {
   verdict: AskResult; argv: string[]; cwd: string; stdin: 'text' | 'stream-json'; manifest: Record<string, unknown> & { inputs: import('./agents-check.mjs').AskInput[] }
   program: import('./agents-team-forms.mjs').AskProgram
 }
-export declare function instructionRules(harness: string, generation: unknown): string | null
 export declare function prepareAsk(request: AskAsked, options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string; home?: string; now?: Date; runs?: string; id?: string; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }): PreparedAsk

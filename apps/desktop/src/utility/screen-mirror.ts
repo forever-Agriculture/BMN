@@ -2,7 +2,7 @@
 import { Terminal } from '@xterm/headless'
 
 /** How much recent output a session keeps so a mirror started late still sees the dialog being drawn. */
-export const SCREEN_TAIL_BYTES = 64 * 1024
+const SCREEN_TAIL_BYTES = 64 * 1024
 
 /**
  * The last bytes a session printed, kept cheaply for every live session. Parsing every byte of every
@@ -344,14 +344,14 @@ function rawOptionAt(lines: readonly string[], row: number): RawOption | null {
 }
 
 /** Claude's text-entry row after the options, as it reads now: its placeholder, or what has been typed. */
-export interface ClaudeOtherRow {
+interface ClaudeOtherRow {
   cursor: boolean
   /** Null while it still shows its placeholder. */
   text: string | null
 }
 
 /** A Claude question with its options in order and its typed-entry row, whatever has been typed or ticked. */
-export interface ClaudeQuestionState {
+interface ClaudeQuestionState {
   /** The cursor's entry: an option index, `options` for the typed-entry row, `options + 1` for Next/Submit. */
   cursor: number | null
   /** Per option, for a multi-select question; empty for a single-choice one. */
@@ -416,7 +416,7 @@ export function claudeQuestionState(lines: readonly string[], question: ScreenQu
 }
 
 /** Codex's question with the cursor's option and its notes field, when one is open. */
-export interface CodexQuestionState {
+interface CodexQuestionState {
   /** The cursor's option index; `options` is "None of the above". */
   cursor: number | null
   /** Null while no notes field is open; empty while it shows its "Add notes" placeholder. */

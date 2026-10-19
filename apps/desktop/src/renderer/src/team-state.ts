@@ -19,7 +19,7 @@ const PREVIEW_DELAY_MS = 250
 const NOTICE_MS = 5_000
 const UNDO_NOTICE_MS = 12_000
 
-export interface TeamNotice {
+interface TeamNotice {
   ok: boolean
   text: string
   issues?: RosterIssueShape[]
@@ -28,13 +28,13 @@ export interface TeamNotice {
 }
 
 /** An Undo of a rules update waiting for the owner: what each file would become, shown before anything is written. */
-export interface TeamRulesUndo {
+interface TeamRulesUndo {
   transaction: string
   plan: RulesPlan
 }
 
 /** An approving control waiting for the owner to confirm it, with what it would approve. */
-export interface TeamConfirmation {
+interface TeamConfirmation {
   request: AgentsApprovalRequest
   title: string
   action: string

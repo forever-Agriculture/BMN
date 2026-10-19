@@ -90,7 +90,7 @@ export function contextTests() {
 }
 
 /** The last test of one app, whatever version it ran against, or null. */
-export function lastContextTest(harness, tests = contextTests()) {
+function lastContextTest(harness, tests = contextTests()) {
   let last = null
   for (const entry of tests) if (entry.harness === harness) last = entry
   return last
@@ -241,7 +241,7 @@ export function checkContext(agent, resolved, proven, precedence = []) {
 // Reading and editing the two files, every other byte left as it is (60.9 AC3)
 
 /** The file that holds an app's default for the owner's own sessions. */
-export function contextFile(harness, environment = process.env) {
+function contextFile(harness, environment = process.env) {
   const home = environment.HOME || homedir()
   if (harness === 'codex') return `${absoluteUncollapsed(environment.CODEX_HOME || `${home}/.codex`)}/config.toml`
   if (harness === 'claude') return `${absoluteUncollapsed(environment.CLAUDE_CONFIG_DIR || `${home}/.claude`)}/settings.json`
@@ -810,7 +810,7 @@ export function contextAutoPlan({ data, versions, tests = contextTests(), source
 // ---------------------------------------------------------------------------------------------
 // CLI
 
-export const CONTEXT_USAGE = `Usage: bmn context check [--json]            Each app's default context limit for your own sessions, and whether
+const CONTEXT_USAGE = `Usage: bmn context check [--json]            Each app's default context limit for your own sessions, and whether
                                              BMN has tested the setting on the installed version
        bmn context set <app> [--limit N|default] [--compact-at N|default] [--plan] [--expect-plan <hash>] [--yes] [--json]
                                              Change that default: only the named keys of the app's file, shown

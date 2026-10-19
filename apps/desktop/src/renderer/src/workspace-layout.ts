@@ -7,7 +7,7 @@ import type { LayoutChange, LayoutWriter } from './layout-writer'
 
 export type SessionView = WorkspaceLayoutState['sessionView'][string]
 
-export interface OutputTransition {
+interface OutputTransition {
   state: WorkspaceLayoutState
   scrollToBottom: boolean
 }
@@ -112,7 +112,7 @@ export function closeLayoutPane(
   }, sessionIds)
 }
 
-export const SPLIT_RATIO_RANGE = Object.freeze({ min: 0.15, max: 0.85 })
+const SPLIT_RATIO_RANGE = Object.freeze({ min: 0.15, max: 0.85 })
 
 /** Sets the first pane's share of a two-pane split, clamped so both panes stay usable. */
 export function resizeLayoutSplit(

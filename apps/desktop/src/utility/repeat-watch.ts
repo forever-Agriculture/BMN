@@ -1,5 +1,5 @@
 // MODULE: repeat-watch.ts - pure, bounded repeat counting for one session incarnation
-export const REPEAT_WINDOW = 20
+const REPEAT_WINDOW = 20
 /** Tune against the local repeat-watch.log calibration segments. */
 export const REPEAT_NOTICE_AT = 8
 

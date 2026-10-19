@@ -61,7 +61,7 @@ export interface EnvViewHandle {
   selectedRow(): number | null
 }
 
-export const PASTE_REFUSED = 'A value is one line; nothing was pasted'
+const PASTE_REFUSED = 'A value is one line; nothing was pasted'
 const DOTS = '•'.repeat(12)
 
 const chars = (count: number): string => `${count} ${count === 1 ? 'char' : 'chars'}`

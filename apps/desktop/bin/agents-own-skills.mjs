@@ -19,14 +19,14 @@ import { copyTree, entryOf, treeHash } from './agents-skills.mjs'
  * is, listed under Integrations › Skills. An entry BMN made that is gone was removed by the owner: BMN records
  * that and never adds it back. A copy that cannot be read is put back, never taken for a removal.
  */
-export const OWN_SKILLS_RECORD_VERSION = 1
+const OWN_SKILLS_RECORD_VERSION = 1
 
-export function ownSkillsRecordPath() {
+function ownSkillsRecordPath() {
   return `${agentsDirectory()}/state/own-skills.json`
 }
 
 /** Where BMN's shipped skills are: the packaged resources/skills, or the repository's skills/ in development. */
-export function shippedSkillsRoot(environment = process.env) {
+function shippedSkillsRoot(environment = process.env) {
   if (environment.BMN_SHIPPED_SKILLS) return environment.BMN_SHIPPED_SKILLS
   const here = dirname(fileURLToPath(import.meta.url))
   for (const candidate of [resolve(here, '../skills'), resolve(here, '../../../skills')]) {
@@ -41,7 +41,7 @@ export function ownCopiesRoot(environment = process.env) {
   return join(data, 'bmn', 'skills')
 }
 
-export function shippedNames(root) {
+function shippedNames(root) {
   const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
   if (!Array.isArray(manifest?.skills)) throw new Error('skills/manifest.json has no skills list')
   return manifest.skills.filter((name) => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/u.test(name))

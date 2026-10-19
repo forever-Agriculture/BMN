@@ -3,7 +3,7 @@
 // Everything is decided in BMN through the control socket: the card is checked there, only the owner's own surfaces
 // answer it (no token reaching the socket can), and the grant read here is read fresh each time, never from a handoff.
 
-export const GRANT_USAGE = `Usage: bmn grant [--run ID] [--json]
+const GRANT_USAGE = `Usage: bmn grant [--run ID] [--json]
        bmn grant ask --run ID --card-file - [--key K] [--json]
        bmn grant ask --run ID --nothing [--title T] [--scope S] [--key K] [--json]
        bmn grant use --run ID --use-id U (--boundary B | --item I) [--json]
@@ -72,7 +72,7 @@ async function readCard() {
 }
 
 /** What `grant ask` prints for the host's answer. */
-export function describeAsk(result) {
+function describeAsk(result) {
   const run = result?.runId ?? 'this run'
   if (result?.state === 'nothing') return `Recorded: run ${run} needs nothing for the night${result.outcome === 'unchanged' || result.outcome === 'repeated' ? ' (already said; nothing changed)' : ''}.`
   const same = result?.outcome === 'unchanged' || result?.outcome === 'repeated' ? ' (the same as before; nothing changed)' : ''
@@ -81,7 +81,7 @@ export function describeAsk(result) {
 }
 
 /** What `grant` prints: each run's lines as BMN words them, or why there is none. */
-export function describeStatus(result, runId) {
+function describeStatus(result, runId) {
   const runs = Array.isArray(result?.runs) ? result.runs : []
   const lines = []
   const departure = result?.departure
@@ -97,12 +97,12 @@ export function describeStatus(result, runId) {
   return lines.join('\n')
 }
 
-export function describeUse(result, use) {
+function describeUse(result, use) {
   const what = use.boundary !== undefined ? `one extra round at ${use.boundary}` : `one use of item ${use.item}`
   return `Recorded ${what} for run ${use.runId} in period ${result?.periodId}${result?.outcome === 'repeated' ? ' (already recorded under this use id; not repeated)' : ''}; ${result?.left ?? 0} left. Report its outcome with --period ${result?.periodId}.`
 }
 
-export function describeReport(result, runId) {
+function describeReport(result, runId) {
   return `Kept as the agent's report for run ${runId}${result?.outcome === 'repeated' ? ' (already kept; not repeated)' : ''}; it grants nothing.`
 }
 

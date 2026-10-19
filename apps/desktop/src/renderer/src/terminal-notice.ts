@@ -6,7 +6,7 @@ import {
   type TerminalNoticeCode
 } from '@bmn/protocol'
 
-export interface TerminalNotice {
+interface TerminalNotice {
   title: string
   body?: string
 }

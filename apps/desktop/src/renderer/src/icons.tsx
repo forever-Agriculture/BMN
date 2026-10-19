@@ -17,7 +17,7 @@ const PATHS = {
   close: 'M4 4l8 8M12 4l-8 8'
 } as const
 
-export type IconName = keyof typeof PATHS
+type IconName = keyof typeof PATHS
 
 export function Icon(props: { name: IconName; size?: number }): React.JSX.Element {
   const size = props.size ?? 16

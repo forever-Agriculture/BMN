@@ -25,7 +25,7 @@ export function copiedReference(canonicalPath: string, line: number | null, colu
   return formatFileReference(canonicalPath, line, column)
 }
 
-export interface MissingWords {
+interface MissingWords {
   title: string
   /** Where a relative reference was resolved from, or that the path was absolute. */
   from: string

@@ -5,7 +5,7 @@ import { guardPath } from './session-guard-card'
 import type { SessionPlace } from './session-request-card'
 import { turnAppName, turnRetryWords } from './turn-changes-presentation'
 
-export const TURN_PAUSE_HEADING = 'Recording what each turn changes is paused here'
+const TURN_PAUSE_HEADING = 'Recording what each turn changes is paused here'
 
 /**
  * Recording paused for a session's work tree after three scans in a row failed or read nothing new. The card

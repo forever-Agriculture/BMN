@@ -95,18 +95,12 @@ export interface RosterTool {
 export interface RosterIssue { code: string; line?: number; message: string }
 export interface RosterBlock { startLine: number; contentLine: number; endLine: number; start: number; end: number; contentStart: number; contentEnd: number; source: string }
 export interface RosterSection { heading: string; line: number; start: number; blocks: RosterBlock[] }
-/** The layout BMN writes for a new team; an older one it still reads stays as it is. */
-export declare const SCHEMA_VERSION: 3
 export declare const OLDEST_SCHEMA_VERSION: 2
 export declare function schemaSupported(version: unknown): boolean
-export declare const CALLED_BY_BMN: CalledByBmn
-export declare const CALLED_WORDS: 'called by BMN'
 /** Whether an agent is called by BMN itself instead of running in an agent app (65.1). */
 export declare function isCalled(agent: Pick<RosterAgent, 'harness'> | null | undefined): boolean
 /** The role only an agent called by BMN may hold, and the only one it may hold. */
 export declare const JUDGE_ROLE: 'judge'
-export declare const JUDGE_DESCRIPTION: string
-export declare const SCHEMA_3_CHANGES: string
 export interface JudgeProposal { receives: RosterProvider; runs: RosterProvider; agent: Omit<RosterAgent, 'provider' | 'run_by'> }
 export declare const JUDGE_PROPOSAL: JudgeProposal
 /** The team with BMN's judge proposal taken, or null where there is nothing to propose. */
@@ -119,32 +113,20 @@ export declare function calledParties(data: Pick<RosterData, 'providers'>, agent
 export declare const HARNESSES: Harness[]
 export declare const LISTED_APPS: ListedApp[]
 export declare const RETIRED_APPS: Record<RetiredApp, string>
-export declare const RETIRED_ON: string
-export declare const RETIRED_TAG: string
 export declare function isRetired(app: unknown): app is RetiredApp
 export declare function retiredWords(app: RetiredApp): string
 export declare function appRefusal(app: unknown, words: string): string
-export declare const RETIRED_PROGRAMS: Record<string, RetiredApp>
 export declare function retiredProgram(command: unknown): RetiredApp | null
 export declare function appName(app: string): string
 export declare const EFFORTS: Effort[]
-export declare const THEN: RosterRole['then'][]
-export declare const CLASSES: AgentClass[]
-export declare const PRIVATE_WORK: PrivateWork[]
 export declare const LEAD_ROLE: 'lead'
 export declare const DESIGNER_ROLE: 'designer'
 export interface ClassRule { classes: AgentClass[]; code: 'CLASS_CANNOT_LEAD' | 'CLASS_CANNOT_DESIGN'; rule: string }
-export declare const CLASS_ROLES: Record<string, ClassRule>
 export declare function classRefusal(agentClass: AgentClass, role: string): ClassRule | null
-export declare const MAX_EXCEPTIONS: number
-export declare const MAX_SKILLS: number
 export declare const SKILL_PATTERN: RegExp
-export declare const MAX_TOOLS: number
 export declare const TOOL_PATTERN: RegExp
-export declare const ENV_NAME_PATTERN: RegExp
 export declare const TOOL_FIELDS: string[]
 export declare const SHARED_SECTIONS: string[]
-export declare const STARTER_ROLES: RosterRole[]
 export declare const AGENT_FIELDS: string[]
 export declare const FREE_TEXT_FIELDS: string[]
 export declare const RESERVED_SECTIONS: string[]
@@ -170,10 +152,8 @@ export interface TeamEntry {
   called_by?: CalledByBmn; run_by?: string
 }
 export declare const APP_NAMES: Record<Harness, string>
-export declare const PUBLIC_ONLY_APPS: Harness[]
 export declare function harnessPrivateWork(data: RosterData | null, harness: string): { allowed: boolean; reason: string; route: RosterRoute | null; provider: RosterProvider | null }
 export declare function publicOnlyReasons(agent: RosterAgent, data: RosterData): string[]
-export declare function teamEntry(data: RosterData, agent: RosterAgent): TeamEntry
 export declare function teamLine(entry: TeamEntry): string
 export declare function team(data: RosterData, all: boolean): TeamEntry[]
 export declare function roleChain(data: RosterData, roleId: string): Record<string, unknown>
@@ -193,25 +173,15 @@ export declare function readOnlyProposal(data: Pick<RosterData, 'roles'> | null 
 export declare function roleEfforts(role: RosterRole, agentId: string): string[]
 export declare function initialEfforts(role: RosterRole, agent: RosterAgent): string[]
 export declare const PROJECT_CHOICE_FIELDS: readonly string[]
-export declare const MAX_PROJECT_CHOICES: number
 export declare function projectChoiceProblem(data: Pick<RosterData, 'agents' | 'roles'>, choice: RosterProjectChoice): string | null
 export declare function choiceEnded(choice: RosterProjectChoice, now?: Date): boolean
 export interface ProjectChoiceCollision { project: string; role: string; choices: RosterProjectChoice[] }
 export declare function projectChoiceCollisions(choices: readonly RosterProjectChoice[] | undefined, canonical: (folder: string) => string, now?: Date | null): ProjectChoiceCollision[]
 export declare function collisionWords(group: ProjectChoiceCollision): string
 export declare function projectChoiceFor(data: Pick<RosterData, 'project_choices'>, project: string, roleId: string, canonical: (folder: string) => string, now?: Date): { choice: RosterProjectChoice; ended: boolean; collision?: undefined } | { collision: ProjectChoiceCollision; choice?: undefined; ended?: undefined } | null
-export declare function projectChoicesYaml(choices: RosterProjectChoice[]): string
-export declare function agentYaml(agent: RosterAgent): string
-export declare function rolesYaml(roles: RosterRole[]): string
-export declare function providersYaml(providers: RosterProvider[]): string
-export declare function exceptionsYaml(exceptions: RosterException[]): string
-export declare function skillsYaml(data: Pick<RosterData, 'skills' | 'skills_source'>): string
-export declare function toolsYaml(data: Pick<RosterData, 'tools'>): string
 export declare function starterRoster(): string
 export declare function privateWorkOf(data: RosterData, agent: RosterAgent): PrivateWork
 export declare function resolvedDirectory(path: string): string
-export declare function routesYaml(routes: RosterRoute[]): string
-export declare function headerYaml(version?: number): string
 export declare function rewriteRoster(text: string, data: RosterData, options?: { scope?: string[] | null }): string
 export declare function outsideYamlBlocks(text: string): string[]
 export declare function proseOf(text: string, id: string): string | null

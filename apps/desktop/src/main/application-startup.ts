@@ -16,7 +16,7 @@ export interface StartupHostClient {
   request<Result>(method: ProtocolMethod, params: object): Promise<Result>
 }
 
-export interface WorkspaceStartupState {
+interface WorkspaceStartupState {
   activeWorkspaceId: string | null
   workspaces: WorkspaceRecord[]
   sessions: SessionRecord[]
@@ -54,7 +54,7 @@ export async function loadWorkspaceStartup(client: StartupHostClient): Promise<W
   }
 }
 
-export interface CreatedSessionIdentity {
+interface CreatedSessionIdentity {
   sessionId: string
   incarnationId: string
   binding: unknown

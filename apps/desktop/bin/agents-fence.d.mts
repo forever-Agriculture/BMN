@@ -6,9 +6,6 @@ type Environment = NodeJS.ProcessEnv | Record<string, string>
 
 /** Where a marker is planted, in the words the result uses. */
 export declare const FENCE_MARKERS: Record<string, string>
-/** Where a marker is planted for an OpenCode research run (70.3). */
-export declare const OPENCODE_FENCE_MARKERS: Record<string, string>
-export declare const FENCE_USAGE: string
 export declare function fenceDirectory(): string
 /** Which planted markers a text holds, plainly or inside base64. */
 export declare function markersIn(text: string, markers: Record<string, string>): string[]

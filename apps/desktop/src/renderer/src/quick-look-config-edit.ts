@@ -38,7 +38,7 @@ export function pasteLandsMasked(text: string): boolean {
 }
 
 /** The token a hidden value stands in: its quotes included, a trailing comma, brace or comment left out; and whether it spans lines. */
-export interface ValueSpan {
+interface ValueSpan {
   from: number
   to: number
   /** Where the value's own text is, inside any quotes. */

@@ -1,7 +1,7 @@
 import { ERROR_CODES, isProtocolErrorCode, type ProtocolErrorCode } from '@bmn/protocol'
 import type { BridgeError } from './bridge'
 
-export function bridgeError(code: ProtocolErrorCode, message: string): BridgeError {
+function bridgeError(code: ProtocolErrorCode, message: string): BridgeError {
   return { name: 'BridgeError', code, message }
 }
 

@@ -18,7 +18,7 @@ async function textReadSlot(): Promise<() => void> {
     else activeTextReads--
   }
 }
-export function insideDirectory(root: string, path: string): boolean {
+function insideDirectory(root: string, path: string): boolean {
   const part = relative(root, path)
   return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`))
 }
@@ -41,7 +41,7 @@ export async function worktreeText(root: string, path: string, maxBytes: number)
   } finally { release() }
 }
 
-export interface WorktreeLocation { checkout: string; branch: string | null }
+interface WorktreeLocation { checkout: string; branch: string | null }
 export function parseWorktrees(text: string): WorktreeLocation[] {
   const records: WorktreeLocation[] = []
   let current: WorktreeLocation | null = null
@@ -72,7 +72,7 @@ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
 const ENTRY_ID = /^\[(d\d{1,4})\](?:\s|$)/u
 const BMN_RECORD = /\(bmn: (?:([A-Za-z0-9][A-Za-z0-9-]{0,63})\/)?([A-Za-z0-9][A-Za-z0-9._:-]{0,119})\)\s*$/u
 
-export function decisionEntry(value: string): DevAutoRun['decisionEntries'][number] {
+function decisionEntry(value: string): DevAutoRun['decisionEntries'][number] {
   const record = BMN_RECORD.exec(value)
   return { entry: ENTRY_ID.exec(value)?.[1] ?? null, bmnKey: record?.[2] ?? null, bmnSession: record?.[1] ?? null }
 }

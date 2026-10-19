@@ -13,15 +13,15 @@ export interface FileReference {
   column: number | null
 }
 
-export type FileReferenceParse = { ok: true; reference: FileReference } | { ok: false; reason: string }
+type FileReferenceParse = { ok: true; reference: FileReference } | { ok: false; reason: string }
 
 /**
  * `typed` is text the owner entered or pasted on purpose, so unquoted spaces belong to the path.
  * `terminal` is text found in output, where anything ambiguous stays plain text.
  */
-export type FileReferenceMode = 'typed' | 'terminal'
+type FileReferenceMode = 'typed' | 'terminal'
 
-export interface FileReferenceMatch {
+interface FileReferenceMatch {
   /** Offsets into the searched text; `end` is exclusive. */
   start: number
   end: number
@@ -37,7 +37,7 @@ export type FileReferenceReadParams = ({ sessionId: string; workspaceId?: never 
   baseDirectory?: string | null
 }
 
-export type FileReferenceBaseKind = 'launch-directory' | 'chosen-directory'
+type FileReferenceBaseKind = 'launch-directory' | 'chosen-directory'
 
 export interface FileReferenceBase {
   kind: FileReferenceBaseKind

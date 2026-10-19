@@ -18,7 +18,7 @@ import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute
  */
 
 /** The longest a decision may take before the prompt is stopped instead (60.8 AC2). */
-export const GUARD_LIMIT_MS = 2000
+const GUARD_LIMIT_MS = 2000
 
 /**
  * The event that carries a prompt in each app. Claude Code and Codex document a prompt hook that
@@ -67,7 +67,7 @@ export function guardState() {
 }
 
 /** How the agent process was started and with what, as Linux reports it; null when any part cannot be read. */
-export function readAgentProcess(procRoot, pid) {
+function readAgentProcess(procRoot, pid) {
   try {
     const argv = readFileSync(`${procRoot}/${pid}/cmdline`, 'utf8').split('\0')
     while (argv.length > 0 && argv[argv.length - 1] === '') argv.pop()

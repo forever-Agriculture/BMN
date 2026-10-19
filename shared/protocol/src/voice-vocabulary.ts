@@ -1,15 +1,15 @@
 // MODULE: voice-vocabulary.ts - owner-approved dictation hints: one validator shared by storage, the panel and transcription
 
 export const VOICE_VOCABULARY_MAX_WORDS = 30
-export const VOICE_VOCABULARY_MAX_WORD_LENGTH = 40
+const VOICE_VOCABULARY_MAX_WORD_LENGTH = 40
 /**
  * whisper.cpp keeps at most n_text_ctx/2 - 1 = 223 prompt tokens after its previous-text marker, and its tokenizer
  * takes at least one UTF-8 byte per token, so a prompt of at most 223 bytes always reaches Whisper whole.
  */
 export const VOICE_VOCABULARY_MAX_PROMPT_BYTES = 223
 
-export type VocabularyWordResult = { ok: true; word: string } | { ok: false; reason: string }
-export type VocabularyResult = { ok: true; words: string[] } | { ok: false; reason: string }
+type VocabularyWordResult = { ok: true; word: string } | { ok: false; reason: string }
+type VocabularyResult = { ok: true; words: string[] } | { ok: false; reason: string }
 
 const FORBIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp},]/u
 const utf8 = new TextEncoder()

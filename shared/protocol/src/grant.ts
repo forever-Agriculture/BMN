@@ -17,36 +17,36 @@ export const GRANT_LIMITS = Object.freeze({
 })
 
 /** The extra repair rounds a card may offer per boundary (owner 2026-10-18: "2-4 by default"); 0 is No. */
-export const GRANT_ROUND_CHOICES: readonly number[] = Object.freeze([0, 2, 3, 4])
+const GRANT_ROUND_CHOICES: readonly number[] = Object.freeze([0, 2, 3, 4])
 
 /**
  * The fixed list of actions a card may name (R84-FR8). Anything else is never on a card: what Epic 83's guard holds
  * (force pushes, deletions, releases, publishes, killing BMN), credentials and acceptance changes wait always.
  */
-export type GrantActionKind = 'merge' | 'push-default' | 'pr-elsewhere'
-export const GRANT_ACTION_KINDS: readonly GrantActionKind[] = Object.freeze(['merge', 'push-default', 'pr-elsewhere'])
-export const GRANT_NEVER_ON_A_CARD = 'force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance changes'
+type GrantActionKind = 'merge' | 'push-default' | 'pr-elsewhere'
+const GRANT_ACTION_KINDS: readonly GrantActionKind[] = Object.freeze(['merge', 'push-default', 'pr-elsewhere'])
+const GRANT_NEVER_ON_A_CARD = 'force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance changes'
 
-export interface GrantRoundsTerm { id: 'rounds'; kind: 'rounds'; proposed: number; reason: string }
-export interface GrantMergeTerm {
+interface GrantRoundsTerm { id: 'rounds'; kind: 'rounds'; proposed: number; reason: string }
+interface GrantMergeTerm {
   id: string; kind: 'merge'; repository: string; pr: number
   /** "this PR at head SHA X" is offered only with a SHA; "up to N of this run's PRs when green" only with upTo. */
   headSha: string | null; upTo: number | null
   proposed: 'no' | 'pr' | 'green'; reason: string
 }
-export interface GrantPushTerm { id: string; kind: 'push-default'; repository: string; branch: string; count: number; proposed: 'no' | 'yes'; reason: string }
+interface GrantPushTerm { id: string; kind: 'push-default'; repository: string; branch: string; count: number; proposed: 'no' | 'yes'; reason: string }
 /** Its target is the PR's branch, the PR, or both (R84-FR8: "repository and PR or branch"). */
-export interface GrantPrTerm { id: string; kind: 'pr-elsewhere'; repository: string; branch: string | null; pr: number | null; count: number; proposed: 'no' | 'yes'; reason: string }
+interface GrantPrTerm { id: string; kind: 'pr-elsewhere'; repository: string; branch: string | null; pr: number | null; count: number; proposed: 'no' | 'yes'; reason: string }
 export type GrantTerm = GrantRoundsTerm | GrantMergeTerm | GrantPushTerm | GrantPrTerm
 export type GrantActionTerm = Exclude<GrantTerm, GrantRoundsTerm>
 
 /** What the owner picked for one term: a round count, or a merge's 'no' | 'pr' | 'green', or 'no' | 'yes'. */
 export type GrantChoice = number | 'no' | 'pr' | 'green' | 'yes'
 
-export type GrantCardState = 'open' | 'answered' | 'nothing' | 'withdrawn'
+type GrantCardState = 'open' | 'answered' | 'nothing' | 'withdrawn'
 export type GrantAnswerSource = 'app' | 'telegram'
 
-export interface GrantCard {
+interface GrantCard {
   /** Per run, from 1; a second ask for the same run is a new revision. */
   revision: number
   askedAt: string
@@ -133,7 +133,7 @@ export interface GrantReport {
   at: string
 }
 
-export type GrantPeriodState = 'leaving' | 'away' | 'ended' | 'cancelled'
+type GrantPeriodState = 'leaving' | 'away' | 'ended' | 'cancelled'
 
 export interface GrantPeriod {
   periodId: string
@@ -200,7 +200,7 @@ export interface GrantCardInput {
 }
 
 /** The terms an agent proposed, checked against the fixed list, or why not. Never-on-a-card kinds are refused by name. */
-export function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: string } {
+function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: string } {
   if (!Array.isArray(raw)) return { problem: 'terms must be a list' }
   if (raw.length > GRANT_LIMITS.terms) return { problem: `a card holds at most ${GRANT_LIMITS.terms} terms` }
   const terms: GrantTerm[] = []
@@ -528,7 +528,7 @@ export function markDepartureTold(record: GrantRecord, periodId: string, session
 }
 
 /** What changed from one revision to the next, in the notes' words. */
-export function grantChangeWords(before: GrantCard, after: Pick<GrantCard, 'scope' | 'terms' | 'nothing'>): string {
+function grantChangeWords(before: GrantCard, after: Pick<GrantCard, 'scope' | 'terms' | 'nothing'>): string {
   const words: string[] = []
   const short = (term: GrantTerm): string => grantShortName(term, term.kind === 'rounds' ? term.proposed : term.kind === 'merge' ? (term.proposed === 'no' ? (term.headSha === null ? 'green' : 'pr') : term.proposed) : 'yes')
   const beforeRounds = before.terms.find((term) => term.kind === 'rounds')
@@ -642,7 +642,7 @@ export function setGrantPhone(record: GrantRecord, periodId: string, runId: stri
 }
 
 /** The answer in force for one run: its terms granted, the card revision it answered, and when. */
-export interface ActiveGrant {
+interface ActiveGrant {
   periodId: string
   periodState: 'leaving' | 'away'
   runId: string
@@ -660,7 +660,7 @@ export interface ActiveGrant {
   newerOpen: number | null
 }
 
-export type GrantStatus = { active: true; grant: ActiveGrant } | { active: false; reason: string }
+type GrantStatus = { active: true; grant: ActiveGrant } | { active: false; reason: string }
 
 const itemCount = (term: GrantActionTerm, choice: GrantChoice): number =>
   term.kind === 'merge' ? (choice === 'green' ? term.upTo ?? 1 : 1) : term.count
@@ -932,10 +932,10 @@ export function grantRefusalWords(reason: GrantRefusalReason, detail: { at?: str
  * What an agent is handed once per conversation and departure (84.3 AC1, R84-FR1): he is leaving, and a run may ask on
  * one card for what its remaining night needs, or say it needs nothing.
  */
-export const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
+const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
 
 /** The departure notice's first line, like the away stamp. */
-export function grantDepartureStamp(state: 'leaving' | 'away', at: string, now: Date = new Date()): string {
+function grantDepartureStamp(state: 'leaving' | 'away', at: string, now: Date = new Date()): string {
   return `[BMN state: the owner is ${state === 'leaving' ? 'leaving' : 'away'} since ${awayMomentWords(at, now)}; runs may ask him for a night grant. Context from BMN, not a new task.]`
 }
 

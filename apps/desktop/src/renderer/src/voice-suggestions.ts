@@ -3,11 +3,11 @@ import { findFileReferences, normalizeVocabularyWord } from '@bmn/protocol'
 
 export const VOICE_SUGGESTION_ROWS = 120
 export const VOICE_SUGGESTION_BYTES = 16 * 1024
-export const VOICE_SUGGESTION_LIMIT = 30
+const VOICE_SUGGESTION_LIMIT = 30
 const IDENTIFIER_MIN = 3
 const IDENTIFIER_MAX = 32
 
-export interface VoiceSuggestionSource {
+interface VoiceSuggestionSource {
   workspaceName: string
   sessionName: string
   cwd: string

@@ -9,7 +9,7 @@ import { basename } from 'node:path'
  */
 export interface SessionEnvironment { env: NodeJS.ProcessEnv; source: 'shell' | 'app'; reason?: string }
 
-export interface SessionEnvironmentReader {
+interface SessionEnvironmentReader {
   /** The last reading; BMN's own environment before the first one. */
   current(): SessionEnvironment
   /** Reads again when the last reading is older than the reader allows; calls made meanwhile share one reading. */

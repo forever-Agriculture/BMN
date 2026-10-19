@@ -6,7 +6,7 @@ export function programCopyAllowed(settings: Partial<AppSettings> | null | undef
   return settings?.terminal?.programClipboard === true
 }
 
-export interface ProgramCopyActions {
+interface ProgramCopyActions {
   /** The owner's choice, read at each copy so turning it off takes effect at once. */
   allowed(): Promise<boolean>
   /** Writes one target as plain text; false when this platform has no such target (the primary selection off Linux). */

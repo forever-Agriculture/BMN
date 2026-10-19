@@ -483,7 +483,7 @@ export function researchRunsDirectory() {
 }
 
 /** The owner's own Codex sign-in file as a research run links to it. BMN names it and never reads it. */
-export function codexSignInFile(environment = process.env) {
+function codexSignInFile(environment = process.env) {
   return `${environment.HOME ?? ''}/.codex/${CODEX_SIGN_IN}`
 }
 

@@ -11,7 +11,7 @@ import { DiffStopped, countLines, decodeText, diffLines, unified, type Hunk } fr
 import { SHOWN_LIMITS, showDifference, type ShownLimits } from './turn-changes-shown'
 import type { TreeRow, TurnCaptureRecord, TurnStore } from './turn-changes-store'
 
-export type TurnFileState =
+type TurnFileState =
   | 'added'
   | 'removed'
   | 'changed'
@@ -22,7 +22,7 @@ export type TurnFileState =
   | 'entered what is covered'
   | 'left what is covered'
 
-export type TurnEntryKind = 'file' | 'link' | 'submodule'
+type TurnEntryKind = 'file' | 'link' | 'submodule'
 
 /** One path's row of a comparison. `added` and `removed` are lines, present only where lines were counted. */
 export interface TurnFileRow {
@@ -45,7 +45,7 @@ export interface TurnFileRow {
   onlyBefore?: boolean
 }
 
-export interface TurnTotals {
+interface TurnTotals {
   files: number
   added: number
   removed: number
@@ -65,7 +65,7 @@ export type TurnDifference =
   | { state: 'text'; added: number; removed: number; hunks: Hunk[] }
   | { state: 'binary'; sizeBefore: number | null; sizeAfter: number | null }
 
-export interface CompareOptions {
+interface CompareOptions {
   limitMs?: number
   cancelled?: () => boolean
 }

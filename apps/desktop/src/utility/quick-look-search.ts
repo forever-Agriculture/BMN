@@ -19,7 +19,7 @@ import {
 import { FILE_SEARCH_MAX_DEPTH, GENERATED_DIRECTORIES } from './file-reference-search'
 import { gitTopLevel, repositoryGit, repositoryGitError } from './repository-git'
 
-export interface ContentsSearchLimits {
+interface ContentsSearchLimits {
   maxFiles?: number
   maxLines?: number
   maxFileBytes?: number

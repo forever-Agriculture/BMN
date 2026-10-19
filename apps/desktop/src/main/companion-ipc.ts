@@ -257,7 +257,7 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
   })
 }
 
-export interface AppEventForwarderOptions {
+interface AppEventForwarderOptions {
   client(): CompanionHostClient | undefined
   targets(): WebContents[]
   /** True while the owner is present and looking at the session: selected in a focused window. */
@@ -272,7 +272,7 @@ export interface AppEventForwarderOptions {
   place?(sessionId: string): Promise<string | null>
 }
 
-export interface AttentionNotification {
+interface AttentionNotification {
   title: string
   body: string
   sessionId: string

@@ -30,7 +30,7 @@ import { HostControlError } from './session-manager'
 
 export type { MessageDestination }
 
-export interface SessionMessagesOptions {
+interface SessionMessagesOptions {
   database: Pick<DatabaseWorkerClient, 'companion'>
   liveIncarnationId(sessionId: string): string | null | undefined
   /** A session as the host knows it now, read afresh. */

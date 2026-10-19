@@ -40,7 +40,7 @@ export async function handleTerminalViewFailure(
 
 type OutputChunk = Pick<TerminalOutputMessage, 'attachmentId' | 'streamSeq' | 'bytes'>
 
-export function terminalViewDisconnectNotice(reason: TerminalViewDisconnectReason): string {
+function terminalViewDisconnectNotice(reason: TerminalViewDisconnectReason): string {
   if (reason === 'sequence-gap') {
     return 'Terminal output sequence was invalid. Rebuilding this view; the shell process was not stopped.'
   }

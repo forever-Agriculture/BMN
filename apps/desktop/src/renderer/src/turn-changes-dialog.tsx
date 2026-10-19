@@ -34,11 +34,11 @@ import './turn-changes.css'
 
 export type { TurnFileBody, TurnOpened } from './turn-changes-reader'
 
-export const TURNS_HEADING = `The latest ${TURN_LIST_LIMIT} turns still kept`
-export const TURN_GONE_WORDS = 'No longer kept'
-export const TURN_REMOVAL_PENDING_WORDS = 'Removal pending'
-export const TURN_SECRET_CHANGED_WORDS = 'Secret value changed'
-export const TURN_CUT_WORDS = `cut at ${TURN_SHOWN_LIMITS.lineCharacters.toLocaleString('en-US')} characters`
+const TURNS_HEADING = `The latest ${TURN_LIST_LIMIT} turns still kept`
+const TURN_GONE_WORDS = 'No longer kept'
+const TURN_REMOVAL_PENDING_WORDS = 'Removal pending'
+const TURN_SECRET_CHANGED_WORDS = 'Secret value changed'
+const TURN_CUT_WORDS = `cut at ${TURN_SHOWN_LIMITS.lineCharacters.toLocaleString('en-US')} characters`
 
 /** A turn's totals with their mark, or the wording that says why there are none. Gold is only ever on the mark and the wording. */
 function TurnResult(props: { turn: TurnSummary; whole?: boolean }): React.JSX.Element | null {

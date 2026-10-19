@@ -23,7 +23,7 @@ export interface TeamModelRow {
   recorded?: RosterPriceShape
 }
 
-export interface ResearchGroups {
+interface ResearchGroups {
   /** Models not on the team that the last research saw for the first time. */
   fresh: ResearchModelView[]
   team: TeamModelRow[]
@@ -123,7 +123,7 @@ export function fillFrom(model: ResearchModelView, data: RosterDataShape): Resea
  * only what was found for the name the owner typed.
  */
 /** What a Look up was asked about: the model name as typed and the provider it would run on. */
-export interface LookupAsk { model: string; provider: string }
+interface LookupAsk { model: string; provider: string }
 
 /**
  * Whether a Look up's answer may fill the form as it is now (60.10 AC6). The fields stay open

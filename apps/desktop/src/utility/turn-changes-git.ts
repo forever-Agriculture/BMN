@@ -59,7 +59,7 @@ export const TURN_GIT_COMMANDS = Object.freeze({
   nested: Object.freeze(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])
 } satisfies Record<string, readonly string[]>)
 
-export type TurnGitCommand = keyof typeof TURN_GIT_COMMANDS
+type TurnGitCommand = keyof typeof TURN_GIT_COMMANDS
 
 /** One Git process as it was started, for the test that pins the list. */
 export interface TurnGitCall {
@@ -77,7 +77,7 @@ export interface TurnGitContext {
   observe?: ((call: TurnGitCall) => void) | undefined
 }
 
-export interface TurnGitResult {
+interface TurnGitResult {
   code: number | null
   stdout: string
   stderr: string

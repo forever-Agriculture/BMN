@@ -134,13 +134,11 @@ export interface Destination {
   unapproved?: string
 }
 export interface ResearchRun { id: string; folder: string; prompt: string; cwd: string; /** The run's own Codex folder, for a Codex run. */ codex?: string }
-export declare const REFUSALS: string[]
 export declare const TESTED_HARNESS_VERSIONS: Record<string, string[]>
 export declare function versionStanding(harness: string, version: string | null, tested?: Record<string, string[]>): { tested: boolean; state: 'tested' | 'newer than BMN tested' | 'not a version BMN tested' | 'version unreadable' }
 export declare const RESUME_TESTED_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_FENCE_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_TOOLS: string
-export declare const WEB_QUESTION_COMMAND: string
 export declare const WEB_NEXT_STEP: string
 export declare const OPENCODE_NEXT_STEP: string
 export declare const OPENCODE_RESEARCH_TOOLS_SEEN: string[]
@@ -154,7 +152,6 @@ export declare const CODEX_SIGN_IN: string
 export declare const CODEX_RESEARCH_TOOLS_SEEN: string[]
 export declare function researchFormHash(harness: string): string
 export declare function researchFormProblem(parsed: Record<string, unknown>): string | null
-export declare function codexSignInFile(environment?: Environment): string
 export declare function removeResearchCodexFolders(only?: { folder: string } | null): void
 export declare function fenceTestsPath(): string
 export declare function fenceTests(): FenceTestEntry[]
@@ -192,15 +189,12 @@ export declare function workspaceRoot(directory: string): string
 export declare function sessionRecord(codexHome: string | null, id: string): { id?: unknown; cwd?: unknown; provider?: unknown; cli_version?: unknown } | null
 export declare function sessionRecordFiles(codexHome: string | null, id: string): string[]
 export declare function sessionRecordAt(path: string): { id?: unknown; cwd?: unknown; provider?: unknown; cli_version?: unknown } | null
-export declare function workspaceOrigin(workspace: string): { origin: string; reason?: undefined } | { reason: string; origin?: undefined }
 export declare function normalizedGithubOrigin(url: string): string | null
-export declare function visibilityDirectory(): string
 export declare function visibilityPath(workspace: string): string
 export declare function workspaceVisibility(workspace: string, now?: Date): WorkspaceVisibility
 export declare function refreshVisibility(workspace: string, options?: { now?: Date; api?: string; request?: typeof fetch; timeoutMs?: number }): Promise<VisibilityRecord>
 export declare function destinationOf(data: RosterData, harness: string, route: Record<string, unknown>): Destination
 export declare function privateWorkAnswer(data: RosterData, destination: Destination, root: string | null): { allowed: boolean; answer: PrivateWork; reason: string; exception?: { id: string; scope: 'this workspace' } }
-export declare function publicOnlyReasons(agent: RosterAgent, data: RosterData): string[]
 export declare function bindingPath(receiptHash: string): string
 export declare function bindSession(receiptFile: string, sessionId: string, options?: { now?: Date }): { receipt_hash: string; session_id: string }
 export declare function researchRunsDirectory(): string

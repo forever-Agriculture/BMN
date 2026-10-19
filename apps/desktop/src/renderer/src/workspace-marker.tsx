@@ -42,7 +42,7 @@ export function WorkspaceIdentityMark(props: {
 }
 
 /** The swatch shown against each choice in the menu; the choice's name carries the meaning. */
-export function WorkspaceMarkerSwatch(props: { marker: WorkspaceMarker }): React.JSX.Element {
+function WorkspaceMarkerSwatch(props: { marker: WorkspaceMarker }): React.JSX.Element {
   return <span className="workspace-marker menu-swatch" data-marker={props.marker} aria-hidden="true" />
 }
 

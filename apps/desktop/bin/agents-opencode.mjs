@@ -28,7 +28,7 @@ export const OPENCODE_RESEARCH_AGENT = 'bmn-researcher'
  * without an account; a run that names none turns its first search into a question, which a run
  * nobody watches cancels. The search text goes to that service, not to the model's provider.
  */
-export const OPENCODE_WEBSEARCH_PROVIDER = 'tinyfish'
+const OPENCODE_WEBSEARCH_PROVIDER = 'tinyfish'
 
 /** An OpenCode session id (`ses_` and 26 characters), the one shape `roster bind` takes for an OpenCode receipt. */
 export const OPENCODE_SESSION_ID = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
@@ -153,10 +153,10 @@ export function openCodeEnvironment(base = openCodeFolder()) {
 }
 
 /** The arguments of the form after `opencode`, model and title left to the lead. */
-export const OPENCODE_RUN_ARGV = ['run', '--standalone', '--format', 'json', '--agent', OPENCODE_HELPER_AGENT]
+const OPENCODE_RUN_ARGV = ['run', '--standalone', '--format', 'json', '--agent', OPENCODE_HELPER_AGENT]
 
 /** A research run's title: with one named, OpenCode makes no request of its own to name the session. */
-export const OPENCODE_RESEARCH_TITLE = 'BMN research'
+const OPENCODE_RESEARCH_TITLE = 'BMN research'
 
 /**
  * The one command a research run on OpenCode is (70.3): BMN's folder, the research agent, the
@@ -214,7 +214,7 @@ export function openCodeSession(stdout) {
  * What `bmn roster role --json` hands a lead for an OpenCode candidate: the environment and the
  * arguments, then `-m <model>#<effort> --title <title>` and the prompt on standard input.
  */
-export function openCodeItems(base = openCodeFolder()) {
+function openCodeItems(base = openCodeFolder()) {
   return {
     env: Object.entries(openCodeEnvironment(base)).map(([name, value]) => `${name}=${value}`),
     argv: [...OPENCODE_RUN_ARGV],

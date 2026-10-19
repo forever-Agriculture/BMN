@@ -10,7 +10,7 @@ import { useSelfRefresh } from './self-refresh'
 import { shortDate } from './team-preferences'
 import './workspace-results.css'
 
-export interface WorkspaceReportRow {
+interface WorkspaceReportRow {
   record: ProgressRecord
   presentation: ProgressPresentation
   run: 'Current run' | 'Previous run' | 'Run unknown'

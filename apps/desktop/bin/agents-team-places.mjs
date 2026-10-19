@@ -22,13 +22,13 @@ import { RUN_FILES, endScope, runState, scopeUnit, writeWhole } from './agents-t
  */
 
 /** Asks running at once across BMN; the owner sets 1 to 10 in Preferences. */
-export const CAPACITY = Object.freeze({ default: 4, min: 1, max: 10 })
+const CAPACITY = Object.freeze({ default: 4, min: 1, max: 10 })
 /** How long a key finds its run, from the day it names; then it is expired. */
-export const KEY_WINDOW_DAYS = 7
+const KEY_WINDOW_DAYS = 7
 /** How long a run's record is kept after it ends. */
 export const RETENTION_DAYS = 30
 /** A key: the UTC day it was issued and a name of the asker's own. */
-export const KEY_PATTERN = /^(\d{4})(\d{2})(\d{2})-[A-Za-z0-9._-]{1,64}$/u
+const KEY_PATTERN = /^(\d{4})(\d{2})(\d{2})-[A-Za-z0-9._-]{1,64}$/u
 /** A run whose asking command ended this long after writing its launch, with no supervisor seen, never started. */
 const START_GRACE_MS = 10_000
 const DAY_MS = 86_400_000
@@ -212,7 +212,7 @@ function heldPlaces(runs, now) {
 }
 
 /** Gives a run's place back; its finish and a refusal before the start call this. */
-export function releasePlace(runs, id) {
+function releasePlace(runs, id) {
   rmSync(placePath(runs, id), { force: true })
 }
 

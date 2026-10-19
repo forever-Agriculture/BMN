@@ -235,7 +235,7 @@ export function maskedDraft(state: EditorState, from = 0, to = state.doc.length)
   return maskedSlice(state.doc.toString(), ranges, from, to)
 }
 
-export interface ConfigEditorInput {
+interface ConfigEditorInput {
   /** The file's text with one `\n` per line ending. */
   content: string
   format: ConfigFormat

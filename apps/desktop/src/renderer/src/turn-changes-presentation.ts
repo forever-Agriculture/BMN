@@ -37,10 +37,10 @@ export function turnEndWord(turn: Pick<TurnSummary, 'state' | 'end'>): string {
   return END_WORDS[turn.end] ?? turn.end
 }
 
-export interface TurnTotalsWords { files: string; added: string; removed: string }
+interface TurnTotalsWords { files: string; added: string; removed: string }
 
 /** `4 files`, `+120`, `−33`: the three parts of a turn's totals, each in its own tone. */
-export function turnTotalsWords(totals: { files: number; added: number; removed: number }): TurnTotalsWords {
+function turnTotalsWords(totals: { files: number; added: number; removed: number }): TurnTotalsWords {
   return { files: `${count(totals.files)} ${totals.files === 1 ? 'file' : 'files'}`, added: `+${count(totals.added)}`, removed: `${MINUS}${count(totals.removed)}` }
 }
 
@@ -89,7 +89,7 @@ export function turnRecordingWords(view: Pick<TurnSessionView, 'state' | 'app'> 
 export interface TurnPlatePart { text: string; tone: 'text' | 'muted' | 'caveat' }
 
 /** The one quiet button of a pane's header: its words in a pane over 880 px, its words in a narrower one, and its tooltip. */
-export interface TurnPlateWords {
+interface TurnPlateWords {
   full: TurnPlatePart[]
   short: TurnPlatePart
   title: string

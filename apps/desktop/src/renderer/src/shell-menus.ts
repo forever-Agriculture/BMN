@@ -3,7 +3,7 @@ import type { PaletteCommand } from './command-palette'
 import type { MenuEntry } from './popup-menu'
 
 /** A session's or workspace's place in its list, for Move up and Move down. */
-export interface ListPlace { first: boolean; last: boolean }
+interface ListPlace { first: boolean; last: boolean }
 
 /** Workspace ⋯: Pinned files…, New session here, Rename…, Move up, Move down · the Marker · Archive or Restore. */
 export function workspaceMenu(

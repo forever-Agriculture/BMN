@@ -25,7 +25,7 @@ const LIST_READ_LIMIT = 200_000
 /** The walk lets the terminals' process breathe this often. */
 const YIELD_EVERY = 256
 
-export interface QuickLookOptions {
+interface QuickLookOptions {
   home?: string | null
   /** Test seam for the work tree's root; Git otherwise. */
   gitRoot?: (folder: string) => Promise<string | null>

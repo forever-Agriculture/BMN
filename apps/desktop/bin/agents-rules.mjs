@@ -23,7 +23,7 @@ import { unifiedDiff } from './text-diff.mjs'
 
 /** The Team phrase names agents only while it stays this short; longer, it points at `bmn team`. */
 export const TEAM_LIMIT_BYTES = 400
-export const TEAM_MARKER = '<!-- bmn:team -->'
+const TEAM_MARKER = '<!-- bmn:team -->'
 const TEAM_POINTER = ' (roles, efforts and limits: `bmn team`)'
 const TEAM_FALLBACK = 'the agents `bmn team` lists'
 const OPEN_APPS = /^<!--\s*bmn:apps\s+([a-z ,]+?)\s*-->$/
@@ -33,7 +33,7 @@ const CLOSE_PUBLIC = /^<!--\s*\/bmn:public\s*-->$/
 const ANY_MARKER = /<!--\s*\/?bmn:/
 const EARLIER_MARKER = /<!--\s*\/?bmn:(harness|shareable)\b/
 /** What the owner reads for each rendering kind. */
-export const KIND_WORDS = { full: 'Full rules', public: 'Public sections only' }
+const KIND_WORDS = { full: 'Full rules', public: 'Public sections only' }
 
 export function masterPath() {
   return `${agentsDirectory()}/global-rules.md`
@@ -60,7 +60,7 @@ function probeLogPath() {
 }
 
 /** Each harness's own global rules file, resolved the way `bmn hooks` resolves its config folder. */
-export function targetPath(harness, environment = process.env) {
+function targetPath(harness, environment = process.env) {
   const home = environment.HOME || homedir()
   if (harness === 'claude') return `${absoluteUncollapsed(environment.CLAUDE_CONFIG_DIR || `${home}/.claude`)}/CLAUDE.md`
   if (harness === 'codex') return `${absoluteUncollapsed(environment.CODEX_HOME || `${home}/.codex`)}/AGENTS.md`
@@ -250,7 +250,7 @@ function readJson(path, fallback) {
   }
 }
 
-export function lastWritten() {
+function lastWritten() {
   return readJson(lastWrittenPath(), {})
 }
 
@@ -388,7 +388,7 @@ function snapshotMaster(master, reason, now = new Date()) {
  * What an install would write, without writing: each target's prior state, kind of replacement,
  * rendering and diff, plus a hash of all of it that a confirmed install must match.
  */
-export async function planInstall(harnesses, { environment = process.env } = {}) {
+async function planInstall(harnesses, { environment = process.env } = {}) {
   const master = readMaster()
   const generation = approvedOrNull()
   const plans = []
@@ -463,14 +463,6 @@ export async function planSave(text, { environment = process.env } = {}) {
   const changesMaster = priorText !== text
   const hash = sha256(canonicalJson({ master: { prior: stateKey(prior), next: master.hash, changes: changesMaster }, targets: planHash(plans), blocked }))
   return { code: 'OK', master, prior, priorHash: priorText === null ? null : sha256(priorText), changesMaster, diff: unifiedDiff(priorText ?? '', text, path), plans, blocked, planHash: hash }
-}
-
-/** The save plan as the panel shows it: the master's diff, then each app's file as an install plan shows it. */
-export function savePlanView(result) {
-  return {
-    ...planView(result), changes_master: result.changesMaster === true, master_diff: result.diff ?? '',
-    blocked: result.blocked ?? [], ...(result.errors ? { errors: result.errors } : {})
-  }
 }
 
 /**
@@ -852,7 +844,7 @@ export function writeMaster(expected, text, reason, { now = new Date() } = {}) {
   return written
 }
 
-export async function revertMaster(revision, { yes = false, asJson = false } = {}) {
+async function revertMaster(revision, { yes = false, asJson = false } = {}) {
   const history = masterHistory()
   const entry = history.find((item) => item.revision === revision)
   if (entry === undefined) throw new RosterError('HISTORY_UNAVAILABLE', `no master revision ${revision}`)
@@ -1006,7 +998,7 @@ function hashInText(text, hash) {
  * A rollout up to its first tool call: what the session was given before the agent could read
  * anything itself. A hash found later may come from a tool reading the file, which proves nothing.
  */
-export function beforeFirstToolCall(rollout) {
+function beforeFirstToolCall(rollout) {
   const kept = []
   for (const line of rollout.split('\n')) {
     let type
@@ -1111,7 +1103,7 @@ export function findRollout(root, cwd, since) {
 // ---------------------------------------------------------------------------------------------
 // CLI
 
-export const RULES_USAGE = `Usage: bmn rules render <app>                     The exact file BMN writes for one app (stdout)
+const RULES_USAGE = `Usage: bmn rules render <app>                     The exact file BMN writes for one app (stdout)
        bmn rules check [--json]                    Each target: unreadable, missing, link, unmanaged,
                                                    edited-outside, stale or current; exit 0 only if all current
        bmn rules install [app…] [--plan] [--expect-plan <hash>] [--yes] [--json]

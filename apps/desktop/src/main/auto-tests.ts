@@ -6,8 +6,8 @@ import { AUTO_TEST_TRIES, ROSTER_APP_NAMES, type AutoTestKind, type AutoTestsVie
 /** How long after a try that settled nothing BMN tries the same test again. */
 export const AUTO_TEST_RETRY_MS = 10 * 60_000
 /** Tries kept on disk; the oldest go first, and none older than this many days. */
-export const AUTO_TEST_KEPT = 500
-export const AUTO_TEST_KEPT_DAYS = 180
+const AUTO_TEST_KEPT = 500
+const AUTO_TEST_KEPT_DAYS = 180
 
 export type AutoTestOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 

@@ -3,10 +3,7 @@ import type { RosterData } from './agents-roster.mjs'
 
 type Environment = NodeJS.ProcessEnv | Record<string, string>
 
-export declare const RESEARCH_APPS: string[]
-export declare const RESEARCH_LIMIT_MS: number
 export declare const MAX_LISTED: number
-export declare const SOURCE_RANKS: string[]
 export declare function researchDirectory(): string
 export declare function researchResultsPath(): string
 
@@ -67,7 +64,6 @@ export interface KeptModel extends FoundModel { provider_id: string; first_seen:
 export interface ResearchStore { version: 1; runs: ResearchRunRecord[]; models: KeptModel[] }
 export declare function readResearch(): ResearchStore
 export declare function mergeResearch(store: ResearchStore, run: ResearchRunRecord, found: (FoundModel & { provider_id: string })[]): ResearchStore
-export declare function saveResearch(store: ResearchStore): void
 
 export interface ResearchModelShape {
   id: string; provider: string; providerId: string; publishedName?: string

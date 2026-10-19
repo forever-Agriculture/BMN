@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 /** How often a view shown on screen reads again what changes without BMN saying so, such as dev-auto's files or Telegram's polling. */
 export const SELF_REFRESH_MS = 30_000
 
-export interface SelfRefreshOptions {
+interface SelfRefreshOptions {
   /** BMN's change topics that make this view read again; an event about another session is ignored when `sessionId` is set. */
   topics?: readonly string[]
   sessionId?: string | null

@@ -6,7 +6,7 @@ import { said, TELEGRAM_TEXT_LIMIT } from './telegram-cards'
 import { telegramSendDefinitelyUnsent } from './telegram-delivery'
 
 export const QUIET_LEDGER_KEY = 'telegram-quiet-delivery-v1'
-export const QUIET_LEDGER_LIMIT = 200
+const QUIET_LEDGER_LIMIT = 200
 type Phase = 'held' | 'claimed' | 'uncertain'
 type Entry = {
   requestId: string; revision: number; kind: AttentionRecord['kind']; heldAt: number
@@ -28,7 +28,7 @@ interface Ledger {
   lastBatchAt?: number
   entries: Entry[]
 }
-export interface QuietDeliveryStatus {
+interface QuietDeliveryStatus {
   active: boolean; until: string; waiting: number; capacityBlocked: boolean
   requests: Record<string, 'held-quiet' | 'uncertain'>
   uncertainRevisions: Record<string, number[]>
@@ -36,7 +36,7 @@ export interface QuietDeliveryStatus {
 }
 export type NewDeliveryDecision = { action: 'send'; claim: string | null } | { action: 'consumed' } |
   { action: 'hold'; reason?: 'held-quiet' | 'held-at-desk' | 'quiet-backlog' | 'quiet-capacity' | 'quiet-restarting' }
-export interface QuietRequest { record: AttentionRecord; heldAt: number; eligible: boolean }
+interface QuietRequest { record: AttentionRecord; heldAt: number; eligible: boolean }
 export interface QuietChanges {
   hold?: { requestId: string; revision: number; heldAt: number }
   claim?: { requestId: string; revision: number }
@@ -44,7 +44,7 @@ export interface QuietChanges {
   release?: boolean
   clear?: Array<{ requestId: string; revision: number }>
 }
-export interface QuietDeliveryDependencies {
+interface QuietDeliveryDependencies {
   read(): Promise<unknown>
   write(value: unknown, changes?: QuietChanges): Promise<boolean>
   settings(): TelegramQuietHours

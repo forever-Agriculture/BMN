@@ -242,7 +242,7 @@ function Facts(props: { model: ResearchModelView; teamHas?: string | undefined }
 }
 
 /** The agents that cannot research now, each with why in a few plain words; the check's own message stays in `bmn roster check`. */
-export function notOffered(unable: readonly ResearcherView[]): string {
+function notOffered(unable: readonly ResearcherView[]): string {
   return unable.map((entry) => ` ${entry.name} cannot research${entry.why ? `: ${entry.why}` : ''}.`).join('')
 }
 

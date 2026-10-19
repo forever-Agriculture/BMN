@@ -26,7 +26,7 @@ export function messageHandover(): string {
     : measured.map((app) => `${appName(app)} (measured on ${appName(app)} ${SESSION_MESSAGE_HANDOVER[app]!.version})`).join(', ')
 }
 
-export interface MessageRowView {
+interface MessageRowView {
   message: SessionMessageListRow
   /** "Lead → Planner": the names the two sessions have now. */
   route: string

@@ -2,7 +2,7 @@
 import type { ListeningPort } from './companion'
 
 /** 127.0.0.1, ::1 and the wildcard binds: a browser on this machine reaches each of them as localhost. */
-export function isLocalPortAddress(address: string): boolean {
+function isLocalPortAddress(address: string): boolean {
   // Only these answer at localhost: a server bound to 127.0.1.1 alone is reached at that address, not at 127.0.0.1.
   return ['127.0.0.1', '0.0.0.0', '::1', '::', '::ffff:127.0.0.1', '::ffff:0.0.0.0'].includes(address)
 }

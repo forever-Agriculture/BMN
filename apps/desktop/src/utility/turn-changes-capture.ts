@@ -35,10 +35,10 @@ export const TURN_LIMITS = Object.freeze({
 })
 export type TurnLimits = { -readonly [Name in keyof typeof TURN_LIMITS]: number }
 
-export type TurnRefusalState = 'unavailable' | 'not-supported' | 'cancelled' | 'busy'
+type TurnRefusalState = 'unavailable' | 'not-supported' | 'cancelled' | 'busy'
 
 /** Every reason a capture or a comparison is refused with. A closed list: none can carry a file's name. */
-export type TurnRefusalReason =
+type TurnRefusalReason =
   | 'the terminal has no foreground process'
   | 'the folder cannot be reached'
   | 'the folder is not a folder'
@@ -245,7 +245,7 @@ class Confined {
 
 // ---- the root --------------------------------------------------------------------------------------
 
-export interface EstablishedRoot {
+interface EstablishedRoot {
   state: 'established'
   root: string
   rootFd: number
@@ -301,7 +301,7 @@ function sameFolder(root: string, held: { dev: number; ino: number }): boolean {
  * repository and which work tree it names, and the answer must be that same folder. The caller closes
  * `rootFd`. Nothing is read or written before this has succeeded.
  */
-export async function establishRoot(folder: string, context: RootContext): Promise<EstablishedRoot | TurnRefusal> {
+async function establishRoot(folder: string, context: RootContext): Promise<EstablishedRoot | TurnRefusal> {
   let start: string
   try {
     start = realpathSync(folder)
@@ -458,7 +458,7 @@ interface Waiting {
 }
 
 /** Every path of a stored tree that is not a folder. */
-export function* leaves(store: TurnStore, hash: string, prefix = ''): Generator<string> {
+function* leaves(store: TurnStore, hash: string, prefix = ''): Generator<string> {
   for (const [name, row] of store.tree(hash)) {
     if (row[1] === 'd') yield* leaves(store, row[2], `${prefix}${name}/`)
     else yield `${prefix}${name}`

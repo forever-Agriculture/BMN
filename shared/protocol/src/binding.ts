@@ -3,7 +3,7 @@ import type { ReportedResumePreview } from './resume-command'
 /** The apps whose conversations BMN binds and resumes. */
 export type LiveAgentCli = 'claude' | 'codex' | 'opencode'
 /** Epic 71: a binding stored before Cursor was retired still names it; it is shown, never resumed. */
-export type RetiredAgentCli = 'cursor'
+type RetiredAgentCli = 'cursor'
 export type AgentCli = LiveAgentCli | RetiredAgentCli | 'other'
 
 export interface ConversationLaunchContext {

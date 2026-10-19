@@ -3,7 +3,7 @@ import { accessSync, constants, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 
 /** The entry PATH selects, and where it leads when it is a link. */
-export interface AppProgram { path: string; target?: string }
+interface AppProgram { path: string; target?: string }
 
 /**
  * The first executable file named `command` on `pathVariable`, the way a shell would find it, with

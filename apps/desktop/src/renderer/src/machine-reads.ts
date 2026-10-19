@@ -14,7 +14,7 @@ export interface MachineReads {
   shownElsewhere(): number
 }
 
-export interface MachineReadSeams<T> {
+interface MachineReadSeams<T> {
   fetch(): Promise<T>
   /** Shows an answer; `began` is when its read was asked for, which is what its freshness is judged by. */
   adopt(answer: T, began: number): void

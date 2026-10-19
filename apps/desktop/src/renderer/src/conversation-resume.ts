@@ -10,7 +10,7 @@ import {
 } from '@bmn/protocol'
 import { quoteArgv } from './launch-template'
 
-export interface ConversationBindingPresentation {
+interface ConversationBindingPresentation {
   label: string
   detail: string
   canResume: boolean
@@ -108,7 +108,7 @@ export function reportedResumeLine(command: ReportedResumeCommand): { label: str
   }
 }
 
-export interface ReportedResumeConfirmation {
+interface ReportedResumeConfirmation {
   message: string
   /** The command exactly as the program reported it. */
   argv: string
@@ -149,7 +149,7 @@ export async function resumeBoundConversation<Result>(
   return { started: true, result: await resume() }
 }
 
-export interface ResumeConfirmationPresentation {
+interface ResumeConfirmationPresentation {
   /** What the owner is about to reopen, before any process starts. */
   message: string
   /** The exact command BMN will run, shown on its own so nothing is paraphrased. */

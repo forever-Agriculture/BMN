@@ -134,7 +134,7 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
 }
 
 /** Every session's name by id, archived ones included, for the `/back` reply's Waiting on you. */
-export function awaySessionNames(database: DatabaseConnection): Record<string, string> {
+function awaySessionNames(database: DatabaseConnection): Record<string, string> {
   const rows = database.prepare('SELECT session_id, name FROM session').all() as Array<{ session_id: string; name: string }>
   return Object.fromEntries(rows.map((row) => [row.session_id, row.name]))
 }

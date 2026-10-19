@@ -174,7 +174,7 @@ export async function readMachineHealth(options: HealthReaderOptions = {}): Prom
   return { cpuC, integratedGpuC, driveC, battery, mainsOnline, nvidiaGpuC: nvidia.celsius, ...(nvidia.asleep ? { nvidiaGpuAsleep: true } : {}) }
 }
 
-export interface HealthJudgement {
+interface HealthJudgement {
   problems: HealthProblemKind[]
   /** Readings in a row with the CPU at the hot limit or above, this one included. */
   cpuHotStreak: number

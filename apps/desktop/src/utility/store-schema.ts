@@ -28,7 +28,7 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'workspace_layout'
 ] as const)
 
-export interface DatabaseMigration {
+interface DatabaseMigration {
   version: number
   sql: string
 }

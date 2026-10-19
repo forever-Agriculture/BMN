@@ -23,7 +23,7 @@ export function shortDate(iso: string): string {
 }
 
 /** `28 Sep 14:02`, in the owner's local time. */
-export function shortDateTime(iso: string): string {
+function shortDateTime(iso: string): string {
   const date = new Date(iso)
   const pad = (value: number): string => String(value).padStart(2, '0')
   return `${shortDate(iso)} ${pad(date.getHours())}:${pad(date.getMinutes())}`
@@ -87,7 +87,7 @@ export function agentFailure(row: AgentHistoryAgentRow): { text: string; title: 
 }
 
 /** Sessions Start cleanup would delete now, across every managed agent. */
-export function pendingDeletions(status: AgentHistoryStatus): number {
+function pendingDeletions(status: AgentHistoryStatus): number {
   if (status.keepDays === null) return 0
   return status.agents.reduce((sum, row) => sum + (row.state === 'managed' ? row.candidates ?? 0 : 0), 0)
 }

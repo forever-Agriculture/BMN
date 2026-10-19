@@ -27,7 +27,7 @@ export const procReader: ProcReader = {
  * turns before the next: an agent's processes hold many descriptors, so counting processes alone does not bound it.
  */
 export const PROCESSES_PER_SLICE = 50
-export const SLICE_MS = 4
+const SLICE_MS = 4
 /** Descriptors of one process read between checks of the slice's time. */
 const DESCRIPTORS_PER_CHECK = 64
 /**
@@ -60,7 +60,7 @@ interface ListeningSocket {
  * handed the socket over a Unix socket is not found until the socket is reopened: rare enough to accept for a list of
  * dev servers.)
  */
-export interface ScanMemory {
+interface ScanMemory {
   holders: Map<string, { pid: string; fd: string }>
   /** Socket inode → the session processes already searched without finding it; the socket seen first comes first. */
   pending: Map<string, Set<string>>

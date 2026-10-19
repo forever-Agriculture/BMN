@@ -8,8 +8,8 @@ import { DEFAULT_TELEGRAM_QUIET_HOURS, type TelegramQuietHours } from './telegra
 import { DEFAULT_TELEGRAM_MORNING_DIGEST, type TelegramMorningDigest } from './telegram-digest'
 import { DEFAULT_TELEGRAM_HEALTH_ALERTS, type TelegramHealthAlerts } from './telegram-health'
 
-export type ArtifactDirection = 'input' | 'output'
-export type ArtifactSource = 'owner' | 'agent' | 'telegram'
+type ArtifactDirection = 'input' | 'output'
+type ArtifactSource = 'owner' | 'agent' | 'telegram'
 export type ArtifactState = 'ready' | 'missing' | 'corrupt'
 
 /** An owned immutable original. `input` files were attached for an agent; `output` files were published by one. */
@@ -120,7 +120,7 @@ export function terminalNoticeOrigin(code: TerminalNoticeCode): string {
   return `osc:${code}`
 }
 
-export const ATTENTION_ORIGINS = Object.freeze([
+const ATTENTION_ORIGINS = Object.freeze([
   'cli', 'owner', 'input', 'telegram', 'expiry',
   // App-assigned terminal notifications, repeat watch, plan-use watch and the pause of messages between sessions
   // (Epic 66). Never claimable by a token.
@@ -137,7 +137,7 @@ export const ATTENTION_ORIGINS = Object.freeze([
 export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
 /** `terminal` is not a harness: it is what a program's own OSC notification is logged as. */
-export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'terminal'] as const)
+const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'terminal'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
 /**
  * What a saved row or request may name: the agents above, and Cursor, which BMN retired (Epic 71).
@@ -394,15 +394,12 @@ export function usageClock(iso: string, now: Date): string {
 /** The most recent hook events the utility keeps per session; older ones are dropped. */
 export const HOOK_EVENT_LOG_LIMIT = 30
 
-/** At most one effect per slot the hook touches, so a malformed array is refused rather than stored. */
-export const MAX_HOOK_EVENT_EFFECTS = 8
-
 /**
  * The latest harness event one run of a session actually reported to BMN, kept independently of the
  * bounded hook-event log so a summary survives that log's evictions. Terminal OSC notices are logged
  * as `terminal` and never count as a harness observation.
  */
-export interface HookObservationObserved {
+interface HookObservationObserved {
   state: 'observed'
   sessionId: string
   incarnationId: string
@@ -435,7 +432,7 @@ export interface HookOriginRecord {
   observedAt: string
 }
 
-export interface HookObservationNone {
+interface HookObservationNone {
   state: 'none'
   sessionId: string
   /** The run the answer is about: the requested or live incarnation, or null when there is none. */
@@ -603,7 +600,7 @@ export interface VoiceStatus {
 export type ArchiveDeleteAfterDays = 90 | 30 | 10 | null
 export const ARCHIVE_DELETE_AFTER_DAYS: readonly ArchiveDeleteAfterDays[] = Object.freeze([null, 90, 30, 10])
 
-export interface ArchiveSettings {
+interface ArchiveSettings {
   deleteAfterDays: ArchiveDeleteAfterDays
 }
 
@@ -765,7 +762,7 @@ function isTelegramOwnerEntry(value: unknown): value is TelegramOwnerEntry {
 }
 
 /** A shorter outage, such as a laptop waking up, retries quietly. */
-export const TELEGRAM_UNREACHABLE_CUE_AFTER_MS = 5 * 60_000
+const TELEGRAM_UNREACHABLE_CUE_AFTER_MS = 5 * 60_000
 
 /** `conflict` and `unauthorized` stop retrying: only the owner can fix them. */
 export function telegramNeedsOwner(state: TelegramConnectorState): boolean {

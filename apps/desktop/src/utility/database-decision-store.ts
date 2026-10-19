@@ -14,7 +14,7 @@ import type { DatabaseConnection } from './database-initialization'
 import { WorkspaceStoreError } from './database-workspace-store'
 
 /** A decision's key lives in its session's own namespace, apart from every request key. */
-export const DECISION_KEY_PREFIX = 'decision:'
+const DECISION_KEY_PREFIX = 'decision:'
 /** The most decisions one period query returns; more is said, never summed. */
 export const DECISION_PERIOD_LIMIT = 200
 

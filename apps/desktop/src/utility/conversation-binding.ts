@@ -14,7 +14,7 @@ import {
   type UnsupportedConversationBinding
 } from '@bmn/protocol'
 
-export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 // OpenCode 1.18.31: a local session ID was confirmed by `opencode export` on 2026-09-22.
 export const OPENCODE_REFERENCE_PATTERN = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
@@ -38,9 +38,9 @@ export const RELEVANT_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
   'TERM'
 ])
 
-export type ClaudeOptionArity = 'none' | 'required' | 'optional' | 'variadic'
+type ClaudeOptionArity = 'none' | 'required' | 'optional' | 'variadic'
 
-export interface ClaudeOptionDefinition {
+interface ClaudeOptionDefinition {
   canonicalName: string
   aliases: readonly string[]
   arity: ClaudeOptionArity
@@ -196,13 +196,13 @@ export function parseClaudeHelpOptionGrammar(helpOutput: string): ClaudeOptionGr
   return canonicalNames.size === 0 ? undefined : { byAlias, canonicalNames }
 }
 
-export interface ConversationLaunchInput {
+interface ConversationLaunchInput {
   cwd: string
   executable: string
   argv: readonly string[]
 }
 
-export interface PreparedConversationLaunch {
+interface PreparedConversationLaunch {
   executable: string
   argv: readonly string[]
   binding: PersistedConversationBinding
@@ -702,7 +702,7 @@ export const CODEX_RESUME_OPTIONS: ReadonlyMap<string, CodexOptionArity> = new M
   ['--worktree', 'none']
 ])
 
-export interface CodexResumeArguments {
+interface CodexResumeArguments {
   carried: string[]
   droppedOptions: string[]
   droppedPositionals: number
@@ -793,10 +793,10 @@ export function codexResumeCommand(binding: BoundConversationBinding): string {
 }
 
 /** The harnesses that report their own conversation, each of which Resume can reopen. */
-export type ObservedAgentCli = LiveAgentCli
+type ObservedAgentCli = LiveAgentCli
 
 /** The control socket's detail limit, so every composed binding detail fits a request field. */
-export const MAX_BINDING_DETAIL_CHARACTERS = 2_000
+const MAX_BINDING_DETAIL_CHARACTERS = 2_000
 
 const OBSERVATION_AGENT_NAMES: Readonly<Record<ObservedAgentCli, string>> = {
   claude: 'Claude Code',
@@ -825,7 +825,7 @@ export function conversationObservationSourceDetail(
   return `Reported by ${OBSERVATION_AGENT_NAMES[agent]} ${OBSERVATION_SOURCE_PHRASES[source]}`
 }
 
-export interface ConversationObservationInput {
+interface ConversationObservationInput {
   agentCli: ObservedAgentCli
   conversationReference: string
   source: ConversationObservationSource
@@ -884,11 +884,11 @@ export function bindingFromObservation(
 
 /** TUI resume policy checked against OpenCode --help on 2026-09-22. */
 export const OPENCODE_RESUME_OPTIONS_CLI_VERSION = '1.18.31'
-export const OPENCODE_RESUME_OPTIONS: ReadonlySet<string> = new Set([
+const OPENCODE_RESUME_OPTIONS: ReadonlySet<string> = new Set([
   '--model', '-m', '--agent', '--port', '--hostname'
 ])
 
-export interface OpenCodeResumeArguments extends CodexResumeArguments {
+interface OpenCodeResumeArguments extends CodexResumeArguments {
   projectPath?: string
 }
 

@@ -6,7 +6,7 @@ import { MainIpcError } from './workspace-ipc'
 
 type BridgeFailure = Extract<BridgeInvokeResult<never>, { ok: false }>
 
-export type BridgeInvokeListener = (event: IpcMainInvokeEvent, ...args: never[]) => unknown
+type BridgeInvokeListener = (event: IpcMainInvokeEvent, ...args: never[]) => unknown
 
 export interface BridgeInvokeRegistration {
   channel: `aiterm:${string}`
@@ -14,7 +14,7 @@ export interface BridgeInvokeRegistration {
 }
 
 /** The registrar every `aiterm:*` invoke channel is installed through; there is no other path. */
-export interface BridgeInvokeRegistrar {
+interface BridgeInvokeRegistrar {
   handle(channel: `aiterm:${string}`, listener: BridgeInvokeListener): void
   registrations(): readonly BridgeInvokeRegistration[]
 }
@@ -34,7 +34,7 @@ function failure(code: ProtocolErrorCode, message: string): BridgeFailure {
  * Maps a main-process failure to the typed bridge failure. The protocol code travels as a field,
  * never inside the message: Electron would otherwise deliver only a prefixed message string.
  */
-export function bridgeFailure(error: unknown): BridgeFailure {
+function bridgeFailure(error: unknown): BridgeFailure {
   if (error instanceof MainIpcError) return failure(error.code, error.message)
   if (error instanceof PtyHostRemoteError) {
     return failure(error.protocolError.data.code, error.protocolError.message)

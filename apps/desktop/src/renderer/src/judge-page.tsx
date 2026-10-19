@@ -14,7 +14,7 @@ import { askerName, whenWords } from './web-questions'
 /** How often the page reads the calls again: an agent or a script may ask at any moment. */
 const POLL_MS = 4000
 
-export interface CalledParties { receives: CalledParty; runs: CalledParty; allowed: boolean; reason: string }
+interface CalledParties { receives: CalledParty; runs: CalledParty; allowed: boolean; reason: string }
 
 /** Dollars as the page says them: a plain zero, otherwise as many places as the amount needs to be told from its neighbours. */
 export function usd(value: number, places: number): string {

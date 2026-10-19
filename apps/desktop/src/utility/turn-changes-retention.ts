@@ -10,7 +10,7 @@ import type { TurnStoreKeeper } from './turn-changes-engine'
 import { workTreeKey } from './turn-changes-store'
 
 const DAY_MS = 86_400_000
-export const TURN_SWEEP_INTERVAL_MS = 60 * 60_000
+const TURN_SWEEP_INTERVAL_MS = 60 * 60_000
 
 /** The rows of turn changes, as the sweep needs them. Each call is one transaction. */
 export interface TurnRetentionDatabase {
@@ -23,7 +23,7 @@ export interface TurnRetentionDatabase {
   named: () => Promise<Array<{ sessionId: string; captureId: string }>>
 }
 
-export interface TurnRetentionOptions {
+interface TurnRetentionOptions {
   database: TurnRetentionDatabase
   keeper: TurnStoreKeeper
   /** Whether `<data root>/turn-changes/` exists at all. While it does not, nothing is asked of the keeper. */
@@ -36,7 +36,7 @@ export interface TurnRetentionOptions {
   setTimer?: (callback: () => void, ms: number) => { cancel: () => void }
 }
 
-export interface TurnSweepReport {
+interface TurnSweepReport {
   /** Turns whose time had passed. */
   turns: number
   /** Captures no kept turn referred to. */

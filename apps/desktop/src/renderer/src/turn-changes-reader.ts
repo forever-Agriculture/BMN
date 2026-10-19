@@ -20,7 +20,7 @@ export interface TurnReads {
   readTurnDifference(sessionId: string, turnId: string, path: string): Promise<TurnDifferenceAnswer>
 }
 
-export interface TurnReaderState {
+interface TurnReaderState {
   /** Null until the first read has answered. */
   turns: readonly TurnSummary[] | null
   opened: TurnOpened | null
@@ -28,7 +28,7 @@ export interface TurnReaderState {
   bodies: ReadonlyMap<string, TurnFileBody>
 }
 
-export interface TurnReaderOptions {
+interface TurnReaderOptions {
   /** Something of the state changed: the dialog draws again. */
   changed(): void
   failed(error: unknown, words: string): void

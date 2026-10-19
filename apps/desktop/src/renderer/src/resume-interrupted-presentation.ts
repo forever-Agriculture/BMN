@@ -6,7 +6,7 @@ import type {
 } from '@bmn/protocol'
 import { reportedResumeProvenance } from './conversation-resume'
 
-export type ResumeRowOutcome =
+type ResumeRowOutcome =
   | { kind: 'pending' }
   | { kind: 'started' }
   | { kind: 'failed'; error: string }

@@ -8,16 +8,10 @@ export type ToolState = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside
 export type ToolsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 type Versions = Partial<Record<ToolsHarness, string | null>>
 
-export declare class ToolsError extends Error {
-  code: string
-  constructor(code: string, message: string)
-}
-
 export declare const TOOL_APPS: Record<ToolsHarness, {
   command: string; format: 'json' | 'toml'; path: string[]; file: (environment: Environment) => string
   list: string[]; add: ((id: string, program: string) => string[]) | null; remove: ((id: string) => string[]) | null
 }>
-export declare const SETTLED_STATES: ToolState[]
 export declare function toolsTestsPath(): string
 
 export interface ToolsTestEntry {
@@ -71,7 +65,6 @@ export interface AppTools {
 export declare function appTools(harness: string, options: { version: string | null | undefined; tests?: ToolsTestEntry[] }): AppTools
 
 export type ToolDefinition = { url: string; headers?: Record<string, string> } | { command: string; args?: (string | { env: string })[]; env?: Record<string, string> }
-export declare function definitionOf(tool: RosterTool): ToolDefinition
 export declare function renderTool(tool: RosterTool, harness: string, options?: { variable?: boolean; argument?: boolean; header?: boolean }): { entry: Record<string, unknown>; blocked?: undefined } | { blocked: string; entry?: undefined }
 export declare function looksSecret(text: unknown): boolean
 /** Whether an argument is plainly not a value: a flag, number, name, package, path or plain address. */
@@ -84,7 +77,6 @@ export type AppToolEntry =
   | { value: Record<string, unknown>; raw: string; hash: string; text_hash: string; definition: ToolDefinition; secrets: string[]; extras: string[]; unreadable?: undefined }
 export interface AppToolsFile { harness: string; path: string; readable: boolean; detail?: string; entries: Map<string, AppToolEntry>; text?: string; link?: string }
 export declare function readAppTools(harness: string, environment?: Environment, options?: { path?: string; at?: string[] }): AppToolsFile
-export declare function eligible(tool: RosterTool, harness: string, kind: 'full' | 'public'): boolean
 export declare function transportWords(tool: Pick<RosterTool, 'command' | 'args' | 'url'>): string
 
 export interface ToolRow { id: string; state: ToolState; detail?: string; managed?: boolean; secret?: true }
@@ -132,7 +124,6 @@ export declare function restoreToolsTransaction(manifest: unknown, folder: strin
 export interface ToolProposal { id: string; state: 'ready' | 'secret' | 'known' | 'conflict' | 'unreadable'; apps: ToolsHarness[]; tool?: RosterTool; notes: string[] }
 export declare function proposeTools(options?: { environment?: Environment; generation?: Generation | null }): { files: { harness: ToolsHarness; path: string; readable: boolean; detail?: string }[]; proposals: ToolProposal[] }
 
-export declare function agentTools(data: Pick<RosterData, 'tools'> | null, agentId: string): RosterTool[]
 export interface ToolsProven { isolation: boolean; variable: boolean; argument?: boolean; header?: boolean; empty?: boolean; covers?: string[] }
 /** Every tool a run of this agent may carry: the tools for all apps or its app, and its own. */
 /** The apps for which BMN has a test that shows which tools a run starts with. */
@@ -140,8 +131,6 @@ export declare const RUN_TEST_APPS: string[]
 /** What one run of Claude Code showed of its tools: by its own start line (`named`, `connected`), by the stand-ins' own notes (`started`), and whether it came to its own end. */
 export interface RunSeen { ended: boolean; line: boolean; named: Set<string>; connected: Set<string>; started: Set<string> }
 export declare function claudeRunSeen(result: { finished: boolean; stdout: string }, notes: { id?: unknown }[]): RunSeen
-/** The two signs a run test goes by. */
-export declare const RUN_SIGNS: string[]
 export declare function runTools(data: Pick<RosterData, 'tools' | 'providers' | 'harness_routes'> | null, agent: RosterAgent): RosterTool[]
 /** The places a run could take tools from that the owner's test did not see shut out. */
 export declare function uncoveredSources(harness: string, options?: { environment?: Environment; cwd?: string | null; covers?: string[]; policyRoot?: string; settings?: string }): string[]
@@ -160,5 +149,4 @@ export declare function testTools(harness: string, options?: { environment?: Env
 /** One app BMN gives the tools test by itself now (Story 75.8). */
 export interface ToolsAutoPlanEntry { harness: ToolsHarness; version: string; key: string; reason: 'untested' | 'retry' }
 export declare function toolsAutoPlan(options?: { versions?: Partial<Record<ToolsHarness, string | null>>; tests?: ToolsTestEntry[] }): ToolsAutoPlanEntry[]
-export declare const TOOLS_USAGE: string
 export declare function runToolsCommand(argv: string[]): Promise<number>

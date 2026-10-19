@@ -11,7 +11,7 @@ import { compareCaptures, shownFileDifference, type TurnComparison } from './tur
 import type { TurnGitCall } from './turn-changes-git'
 import { TURN_STORE_FOLDER, TurnStore, isStoreSegment, listTurnStores, workTreeKey, type TurnCaptureRecord } from './turn-changes-store'
 
-export interface TurnEngineOptions {
+interface TurnEngineOptions {
   dataRoot: string
   home: string
   git?: string | null
@@ -88,7 +88,7 @@ export interface TurnStoreKeeper {
 }
 
 /** What holds a publication besides the engine's own words: a time of `Date.now()` past which it stops, and its caller's stop. */
-export interface PublishHold {
+interface PublishHold {
   until?: number | undefined
   stopped?: (() => boolean) | undefined
 }

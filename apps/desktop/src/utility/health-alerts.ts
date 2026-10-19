@@ -33,7 +33,7 @@ interface HealthAlertState {
   unconfirmed?: true
 }
 
-export interface HealthAlertDependencies {
+interface HealthAlertDependencies {
   read(): Promise<unknown>
   write(value: unknown): Promise<void>
   settings(): TelegramHealthAlerts
@@ -112,7 +112,7 @@ function problemLines(kind: HealthProblemKind, readings: HealthReadings, cpuHotS
   }
 }
 
-export type HealthMessageKind = 'alert' | 'clear' | 'test'
+type HealthMessageKind = 'alert' | 'clear' | 'test'
 
 /**
  * Readings, the host name and fixed words only. Every reading is shown, a missing one as "not measured".

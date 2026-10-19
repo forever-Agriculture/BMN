@@ -42,7 +42,7 @@ export function missingColumns(database: DatabaseConnection, table: string, requ
   return required.filter((column) => !present.has(column))
 }
 
-export interface RunResult { code: number | null; output: string }
+interface RunResult { code: number | null; output: string }
 
 /** One agent command, no shell, bounded in time; the last line of its output explains a failure. */
 export function runAgentCommand(

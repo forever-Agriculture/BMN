@@ -51,7 +51,7 @@ export function treeRows(root: string, listings: ReadonlyMap<string, TreeListing
 }
 
 /** What a key in the tree asks the sheet to do. */
-export type TreeAction =
+type TreeAction =
   | { kind: 'select'; path: string }
   | { kind: 'expand'; path: string }
   | { kind: 'collapse'; path: string }

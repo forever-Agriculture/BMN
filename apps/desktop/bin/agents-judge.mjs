@@ -30,19 +30,19 @@ export const NO_ANSWER = 'no answer'
  * source routes both. No call from BMN's own tests reaches either: the first real one is the owner's.
  */
 export const SYSTEM_ONE_PATH = '/zen/v1/systemone'
-export const DEADLINE_MS = 5000
-export const DEADLINE_MAX_MS = 30_000
+const DEADLINE_MS = 5000
+const DEADLINE_MAX_MS = 30_000
 /** The vendor's limits (TypeSafe AI's models page, 2026-10-12): 255 choices, 2 to 10 score levels, 64k tokens a request of which 32k for the text and the longest question. */
 export const MAX_CHOICES = 255
-export const MIN_LEVELS = 2
+const MIN_LEVELS = 2
 export const MAX_LEVELS = 10
 /**
  * BMN's own size limits, in bytes. A token is at least one byte, so a request of this many bytes
  * is well inside the vendor's 64k tokens whatever the language of the text.
  */
 export const STATE_MAX_BYTES = 24_000
-export const REQUEST_MAX_BYTES = 48_000
-export const MAX_QUESTIONS = 64
+const REQUEST_MAX_BYTES = 48_000
+const MAX_QUESTIONS = 64
 const ANSWER_MAX_BYTES = 256 * 1024
 /** The most input tokens BMN takes a gateway's word for: the model holds 64,000, and a request is far smaller. */
 const TOKENS_MAX = 1_000_000
@@ -52,7 +52,7 @@ const UNCOUNTED_ALLOWANCE = 256
 export const CALLS_KEPT = 200
 const MONTHS_KEPT = 13
 const PURPOSES_KEPT = 40
-export const NO_PURPOSE = 'unnamed'
+const NO_PURPOSE = 'unnamed'
 const PURPOSE = /^[a-z0-9][a-z0-9-]{0,31}$/
 const QUESTION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
 
@@ -828,7 +828,7 @@ export async function runJudge({
 // ---------------------------------------------------------------------------------------------
 // The command: bmn judge ask
 
-export const JUDGE_USAGE = `Usage: bmn judge ask --state-file <path>|- --questions-file <path> --data public|private
+const JUDGE_USAGE = `Usage: bmn judge ask --state-file <path>|- --questions-file <path> --data public|private
                      [--workspace <path>] [--purpose <word>] [--twice] [--timeout <seconds>]
                      [--agent <id>] [--model <name>] [--json]
 

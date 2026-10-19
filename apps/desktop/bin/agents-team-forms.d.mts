@@ -5,8 +5,6 @@ export declare const ASK_FORMS_CHECKED: Readonly<Record<string, { version: strin
 export declare const ASK_UNSUPPORTED: Readonly<Record<string, Record<string, string>>>
 export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; inputs: string; snapshots: string; receipt: string; answer: string; outcome: string; question: string; work: string; bin: string; codexAnswer: string; projectStart: string; browser: string; browserRecord: string }>
 export declare const ASK_READS: Readonly<Record<AskFormName, { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }>>
-export declare const OPENCODE_ASK_TITLE: string
-export declare const CODEX_ASK_LOG: string
 export declare const CLAUDE_ASK_TOOLS: readonly string[]
 export interface AskProgram { launcher: string; payload: string }
 export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean } | null }
@@ -17,6 +15,5 @@ export declare function askFormName(harness: string, options: { project: string 
 export declare function askCommand(harness: string, program: AskProgram, request: AskCommandRequest): AskCommand
 export declare function claudePictureMessage(pictures: { media_type: string; bytes: Buffer }[], prompt: string): string
 export interface ProgramFile { path: string; real: string; sha256: string; link: string | null; dev: string; ino: string; size: string; mtime_ns: string; ctime_ns: string }
-export declare function programStat(path: string): Omit<ProgramFile, 'path' | 'sha256'>
 export declare function executableIdentity(program: AskProgram): { launcher: ProgramFile; payload: ProgramFile }
 export declare function sameProgram(identity: { launcher: ProgramFile; payload: ProgramFile }, program: AskProgram): boolean

@@ -3,11 +3,11 @@ import { existsSync, realpathSync } from 'node:fs'
 import { refreshVisibility, workspaceRoot, workspaceVisibility } from '../../bin/agents-check.mjs'
 import { rosterPath } from '../../bin/agents-roster.mjs'
 
-export const VISIBILITY_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
+const VISIBILITY_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
 
-export type VisibilityRefreshOutcome = 'refreshed' | 'fresh' | 'skipped'
+type VisibilityRefreshOutcome = 'refreshed' | 'fresh' | 'skipped'
 
-export interface VisibilityRefreshOptions {
+interface VisibilityRefreshOptions {
   now?: Date
   request?: typeof fetch
   api?: string

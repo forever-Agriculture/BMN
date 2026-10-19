@@ -255,7 +255,7 @@ function LoadedImageViewport(props: {
   )
 }
 
-export interface ArtifactPreviewState {
+interface ArtifactPreviewState {
   preview: ArtifactPreview | null
   error: string | null
   loading: boolean

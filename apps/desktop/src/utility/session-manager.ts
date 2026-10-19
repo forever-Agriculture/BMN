@@ -196,7 +196,7 @@ export interface CreateResumingRecord {
  * command about to be spawned, so a binding that changed after the row was drawn fails the row
  * instead of quietly starting something else.
  */
-export interface ConfirmedStartParams extends SessionResumeParams {
+interface ConfirmedStartParams extends SessionResumeParams {
   expectedCommand?: string
 }
 
@@ -265,7 +265,7 @@ export interface SessionIdentity {
   incarnationId: string
 }
 
-export interface AttachmentIdentity extends SessionIdentity {
+interface AttachmentIdentity extends SessionIdentity {
   attachmentId: string
   streamSeq: 0
   captureStartedAt: string
@@ -319,7 +319,7 @@ interface SessionManagerOptions {
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
 }
 
-export interface UndeliveredOutputState {
+interface UndeliveredOutputState {
   limitBytes: number
   bufferedBytes: number
   droppedBytes: number
@@ -466,7 +466,7 @@ export class PersistedSessionStartError extends HostControlError {
   }
 }
 
-export interface StoredSessionReader {
+interface StoredSessionReader {
   listWorkspaces(includeArchived: boolean): Promise<readonly WorkspaceRecord[]>
   listSessions(workspaceId: string): Promise<readonly SessionRecord[]>
 }

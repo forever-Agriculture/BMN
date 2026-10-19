@@ -41,7 +41,7 @@ export const ACCESS_GONE = '--access is gone: a teammate reads with its own app\
 export const WIDE_READ_GONE = '--wide-read is gone: a teammate reads with its own app\'s read-only tools; name the project it works in with --project'
 
 /** The request an earlier run kept, for a recheck: `{ role, project, agent }`, or null when that run is gone. */
-export function earlierRun(id, runs = teamRunsDirectory()) {
+function earlierRun(id, runs = teamRunsDirectory()) {
   if (!RUN_ID.test(id)) throw new AskRefusal('RECHECK_INVALID', `${id} is not the id of an ask`)
   try {
     const request = JSON.parse(readFileSync(join(runs, id, ASK_RUN_FILES.request), 'utf8'))
@@ -68,19 +68,19 @@ export function filePrompt(question, files) {
  * AC2's repair: in the gate a reviewer listed the log and judged a change without opening the commit
  * that had reverted it, so a project ask says to read the commits behind what it judges.
  */
-export function projectPrompt(prompt, root) {
+function projectPrompt(prompt, root) {
   return `${prompt.replace(/\n?$/u, '\n')}\nYou work in the project ${root} (your working folder), read-only, with its Git history: git log, git show, git diff and git blame answer. The history can say why the code is as it is: before you judge code, read the commits behind it (git log -p or git blame on the lines in question, then git show).\n`
 }
 
 /** A prompt with the pictures named in the order they are attached: by label, type and size, never by what was taken out of them. */
-export function picturePrompt(prompt, pictures) {
+function picturePrompt(prompt, pictures) {
   if (pictures.length === 0) return prompt
   const lines = pictures.map((picture, index) => `${index + 1}. ${picture.label} (${picture.media_type.slice(6).toUpperCase()}, ${picture.width}x${picture.height})`)
   return `${prompt.replace(/\n?$/u, '\n')}\nThe asker gave you ${pictures.length === 1 ? 'this picture' : `these ${pictures.length} pictures`}, attached as ${pictures.length === 1 ? 'an image' : 'images in this order'}:\n${lines.join('\n')}\n`
 }
 
 /** The owner's global rules for an app as BMN generates them, or null when there is no rules master. */
-export function instructionRules(harness, generation) {
+function instructionRules(harness, generation) {
   try {
     return render(readMaster(), harness, generation).text
   } catch {

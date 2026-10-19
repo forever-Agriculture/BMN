@@ -7,9 +7,8 @@ import type { DatabaseConnection } from './database-initialization'
 
 const DAY_MS = 86_400_000
 
-export type TurnState = 'open' | 'provisional' | 'closed'
+type TurnState = 'open' | 'provisional' | 'closed'
 export type TurnTotalsState = 'none' | 'complete' | 'partial' | 'not-complete'
-export type TurnCaptureRole = 'before' | 'after'
 
 /** One scan of a work tree, as its rows know it: where, when, which commit `HEAD` named, how it ended, its size. */
 export interface TurnCaptureRow {
@@ -28,7 +27,7 @@ export interface TurnCaptureRow {
   size: number
 }
 
-export interface TurnTotals {
+interface TurnTotals {
   files: number
   added: number
   removed: number
@@ -115,7 +114,7 @@ function turnRow(row: TurnDatabaseRow): TurnRow {
 }
 
 /** A published capture gets its row. A capture already recorded is left as it is. */
-export function recordTurnCapture(database: DatabaseConnection, capture: TurnCaptureRow): void {
+function recordTurnCapture(database: DatabaseConnection, capture: TurnCaptureRow): void {
   database.prepare(
     `INSERT OR IGNORE INTO turn_capture(capture_id, session_id, work_tree, scan_started_ms, scan_ended_ms, head_start, head_end, state, bound, size)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

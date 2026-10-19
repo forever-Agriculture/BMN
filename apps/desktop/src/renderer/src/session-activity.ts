@@ -40,7 +40,7 @@ export interface ActivityObservation {
  * Working: output activity already says that. The table is allowed to be incomplete - an unknown title changes nothing.
  * Checked against Claude Code 2.1.278 and Codex 0.155.1 (2026-09-20).
  */
-export const TITLE_WORDS = Object.freeze([
+const TITLE_WORDS = Object.freeze([
   Object.freeze({ cli: 'claude-code', rule: 'prefix', text: '✳', word: 'Idle' }),
   Object.freeze({ cli: 'codex', rule: 'contains', text: 'Action Required', word: 'Action required' })
 ] as const satisfies readonly { cli: string; rule: 'prefix' | 'contains'; text: string; word: ActivityWord }[])
@@ -100,7 +100,7 @@ export interface ActivityPublication {
 }
 
 /** What to show now, and the windows each session's cap is measured from on the next call. */
-export interface PublishableActivities {
+interface PublishableActivities {
   activities: Record<string, SessionActivity>
   publishedAt: Record<string, ActivityPublication>
 }

@@ -16,13 +16,13 @@ export const TURN_STORE_FORMAT = 1
 export const TURN_STORE_FOLDER = 'turn-changes'
 
 /** A file's bytes by hash, its size and whether it may be executed. */
-export type FileEntry = ['f', hash: string, size: number, executable: 0 | 1]
+type FileEntry = ['f', hash: string, size: number, executable: 0 | 1]
 /** A link, kept as its text. */
-export type LinkEntry = ['l', text: string]
+type LinkEntry = ['l', text: string]
 /** A submodule or nested repository: the commit Git reports for it, never walked. */
-export type SubmoduleEntry = ['s', commit: string | null, nested: 0 | 1]
+type SubmoduleEntry = ['s', commit: string | null, nested: 0 | 1]
 /** A file over the size limit: "too large, not read". */
-export type TooLargeEntry = ['x', size: number, modifiedMs: number, executable: 0 | 1]
+type TooLargeEntry = ['x', size: number, modifiedMs: number, executable: 0 | 1]
 /** An entry BMN could not read, with the fixed reason. */
 export type NotReadEntry = ['u', why: NotReadReason]
 export type TurnEntry = FileEntry | LinkEntry | SubmoduleEntry | TooLargeEntry | NotReadEntry

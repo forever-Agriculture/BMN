@@ -21,7 +21,7 @@ export function searchable(mode: QuickLookSearchMode, query: string): boolean {
   return mode === 'files' ? query.trim().length > 0 : [...query].length >= QUICK_LOOK_SEARCH_MIN_CHARS
 }
 
-export interface ContentsHeader {
+interface ContentsHeader {
   /** "8 matches in 3 files", or "No matches". */
   count: string
   /** "619 files read · 0.2 s". */
@@ -56,7 +56,7 @@ export function filesHeader(result: Extract<QuickLookSearchResult, { mode: 'file
     : plural(result.files.length, 'file', 'files')
 }
 
-export interface SearchMatch {
+interface SearchMatch {
   path: string
   line: number
   column: number

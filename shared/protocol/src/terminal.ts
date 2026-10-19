@@ -84,7 +84,7 @@ export function decsetResetSequence(armed: readonly number[]): string {
     .join('')
 }
 
-export interface TerminalByteMessage {
+interface TerminalByteMessage {
   attachmentId: string
   streamSeq: number
   bytes: Uint8Array
@@ -132,7 +132,7 @@ export interface TerminalUnobservedInterruptedMessage {
   reason: string
 }
 
-export type TerminalInterruptedMessage =
+type TerminalInterruptedMessage =
   | TerminalLifecycleInterruptedMessage
   | TerminalUnobservedInterruptedMessage
 

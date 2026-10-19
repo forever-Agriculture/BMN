@@ -70,7 +70,7 @@ export class ControlError extends Error {
 }
 
 /** The narrowing this server does on purpose: a conversation belongs to an agent CLI, not to a shell. */
-export type ConversationAgentCli = LiveAgentCli
+type ConversationAgentCli = LiveAgentCli
 
 export interface ControlHandlers {
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
@@ -304,7 +304,7 @@ export class MemoryReceiptStore implements ReceiptStore {
   }
 }
 
-export interface ControlServerOptions {
+interface ControlServerOptions {
   /** Parent dir created 0700; socket chmod 0600; a stale socket file is removed only if connecting to it fails. */
   socketPath: string
   auth: ControlAuth
@@ -349,7 +349,7 @@ const MAX_INPUT_TEXT_BYTES = 64 * 1024
 const MAX_ERROR_MESSAGE_LENGTH = 500
 const CLOSE_GRACE_MS = 1000
 /** How long one `answer.take` may wait for an answer; the CLI's own deadline is longer. */
-export const MAX_ANSWER_WAIT_SECONDS = 25
+const MAX_ANSWER_WAIT_SECONDS = 25
 const REQUEST_KEYS = ['jsonrpc', 'id', 'method', 'params']
 const PROGRESS_STATES: readonly ProgressState[] = [
   'running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown'

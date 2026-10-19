@@ -3,7 +3,7 @@ import { DATABASE_MIGRATIONS } from './store-schema'
 
 export type SqlValue = string | number | null
 
-export interface DatabaseStatement {
+interface DatabaseStatement {
   run(...values: SqlValue[]): { changes: number | bigint }
   get(...values: SqlValue[]): unknown
   all(...values: SqlValue[]): unknown[]
@@ -17,7 +17,7 @@ export interface DatabaseConnection {
   close(): void
 }
 
-export interface DatabaseInitialization {
+interface DatabaseInitialization {
   schemaTables: string[]
   database: { journalMode: string; foreignKeys: boolean; busyTimeoutMs: number }
   interruptedIncarnations: number

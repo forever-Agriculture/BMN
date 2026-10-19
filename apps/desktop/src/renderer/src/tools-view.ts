@@ -3,7 +3,7 @@ import {
   ROSTER_HARNESSES, appDisplayName, isRetiredApp, type RosterDataShape, type RosterHarness, type RosterToolShape, type ToolProposalView, type ToolStateName, type ToolsAppView
 } from '@bmn/protocol'
 
-export const TOOL_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
+const TOOL_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const HEADER = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/
 export const MAX_TOOLS = 64
@@ -168,7 +168,7 @@ export function idFromName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
 }
 
-export type DraftField = 'id' | 'name' | 'command' | 'args' | 'env' | 'url' | 'headers' | 'scope'
+type DraftField = 'id' | 'name' | 'command' | 'args' | 'env' | 'url' | 'headers' | 'scope'
 
 const lines = (text: string): string[] => text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
 

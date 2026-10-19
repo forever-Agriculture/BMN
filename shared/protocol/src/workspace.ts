@@ -4,8 +4,8 @@ import { parseReportedResumeCommand, type ReportedResumeCommand } from './resume
 import { hasControlOrFormatCharacter } from './file-reference'
 
 export const DEFAULT_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
-export const WORKSPACE_NAME_MAX_LENGTH = 120
-export const LAYOUT_RATIO_TOLERANCE = 0.000_001
+const WORKSPACE_NAME_MAX_LENGTH = 120
+const LAYOUT_RATIO_TOLERANCE = 0.000_001
 
 /**
  * A workspace's optional identity marker. This says which workspace a row or pane belongs to and
@@ -181,7 +181,7 @@ export interface SessionUpdateParams {
   archived?: boolean
 }
 
-export interface SessionStopParams {
+interface SessionStopParams {
   sessionId: string
   incarnationId: string
   cause: SessionStopCause
@@ -565,7 +565,7 @@ export function isSessionStopParams(value: unknown): value is SessionStopParams 
 }
 
 /** At most one row per session, and never more rows than a dialog could honestly have listed. */
-export const MAX_COHORT_RESUME_ENTRIES = 64
+const MAX_COHORT_RESUME_ENTRIES = 64
 
 function isCohortResumeEntry(value: unknown): value is SessionCohortResumeEntry {
   if (!isRecord(value) || !hasExactKeys(value, ['sessionId', 'action', 'command', 'cols', 'rows'])) {

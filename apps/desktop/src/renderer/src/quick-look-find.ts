@@ -6,7 +6,7 @@ export interface FindMatch {
 }
 
 /** More matches than this are counted as "10,000+" and not marked one by one. */
-export const FIND_MAX_MATCHES = 10_000
+const FIND_MAX_MATCHES = 10_000
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 

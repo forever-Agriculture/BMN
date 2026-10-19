@@ -71,9 +71,9 @@ import {
 import './quick-look.css'
 
 /** Below this sheet width the tree starts folded, so that the file keeps 80 columns. */
-export const QUICK_LOOK_TREE_FOLD_WIDTH = 940
+const QUICK_LOOK_TREE_FOLD_WIDTH = 940
 /** How often a shown file's identity is asked for while the window has focus (Story 67.2 AC2). */
-export const QUICK_LOOK_IDENTITY_MS = 2000
+const QUICK_LOOK_IDENTITY_MS = 2000
 
 /** Rendered or source, per Markdown file, kept in this window's memory until BMN quits (Story 67.4 AC1). */
 const markdownModes = new Map<string, 'rendered' | 'source'>()

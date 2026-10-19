@@ -44,7 +44,7 @@ interface PendingRequest {
 
 export const HOST_DIAGNOSTIC_BUFFER_BYTES = 16 * 1024
 /** How long a dead host's last output may take to arrive before its startup failure is reported without it. */
-export const HOST_OUTPUT_DRAIN_MS = 1_000
+const HOST_OUTPUT_DRAIN_MS = 1_000
 
 /**
  * Electron drops every listener on a utility process's stdout and stderr once its exit listeners return, and output

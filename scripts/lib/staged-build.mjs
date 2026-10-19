@@ -34,7 +34,7 @@ export function prepareBuildFolders(folders, fs = defaultFs) {
 }
 
 /** Moves the unpacked build electron-builder wrote under `staging` to the `next` folder. */
-export function stageBuiltFolder(folders, unpackedName, fs = defaultFs) {
+function stageBuiltFolder(folders, unpackedName, fs = defaultFs) {
   const built = join(folders.staging, unpackedName)
   if (!fs.existsSync(built)) throw new Error(`package left no build at ${built}`)
   fs.renameSync(built, folders.next)

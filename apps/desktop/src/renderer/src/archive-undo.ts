@@ -3,7 +3,7 @@ import type { SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 
 export type ArchiveUndoTarget = { kind: 'workspace' | 'session'; id: string; revision: number }
 type RestoreApi = Pick<Window['aiTerminal'], 'listWorkspaces' | 'listSessions' | 'updateWorkspace' | 'updateSession'>
-export type ArchiveRestored = { kind: 'workspace'; record: WorkspaceRecord } | { kind: 'session'; record: SessionRecord }
+type ArchiveRestored = { kind: 'workspace'; record: WorkspaceRecord } | { kind: 'session'; record: SessionRecord }
 
 export async function restoreArchive(target: ArchiveUndoTarget, api: RestoreApi): Promise<ArchiveRestored> {
   const workspaces = await api.listWorkspaces(true)

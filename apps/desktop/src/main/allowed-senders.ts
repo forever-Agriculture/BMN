@@ -1,6 +1,6 @@
 // MODULE: allowed-senders.ts - tracks which web contents may use the privileged bridge
 /** The part of Electron's WebContents that sender tracking needs. */
-export interface TrackedSender {
+interface TrackedSender {
   readonly id: number
   once(event: 'destroyed', listener: () => void): unknown
 }
