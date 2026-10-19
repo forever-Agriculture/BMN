@@ -1,15 +1,44 @@
 // MODULE: quick-look-config-editor.tsx - the edit mode of a config file in the Quick look sheet: the draft, its ten-second reveal, the syntax line 300 ms after typing stops, and a draft carried onto the file as it is now (Story 68.2)
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import { Text, type ChangeSet } from '@codemirror/state'
-import type { EditorView } from '@codemirror/view'
+import { EditorSelection, Text, type ChangeSet } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { quickLookFileType, quickLookName } from '@bmn/protocol'
 import { draftChanges, lineSummary, maskField, rebaseConfigDraft, type Mask } from './quick-look-config-edit'
+import { topVisibleLine } from './quick-look-code'
 import { createConfigEditor, draftDirty, draftMarks, freezeConfig, maskOnCaretLine, maskedDraft, showConfigValue } from './quick-look-config-view'
 import { REVEAL_SECONDS, quickLookSecretRanges } from './quick-look-secrets'
 import { checkSyntax, syntaxWords, type ConfigFormat, type SyntaxVerdict } from './quick-look-syntax'
 
 /** Syntax is checked this long after the last key (AC5). */
 const SYNTAX_WAIT_MS = 300
+
+/** Where the reader was when edit mode opened: its caret and the line at its top (1-based); null when unknown. */
+export interface EditStart {
+  caret: number | null
+  top: number | null
+}
+
+/** The reader's caret when it is on screen, else null: a caret scrolled out of view would pull the draft back to it. */
+export function shownCaret(view: EditorView | null): number | null {
+  if (!view) return null
+  const head = view.state.selection.main.head
+  const at = view.coordsAtPos(head)
+  const box = view.scrollDOM.getBoundingClientRect()
+  return at && at.top >= box.top && at.bottom <= box.bottom ? head : null
+}
+
+/** Puts the caret and the line at the top where the reader had them, clamped to the text (owner 2026-10-19: E jumped to the top). */
+function keepPlace(view: EditorView, start: EditStart): void {
+  const doc = view.state.doc
+  const top = start.top !== null && start.top >= 1 ? doc.line(Math.min(start.top, doc.lines)).from : null
+  // With no caret on screen it goes to the top line, so the first arrow key does not jump back to the file's start.
+  const caret = start.caret === null ? top : Math.min(Math.max(0, start.caret), doc.length)
+  if (caret === null && top === null) return
+  view.dispatch({
+    ...(caret === null ? {} : { selection: EditorSelection.cursor(caret) }),
+    ...(top === null ? {} : { effects: EditorView.scrollIntoView(top, { y: 'start', yMargin: 0 }) })
+  })
+}
 
 export interface ConfigEditorHandle {
   /** The text to save, with the file's line endings. */
@@ -41,6 +70,10 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
   format: ConfigFormat
   lineEnding: '\n' | '\r\n'
   focus: boolean
+  /** Where the reader was; the draft opens there. */
+  start: EditStart
+  /** The line at the top, reported as the draft scrolls, so leaving edit mode keeps the place. */
+  onTop(line: number): void
   /** A Save of the draft is under way: it takes no edits until the answer. */
   frozen: boolean
   onDraft(state: ConfigDraftState): void
@@ -54,8 +87,13 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
   const shown = useRef<{ id: number; until: number } | null>(null)
   const ticker = useRef(0)
   const syntaxTimer = useRef(0)
-  const callbacks = useRef({ onDraft: props.onDraft, onNote: props.onNote, onShown: props.onShown })
-  callbacks.current = { onDraft: props.onDraft, onNote: props.onNote, onShown: props.onShown }
+  const callbacks = useRef({ onDraft: props.onDraft, onNote: props.onNote, onShown: props.onShown, onTop: props.onTop })
+  callbacks.current = { onDraft: props.onDraft, onNote: props.onNote, onShown: props.onShown, onTop: props.onTop }
+  const topFrame = useRef(0)
+  const reportTop = (current: EditorView): void => {
+    cancelAnimationFrame(topFrame.current)
+    topFrame.current = requestAnimationFrame(() => { if (view.current === current && current.dom.isConnected) callbacks.current.onTop(topVisibleLine(current)) })
+  }
 
   const report = (current: EditorView, syntax: SyntaxVerdict | null): void => {
     callbacks.current.onDraft({
@@ -116,14 +154,17 @@ export const ConfigEditor = forwardRef<ConfigEditorHandle, {
       onReveal: reveal
     })
     view.current = created
+    created.scrollDOM.addEventListener('scroll', () => reportTop(created), { passive: true })
     report(created, checkSyntax(props.format, created.state.doc.toString()))
     return created
   }
 
   useEffect(() => {
     const created = mount(props.content)
+    if (created) keepPlace(created, props.start)
     if (props.focus) created?.focus()
     return () => {
+      cancelAnimationFrame(topFrame.current)
       window.clearInterval(ticker.current)
       window.clearTimeout(syntaxTimer.current)
       view.current?.destroy()

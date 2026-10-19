@@ -44,6 +44,8 @@ const BOARD = [
   '  1-1-hide-secret-shaped-text-sent-to-telegram: done # keys and tokens named in a note',
   '  1-3-a-made-up-story-with-a-very-long-name-for-the-board: backlog', ''
 ].join('\n')
+// A long made-up board, so a place far down the file can be kept across edit mode.
+const LONG_BOARD = ['# made-up long board', ...Array.from({ length: 199 }, (_, index) => `  ${index + 2}-made-up-long-row: done`), ''].join('\n')
 const EDITED_ENV = '# made-up config\nexport MADEUP_HOST=made-up.example\nMADEUP_SECRET="madeupQL68oldValue"\n\nMADEUP_MODE=dev\n'
 // A word only one made-up file holds, so a search's traces can be looked for in the app's folders afterwards.
 const PROBE = 'QL67searchprobe'
@@ -90,6 +92,7 @@ function writeProject(project) {
   file('config/locked.json', '{"a": 1}\n')
   // A planning board as BMN keeps one (plan/status.yaml): long story names, some with secret-sounding words, all readable.
   file('docs/plan/status.yaml', BOARD)
+  file('docs/plan/long.yaml', LONG_BOARD)
   chmodSync(join(project, 'config/locked.json'), 0o444)
   file('docs/plan.md', [
     '---', 'title: Made-up plan', '---', '# Made-up plan', '',
@@ -1011,6 +1014,56 @@ let n=0;setInterval(()=>{n+=1;process.stdout.write('\\rQUICK LOOK FIXTURE tick '
     await page.keyboard.press('Control+Shift+E')
     await sheet.waitFor()
     await sheet.locator('.ql-tr').first().waitFor()
+
+    // Edit mode keeps the reader's place (owner 2026-10-19, "when you press <edit> or <e> the page jumps to top"):
+    // E and the plate open the draft at the line the reader had at its top, with the caret where it was or, scrolled
+    // out of view, on that top line; leaving with no edits shows the reader where the draft was.
+    if (await sheet.locator('.ql-tr', { hasText: 'long.yaml' }).count() === 0) {
+      if (await sheet.locator('.ql-tr.fold', { hasText: /^plan$/u }).count() === 0) await sheet.locator('.ql-tr', { hasText: 'docs' }).first().click()
+      await sheet.locator('.ql-tr.fold', { hasText: /^plan$/u }).click()
+    }
+    await openRow('long.yaml')
+    const caretLine = () => sheet.evaluate((element) => Number(element.querySelector('.cm-lineNumbers .cm-activeLineGutter')?.textContent ?? 0))
+    const place = async () => ({ top: await topLine(), caret: await caretLine() })
+    const leftEdit = async () => {
+      await page.waitForFunction(() => document.querySelector('dialog.quick-look .ql-editing-plate') === null)
+      await page.waitForTimeout(200)
+    }
+    const inEdit = async () => {
+      await sheet.locator('.ql-editing-plate').waitFor()
+      await page.waitForTimeout(200)
+    }
+    await sheet.locator('.ql-code .cm-content').click()
+    await page.keyboard.press('Control+g')
+    await sheet.locator('input[aria-label="Go to line"]').waitFor()
+    await page.keyboard.type('150')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(200)
+    const reading = await place()
+    await page.keyboard.press('e')
+    await inEdit()
+    const byKey = await place()
+    check('E opens the draft at the reader\'s place: the same line at the top and the caret on line 150', reading.top > 100 && reading.caret === 150 &&
+      byKey.top === reading.top && byKey.caret === 150, { reading, byKey })
+    // Two pages up in the draft, away from both ends, where no scroll limit can hold the line at the top.
+    await page.keyboard.press('PageUp')
+    await page.keyboard.press('PageUp')
+    await page.waitForTimeout(200)
+    const moved = await place()
+    await editPlate.click()
+    await leftEdit()
+    const reader = await place()
+    check('leaving edit mode with no edits shows the reader at the line the draft had at its top', moved.top > 1 && moved.top < reading.top && reader.top === moved.top, { moved, reader })
+    await sheet.locator('.ql-code .cm-scroller').evaluate((element) => { element.scrollTop += 900 })
+    await page.waitForTimeout(200)
+    const wheeled = await place()
+    await editPlate.click()
+    await inEdit()
+    const byPlate = await place()
+    check('the Edit plate keeps the place too, and a caret scrolled out of view starts on the top line', wheeled.top > reader.top + 20 &&
+      byPlate.top === wheeled.top && byPlate.caret === wheeled.top, { wheeled, byPlate })
+    await editPlate.click()
+    await leftEdit()
 
     // Markdown's checks below open docs/plan.md from the tree.
     if (await sheet.locator('.ql-tr', { hasText: 'plan.md' }).count() === 0) await sheet.locator('.ql-tr', { hasText: 'docs' }).first().click()

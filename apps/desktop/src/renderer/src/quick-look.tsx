@@ -49,7 +49,7 @@ import { treeKey, treeRows, type TreeListing, type TreeRow } from './quick-look-
 import { readEnvFile, readersOf } from './quick-look-env'
 import { EMPTY_ENV_DRAFT, EnvView, envDraftDirty, envDraftSummary, envDraftText, rebaseEnvDraft, type EnvDraft, type EnvViewHandle } from './quick-look-env-view'
 import { SaveBar, asksQuestion, type SaveRow } from './quick-look-save-bar'
-import { ConfigEditor, type ConfigDraftState, type ConfigEditorHandle } from './quick-look-config-editor'
+import { ConfigEditor, shownCaret, type ConfigDraftState, type ConfigEditorHandle, type EditStart } from './quick-look-config-editor'
 import { lineEndingOf } from './quick-look-config-edit'
 import { configFormatOf, syntaxWords } from './quick-look-syntax'
 import { quickLookFooter, type QuickLookFocus } from './quick-look-keys'
@@ -397,6 +397,8 @@ export function QuickLook(props: {
   const [configShown, setConfigShown] = useState(false)
   const [footerNote, setFooterNote] = useState<string | null>(null)
   const configEditor = useRef<ConfigEditorHandle | null>(null)
+  /** Where the reader was when edit mode opened, so the draft opens there and not at the first line. */
+  const editStart = useRef<EditStart>({ caret: null, top: null })
   /** The bytes the config draft was made on: the file as read when E was pressed, or as it was when the draft was carried. */
   const editDigest = useRef<string | null>(null)
   const envView = useRef<EnvViewHandle | null>(null)
@@ -622,6 +624,7 @@ export function QuickLook(props: {
   const beginEdit = (): void => {
     if (!ready) return
     editDigest.current = ready.digest
+    editStart.current = { caret: shownCaret(codeView.current), top: currentTop() }
     setEditing(true)
     setFocusArea('file')
     setFind((state) => (state.open ? { ...state, open: false } : state))
@@ -634,6 +637,9 @@ export function QuickLook(props: {
     setEnvDraft(EMPTY_ENV_DRAFT)
     setEnvShown(null)
     setSaveRow(null)
+    // The reader opens again at the line the draft had at its top, not where the file was first opened.
+    const topLine = currentTop()
+    if (editing && topLine !== null) setFile((current) => (current ? { ...current, topLine } : current))
     setEditing(false)
     setConfigDraft(null)
     setConfigShown(false)
@@ -1621,6 +1627,7 @@ export function QuickLook(props: {
                   <>
                     <ConfigEditor key={ready.path} ref={configEditor} path={ready.path} canonicalPath={ready.canonicalPath} content={text} format={configFormat}
                       lineEnding={configEnding === '\r\n' ? '\r\n' : '\n'} focus={focusArea === 'file' && !asksQuestion(saveRow)} frozen={saving}
+                      start={editStart.current} onTop={(line) => { shownTop.current = { path: ready.path, line } }}
                       onDraft={setConfigDraft} onNote={setFooterNote} onShown={setConfigShown} onFocus={() => setFocusArea('file')} />
                     {configDraft?.syntax ? <p className={`ql-syntax${configDraft.valid === false ? ' ql-refused' : ''}`} role="status">{configDraft.syntax}</p> : null}
                   </>
