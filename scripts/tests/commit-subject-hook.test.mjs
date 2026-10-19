@@ -1,9 +1,9 @@
-// MODULE: commit-subject-hook.test.mjs - real git commits against .githooks/commit-msg
+// MODULE: commit-subject-hook.test.mjs - real git commits against .githooks/commit-msg, and the postinstall step that installs it
 // Story 80.10 AC1-AC2. Every repository here is disposable, in its own temporary folder removed in `finally`;
 // git runs with no GIT_* variables from the caller, no system or global config, and a discovery ceiling, so
 // nothing can reach this checkout's shared config.
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const hooksDir = join(repoRoot, '.githooks')
+const installStep = join(repoRoot, 'scripts/install/git-hooks.mjs')
 
 const REFUSAL = /the subject line is (\d+) characters; the limit is 100\.\nMove the detail into the body/u
 
@@ -187,5 +188,68 @@ describe.each([['repository'], ['linked worktree']])('commit-msg hook in a dispo
       expect(result.status).toBe(0)
       expect(context.subject(cwd)).toBe('fix: short')
     })
+  })
+})
+
+describe('postinstall git-hooks step on disposable repositories', () => {
+  const runStep = (cwd, env) => spawnSync(process.execPath, [installStep], { cwd, env, encoding: 'utf8' })
+
+  it('sets core.hooksPath to .githooks when it is unset, in one printed line', () => {
+    withRepository((context) => {
+      expect(context.git(context.repo, ['config', '--get', 'core.hooksPath']).status).toBe(1)
+      const result = runStep(context.worktree, context.env)
+      expect(result.status).toBe(0)
+      expect(result.stdout.trim().split('\n')).toHaveLength(1)
+      expect(result.stdout).toContain('set core.hooksPath to .githooks')
+      expect(context.ok(context.repo, ['config', '--get', 'core.hooksPath'])).toBe('.githooks')
+    }, { hooksPath: null })
+  })
+
+  it('leaves core.hooksPath alone and silent when it is already .githooks', () => {
+    withRepository((context) => {
+      const result = runStep(context.repo, context.env)
+      expect(result.status).toBe(0)
+      expect(result.stdout).toBe('')
+      expect(context.ok(context.repo, ['config', '--get', 'core.hooksPath'])).toBe('.githooks')
+    }, { hooksPath: '.githooks' })
+  })
+
+  it('leaves another core.hooksPath value and reports why, still exiting 0', () => {
+    withRepository((context) => {
+      const result = runStep(context.repo, context.env)
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('core.hooksPath is already "/elsewhere/hooks", left as is')
+      expect(context.ok(context.repo, ['config', '--get', 'core.hooksPath'])).toBe('/elsewhere/hooks')
+    }, { hooksPath: '/elsewhere/hooks' })
+  })
+
+  it('says so and exits 0 outside a git checkout', () => {
+    withRepository((context) => {
+      const outside = join(context.root, 'outside')
+      mkdirSync(outside)
+      expect(context.git(outside, ['rev-parse', '--git-dir']).status).not.toBe(0)
+      const result = runStep(outside, context.env)
+      expect(result.status).toBe(0)
+      expect(result.stdout).toContain('not a git checkout')
+    }, { hooksPath: null })
+  })
+
+  it('installs a relative .githooks that a tracked hook then enforces in a linked worktree', () => {
+    withRepository((context) => {
+      const { repo, root, ok, git, env } = context
+      mkdirSync(join(repo, '.githooks'))
+      copyFileSync(join(hooksDir, 'commit-msg'), join(repo, '.githooks/commit-msg'))
+      chmodSync(join(repo, '.githooks/commit-msg'), 0o755)
+      ok(repo, ['add', '.githooks/commit-msg'])
+      ok(repo, ['commit', '-q', '-m', 'chore: track the commit-msg hook'])
+      expect(runStep(repo, env).status).toBe(0)
+      const tracked = join(root, 'tracked-worktree')
+      ok(repo, ['worktree', 'add', '-q', '-b', 'tracked', tracked])
+      const refused = context.commit(tracked, `${ascii('feat: ', 101)}\n`)
+      expect(refused.status).toBe(1)
+      expect(refused.stderr).toMatch(REFUSAL)
+      expect(context.commit(tracked, `${ascii('feat: ', 100)}\n`).status).toBe(0)
+      expect(git(tracked, ['config', '--get', 'core.hooksPath']).stdout.trim()).toBe('.githooks')
+    }, { hooksPath: null })
   })
 })

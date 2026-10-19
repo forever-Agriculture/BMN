@@ -7,7 +7,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "postinstall": "pnpm run install:electron && node scripts/build/rebuild-native.mjs",
+    "postinstall": "node scripts/install/git-hooks.mjs && pnpm run install:electron && node scripts/build/rebuild-native.mjs",
     "install:electron": "node apps/desktop/node_modules/electron/install.js",
     "test:unit": "pnpm --filter @bmn/protocol run build && vitest run --maxWorkers=50% --exclude '.claude/**' --exclude '.dev-auto/**'",
     "test:electron": "pnpm run build && node scripts/test/electron-self-test.mjs && node scripts/test/electron-normal-start.mjs",
