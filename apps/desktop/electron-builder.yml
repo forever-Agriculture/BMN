@@ -1,3 +1,4 @@
+# MODULE: electron-builder.yml - Packaged application files and explicit CLI worker resources
 appId: dev.bmn.desktop
 productName: BMN
 directories:
@@ -42,6 +43,23 @@ extraResources:
     to: bin/bmn-statusline.mjs
   - from: bin/bmn-hook-runtime.mjs
     to: bin/bmn-hook-runtime.mjs
+  # Epic 81: the local doctor and its bounded, read-only worker graph.
+  - from: bin/doctor.mjs
+    to: bin/doctor.mjs
+  - from: bin/doctor-adapters.mjs
+    to: bin/doctor-adapters.mjs
+  - from: bin/doctor-state.mjs
+    to: bin/doctor-state.mjs
+  - from: bin/doctor-results.mjs
+    to: bin/doctor-results.mjs
+  - from: bin/doctor-leftovers.mjs
+    to: bin/doctor-leftovers.mjs
+  - from: bin/doctor-leftover-results.mjs
+    to: bin/doctor-leftover-results.mjs
+  - from: bin/doctor-profile.mjs
+    to: bin/doctor-profile.mjs
+  - from: bin/doctor-locations.mjs
+    to: bin/doctor-locations.mjs
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
   - from: bin/safe-config-write.mjs
     to: bin/safe-config-write.mjs

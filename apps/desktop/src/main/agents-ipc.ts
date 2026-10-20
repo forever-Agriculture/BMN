@@ -1,5 +1,6 @@
 // MODULE: agents-ipc.ts - Epic 60.5/60.6: renderer channels for the Preferences Team and Rules pages
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
@@ -66,9 +67,10 @@ import {
   type TeamUpdateTarget
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
+import { readDoctorView } from '../../bin/doctor.mjs'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
-import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
   applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, saveRules, type RulesHarness, type SavePlan, type SaveResult
 } from '../../bin/agents-rules.mjs'
@@ -141,6 +143,8 @@ interface AgentsIpcOptions {
   autoTestKinds?: readonly AutoTestKind[]
   /** What BMN installs by itself at start (Story 75.9); all where absent. A test run names what it means to see, so nothing is written into the owner's own apps. */
   startInstalls?: readonly StartInstall[]
+  /** Real app startup runs the doctor; isolated acceptance runs opt in with a synthetic profile. */
+  doctorAtStart?: boolean
   /** Agents › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
   chooseAskExportFolder?(event: IpcMainInvokeEvent): Promise<string | null>
 }
@@ -155,10 +159,12 @@ export interface AgentsIpcHandle {
   autoTestsAtStart(): Promise<void>
   /** BMN has started: its missing hook entries, then the approved skills and tools, are installed (Story 75.9). Never rejects. */
   installsAtStart(): Promise<void>
+  /** Runs independently in the background; its checks never install anything or block session admission. */
+  doctorAtStart(): Promise<void>
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
-const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
+const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
   'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const
 /** Variables the rules CLI only needs to know are set; their value may hold a key, so a mark is passed on instead. */
 const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
@@ -507,7 +513,14 @@ function inspectApp(harness: RosterHarness, environment: NodeJS.ProcessEnv): App
  * decision 2026-10-10); the row only says whether BMN's tests ran against it.
  */
 function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView {
-  const { resolution, reason } = inspectApp(harness, context.env)
+  let inspection: AppInspection
+  try { inspection = inspectApp(harness, context.env) }
+  catch {
+    // An unreadable destination is one display row; it must not hide the remaining Health checks.
+    inspection = { resolution: { harness, version: harnessVersion(APP_COMMANDS[harness], context.env),
+      provider: null, host: null, basis: 'unknown', sources: [] }, reason: 'The selected app profile could not be read.' }
+  }
+  const { resolution, reason } = inspection
   const app = ROSTER_APP_NAMES[harness]
   const tested = (TESTED_HARNESS_VERSIONS[harness] ?? []).join(', ')
   const same = 'BMN reads where it sends data the same way on every version.'
@@ -746,6 +759,7 @@ async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnapshot> {
     tools: toolsView(apps, pages, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     hooks: context.hooks?.() ?? null,
+    doctor: await readDoctorView({ environment: context.env, now: context.now().getTime(), appVersions: Object.fromEntries(apps.map((app) => [app.harness, app.version])) }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
       ...(entry.state ? { state: entry.state } : {}), ...(entry.reason ? { reason: entry.reason } : {}), ...(entry.targets ? { targets: entry.targets } : {}),
@@ -885,6 +899,7 @@ export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAns
 }
 
 export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: AgentsIpcOptions): AgentsIpcHandle {
+  const doctorStartupId = randomUUID()
   const handle = (channel: `aiterm:${string}`, listener: (params: Record<string, unknown>, event: IpcMainInvokeEvent) => unknown): void => {
     ipc.handle(channel, (event, params) => {
       if (!options.senderIsAllowed(event)) throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
@@ -1752,6 +1767,11 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   const startKinds = new Set<StartInstall>(options.startInstalls ?? START_INSTALLS)
   return {
     autoTestsAtStart: () => autoTests.trigger(),
+    doctorAtStart: async () => {
+      if (options.doctorAtStart === false) return
+      const ctx = context()
+      await runCli(ctx.script, ['doctor', '--startup', doctorStartupId, '--json'], ctx.env, 13 * 60 * 1000)
+    },
     installsAtStart: async () => {
       if (startKinds.has('hooks')) {
         const ctx = context()

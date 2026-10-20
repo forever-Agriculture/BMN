@@ -1,3 +1,4 @@
+# MODULE: design.md - Shared screen rules and approved Health doctor design
 # Screen design rules
 
 These are the rules every BMN screen follows. Fable wrote them in Story 80.2 from a review of every screen, and
@@ -117,6 +118,25 @@ rule has an ID that reviews and commits cite. "Text 8%" means `color-mix(in srgb
   name) and attention (dots, bars). No second hue.
 - **C3 Quick Look** keeps its tint for literals (`--ql-plate-*`, the owner's one exception); its lines follow
   L4, L5 and F2 all the same.
+
+## Health doctor
+
+Approved by the owner on 2026-10-20, Story 81.2 AC3; Fable design ask
+`20261020T084008-353e3b99`, corrected notes in the run's `design-81-2-notes.md`.
+
+- Add Doctor after Hooks and before Local control. Keep existing Health controls and its row grid,
+  hairlines, theme tokens and responsive layout at 1280×800 and 800×800.
+- Checks run automatically. Show problems, unavailable or stale checks, and show-only leftovers.
+  Only problems count as Needs-you; leftovers may be deliberately retained.
+- Show All well only when every applicable check passed fresh. While checking, keep previous results
+  and each result's own timestamp. Adopt refreshed rows through Health's existing calm-state rule.
+- Rows name the app/check, path or command, state, safe reason/fix and checked/tried time. Withhold
+  secret-bearing contents. Checks leave the owner's files unchanged.
+- Put timing, version qualification and the checked scope behind one What is checked disclosure.
+  Its summary is the only added keyboard stop; existing sheets keep their focus-return behavior.
+- Leftovers say Review it yourself; BMN leaves it. There is no cleanup control, Check now or switch.
+- Names are withheld even when ordinary-looking. The location column uses structural coordinates and source
+  revision, with full text in its title. Manual resolution stays behind the existing What is checked disclosure.
 
 ## Reviews
 

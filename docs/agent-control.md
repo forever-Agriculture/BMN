@@ -1,3 +1,4 @@
+# MODULE: agent-control.md - CLI contracts, authorization and local commands
 # Agent control: `bmn`
 
 Every session BMN starts can talk back to the app through the `bmn` command. An agent,
@@ -135,6 +136,8 @@ Commands:
   judge ask --state-file <path>|- --questions-file <path> --data public|private
                                             Ask the team's judge typed questions about one text; it answers
                                             with numbers, and BMN reads them (bmn judge --help)
+  doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
+                                            one shared run, also with BMN closed (bmn doctor --help)
   plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
                                             rows, check the plan's structure, change one row safely; not the
                                             subscription's Plan use (bmn plan --help)
@@ -2328,6 +2331,68 @@ pictures, the key, the exits, reading the answer as advice, and that a refusal i
 Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines run when 72.1 measured them
 (2026-10-15), so BMN offers no permission rule for it; should a later Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only
 by the owner.
+
+## Read-only app health: `bmn doctor`
+
+`bmn doctor [--json]` shares Health's automatic doctor and works with BMN closed, without a socket or token.
+It reads BMN's hooks, skills, tools and rules checks, qualified Claude/Codex doctors, and show-only leftovers.
+There is no cleanup command. It never installs, removes or changes the inspected files.
+
+A full cycle starts when never run, strictly more than 24 hours after the last cycle started, or after an app
+version/executable changes. A failed or partial cycle counts. Failed and problem checks get one retry at the
+next distinct BMN startup; ordinary CLI calls do not consume it. Retry does not move the full-cycle clock.
+Concurrent callers join one run under `doctor.lock`; an interrupted attempt is named when ownership is released.
+Earlier results remain visible while checking. Each result has its own timestamp, version identity and freshness.
+Selected HOME, supported XDG roots, Claude/Codex profile selectors and both OpenCode selectors retain their
+existing precedence, including an unset selector. Inline OpenCode configuration is uninspected scope; its value
+is never passed to an app. A private keyed profile fingerprint binds cadence, results and joined views in the
+existing state. Switching profiles starts a fresh cycle; a caller joining a different profile gets
+`profile-changed`, stale rows and exit 3. Executable/version qualification is independent of this fingerprint.
+An empty or invalid HOME never falls back to the owner's cache. An explicitly selected missing, unreadable
+or wrongly typed profile is unavailable; a whole `/tmp` or `/var/tmp` selector is refused rather than checked empty.
+Every view read checks access again: unavailable selected scope gives `profile-unavailable`, stale earlier rows
+with their original times, and exit 3, without starting work. The worker records an observed scope failure under
+the run lock. Availability never changes the profile fingerprint, daily clock or an already-used retry. The
+startup which records that failure cannot also retry it; a later startup gets the existing one retry. CLI reads
+and repeated CLI runs cannot consume it. Restoring access alone does not revive persisted failed results.
+Scope and access are checked before and after awaited checks and before publication.
+
+Each new doctor version first runs on a disposable profile with planted problems. Real-profile runs use bwrap:
+read-only host and home, private scratch, empty working directory, closed stdin, fixed environment, 60 seconds
+and 1 MiB total output. Unsupported versions have no unsandboxed fallback. OpenCode has no qualified doctor.
+Real checks retain absolute selected paths, including temporary roots and their symlink targets, read-only.
+Qualification masks owner/default/selected profiles, even through absolute and symlink paths, and exposes only
+the approved executable and its runtime dependencies beneath those masks. No owner profile is used to qualify.
+The bounded raw streams remain transient; allowlisted facts and BMN-authored reasons/fixes are the only output.
+Unknown diagnostics make a check partial. Arbitrary names, paths, messages and credential fragments are withheld.
+
+JSON has `schemaVersion: 1`, `running`, `cycleStartedAt`, `attemptStartedAt`, `retryUsed`, `retryAtNextStart`,
+`error`, `rows`, `problemCount`, `allWell`, `exitCode` and fixed `locationHelp`. Times are Unix milliseconds or null. Each row names
+`check`, `state`, `checkedAt`, `stale`, `problems` and `leftovers`. Problem facts carry a fixed `code`, generated
+`item`, optional app, and safe `reason`/`fix`. Leftovers carry kind, app, generated item, fixed reason/location,
+`identity: "withheld"` and a structural `locator`. Names, paths, plugin IDs, project names and MCP keys are withheld
+even when ordinary-looking. Each filesystem locator has a selected-root enum, parent and object device/inode,
+byte size and nanosecond mtime/ctime, and a one-based directory-entry position sorted by raw UTF-8 bytes.
+Configuration entries add a one-based line and UTF-16 column from the parser. Every plugin install/cache and
+affected Codex memory row is separate; memory locators use verified `stage1_outputs` numeric `rowid`, never a
+thread ID, and include the WAL revision when present. Acquisition version 1 binds the coordinates to bytes
+read through one verified descriptor, with parent enumeration, source type/mode and revision checks before
+and after. Each configuration is acquired once per scan; nested entries and MCP scopes share those bytes.
+Directory and followed-link observations retain bounded flat numeric dependency witnesses for their children
+and targets, without source names or hashes. SQLite copies use one verified database/WAL source vector for
+memories and project coverage; originals are never queried or recovered. Active rollback journals, unsupported
+schemas, unstable copies and exhausted bounds are incomplete coverage. Publication and later resolution
+recheck the original revisions and every witness. Legacy coordinates become unresolved, never trusted as
+acquired observations. A bounded metadata lookup marks changed, reordered, replaced or unverifiable
+coordinates stale; unresolved coverage is partial. `locationHelp` explains manual
+resolution and revision verification. A stale item coordinate stays show-only and does not make a fresh,
+successful check stale. Text output also lists each show-only item. Leftovers do not count as
+problems or Needs-you. Saved state is schema-validated and atomic
+at `~/.config/bmn/agents/state/doctor.json`; unexpected state/lock symlinks are refused.
+
+Exit precedence: **2** invalid usage; **3** incomplete, failed, unsupported, unqualified, stale or running checks;
+**1** recognized problems; **0** every applicable check passed fresh. Exit 3 retains any recognized problems.
+BMN alone supplies the internal `--startup UUID` option to identify one application startup for retry scheduling.
 
 ## The project's plan: `bmn plan`
 

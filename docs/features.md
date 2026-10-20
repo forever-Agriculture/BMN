@@ -1,3 +1,4 @@
+# MODULE: features.md - Owner workflows, implemented behavior and practical limits
 # BMN features
 
 This page walks through what you can do with BMN, workflow by workflow, and says plainly where each
@@ -303,6 +304,17 @@ or Codex conversation starts, BMN hands its agent a short brief of what to send 
 once more after a compaction ([agent-control.md](agent-control.md#bmns-start-brief)). `bmn help agents` prints the etiquette page agents can read. Preferences →
 Integrations › Health › **Local control** shows whether the control socket is listening, with its path; a runtime
 path that is too long disables the socket, and Preferences says so.
+
+Integrations › Health › **Doctor** runs automatically when due at startup. It shows problems and checks that
+failed, timed out, are stale, or could not be qualified for the installed version, each with its own time.
+Earlier results stay while checking. **All well** appears only when every applicable check passed fresh.
+BMN reads its hooks, skills, tools and rules checks and runs the qualified Claude/Codex doctors read-only.
+Each new doctor version is tried on a disposable profile first; OpenCode has no qualified doctor.
+Leftover memory, skills, plugins and MCP entries are show-only, with a reason; they do not count as Needs-you.
+Names stay withheld. Each item has structural source coordinates and a checked revision; the existing disclosure
+explains manual resolution. Changed or unverifiable sources become stale. Selected custom profiles are kept apart.
+There is no cleanup control or switch. The **What is checked** disclosure explains timing and limits.
+Agents see the same projected results with [`bmn doctor --json`](agent-control.md#read-only-app-health-bmn-doctor).
 
 BMN wires its hooks itself: at every start it adds, for Claude Code, Codex and OpenCode where each
 is set up, the entries an event has none of, after backing the file up, and leaves an entry it did

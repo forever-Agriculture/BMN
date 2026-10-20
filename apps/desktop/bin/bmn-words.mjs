@@ -155,6 +155,8 @@ Commands:
   judge ask --state-file <path>|- --questions-file <path> --data public|private
                                             Ask the team's judge typed questions about one text; it answers
                                             with numbers, and BMN reads them (bmn judge --help)
+  doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
+                                            one shared run, also with BMN closed (bmn doctor --help)
   plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
                                             rows, check the plan's structure, change one row safely; not the
                                             subscription's Plan use (bmn plan --help)

@@ -179,6 +179,36 @@ export function readJsonEntries(text, path) {
   return entries
 }
 
+/** Parser-derived entry coordinates for read-only inventory, including nested arrays. Offsets are UTF-16. */
+export function readJsonItems(text, path = []) {
+  let start = skipSpace(text, 0)
+  if (start >= text.length) return []
+  const items = (at) => {
+    if (text[at] === '{') {
+      const members = objectSpans(text, at).members
+      if (new Set(members.map((member) => member.key)).size !== members.length) fail('a name is there twice')
+      return members.map((member) => ({ key: member.key, start: member.keyStart, valueStart: member.valueStart, value: parseValue(text.slice(member.valueStart, member.valueEnd)) }))
+    }
+    if (text[at] !== '[') fail('an object or list was expected')
+    const entries = []
+    let index = skipSpace(text, at + 1)
+    while (text[index] !== ']') {
+      const end = valueEnd(text, index)
+      entries.push({ key: entries.length, start: index, valueStart: index, value: parseValue(text.slice(index, end)) })
+      index = skipSpace(text, end)
+      if (text[index] === ',') index = skipSpace(text, index + 1)
+      else if (text[index] !== ']') fail('a list is not closed')
+    }
+    return entries
+  }
+  for (const key of path) {
+    const entry = items(start).find((entry) => entry.key === key)
+    if (!entry) return []
+    start = entry.valueStart
+  }
+  return items(start).map((entry) => ({ key: entry.key, start: entry.start, value: entry.value }))
+}
+
 function lineStart(text, index) {
   return text.lastIndexOf('\n', index - 1) + 1
 }

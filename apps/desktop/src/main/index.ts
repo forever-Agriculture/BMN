@@ -595,6 +595,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     ...(rendererTestMode || selfTest ? { autoTestKinds: testRunAutoTests(process.env.BMN_AUTO_TESTS) } : {}),
     // Nor does it install anything by itself at start unless it names it (Story 75.9): the self-test's HOME holds the owner's own hook files.
     ...(rendererTestMode || selfTest ? { startInstalls: testRunStartInstalls(process.env.BMN_START_INSTALLS) } : {}),
+    ...(rendererTestMode || selfTest ? { doctorAtStart: process.env.BMN_DOCTOR_AT_START === '1' } : {}),
     // The self-test keeps the owner's HOME, where his approved team is read, and opens Preferences on Team: it asks
     // no OpenCode, so nothing runs in BMN's OpenCode folder under his real roots (packaged smoke of 2026-10-15).
     ...(selfTest ? {
@@ -616,7 +617,10 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   // Once the shell's own program path is known, so an app is tested with the program a session would start (Story 75.8),
   // after BMN's hook entries, skills and tools are installed, so the tests read them in place (Story 75.9).
   void sessionEnvironment.refresh().finally(() => {
-    void agentsIpc.installsAtStart().finally(() => agentsIpc.autoTestsAtStart())
+    void agentsIpc.installsAtStart().finally(() => {
+      void agentsIpc.doctorAtStart()
+      return agentsIpc.autoTestsAtStart()
+    })
   })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,

@@ -45,6 +45,7 @@ import { createMachineReads, endedSince, type MachineReads } from './machine-rea
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
+import { DoctorHealth, doctorNeedsCount, useDoctorClock } from './doctor-health'
 import { PushPolicyHealth } from './push-policy-health'
 import { destinationProviders, diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -262,6 +263,7 @@ export function healthNeedsCount(snapshot: RulesSnapshot): number {
     + count(snapshot.tools.apps, (app) => toolsRowState(snapshot, app).needs)
     + count(snapshot.context, contextRowNeeds)
     + (snapshot.hooks?.state === 'checked' ? count(snapshot.hooks.apps, (app) => hookRowWords(app).needs) : 0)
+    + doctorNeedsCount(snapshot.doctor)
 }
 
 type Pending =
@@ -1746,6 +1748,19 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     return () => forgetUpdateWatches(shown)
   }, [])
   const top = useHealthRule<HTMLHeadingElement>(rules)
+  const shownDoctor = useRef(snapshot.doctor)
+  if (action === null && rules.pending === null && !rules.dirty) shownDoctor.current = snapshot.doctor
+  const doctorView = shownDoctor.current
+  const doctorNow = useDoctorClock(doctorView)
+  useEffect(() => {
+    const doctor = doctorView
+    if (!doctor || (!doctor.running && (doctor.cycleStartedAt !== null || doctor.error !== null)) ||
+      rules.busy || rules.dirty || rules.pending !== null || action !== null) return
+    const timer = window.setInterval(() => {
+      if (top.current !== null && top.current.offsetParent !== null) void rules.load()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [doctorView, rules.busy, rules.dirty, rules.pending, rules.load, action, top])
   const opener = useRef<HTMLButtonElement | null>(null)
   // Update… is off while its sheet is open, so the focus can go back to it only once the sheet has gone.
   useEffect(() => {
@@ -1764,7 +1779,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     ...(snapshot.tools.pending > 0 ? [`${snapshot.tools.pending} tool entr${snapshot.tools.pending === 1 ? 'y' : 'ies'} not installed yet`] : []),
     ...(snapshot.tools.exposed > 0 ? [`${snapshot.tools.exposed} tool${snapshot.tools.exposed === 1 ? '' : 's'} exposed`] : [])
   ].join(' · ')
-  const needYou = healthNeedsCount(snapshot)
+  const needYou = healthNeedsCount({ ...snapshot, doctor: doctorView })
   return (
     <>
       <PageHead title="Health" status={rules.busy && pending === null ? 'Checking…' : `Checked ${shortDate(health.checkedAt)}${needYou > 0 ? ` · ${needYou} need${needYou === 1 ? 's' : ''} you` : ''}${skillsCount === '' ? '' : ` · ${skillsCount}`}`} />
@@ -1864,6 +1879,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <PushPolicyHealth />
 
       <HooksHealth hooks={snapshot.hooks} home={snapshot.home} />
+      <DoctorHealth view={doctorView} now={doctorNow} />
     </>
   )
 }

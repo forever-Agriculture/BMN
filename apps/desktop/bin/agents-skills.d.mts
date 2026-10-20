@@ -9,6 +9,8 @@ export type SkillsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 /** `list` is the command that names the skills an app sees, or for OpenCode 2 the operation its server answers. */
 export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | { server: string } | null; prompt: boolean }>
 export declare function skillsTestsPath(): string
+/** Shared with the read-only doctor inventory; applies the same profile/root overrides as skill discovery. */
+export declare function rootPath(root: string, environment?: Environment): string
 
 export declare function treeHash(root: string): string
 export declare function copyTree(from: string, to: string): void

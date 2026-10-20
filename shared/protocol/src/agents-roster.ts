@@ -784,6 +784,8 @@ export interface RulesSnapshot {
   ownEnvironment?: string
   /** BMN's hook entries in each app's own hook file, as its install at start found and left them (Story 75.9); null until it has run. */
   hooks: HooksAtStart | null
+  /** Automatic read-only doctor; absent on snapshots produced by an older build. */
+  doctor?: import('./doctor').DoctorView | undefined
   /** An old install may name an app BMN retired (Epic 71); it is listed as it was saved. `master` marks a save, whose Undo puts the master back too (Story 75.9). */
   transactions: { id: string; createdAt?: string; state?: string; reason?: string; targets?: RosterListedApp[]; valid: boolean; master?: boolean }[]
   history: { revision: number; at: string; hash: string; bytes: number; reason: string; intact: boolean }[] | null

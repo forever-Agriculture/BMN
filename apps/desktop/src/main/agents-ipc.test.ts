@@ -11,6 +11,10 @@ import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot,
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, teamRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextTests } from '../../bin/agents-context.mjs'
+import { loadDoctorState, saveDoctorState } from '../../bin/doctor.mjs'
+import { CHECKS } from '../../bin/doctor-results.mjs'
+import { emptyDoctorState } from '../../bin/doctor-state.mjs'
+import { profileFingerprint, selectedProfile } from '../../bin/doctor-profile.mjs'
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { judgeProposal } from '../../bin/agents-roster.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
@@ -119,6 +123,51 @@ const call = async <Result>(channel: string, params: Record<string, unknown> = {
 const snapshot = (): Promise<AgentsSnapshot> => call('agents:snapshot')
 const shownOf = (state: AgentsSnapshot): AgentsShownRevision => ({ generation: state.approved?.generation ?? null, fileHash: state.file.hash as string, link: state.file.link, directory: state.file.directory })
 const shown = async (): Promise<AgentsShownRevision> => shownOf(await snapshot())
+
+describe('Health doctor cache and startup', () => {
+  for (const [harness, selector] of [['codex', 'CODEX_HOME'], ['claude', 'CLAUDE_CONFIG_DIR'], ['opencode', 'OPENCODE_CONFIG_DIR']] as const) it(`keeps the Health snapshot available for an unreadable selected profile: ${harness}`, async () => {
+    const folder = join(home, `selected-${harness}`)
+    mkdirSync(folder); appEnv[selector] = folder
+    if (harness === 'opencode') stub('opencode', 'echo "2.0.29"')
+    saveDoctorState(emptyDoctorState(), { HOME: home })
+    chmodSync(folder, 0)
+    try {
+      const result = await call<RulesSnapshot>('rules:snapshot')
+      expect(result.doctor?.error).toBe('profile-unavailable')
+      expect(result.doctor?.allWell).toBe(false)
+      expect(result.apps.find((app) => app.harness === harness)?.provider).toBeNull()
+    } finally { chmodSync(folder, 0o700) }
+  })
+
+  it('marks the cached doctor stale when Health observes a different installed app version', async () => {
+    const state = emptyDoctorState()
+    const now = Date.now()
+    Object.assign(state, { cycleStartedAt: now, versions: 'a'.repeat(64), appVersions: { claude: '2.1.295', codex: '0.161.0', opencode: null } })
+    mkdirSync(join(home, '.config/bmn/agents/state'), { recursive: true })
+    state.profileKey = 'b'.repeat(64)
+    state.profileIdentity = profileFingerprint(selectedProfile({ HOME: home }), state.profileKey)
+    for (const check of CHECKS) state.results[check] = { state: 'passed', problems: [], checkedAt: now, version: 'a'.repeat(64) }
+    saveDoctorState(state, { HOME: home })
+    expect((await call<RulesSnapshot>('rules:snapshot')).doctor?.allWell).toBe(true)
+    stub('codex', 'echo "codex-cli 0.162.0"')
+    const after = await call<RulesSnapshot>('rules:snapshot')
+    expect(after.doctor?.allWell).toBe(false)
+    expect(after.doctor?.rows.every((row) => row.stale)).toBe(true)
+    expect(loadDoctorState({ HOME: home }).cycleStartedAt).toBe(now)
+  })
+
+  it('uses one stable startup identity when startup is triggered twice in one application instance', async () => {
+    await ipc.doctorAtStart()
+    const first = loadDoctorState({ HOME: home })
+    expect(first.attempt?.finishedAt).not.toBeNull()
+    expect(first.cycleStartupId).not.toBeNull()
+    await ipc.doctorAtStart()
+    const second = loadDoctorState({ HOME: home })
+    expect(second.cycleStartupId).toBe(first.cycleStartupId)
+    expect(second.attempt?.id).toBe(first.attempt?.id)
+    expect(second.retryUsed).toBe(false)
+  }, 30000)
+})
 const activate = (data: RosterDataShape, id: string): RosterDataShape => ({ ...data, agents: data.agents.map((agent) => (agent.id === id ? { ...agent, status: 'active' as const } : agent)) })
 const bindings = (preview: AgentsPreview) => preview.teamUpdate.map((target) => ({ harness: target.harness, binding: target.binding }))
 const file = (path: string): string => readFileSync(join(home, path), 'utf8')
