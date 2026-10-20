@@ -31,7 +31,7 @@ visible: no folds.
 | Part | `data-part` | Required | What goes in |
 | --- | --- | --- | --- |
 | Header | `<header>` | yes | `<title>` of 2–4 words; eyebrow `Project · work identifier · date` (`BMN · Epic 76 · 17 October 2026`); a heading of 2–8 words; 2–5 status chips; the hero card: one big figure or status word on the left, the lede (2–3 sentences: what is different now, compared with before) on the right; then 2–4 number tiles (label, figure, note) when the work has figures worth showing |
-| Why we built it | `why` | yes | the need in the reader's words: who asked, what hurt, with the source (a date, a feedback point) |
+| Why we built it | `why` | yes | one section for both why we need it and why we built it, in the reader's words: what hurt and for whom, who asked, with the source (a date, a feedback point); never a separate "why we need it" part |
 | What changes | `changes` | yes | 2–6 cards (a pill label, a bold title, one or two sentences, a muted note), then **one** example (`.exhibit`): a screen, a message, a command and its output |
 | What keeps it safe | `safety` | if relevant | one "Rule n" card per guard: what it stops; then what it cannot stop |
 | Money / usage | `money` | if it costs or limits | limits as tiles or a table, what was measured, the worst case, the switch that turns it off |
