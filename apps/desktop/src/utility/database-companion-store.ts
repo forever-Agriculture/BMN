@@ -487,6 +487,22 @@ export function awayWentOn(database: DatabaseConnection, call: { since: string; 
   return { records: rows.map(attentionFromRow), complete: rows.length === total, total }
 }
 
+/**
+ * One away period's questions, permissions and reviews that the owner answered himself after they waited at least
+ * `minWaitMs` (Story 84.8 [d29]): closed by his own routes between `since` and `until`, both included, so a run's long
+ * stall he answered just before Back is not lost. Oldest first, cut at `limit` with `complete` false. Read-only.
+ */
+export function awayAnsweredWaits(database: DatabaseConnection, call: { since: string; until: string; limit: number; minWaitMs: number }): { records: AttentionRecord[]; complete: boolean; total: number } {
+  const owner = AWAY_OWNER_ORIGINS.map(() => '?').join(', ')
+  const where = `kind IN ('question', 'permission', 'review') AND resolved_by IN (${owner})
+     AND resolved_at >= ? AND resolved_at <= ?
+     AND CAST(round((julianday(resolved_at) - julianday(opened_at)) * 86400000) AS INTEGER) >= ?`
+  const args = [...AWAY_OWNER_ORIGINS, call.since, call.until, call.minWaitMs]
+  const { total } = database.prepare(`SELECT COUNT(*) AS total FROM attention_request WHERE ${where}`).get(...args) as { total: number }
+  const rows = database.prepare(`SELECT * FROM attention_request WHERE ${where} ORDER BY opened_at, rowid LIMIT ?`).all(...args, call.limit) as AttentionRow[]
+  return { records: rows.map(attentionFromRow), complete: rows.length === total, total }
+}
+
 /** Private delivery metadata never enters AttentionRecord, receipts or agent APIs. */
 export function listQuietAttention(database: DatabaseConnection): Array<{ record: AttentionRecord; heldAt: number; eligible: boolean }> {
   const rows = database.prepare(`SELECT * FROM attention_request WHERE telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL ORDER BY opened_at, rowid`)
@@ -1422,6 +1438,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   markAttentionSeen,
   listAttention,
   awayWentOn,
+  awayAnsweredWaits,
   usageNoticeExists,
   upsertProgress,
   listProgress,

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   artifactBytesUsed,
   claimInputDraft,
+  awayAnsweredWaits,
   awayWentOn,
   closeAttention,
   commitQuietDelivery,
@@ -970,5 +971,38 @@ describe('cards that went on without him (Epic 78, owner 2026-10-17)', () => {
     const cut = awayWentOn(database, { since: at(0), until: at(50), limit: 40 })
     expect(cut.records).toHaveLength(40)
     expect(cut).toMatchObject({ complete: false, total: 103 })
+  })
+})
+
+describe('long waits he answered himself (Story 84.8 [d29])', () => {
+  const at = (minutes: number): string => new Date(Date.parse('2026-10-17T21:00:00.000Z') + minutes * 60_000).toISOString()
+  const open = (key: string, minute: number, kind: 'question' | 'permission' | 'review' | 'notice' = 'question') =>
+    openAttention(database, { sessionId: 's1', incarnationId: 'i1', requestKey: key, kind, title: key, origin: 'cli' }, key, at(minute))
+  const close = (key: string, minute: number, origin: string, state: 'answered' | 'withdrawn' | 'expired' = 'answered') =>
+    closeAttention(database, { sessionId: 's1', requestKey: key }, state, null, at(minute), origin)
+  // The period: 21:00 to Back at 05:43 (523 minutes); the minimum wait is thirty minutes.
+  const read = (limit = 20) => awayAnsweredWaits(database, { since: at(0), until: at(523), limit, minWaitMs: 30 * 60_000 })
+
+  it('keeps an owner-answered long wait, up to the Back time, and leaves out short waits, other origins and other periods', () => {
+    // The night's case: opened 21:38, answered at the terminal 05:42, Back 05:43.
+    open('stall', 38); close('stall', 522, 'input')
+    open('phone', 60, 'permission'); close('phone', 120, 'telegram')
+    open('app', 100, 'review'); close('app', 130, 'owner', 'withdrawn')
+    open('quick', 200); close('quick', 229, 'telegram')
+    for (const origin of ['cli', 'expiry', 'hook:claude:Stop']) { open(origin, 10); close(origin, 300, origin, origin === 'expiry' ? 'expired' : 'withdrawn') }
+    open('notice', 10, 'notice'); close('notice', 300, 'owner')
+    open('before', -120); close('before', -1, 'input')
+    open('after', 300); close('after', 524, 'input')
+    open('still', 50)
+    const result = read()
+    expect(result).toMatchObject({ complete: true, total: 3 })
+    expect(result.records.map((record) => [record.requestId, record.resolvedBy])).toEqual([['stall', 'input'], ['phone', 'telegram'], ['app', 'owner']])
+  })
+
+  it('cuts at the limit, oldest first, and counts past what it returns', () => {
+    for (let index = 0; index < 25; index += 1) { open(`q${index}`, index); close(`q${index}`, 400, 'owner') }
+    const cut = read(20)
+    expect(cut.records.map((record) => record.requestId)).toEqual(Array.from({ length: 20 }, (_, index) => `q${index}`))
+    expect(cut).toMatchObject({ complete: false, total: 25 })
   })
 })

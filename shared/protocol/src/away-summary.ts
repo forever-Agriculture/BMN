@@ -10,16 +10,18 @@ import { pad } from './shared-helpers'
 /** Fable's bounds (Story 76.1 §4–5). */
 export const AWAY_SUMMARY_LIMITS = Object.freeze({
   waiting: 40, wentOn: 500, decisions: 30, sessions: 20, lines: 8, published: 3, runs: 20, telegramWaiting: 10, telegramWentOn: 10,
-  telegramSession: 120, telegramTitle: 220
+  telegramSession: 120, telegramTitle: 220,
+  /** Story 84.8 [d29]: a request he answered himself shows in Waited for you when it waited this long; a short wait is the system working. */
+  longWaitMinutes: 30, answeredWaits: 20
 })
 
 /** The sources the summary reads; each says on its own whether it was read in full. */
-export type AwaySourceName = 'requests' | 'went-on' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto' | 'grants'
+export type AwaySourceName = 'requests' | 'went-on' | 'answered-waits' | 'decisions' | 'turns' | 'changes' | 'files' | 'messages' | 'asks' | 'exits' | 'dev-auto' | 'grants'
 const SOURCE_WORDS: Readonly<Record<AwaySourceName, string>> = Object.freeze({
-  requests: 'requests', 'went-on': 'requests closed without you', decisions: 'decision records', turns: 'turn endings', changes: 'turn changes', files: 'published files', messages: 'messages',
+  requests: 'requests', 'went-on': 'requests closed without you', 'answered-waits': 'long waits you answered', decisions: 'decision records', turns: 'turn endings', changes: 'turn changes', files: 'published files', messages: 'messages',
   asks: 'teammate asks', exits: 'session exits', 'dev-auto': 'dev-auto runs', grants: 'grant records'
 })
-const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'went-on', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto', 'grants'])
+const SOURCE_ORDER: readonly AwaySourceName[] = Object.freeze(['requests', 'went-on', 'answered-waits', 'decisions', 'turns', 'changes', 'files', 'messages', 'asks', 'exits', 'dev-auto', 'grants'])
 
 /** Why a source was not read in full: missing, unreadable, partial, truncated or no longer retained are told apart. */
 export type AwaySourceGap =
@@ -113,6 +115,11 @@ export interface AwaySummaryPayload {
    * they could not be read.
    */
   wentOn: { records: AttentionRecord[]; complete: boolean; total: number } | null
+  /**
+   * The period's questions, permissions and reviews he answered himself after a long wait, oldest first (Story 84.8 [d29]);
+   * null when they could not be read. Absent from a host that predates it, which reads as none.
+   */
+  answeredWaits?: { records: AttentionRecord[]; complete: boolean; total: number } | null
   activity: AwayPeriodActivity | null
   /** Names of the published files that decision references point at and BMN found. */
   artifactNames: Record<string, string>
@@ -151,6 +158,17 @@ interface AwayWentOnRow {
   /** How it closed without him. */
   how: string
 }
+interface AwayWaitedRow {
+  requestId: string
+  sessionId: string
+  kind: string
+  title: string
+  command: boolean
+  /** How long it waited: "8 h 4 min". */
+  waited: string
+  /** Which of his routes answered it and when: "answered at the terminal 05:42". */
+  how: string
+}
 /** A link opens a session, a published file or a dev-auto run BMN validated; anything else stays words. */
 export interface AwayDecisionRow { label: string; text: string; muted?: boolean; links?: Array<{ kind: 'session' | 'artifact' | 'workflow'; id: string; text: string }> }
 interface AwayDecisionView { key: string; sessionId: string; time: string; choice: string; rows: AwayDecisionRow[] }
@@ -168,6 +186,8 @@ export interface AwaySummaryView {
   couldNotReadWhy: string | null
   waiting: { open: number; groups: Array<{ sessionId: string; where: string; rows: AwayWaitingRow[] }>; more: string | null; empty: string | null }
   wentOn: { count: number; incomplete: boolean; groups: Array<{ sessionId: string; where: string; rows: AwayWentOnRow[] }>; more: string | null; empty: string | null }
+  /** Requests that waited long and that he answered himself; hidden when none (Story 84.8 [d29]). */
+  waitedForYou: { count: number; groups: Array<{ sessionId: string; where: string; rows: AwayWaitedRow[] }>; more: string | null }
   decided: { incomplete: boolean; groups: Array<{ sessionId: string; where: string; records: AwayDecisionView[] }>; more: string | null; empty: string | null; tail: string }
   /** Runs blocked now, whenever they stopped: each waits on someone. */
   stuck: { rows: AwayRunRow[]; more: string | null; empty: string | null }
@@ -222,6 +242,11 @@ export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolve
     default: return 'Closed when the agent went on'
   }
 }
+
+/** Which of his own routes answered a request (AWAY_OWNER_ORIGINS). */
+const ANSWERED_WORDS: Readonly<Record<(typeof AWAY_OWNER_ORIGINS)[number], string>> = Object.freeze({
+  owner: 'answered in BMN', input: 'answered at the terminal', telegram: 'answered from your phone'
+})
 
 /** An app's name from its harness id; another id stands as itself. */
 function awayAppName(app: string | null): string | null {
@@ -312,6 +337,8 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   if (input.wentOn === null) gaps['went-on'] = { kind: 'unreadable' }
   else if (!input.wentOn.complete) gaps['went-on'] = { kind: 'truncated', at: input.wentOn.records.length }
   const wentOnTotal = input.wentOn === null ? 0 : Math.max(input.wentOn.total, input.wentOn.records.length)
+  if (input.answeredWaits === null) gaps['answered-waits'] = { kind: 'unreadable' }
+  else if (input.answeredWaits !== undefined && !input.answeredWaits.complete) gaps['answered-waits'] = { kind: 'truncated', at: input.answeredWaits.records.length }
   if (input.decisions === null) gaps.decisions = { kind: 'unreadable' }
   else if (!input.decisions.complete) gaps.decisions = { kind: 'truncated', at: input.decisions.decisions.length }
   if (input.activity === null) for (const source of ['turns', 'files', 'messages', 'exits'] as const) gaps[source] = { kind: 'unreadable' }
@@ -362,6 +389,24 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     groups: bySession(wentOnRows, input.order).map(([sessionId, rows]) => ({ sessionId, where: where(sessionId), rows })),
     more: wentOnTotal > closed.length ? `${wentOnTotal - closed.length} more closed than this list holds; the oldest ${closed.length} are shown.` : null,
     empty: input.wentOn !== null && closed.length === 0 ? 'No card closed without you.' : null
+  }
+
+  // Waited for you: a request that waited long and that he answered himself, often just before Back, so a run's stall
+  // shows even when nothing needs him now (Story 84.8 [d29]).
+  const answered = input.answeredWaits?.records ?? []
+  const answeredTotal = Math.max(input.answeredWaits?.total ?? 0, answered.length)
+  const waitedRows: AwayWaitedRow[] = answered.map((record) => {
+    const subject = requestSubject(record)
+    const route = ANSWERED_WORDS[record.resolvedBy as keyof typeof ANSWERED_WORDS] ?? 'answered'
+    return {
+      requestId: record.requestId, sessionId: record.sessionId, kind: kindWords(record), title: oneLine(subject.text, 200), command: subject.command,
+      waited: awayDurationWords(record.openedAt, record.resolvedAt ?? record.openedAt), how: `${route} ${clockWords(record.resolvedAt ?? record.openedAt)}`
+    }
+  })
+  const waitedForYou: AwaySummaryView['waitedForYou'] = {
+    count: answeredTotal,
+    groups: bySession(waitedRows, input.order).map(([sessionId, rows]) => ({ sessionId, where: where(sessionId), rows })),
+    more: answeredTotal > answered.length ? `${answeredTotal - answered.length} more waited; the oldest ${answered.length} are shown.` : null
   }
 
   // Decided for you: the period's records; a dev-auto entry joined to its record by their recorded identity shows here once.
@@ -501,6 +546,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     couldNotRead,
     couldNotReadWhy,
     waiting,
+    waitedForYou,
     stuck,
     finished,
     granted: awayGrantSection(input.grants === undefined ? [] : input.grants === null ? null : input.grants.periods, away.periodId, now, input.grants?.carried ?? []),

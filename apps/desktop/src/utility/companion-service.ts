@@ -1399,7 +1399,11 @@ export class CompanionService {
         })
         const wentOn = await this.options.database.companion('awayWentOn', { since: record.since, until: until ?? now, limit: AWAY_SUMMARY_LIMITS.wentOn })
           .catch(() => null)
-        return { away: ownerAwayView(record), ...data, wentOn }
+        // Story 84.8 [d29]: the long waits he answered himself, up to the period's end (Back) or now while away.
+        const answeredWaits = await this.options.database.companion('awayAnsweredWaits', {
+          since: record.since, until: until ?? now, limit: AWAY_SUMMARY_LIMITS.answeredWaits, minWaitMs: AWAY_SUMMARY_LIMITS.longWaitMinutes * 60_000
+        }).catch(() => null)
+        return { away: ownerAwayView(record), ...data, wentOn, answeredWaits }
       }
       case METHOD_REGISTRY.awaySummaryShown: {
         const periodId = params.periodId

@@ -335,3 +335,47 @@ describe('Went on without you (Epic 78, owner 2026-10-17)', () => {
     expect(more).toBe(2)
   })
 })
+
+describe('Waited for you (Story 84.8 [d29])', () => {
+  const BASH = { type: 'permission' as const, harness: 'claude' as const, shape: 'permission' as const, requestRef: 'ref-1', toolUseId: null, tool: 'Bash', command: 'gh auth switch', cwd: null }
+  const answered = (id: string, sessionId: string, openedAt: string, resolvedAt: string, resolvedBy: string, over: Partial<AttentionRecord> = {}): AttentionRecord =>
+    request(id, sessionId, openedAt, { state: 'answered', resolvedAt, resolvedBy, ...over })
+
+  it('shows the night\'s 8 h stall he answered at the terminal just before Back, by session, with how long it waited and how', () => {
+    const view = buildAwaySummary(input({
+      answeredWaits: {
+        records: [
+          answered('a1', 's1', at(14, 23, 35), at(15, 7, 39), 'input'),
+          answered('a2', 's2', at(15, 0, 10), at(15, 1, 0), 'telegram', { kind: 'permission', prompt: BASH }),
+          answered('a3', 's1', at(15, 2, 0), at(15, 3, 0), 'owner', { kind: 'review' })
+        ],
+        complete: true,
+        total: 3
+      }
+    }))
+    expect(view.waitedForYou.count).toBe(3)
+    expect(view.waitedForYou.more).toBeNull()
+    expect(view.couldNotRead).toBeNull()
+    expect(view.waitedForYou.groups.map((group) => [group.where, group.rows.map((row) => [row.requestId, row.waited, row.kind, row.title, row.command, row.how])])).toEqual([
+      ['Personal › Builder', [
+        ['a1', '8 h 4 min', 'Question', 'Title a1', false, 'answered at the terminal 07:39'],
+        ['a3', '1 h', 'Review', 'Title a3', false, 'answered in BMN 03:00']
+      ]],
+      ['Personal › Reviewer (archived 05:00)', [['a2', '50 min', 'Permission', 'gh auth switch', true, 'answered from your phone 01:00']]]
+    ])
+    expect(AWAY_SUMMARY_LIMITS).toMatchObject({ longWaitMinutes: 30, answeredWaits: 20 })
+  })
+
+  it('is empty when none waited, names a list it could not read, and counts past a cut', () => {
+    expect(buildAwaySummary(input({ answeredWaits: { records: [], complete: true, total: 0 } })).waitedForYou).toEqual({ count: 0, groups: [], more: null })
+    const unread = buildAwaySummary(input({ answeredWaits: null }))
+    expect(unread.waitedForYou.count).toBe(0)
+    expect(unread.couldNotRead).toBe('Not fully read: long waits you answered · counts there may be low.')
+    expect(unread.couldNotReadWhy).toBe('long waits you answered: unreadable')
+    const records = Array.from({ length: AWAY_SUMMARY_LIMITS.answeredWaits }, (_, index) => answered(`w${index}`, 's1', at(14, 23, index), at(15, 6, 0), 'owner'))
+    const cut = buildAwaySummary(input({ answeredWaits: { records, complete: false, total: AWAY_SUMMARY_LIMITS.answeredWaits + 4 } }))
+    expect(cut.waitedForYou.count).toBe(AWAY_SUMMARY_LIMITS.answeredWaits + 4)
+    expect(cut.waitedForYou.more).toBe(`4 more waited; the oldest ${AWAY_SUMMARY_LIMITS.answeredWaits} are shown.`)
+    expect(cut.couldNotReadWhy).toBe(`long waits you answered: cut at ${AWAY_SUMMARY_LIMITS.answeredWaits} listings`)
+  })
+})

@@ -1,4 +1,4 @@
-// MODULE: away-summary-dialog.tsx - "While you were away": one period's summary, read-only; every row only navigates (Story 76.6; Fable's redesign 2026-10-18: Needs you, Stuck, Finished, Granted (Story 84.7), then the record)
+// MODULE: away-summary-dialog.tsx - "While you were away": one period's summary, read-only; every row only navigates (Story 76.6; Fable's redesign 2026-10-18: Needs you, Waited for you (Story 84.8), Stuck, Finished, Granted (Story 84.7), then the record)
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildAwaySummary,
@@ -234,6 +234,29 @@ export function AwaySummaryDialog(props: {
             ) : null}
             {view.waiting.more !== null ? <small className="away-more">{view.waiting.more}</small> : null}
           </section>
+
+          {view.waitedForYou.count > 0 ? (
+            <section className="inspector-section" aria-label="Waited for you">
+              <h3><span>Waited for you</span><span className="away-count">{view.waitedForYou.count}</span></h3>
+              <ul className="message-list">
+                {view.waitedForYou.groups.flatMap((group) => group.rows.map((row) => (
+                  <li key={row.requestId}>
+                    <button type="button" className="message-row" onClick={() => {
+                      const request = requests.get(row.requestId)
+                      if (request) props.onOpenRequest(request)
+                      else props.onOpenSession(row.sessionId)
+                    }}>
+                      <span className="age" title={`${row.kind} · waited ${row.waited}`}>{row.waited}</span>
+                      <span className="route" title={group.where}>{sessionWords(group.where)}</span>
+                      <span className="state" title={row.how}>{row.how}</span>
+                      <span className={row.command ? 'first-line away-command' : 'first-line'} title={row.title}>{row.title}</span>
+                    </button>
+                  </li>
+                )))}
+              </ul>
+              {view.waitedForYou.more !== null ? <small className="away-more">{view.waitedForYou.more}</small> : null}
+            </section>
+          ) : null}
 
           <RunSection label="Stuck" section={view.stuck} openKey={openKey} setOpenKey={setOpenKey} links={links} />
           <RunSection label="Finished" section={view.finished} openKey={openKey} setOpenKey={setOpenKey} links={links} />
