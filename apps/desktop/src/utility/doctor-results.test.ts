@@ -46,7 +46,8 @@ describe('doctor result projection', () => {
   it('projects BMN checks, including names and failures, before the same sinks', () => {
     expect(parseBmnDoctor('rules', JSON.stringify({ ok: false, targets: [{ harness: 'claude', state: 'missing', path: SECRET, detail: SECRET }, { harness: 'codex', state: 'current' }, { harness: 'opencode', state: 'current' }] }), 1)).toEqual({ state: 'problems', problems: [{ code: 'rules-check', item: 1, app: 'claude' }] })
     const hooks = parseBmnDoctor('hooks', JSON.stringify({ agents: [{ events: [{ state: SECRET, name: SECRET }] }] }), 1)
-    expect(hooks.problems.some((row) => row.code === 'hook-check')).toBe(true)
+    expect(hooks.state).toBe('partial')
+    expect(hooks.problems.some((row) => row.code === 'hook-check')).toBe(false)
     expect(JSON.stringify(hooks)).not.toContain(SECRET)
     expect(parseBmnDoctor('tools', JSON.stringify({ apps: [] }), 0).state).toBe('partial')
     expect(parseBmnDoctor('skills', SECRET, 1).state).toBe('partial')

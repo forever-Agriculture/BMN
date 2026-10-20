@@ -12,7 +12,7 @@ import { leftoversModule } from './doctor-leftovers.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
 
 export const SANDBOX_POLICY = 'bwrap-selected-profile-qualification-masked-v3'
-export const PARSER_VERSION = 'doctor-projection-v1'
+export const PARSER_VERSION = 'doctor-projection-v3-hook-contract'
 export const LIMITS = Object.freeze({ timeoutMs: 60000, outputBytes: 1024 * 1024 })
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 const unavailable = (state) => ({ state, problems: [] })
@@ -165,7 +165,7 @@ export async function doctorVersions(environment) {
       versions[app] = { executable, version, identity: sha(`${identity}:${version}`) , executableIdentity: identity }
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
-  return { apps: versions, identity: sha(JSON.stringify(Object.fromEntries(Object.entries(versions).map(([app, entry]) => [app, entry.identity])))) }
+  return { apps: versions, identity: sha(JSON.stringify([PARSER_VERSION, Object.fromEntries(Object.entries(versions).map(([app, entry]) => [app, entry.identity]))])) }
 }
 
 export function stillSameExecutable(entry) {

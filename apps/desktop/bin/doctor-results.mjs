@@ -35,6 +35,13 @@ const invalid = () => result([], true)
 const completeApps = (rows, key) => rows.length === 3 &&
   new Set(rows.map((row) => row?.[key])).size === 3 &&
   rows.every((row) => ['claude', 'codex', 'opencode'].includes(row?.[key]))
+// The producer's qualified vocabulary, not arbitrary state prefixes or user-provided optional flags.
+const HOOK_EVENTS = Object.freeze({
+  claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
+  codex: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
+  opencode: ['plugin', 'cli.json']
+})
+const CODEX_OPTIONAL_HOOKS = ['PermissionRequest', 'PostCompact']
 const CODEX_CHECKS = Object.freeze({
   'app_server.status': 'runtime-check', 'auth.credentials': 'auth-check', 'config.load': 'config-invalid',
   'git.environment': 'runtime-check', installation: 'installation-check', 'mcp.config': 'tool-check',
@@ -144,11 +151,22 @@ export function parseBmnDoctor(check, text, exitCode) {
     partial = !completeApps(data.agents, 'agent') || typeof data.ok !== 'boolean'
     for (const app of data.agents) {
       currentApp = app?.agent
-      if (!object(app) || !Array.isArray(app.events) || app.events.length === 0) { partial = true; continue }
+      if (!object(app) || typeof app.agent !== 'string' || !['claude', 'codex', 'opencode'].includes(app.agent) ||
+        !Array.isArray(app.events) || app.events.length === 0) { partial = true; continue }
+      const required = HOOK_EVENTS[app.agent]
+      const seen = new Set()
       for (const event of app.events) {
-        if (!object(event) || typeof event.state !== 'string') partial = true
-        else if (event.state !== 'wired') add('hook-check')
+        const optional = app.agent === 'codex' && CODEX_OPTIONAL_HOOKS.includes(event?.event)
+        if (!object(event) || (!required.includes(event.event) && !optional) || seen.has(event.event)) { partial = true; continue }
+        seen.add(event.event)
+        if (typeof event.optional !== 'boolean' || event.optional !== optional) partial = true
+        if (event.state === 'wired' || event.state === 'wired (older wording)' && ['claude', 'codex'].includes(app.agent)) continue
+        if (event.state === 'missing') {
+          if (!optional || event.optional !== true) add('hook-check')
+        } else if (event.state === 'wired (older wording)' && app.agent === 'opencode' && event.event === 'plugin') add('hook-check')
+        else partial = true
       }
+      if (required.some(event => !seen.has(event))) partial = true
     }
   } else if (['skills', 'tools'].includes(check) && object(data) && Array.isArray(data.apps) && data.apps.length > 0) {
     partial = !completeApps(data.apps, 'harness')
