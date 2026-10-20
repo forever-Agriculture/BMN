@@ -1,3 +1,4 @@
+# MODULE: development.md - Build, check, package and maintain the BMN source tree
 # Development
 
 ## Prerequisites
@@ -77,6 +78,10 @@ All commands run from the repository root.
   leaves behind; nothing else reads it.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox
   appears anywhere in `apps`, `shared` or `scripts`.
+- The unit suite rejects native selects and source files over 2,000 lines through
+  `scripts/lib/source-guards.mjs`. Its allowlist explains the four files kept whole. Tests and
+  standalone harnesses are excluded; the bundled self-test is explicitly listed. The retired-name
+  check in `scripts/lib/retired-references.mjs` keeps its own classified allowlist.
 - `pnpm run test:visual [-- --out DIR]` builds the app, checks its screens on a fixed made-up fixture
   (one folder, window sizes, themes, system fonts, a page clock that starts at 2026-01-01, a
   settled screen) and keeps the screenshots as one set under its commit:
