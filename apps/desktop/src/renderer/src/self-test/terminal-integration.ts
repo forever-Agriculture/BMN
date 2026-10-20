@@ -226,11 +226,12 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   type('Executable', '/bin/bash')
   type('Arguments', '--noprofile --norc')
   type('Working directory', sourceCwd)
-  const closeChoice = sessionForm.querySelector<HTMLSelectElement>('select[aria-label="When windows close"]')
+  const closeChoice = sessionForm.querySelector<HTMLButtonElement>('.select-opener[data-label="When windows close"]')
   if (!closeChoice) throw new Error('the session form field When windows close was not rendered')
-  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(closeChoice, 'stop')
-  closeChoice.dispatchEvent(new Event('change', { bubbles: true }))
-  await waitFor(() => input('Session name').value === 'Form-made shell' && closeChoice.value === 'stop' ? true : undefined)
+  closeChoice.click()
+  const stopChoice = await waitFor(() => document.querySelector<HTMLButtonElement>('.select-list [data-value="stop"]'))
+  stopChoice.click()
+  await waitFor(() => input('Session name').value === 'Form-made shell' && closeChoice.dataset.value === 'stop' ? true : undefined)
   console.warn('[BMN] renderer behavioural integration: session form filled')
   const expectedFormSession = {
     name: input('Session name').value,

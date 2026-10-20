@@ -35,6 +35,7 @@ import { runMorningDigestSelfTest } from './morning-digest'
 import { runHealthAlertsSelfTest } from './health-alerts'
 import { runAwaySelfTest } from './away'
 import { runAwayGrantSelfTest } from './away-grant'
+import { runSelectMenusSelfTest } from './select-menus'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -1914,6 +1915,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (Object.values(workspaceResultsAcceptance).some((value) => value !== true)) {
       throw new Error(`workspace results did not read safely: ${JSON.stringify(workspaceResultsAcceptance)}`)
     }
+    const selectMenus = await runSelectMenusSelfTest(host.applicationWindow)
+    console.error(`[BMN] self-test phase: select menus ${JSON.stringify(selectMenus)}`)
+
     // The raw-mode synthetic receiver records the exact PTY bytes for this owner-confirmed file send.
     const beforeFileReferenceWire = terminalModeProgramInput(destinationHarness.input)
     const fileReferenceWireUi = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
@@ -1936,9 +1940,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       setInput(input, 'refs/src/parser.ts:42:7');
       input.closest('form').requestSubmit();
       await wait(() => dialog.querySelector('.file-reference-line'), 'file ready');
-      const chooser = await wait(() => dialog.querySelector('select[aria-label="Send to session"]'), 'chooser');
-      chooser.value = ${JSON.stringify(petitionDestination.session.sessionId)};
-      chooser.dispatchEvent(new Event('change', { bubbles: true }));
+      const chooser = await wait(() => dialog.querySelector('.select-opener[data-label="Send to session"]'), 'chooser');
+      chooser.click();
+      const choice = await wait(() => dialog.querySelector('.select-list [data-value="${petitionDestination.session.sessionId}"]'), 'target row');
+      choice.click();
       const review = await wait(() => [...dialog.querySelectorAll('button')]
         .find(button => button.textContent.trim() === 'Review send…' && !button.disabled), 'review');
       review.click();
@@ -5224,10 +5229,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('database worker did not enable WAL, foreign keys, and the busy timeout')
     }
 
-    // The eleven reads checked with the file-reference flow, plus the one the send dialog made; palette rows read
+    // The eleven reads checked with the file-reference flow, plus the two send dialogs; palette rows read
     // through Quick look (Story 67.6).
-    if (taps.readFileReferences.length !== 12) {
-      throw new Error(`the renderer read file references ${taps.readFileReferences.length} times, not 12`)
+    if (taps.readFileReferences.length !== 13) {
+      throw new Error(`the renderer read file references ${taps.readFileReferences.length} times, not 13`)
     }
     const registeredInvokeChannels = host.bridgeRegistrations().map(({ channel }) => channel)
     if (JSON.stringify(registeredInvokeChannels) !== JSON.stringify(envelopedInvokeChannels)) {
@@ -5267,6 +5272,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       filesWithoutHandoffs: preloadProbe.filesWithoutHandoffs,
       agentHandoff,
       fileReferenceWire,
+      selectMenus,
       sixelRender,
       sixelPty,
       sixelAnimation,

@@ -307,6 +307,17 @@ async function walkStates(application, context) {
     await field.focus()
   })
   await step('New session panel', 'palette: New session…', () => palette('New session…'), true)
+  const captureSelect = async (name, opener) => {
+    await opener.scrollIntoViewIfNeeded()
+    await step(`${name}, closed`, 'select opener', async () => {})
+    await step(`${name}, choices`, 'open select list', () => opener.click())
+    await page.keyboard.press('Escape')
+  }
+  const advancedLaunch = page.locator('.session-launcher details.advanced')
+  if (!(await advancedLaunch.evaluate((element) => element.open))) await advancedLaunch.locator('summary').click()
+  await captureSelect('When windows close', page.locator('.session-launcher .select-opener[data-label="When windows close"]'))
+  await captureSelect('Terminal images', page.locator('.session-launcher .select-opener[data-label="Terminal images (Sixel)"]'))
+  await advancedLaunch.locator('summary').click()
   await step('Edit launch settings', 'palette: Edit launch settings', () => palette('Edit launch settings'), true)
   await step('Session details panel', 'palette: Session details', () => palette('Session details'), true)
   await step('Files side panel', 'palette: Show files', () => palette('Show files'), true)
@@ -326,10 +337,12 @@ async function walkStates(application, context) {
     await referenceDialog.locator('.file-reference-send').waitFor()
   })
   await step('File reference dialog, a session chosen', 'Send to session: the shell session', async () => {
-    const chooser = referenceDialog.locator('select[aria-label="Send to session"]')
-    await chooser.selectOption({ index: 1 })
+    const chooser = referenceDialog.locator('.select-opener[data-label="Send to session"]')
+    await chooser.click()
+    await referenceDialog.locator('.select-list [role="menuitemradio"]').nth(1).click()
     await referenceDialog.getByRole('button', { name: 'Review send…' }).waitFor()
   })
+  await captureSelect('Send to session', referenceDialog.locator('.select-opener[data-label="Send to session"]'))
   await step('File reference dialog, send reviewed', 'Review send…', async () => {
     await referenceDialog.getByRole('button', { name: 'Review send…' }).click()
     await referenceDialog.locator('.file-reference-send-preview').waitFor()
@@ -415,6 +428,8 @@ async function walkStates(application, context) {
   }, true)
   for (const pageLabel of ['General', 'Notifications', 'Voice', 'Data']) {
     await step(`Preferences › ${pageLabel}`, `Preferences, ${pageLabel}`, () => preferences(pageLabel, null), true)
+    if (pageLabel === 'Notifications') await captureSelect('Notify on', main.locator('#preferences-telegram-notify-on'))
+    if (pageLabel === 'Voice') await captureSelect('Language', main.locator('#preferences-voice-language'))
   }
 
   // ---- Away (Story 80.1) ----

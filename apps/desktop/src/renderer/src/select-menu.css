@@ -1,0 +1,103 @@
+/* MODULE: select-menu.css - BMN's select: the plate opener and its list's rows (Story 80.4; docs/design.md S1-S4) */
+
+/* The opener is a plate (B1) holding the value and a muted chevron; open, it takes
+   the --selected fill. Its list is popup-menu's sheet (L4) with rows (B7): the chosen row has the gold bar and the
+   --selected fill (F2), the highlighted row the focus ring (F1), and hover only tints. Disabled is the shared button
+   rule (B3). No colour here is new: tokens and text tints only (C1, C2). */
+
+button.select-opener {
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 3px 8px 3px 10px;
+  border-radius: 8px;
+  font-weight: 400;
+  text-align: left;
+}
+
+button.select-opener[aria-expanded='true'],
+button.select-opener[aria-expanded='true']:hover:not(:disabled) {
+  background: var(--selected);
+}
+
+button.select-opener .select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.select-opener[data-empty] .select-value {
+  color: var(--muted);
+}
+
+button.select-opener .select-chevron {
+  flex: none;
+  color: var(--muted);
+}
+
+/* S4: 32px in the launcher, 36px with radius 10 in dialogs; the launcher and Send to session span their column. */
+.create-form .field button.select-opener,
+.file-reference-send button.select-opener {
+  width: 100%;
+}
+
+.app-dialog button.select-opener {
+  min-height: 36px;
+  border-radius: 10px;
+}
+
+/* Notify on and Language: as wide as the longest value needs, at least 160px, never past the control column. */
+.preferences-row-control button.select-opener {
+  width: max-content;
+  min-width: 160px;
+}
+
+/* The list: at most eight 28px rows, then it scrolls; aligned to the opener's left edge by popup-menu. */
+.popup-menu.select-list {
+  min-width: 0;
+  max-width: calc(100vw - 16px);
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+.popup-menu.select-list .menu-group {
+  flex-shrink: 0;
+}
+
+.popup-menu.select-list [role='menuitemradio'] {
+  flex: none;
+  min-width: 0;
+  min-height: 28px;
+  font-weight: 400;
+}
+
+.popup-menu.select-list [role='menuitemradio']::after {
+  content: none;
+}
+
+.popup-menu.select-list [role='menuitemradio'][aria-checked='true'] {
+  box-shadow: inset 2px 0 var(--identity);
+}
+
+.popup-menu.select-list .select-row {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+}
+
+.popup-menu.select-list .select-row > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.popup-menu.select-list .select-row-description {
+  color: var(--muted);
+  font-size: 11px;
+}

@@ -493,22 +493,31 @@ export async function runEpic27FileReferenceIntegration(options: {
     await waitFor('source reference ready', () => dialog.querySelector('.file-reference-line'))
     return dialog
   }
-  const chooseTarget = async (dialog: HTMLDialogElement): Promise<HTMLSelectElement> => {
-    const chooser = await waitFor('send chooser', () => dialog.querySelector<HTMLSelectElement>('select[aria-label="Send to session"]'))
-    chooser.value = options.targetSessionId
-    chooser.dispatchEvent(new Event('change', { bubbles: true }))
+  const chooseTarget = async (dialog: HTMLDialogElement): Promise<HTMLButtonElement> => {
+    const chooser = await waitFor('send chooser', () => dialog.querySelector<HTMLButtonElement>('.select-opener[data-label="Send to session"]'))
+    chooser.click()
+    const target = await waitFor('target option', () => [...dialog.querySelectorAll<HTMLButtonElement>('.select-list [role="menuitemradio"]')]
+      .find((option) => option.dataset.value === options.targetSessionId))
+    target.click()
     await waitFor('review send enabled', () => {
-      const review = button(dialog, 'Review send…')
-      return review.disabled ? undefined : review
+      const review = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent?.trim() === 'Review send…')
+      return review && !review.disabled ? review : undefined
     })
     return chooser
   }
 
   const dialog = await openFromSource()
-  const chooser = await waitFor('empty send chooser', () => dialog.querySelector<HTMLSelectElement>('select[aria-label="Send to session"]'))
-  const chooserDefaultEmpty = chooser.value === ''
-  const chooserCrossWorkspace = [...chooser.options].some((option) => option.textContent?.includes('Self-test archived workspace')) &&
-    [...chooser.options].some((option) => option.value === options.targetSessionId)
+  const chooser = await waitFor('empty send chooser', () => dialog.querySelector<HTMLButtonElement>('.select-opener[data-label="Send to session"]'))
+  const chooserDefaultEmpty = chooser.dataset.value === ''
+  chooser.click()
+  const choices = await waitFor('send options', () => {
+    const rows = [...dialog.querySelectorAll<HTMLButtonElement>('.select-list [role="menuitemradio"]')]
+    return rows.length > 0 ? rows : undefined
+  })
+  const chooserCrossWorkspace = choices.some((option) => option.textContent?.includes('Self-test archived workspace')) &&
+    choices.some((option) => option.dataset.value === options.targetSessionId)
+  chooser.click()
+  await waitFor('send options closed', () => !dialog.querySelector('.select-list') || undefined)
   await chooseTarget(dialog)
   button(dialog, 'Review send…').click()
   const sendPreview = await waitFor('send preview', () => dialog.querySelector<HTMLElement>('.file-reference-send-preview'))
@@ -543,7 +552,7 @@ export async function runEpic27FileReferenceIntegration(options: {
   await waitFor('focus-loss preview', () => focusDialog.querySelector('.file-reference-send-preview'))
   window.dispatchEvent(new Event('blur'))
   const focusLossClearedTarget = await waitFor('focus-loss reset', () =>
-    focusChooser.value === '' && !focusDialog.querySelector('.file-reference-send-preview') || undefined)
+    focusChooser.dataset.value === '' && !focusDialog.querySelector('.file-reference-send-preview') || undefined)
   await closeWithEscape(focusDialog)
 
   options.sourcePane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))

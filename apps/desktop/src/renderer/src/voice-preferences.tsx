@@ -1,19 +1,18 @@
 // MODULE: voice-preferences.tsx - Preferences → Voice: engine status, model folder, downloads, language and the approved vocabulary
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  VOICE_LANGUAGES,
   VOICE_VOCABULARY_MAX_PROMPT_BYTES,
   VOICE_VOCABULARY_MAX_WORDS,
   addVocabularyWord,
   vocabularyPrompt,
   vocabularyPromptBytes,
   type AppSettings,
-  type VoiceLanguage,
   type VoiceModelStatus,
   type VoiceSettings,
   type VoiceStatus
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
+import { VoiceLanguageSelect } from './select-fields'
 import { SHORTCUT_LABELS } from './keymap'
 import { createVoiceStatusRunner, type VoiceStatusEvent } from './voice-status-runner'
 
@@ -313,19 +312,11 @@ export function VoicePreferences(props: {
           <label htmlFor="preferences-voice-language">Language</label>
         </div>
         <div className="preferences-row-control">
-          <select
-            id="preferences-voice-language"
-            value={voice.language}
-            disabled={busy}
-            onChange={(event) => {
-              const language = event.target.value as VoiceLanguage
+          <VoiceLanguageSelect value={voice.language} disabled={busy}
+            onChange={(language) => {
               void save((current) => ({ ...current, language }))
             }}
-          >
-            {VOICE_LANGUAGES.map((language) => (
-              <option key={language.code} value={language.code}>{language.label}</option>
-            ))}
-          </select>
+          />
           <p className="preferences-help">A set language is faster and more accurate than detection.</p>
         </div>
       </div>

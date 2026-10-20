@@ -1,3 +1,4 @@
+// MODULE: electron-self-test.mjs - Run the isolated Electron roundtrip and require every acceptance phase receipt
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -26,7 +27,7 @@ const requiredPhases = [
   'repositoryLaunch', 'checkoutPeers', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
   'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeAcceptance',
   'hiddenPaneSize', 'inactiveFollowingOutputLayoutPuts', 'inactiveFollowingOutputCaptured',
-  'stoppedStaleProgress', 'attentionTriage', 'filesWithoutHandoffs', 'fileReferenceFlow', 'quickLookFlow', 'fileReferenceWire',
+  'stoppedStaleProgress', 'attentionTriage', 'filesWithoutHandoffs', 'fileReferenceFlow', 'quickLookFlow', 'fileReferenceWire', 'selectMenus',
   'voiceFlow', 'launchBackgroundChoiceRecorded', 'registeredInvokeChannels', 'formCreatedSession',
   'treeSelectionLayoutPut', 'rendererLaunchUnavailable',
   'rendererStoppedPanelLabel', 'rendererLiveExitLabel', 'rendererLiveExitSidebarWord', 'closePrompt',

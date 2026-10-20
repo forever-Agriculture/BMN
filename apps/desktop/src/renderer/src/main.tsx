@@ -76,10 +76,10 @@ import {
 import { ProgressStrip } from './progress-strip'
 import { AgentPicker, type PickerOption } from './agent-picker'
 import { Icon } from './icons'
+import { BackgroundChoiceSelect, TerminalGraphicsSelect } from './select-fields'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
 import { createLayoutWriter } from './layout-writer'
 import {
-  BACKGROUND_CHOICE_OPTIONS,
   INITIAL_SESSION_FORM,
   LAUNCH_AGENTS,
   applyLaunchAgent,
@@ -2487,23 +2487,14 @@ function App(): React.JSX.Element {
                   </label>
                   <p className="field-help resolved">Runs <code>{resolvedCommand}</code></p>
                   <label className="field">When windows close
-                    <select aria-label="When windows close" value={sessionForm.backgroundChoice ?? ''} onChange={(event) => {
-                      const value = event.target.value
-                      const backgroundChoice = value === 'hide' || value === 'stop' ? value : null
+                    <BackgroundChoiceSelect value={sessionForm.backgroundChoice} onChange={(backgroundChoice) => {
                       setSessionForm((current) => ({ ...current, backgroundChoice }))
-                    }}>{BACKGROUND_CHOICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+                    }} />
                   </label>
                   <label className="field">Terminal images (Sixel)
-                    <select aria-label="Terminal images (Sixel)" value={sessionForm.terminalGraphics ?? ''}
-                      onChange={(event) => {
-                        const choice = event.target.value
-                        setSessionForm((current) => ({ ...current,
-                          terminalGraphics: choice === 'sixel' || choice === 'standard' ? choice : null }))
-                      }}>
-                      <option value="">Default (on)</option>
-                      <option value="sixel">On</option>
-                      <option value="standard">Off</option>
-                    </select>
+                    <TerminalGraphicsSelect value={sessionForm.terminalGraphics} onChange={(terminalGraphics) => {
+                      setSessionForm((current) => ({ ...current, terminalGraphics }))
+                    }} />
                   </label>
                   <p className="field-help">{effectiveTerminalGraphics(sessionForm.terminalGraphics) === 'sixel'
                     ? 'Sixel images on.' : 'Standard terminal.'} For SSH, sudo or containers without BMN terminfo,

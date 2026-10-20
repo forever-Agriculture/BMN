@@ -1,8 +1,9 @@
 // MODULE: file-reference-dialog.tsx - read-only overlay for a local file reference: path, base, line context and actions
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type Ref } from 'react'
 import { exactAbsoluteFileReference, formatFileReference, type FileReferenceReadResult } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Dialog } from './dialog'
+import { SelectMenu, type SelectOption } from './select-menu'
 import { baseDescription, byteSize, previewLines } from './file-reference-presentation'
 
 /** Captured when the action starts: the session and its launch directory never follow later focus. */
@@ -30,6 +31,26 @@ export interface FileReferenceSendTarget {
   incarnationId: string | null
 }
 
+export function sendTargetOptions(targets: FileReferenceSendTarget[]): SelectOption[] {
+  return [{ value: '', label: 'Choose a session…' }, ...targets.map((target) => ({
+    value: target.sessionId, label: `${target.workspaceName} › ${target.sessionName}`,
+    description: `${target.harness} · ${target.path}`
+  }))]
+}
+
+export function sendTargetOf(targets: FileReferenceSendTarget[], value: string): FileReferenceSendTarget | null {
+  return targets.find((target) => target.sessionId === value) ?? null
+}
+
+export function SendTargetChooser(props: {
+  targets: FileReferenceSendTarget[]; value: string; busy: boolean; onChoose(value: string): void; ref?: Ref<HTMLButtonElement>
+}): React.JSX.Element {
+  return <label>Send to session
+    <SelectMenu ref={props.ref} aria-label="Send to session" disabled={props.busy} value={props.value}
+      options={sendTargetOptions(props.targets)} onChange={props.onChoose} />
+  </label>
+}
+
 export function FileReferenceDialog(props: {
   request: FileReferenceRequest
   targets: FileReferenceSendTarget[]
@@ -43,7 +64,7 @@ export function FileReferenceDialog(props: {
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState('')
   const marked = useRef<HTMLElement>(null)
-  const chooser = useRef<HTMLSelectElement>(null)
+  const chooser = useRef<HTMLButtonElement>(null)
   const sending = useRef(false)
   const [sendTarget, setSendTarget] = useState<(FileReferenceSendTarget & { requestId: string }) | null>(null)
   const [sendPreview, setSendPreview] = useState(false)
@@ -216,22 +237,14 @@ export function FileReferenceDialog(props: {
       ) : null}
       {snapshot && props.targets.length > 0 ? (
         <div className="file-reference-send">
-          <label>Send to session
-            <select ref={chooser} aria-label="Send to session" disabled={busy} value={sendTarget?.sessionId ?? ''} onChange={(event) => {
-              const target = props.targets.find((item) => item.sessionId === event.target.value)
+          <SendTargetChooser ref={chooser} targets={props.targets} value={sendTarget?.sessionId ?? ''} busy={busy}
+            onChoose={(value) => {
+              const target = sendTargetOf(props.targets, value)
               setSendTarget(target ? { ...target, requestId: crypto.randomUUID() } : null)
               setSendPreview(false)
               setFeedback('')
               setError(null)
-            }}>
-              <option value="">Choose a session…</option>
-              {props.targets.map((target) => (
-                <option key={target.sessionId} value={target.sessionId}>
-                  {target.workspaceName} › {target.sessionName} · {target.harness} · {target.path}
-                </option>
-              ))}
-            </select>
-          </label>
+            }} />
           {sendTarget && !sendPreview ? (
             <button type="button" disabled={busy || !sendTarget.incarnationId || !sendPayload} onClick={() => setSendPreview(true)}>
               Review send…

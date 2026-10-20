@@ -14,6 +14,7 @@ import type {
 } from '@bmn/protocol'
 import { COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, DEFAULT_TELEGRAM_HEALTH_ALERTS, DEFAULT_TELEGRAM_QUIET_HOURS, DEFAULT_TELEGRAM_MORNING_DIGEST, HEALTH_LIMITS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE, type AttentionKind } from '@bmn/protocol'
 import { Icon } from './icons'
+import { NotifyOnSelect } from './select-fields'
 import { COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
@@ -909,15 +910,7 @@ export function PreferencesDialog(props: {
             <label htmlFor="preferences-telegram-notify-on">Notify on</label>
           </div>
           <div className="preferences-row-control">
-            <select
-              id="preferences-telegram-notify-on"
-              value={notifyOn}
-              disabled={telegramFormBusy}
-              onChange={(event) => setNotifyOn(event.target.value as 'attention' | 'attention-and-exit')}
-            >
-              <option value="attention">Needs-you requests</option>
-              <option value="attention-and-exit">Needs-you requests and session exits</option>
-            </select>
+            <NotifyOnSelect value={notifyOn} disabled={telegramFormBusy} onChange={setNotifyOn} />
           </div>
         </div>
 
