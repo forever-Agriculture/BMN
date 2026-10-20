@@ -44,7 +44,6 @@
   margin: 0;
   padding: 10px;
   overflow: auto;
-  border: 1px solid var(--hairline);
   border-radius: 6px;
   background: var(--ground);
   font: 12px/1.45 var(--font-mono);

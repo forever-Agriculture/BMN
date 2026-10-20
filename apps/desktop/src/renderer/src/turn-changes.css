@@ -456,22 +456,16 @@
   padding: 2px 10px;
 }
 
-/* One file's difference: the box of .file-reference-preview; three neutral tones and no hue. */
+/* One file's difference: the well of .file-reference-preview (L3); three neutral tones and no hue. */
 .turn-diff {
   --no: 6ch;
   margin: 4px 0 8px;
   padding: 6px 0;
   overflow: auto hidden;
   scrollbar-width: thin;
-  border: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
   border-radius: 10px;
   background: var(--ground);
   font: 12px/1.5 var(--font-mono);
-}
-
-.shell-window .turn-diff:focus-visible {
-  outline: none;
-  border-color: var(--focus);
 }
 
 /* Every line is as wide as the longest one, so a plate runs to the same edge on each. */

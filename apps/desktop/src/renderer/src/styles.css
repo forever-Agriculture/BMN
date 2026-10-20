@@ -17,6 +17,8 @@
   --verified: #8db58f;
   --selection: #333333;
   --focus: #e8e8e8;
+  /* L4 (docs/design.md): the one line around a floating sheet, text 9% in every colour mode. */
+  --rim: color-mix(in srgb, var(--text) 9%, transparent);
   /* Chrome-only hover feedback; terminal output and status marks never animate. */
   --hover-transition: background-color 100ms ease-out, border-color 100ms ease-out, color 100ms ease-out;
   --font-chrome: 'Ubuntu Sans', Ubuntu, system-ui, sans-serif;
@@ -210,11 +212,15 @@ select,
 textarea {
   min-height: 28px;
   padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 8px;
   color: var(--text);
   background: var(--ground);
   font: inherit;
+}
+
+:where(input:not([type='checkbox'], [type='radio']), select, textarea):hover:not(:focus-visible) {
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 
 input[type='checkbox'],
@@ -518,7 +524,7 @@ input[type='radio'] {
   width: max-content;
   max-width: min(560px, calc(100vw - 32px));
   transform: translateX(-50%);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--rim);
   border-radius: 6px;
   box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
   pointer-events: none;
@@ -857,7 +863,7 @@ input[type='radio'] {
   flex-direction: column;
   min-width: 190px;
   padding: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rim);
   border-radius: 8px;
   background: var(--raised);
   box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
@@ -876,7 +882,8 @@ input[type='radio'] {
   font: 11px var(--font-mono);
 }
 
-.popup-menu [role='menuitem'].danger {
+/* F4: a danger action is a plain row at rest and takes the error tone on hover only. */
+.popup-menu [role='menuitem'].danger:hover:not(:disabled) {
   color: var(--error);
 }
 
@@ -1189,9 +1196,9 @@ input[type='radio'] {
 
 .progress-strip .stale {
   padding: 0 6px;
-  border: 1px solid var(--attention);
   border-radius: 4px;
-  color: var(--attention);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   font-size: 11px;
 }
 
@@ -1225,14 +1232,13 @@ input[type='radio'] {
   text-overflow: ellipsis;
 }
 
-/* In Session details the strip wraps into a small card: label, then state, then source. */
+/* In Session details the strip wraps inside its section (L1): label, then state, then source, with no frame. */
 .session-inspector .progress-strip {
   flex-wrap: wrap;
   row-gap: 2px;
   min-height: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
+  padding: 0;
+  border: 0;
   white-space: normal;
 }
 
@@ -1260,7 +1266,6 @@ input[type='radio'] {
   row-gap: 4px;
   min-height: 0;
   padding: 9px 12px;
-  border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--raised);
   white-space: normal;
@@ -1311,9 +1316,9 @@ input[type='radio'] {
 
 .progress-evidence-dialog .provenance .stale {
   padding: 0 6px;
-  border: 1px solid var(--attention);
   border-radius: 4px;
-  color: var(--attention);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   font-size: 11px;
 }
 
@@ -1329,15 +1334,14 @@ input[type='radio'] {
   margin: 14px 0 6px;
 }
 
-/* A newer report informs; it does not ask. Hairline and muted, never orange and never red. */
+/* A newer report informs; it does not ask. A row over a hairline (L2), muted, never orange and never red. */
 .progress-replaced {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 10px;
-  padding: 6px 10px;
-  border: 1px solid var(--hairline);
-  border-radius: 4px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--hairline);
   color: var(--muted);
   font-size: 12px;
 }
@@ -1422,7 +1426,7 @@ input[type='radio'] {
   width: max-content;
   max-width: min(420px, calc(100% - 24px));
   padding: 4px 6px;
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--rim);
   border-radius: 8px;
   background: var(--raised);
   box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
@@ -1651,14 +1655,14 @@ input[type='radio'] {
   font-weight: 500;
 }
 
+/* On the window's ground, saved output is a plate (L3), not a well. */
 .saved-output-summary {
   max-height: 50vh;
   margin: 0;
   padding: 10px;
   overflow: auto;
-  border: 1px solid var(--hairline);
   border-radius: 6px;
-  background: var(--ground);
+  background: var(--raised);
   font: 12px/1.45 var(--font-mono);
   white-space: pre-wrap;
 }
@@ -2110,7 +2114,7 @@ input[type='radio'] {
   padding: 0;
   border: 0;
   border-radius: 14px;
-  outline: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+  outline: 1px solid var(--rim);
   outline-offset: -1px;
   color: var(--text);
   background: color-mix(in srgb, var(--identity) 3%, var(--raised));
@@ -2190,13 +2194,13 @@ input[type='radio'] {
 .app-dialog :where(input:not([type='checkbox'], [type='radio']), select, textarea) {
   min-height: 36px;
   padding: 6px 12px;
-  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
   border-radius: 10px;
   transition: var(--hover-transition), box-shadow 100ms ease-out;
 }
 
 .app-dialog :where(input:not([type='checkbox'], [type='radio']), select, textarea):hover:not(:focus-visible) {
-  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 
 .app-dialog :where(button:not(.icon-button)) {
@@ -2282,7 +2286,6 @@ input[type='radio'] {
   margin: 0;
   padding: 10px;
   overflow: auto;
-  border: 1px solid var(--hairline);
   border-radius: 6px;
   background: var(--ground);
   font: 12px/1.45 var(--font-mono);
@@ -2555,7 +2558,8 @@ input[type='radio'] {
   font-size: 13px;
 }
 
-.file-reference-entry button.primary {
+/* S4: the button beside the 36px field matches it, primary or plate. */
+.file-reference-entry button {
   min-height: 36px;
   padding-inline: 18px;
 }
@@ -2626,15 +2630,8 @@ input[type='radio'] {
   min-height: 120px;
   max-height: 55vh;
   overflow: auto;
-  border: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
   border-radius: 10px;
   background: var(--ground);
-  transition: border-color 100ms ease-out;
-}
-
-.shell-window .file-reference-preview:focus-visible {
-  outline: none;
-  border-color: var(--focus);
 }
 
 .file-reference-preview::-webkit-scrollbar {
@@ -2812,9 +2809,9 @@ input[type='radio'] {
 .session-request-card kbd,
 .shortcut {
   padding: 1px 6px;
-  border: 1px solid var(--hairline);
   border-radius: 4px;
   color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   font: 11px var(--font-mono);
   white-space: nowrap;
 }

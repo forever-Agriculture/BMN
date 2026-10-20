@@ -82,7 +82,6 @@
   overflow: hidden;
   height: 200px;
   background: var(--ground);
-  border: 1px solid var(--hairline);
   border-radius: 6px;
 }
 
@@ -310,7 +309,6 @@
 
 .files-draft {
   padding: 8px;
-  border: 1px solid var(--hairline);
   border-radius: 6px;
   background: var(--raised);
 }
@@ -327,7 +325,6 @@
   margin: 0 0 6px;
   padding: 6px;
   background: var(--ground);
-  border: 1px solid var(--hairline);
   border-radius: 4px;
   color: var(--text);
   font: 12px var(--font-mono);
