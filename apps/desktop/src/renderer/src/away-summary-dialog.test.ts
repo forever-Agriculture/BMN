@@ -76,7 +76,7 @@ describe('Waited for you (Story 84.8 [d29])', () => {
   it('passes the host\'s long waits he answered through to the view, and an unread list is a gap', () => {
     const answered = { requestId: 'a', sessionId: 's1', state: 'answered', openedAt: at(14, 23, 35), resolvedAt: at(15, 7, 39), resolvedBy: 'input', kind: 'question', title: 'Push now?', prompt: null } as unknown as AttentionRecord
     const view = awaySummaryView(sources({ payload: { ...sources().payload, answeredWaits: { records: [answered], complete: true, total: 1 } } }), [], workspaces, new Date(2026, 9, 15, 7, 41))
-    expect(view.waitedForYou.groups[0]!.rows[0]).toMatchObject({ waited: '8 h 4 min', how: 'answered at the terminal 07:39', title: 'Push now?' })
+    expect(view.waitedForYou.groups[0]!.rows[0]).toMatchObject({ waited: '8 h 4 min', how: 'Terminal 07:39', title: 'Push now?' })
     const unread = awaySummaryView(sources({ payload: { ...sources().payload, answeredWaits: null } }), [], workspaces, new Date(2026, 9, 15, 7, 41))
     expect(unread.couldNotRead).toBe('Not fully read: long waits you answered · counts there may be low.')
   })

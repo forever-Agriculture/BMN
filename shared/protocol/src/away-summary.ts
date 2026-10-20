@@ -166,7 +166,7 @@ interface AwayWaitedRow {
   command: boolean
   /** How long it waited: "8 h 4 min". */
   waited: string
-  /** Which of his routes answered it and when: "answered at the terminal 05:42". */
+  /** Which of his routes answered it and when, short enough for the state column: "Terminal 05:42". */
   how: string
 }
 /** A link opens a session, a published file or a dev-auto run BMN validated; anything else stays words. */
@@ -245,7 +245,7 @@ export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolve
 
 /** Which of his own routes answered a request (AWAY_OWNER_ORIGINS). */
 const ANSWERED_WORDS: Readonly<Record<(typeof AWAY_OWNER_ORIGINS)[number], string>> = Object.freeze({
-  owner: 'answered in BMN', input: 'answered at the terminal', telegram: 'answered from your phone'
+  owner: 'In BMN', input: 'Terminal', telegram: 'Phone'
 })
 
 /** An app's name from its harness id; another id stands as itself. */
@@ -397,7 +397,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const answeredTotal = Math.max(input.answeredWaits?.total ?? 0, answered.length)
   const waitedRows: AwayWaitedRow[] = answered.map((record) => {
     const subject = requestSubject(record)
-    const route = ANSWERED_WORDS[record.resolvedBy as keyof typeof ANSWERED_WORDS] ?? 'answered'
+    const route = ANSWERED_WORDS[record.resolvedBy as keyof typeof ANSWERED_WORDS] ?? 'Answered'
     return {
       requestId: record.requestId, sessionId: record.sessionId, kind: kindWords(record), title: oneLine(subject.text, 200), command: subject.command,
       waited: awayDurationWords(record.openedAt, record.resolvedAt ?? record.openedAt), how: `${route} ${clockWords(record.resolvedAt ?? record.openedAt)}`

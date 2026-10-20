@@ -358,10 +358,10 @@ describe('Waited for you (Story 84.8 [d29])', () => {
     expect(view.couldNotRead).toBeNull()
     expect(view.waitedForYou.groups.map((group) => [group.where, group.rows.map((row) => [row.requestId, row.waited, row.kind, row.title, row.command, row.how])])).toEqual([
       ['Personal › Builder', [
-        ['a1', '8 h 4 min', 'Question', 'Title a1', false, 'answered at the terminal 07:39'],
-        ['a3', '1 h', 'Review', 'Title a3', false, 'answered in BMN 03:00']
+        ['a1', '8 h 4 min', 'Question', 'Title a1', false, 'Terminal 07:39'],
+        ['a3', '1 h', 'Review', 'Title a3', false, 'In BMN 03:00']
       ]],
-      ['Personal › Reviewer (archived 05:00)', [['a2', '50 min', 'Permission', 'gh auth switch', true, 'answered from your phone 01:00']]]
+      ['Personal › Reviewer (archived 05:00)', [['a2', '50 min', 'Permission', 'gh auth switch', true, 'Phone 01:00']]]
     ])
     expect(AWAY_SUMMARY_LIMITS).toMatchObject({ longWaitMinutes: 30, answeredWaits: 20 })
   })
