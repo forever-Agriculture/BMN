@@ -7,7 +7,8 @@
 // A "before" set is captured by running the preceding revision's own runner in a built checkout of that commit,
 // never by restyling this one. --electron names the Electron binary when this checkout's own may not create user
 // namespaces (a worktree, under Ubuntu's AppArmor profile, docs/development.md); the app it runs is this checkout's.
-// Last, the button-screens pass (button-screens.mjs) saves every screen state with a button under DIR/buttons.
+// Last, the button-screens pass (button-screens.mjs) saves every screen state with a button, menu or panel under
+// DIR/buttons.
 /* global window, document, HTMLElement, HTMLButtonElement, getComputedStyle, requestAnimationFrame */
 import { toggleSessionRequests } from './session-request-helpers.mjs'
 import { sessionRequestControl } from './session-request-helpers.mjs'

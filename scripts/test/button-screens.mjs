@@ -1,12 +1,15 @@
-// MODULE: button-screens.mjs - the button-screens pass of `pnpm run test:visual` (Story 80.12): every screen state with
-// a button, in colour modes Black and Brown (identity Knight), at 1280x800 and 800x800.
+// MODULE: button-screens.mjs - the button-screens pass of `pnpm run test:visual` (Stories 80.12, 80.13): every screen
+// state with a button, menu or panel, in colour modes Black and Brown (identity Knight), at 1280x800 and 800x800.
 //
 // The states are Story 80.1's (plan/references/reference-80-slop-cleanup/screens/capture.mjs, 63 states), then the file
 // reference dialog with a file read (its Send to session area), and Epic 84's departure: the head's "leaving" and
-// "2 cards", Before you go and one of its grant choices changed. Each of the four variants starts the app afresh on the
-// runner's fixture (headless window, fixed environment, the made-up project folder, the page clock) and walks the states
-// in order; each state is saved as <directory>/<mode>-<width>/<state>.png, and the computed look of every visible button
-// in it goes into buttons.json beside them. states.json lists the states in order, with how each is reached.
+// "2 cards", Before you go and one of its grant choices changed. Story 80.13 adds the boxes 80.1 did not reach: progress
+// and its evidence, Quick Look's tasks, find, menu, peek, a shown value and its two editors, a refused amount, a turn's
+// difference, a message, and a stopped session with its notice, saved output and Resume. Each of the four variants
+// starts the app afresh on the runner's fixture (headless window, fixed environment, the made-up project folder, the
+// page clock) and walks the states in order; each state is saved as <directory>/<mode>-<width>/<state>.png, and the
+// computed look of every visible button in it goes into buttons.json beside them. states.json lists the states in
+// order, with how each is reached.
 //
 // The data folders sit at one fixed path inside the runner's fixture folder, so a path the screens print is the same on
 // every run. HOME holds Story 80.1's synthetic team (the unit tests' roster-example.md), a rules master and stand-in
@@ -450,6 +453,202 @@ async function walkStates(application, context) {
     const first = beforeYouGo.locator('article.grant-card.request').first()
     await first.locator('.segmented').nth(1).locator('[role="radio"]', { hasText: /^No$/ }).click()
     await first.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]', { hasText: /^No$/ }).waitFor()
+  })
+
+  // ---- Story 80.13: the boxes 80.1's capture did not reach (screens/box-confirmations.md) ----
+  const clock = application.context().clock
+  const pageNow = () => page.evaluate(() => Date.now())
+  const sessionId = await page.locator('.session-row > button[data-session-id]').first().getAttribute('data-session-id')
+  const pane = page.locator('.session-terminal.selected')
+  // The shell runs what an agent would, typed by the owner's CLI; what it prints back is fixed words, never an id.
+  const shellRuns = async (command, said) => {
+    ownerCli(['send', command, '--submit', '--session', sessionId])
+    await page.waitForFunction(([id, wanted]) =>
+      window.__aitermTest?.snapshot(id)?.bufferLines.some((line) => line.includes(wanted)), [sessionId, said])
+  }
+  // A report a month old reads "31 d ago" and stale on every run; it carries a file the shell published as evidence.
+  writeFileSync(join(home, 'report.md'), '# Search filters\n\nFilters added; the unit tests pass.\n')
+  writeFileSync(join(home, 'box-progress.sh'), [
+    'case "$1" in 1) label=\'Story 1.2 search filters\' at=2025-12-01T00:00:00.000Z ;; *) label=\'Story 1.3 search ranking\' at=2025-12-02T00:00:00.000Z ;; esac',
+    '[ -s "$HOME/report.id" ] || bmn publish "$HOME/report.md" --name report.md --key box-report --json |',
+    '  node -e \'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).artifactId)\' > "$HOME/report.id"',
+    'bmn progress claimed-done "$label" --source synthetic --detail \'Filters added; the unit tests pass.\' \\',
+    '  --evidence-id "$(cat "$HOME/report.id")" --observed "$at" > /dev/null && echo "progress $1 taken"',
+    ''
+  ].join('\n'))
+  await step('Session pane, stale progress', 'the shell publishes report.md and reports progress observed a month before the page clock', async () => {
+    await escapeAll()
+    await shellRuns('sh ~/box-progress.sh 1', 'progress 1 taken')
+    await pane.locator('.progress-strip .stale').waitFor()
+  })
+  const progressDialog = page.locator('dialog.progress-evidence-dialog')
+  await step('Progress evidence dialog', 'the strip\'s state word', async () => {
+    await pane.locator('.progress-open').click()
+    await progressDialog.locator('.provenance .stale').waitFor()
+  })
+  await step('Progress evidence dialog, a file previewed', 'Preview on report.md', async () => {
+    await progressDialog.getByRole('button', { name: 'Preview', exact: true }).click()
+    await progressDialog.locator('.files-preview-box .files-preview-text').waitFor()
+  })
+  await step('Progress evidence dialog, a newer report', 'the shell reports again, a day newer, while the dialog is open', async () => {
+    await shellRuns('sh ~/box-progress.sh 2', 'progress 2 taken')
+    await progressDialog.locator('.progress-replaced').waitFor()
+  })
+  await step('Session details panel, stale progress', 'palette: Session details', async () => {
+    await palette('Session details')
+    await page.locator('.session-inspector .progress-strip .stale').waitFor()
+  })
+  await step('Files side panel, a file published', 'palette: Show files (report.md, published above)', async () => {
+    await palette('Show files')
+    await page.locator('.files-panel .files-preview-box').waitFor()
+  })
+
+  // Quick Look on files made for it: Markdown tasks, a config file with a token, and a .env file.
+  writeFileSync(join(context.fixtureFolder, 'notes.md'),
+    '# Notes\n\n- [x] search filters\n- [ ] search ranking\n\nThe search filters keep the last query.\n')
+  writeFileSync(join(context.fixtureFolder, 'settings.json'),
+    '{\n  "theme": "black",\n  "apiToken": "made-up-token-0123456789abcdef"\n}\n')
+  writeFileSync(join(context.fixtureFolder, '.env'), 'API_KEY=made-up-key-0123456789\nREGION=eu-west-1\n')
+  const quickLook = page.locator('dialog.quick-look[open]')
+  const goToFile = async (name) => {
+    if (!(await quickLook.count())) {
+      await palette('Project files…')
+      await quickLook.waitFor()
+    }
+    await page.keyboard.press('Control+P')
+    await quickLook.locator('.ql-top input').fill(name)
+    await quickLook.locator('.ql-results-list [role="option"]', { hasText: name }).first().waitFor()
+  }
+  const openInQuickLook = async (name) => {
+    await goToFile(name)
+    await page.keyboard.press('Enter')
+    await quickLook.locator('.ql-path', { hasText: name }).waitFor()
+  }
+  await step('Quick Look, Go to file typed', 'palette: Project files…, Go to file: notes.md (the top field focused)', async () => {
+    await escapeAll()
+    await goToFile('notes.md')
+    await quickLook.locator('.ql-in.focus').waitFor()
+  })
+  await step('Quick Look, Markdown tasks', 'Enter on notes.md', async () => {
+    await page.keyboard.press('Enter')
+    await quickLook.locator('.ql-path', { hasText: 'notes.md' }).waitFor()
+    await quickLook.locator('.ql-md-box').first().waitFor()
+  })
+  await step('Quick Look, find in file', 'Ctrl+F, "search"', async () => {
+    await page.keyboard.press('Control+F')
+    await quickLook.locator('.ql-find-in').fill('search')
+    await quickLook.locator('.ql-match-current').waitFor()
+  })
+  await step('Quick Look, file actions menu', 'the path row\'s More actions', async () => {
+    await quickLook.getByRole('button', { name: 'More actions' }).click()
+    await quickLook.locator('.ql-menu').waitFor()
+  })
+  await step('Quick Look, peeking', 'F8 held down', async () => {
+    await page.keyboard.press('Escape')
+    await page.keyboard.down('F8')
+    await page.locator('dialog.quick-look.peeking').waitFor()
+  })
+  await page.keyboard.up('F8')
+  await step('Quick Look, a value shown', 'settings.json, its token shown (the eye); the page clock held so it reads 10 s', async () => {
+    await openInQuickLook('settings.json')
+    const eye = quickLook.locator('.ql-secret-note .ql-eye').first()
+    await eye.waitFor()
+    await clock.setFixedTime(await pageNow())
+    await eye.click()
+    await quickLook.locator('.ql-secret-shown').waitFor()
+  })
+  await clock.setSystemTime(await pageNow())
+  await step('Quick Look, a config file edited', 'settings.json, Edit', async () => {
+    await quickLook.locator('.ql-secret-shown').waitFor({ state: 'detached', timeout: 15_000 })
+    await quickLook.getByRole('button', { name: /^Edit/ }).click()
+    await quickLook.locator('.ql-code.ql-editing').waitFor()
+  })
+  await step('Quick Look, an env value edited', '.env (leaving the unchanged edit), API_KEY double-clicked', async () => {
+    await quickLook.getByRole('button', { name: 'Editing' }).click()
+    await openInQuickLook('.env')
+    await quickLook.locator('.ql-env-row', { hasText: 'API_KEY' }).dblclick()
+    await quickLook.locator('.ql-env-field').waitFor()
+  })
+
+  // A refused amount in Preferences: the field's invalid ring.
+  await step('Preferences › Agents › Team › Jev, a limit refused', 'Jev\'s card, Monthly limit: 0', async () => {
+    await escapeAll()
+    await preferences('Agents', 'Team')
+    await card('Jev').locator('.agent-open').click()
+    await pause(900)
+    const limit = main.getByRole('textbox', { name: 'Monthly limit in dollars' })
+    await limit.fill('0')
+    await main.locator('.field[aria-invalid="true"]').waitFor()
+    await limit.evaluate((field) => field.scrollIntoView({ block: 'center' }))
+  })
+
+  // The shell says how to resume it; then a stand-in agent holds its terminal, as Claude Code would: it reports
+  // through `bmn hook claude` (a made-up conversation), and its one turn changes notes.md between the prompt and
+  // the stop. A second session, Reviewer, leaves it a message with `bmn tell` and exits. The scans' clock times and
+  // the message's stamp (session ids) differ on every run, so the capture paints them over.
+  await escapeAll()
+  await palette('Close files')
+  await shellRuns('bmn resume-command -- bash --noprofile --norc', 'Resume command recorded')
+  writeFileSync(join(home, 'stand-in.mjs'), [
+    'import { spawnSync } from \'node:child_process\'',
+    'import { readFileSync, writeFileSync } from \'node:fs\'',
+    `const folder = ${JSON.stringify(context.fixtureFolder)}`,
+    'const hook = (event) => spawnSync(\'bmn\', [\'hook\', \'claude\'], { encoding: \'utf8\', input: JSON.stringify({',
+    '  session_id: \'5b5b5b5b-1b1b-2c2c-3d3d-4e4e4e4e4e4e\', cwd: folder, ...event }) })',
+    'hook({ hook_event_name: \'SessionStart\', source: \'startup\' })',
+    'hook({ hook_event_name: \'UserPromptSubmit\', prompt: \'Rank the search results\', prompt_id: \'prompt-1\' })',
+    'const notes = `${folder}/notes.md`',
+    'writeFileSync(notes, readFileSync(notes, \'utf8\').replace(\'- [ ] search ranking\', \'- [x] search ranking\') +',
+    '  \'Ranking puts the newest match first.\\n\')',
+    'hook({ hook_event_name: \'Stop\', last_assistant_message: \'Search ranking is done.\' })',
+    'process.stdout.write(\'stand-in agent holds the terminal\\r\\n\')',
+    'process.stdin.setRawMode(true)',
+    'process.stdin.resume()',
+    ''
+  ].join('\n'))
+  await shellRuns('node ~/stand-in.mjs', 'stand-in agent holds the terminal')
+  const turnsDialog = page.locator('dialog.turn-changes-dialog')
+  await step('Turn changes dialog, a turn opened', 'palette: Turn changes…, the one turn, notes.md', async () => {
+    await palette('Turn changes…')
+    await turnsDialog.locator('.turn-row').first().click()
+    // The turn's files come from its second scan, which takes longer on a loaded machine.
+    await turnsDialog.locator('.file-row', { hasText: 'notes.md' }).click({ timeout: 60_000 })
+    await turnsDialog.locator('.turn-diff').waitFor()
+  }, false, [turnsDialog.locator('.turn-labels li', { hasText: 'Two scans' })])
+  await escapeAll()
+  const workspaceId = await page.evaluate(async () => (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt).workspaceId)
+  await page.evaluate((p) => window.aiTerminal.createSession(p), {
+    workspaceId, name: 'Reviewer', cwd: context.fixtureFolder, executable: '/bin/sh', cols: 100, rows: 24, backgroundChoice: 'stop',
+    argv: ['-c', `bmn tell ${sessionId} --text 'The ranking reads well; one question on ties.' --key box-tell > /dev/null`]
+  })
+  await page.waitForFunction(async (id) => (await window.aiTerminal.listSessionMessages(id)).messages.length === 1, workspaceId)
+  const messagesDialog = page.locator('dialog.session-messages-dialog')
+  await step('Messages dialog, a message opened', 'Reviewer (a second session) tells the stand-in; palette: Messages…, the message', async () => {
+    await palette('Messages…')
+    await messagesDialog.locator('.message-row').first().click()
+    await messagesDialog.locator('.message-text').waitFor()
+  }, false, [messagesDialog.locator('.message-stamp')])
+
+  // The session stops: the brief notice, the stopped session, its saved output and Resume.
+  await escapeAll()
+  await step('Brief notice, a session stopped', 'palette: Stop session…, Stop session; the page clock held while it shows', async () => {
+    await palette('Stop session…')
+    await page.locator('dialog[open]').getByRole('button', { name: 'Stop session', exact: true }).click()
+    await page.locator('.feedback-notice.brief').waitFor()
+    await clock.pauseAt((await pageNow()) + 100)
+  })
+  await clock.resume()
+  await step('Stopped session', 'the brief notice gone', async () => {
+    await page.locator('.feedback-notice.brief').waitFor({ state: 'detached', timeout: 15_000 })
+    await page.locator('.stopped-session .progress-strip').waitFor()
+  })
+  await step('Stopped session, saved output', 'Saved output', async () => {
+    await page.locator('.stopped-session').getByRole('button', { name: 'Saved output', exact: true }).click()
+    await page.locator('.saved-output-summary').waitFor()
+  })
+  await step('Resume dialog, a reported command', 'Resume', async () => {
+    await page.locator('.stopped-session').getByRole('button', { name: 'Resume', exact: true }).click()
+    await page.locator('dialog[open] .resume-command').waitFor()
   })
   return { states, facts }
 }
