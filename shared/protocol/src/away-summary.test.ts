@@ -359,11 +359,19 @@ describe('Waited for you (Story 84.8 [d29])', () => {
     expect(view.waitedForYou.groups.map((group) => [group.where, group.rows.map((row) => [row.requestId, row.waited, row.kind, row.title, row.command, row.how])])).toEqual([
       ['Personal › Builder', [
         ['a1', '8 h 4 min', 'Question', 'Title a1', false, 'Terminal 07:39'],
-        ['a3', '1 h', 'Review', 'Title a3', false, 'In BMN 03:00']
+        ['a3', '1 h', 'Review', 'Title a3', false, 'Here 03:00']
       ]],
-      ['Personal › Reviewer (archived 05:00)', [['a2', '50 min', 'Permission', 'gh auth switch', true, 'Phone 01:00']]]
+      ['Personal › Reviewer (archived 05:00)', [['a2', '50 min', 'Permission', 'gh auth switch', true, 'Telegram 01:00']]]
     ])
     expect(AWAY_SUMMARY_LIMITS).toMatchObject({ longWaitMinutes: 30, answeredWaits: 20 })
+  })
+
+  it('drops the minutes from 10 h so the wait fits its cell', () => {
+    const rows = (openedAt: string) => buildAwaySummary(input({
+      answeredWaits: { records: [answered('a1', 's1', openedAt, at(15, 6, 34), 'input')], complete: true, total: 1 }
+    })).waitedForYou.groups[0]!.rows[0]!.waited
+    expect(rows(at(14, 18, 0))).toBe('12 h')
+    expect(rows(at(14, 20, 40))).toBe('9 h 54 min')
   })
 
   it('is empty when none waited, names a list it could not read, and counts past a cut', () => {

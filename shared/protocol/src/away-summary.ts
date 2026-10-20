@@ -245,7 +245,7 @@ export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolve
 
 /** Which of his own routes answered a request (AWAY_OWNER_ORIGINS). */
 const ANSWERED_WORDS: Readonly<Record<(typeof AWAY_OWNER_ORIGINS)[number], string>> = Object.freeze({
-  owner: 'In BMN', input: 'Terminal', telegram: 'Phone'
+  owner: 'Here', input: 'Terminal', telegram: 'Telegram'
 })
 
 /** An app's name from its harness id; another id stands as itself. */
@@ -400,7 +400,8 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     const route = ANSWERED_WORDS[record.resolvedBy as keyof typeof ANSWERED_WORDS] ?? 'Answered'
     return {
       requestId: record.requestId, sessionId: record.sessionId, kind: kindWords(record), title: oneLine(subject.text, 200), command: subject.command,
-      waited: awayDurationWords(record.openedAt, record.resolvedAt ?? record.openedAt), how: `${route} ${clockWords(record.resolvedAt ?? record.openedAt)}`
+      // From 10 h the minutes go, so the 64px age cell stays whole ("12 h"); the tooltip keeps the kind.
+      waited: awayDurationWords(record.openedAt, record.resolvedAt ?? record.openedAt).replace(/^(\d{2}) h \d+ min$/, '$1 h'), how: `${route} ${clockWords(record.resolvedAt ?? record.openedAt)}`
     }
   })
   const waitedForYou: AwaySummaryView['waitedForYou'] = {
