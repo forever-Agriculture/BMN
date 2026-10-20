@@ -728,14 +728,16 @@
   place-items: center;
   width: 13px;
   height: 13px;
+  border: 1px solid var(--border);
   border-radius: 3px;
   color: var(--text);
-  background: var(--ql-plate);
   transform: translateY(2px);
 }
 
 .ql-md-box.on {
-  background: var(--ql-plate-2);
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--ground);
 }
 
 .ql-md blockquote {

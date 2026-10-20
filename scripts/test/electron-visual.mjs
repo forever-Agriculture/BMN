@@ -2256,6 +2256,18 @@ const evidence = await withTemporaryRoot(
         'black-knight-epic20-menu-open.png',
         glanceEvidenceDirectory
       ))
+      // F4: the danger row is plain at rest and takes the error tone only on hover.
+      const dangerItem = page.locator('.popup-menu [role="menuitem"].danger').first()
+      const dangerRest = await dangerItem.evaluate((element) => getComputedStyle(element).color)
+      await dangerItem.hover()
+      await page.waitForTimeout(120)
+      const dangerHover = await dangerItem.evaluate((element) => getComputedStyle(element).color)
+      assert.notEqual(dangerHover, dangerRest, JSON.stringify({ dangerRest, dangerHover }))
+      glanceScreenshots.push(await screenshot(
+        page,
+        'black-knight-epic20-menu-danger-hover.png',
+        glanceEvidenceDirectory
+      ))
       await page.keyboard.press('Escape')
       phase('workspace glance checks passed')
 

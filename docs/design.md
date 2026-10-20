@@ -111,7 +111,8 @@ rule has an ID that reviews and commits cite. "Text 8%" means `color-mix(in srgb
 ## Colour
 
 - **C1 Tokens.** The existing tokens of each colour mode, plus `--rim`. No new hex values; a new tint is a
-  `color-mix` of `--text` or `--identity` over transparent at 16% or less.
+  `color-mix` of `--text` or `--identity` over transparent at 16% or less for a fill; an edge follows L4 and L5. On
+  the primary, `--ground` stands in for `--text`.
 - **C2 One accent.** Identity gold (`--identity` = `--attention`, #c9a45c) marks identity (the mark, the project
   name) and attention (dots, bars). No second hue.
 - **C3 Quick Look** keeps its tint for literals (`--ql-plate-*`, the owner's one exception); its lines follow
