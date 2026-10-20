@@ -1036,7 +1036,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
         if (kind === 'skills') {
           const own = parseJson((await runCli(ctx.script, ['skills', 'own', '--json'], ctx.env)).stdout)
           const rows = Array.isArray(own?.rows) ? own.rows as Array<{ state?: unknown }> : []
-          const added = rows.filter((row) => row.state === 'installed' || row.state === 'taken-over' || row.state === 'updated' || row.state === 'repaired').length
+          const added = rows.filter((row) => row.state === 'installed' || row.state === 'taken-over' || row.state === 'updated' || row.state === 'repaired' || row.state === 'retired').length
           if (own?.ok !== true) said.push(`BMN's skills not installed: ${String(own?.message ?? 'the install did not run')}`)
           else if (added > 0) said.push(`BMN's skills installed: ${added} entr${added === 1 ? 'y' : 'ies'} changed`)
         }

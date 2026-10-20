@@ -1234,7 +1234,7 @@ the Skills page say so and change nothing; they never fall back to "no team".
 #### BMN's own skills (Story 77.4)
 
 BMN ships five skills in the repository's `skills/` (listed in `skills/manifest.json`, packaged under `resources/skills`):
-`plan` ([planning.md](planning.md)), `team-ask` (Asking a teammate), `team-page`, `web-question` and `jev-judge` (under
+`plan` ([planning.md](planning.md)), `team-ask` (Asking a teammate), `report-artifact`, `web-question` and `jev-judge` (under
 Models). At every start, before the skills install, `bmn skills own` makes each one your skills folder lacks a link to
 BMN's copy under `~/.local/share/bmn/skills/<name>`, which stays readable with BMN closed and is refreshed by an update
 (the link stays, the copy changes). The skills install then carries them like any other skill; they count as public,
@@ -1245,10 +1245,14 @@ edit.
 - Anything else of that name (your own folder, a link elsewhere) is yours and left as it is; Skills says so.
 - An entry BMN made that you remove stays removed: BMN records it in `~/.config/bmn/agents/state/own-skills.json` and
   never adds it back. A copy BMN cannot read is put back, never taken for your removal.
+- A renamed skill's old name sits under `retired` in the manifest (`team-page`, now `report-artifact`): BMN removes
+  its own link, copy and record of that name, leaves an entry you made, and the skills install then removes the old
+  name from the other apps as a skill that left.
 
-`team-page` is the page for finished work (dev-auto ends every completed epic with one): the agent writes one HTML page
-in the owner's fixed structure from its `template.html`, checks it with `check.py` (PASS/FAIL per rule) and publishes it
-privately, Claude Code as an Artifact and any other app with `bmn publish`, a new key per revision. `bmn skills own
+`report-artifact` is the page for finished work (dev-auto ends every completed epic with one): the agent fills its
+`template.html` in the owner's sections (why we built it, what changes, then whatever else matters, the honest opinion
+last), checks it with `check.py` (PASS/FAIL per rule) and publishes it privately, Claude Code as an Artifact and any
+other app with `bmn publish`, a new key per revision. `bmn skills own
 --plan --json` says what it would do without writing; `bmn skills check --json` lists the same rows under `own`.
 
 ### Tools (MCP)

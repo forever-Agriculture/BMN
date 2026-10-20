@@ -1,4 +1,4 @@
-// MODULE: agents-own-skills.mjs - Story 77.4: BMN's own skills (plan, team-ask, team-page, web-question, jev-judge) install themselves into the skills folder as BMN's entries, pointing at a copy that stays readable with BMN closed
+// MODULE: agents-own-skills.mjs - Story 77.4: BMN's own skills (plan, team-ask, report-artifact, web-question, jev-judge) install themselves into the skills folder as BMN's entries, pointing at a copy that stays readable with BMN closed; a renamed skill's old name is retired
 import { randomBytes } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -18,7 +18,9 @@ import { realOrNull } from './shared-helpers.mjs'
  * Whose entry is it: a link to BMN's copy is BMN's; a link into a BMN checkout or install (how the owner linked
  * web-question and jev-judge by hand) is taken over; anything else of that name is the owner's and is left as it
  * is, listed under Integrations › Skills. An entry BMN made that is gone was removed by the owner: BMN records
- * that and never adds it back. A copy that cannot be read is put back, never taken for a removal.
+ * that and never adds it back. A copy that cannot be read is put back, never taken for a removal. A skill BMN renamed
+ * keeps its old name under `retired` in the manifest: BMN's own link, copy and record of that name go, anything else
+ * of that name stays, and the skills install then removes the old name from the other apps as a skill that left.
  */
 const OWN_SKILLS_RECORD_VERSION = 1
 
@@ -46,6 +48,13 @@ function shippedNames(root) {
   const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
   if (!Array.isArray(manifest?.skills)) throw new Error('skills/manifest.json has no skills list')
   return manifest.skills.filter((name) => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/u.test(name))
+}
+
+/** Old names of renamed skills, from the manifest's `retired` list; a name still shipped is never retired. */
+function retiredNames(root, shipped) {
+  const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
+  if (!Array.isArray(manifest?.retired)) return []
+  return manifest.retired.filter((name) => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/u.test(name) && !shipped.includes(name))
 }
 
 function readRecord() {
@@ -108,7 +117,8 @@ function copyCurrent(from, copy) {
 /**
  * Bring BMN's own skills into the skills folder. `apply: false` only says what it would do. Returns one row per
  * shipped skill: installed, current, updated, repaired, taken-over, foreign (left), removed (by the owner, not
- * added back) or unavailable (the shipped skill or the skills folder cannot be read).
+ * added back) or unavailable (the shipped skill or the skills folder cannot be read); plus one `retired` row per old
+ * name whose BMN entry, copy or record it takes away.
  */
 export function installOwnSkills({ source, environment = process.env, apply = true, now = new Date() } = {}) {
   const root = shippedSkillsRoot(environment)
@@ -162,6 +172,23 @@ export function installOwnSkills({ source, environment = process.env, apply = tr
       continue
     }
     rows.push({ name, state: 'foreign', path, detail: `a ${entry.folder ? 'folder' : 'file'} BMN did not make; left as it is` })
+  }
+  for (const name of retiredNames(root, names)) {
+    const path = join(source, name)
+    const copy = join(copies, name)
+    let entry
+    try { entry = entryOf(path) } catch { continue }
+    const target = entry.kind === 'link' ? resolve(dirname(path), entry.target) : null
+    const ours = target !== null && (target === copy || (realOrNull(target) !== null && realOrNull(target) === realOrNull(copy)))
+    const known = record.skills[name] !== undefined || record.removed[name] !== undefined
+    if (!ours && !known && lstatOrNull(copy) === null) continue
+    // BMN's copy and record go; the link goes only when it is BMN's, so a folder or link the owner made stays.
+    if (apply) {
+      if (ours) rmSync(path, { force: true })
+      rmSync(copy, { recursive: true, force: true })
+      delete record.skills[name]; delete record.removed[name]; changed = true
+    }
+    rows.push({ name, state: 'retired', path, detail: ours ? 'an old name of a BMN skill; its entry is removed' : 'an old name of a BMN skill; BMN\'s copy is removed, the entry there is not BMN\'s and stays' })
   }
   if (apply && changed) writeRecord(record)
   return { ok: true, code: 'OK', source, shipped: root, copies, rows }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# MODULE: check.py - PASS/FAIL checks of a team page: structure and order of its parts, header, tables, look, length and hygiene
-"""Check a team page made from template.html. Exit 0 only when every rule passes.
+# MODULE: check.py - PASS/FAIL checks of a report artifact: structure and order of its parts, header, tables, look, length and hygiene
+"""Check a report artifact made from template.html. Exit 0 only when every rule passes.
 
 Usage: check.py PAGE.html [--owner]
   --owner  the page is for the owner, so the Decided for you part is required
@@ -13,6 +13,8 @@ from html.parser import HTMLParser
 ORDER = ["why", "changes", "safety", "money", "checks", "limits", "decided", "next", "opinion"]
 REQUIRED = {"why", "changes", "checks", "limits", "next", "opinion"}
 MAX_WORDS = 1500
+MAX_COLUMN = 1200
+OPEN_STATE = re.compile(r"^(not\b|unverified|pending|failed|blocked)", re.I)
 STYLESHEET_HOSTS = ("https://fonts.googleapis.com/",)
 RUN_ID = re.compile(r"\b\d{8}T\d{6}-[0-9a-f]{8}\b")
 SECRET = re.compile(r"\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|\d{8,10}:[A-Za-z0-9_-]{30,})\b")
@@ -103,6 +105,14 @@ def check(source, owner):
     rule("lede present", lede and lede[0].all_text().strip())
     chips = header.find(lambda n: "chip" in n.classes()) if header else []
     rule("2-5 status chips", 2 <= len(chips) <= 5, f"{len(chips)} chips")
+    green_open = [c.all_text().strip() for c in chips if "g" in c.classes() and OPEN_STATE.match(c.all_text().strip())]
+    rule("an open status is never green", not green_open, ", ".join(green_open))
+    heroes = has("hero")
+    rule("one hero card with a big figure and the lede", len(heroes) == 1 and heroes[0].find(lambda n: "big" in n.classes())
+         and heroes[0].find(lambda n: "lede" in n.classes()))
+    tiles = has("tile")
+    rule("number tiles: none, or 2-4 each with a label, a figure and a note", not tiles or 2 <= len(tiles) <= 4 and all(
+        all(t.find(lambda n, c=c: c in n.classes()) for c in ("label", "kpi", "note")) for t in tiles), f"{len(tiles)} tiles")
 
     sections = root.find(lambda n: n.tag == "section")
     parts = [s.attrs.get("data-part") for s in sections]
@@ -122,7 +132,8 @@ def check(source, owner):
 
     if "changes" in by:
         s = by["changes"]
-        rule("changes: bullets", s.find(lambda n: n.tag in ("ul", "ol")))
+        rule("changes: bullets or cards", s.find(lambda n: n.tag in ("ul", "ol")) or any(
+            len(g.find(lambda n: "card" in n.classes())) >= 2 for g in s.find(lambda n: "grid" in n.classes())))
         exhibits = s.find(lambda n: "exhibit" in n.classes())
         rule("changes: exactly one example (.exhibit)", len(exhibits) == 1)
         rule("changes: the example has content", any(
@@ -150,10 +161,11 @@ def check(source, owner):
     rule("every table in a .table-wrap", unwrapped == 0, f"{unwrapped} unwrapped")
 
     rule("tokens on :root", re.search(r":root\s*\{[^}]*--ink", css))
-    rule("dark theme by preference and by attribute",
-         "prefers-color-scheme: dark" in css and ':root:not([data-theme="light"])' in css and ':root[data-theme="dark"]' in css)
+    dark_only = re.search(r":root\s*\{[^}]*color-scheme:\s*dark", css) and "data-theme" not in css and "prefers-color-scheme" not in css
+    rule("a dark theme: one dark theme by choice, or dark by preference and by attribute", dark_only or (
+         "prefers-color-scheme: dark" in css and ':root:not([data-theme="light"])' in css and ':root[data-theme="dark"]' in css))
     rule("body has its own background", re.search(r"body\s*\{[^}]*background", css))
-    rule("one reading column of at most 760px", (m := re.search(r"main\s*\{[^}]*max-width:\s*(\d+)px", css)) and int(m.group(1)) <= 760)
+    rule(f"one column of at most {MAX_COLUMN}px", (m := re.search(r"main\s*\{[^}]*max-width:\s*(\d+)px", css)) and int(m.group(1)) <= MAX_COLUMN)
 
     links = [n.attrs.get("href", "") for n in root.find(lambda n: n.tag == "link" and n.attrs.get("rel") == "stylesheet")]
     rule("stylesheets only from Google Fonts", all(h.startswith(STYLESHEET_HOSTS) for h in links), ", ".join(links))
@@ -169,7 +181,8 @@ def check(source, owner):
     raw = html.unescape(source)
     rule("no credential-shaped strings", not SECRET.search(raw))
     rule("no home-folder or session paths", not HOME_PATH.search(raw), (HOME_PATH.search(raw) or [""])[0])
-    rule("no template placeholders left", not re.search(r"Two To Four Words|Project · Epic N|What is different now|A bold opening phrase|Written by …", raw))
+    rule("no template placeholders left", not re.search(
+        r"Two To Four Words|Project · Epic N|What is different now|A bold opening phrase|The one-line result in bold|Who asked, what hurt|For Dana|example\.webp|Written by …", raw))
     return results
 
 

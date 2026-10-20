@@ -894,18 +894,18 @@ describe('skills on Integrations › Skills and Health (60.11 AC1-AC5)', () => {
 
   it('puts BMN\'s own skills into the skills folder at start, leaves the owner\'s entry of that name and says so (Story 77.4)', async () => {
     await approvedAndInstalled()
-    for (const name of ['plan', 'team-page']) {
+    for (const name of ['plan', 'report-artifact']) {
       mkdirSync(join(home, 'shipped', name))
       writeFileSync(join(home, 'shipped', name, 'SKILL.md'), `---\nname: ${name}\ndescription: Shipped ${name}.\n---\n`)
     }
-    writeFileSync(join(home, 'shipped/manifest.json'), JSON.stringify({ skills: ['plan', 'team-page'] }))
-    skill('team-page')
+    writeFileSync(join(home, 'shipped/manifest.json'), JSON.stringify({ skills: ['plan', 'report-artifact'] }))
+    skill('report-artifact')
     await ipc.installsAtStart()
     expect(readlinkSync(join(home, '.claude/skills/plan'))).toBe(join(home, '.local/share/bmn/skills/plan'))
-    expect(readFileSync(join(home, '.claude/skills/team-page/SKILL.md'), 'utf8')).toContain('Synthetic skill team-page')
+    expect(readFileSync(join(home, '.claude/skills/report-artifact/SKILL.md'), 'utf8')).toContain('Synthetic skill report-artifact')
     const view = (await rulesSnapshot()).skills
-    expect(view.skills.map((entry) => entry.name)).toEqual(['plan', 'team-page'])
-    expect(view.ownLeft).toEqual([{ name: 'team-page', state: 'foreign', detail: 'a folder BMN did not make; left as it is' }])
+    expect(view.skills.map((entry) => entry.name)).toEqual(['plan', 'report-artifact'])
+    expect(view.ownLeft).toEqual([{ name: 'report-artifact', state: 'foreign', detail: 'a folder BMN did not make; left as it is' }])
   })
 
   it('writes nothing before the owner\'s test, then installs as one transaction that Undo puts back', async () => {

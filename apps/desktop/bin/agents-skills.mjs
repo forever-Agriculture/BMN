@@ -1233,7 +1233,7 @@ export function skillsLoadingAutoPlan({ versions, tests = skillsTests(), environ
 const SKILLS_USAGE = `Usage: bmn skills check [--json]                    One state per app and per skill; exit 0 only when every supported app has its skills
        bmn skills install [app…] [--plan] [--yes]   Link or copy each app's skills, and remove what an app may no longer have, as one transaction
        bmn skills install --absent [--plan] [--yes] The same, leaving an entry BMN did not write or one changed outside it: what BMN runs by itself
-       bmn skills own [--plan] [--json]             BMN's own skills (plan, team-ask, team-page, web-question, jev-judge) into the skills folder,
+       bmn skills own [--plan] [--json]             BMN's own skills (plan, team-ask, report-artifact, web-question, jev-judge) into the skills folder,
                                                     as links to BMN's copy; what BMN runs by itself at start (Story 77.4)
        bmn skills test <app> [--json]               Owner-run: find where the app reads skills, then whether it lists a skill placed there (no prompt)
        bmn skills test <app> --prompt [--json]      Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model
