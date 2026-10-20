@@ -1,0 +1,273 @@
+/* MODULE: styles/workspace-tree.css - the workspace tree; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- Workspace tree ---------- */
+
+.workspace-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.workspace-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 6px;
+}
+
+.workspace-group {
+  margin-bottom: 10px;
+}
+
+.workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.workspace-row > button:first-child {
+  flex: 1;
+  justify-content: flex-start;
+  min-width: 0;
+  border-color: transparent;
+  padding: 2px 6px;
+  color: var(--muted);
+}
+
+.workspace-row .eyebrow {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-row .count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-row.archived .eyebrow::after {
+  content: ' · archived';
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.workspace-row .status-dot {
+  margin-left: auto;
+}
+
+.workspace-row .status-dot + .visually-hidden + .count {
+  margin-left: 6px;
+}
+
+.row-menu-button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  border-color: transparent;
+  color: var(--faint);
+  font-size: 14px;
+  opacity: 0;
+}
+
+.workspace-row:hover .row-menu-button,
+.session-row:hover .row-menu-button,
+.workspace-row:focus-within .row-menu-button,
+.session-row:focus-within .row-menu-button,
+.row-menu-button[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.row-menu-button:hover:not(:disabled),
+.row-menu-button[aria-expanded='true'] {
+  color: var(--text);
+}
+
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 1px 0;
+}
+
+.session-row > button:first-child {
+  position: relative;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0;
+  flex: 1;
+  justify-content: stretch;
+  min-width: 0;
+  min-height: 34px;
+  padding: 4px 8px 4px 10px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0 6px 6px 0;
+  text-align: left;
+}
+
+.session-row > button:first-child .status-dot {
+  grid-row: 1;
+  align-self: center;
+}
+
+/* The gaps are margins, not a column gap, so a row without a flag gives its name the whole width. */
+.session-row .session-name {
+  grid-row: 1;
+  grid-column: 2;
+  margin-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Story 40.2: line one is the mark, the name across the row and the origin flag; line two is kind chip · state
+   word · path. The word is never cut: the path gives way first, then the chip, whole. Line two wraps and shows
+   only its last line, so a chip that does not fit beside the word moves to a clipped line above it. No gap: a
+   gap could wrap the path alone. */
+.session-row .origin-flag {
+  grid-row: 1;
+  grid-column: 3;
+  align-self: center;
+  height: 18px;
+  margin-left: 6px;
+  overflow: hidden;
+  line-height: 18px;
+}
+
+.session-row .session-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-end;
+  align-items: center;
+  grid-row: 2;
+  grid-column: 2 / -1;
+  height: 18px;
+  margin-left: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-row .chips {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  margin-right: 6px;
+}
+
+.session-row .chip {
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+/* Every session starts in a shell, so a bare "Shell" tag on each row is noise. The element stays in
+   the DOM: the self-test reads its text. Its wrapper goes too, so the word starts the line. */
+.session-row .chip[data-generic='true'],
+.session-row .chips:has(> .chip[data-generic='true']) {
+  display: none;
+}
+
+.session-row .session-state {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Zero basis, so the path gives up its width first; below about 60 px an ellipsis says nothing, so it goes. */
+.session-row .session-path {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+  container: session-path / inline-size;
+}
+
+.session-row .session-directory {
+  display: block;
+  overflow: hidden;
+  padding-left: 6px;
+  color: var(--muted);
+  font: 11px/18px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container session-path (width < 66px) {
+  .session-row .session-directory {
+    display: none;
+  }
+}
+
+.session-row.archived .session-name {
+  color: var(--muted);
+}
+
+.session-row[data-live='false']:not(:has(.status-dot.needs-you, .unread-mark)) .session-name {
+  color: var(--muted);
+}
+
+.session-row.archived .session-directory::before {
+  content: 'archived · ';
+}
+
+.session-row.selected > button:first-child {
+  border-left-color: var(--identity);
+  background: var(--selected);
+}
+
+.session-row.selected > button:first-child:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.session-row.selected .session-name {
+  font-weight: 500;
+}
+
+.session-row.selected > button:first-child:focus-visible {
+  outline: none;
+}
+
+.session-row.selected > button:first-child:focus-visible::after {
+  position: absolute;
+  inset: 2px 2px 2px 4px;
+  border: 2px solid var(--focus);
+  border-radius: 4px;
+  content: '';
+  pointer-events: none;
+}
+
+/* Beside the name on line one, outside the row button so its words stay the session's own. */
+.session-row .unread-mark {
+  align-self: flex-start;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.new-workspace {
+  justify-content: flex-start;
+  color: var(--muted);
+}
+
+.show-archived {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}

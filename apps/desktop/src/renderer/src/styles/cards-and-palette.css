@@ -1,0 +1,365 @@
+/* MODULE: styles/cards-and-palette.css - request and guard cards, hook events and the command palette; a part of styles.css, which imports its parts in cascade order */
+
+.palette-file-status {
+  margin: 4px 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.session-request-card {
+  position: fixed;
+  top: 90px;
+  left: 12px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 24px));
+  max-height: max(100px, calc(100vh - var(--request-top, 90px) - 40px));
+  overflow: auto;
+  border: 0;
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+}
+.pane-request-control { padding: 0 3px; min-height: 22px; border: 0; font: inherit; color: var(--attention); }
+.pane-request-control[data-cleared='true'] { color: var(--muted); }
+.stopped-request-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.attention-questions { display: grid; gap: 10px; }
+.attention-questions h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 500; overflow-wrap: anywhere; }
+.attention-questions ul { margin: 0; padding-left: 18px; }
+.attention-questions li { margin-bottom: 6px; overflow-wrap: anywhere; }
+.attention-item.cleared { opacity: 0.85; }
+.session-guard-card .guard-line { margin: 0; overflow-wrap: anywhere; }
+.session-guard-card .guard-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; font-size: 12.5px; }
+.session-guard-card .guard-facts dt { color: var(--muted); }
+.session-guard-card .guard-facts dd { margin: 0; overflow-wrap: anywhere; }
+.session-guard-card .guard-refusal { margin: 0; color: var(--attention); overflow-wrap: anywhere; }
+
+.session-request-card > header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--raised);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.session-request-card > header button {
+  border: 0;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 4px;
+}
+
+.session-request-card > header strong {
+  font-weight: 600;
+}
+
+.session-request-card > header span {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-request-card kbd,
+.shortcut {
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font: 11px var(--font-mono);
+  white-space: nowrap;
+}
+
+.attention-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.attention-group > .eyebrow {
+  display: block;
+  padding: 9px 12px 4px;
+}
+
+.attention-group + .attention-group {
+  border-top: 1px solid var(--hairline);
+}
+
+.attention-item.update .status-dot {
+  border: 1px solid var(--muted);
+  background: transparent;
+}
+
+.attention-item .where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+/* One line: the session name gives way (its full text is the title), never the kind, age or expiry. */
+.attention-item .where > * {
+  flex: none;
+  max-width: 100%;
+}
+
+.attention-item .where .name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.attention-item .where .age {
+  flex-shrink: 0;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.hook-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hook-events li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 12px;
+}
+
+.hook-events .hook-event-name {
+  color: var(--text);
+  font: 12px/1.4 var(--font-mono);
+}
+
+.hook-events .hook-event-effects,
+.hook-events .age {
+  color: var(--muted);
+}
+
+.hook-events .age {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.attention-item .attention-kind {
+  padding: 1px 5px;
+  border: 0;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.attention-item h3 {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.attention-item pre {
+  margin: 0;
+  color: var(--muted);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.attention-prompt {
+  display: grid;
+  gap: 8px;
+}
+
+.attention-prompt-where {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.attention-prompt-label {
+  display: block;
+  font-size: 13px;
+}
+
+.attention-destination {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.attention-prompt-description {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attention-item .seen {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attention-item .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attention-item h3,
+.attention-item pre,
+.attention-item .seen {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.popover-empty {
+  padding: 12px;
+  color: var(--muted);
+}
+
+/* The palette floats over the terminals without dimming them. */
+.command-palette {
+  width: min(640px, calc(100vw - 48px));
+  margin-top: max(10vh, calc(50vh - 190px));
+}
+
+.command-palette::backdrop {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.command-palette .app-dialog-heading {
+  padding-top: 12px;
+}
+
+.command-palette .app-dialog-body {
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+.command-palette input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: 15px;
+}
+
+.palette-results {
+  display: flex;
+  flex-direction: column;
+  max-height: 55vh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.palette-results::-webkit-scrollbar {
+  width: 8px;
+}
+
+.palette-results::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.palette-results::-webkit-scrollbar-thumb {
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.palette-results::-webkit-scrollbar-button {
+  -webkit-appearance: none;
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.palette-results::-webkit-scrollbar-button:vertical:start:decrement,
+.palette-results::-webkit-scrollbar-button:vertical:end:increment {
+  -webkit-appearance: none;
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.palette-results .group {
+  padding: 10px 12px 4px;
+}
+
+.palette-results [role='option'] {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.palette-results [role='option'] .label {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-results [role='option'] .context {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-results [role='option'] .shortcut {
+  margin-left: auto;
+}
+
+/* A session row carries the same mark as its sidebar row, so the palette shows state, not only names it. */
+.palette-results [role='option'] .status-dot {
+  flex: none;
+}
+
+.palette-results [role='option'][data-live='false']:not(:has(.status-dot.needs-you)) .label {
+  color: var(--muted);
+}
+
+.palette-results [role='option'][aria-selected='true'] {
+  background: color-mix(in srgb, var(--identity) 14%, transparent);
+  box-shadow: inset 2px 0 var(--identity);
+}
+
+.palette-results [role='option'][aria-selected='true'] .context {
+  color: var(--text);
+  opacity: 0.75;
+}
+
+.palette-results [role='option']:active {
+  background: var(--raised);
+  box-shadow: none;
+  transform: translateY(1px);
+  transition-duration: 0ms;
+}
+
+.palette-results [role='option'][aria-selected='true']:active {
+  box-shadow: inset 2px 0 var(--identity);
+}

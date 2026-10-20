@@ -1,0 +1,283 @@
+/* MODULE: styles/preferences-team-asks-and-web-questions.css - the Team asks and Web questions pages; a part of preferences-dialog.css, which imports its parts in cascade order */
+
+/* Team › Models › Web questions (64.3): the switch and Ask as rows, a plate for the question under way, then one line per kept question; an opened one is a raised sheet. */
+.preferences-dialog :is(.web-questions, .team-asks) {
+  container: web-questions / inline-size;
+  margin-top: 14px;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .one-line {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Ask field is the page's own field; it grows with the question up to a few lines. */
+.preferences-dialog .web-questions .ask-field {
+  flex: 1 1 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 52px;
+  max-height: 184px;
+  line-height: 1.45;
+  resize: none;
+  field-sizing: content;
+}
+
+/* Who the question goes to takes the room; Ask keeps the end of the first line. */
+.preferences-dialog .web-questions .ask-line {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.preferences-dialog .web-questions .ask-line > :first-child {
+  flex: 1 1 0;
+  min-width: 12em;
+}
+
+.preferences-dialog .web-questions .ask-reply {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .note-text > strong {
+  font-weight: 600;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question {
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* A line is a button without a plate: the whole line opens the question. Its text starts where the plates' text starts. */
+.preferences-dialog :is(.web-questions, .team-asks) .question-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question-line:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question-line .model-facts {
+  column-gap: 14px;
+  color: var(--muted);
+}
+
+/* The time keeps one width down the list, so who asked starts at the same place on every line. */
+.preferences-dialog :is(.web-questions, .team-asks) .model-facts > .when {
+  min-width: 15ch;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .outcome {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A question without an answer is quiet: the bright lines are the ones with something to read. */
+.preferences-dialog :is(.web-questions, .team-asks) .question.quiet :is(.outcome, .question-text > .one-line) {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* The opened question is one raised sheet with the selection bar. */
+.preferences-dialog :is(.web-questions, .team-asks) .question.open {
+  border-bottom-color: transparent;
+  border-radius: 0 6px 6px 0;
+  background: var(--raised);
+  box-shadow: inset 2px 0 0 var(--identity);
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question.open > .question-line:hover:not(:disabled) {
+  background: transparent;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question-body p {
+  margin: 0;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .whole {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .part-label {
+  margin: 8px 0 0;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) :is(.claims, .plain-lines) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .plain-lines {
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A claim that is not evidence has no plate and stays quiet. */
+.preferences-dialog :is(.web-questions, .team-asks) .claim {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 0 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Evidence stands on a plate, with its mark in weight. */
+.preferences-dialog :is(.web-questions, .team-asks) .claim.found {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--selected);
+  color: var(--text);
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .claim > :is(.mark, .passage) {
+  font-size: 12px;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .claim.found > .mark {
+  font-weight: 600;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .claim.found > .passage {
+  color: var(--muted);
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .page-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .page-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.preferences-dialog :is(.web-questions, .team-asks) .question-body > .page-foot {
+  padding: 6px 0 12px;
+}
+
+/* Narrow: the label goes above its control, so the field and the switch's words get the whole width. */
+@container web-questions (max-width: 520px) {
+  .preferences-dialog .web-questions .preferences-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preferences-dialog .web-questions .preferences-row-label {
+    padding-top: 0;
+  }
+}
+
+/* Team › Asks (73.1): the Web questions list, line for line, with Stop beside a running line and the reason on the line itself. */
+.preferences-dialog .team-asks .ask-line-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.preferences-dialog .team-asks .ask-line-row > .stop {
+  margin-right: 12px;
+}
+
+.preferences-dialog .team-asks .reason {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .team-asks .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .team-asks .path-fact {
+  font-size: 11.5px;
+}
+
+/* The teammate's words stand on one plate, as plain text: nothing in them is drawn as a link, a picture or markup. */
+.preferences-dialog .team-asks .answer-plate {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--selected);
+  color: var(--text);
+}
+
+.preferences-dialog .team-asks .part-label > .faint {
+  font-weight: 400;
+}
+
+.preferences-dialog .team-asks .ask-facts {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.preferences-dialog .team-asks .ask-facts dd.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Asks' times are at most "14 Oct 23:07": the time column keeps that width so who asked lines up. */
+.preferences-dialog .team-asks .model-facts > .when {
+  min-width: 12ch;
+}
+
+/* A running line ends in Stop: the whole row lights, not only the part that opens it. */
+.preferences-dialog .team-asks .ask-line-row:has(> .stop):hover {
+  background: var(--hover);
+}
+
+.preferences-dialog .team-asks .ask-line-row:has(> .stop) > .question-line:hover:not(:disabled) {
+  background: transparent;
+}
+
+/* A run id moves to the next line whole rather than breaking inside. */
+.preferences-dialog .team-asks .ask-facts dd.wrap > .mono {
+  white-space: nowrap;
+}

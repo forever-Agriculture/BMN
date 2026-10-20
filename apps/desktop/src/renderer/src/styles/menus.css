@@ -1,0 +1,92 @@
+/* MODULE: styles/menus.css - BMN's popup menus; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- Menus ---------- */
+
+.popup-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.popup-menu [role='menuitem'],
+.popup-menu [role='menuitemcheckbox'] {
+  justify-content: space-between;
+  gap: 16px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.popup-menu [role='menuitem'] kbd {
+  color: var(--muted);
+  font: 11px var(--font-mono);
+}
+
+/* F4: a danger action is a plain row at rest and takes the error tone on hover only. */
+.popup-menu [role='menuitem'].danger:hover:not(:disabled) {
+  color: var(--error);
+}
+
+.popup-menu hr {
+  width: 100%;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+}
+
+/* An exclusive choice inside a menu: a named group whose current option carries a check. */
+.popup-menu .menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.popup-menu .menu-group-label {
+  padding: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.popup-menu [role='menuitemradio'] {
+  justify-content: flex-start;
+  gap: 16px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.popup-menu [role='menuitemradio'] > span {
+  display: inline-flex;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The selected choice, and a switch that is on, are named by a glyph as well as by aria-checked, never by colour alone. */
+.popup-menu [role='menuitemradio']::after,
+.popup-menu [role='menuitemcheckbox']::after {
+  content: '';
+  width: 12px;
+  color: var(--text);
+  text-align: right;
+}
+
+.popup-menu [role='menuitemradio'][aria-checked='true']::after {
+  content: '✓';
+}
+
+/* The glyph is for the eye; aria-checked already says it, so the switch keeps its plain name when it is read out. */
+.popup-menu [role='menuitemcheckbox'][aria-checked='true']::after {
+  content: '✓' / '';
+}
+
+.popup-menu [role='menuitemradio'][aria-checked='true'] {
+  background: var(--selected);
+}

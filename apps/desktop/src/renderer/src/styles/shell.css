@@ -1,0 +1,206 @@
+/* MODULE: styles/shell.css - the window shell; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- Shell ---------- */
+
+.shell-window {
+  --side-panel-width: min(340px, 90vw);
+  /* Three 18px lines + 16px padding/border, 44px bottom offset and 8px clearance. */
+  --brief-reserve: 122px;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--ground);
+}
+
+.app-header {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  height: 44px;
+  flex: none;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 196px;
+  color: var(--identity);
+}
+
+.identity svg {
+  flex: none;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--identity) 45%, transparent));
+}
+
+.motto {
+  color: var(--identity);
+  font-size: 12.5px;
+  text-shadow: 0 0 10px color-mix(in srgb, var(--identity) 25%, transparent);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.breadcrumb strong {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.breadcrumb .separator {
+  color: var(--faint);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Story 76.3: away is a state, not attention: the app's own box, no gold, no plate; set apart from the two icons. */
+.away-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.away-check input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.away-check[data-away] {
+  color: var(--text);
+}
+
+/* Checked, the words open the summary so far: a plain text button, no plate (Story 76.6). */
+.away-check button.away-words {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.away-check button.away-words:hover { text-decoration: underline; }
+
+/*
+ * The failure bar's red used to run the full window width along its bottom edge, directly against the
+ * gold selection outline of the pane beneath it: two saturated 1px lines touching, meaning two
+ * different things (owner, 2026-09-20; design review the same day). The red moved to a short accent at
+ * the reading start of the message and the bottom edge became the ordinary hairline seam, so nothing
+ * red runs alongside the gold. Selection keeps its token, its shape and its precedence.
+ */
+.feedback-notice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px 7px 15px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+  background: var(--raised);
+  font-size: 13px;
+}
+
+/* Not on `.brief`, which is a confirmation and was never red. */
+.feedback-notice:not(.brief)::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 3px;
+  background: var(--error);
+  pointer-events: none;
+}
+
+/* Brief confirmations float above the panes so terminals do not refit each time one appears. */
+.feedback-notice.brief {
+  position: fixed;
+  padding-left: 12px;
+  bottom: 44px;
+  left: 50%;
+  z-index: 30;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  border: 1px solid var(--rim);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
+  pointer-events: none;
+}
+
+.feedback-notice.brief button {
+  flex-shrink: 0;
+  pointer-events: auto;
+}
+
+.feedback-notice.brief > span {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 18px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  pointer-events: auto;
+}
+
+/* Keep Undo fixed through outside-pointer dismissal. Only overlays reserve space; terminals never refit. */
+.shell-window:has(> .feedback-notice.brief) .workspace-body.with-panel > .side-panel {
+  bottom: var(--brief-reserve);
+}
+
+.shell-window:has(> .feedback-notice.brief) .session-request-card {
+  max-height: max(100px, calc(100vh - var(--request-top, 90px) - var(--brief-reserve)));
+}
+
+.feedback-notice span {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-body {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace-body.focus-mode {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Utility drawers cover the live view. Resizing an inline TUI can permanently reflow old
+   output; inspecting files or launch settings must preserve the program's terminal grid. */
+.workspace-body.with-panel > .side-panel {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: var(--side-panel-width);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
+}

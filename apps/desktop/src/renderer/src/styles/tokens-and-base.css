@@ -1,0 +1,379 @@
+/* MODULE: styles/tokens-and-base.css - color modes, identities, base elements, focus rings and status dots; a part of styles.css, which imports its parts in cascade order */
+
+/* Black is the default color mode. Knight is the default identity: heraldic gold. */
+:root {
+  --ground: #0a0a0a;
+  --surface: #0e0e0e;
+  --raised: #141414;
+  --hover: #171717;
+  --selected: #1c1c1c;
+  --hairline: #1f1f1f;
+  --border: #6e6e6e;
+  --text: #e8e8e8;
+  --muted: #a3a3a3;
+  --faint: #737373;
+  --identity: #c9a45c;
+  --attention: #c9a45c;
+  --error: #e5816c;
+  --verified: #8db58f;
+  --selection: #333333;
+  --focus: #e8e8e8;
+  /* L4 (docs/design.md): the one line around a floating sheet, text 9% in every colour mode. */
+  --rim: color-mix(in srgb, var(--text) 9%, transparent);
+  /* Chrome-only hover feedback; terminal output and status marks never animate. */
+  --hover-transition: background-color 100ms ease-out, border-color 100ms ease-out, color 100ms ease-out;
+  --font-chrome: 'Ubuntu Sans', Ubuntu, system-ui, sans-serif;
+  --font-mono: 'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Ubuntu Mono', monospace;
+  color: var(--text);
+  background: var(--ground);
+  font-family: var(--font-chrome);
+  font-size: 13px;
+  color-scheme: dark;
+}
+
+/* Steel remains available as the cool palette. */
+:root[data-color-mode='steel'] {
+  --ground: #14171b;
+  --surface: #191d22;
+  --raised: #20252b;
+  --hover: #232930;
+  --selected: #29303a;
+  --hairline: #2b3139;
+  --border: #78828e;
+  --text: #e3e6ea;
+  --muted: #a5adb7;
+  --faint: #737c87;
+  --selection: #3b4552;
+  --focus: #e3e6ea;
+}
+
+/* Brown is the original warm Chancel look. */
+:root[data-color-mode='brown'] {
+  --ground: #1b1917;
+  --surface: #211e1b;
+  --raised: #292521;
+  --hover: #2a2621;
+  --selected: #302b24;
+  --hairline: #33302b;
+  --border: #82776b;
+  --text: #e8e2d6;
+  --muted: #aba296;
+  --faint: #7d7368;
+  --selection: #524b3f;
+  --focus: #e8e2d6;
+}
+
+:root[data-color-mode='dark'] {
+  --ground: #161616;
+  --surface: #1b1b1b;
+  --raised: #222222;
+  --hover: #242424;
+  --selected: #2b2b2b;
+  --hairline: #2c2c2c;
+  --border: #7c7c7c;
+  --text: #e6e4e0;
+  --muted: #a6a39e;
+  --faint: #767370;
+  --selection: #3f3f3f;
+  --focus: #e6e4e0;
+}
+
+/* Black is near-black, for dark rooms and OLED screens, like a black Zen browser space. */
+:root[data-color-mode='black'] {
+  --ground: #0a0a0a;
+  --surface: #0e0e0e;
+  --raised: #141414;
+  --hover: #171717;
+  --selected: #1c1c1c;
+  --hairline: #1f1f1f;
+  --border: #6e6e6e;
+  --text: #e8e8e8;
+  --muted: #a3a3a3;
+  --faint: #737373;
+  --selection: #333333;
+  --focus: #e8e8e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  color: var(--text);
+  background: var(--selection);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--hover-transition);
+}
+
+button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  transition-duration: 0ms;
+}
+
+button.primary {
+  color: var(--ground);
+  background: var(--text);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+button.primary:active:not(:disabled) {
+  color: var(--ground);
+  background: var(--text);
+}
+
+button.ghost,
+.icon-button {
+  color: var(--muted);
+}
+
+button.ghost:hover:not(:disabled),
+.icon-button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.icon-button {
+  min-width: 28px;
+  padding: 2px 6px;
+  font-size: 15px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  color: var(--faint);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  opacity: 0.55;
+}
+
+button.primary:disabled {
+  color: var(--faint);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+/* B4, B5, B7: a quiet word, a glyph, a row and a toggle are not plates. They have no fill at rest or disabled, keep
+   their own weight, and take the hover and press tints above, which outrank the first rule. */
+button:where(.ghost, .icon-button, .row-menu-button, .workspace-row > :first-child, .session-row > :first-child,
+  .popup-menu [role^='menuitem'], .pane-actions button:not(.project-plate), .pane-footer .speak-button,
+  .pane-request-control) {
+  background: transparent;
+}
+
+button:where(.ghost, .icon-button, .row-menu-button, .workspace-row > :first-child, .session-row > :first-child,
+  .popup-menu [role^='menuitem'], .pane-actions button:not(.project-plate), .pane-footer .speak-button,
+  .pane-request-control):disabled {
+  background: transparent;
+}
+
+button:where(.icon-button, .row-menu-button, .workspace-row > :first-child, .session-row > :first-child,
+  .popup-menu [role^='menuitem'], .pane-actions button:not(.project-plate), .pane-footer .speak-button) {
+  font-weight: inherit;
+}
+
+input,
+select,
+textarea {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--ground);
+  font: inherit;
+}
+
+:where(input:not([type='checkbox'], [type='radio']), select, textarea):hover:not(:focus-visible) {
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  min-height: 0;
+  accent-color: var(--text);
+}
+
+/* Focus sits inside the control's own edge; a ring floating outside a bordered control reads as a double line. */
+.shell-window :where(button, input, select, textarea, [tabindex]):not(.xterm-helper-textarea):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* A checked box or radio is filled with the focus colour, so its ring floats just outside instead. */
+.shell-window input:is([type='checkbox'], [type='radio']):focus-visible {
+  outline-offset: 2px;
+}
+
+/* A text field's border becomes the ring, with a soft halo so keyboard focus still reads at a glance. */
+.shell-window :where(input:not([type='checkbox'], [type='radio']), select, textarea):not(.xterm-helper-textarea):focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
+}
+
+/* A primary button is filled with the focus colour, so its ring uses the ground instead. */
+.shell-window button.primary:focus-visible {
+  outline-color: var(--ground);
+}
+
+.xterm-helper-textarea:focus-visible {
+  outline: none;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.chip {
+  display: inline-block;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  font: 11px/18px var(--font-mono);
+  white-space: nowrap;
+}
+
+/* The model-maker's flag beside the agent chip: emoji only, the one colour the palette allows. */
+.origin-flag {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: text-bottom;
+  white-space: nowrap;
+}
+
+.inline-error {
+  color: var(--error);
+  font-size: 12px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Status dot: running is green, needs-you is attention, exited is faint, idle is a ring only. */
+.status-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.status-dot.running {
+  background: var(--verified);
+}
+
+/*
+ * A live session at rest keeps the running colour and the dot's geometry, hollow instead of filled. The ring is 2px,
+ * not the 1px of the faint Not-started ring: at 7px the eye resolves almost no colour, so the two rings are told apart
+ * by weight, not hue (design review, 2026-09-20). No pulse: status marks never animate.
+ */
+.status-dot.running-idle {
+  border: 2px solid var(--verified);
+  background: transparent;
+}
+
+.status-dot.needs-you {
+  background: var(--attention);
+  box-shadow: 0 0 0 1px var(--attention);
+}
+
+.status-dot.idle {
+  border: 1px solid var(--faint);
+  background: transparent;
+}
+
+/*
+ * Workspace identity marker: a 4x12 solid bar, deliberately never the 7px circle every status mark
+ * uses, so identity and status cannot be confused at a glance. One curated set of five swatches
+ * serves all four palettes; each measures at least 4.92:1 against every palette's ground, surface,
+ * hover and selected background (measured 2026-09-20, design by Fable, minimum on steel's --selected
+ * #29303a, against a 3:1 requirement). The five are told apart by their names in the tooltip and the
+ * accessible name, never by hue alone. `none` renders no element at all, so a workspace that never
+ * chose a marker looks exactly as it did before the choice existed. Markers never animate.
+ */
+.workspace-marker {
+  display: inline-block;
+  flex: none;
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--marker, transparent);
+}
+
+.workspace-marker[data-marker='slate'] {
+  --marker: #8fa3b8;
+}
+
+.workspace-marker[data-marker='teal'] {
+  --marker: #5cbfb0;
+}
+
+.workspace-marker[data-marker='blue'] {
+  --marker: #6fa8e8;
+}
+
+.workspace-marker[data-marker='violet'] {
+  --marker: #a98fe6;
+}
+
+.workspace-marker[data-marker='rose'] {
+  --marker: #e08ab8;
+}
+
+/* In the menu the swatch previews the choice. None is drawn as nothing, because nothing is what it
+ * leaves behind; the word beside it carries the meaning (design review, 2026-09-20). */

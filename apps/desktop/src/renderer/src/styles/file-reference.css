@@ -1,0 +1,211 @@
+/* MODULE: styles/file-reference.css - the file reference preview; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- File reference preview ---------- */
+
+.file-reference-dialog {
+  width: min(960px, calc(100vw - 48px));
+}
+
+.file-reference-entry {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.file-reference-entry label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-entry input {
+  width: 100%;
+  font-size: 13px;
+}
+
+/* S4: the button beside the 36px field matches it, primary or plate. */
+.file-reference-entry button {
+  min-height: 36px;
+  padding-inline: 18px;
+}
+
+/* The facts about this opening sit on one quiet plate, on a steady row rhythm. */
+.file-reference-meta {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3.5%, transparent);
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.file-reference-meta dt {
+  color: var(--muted);
+}
+
+.file-reference-meta dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-reference-meta .mono {
+  font-size: 12px;
+}
+
+.file-reference-path {
+  user-select: text;
+}
+
+/* The button's padding is pulled back so a wrapped "Choose folder…" lines up with the path above it. */
+.file-reference-base-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: -6px;
+}
+
+.file-reference-base-actions button {
+  min-height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.file-reference-status {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-position {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.file-reference-preview {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 120px;
+  max-height: 55vh;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--ground);
+}
+
+.file-reference-preview::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.file-reference-preview::-webkit-scrollbar-track,
+.file-reference-preview::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.file-reference-preview::-webkit-scrollbar-thumb {
+  border: 3px solid var(--ground);
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.file-reference-preview::-webkit-scrollbar-button {
+  display: none;
+}
+
+.file-reference-preview pre {
+  margin: 0;
+  padding: 10px 0;
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre;
+}
+
+.file-reference-gutter {
+  position: sticky;
+  left: 0;
+  padding-inline: 14px 10px !important;
+  color: var(--faint);
+  text-align: right;
+  background: color-mix(in srgb, var(--text) 2.5%, var(--ground));
+  user-select: none;
+}
+
+.file-reference-code {
+  min-width: max-content;
+  padding-inline: 14px 16px !important;
+  color: var(--text);
+  user-select: text;
+}
+
+/* The referenced line carries the identity colour, as the palette's selected row does. */
+.file-reference-line {
+  display: block;
+  margin-inline: -14px -16px;
+  padding-inline: 14px 16px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--identity) 13%, transparent);
+  box-shadow: inset 3px 0 var(--identity);
+}
+
+.file-reference-actions {
+  align-items: center;
+}
+
+.file-reference-feedback {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-send {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.file-reference-send label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-send select {
+  width: 100%;
+  min-height: 36px;
+}
+
+.file-reference-send p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.file-reference-send-preview {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.file-reference-send-preview pre {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--ground);
+  font: 12px/1.5 var(--font-mono);
+  user-select: text;
+}

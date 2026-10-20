@@ -1,0 +1,267 @@
+/* MODULE: styles/preferences-judge.css - the judge page; a part of preferences-dialog.css, which imports its parts in cascade order */
+
+/* Jev's page: an agent BMN calls itself. */
+.preferences-dialog .judge-page {
+  container: judge / inline-size;
+}
+
+.preferences-dialog .judge-page a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--faint);
+  text-underline-offset: 3px;
+}
+
+.preferences-dialog .judge-page a:hover {
+  text-decoration-color: currentColor;
+}
+
+/* A provider and its answer. The answer that limits is the bright one. */
+.preferences-dialog .judge-page .party {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+
+.preferences-dialog .judge-page .party > .answer {
+  color: var(--muted);
+}
+
+.preferences-dialog .judge-page .party > .answer.limits,
+.preferences-dialog .judge-page .verdict {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preferences-dialog .judge-page .source {
+  flex: 1 1 100%;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Cost: one table, one set of columns for both months. */
+.preferences-dialog .judge-page .cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .judge-page .cost-table :is(th, td) {
+  padding: 4px 0 4px 14px;
+  color: var(--muted);
+  font-weight: 400;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.preferences-dialog .judge-page .cost-table :is(th, td):last-child {
+  padding-right: 12px;
+}
+
+/* The first column takes what the numbers leave and cuts a long purpose short. */
+.preferences-dialog .judge-page .cost-table :is(th, td):first-child {
+  width: 100%;
+  max-width: 0;
+  padding-left: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.preferences-dialog .judge-page .cost-table thead th {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* A month's own line is its total: bright, under a hairline. Its purposes sit below it, indented and quiet. */
+.preferences-dialog .judge-page .cost-table .month > :is(th, td) {
+  padding-top: 9px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preferences-dialog .judge-page .cost-table .month > th {
+  padding-left: 12px;
+}
+
+.preferences-dialog .judge-page .cost-table .month-name {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+/* Try it: the text grows to a few lines, then scrolls. */
+.preferences-dialog .judge-page .try-text {
+  flex: 1 1 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 76px;
+  max-height: 220px;
+  line-height: 1.45;
+  resize: none;
+  field-sizing: content;
+}
+
+.preferences-dialog .judge-page .try-stack {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* What may be sent takes the room; Ask keeps the end of the line. */
+.preferences-dialog .judge-page .try-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.preferences-dialog .judge-page .try-line > :first-child {
+  flex: 1 1 0;
+  min-width: 12em;
+}
+
+/* A reply that says nothing has no plate and a quiet number. */
+.preferences-dialog .judge-page .try-reply {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 0 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A yes stands on a plate. */
+.preferences-dialog .judge-page .try-reply.said {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--selected);
+}
+
+.preferences-dialog .judge-page .noul {
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .judge-page .said > .noul {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preferences-dialog .judge-page .reply-words {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preferences-dialog .judge-page .reply-words strong {
+  font-weight: 600;
+}
+
+/* Not `.facts`: that name is the sheets' two-column list. */
+.preferences-dialog .judge-page .reply-words > .reply-facts {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Last calls: one grid for the whole list, so every column starts at the same place on every line. */
+.preferences-dialog .judge-page .calls {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1.6fr) minmax(0, 1fr) max-content;
+  column-gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preferences-dialog .judge-page .calls > li {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  row-gap: 2px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .judge-page .calls > li > :last-child {
+  text-align: right;
+}
+
+.preferences-dialog .judge-page .calls > .calls-head {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.preferences-dialog .judge-page .calls :is(.who, .purpose) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preferences-dialog .judge-page .calls :is(.when, .purpose, .outcome) {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.preferences-dialog .judge-page .calls .when {
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .judge-page .calls .outcome {
+  font-size: 12px;
+}
+
+/* Most calls are answered and stay quiet: the bright outcome is the one that went wrong. */
+.preferences-dialog .judge-page .calls .loud > .outcome {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Narrow: labels go above their controls, and a call takes two lines (who and outcome, then when and purpose). */
+@container judge (max-width: 520px) {
+  .preferences-dialog .judge-page .preferences-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preferences-dialog .judge-page .preferences-row-label {
+    padding-top: 0;
+  }
+
+  .preferences-dialog .judge-page .cost-table .month-name {
+    display: none;
+  }
+
+  .preferences-dialog .judge-page .calls {
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+  }
+
+  .preferences-dialog .judge-page .calls > .calls-head {
+    display: none;
+  }
+
+  .preferences-dialog .judge-page .calls .who {
+    grid-area: 1 / 1 / 2 / 3;
+  }
+
+  .preferences-dialog .judge-page .calls .outcome {
+    grid-area: 1 / 3;
+  }
+
+  .preferences-dialog .judge-page .calls .when {
+    grid-area: 2 / 1;
+  }
+
+  .preferences-dialog .judge-page .calls .purpose {
+    grid-area: 2 / 2 / 3 / 4;
+  }
+}

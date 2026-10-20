@@ -1,0 +1,224 @@
+/* MODULE: styles/dialogs.css - dialogs, popovers and the palette frame; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- Dialogs, popovers and palette ---------- */
+
+/* A dialog is one lifted sheet: no frame, a faint rim and a single deep shadow. */
+.app-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: 90vh;
+  overflow: clip;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  outline: 1px solid var(--rim);
+  outline-offset: -1px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--identity) 3%, var(--raised));
+  box-shadow: 0 30px 140px -15px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 30%);
+}
+
+.app-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: dialog-in 180ms ease-out;
+}
+
+.app-dialog::backdrop {
+  background: rgb(0 0 0 / 28%);
+  backdrop-filter: blur(6px);
+}
+
+.app-dialog[open]::backdrop {
+  animation: backdrop-in 180ms ease-out;
+}
+
+/* Chrome only: a dialog settles into place when it opens; terminal output never animates. */
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.app-dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 12px 0 20px;
+}
+
+.app-dialog-heading h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.app-dialog-heading .icon-button {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 16px;
+}
+
+.app-dialog-heading .icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.app-dialog-heading .icon-button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.app-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 20px 20px;
+}
+
+/* Fields and buttons inside a dialog: soft edges and filled plates instead of outlined boxes. */
+.app-dialog :where(input:not([type='checkbox'], [type='radio']), select, textarea) {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 10px;
+  transition: var(--hover-transition), box-shadow 100ms ease-out;
+}
+
+.app-dialog :where(input:not([type='checkbox'], [type='radio']), select, textarea):hover:not(:focus-visible) {
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+.app-dialog :where(button:not(.icon-button)) {
+  min-height: 32px;
+  padding: 4px 14px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-weight: 500;
+}
+
+.app-dialog :where(button:not(.icon-button)):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.app-dialog :where(button:not(.icon-button)):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  box-shadow: none;
+}
+
+.app-dialog :where(button:not(.icon-button)):disabled {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.app-dialog :where(button.ghost) {
+  background: transparent;
+}
+
+.app-dialog :where(button.ghost):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.app-dialog :where(button.ghost):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.app-dialog button.primary:disabled {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.app-dialog :where(button.danger) {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+}
+
+.app-dialog :where(button.danger):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 22%, transparent);
+}
+
+.app-dialog :where(button.danger):active:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 26%, transparent);
+}
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dialog-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dialog-form input {
+  color: var(--text);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* The exact Resume command, wrapped rather than cut: the owner confirms the whole of it. */
+.resume-command {
+  max-height: 30vh;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--ground);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dialog-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* What a reported command runs and where (Story 43.2), shown whole: the owner confirms all of it. */
+.resume-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.resume-facts dt {
+  color: var(--muted);
+}
+
+.resume-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* Session details: the command a program reported (Story 43.1), exactly as it said it, on a line of its own. */
+.reported-resume code {
+  display: block;
+  margin: 2px 0;
+  font: 12px/1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}

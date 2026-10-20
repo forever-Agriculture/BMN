@@ -1,0 +1,168 @@
+/* MODULE: styles/preferences-history.css - the History page; a part of preferences-dialog.css, which imports its parts in cascade order */
+
+.preferences-dialog .hook-check-report {
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .hook-check-report section {
+  border-top: 1px solid var(--border);
+  padding: 8px 0;
+}
+
+.preferences-dialog .hook-check-report h4 {
+  margin: 0 0 4px;
+}
+
+.preferences-dialog .hook-check-report ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+/* History (Epic 31): one filled track per limit, kv rows, the one confirm band. Gold marks selection only. */
+.preferences-dialog .history-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* Segmented: one track, the chosen segment a raised plate with a short gold bar; focus is the white ring. */
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(var(--segments, 4), minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.segmented [role='radio'] {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  box-shadow: none;
+}
+
+.segmented.fit {
+  grid-template-columns: repeat(var(--segments, 4), auto);
+}
+
+.segmented [role='radio'] svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.segmented [role='radio']::before {
+  position: absolute;
+  right: 10px;
+  bottom: 3px;
+  left: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  content: '';
+  transition: var(--hover-transition);
+}
+
+.segmented [role='radio']:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+/* B3: this hover outranks `button:active`, so the press is repeated here. */
+.segmented [role='radio']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.segmented [role='radio']:disabled {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  opacity: 1;
+}
+
+.segmented [role='radio'][aria-checked='true'] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 35%);
+}
+
+.segmented [role='radio'][aria-checked='true']::before {
+  background: var(--identity);
+}
+
+.segmented:has([role='radio']:disabled) {
+  opacity: 0.5;
+}
+
+/* Agent rows follow .kv: muted keys, bright values, the value column flush right. */
+.preferences-dialog .history-rows {
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  margin: 4px 0 0;
+}
+
+.preferences-dialog .history-row {
+  display: contents;
+}
+
+.preferences-dialog .history-rows dd.value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.preferences-dialog .history-rows dd.value[title],
+.preferences-dialog .history-rows .next {
+  color: var(--text);
+}
+
+.preferences-dialog .history-rows dd.failure {
+  grid-column: 2 / -1;
+  color: var(--muted);
+}
+
+/* The confirm band is its own row: hairline above, dot on the sentence's first line, primary centred on the whole. */
+.preferences-dialog .history-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .history-confirm p {
+  flex: 1;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.preferences-dialog .history-confirm .status-dot {
+  margin-top: 6px;
+}
+
+.preferences-dialog .history-confirm button {
+  align-self: center;
+}
+
+.preferences-dialog .history-archive {
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 12px;
+}

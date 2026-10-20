@@ -1,0 +1,723 @@
+/* MODULE: styles/session-panes.css - the session area and its panes; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- Session area and panes ---------- */
+
+.session-area {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-area.stacked {
+  flex-direction: column;
+}
+
+.session-terminal {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  container: pane / inline-size;
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+}
+
+.session-area.split .session-terminal.selected {
+  outline-color: var(--identity);
+}
+
+.session-area.split .session-terminal:not(.selected) .pane-heading strong {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.session-terminal-hidden {
+  position: absolute;
+  left: -100000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.session-terminal.drop-target {
+  outline: 2px dashed var(--border);
+}
+
+.pane-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 42px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.pane-heading strong {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  max-width: 40%;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-status {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-status.needs-you {
+  color: var(--attention);
+}
+
+.pane-state {
+  font-weight: 500;
+}
+
+.pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* A session's listening ports: small plates, each opening the owner's browser (Story 41.2). No mark, no colour. */
+.pane-ports {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.pane-ports .port-chip {
+  min-height: 0;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font: 11px/22px var(--font-mono);
+  white-space: nowrap;
+}
+
+.pane-ports button.port-chip:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.pane-ports button.port-chip:active {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.pane-ports .port-chip.more {
+  color: var(--muted);
+}
+
+.session-ports ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The address plate, and under it the program and the bound address in full. */
+.session-ports li {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.session-ports .port-open {
+  font-family: var(--font-mono);
+}
+
+.session-ports .port-detail {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pane-actions button {
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.pane-actions button[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--selected);
+}
+
+/* A toggle that is on (Split, Focus, Files) is a bar under its word, so the project plate stays the one filled thing in
+   the row; in a split pane the two no longer read as twins (Fable's review 2026-10-18). */
+.pane-actions button[aria-pressed='true']:not(.project-plate) {
+  border-color: transparent;
+  border-radius: 6px 6px 2px 2px;
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--text);
+}
+
+.pane-actions button:disabled {
+  color: var(--faint);
+}
+
+/* The project plate: the one filled button in the row, named by the project's folder (Fable, 2026-10-18). Filled means a
+   thing of this session that opens; the borderless toggles beside it are views. Narrow panes hide its word, not its fill. */
+.pane-actions button.project-plate {
+  margin-right: 6px;
+}
+
+.pane-actions button.project-plate,
+.empty-state button.project-plate {
+  border-color: transparent;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.pane-actions button.project-plate:hover,
+.empty-state button.project-plate:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+/* B3: the hover above outranks `button:active`, so the press is repeated here. */
+.pane-actions button.project-plate:active:not(:disabled),
+.empty-state button.project-plate:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.pane-actions button.project-plate[aria-pressed='true'] {
+  background: var(--selected);
+}
+
+.project-plate .button-label {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  font: 12px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.progress-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  min-height: 28px;
+  padding: 3px 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.progress-strip .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress-strip .state.verified {
+  color: var(--verified);
+}
+
+.progress-strip .state.failed,
+.progress-strip .state.blocked {
+  color: var(--error);
+}
+
+.progress-strip .state.waiting {
+  color: var(--attention);
+}
+
+.progress-strip .source {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.progress-strip .stale {
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-size: 11px;
+}
+
+/* The state word is the way into the detail. It keeps its own state colour and adds no chrome of its
+   own, so the strip reads as one line rather than as a row of controls. */
+.progress-strip .progress-open {
+  display: flex;
+  min-height: 0;
+  line-height: inherit;
+  flex: 0 1 auto;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.progress-strip .progress-open:hover {
+  text-decoration: underline;
+}
+
+/* A bare text node cannot shrink; the word is a span so a narrow strip truncates it instead of
+   spilling it over the label. */
+.progress-strip .progress-open .word {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In Session details the strip wraps inside its section (L1): label, then state, then source, with no frame. */
+.session-inspector .progress-strip {
+  flex-wrap: wrap;
+  row-gap: 2px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  white-space: normal;
+}
+
+.session-inspector .progress-strip .label {
+  flex: 1 1 100%;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.session-inspector .progress-strip .progress-open {
+  flex: 1 1 auto;
+}
+
+.session-inspector .progress-strip .source {
+  flex: 1 1 100%;
+  margin-left: 0;
+  font-size: 11px;
+}
+
+/* On a stopped session the strip is a plate, not a pane bar: the label gets its own line (up to two),
+   then state and evidence on the left and the source on the right, on one baseline. */
+.stopped-session .progress-strip {
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 4px;
+  min-height: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--raised);
+  white-space: normal;
+}
+
+.stopped-session .progress-strip .label {
+  display: -webkit-box;
+  flex: 1 1 100%;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.stopped-session .progress-strip .progress-open {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+
+.stopped-session .progress-strip .source {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Whether anything backs the word is never in the word's own colour: it is a fact, not a verdict. */
+.progress-strip .progress-open .evidence {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+.progress-evidence-dialog h3 {
+  margin: 12px 0 2px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.progress-evidence-dialog .provenance {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.progress-evidence-dialog .provenance .stale {
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-size: 11px;
+}
+
+.progress-evidence-dialog .detail {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.progress-evidence-dialog .eyebrow {
+  display: block;
+  margin: 14px 0 6px;
+}
+
+/* A newer report informs; it does not ask. A row over a hairline (L2), muted, never orange and never red. */
+.progress-replaced {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.progress-replaced button {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.progress-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress-evidence li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 12px;
+}
+
+.progress-evidence .name {
+  overflow: hidden;
+  color: var(--text);
+  font: 12px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A file that is gone is muted, never --error: red would read as the reported work having failed. */
+.progress-evidence .availability {
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.progress-evidence li.unavailable .name {
+  color: var(--muted);
+}
+
+.progress-evidence .actions {
+  display: flex;
+  gap: 4px;
+}
+
+.progress-evidence .actions button {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+
+.progress-evidence-dialog .files-preview-box {
+  margin-top: 10px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* A lens over the terminal, not a row beside it: the surface keeps its size, so the program is never resized. */
+.terminal-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.terminal-search {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 4px 6px;
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+}
+
+/* The input gives up its width first; the result text truncates only once the input is at its minimum. */
+.terminal-search input {
+  flex: 0 100 180px;
+  min-width: 140px;
+  font-family: var(--font-mono);
+}
+
+.terminal-search-bottom { top: auto; bottom: 8px; }
+.workspace-pins-dialog code { overflow-wrap: anywhere; }
+.workspace-pins-dialog li { margin-block: 10px; }
+.workspace-pins-dialog form { display: flex; flex-wrap: wrap; gap: 8px; }
+.workspace-pins-dialog form label { flex: 1; min-width: 0; }
+.workspace-pins-dialog input { width: 100%; box-sizing: border-box; }
+
+@container pane (max-width: 520px) {
+  .terminal-search input {
+    min-width: 72px;
+  }
+}
+
+/* Too narrow for one row of controls: the bar still floats, with the input on its own row above them. */
+@container pane (max-width: 420px) {
+  .terminal-search {
+    flex-wrap: wrap;
+  }
+
+  .terminal-search input {
+    flex: 1 1 100%;
+  }
+
+  .terminal-search .search-result {
+    flex: 1 1 0;
+  }
+}
+
+.terminal-search button {
+  flex: none;
+}
+
+.terminal-search .search-result {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-frame > .terminal-surface {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 12px;
+  background: var(--ground);
+}
+
+.terminal-surface .xterm {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-image-warning {
+  padding: 4px 12px;
+  color: var(--warning, var(--muted));
+  font-size: 12px;
+}
+
+.field-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pane-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 32px;
+  padding: 2px 8px 2px 12px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pane-footer .input-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-footer .armed {
+  color: var(--attention);
+}
+
+.pane-footer .input-state.listening {
+  color: var(--error);
+}
+
+.pane-footer button {
+  min-height: 26px;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.pane-footer .speak-button.recording {
+  border-radius: 6px 6px 2px 2px;
+  color: var(--text);
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-footer .speak-button.recording svg {
+  animation: speak-listening 1.4s ease-in-out infinite;
+}
+
+.pane-footer .speak-button.transcribing,
+.pane-footer .speak-button.starting {
+  color: var(--text);
+}
+
+@keyframes speak-listening {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.split-handle {
+  flex: none;
+  background: var(--hairline);
+}
+
+.session-area.side-by-side .split-handle {
+  width: 5px;
+  cursor: col-resize;
+  border-inline: 2px solid var(--ground);
+}
+
+.session-area.stacked .split-handle {
+  height: 5px;
+  cursor: row-resize;
+  border-block: 2px solid var(--ground);
+}
+
+.split-handle:hover,
+.split-handle:focus-visible {
+  background: var(--border);
+}
+
+.new-output {
+  position: absolute;
+  right: 20px;
+  bottom: 44px;
+  z-index: 5;
+  background: var(--raised);
+}
+
+.stopped-session,
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: auto;
+  max-width: 560px;
+  padding: 24px;
+}
+
+.session-area.split .stopped-session,
+.stopped-pane {
+  flex: 1 1 0;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  overflow: auto;
+}
+
+.stopped-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted);
+}
+
+.stopped-pane strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stopped-session h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.stopped-session p,
+.empty-state p {
+  color: var(--muted);
+}
+
+.stopped-session .actions,
+.empty-state .actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.empty-state h1 {
+  font-size: 18px;
+  font-weight: 500;
+}
+
+/* On the window's ground, saved output is a plate (L3), not a well. */
+.saved-output-summary {
+  max-height: 50vh;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--raised);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+}

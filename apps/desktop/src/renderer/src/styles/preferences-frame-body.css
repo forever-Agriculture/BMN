@@ -1,0 +1,155 @@
+/* MODULE: styles/preferences-frame-body.css - the dialog body, fields and shared rows; a part of preferences-dialog.css, which imports its parts in cascade order */
+
+.preferences-button {
+  position: relative;
+}
+
+.preferences-button .status-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+}
+
+/* Morning digest and Quiet hours: each feature is a hairline-separated group of ordinary rows. A schedule keeps its
+   checkbox, words and time fields on one baseline; each "words [time]" pair wraps as a unit. */
+.preferences-dialog .telegram-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .telegram-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 32px;
+}
+
+.preferences-dialog .telegram-schedule > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.preferences-dialog .telegram-schedule input[type='time']:disabled,
+.preferences-dialog .telegram-kinds:has(input:disabled) {
+  opacity: 0.5;
+}
+
+.preferences-dialog .telegram-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  inline-size: 100%;
+  padding-top: 7px;
+}
+
+.preferences-dialog .telegram-quiet-state {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .telegram-quiet-state[data-active='true'] {
+  color: var(--text);
+}
+
+.preferences-dialog .telegram-group .preferences-row-control > :is(.advanced, .preferences-error, .telegram-quiet-now) {
+  flex: 1 1 100%;
+}
+
+/* The words beside a feature's checkbox also label it, so they take the checkbox's pointer. */
+.preferences-dialog .telegram-schedule label {
+  cursor: pointer;
+}
+
+.preferences-dialog .telegram-quiet-now {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* Inside a group the hairline above the group already separates it; the disclosure needs no second rule. */
+.preferences-dialog .telegram-group .advanced {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* Pages (Epic 60): a left navigation over one page at a time. Solid plates on the dialog's ground, shape carries
+   meaning, gold marks only the chosen segment and the dot that says something waits for the owner. */
+.preferences-dialog {
+  width: min(1080px, calc(100vw - 32px));
+  height: min(820px, 90vh);
+  background: var(--surface);
+}
+
+.preferences-dialog .app-dialog-heading {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .app-dialog-body {
+  flex: 1;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.preferences-dialog .preferences-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.preferences-dialog .preferences-nav {
+  flex: none;
+  width: 176px;
+  padding: 8px;
+  overflow: auto;
+  border-right: 1px solid var(--hairline);
+}
+
+.preferences-dialog .nav-item {
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.preferences-dialog .nav-item:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.preferences-dialog .nav-item[aria-current] {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.preferences-dialog .nav-item .needs-dot {
+  margin-left: auto;
+}
+
+/* Story 75.10: Agents and Integrations show their views in one segmented line right under the page head's hairline;
+   head and views stay at the top together while the page scrolls. */
+.preferences-dialog .page-top {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 0 6px;
+  background: var(--surface);
+}

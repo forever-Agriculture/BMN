@@ -1,0 +1,1461 @@
+/* MODULE: styles/preferences-team-rules-models.css - team, rules, models, agent picker and push policy, interleaved, moved whole; a part of preferences-dialog.css, which imports its parts in cascade order */
+
+.preferences-dialog .page-top > .page-head {
+  position: static;
+  margin: 0;
+}
+
+.preferences-dialog .page-views {
+  padding: 10px 0 2px;
+}
+
+/* The attention mark in a head's status stands clear of its first word. */
+.preferences-dialog .page-head .faint > .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.preferences-dialog .preferences-main {
+  flex: 1;
+  min-width: 0;
+  padding: 0 24px 32px;
+  overflow: auto;
+}
+
+.preferences-dialog .preferences-page {
+  max-width: 860px;
+}
+
+/* An existing section is a page now: its heading is the page's title line and its rows stay as they were. */
+.preferences-dialog .preferences-page > .preferences-section {
+  padding: 0;
+  border-top: 0;
+}
+
+.preferences-dialog .preferences-page > .preferences-section > h3,
+.preferences-dialog .page-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin: 0 0 6px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.preferences-dialog .preferences-page > .preferences-section > h3,
+.preferences-dialog .page-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.preferences-dialog .page-head {
+  margin-bottom: 0;
+}
+
+.preferences-dialog .spacer {
+  flex: 1;
+}
+
+.preferences-dialog .muted {
+  color: var(--muted);
+}
+
+.preferences-dialog .faint {
+  color: var(--faint);
+}
+
+.preferences-dialog .error-text {
+  color: var(--error);
+}
+
+.preferences-dialog .mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .stack {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.preferences-dialog .crumb {
+  min-height: 0;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.preferences-dialog .crumb:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+
+.preferences-dialog .group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 22px 0 0;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.preferences-dialog .group-head .caption {
+  margin-left: auto;
+  color: var(--faint);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.preferences-dialog .page-note {
+  margin: 14px 0;
+  color: var(--muted);
+}
+
+.preferences-dialog .page-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 0;
+}
+
+.preferences-dialog :is(.team-page, .rules-page) .preferences-row {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog :is(.team-page, .rules-page) .advanced {
+  margin-top: 18px;
+  border-top: 0;
+}
+
+.preferences-dialog .issue-list {
+  flex: 1 1 100%;
+  margin: 6px 0;
+  padding-left: 18px;
+  color: var(--error);
+  font-size: 12px;
+}
+
+/* Controls: neutral plates. A field is a filled plate with no outline; focus is the white ring. */
+.preferences-dialog .field {
+  width: 100%;
+  max-width: 360px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+}
+
+.preferences-dialog .field::placeholder {
+  color: var(--faint);
+}
+
+.preferences-dialog .field.number {
+  max-width: 120px;
+  text-align: right;
+}
+
+.preferences-dialog :is(.field.wide, textarea.field) {
+  max-width: none;
+  resize: vertical;
+}
+
+.preferences-dialog .field[aria-invalid='true'] {
+  box-shadow: inset 0 0 0 1px var(--error);
+}
+
+.preferences-dialog .switch {
+  position: relative;
+  flex: none;
+  width: 30px;
+  min-width: 30px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--selection);
+}
+
+.preferences-dialog .switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: '';
+  transition: left 150ms ease-out;
+}
+
+/* The switch is small; its pointer target is not. */
+.preferences-dialog .switch::before {
+  position: absolute;
+  inset: -7px;
+  content: '';
+}
+
+.preferences-dialog .switch:hover:not(:disabled) {
+  background: var(--selection);
+}
+
+.preferences-dialog .switch.on,
+.preferences-dialog .switch.on:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.preferences-dialog .switch.on::after {
+  left: 16px;
+  background: var(--text);
+}
+
+.preferences-dialog .chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.preferences-dialog .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--raised);
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.preferences-dialog button.chip:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.preferences-dialog .chip.on,
+.preferences-dialog button.chip.on:hover:not(:disabled) {
+  background: var(--selection);
+  color: var(--text);
+}
+
+.preferences-dialog .chip-remove {
+  min-width: 16px;
+  min-height: 16px;
+  margin-right: -4px;
+  padding: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.preferences-dialog .chip-add .field {
+  width: 130px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border-radius: 11px;
+}
+
+.preferences-dialog .choice-list {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+}
+
+.preferences-dialog .choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.preferences-dialog .choice.disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.preferences-dialog .choice-line {
+  color: var(--faint);
+}
+
+.preferences-dialog .choice input {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--raised);
+  appearance: none;
+  cursor: inherit;
+}
+
+.preferences-dialog .choice input[type='radio'] {
+  border-radius: 50%;
+}
+
+.preferences-dialog .choice input:disabled {
+  border-color: var(--hairline);
+}
+
+.preferences-dialog .choice input[type='radio']:checked {
+  border-color: var(--text);
+  background: radial-gradient(var(--text) 36%, var(--raised) 42%);
+}
+
+.preferences-dialog .choice input[type='checkbox']:checked {
+  border-color: var(--text);
+  background: var(--text);
+}
+
+.preferences-dialog .choice input[type='checkbox']:checked::after {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--ground);
+  border-width: 0 1.6px 1.6px 0;
+  content: '';
+  rotate: 45deg;
+}
+
+.preferences-dialog .inline-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Marks: a chess piece per class and the dot. */
+.preferences-dialog .piece {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.preferences-dialog .piece-plate {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--selected);
+}
+
+.preferences-dialog .piece-plate .piece {
+  width: 22px;
+  height: 22px;
+}
+
+.preferences-dialog .needs-dot {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+/* Team › Agents: solid cards, two columns only when both fit. */
+.preferences-dialog .agent-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.preferences-dialog .agent-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  align-items: start;
+  padding: 11px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+  cursor: pointer;
+  transition: var(--hover-transition);
+}
+
+.preferences-dialog .agent-card:hover {
+  background: var(--hover);
+}
+
+.preferences-dialog .agent-card.off :is(.piece-plate, .agent-name) {
+  opacity: 0.55;
+}
+
+.preferences-dialog .agent-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .agent-open {
+  min-height: 0;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.preferences-dialog .agent-open:hover:not(:disabled) {
+  background: transparent;
+}
+
+.preferences-dialog .class-word,
+.preferences-dialog .price {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preferences-dialog .agent-notes {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.preferences-dialog .agent-app {
+  margin-top: 3px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .agent-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.preferences-dialog .actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.preferences-dialog .outside-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+/* The line above the rows says why they exist; it takes the width and its two actions stay at the end. */
+.preferences-dialog .outside-why {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.preferences-dialog .outside-diff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* One changed value: its name, then before and after; a role's order as its steps. */
+.preferences-dialog :is(.difference, .review-group) .chain {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+/* Lists: roles, approved versions, earlier versions of the rules. */
+.preferences-dialog .list-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .list-line b {
+  font-weight: 600;
+}
+
+.preferences-dialog .line-detail {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* A role the check holds to read-only: a plate beside its name, no new colour. */
+.preferences-dialog .role-mark {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.preferences-dialog .chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preferences-dialog .chain-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.preferences-dialog .chain .effort {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.preferences-dialog .chain-editor {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.preferences-dialog .candidate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .candidate:last-child {
+  border-bottom: 0;
+}
+
+.preferences-dialog .candidate-name {
+  min-width: 72px;
+}
+
+.preferences-dialog .candidate .order {
+  display: flex;
+  gap: 2px;
+}
+
+.preferences-dialog .candidate .order button {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.preferences-dialog .candidate .order button:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.preferences-dialog .candidate .order button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.preferences-dialog :is(.chain-editor, .sheet) :is(.chip:not(.on), .field) {
+  background: var(--selected);
+}
+
+.preferences-dialog .version-view {
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .version-agent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 0;
+}
+
+.preferences-dialog .version-role {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 4px 16px;
+  padding: 3px 0;
+}
+
+.preferences-dialog .version-role .chain {
+  margin-top: 0;
+}
+
+/* What the last action did: over the foot of the page, taking no room from it. */
+.preferences-dialog .toast {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  max-width: min(640px, calc(100% - 32px));
+  padding: 7px 14px;
+  transform: translateX(-50%);
+  border-radius: 6px;
+  background: var(--selected);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 60%);
+}
+
+.preferences-dialog .toast .issue-list {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* The approval footer: the staged count and first consequence, then Review, Discard and the one light plate. */
+.preferences-dialog .ledger {
+  flex: none;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.preferences-dialog .ledger-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-height: 48px;
+  padding: 8px 20px;
+}
+
+.preferences-dialog .ledger-line + .ledger-line,
+.preferences-dialog .ledger-sheet {
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .ledger-line .issue-list {
+  margin: 0;
+}
+
+.preferences-dialog .ledger > .issue-list {
+  margin: 0;
+  padding: 0 20px 10px 38px;
+}
+
+.preferences-dialog .ledger-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 40vh;
+  padding: 10px 20px;
+  overflow: auto;
+}
+
+.preferences-dialog .review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.preferences-dialog .review-group {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 4px 16px;
+}
+
+.preferences-dialog .review-subject {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.preferences-dialog .consequence {
+  color: var(--muted);
+}
+
+.preferences-dialog :is(.rules-target, .target) > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.preferences-dialog :is(.rules-target, .target) > summary::-webkit-details-marker {
+  display: none;
+}
+
+.preferences-dialog .rules-target > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 4px 0;
+}
+
+.preferences-dialog :is(.diff, .reads) {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog :is(.sheet, .ledger-sheet) .diff {
+  background: var(--ground);
+}
+
+/* Rules › Editor: line numbers in a gutter, marker lines dimmed. The textarea lies exactly over the painted text. */
+.preferences-dialog .editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.preferences-dialog .editor-actions {
+  margin-top: 8px;
+}
+
+.preferences-dialog .rules-editor {
+  position: relative;
+  max-height: 420px;
+  margin-top: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--raised);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  line-height: 1.6;
+}
+
+.preferences-dialog .rules-editor:focus-within {
+  outline: 1px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.preferences-dialog .rules-editor-text,
+.preferences-dialog .rules-editor textarea {
+  margin: 0;
+  padding: 10px 12px 10px 56px;
+  border: 0;
+  border-radius: 0;
+  font: inherit;
+  letter-spacing: 0;
+  tab-size: 4;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.preferences-dialog .rules-editor-text {
+  min-height: 140px;
+  background: linear-gradient(var(--hairline), var(--hairline)) 44px 0 / 1px 100% no-repeat;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.preferences-dialog .editor-line {
+  position: relative;
+  min-height: 1.6em;
+}
+
+.preferences-dialog .line-number {
+  position: absolute;
+  left: -56px;
+  width: 36px;
+  color: var(--faint);
+  text-align: right;
+  user-select: none;
+}
+
+.preferences-dialog .rules-editor .marker {
+  color: var(--faint);
+}
+
+.preferences-dialog .rules-editor textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  resize: none;
+}
+
+/* The Model field: any text, with the names BMN knows offered in a solid panel under it. */
+.preferences-dialog .model-field {
+  position: relative;
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.preferences-dialog .model-list {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  z-index: 5;
+  width: 100%;
+  max-height: 280px;
+  padding: 4px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--selected);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 60%);
+}
+
+.preferences-dialog .model-group {
+  padding: 8px 10px 3px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.preferences-dialog .model-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.preferences-dialog .model-option.active {
+  background: var(--hover);
+}
+
+.preferences-dialog .model-option .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .model-option small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.preferences-dialog .model-none {
+  padding: 8px 10px;
+  color: var(--muted);
+}
+
+.preferences-dialog .insert {
+  position: relative;
+}
+
+.preferences-dialog .insert-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 5;
+  min-width: 250px;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--selected);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 60%);
+}
+
+.preferences-dialog .insert-menu button {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: transparent;
+  font-weight: 400;
+}
+
+.preferences-dialog .insert-menu button:hover:not(:disabled),
+.preferences-dialog .insert-menu button:focus-visible {
+  background: var(--hover);
+}
+
+.preferences-dialog .insert-menu small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preferences-dialog .rules-page .advanced > .segmented {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 6px;
+}
+
+.preferences-dialog .rules-page .advanced > .preferences-help {
+  margin-top: 6px;
+}
+
+/* Why a typed number is not taken, beside its field. */
+.preferences-dialog .field-refusal {
+  color: var(--error);
+  font-size: 12px;
+}
+
+/* A confirmation in place. */
+.preferences-dialog .sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.preferences-dialog .sheet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.preferences-dialog .sheet .choice-list {
+  flex: none;
+}
+
+/* A sheet's facts: what it is about, one named value per line, never a paragraph. */
+.preferences-dialog .facts {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 7px 14px;
+}
+
+.preferences-dialog .facts > span:nth-child(odd) {
+  color: var(--muted);
+}
+
+.preferences-dialog .facts > span:nth-child(even) {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* A path or a command in a sheet is read whole: it wraps instead of being cut. */
+.preferences-dialog .wrap {
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .target > summary {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog :is(.target-file, .target-path) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.preferences-dialog .path {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Rules › Skills: one row per skill: its name and first line, the Public switch, then the apps it is for with its state in each. */
+.preferences-dialog .skill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .skill-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.preferences-dialog .skill-name > .faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preferences-dialog .skill-public {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .skill-row > .chips {
+  grid-column: 1 / -1;
+}
+
+.preferences-dialog .scope-word {
+  min-width: 52px;
+  font-size: 12px;
+}
+
+.preferences-dialog .chip-state {
+  color: var(--faint);
+}
+
+.preferences-dialog .chip.on .chip-state {
+  color: var(--muted);
+}
+
+.preferences-dialog .chip .needs-dot {
+  margin-right: 2px;
+}
+
+.preferences-dialog .rules-page .skill-rows {
+  margin-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .rules-page .skill-rows ~ .preferences-help {
+  margin-top: 10px;
+}
+
+/* Rules › Tools: the rows are the Skills rows; Add tool and Edit are plain rows in a sheet. */
+.preferences-dialog .tool-actions {
+  margin-top: 10px;
+}
+
+.preferences-dialog .skill-row > .tool-why {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+/* The attention mark before a sentence stands clear of its first word. */
+.preferences-dialog :is(.page-note, .preferences-help) > .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.preferences-dialog .tool-editor .preferences-row:last-of-type {
+  border-bottom: 0;
+}
+
+.preferences-dialog .tool-editor .preferences-row-control > .chips {
+  margin-top: 6px;
+}
+
+/* Team › Models: one line per model: its name and provider, then each value with the site it was read on; one action at the far end. */
+.preferences-dialog .model-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .model-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .model-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-size: 12px;
+}
+
+/* The value keeps one width down the list, so sites and dates start at the same place on every line. */
+.preferences-dialog .model-facts > .value {
+  display: inline-block;
+  min-width: 16ch;
+}
+
+.preferences-dialog .model-facts .source {
+  color: var(--muted);
+}
+
+.preferences-dialog .team-page .model-lines ~ .preferences-help {
+  margin-top: 14px;
+}
+
+.preferences-dialog .sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: source;
+}
+
+.preferences-dialog .sources > li {
+  counter-increment: source;
+}
+
+.preferences-dialog .sources > li::before {
+  content: counter(source);
+  margin-right: 7px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* A note that carries its one action at the far end, on a raised plate so it reads as something to do. */
+.preferences-dialog .page-note.with-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* The words take the room and wrap inside it; the action keeps its place at the end of the first line. */
+.preferences-dialog .page-note.with-action > .note-text {
+  flex: 1 1 0;
+  min-width: 12em;
+}
+
+/* A button beside the Model field stands on the field's line, not between the field and its hint. */
+.preferences-dialog .preferences-row-control:has(> .model-field) {
+  align-items: flex-start;
+}
+
+.preferences-dialog .preferences-row-control > .model-field + button.small {
+  margin-top: 4px;
+}
+
+.preferences-dialog .price-changes {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0 10px;
+}
+
+.preferences-dialog .price-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .price-change > .wrap {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* A program's path is shown whole: its last part is the program's name. */
+.preferences-dialog .path.wrap {
+  white-space: normal;
+}
+
+/* Rules › Health: one row per rules file, then one per agent app. */
+.preferences-dialog .health-row {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1.5fr) minmax(64px, auto);
+  gap: 4px 14px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .health-row > button,
+.preferences-dialog .app-actions {
+  justify-self: end;
+}
+
+.preferences-dialog .health-state {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.preferences-dialog .health-state .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.preferences-dialog .app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.preferences-dialog .accepted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 6px 104px;
+}
+
+/* What a check read after an update, or what becomes of an agent's own limit: under the app's row and in line with its version; the row's line moves under it. */
+.preferences-dialog :is(.app-note, .limit-note) {
+  margin: 0;
+  padding: 0 0 9px 104px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted);
+}
+
+.preferences-dialog .health-row:has(+ :is(.app-note, .limit-note)) {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+/* Several notes under one row: only the last one carries the row's line. */
+.preferences-dialog .limit-note:has(+ .limit-note) {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+.preferences-dialog .limit-note > .needs-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* Health › Pushes and merges (Story 83.3): an owner's row ends in its switch; its repositories sit indented under it with their level. */
+.preferences-dialog .health-row.policy-owner {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) auto;
+}
+
+.preferences-dialog .health-row.policy-repository {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 14px;
+}
+
+/* The one switch above the apps' rows: its name, what it starts, and the switch at the row's end. */
+.preferences-dialog .health-row.auto-test {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
+}
+
+.preferences-dialog .rules-page .health-row ~ .preferences-help,
+.preferences-dialog .rules-page :is(.app-block, .limit-block, .skills-block) ~ .preferences-help,
+.preferences-dialog .team-page .role ~ .preferences-help {
+  margin-top: 10px;
+}
+
+@media (max-width: 820px) {
+  .preferences-dialog .preferences-row {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+
+  .preferences-dialog .telegram-status {
+    grid-template-columns: 140px minmax(0, 1fr);
+  }
+
+  .preferences-dialog .agent-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .preferences-dialog .health-row {
+    grid-template-columns: 80px minmax(0, 1fr) auto;
+  }
+
+  .preferences-dialog .health-row > :nth-child(2) {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+
+  .preferences-dialog .health-row > button,
+  .preferences-dialog .app-actions {
+    justify-self: start;
+  }
+
+  .preferences-dialog :is(.accepted, .app-note) {
+    padding-left: 94px;
+  }
+
+  /* The push policy's rows keep their own lines: an owner's state and switch, a repository's level, beside the name. */
+  .preferences-dialog .health-row.policy-owner {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .preferences-dialog .health-row.policy-repository {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .preferences-dialog .health-row:is(.policy-owner, .policy-repository) > :nth-child(2) {
+    grid-column: auto;
+    grid-row: auto;
+  }
+}
+
+/* Narrow: the navigation becomes one horizontal strip above the page. */
+@media (max-width: 560px) {
+  /* A repository's level goes under its name, full width, its three steps sharing it. */
+  .preferences-dialog .health-row.policy-repository {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .preferences-dialog .health-row.policy-repository > :nth-child(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .preferences-dialog .health-row.policy-repository .segmented.fit {
+    display: grid;
+    grid-template-columns: repeat(var(--segments), minmax(0, 1fr));
+  }
+
+  .preferences-dialog .facts {
+    grid-template-columns: 1fr;
+    gap: 2px 14px;
+  }
+
+  .preferences-dialog .facts > span:nth-child(even) {
+    margin-bottom: 6px;
+  }
+
+  .preferences-dialog .preferences-frame {
+    flex-direction: column;
+  }
+
+  .preferences-dialog .preferences-nav {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+    width: auto;
+    padding: 6px 8px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+    scrollbar-width: none;
+  }
+
+  .preferences-dialog .nav-item {
+    flex: none;
+    width: auto;
+    min-height: 26px;
+    padding: 3px 8px;
+  }
+
+  .preferences-dialog .nav-item .needs-dot {
+    margin-left: 0;
+  }
+
+  .preferences-dialog .preferences-main {
+    padding: 0 16px 24px;
+  }
+
+  .preferences-dialog .preferences-row,
+  .preferences-dialog .telegram-status {
+    grid-template-columns: 1fr;
+  }
+
+  .preferences-dialog .agent-side {
+    display: contents;
+  }
+
+  .preferences-dialog .agent-side > * {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .preferences-dialog .target > summary {
+    grid-template-columns: 70px minmax(0, 1fr);
+  }
+
+  .preferences-dialog .target > summary > :last-child {
+    grid-column: 2;
+  }
+
+  .preferences-dialog :is(.review-group, .version-role) {
+    grid-template-columns: 1fr;
+  }
+
+  .preferences-dialog :is(.accepted, .app-note) {
+    padding-left: 0;
+  }
+
+  .preferences-dialog :is(.ledger-line, .ledger-sheet) {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preferences-dialog .switch::after {
+    transition: none;
+  }
+}

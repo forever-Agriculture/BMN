@@ -1,0 +1,224 @@
+/* MODULE: styles/side-panels.css - side panels: session details and the session launcher; a part of styles.css, which imports its parts in cascade order */
+
+/* ---------- Side panels: session details and the session launcher ---------- */
+
+:is(.session-inspector, .session-launcher) {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: auto;
+  padding: 10px 16px 20px;
+  border-left: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 -4px 8px 0;
+}
+
+:is(.session-inspector, .session-launcher) h2 {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+:is(.session-inspector, .session-launcher) .meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Buttons in these panels and in a Needs you card's action row are filled plates, as in dialogs: outlined boxes
+   read as unfinished. :where() keeps the card's selector from raising the rule's specificity for the panels. */
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-weight: 500;
+}
+
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  box-shadow: none;
+}
+
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) button:disabled:not(.primary) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+:is(.session-inspector, .session-launcher, .preferences-dialog) button.small {
+  min-height: 24px;
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+:is(.session-inspector, .session-launcher) button.ghost.small {
+  padding: 1px 4px;
+  color: var(--muted);
+}
+
+:is(.session-inspector, .session-launcher) button.ghost.small:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+:is(.session-inspector, .session-launcher) button.ghost.small:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+/* Stop is quiet until intended: it sits apart on the right and takes the error tone only on hover. */
+.session-inspector button.danger {
+  color: var(--muted);
+}
+
+.session-inspector .actions > button.danger:not(:first-child) {
+  margin-left: auto;
+}
+
+.session-inspector button.danger:hover:not(:disabled) {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.session-inspector button.danger:active:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 16%, transparent);
+}
+
+:is(.session-inspector, .session-launcher) .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.session-inspector .actions:empty {
+  display: none;
+}
+
+.inspector-head {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+
+.inspector-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inspector-state > span:nth-child(2) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.inspector-head .actions {
+  margin-top: 4px;
+}
+
+.inspector-section {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.inspector-section > h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.inspector-section > h3 button {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.inspector-section p {
+  color: var(--text);
+}
+
+.inspector-section small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.inspector-section .actions {
+  margin-top: 2px;
+}
+
+/* Key/value rows: a fixed label column; values truncate with the full text in their title. */
+.kv {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.kv dt {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kv dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Paths keep their tail (the part that names the folder) and lose the head. */
+.kv dd.path {
+  direction: rtl;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.kv dd.path > bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* The launcher shows identity as one line under its Directory field. */
+.repository-identity.compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repository-identity.compact button {
+  margin-left: auto;
+}

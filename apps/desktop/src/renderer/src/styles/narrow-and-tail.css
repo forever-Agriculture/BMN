@@ -1,0 +1,97 @@
+/* MODULE: styles/narrow-and-tail.css - the live announcer, files panel, checkout peers and narrow panes; a part of styles.css, which imports its parts in cascade order */
+
+.live-announcer {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 800px) {
+  .motto {
+    display: none;
+  }
+
+  .identity {
+    width: auto;
+  }
+
+  .workspace-body {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .session-row > button:first-child {
+    grid-template-columns: 7px;
+    padding-inline: 8px;
+  }
+
+  /* The rail is a column of marks: the name, the path and the observed word all live in the row tooltip. */
+  .session-row .session-name,
+  .session-row .session-detail,
+  .session-row .chip,
+  .session-row .origin-flag,
+  .session-row .row-menu-button,
+  .workspace-row .row-menu-button,
+  .workspace-row .count,
+  .show-archived {
+    display: none;
+  }
+
+  .new-workspace {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .new-workspace-label {
+    display: none;
+  }
+
+  .workspace-row .eyebrow {
+    font-size: 9px;
+  }
+
+  .pane-footer .footer-label,
+  .pane-actions .button-label {
+    display: none;
+  }
+}
+
+/* Narrow panes (split view, open side panel) keep the session name and drop button words first. */
+@container pane (max-width: 620px) {
+  .pane-actions .button-label,
+  .pane-footer .footer-label {
+    display: none;
+  }
+}
+
+@container pane (max-width: 420px) {
+  /* AC5: no state may depend on the mark alone. The directory goes, the agent chip goes, and the session
+     name gives up its width before the word does - the name is the one of the three that has a tooltip. */
+  .pane-heading .pane-directory,
+  .pane-heading .chip,
+  .pane-heading .pane-ports {
+    display: none;
+  }
+
+  .pane-heading .pane-status {
+    flex: 0 1 auto;
+  }
+
+  .pane-heading strong {
+    flex: 1 1 0;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+
+  .pane-footer .speak-button.recording svg,
+  .app-dialog[open],
+  .app-dialog[open]::backdrop {
+    animation: none;
+  }
+}
