@@ -1,6 +1,8 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { RepositoryIdentity, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
-import { createCheckoutLookup, currentPeerInput, inspectCheckoutPeers, newlyDiscoveredCheckoutRisk } from './checkout-peers'
+import { CheckoutPeerWarning, createCheckoutLookup, currentPeerInput, inspectCheckoutPeers, newlyDiscoveredCheckoutRisk } from './checkout-peers'
 
 const at = '2026-09-29T10:00:00.000Z'
 function repository(directory: string, root: string): RepositoryIdentity {
@@ -152,5 +154,14 @@ describe('checkout peers from saved launch directories', () => {
       listSessions: async (id) => id === 'one' ? [added] : Promise.reject(new Error('unavailable'))
     })
     expect(failed.incomplete).toBe(true)
+  })
+
+  it('announces the warning lines through one live region', () => {
+    const html = renderToStaticMarkup(createElement(CheckoutPeerWarning, {
+      loading: false,
+      report: { outsideGit: false, incomplete: true, peers: [{ sessionId: 's1', sessionName: 'Shell', workspaceName: 'Repo' }] }
+    }))
+    expect(html.match(/role="status"/g)).toHaveLength(1)
+    expect(html.match(/class="inline-warning"/g)).toHaveLength(3)
   })
 })

@@ -1296,7 +1296,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
           BMN&apos;s own skill <b>{left.name}</b> is not BMN&apos;s here: {left.state === 'removed' ? 'you removed it, so BMN does not add it back' : left.state === 'foreign' ? `${left.detail}; remove it and BMN adds its own at the next start` : left.detail}.
         </p>
       ))}
-      <p className="preferences-help">A skill reaches every app unless you keep it to some; an app held to public work gets only the Public skills.</p>
+      <p className="preferences-help">A skill reaches every app unless you keep it to some; an app held to public work gets only the Public&nbsp;skills.</p>
       <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app, and at every start installs what an app lacks.</p>
 
       <details className="advanced">
