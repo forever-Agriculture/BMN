@@ -1,3 +1,4 @@
+// MODULE: morning-digest.ts - passive Electron digest delivery and unchanged-request proof
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -9,6 +10,17 @@ import { selfTestHistoryRoots } from '../agent-history-self-test'
 import { SELF_TEST_TELEGRAM_CHAT_ID, type SelfTestRecorder } from './taps'
 
 export async function runMorningDigestSelfTest(host: SelfTestHost, client: PtyHostClient, taps: SelfTestRecorder): Promise<object> {
+  // A selected request from an earlier phase must not become seen while this passive check runs.
+  const priorUnwatched = taps.windowUnwatched
+  taps.windowUnwatched = true
+  try {
+    return await runUnwatchedMorningDigestSelfTest(host, client, taps)
+  } finally {
+    taps.windowUnwatched = priorUnwatched
+  }
+}
+
+async function runUnwatchedMorningDigestSelfTest(host: SelfTestHost, client: PtyHostClient, taps: SelfTestRecorder): Promise<object> {
   const began = Date.now()
   const phase = (name: string): void => { console.error(`[BMN] morning-digest step: ${name} +${Date.now() - began}ms`) }
   phase('repository-setup')
