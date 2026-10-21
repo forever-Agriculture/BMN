@@ -1,4 +1,4 @@
-// MODULE: setup-status.test.ts - Finish requires real approval, current app coverage and completed defaults
+// MODULE: setup-status.test.ts - Finish requires real approval, current app coverage and settled defaults
 import { expect, it } from 'vitest'
 import type { SetupAppsSnapshot, SetupDefaultsReport } from '@bmn/protocol'
 import { setupStatus } from './setup-status'
@@ -25,11 +25,19 @@ it('refuses completion for unapproved changes, missing members or newly ready ap
   expect(setupStatus(apps, { ...team, members: ['claude'] }, good)).toMatchObject({ team: 'A ready app needs a team member', canFinish: false })
 })
 
-it('does not mistake preparation, missing app kinds or a partial result for installed defaults', () => {
-  for (const report of [{ ...good, rows: [] }, { ...good, rows: good.rows.filter(row => row.kind !== 'hooks') }, { ...good, code: 'DEFAULTS_PARTIAL' },
-    { ...good, rows: good.rows.map(row => ({ ...row, state: 'recovery' })) }]) {
+it('does not mistake preparation, missing app kinds, a stopped run or recovery history for settled defaults', () => {
+  for (const report of [{ ...good, rows: [] }, { ...good, rows: good.rows.filter(row => row.kind !== 'hooks') },
+    { ...good, code: 'DEFAULTS_PARTIAL', rows: good.rows.filter(row => row.kind !== 'tools') }, { ...good, code: 'DEFAULTS_STATE_UNAVAILABLE' },
+    { ...good, code: 'NOT_APPROVED' }, { ...good, rows: good.rows.map(row => ({ ...row, state: 'recovery' })) }]) {
     expect(setupStatus(apps, team, report).canFinish).toBe(false)
   }
+})
+
+it('lets a settled partial result finish while it still says which default needs attention', () => {
+  const report: SetupDefaultsReport = { ...good, code: 'DEFAULTS_PARTIAL', rows: good.rows.map(row => row.kind === 'tools'
+    ? { ...row, code: 'TOOLS_UNSUPPORTED', state: 'waiting', transaction: null } : row) }
+  expect(setupStatus(apps, team, report)).toMatchObject({ defaults: 'Some defaults need attention', canFinish: true })
+  expect(setupStatus(apps, { ...team, pending: true }, report).canFinish).toBe(false)
 })
 
 it('honours deliberate removals and retains every recovery location for the owner', () => {
