@@ -49,7 +49,7 @@ button.select-opener .select-chevron {
   border-radius: 10px;
 }
 
-/* Notify on and Language: as wide as the longest value needs, at least 160px, never past the control column. */
+/* Notify on and Language: the current value sets the opener width; the list can grow within its column. */
 .preferences-row-control button.select-opener {
   width: max-content;
   min-width: 160px;
@@ -61,6 +61,7 @@ button.select-opener .select-chevron {
   max-width: calc(100vw - 16px);
   max-height: 232px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .popup-menu.select-list .menu-group {

@@ -118,7 +118,7 @@ import { ControlError, ControlServer, type ReceiptRecord } from './control-serve
 import type { DatabaseWorkerClient } from './database-client'
 import type { SendOutcome } from './database-message-store'
 import type { ApplicationRoots } from './roots'
-import { HostControlError, invalidHostControl, type SessionIdentity, type SessionManager } from './session-manager'
+import { HostControlError, invalidHostControl as invalid, type SessionIdentity, type SessionManager } from './session-manager'
 import { codexRolloutPath } from './conversation-binding'
 import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
@@ -242,14 +242,14 @@ interface CompanionServiceOptions {
 
 function text(params: Record<string, unknown>, key: string, max = 4096): string {
   const value = params[key]
-  if (typeof value !== 'string' || value.length === 0 || value.length > max) invalidHostControl(`${key} must be text`)
+  if (typeof value !== 'string' || value.length === 0 || value.length > max) invalid(`${key} must be text`)
   return value
 }
 
 function optionalText(params: Record<string, unknown>, key: string): string | null {
   const value = params[key]
   if (value === undefined || value === null) return null
-  if (typeof value !== 'string') invalidHostControl(`${key} must be text`)
+  if (typeof value !== 'string') invalid(`${key} must be text`)
   return value
 }
 
@@ -257,7 +257,7 @@ function optionalText(params: Record<string, unknown>, key: string): string | nu
 function turnFilesFrom(params: Record<string, unknown>, key: string): number {
   const value = params[key]
   if (value === undefined || value === null) return 0
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value % TURN_FILES_LIMIT !== 0) invalidHostControl(`${key} must be where a page starts`)
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value % TURN_FILES_LIMIT !== 0) invalid(`${key} must be where a page starts`)
   return value
 }
 
@@ -696,7 +696,7 @@ export class CompanionService {
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
       answer: (request) => this.answerAttention(request),
       acknowledge: async (record) => {
-        if (record.kind !== 'notice') invalidHostControl('Only an informational update can be acknowledged')
+        if (record.kind !== 'notice') invalid('Only an informational update can be acknowledged')
         await options.database.companion('closeAttention', {
           requestId: record.requestId, expectedKind: 'notice', expectedRevision: record.revision
         }, 'answered', 'Update acknowledged from Telegram; no terminal input sent', this.iso(), 'telegram')
@@ -1113,7 +1113,7 @@ export class CompanionService {
         return database.companion('listArtifacts', optionalText(params, 'sessionId'))
       case METHOD_REGISTRY.artifactImport: {
         const path = text(params, 'path')
-        if (!isAbsolute(path)) invalidHostControl('The file path must be absolute')
+        if (!isAbsolute(path)) invalid('The file path must be absolute')
         return this.recordImport(
           await this.files.importFile(path, { artifactId: randomUUID() }).catch(fileError),
           { sessionId: text(params, 'sessionId'), direction: 'input', source: 'owner', sourcePath: path }
@@ -1121,7 +1121,7 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.artifactImportBytes: {
         const bytes = params.bytes
-        if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) invalidHostControl('Image bytes are required')
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) invalid('Image bytes are required')
         const installed = await this.files
           .importBytes(bytes, { artifactId: randomUUID(), originalName: text(params, 'name', 255) })
           .catch(fileError)
@@ -1132,7 +1132,7 @@ export class CompanionService {
       case METHOD_REGISTRY.artifactSaveAs: {
         const artifact = await this.readyArtifact(text(params, 'artifactId'))
         const destination = text(params, 'destinationPath')
-        if (!isAbsolute(destination)) invalidHostControl('The destination must be an absolute path')
+        if (!isAbsolute(destination)) invalid('The destination must be an absolute path')
         return this.files
           .saveAs(artifact.storedPath, artifact.sha256, destination, { overwrite: params.overwrite === true })
           .catch(async (error: unknown) => {
@@ -1214,15 +1214,15 @@ export class CompanionService {
         // Only the owner's own window reaches this switch, and only it can see a session's output,
         // so a session token has no way in: the control socket has no method for this at all.
         const sessionId = text(params, 'sessionId')
-        if (!this.knownSessions.has(sessionId)) invalidHostControl('The session is unknown')
+        if (!this.knownSessions.has(sessionId)) invalid('The session is unknown')
         const incarnationId = text(params, 'incarnationId')
         const code = params.code
         if (!(TERMINAL_NOTICE_CODES as readonly unknown[]).includes(code)) {
-          invalidHostControl('The notification sequence is not one BMN reads')
+          invalid('The notification sequence is not one BMN reads')
         }
         // A sequence from a process that has already gone must not speak for the one that replaced it.
         if (this.options.manager.liveIncarnationId(sessionId) !== incarnationId) {
-          invalidHostControl('The session is running a different process now')
+          invalid('The session is running a different process now')
         }
         const body = optionalText(params, 'body')
         return this.terminalNotice({
@@ -1246,13 +1246,13 @@ export class CompanionService {
           expectedKind !== 'question' && expectedKind !== 'permission' &&
           expectedKind !== 'review' && expectedKind !== 'notice'
           && expectedKind !== 'handoff'
-        ) invalidHostControl('The expected attention kind is invalid')
+        ) invalid('The expected attention kind is invalid')
         const expectedRevision = params.expectedRevision
         if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1)) {
-          invalidHostControl('The expected attention revision is invalid')
+          invalid('The expected attention revision is invalid')
         }
         const origin = optionalText(params, 'origin')
-        if (origin !== null && !isAttentionOrigin(origin)) invalidHostControl('The request origin is invalid')
+        if (origin !== null && !isAttentionOrigin(origin)) invalid('The request origin is invalid')
         const requestId = text(params, 'requestId')
         const held = await database.companion('getAttention', requestId)
         this.answers.hookReported(held.sessionId, held.requestKey)
@@ -1303,7 +1303,7 @@ export class CompanionService {
           const value = params.value as { keepDays?: unknown } | null
           const keepDays = value && typeof value === 'object' ? value.keepDays : undefined
           if (!AGENT_HISTORY_KEEP_DAYS.includes(keepDays as AgentHistoryKeepDays)) {
-            invalidHostControl('Keep agent history must be 10, 30 or 90 days, or Never')
+            invalid('Keep agent history must be 10, 30 or 90 days, or Never')
           }
           await this.history.setKeepDays(keepDays as AgentHistoryKeepDays)
           return database.companion('getSettings')
@@ -1342,7 +1342,7 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.presenceSet: {
         const away = params.away
-        if (away !== true && away !== false && away !== null) invalidHostControl('away must be true, false or null')
+        if (away !== true && away !== false && away !== null) invalid('away must be true, false or null')
         const before = this.ownerAway()
         this.measuredAway = away
         this.presenceChanged(before)
@@ -1356,7 +1356,7 @@ export class CompanionService {
         // Story 84.3 AC2: the window's own answer; the control socket refuses this method for every token.
         const { periodId, runId, cardRevision, choices, operationKey } = params
         if (typeof periodId !== 'string' || typeof runId !== 'string' || !Number.isSafeInteger(cardRevision) || typeof operationKey !== 'string' ||
-          typeof choices !== 'object' || choices === null || Array.isArray(choices)) invalidHostControl('periodId, runId, cardRevision, choices and operationKey are required')
+          typeof choices !== 'object' || choices === null || Array.isArray(choices)) invalid('periodId, runId, cardRevision, choices and operationKey are required')
         const result = await this.answerGrant({
           periodId: periodId as string, runId: runId as string, cardRevision: cardRevision as number, choices: choices as Record<string, unknown>,
           via: 'app', operationKey: `app:${operationKey as string}`
@@ -1365,10 +1365,10 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.awaySet: {
         const to = params.to
-        if (to !== 'away' && to !== 'back') invalidHostControl('to must be away or back')
+        if (to !== 'away' && to !== 'back') invalid('to must be away or back')
         // Back while only leaving is the dialog's Not leaving: it cancels the departure and withdraws its cards (84.3 AC1).
         const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }) })
-        if (result.outcome === 'invalid') invalidHostControl(result.reason)
+        if (result.outcome === 'invalid') invalid(result.reason)
         return ownerAwayView(result.record)
       }
       case METHOD_REGISTRY.policyGet:
@@ -1380,9 +1380,9 @@ export class CompanionService {
           ? { kind: 'owner', login: params.login as string, allowed: params.allowed as boolean, expectedRevision }
           : params.kind === 'level'
             ? { kind: 'level', repository: params.repository as string, level: params.level as PushLevel, expectedRevision }
-            : invalidHostControl('kind must be owner or level')
+            : invalid('kind must be owner or level')
         const result = await this.options.database.companion('changePushPolicy', change, this.iso())
-        if (result.outcome === 'invalid') invalidHostControl(result.reason)
+        if (result.outcome === 'invalid') invalid(result.reason)
         if (result.outcome === 'stale') throw new HostControlError(ERROR_CODES.revisionConflict, 'The policy changed since Health read it; read it again')
         if (result.outcome === 'unknown') throw new HostControlError(ERROR_CODES.revisionConflict, `The policy could not be read (${result.reason}); it is left as it is`)
         return this.pushPolicyForOwner()
@@ -1407,7 +1407,7 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.awaySummaryShown: {
         const periodId = params.periodId
-        if (typeof periodId !== 'string' || periodId === '') invalidHostControl('periodId is required')
+        if (typeof periodId !== 'string' || periodId === '') invalid('periodId is required')
         const before = this.awayRecord.summaryShownAt
         this.awayRecord = await this.options.database.companion('markAwaySummaryShown', periodId as string, this.iso())
         if (before !== this.awayRecord.summaryShownAt) this.emit('away', null)
@@ -1842,7 +1842,7 @@ export class CompanionService {
     evidenceIds?: readonly string[]
     observedAt: string
   }): Promise<unknown> {
-    if (Number.isNaN(Date.parse(p.observedAt))) invalidHostControl('observedAt must be an ISO timestamp')
+    if (Number.isNaN(Date.parse(p.observedAt))) invalid('observedAt must be an ISO timestamp')
     // The store resolves the IDs inside the same transaction that writes the observation, so an
     // ineligible file refuses the whole report and leaves the previous one exactly as it was.
     const result = await this.options.database.companion('upsertProgress', {
@@ -2782,18 +2782,18 @@ export class CompanionService {
     const column = raw.column
     if ((line !== null && (!Number.isSafeInteger(line) || Number(line) < 1)) ||
       (column !== null && (!Number.isSafeInteger(column) || Number(column) < 1))) {
-      invalidHostControl('The reference position is invalid')
+      invalid('The reference position is invalid')
     }
     const payload = delivery.ownedArtifactPath
       ? `${this.quotePath(delivery.ownedArtifactPath)} `
       : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
-    if (!payload) invalidHostControl('This path cannot be sent as an exact file reference')
+    if (!payload) invalid('This path cannot be sent as an exact file reference')
     const fingerprint = JSON.stringify([sessionId, expectedIncarnationId, payload])
     const paramsHash = createHash('sha256').update(fingerprint).digest('hex')
     const receiptKey = `file-reference-paste:${requestId}`
     const previous = this.fileReferencePastes.get(requestId)
     if (previous) {
-      if (previous.fingerprint !== fingerprint) invalidHostControl('The paste request changed; choose the target again')
+      if (previous.fingerprint !== fingerprint) invalid('The paste request changed; choose the target again')
       return previous.result
     }
     const availabilityEpoch = this.fileReferenceAvailabilityEpoch
@@ -2802,7 +2802,7 @@ export class CompanionService {
       const database = this.options.database
       const previousReceipt = await database.companion('getReceipt', receiptKey)
       if (previousReceipt) {
-        if (previousReceipt.paramsHash !== paramsHash) invalidHostControl('The paste request changed; choose the target again')
+        if (previousReceipt.paramsHash !== paramsHash) invalid('The paste request changed; choose the target again')
         if (previousReceipt.state === 'done' && previousReceipt.result) {
           return previousReceipt.result as FileReferencePasteReceipt
         }
@@ -2891,7 +2891,7 @@ export class CompanionService {
     const workspaceId = text(raw, 'workspaceId', 128)
     const sessionId = optionalText(raw, 'sessionId')
     const query = text(raw, 'query', 256).trim()
-    if (!query || /[\p{Cc}\p{Cf}]/u.test(query)) invalidHostControl('Search needs visible text')
+    if (!query || /[\p{Cc}\p{Cf}]/u.test(query)) invalid('Search needs visible text')
     this.fileReferenceSearches.get(ownerId)?.controller.abort()
     const controller = new AbortController()
     this.fileReferenceSearches.set(ownerId, { requestId, controller })
@@ -2913,7 +2913,7 @@ export class CompanionService {
     target: SessionRecord
   }> {
     await this.sessionsChanged()
-    if (sourceSessionId === sessionId) invalidHostControl('Choose a different destination session')
+    if (sourceSessionId === sessionId) invalid('Choose a different destination session')
     const source = this.knownSessions.get(sourceSessionId)
     const target = this.knownSessions.get(sessionId)
     const workspaces = await this.options.database.listWorkspaces(true)
@@ -2921,29 +2921,29 @@ export class CompanionService {
       workspaces.filter((workspace) => workspace.archivedAt === null).map((workspace) => workspace.workspaceId)
     )
     if (!source || source.archivedAt !== null || !availableWorkspaces.has(source.workspaceId)) {
-      invalidHostControl('The handoff source session is unavailable')
+      invalid('The handoff source session is unavailable')
     }
     if (!target || target.archivedAt !== null || !availableWorkspaces.has(target.workspaceId)) {
-      invalidHostControl('The handoff destination is unavailable; choose it again')
+      invalid('The handoff destination is unavailable; choose it again')
     }
     return { source, target }
   }
 
   private handoffText(value: unknown): string {
-    if (typeof value !== 'string' || value.trim().length === 0) invalidHostControl('Handoff text must not be empty')
+    if (typeof value !== 'string' || value.trim().length === 0) invalid('Handoff text must not be empty')
     if (new TextEncoder().encode(value).byteLength > HANDOFF_TEXT_BYTES) {
-      invalidHostControl('Handoff text must be at most 16 KiB')
+      invalid('Handoff text must be at most 16 KiB')
     }
     return value
   }
 
   private handoffArtifactIds(value: unknown): string[] {
     if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.length > 0)) {
-      invalidHostControl('Handoff artifacts must be stored artifact IDs')
+      invalid('Handoff artifacts must be stored artifact IDs')
     }
     const distinct = [...new Set(value)]
-    if (distinct.length !== value.length) invalidHostControl('Choose each handoff file only once')
-    if (distinct.length > HANDOFF_ARTIFACTS) invalidHostControl('Choose at most 10 handoff files')
+    if (distinct.length !== value.length) invalid('Choose each handoff file only once')
+    if (distinct.length > HANDOFF_ARTIFACTS) invalid('Choose at most 10 handoff files')
     return distinct
   }
 
@@ -2951,7 +2951,7 @@ export class CompanionService {
     const artifacts: ArtifactRecord[] = []
     for (const artifactId of artifactIds) {
       const artifact = await this.readyArtifact(artifactId)
-      if (artifact.sessionId !== sourceSessionId) invalidHostControl('Every handoff file must belong to the source session')
+      if (artifact.sessionId !== sourceSessionId) invalid('Every handoff file must belong to the source session')
       artifacts.push(artifact)
     }
     return artifacts
@@ -2973,16 +2973,16 @@ export class CompanionService {
     senderCwd: string
   }): Promise<{ draftId: string; state: 'queued' }> {
     if (this.options.manager.liveIncarnationId(p.sourceSessionId) !== p.sourceIncarnationId) {
-      invalidHostControl('The source session is running a different process now')
+      invalid('The source session is running a different process now')
     }
     await this.availableHandoffSessions(p.sourceSessionId, p.destinationSessionId)
     this.handoffText(p.text)
     if (hasDisallowedHandoffControl(p.text)) {
-      invalidHostControl('Handoff text may contain only newline and tab control characters')
+      invalid('Handoff text may contain only newline and tab control characters')
     }
     const artifacts = await this.validateHandoffArtifacts(p.sourceSessionId, this.handoffArtifactIds(p.artifactIds))
     if (artifacts.some((artifact) => artifact.direction !== 'output')) {
-      invalidHostControl('Every agent handoff file must be a published output from its session')
+      invalid('Every agent handoff file must be a published output from its session')
     }
     const prepared = await this.messages.prepareHandoff({
       senderSessionId: p.sourceSessionId, senderIncarnationId: p.sourceIncarnationId, senderCwd: p.senderCwd,
@@ -2994,7 +2994,7 @@ export class CompanionService {
     })))
     const draftId = randomUUID()
     const bytes = new TextEncoder().encode(sessionHandoffFileText(prepared.stamp, p.text, files))
-    if (bytes.byteLength > HANDOFF_PAYLOAD_BYTES) invalidHostControl('The assembled handoff must be at most 64 KiB')
+    if (bytes.byteLength > HANDOFF_PAYLOAD_BYTES) invalid('The assembled handoff must be at most 64 KiB')
     const installed = await this.files.importBytes(bytes, {
       artifactId: randomUUID(), originalName: `handoff-${draftId.slice(0, 8)}.md`
     }).catch(fileError)
@@ -3013,10 +3013,10 @@ export class CompanionService {
     try {
       link = await this.prepareArtifactLink(file)
       const pointer = sessionHandoffPointer({ handoffId: draftId, filePath: this.quotePath(link), bytes: bytes.byteLength, files })
-      if (pointer === null) invalidHostControl("The path of BMN's data folder is too long for a handoff to name")
+      if (pointer === null) invalid("The path of BMN's data folder is too long for a handoff to name")
       // The reads above took time: the handoff is the word of the process that asked, and of no later one.
       if (this.options.manager.liveIncarnationId(p.sourceSessionId) !== p.sourceIncarnationId) {
-        invalidHostControl('The source session is running a different process now')
+        invalid('The source session is running a different process now')
       }
       outcome = await this.options.database.companion('queueAgentHandoff', {
         handoffId: draftId, messageId: randomUUID(), senderSessionId: p.sourceSessionId,
@@ -3062,7 +3062,7 @@ export class CompanionService {
   private async retryDraft(draftId: string): Promise<InputDraftRecord> {
     return this.withDraft(draftId, async () => {
       const draft = await this.options.database.companion('getDraft', draftId)
-      if (draft.origin === 'handoff' || draft.state !== 'uncertain') invalidHostControl('Only an uncertain draft can be copied for an explicit retry')
+      if (draft.origin === 'handoff' || draft.state !== 'uncertain') invalid('Only an uncertain draft can be copied for an explicit retry')
       const { record } = await this.options.database.companion('createDraft', {
         draftId: randomUUID(), sessionId: draft.sessionId, origin: draft.origin, originKey: null,
         requestId: null, text: draft.text, artifactId: draft.artifactId,
@@ -3096,12 +3096,12 @@ export class CompanionService {
     const database = this.options.database
     const draft = await database.companion('getDraft', draftId)
     // A handoff reaches its agent through that agent's own hook, never typed into a terminal (Story 75.5).
-    if (draft.origin === 'handoff') invalidHostControl('A handoff is never typed into a terminal')
+    if (draft.origin === 'handoff') invalid('A handoff is never typed into a terminal')
     if (draft.state === 'uncertain') {
       throw new HostControlError(ERROR_CODES.revisionConflict,
         'Input delivery is uncertain; inspect the terminal and create a separate retry draft')
     }
-    if (draft.state !== 'draft') invalidHostControl('Only an unsent draft can be sent')
+    if (draft.state !== 'draft') invalid('Only an unsent draft can be sent')
     const availabilityEpoch = this.fileReferenceAvailabilityEpoch
     const incarnation = expectedIncarnationId ?? this.options.manager.liveIncarnationId(draft.sessionId)
     if (!incarnation) throw new HostControlError(ERROR_CODES.notFound, 'The target session has no live process')
@@ -3109,8 +3109,8 @@ export class CompanionService {
     const artifact = draft.artifactId ? await this.readyArtifact(draft.artifactId) : null
     const path = artifact ? await this.prepareArtifactLink(artifact) : null
     const payload = [draft.text, path ? `${this.quotePath(path)} ` : null].filter(Boolean).join('\n')
-    if (!payload) invalidHostControl('The draft is empty')
-    if (new TextEncoder().encode(payload).byteLength > HANDOFF_PAYLOAD_BYTES) invalidHostControl('The draft must be at most 64 KiB')
+    if (!payload) invalid('The draft is empty')
+    if (new TextEncoder().encode(payload).byteLength > HANDOFF_PAYLOAD_BYTES) invalid('The draft must be at most 64 KiB')
     const claim = await database.companion('claimInputDraft', draftId, expectedUpdatedAt ?? draft.updatedAt, incarnation, this.iso())
     if (!claim.claimed) {
       throw new HostControlError(
@@ -3138,7 +3138,7 @@ export class CompanionService {
 
   /** Writes a backup and checks the copy at once against its manifest and its own database (Story 75.7). */
   private async exportBackup(parent: string): Promise<BackupExportResult> {
-    if (!isAbsolute(parent)) invalidHostControl('The backup location must be an absolute path')
+    if (!isAbsolute(parent)) invalid('The backup location must be an absolute path')
     const createdAt = this.iso()
     await mkdir(parent, { recursive: true, mode: 0o700 })
     const directory = await mkdtemp(join(parent, `bmn-backup-${createdAt.replaceAll(':', '-')}-`))
@@ -3171,7 +3171,7 @@ export class CompanionService {
   }
 
   private async verifyBackup(directory: string): Promise<BackupVerifyResult> {
-    if (!isAbsolute(directory)) invalidHostControl('The backup location must be an absolute path')
+    if (!isAbsolute(directory)) invalid('The backup location must be an absolute path')
     let manifest: BackupManifest
     try {
       const parsed: unknown = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
@@ -3239,7 +3239,7 @@ export class CompanionService {
       await rm(this.tokenPath(), { force: true })
     } else {
       if (typeof token !== 'string' || !/^\d{3,20}:[A-Za-z0-9_-]{20,80}$/.test(token.trim())) {
-        invalidHostControl('The bot token does not look like a Telegram bot token')
+        invalid('The bot token does not look like a Telegram bot token')
       }
       await mkdir(this.options.roots.config, { recursive: true, mode: 0o700 })
       const temporary = `${this.tokenPath()}.${randomUUID()}.tmp`

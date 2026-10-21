@@ -57,7 +57,10 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
   useLayoutEffect(() => {
     const rect = props.anchor.element.getBoundingClientRect()
     if (props.anchor.select && menu.current) {
-      menu.current.style.width = `${Math.min(rect.width, window.innerWidth - 16)}px`
+      const columnRight = props.anchor.element.parentElement?.getBoundingClientRect().right ?? window.innerWidth - 8
+      const ceiling = Math.max(0, Math.min(columnRight, window.innerWidth - 8) - rect.left)
+      menu.current.style.minWidth = `${Math.min(rect.width, ceiling)}px`
+      menu.current.style.maxWidth = `${ceiling}px`
     }
     const width = menu.current?.offsetWidth ?? 200
     const height = menu.current?.offsetHeight ?? 200

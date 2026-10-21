@@ -1,5 +1,7 @@
 // MODULE: select-menus.ts - Electron self-test for BMN's select (Story 80.4 AC2): each of the five driven by real keys and real clicks
 import type { BrowserWindow } from 'electron'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
 /** What one select showed after each step; every field must be true for the run to pass. */
 export interface SelectMenuSiteReceipt {
@@ -25,9 +27,11 @@ export interface SelectMenuSiteReceipt {
   values: { before: string; keyboard: string; mouse: string }
   /** Language saves as it is chosen: the settings read back after each choice. */
   saved?: { keyboard: string; mouse: string }
+  unavailableWhileArchived?: boolean
 }
 
 interface Look {
+  diagnostic?: Record<string, unknown>
   value: string
   expanded: string | null
   disabled: boolean
@@ -59,8 +63,33 @@ const keyCodes: Record<string, string> = {
   ArrowDown: 'Down', ArrowUp: 'Up', Home: 'Home', End: 'End', Enter: 'Return', ' ': 'Space', Escape: 'Escape', Tab: 'Tab'
 }
 
-export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Record<string, SelectMenuSiteReceipt>> {
+export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<{ sites: Record<string, SelectMenuSiteReceipt>; archiveWorkspaceId: string }> {
   const renderer = <T>(code: string): Promise<T> => window.webContents.executeJavaScript(code) as Promise<T>
+  let phase = 'setup'
+  let inputId = 0
+  const native: Record<string, unknown>[] = []
+  const looks: Record<string, unknown>[] = []
+  const completed: Record<string, SelectMenuSiteReceipt> = {}
+  let overflow = 0
+  const record = (entry: Record<string, unknown>): void => {
+    native.push(entry)
+    if (native.length > 300) { native.shift(); overflow += 1 }
+  }
+  const delivery = (_event: unknown, input: { type: string; key: string; code: string }): void => {
+    record({ kind: 'native-delivery', phase, inputId, type: input.type, key: input.key, code: input.code })
+  }
+  const mark = (name: string, detail: Record<string, unknown> = {}): void => {
+    phase = name
+    console.error(`[BMN select diagnostic] ${JSON.stringify({ kind: 'boundary', phase, inputId, ...detail })}`)
+  }
+  const capture = async (name: string, detail: Record<string, unknown> = {}): Promise<void> => {
+    try {
+      const dom = await renderer<unknown>('window.__bmnSelectDiagnostics?.read()')
+      console.error(`[BMN select diagnostic] ${JSON.stringify({ kind: 'capture', phase: name, ...detail, completed,
+        native, looks, overflow, window: { focused: window.isFocused(), contentsFocused: window.webContents.isFocused(),
+          visible: window.isVisible(), minimized: window.isMinimized(), bounds: window.getContentBounds() }, dom })}`)
+    } catch { console.error('[BMN select diagnostic] capture unavailable; original failure retained') }
+  }
   const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
   const look = (opener: string): Promise<Look | null> => renderer<Look | null>(`(() => {
     const opener = document.querySelector(${JSON.stringify(opener)});
@@ -69,6 +98,7 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
     const active = document.activeElement;
     const box = opener.getBoundingClientRect();
     return {
+      diagnostic: window.__bmnSelectDiagnostics?.snapshot(opener, box),
       value: opener.dataset.value ?? '',
       expanded: opener.getAttribute('aria-expanded'),
       disabled: opener.disabled,
@@ -86,6 +116,8 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
     const end = Date.now() + 3000
     while (Date.now() < end) {
       const state = await look(opener)
+      looks.push({ phase, inputId, selector: opener, state })
+      if (looks.length > 130) { looks.shift(); overflow += 1 }
       if (state && !state.disabled && test(state)) return true
       await pause(25)
     }
@@ -97,12 +129,15 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
     return state
   }
   const key = (name: string): void => {
+    record({ kind: 'native-submit', phase, inputId: ++inputId, key: name, focused: window.isFocused(),
+      contentsFocused: window.webContents.isFocused(), visible: window.isVisible() })
     const keyCode = keyCodes[name] ?? name
     window.webContents.sendInputEvent({ type: 'keyDown', keyCode })
     if (name.length === 1) window.webContents.sendInputEvent({ type: 'char', keyCode })
     window.webContents.sendInputEvent({ type: 'keyUp', keyCode })
   }
   const clickAt = (x: number, y: number): void => {
+    record({ kind: 'native-pointer-submit', phase, inputId: ++inputId, x, y })
     window.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(x), y: Math.round(y) })
     window.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1 })
     window.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(x), y: Math.round(y), button: 'left', clickCount: 1 })
@@ -110,6 +145,7 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
   const centre = (selector: string): Promise<{ x: number; y: number }> => renderer<{ x: number; y: number }>(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) throw new Error('select self-test: nothing at ' + ${JSON.stringify(selector)});
+    if (element.closest('.select-list')) element.scrollIntoView({ block: 'nearest' });
     const box = element.getBoundingClientRect();
     return { x: box.left + Math.min(box.width / 2, 24), y: box.top + box.height / 2 };
   })()`)
@@ -154,12 +190,16 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
   const launcher = async (opener: string): Promise<void> => {
     if (!(await look(opener))?.x) {
       await palette('New session…')
-      await settle(`const advanced = document.querySelector('.session-launcher details.advanced');
+    }
+    await settle(`const advanced = document.querySelector('.session-launcher details.advanced');
         if (!advanced) return false;
         advanced.open = true;
-        return !!document.querySelector(${JSON.stringify(opener)})?.getClientRects().length;`, 'launcher open')
-    }
-    await renderer<void>(`document.querySelector(${JSON.stringify(opener)}).scrollIntoView({ block: 'center' })`)
+        const opener = document.querySelector(${JSON.stringify(opener)});
+        if (!opener) return false;
+        opener.scrollIntoView({ block: 'center' });
+        const box = opener.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return box.width > 0 && box.height > 0 && hit && opener.contains(hit);`, 'launcher choice exposed')
     await pause(200)
   }
 
@@ -221,13 +261,58 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
     }
   ]
 
+  const clockBefore = Date.now()
+  const rendererClock = await renderer<number>(`(() => {
+    const nodes = new WeakMap(); let next = 0; let sequence = 0; let overflow = 0;
+    const events = []; const changes = [];
+    const identify = (element) => {
+      if (!element || !(element instanceof Element)) return null;
+      if (!nodes.has(element)) nodes.set(element, ++next);
+      return { node: nodes.get(element), tag: element.tagName, id: element.id, className: element.className,
+        label: element.getAttribute('data-label'), connected: element.isConnected };
+    };
+    const append = (list, entry) => { list.push({ sequence: ++sequence, ...entry }); if (list.length > 350) {list.shift(); overflow++;} };
+    const listener = (event) => append(events, { phase: window.__bmnSelectDiagnostics.phase, type: event.type,
+      focusAttemptInputId: window.__bmnSelectDiagnostics.focusAttemptInputId,
+      key: event.key ?? null, target: identify(event.target), active: identify(document.activeElement), trusted: event.isTrusted });
+    for (const type of ['keydown', 'keyup', 'pointerdown', 'focusin', 'focusout']) document.addEventListener(type, listener, true);
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        if (target?.matches('dialog,.select-list,.select-opener,details.advanced') ||
+          [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element && node.matches('.select-list,dialog'))) {
+          append(changes, { phase: window.__bmnSelectDiagnostics.phase, type: record.type, attribute: record.attributeName, target: identify(target) });
+        }
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open', 'disabled', 'aria-expanded', 'inert'] });
+    const snapshot = (opener, box = opener.getBoundingClientRect()) => ({ rendererTime: Date.now(),
+      opener: identify(opener), matches: document.querySelectorAll('.session-launcher .select-opener').length,
+      documentFocused: document.hasFocus(), active: identify(document.activeElement), disabled: opener.disabled,
+      effectiveDisabled: opener.matches(':disabled'), inert: !!opener.closest('[inert]'),
+      fieldset: opener.closest('fieldset')?.disabled ?? null, advanced: opener.closest('details')?.open ?? null,
+      bounds: { x: box.x, y: box.y, width: box.width, height: box.height },
+      hit: identify(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)),
+      modals: [...document.querySelectorAll('dialog[open]')].map(dialog => ({ ...identify(dialog), modal: dialog.matches(':modal') })),
+      menus: [...document.querySelectorAll('.select-list')].map(menu => ({ ...identify(menu), label: menu.getAttribute('aria-label') })) });
+    window.__bmnSelectDiagnostics = { phase: 'setup', snapshot, read: () => ({ rendererTime: Date.now(), sequence,
+      overflow, events, changes, openers: [...document.querySelectorAll('.session-launcher .select-opener')].map(opener => snapshot(opener)) }),
+      dispose: () => { observer.disconnect(); for (const type of ['keydown', 'keyup', 'pointerdown', 'focusin', 'focusout']) document.removeEventListener(type, listener, true); } };
+    return Date.now();
+  })()`)
+  mark('loaded', { functionHash: createHash('sha256').update(runSelectMenusSelfTest.toString()).digest('hex'),
+    loadedMain: __filename, loadedMainHash: createHash('sha256').update(readFileSync(__filename)).digest('hex'),
+    electron: process.versions.electron, clock: { before: clockBefore, renderer: rendererClock, after: Date.now() } })
+  window.webContents.on('before-input-event', delivery)
+  try {
   window.webContents.focus()
   const receipts: Record<string, SelectMenuSiteReceipt> = {}
   for (const site of sites) {
+    mark(`${site.name}:start`)
     await site.show()
     const opener = site.opener
     const before = (await now(opener)).value
-    await renderer<void>(`document.querySelector(${JSON.stringify(opener)}).focus()`)
+    await renderer<void>(`window.__bmnSelectDiagnostics.phase = ${JSON.stringify(phase)}; window.__bmnSelectDiagnostics.focusAttemptInputId = ${inputId + 1}; document.querySelector(${JSON.stringify(opener)}).focus()`)
 
     // Keyboard: ArrowDown opens on the current value, ArrowDown moves, Escape changes nothing and refocuses the opener.
     key('ArrowDown')
@@ -298,14 +383,101 @@ export async function runSelectMenusSelfTest(window: BrowserWindow): Promise<Rec
       ...(receipt.saved && (receipt.saved.keyboard !== target || receipt.saved.mouse !== before) ? ['saved value'] : [])
     ]
     if (failed.length > 0) {
+      await capture(`${site.name}:failed`, { receipt, failed })
       throw new Error(`select self-test ${site.name} failed: ${failed.join(', ')} ${JSON.stringify({ receipt, rows })}`)
     }
     receipts[site.name] = receipt
+    completed[site.name] = receipt
+    mark(`${site.name}:passed`, { receipt })
   }
+  // Exercise the production launcher bindings: wrapper-only disabled props cannot catch a missing call-site prop.
+  const archiveFixture = await renderer<{ id: string; previousName: string; showedArchived: boolean }>(`(async () => {
+    for (const dialog of document.querySelectorAll('dialog[open]')) dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+    document.querySelector('.session-launcher button[aria-label="Close new session"]')?.click();
+    const workspaces = await window.aiTerminal.listWorkspaces();
+    const selected = document.querySelector('.workspace-group:has(.session-row.selected)')?.getAttribute('aria-label');
+    const previous = workspaces.find(item => item.name === selected) ?? workspaces[0];
+    const checkbox = document.querySelector('.show-archived input');
+    const showedArchived = checkbox.checked;
+    if (!showedArchived) checkbox.click();
+    const fixture = await window.aiTerminal.createWorkspace({ name: 'Select disabled fixture', defaultCwd: previous.defaultCwd });
+    return { id: fixture.workspaceId, previousName: previous.name, showedArchived };
+  })()`)
+  mark('archive:fixture-created', { archiveFixture })
+  await settle(`const group = [...document.querySelectorAll('.workspace-group')]
+    .find(item => item.getAttribute('aria-label') === 'Select disabled fixture');
+    if (!group) return false;
+    group.querySelector('.workspace-row > button').click(); return true;`, 'archive fixture selected')
+  await palette('New session…')
+  const archiveOpeners = sites.slice(0, 2).map((site) => site.opener)
+  await launcher(archiveOpeners[0]!)
+  const setArchived = (archived: boolean): Promise<void> => renderer<void>(`(async () => {
+    const workspace = (await window.aiTerminal.listWorkspaces(true)).find(item => item.workspaceId === ${JSON.stringify(archiveFixture.id)});
+    await window.aiTerminal.updateWorkspace({ workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, archived: ${archived} });
+  })()`)
+  let archiveFailure: unknown = null
+  try {
+    await setArchived(true)
+    mark('archive:acknowledged')
+    await settle(`return ${JSON.stringify(archiveOpeners)}.every(selector => document.querySelector(selector)?.disabled === true);`, 'archived launcher choices disabled')
+    for (const opener of archiveOpeners) {
+      await launcher(opener)
+      mark('archive:disabled-attempt', { opener })
+      const point = await now(opener)
+      clickAt(point.x, point.y)
+      await renderer<void>(`window.__bmnSelectDiagnostics.phase = ${JSON.stringify(phase)}; window.__bmnSelectDiagnostics.focusAttemptInputId = ${inputId + 1}; document.querySelector(${JSON.stringify(opener)}).focus()`)
+      key('ArrowDown')
+      await pause(60)
+      if ((await now(opener)).expanded !== 'false') throw new Error('an archived launcher choice opened')
+      mark('archive:disabled-rejected', { opener, state: await now(opener) })
+    }
+    await setArchived(false)
+    mark('restore:acknowledged')
+    await settle(`return ${JSON.stringify(archiveOpeners)}.every(selector => document.querySelector(selector)?.disabled === false);`, 'restored launcher choices enabled')
+    for (const opener of archiveOpeners) {
+      await launcher(opener)
+      mark('restore:opening-attempt', { opener })
+      await renderer<void>(`window.__bmnSelectDiagnostics.phase = ${JSON.stringify(phase)}; window.__bmnSelectDiagnostics.focusAttemptInputId = ${inputId + 1}; document.querySelector(${JSON.stringify(opener)}).focus()`)
+      key('ArrowDown')
+      if (!await until(opener, (state) => state.list)) throw new Error(`a restored launcher choice did not open: ${opener}`)
+      mark('restore:opened', { opener, state: await now(opener) })
+      key('Escape')
+      if (!await until(opener, (state) => !state.list && state.focusOpener)) throw new Error(`a restored launcher choice did not close and return focus: ${opener}`)
+      mark('restore:escaped', { opener, state: await now(opener) })
+    }
+    receipts.whenWindowsClose!.unavailableWhileArchived = true
+    receipts.terminalImages!.unavailableWhileArchived = true
+  } catch (error) {
+    archiveFailure = error
+    await capture('archive:failure-before-cleanup', { failedPhase: phase })
+  } finally {
+    try {
+    await setArchived(false)
+    await renderer<void>(`(() => {
+      document.querySelector('.session-launcher button[aria-label="Close new session"]')?.click();
+      const group = [...document.querySelectorAll('.workspace-group')]
+        .find(item => item.getAttribute('aria-label') === ${JSON.stringify(archiveFixture.previousName)});
+      group?.querySelector('.workspace-row > button').click();
+      const checkbox = document.querySelector('.show-archived input');
+      if (checkbox.checked !== ${archiveFixture.showedArchived}) checkbox.click();
+    })()`)
+    } catch (cleanupError) {
+      if (archiveFailure === null) archiveFailure = cleanupError
+      else console.error('[BMN select diagnostic] archive cleanup failed; original failure retained')
+    }
+  }
+  if (archiveFailure !== null) throw archiveFailure
   // Leave the window as it was found: no dialog and no launcher open.
   await renderer<void>(`(() => {
     for (const dialog of document.querySelectorAll('dialog[open]')) dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
     document.querySelector('.session-launcher button[aria-label="Close new session"]')?.click();
   })()`)
-  return receipts
+  return { sites: receipts, archiveWorkspaceId: archiveFixture.id }
+  } catch (error) {
+    await capture('outer:failure', { failedPhase: phase })
+    throw error
+  } finally {
+    window.webContents.removeListener('before-input-event', delivery)
+    await renderer<void>('window.__bmnSelectDiagnostics?.dispose()').catch(() => undefined)
+  }
 }

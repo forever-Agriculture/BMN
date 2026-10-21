@@ -33,6 +33,7 @@ interface ActivityTestHook {
 }
 
 interface TerminalTestHook {
+  paletteCommand: import('./palette-command-barrier').PaletteCommandBarrier
   snapshot(sessionId?: string): TerminalTestSnapshot
   snapshots(): Record<string, TerminalTestSnapshot>
   integration?(): Promise<{

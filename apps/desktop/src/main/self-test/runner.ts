@@ -36,6 +36,8 @@ import { runHealthAlertsSelfTest } from './health-alerts'
 import { runAwaySelfTest } from './away'
 import { runAwayGrantSelfTest } from './away-grant'
 import { runSelectMenusSelfTest } from './select-menus'
+import { paletteInputBaseline } from './reset-input-baseline'
+import { workspacePersistenceView, workspaceRestorationMatches } from './restart-workspaces'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -1915,7 +1917,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (Object.values(workspaceResultsAcceptance).some((value) => value !== true)) {
       throw new Error(`workspace results did not read safely: ${JSON.stringify(workspaceResultsAcceptance)}`)
     }
-    const selectMenus = await runSelectMenusSelfTest(host.applicationWindow)
+    const selectMenuResult = await runSelectMenusSelfTest(host.applicationWindow)
+    const selectMenus = selectMenuResult.sites
     console.error(`[BMN] self-test phase: select menus ${JSON.stringify(selectMenus)}`)
 
     // The raw-mode synthetic receiver records the exact PTY bytes for this owner-confirmed file send.
@@ -2311,8 +2314,27 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('reset modes: the baseline palette probe ran a command')
     }
     const beforeReset = await settledView()
-    const logBeforeReset = readFileSync(resetInputLog)
+    const logBeforePalette = readFileSync(resetInputLog)
+    await host.applicationWindow.webContents.executeJavaScript(
+      `window.__aitermTest.paletteCommand.arm('reset-modes', ${resetId})`)
     const resetRan = await runPaletteCommand(host.applicationWindow, 'Reset terminal modes')
+    await acceptanceWait(async () => {
+      const state = await host.applicationWindow!.webContents.executeJavaScript(`(() => {
+        const barrier = window.__aitermTest.paletteCommand.state();
+        const focused = document.activeElement?.closest('.session-terminal[data-session-id]');
+        if (barrier?.phase === 'failed') throw new Error('reset command-entry barrier failed');
+        return barrier?.phase === 'held' && barrier.session === ${resetId} &&
+          !document.querySelector('dialog.command-palette[open]') && focused?.dataset.sessionId === ${resetId};
+      })()`);
+      return state === true ? true : undefined
+    }, 'closed palette and restored focus at reset command entry')
+    // The palette legitimately reports focus-out/in while mode1004 is armed. Require those exact
+    // raw bytes to drain before measuring reset, then release the actual command once. Never
+    // filter bytes or resample after release: the unchanged comparison catches every later write.
+    const logBeforeReset = await acceptanceWait(async () =>
+      paletteInputBaseline(logBeforePalette, readFileSync(resetInputLog)) ?? undefined, 'exact palette focus input drainage')
+    await host.applicationWindow.webContents.executeJavaScript(
+      `window.__aitermTest.paletteCommand.release('reset-modes', ${resetId})`)
     const resetToast = await acceptanceWait(async () => await host.applicationWindow!.webContents.executeJavaScript(
       `document.body.textContent.includes('Terminal modes reset for Reset modes acceptance') || undefined`) as true | undefined,
     'the reset toast')
@@ -2321,6 +2343,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const wheelInputAfter = await wheel()
     await new Promise((resolve) => setTimeout(resolve, 300))
     const logAfterReset = readFileSync(resetInputLog)
+    console.error('[BMN] self-test reset input boundary ' + JSON.stringify({
+      beforePaletteHex: logBeforePalette.toString('hex'), baselineHex: logBeforeReset.toString('hex'), afterHex: logAfterReset.toString('hex'),
+      command: 'reset-modes', sessionId: resetSession.session.sessionId, paletteFocusDrained: true
+    }))
     await host.recoverApplicationRenderer(host.applicationWindow)
     await host.applicationWindow.webContents.executeJavaScript(`(async () => {
       const end = Date.now() + 10000;
@@ -3286,8 +3312,33 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         `application-quit interruption source did not survive restart: ${JSON.stringify(lifecycleStoppedAfterRestart)}`
       )
     }
+    const expectedWorkspaceIds = [DEFAULT_WORKSPACE_ID, secondWorkspace.workspaceId, selectMenuResult.archiveWorkspaceId, routingWorkspace.workspaceId]
+    const workspacesRestored = workspaceRestorationMatches(expectedWorkspaceIds, markersAfterRestart, restoredWorkspaces)
+    // Keep the actual persistence operands: classification only, never an acceptance receipt.
+    console.error('[BMN] self-test restart operands ' + JSON.stringify({
+      diagnostic: 'restart-operands-exact-fixtures', attempt: 1,
+      workspacesRestored, expectedWorkspaceIds, beforeWorkspaces: markersAfterRestart.map(workspacePersistenceView), actualWorkspaces: restoredWorkspaces.map(workspacePersistenceView),
+      comparisons: Object.fromEntries(Object.entries({
+        workspaceCount: [restoredWorkspaces.length, expectedWorkspaceIds.length],
+        sessionOrder: [restoredDefaultSessions.filter(item => !stoppedBeforeRestartSessionIds.has(item.sessionId) &&
+          item.sessionId !== originSession.sessionId).map(item => item.sessionId).join(','), defaultSessionsAfterLifecycleStop.map(item => item.sessionId).join(',')],
+        archivedFirst: [restoredArchivedSessions[0]?.sessionId, thirdSession.sessionId],
+        selectedSession: [restoredLayout.selectedSessionId, preloadProbe.formCreatedSession.sessionId],
+        scrollLine: [restoredLayout.sessionView[session.sessionId]?.scrollLine, 19],
+        followTail: [restoredLayout.sessionView[session.sessionId]?.followTail, false],
+        bindingsJSON: [JSON.stringify(restoredBindings.map(persistedBindingView)), JSON.stringify(expectedBindings.map(persistedBindingView))]
+      }).map(([key, [actual, expected]]) => [key, {
+        actual: actual === undefined ? { kind: 'undefined' } : actual === null ? { kind: 'null' } : { kind: 'value', value: actual },
+        expected: expected === undefined ? { kind: 'undefined' } : expected === null ? { kind: 'null' } : { kind: 'value', value: expected },
+        mismatch: actual !== expected
+      }])),
+      source: { restoredIds: restoredDefaultSessions.map(item => item.sessionId), stoppedIds: [...stoppedBeforeRestartSessionIds],
+        originId: originSession.sessionId, expectedIds: defaultSessionsAfterLifecycleStop.map(item => item.sessionId),
+        archivedIds: restoredArchivedSessions.map(item => item.sessionId),
+        actualBindingsJSON: JSON.stringify(restoredBindings.map(persistedBindingView)), expectedBindingsJSON: JSON.stringify(expectedBindings.map(persistedBindingView)) }
+    }))
     if (
-      restoredWorkspaces.length !== 3 ||
+      !workspacesRestored ||
       restoredDefaultSessions.filter((item) => !stoppedBeforeRestartSessionIds.has(item.sessionId) &&
         item.sessionId !== originSession.sessionId)
         .map((item) => item.sessionId).join(',') !==

@@ -2487,12 +2487,12 @@ function App(): React.JSX.Element {
                   </label>
                   <p className="field-help resolved">Runs <code>{resolvedCommand}</code></p>
                   <label className="field">When windows close
-                    <BackgroundChoiceSelect value={sessionForm.backgroundChoice} onChange={(backgroundChoice) => {
+                    <BackgroundChoiceSelect value={sessionForm.backgroundChoice} disabled={!activeWorkspace || activeWorkspace.archivedAt !== null} onChange={(backgroundChoice) => {
                       setSessionForm((current) => ({ ...current, backgroundChoice }))
                     }} />
                   </label>
                   <label className="field">Terminal images (Sixel)
-                    <TerminalGraphicsSelect value={sessionForm.terminalGraphics} onChange={(terminalGraphics) => {
+                    <TerminalGraphicsSelect value={sessionForm.terminalGraphics} disabled={!activeWorkspace || activeWorkspace.archivedAt !== null} onChange={(terminalGraphics) => {
                       setSessionForm((current) => ({ ...current, terminalGraphics }))
                     }} />
                   </label>

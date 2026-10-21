@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FileReferenceSearchResult, SessionRecord } from '@bmn/protocol'
 import { Dialog } from './dialog'
+import { runDeferredPaletteCommand } from './palette-command-barrier'
 import { sessionProcessLive } from './session-presentation'
 
 export interface PaletteCommand {
@@ -155,7 +156,11 @@ export function CommandPalette(props: {
     if (!command || command.disabled) return
     props.onClose()
     // Run after the dialog closes so focus restoration never lands on top of the command's own focus.
-    setTimeout(() => command.run(), 0)
+    setTimeout(() => {
+      const hook = window.__aitermTest
+      const focused = document.activeElement?.closest<HTMLElement>('.session-terminal[data-session-id]')?.dataset.sessionId ?? null
+      runDeferredPaletteCommand(command.id, focused, () => command.run(), hook?.paletteCommand)
+    }, 0)
   }
 
   let lastGroup = ''

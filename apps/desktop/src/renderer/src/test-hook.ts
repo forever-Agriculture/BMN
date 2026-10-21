@@ -1,3 +1,4 @@
+import { PaletteCommandBarrier } from './palette-command-barrier'
 import type { QuickLookFlowProbe } from './quick-look-probe'
 import type { FileReferenceFlowProbe } from './file-reference-probe'
 import type { ProgressEvidenceProbe } from './progress-evidence-probe'
@@ -131,6 +132,7 @@ export interface TerminalIntegrationProbe {
 }
 
 interface TerminalTestHook {
+  paletteCommand: PaletteCommandBarrier
   snapshot(sessionId?: string): TerminalTestSnapshot
   snapshots(): Record<string, TerminalTestSnapshot>
   sixelFixture(sessionId: string): Promise<{ storageMB: number; layer: boolean }>
@@ -246,6 +248,7 @@ export function installTerminalTestHook<Term extends TestableTerminal>(options: 
   let facade = terminalFacades.get(options.target)
   if (!facade) {
     facade = {
+      paletteCommand: new PaletteCommandBarrier(),
       snapshot: (sessionId) => {
         const current = terminalHooks.get(options.target)
         const selected = sessionId
