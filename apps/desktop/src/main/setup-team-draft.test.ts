@@ -36,6 +36,22 @@ describe('setup Team proposals',()=>{
     const s=staged(),o=options();o.roster.approved={generation:1,createdAt:'2026-10-21',data:s.data};o.roster.file.data=s.data;o.roster.file.hash='approved';o.roster.approvalProblem=null
     const before=structuredClone(o);expect(buildSetupTeamProposals(o)!.proposals.map(p=>p.app)).toEqual(['claude','opencode']);expect(o).toEqual(before)
   })
+  it('separates explicit approval from proposal suppression only for an already approved team', () => {
+    const s = staged(), o = options()
+    o.roster.approved = { generation: 1, createdAt: 'synthetic', data: s.data }
+    o.roster.approvalProblem = null
+    o.roster.file.data = s.data
+    o.roster.differences = [{ scope: 'agent', id: s.id, field: 'name', kind: 'changed' }]
+    const proposal = buildSetupTeamProposals(o)!, approval = buildSetupTeamProposals({ ...o, intent: 'approve' })!
+    expect(proposal).toMatchObject({ blocked: expect.any(String), proposals: [] })
+    expect(approval.blocked).toBeNull()
+    expect(approval.revision).toBe(proposal.revision)
+    expect(approval.availableApps).toEqual(proposal.availableApps)
+    o.roster.approved = null
+    expect(buildSetupTeamProposals({ ...o, intent: 'approve' })!.blocked).not.toBeNull()
+    o.roster.approvalProblem = { code: 'IO_ERROR', message: 'Synthetic broken approval', lastGood: null }
+    expect(buildSetupTeamProposals({ ...o, intent: 'approve' })!.blocked).not.toBeNull()
+  })
   it('changes the revision for profile, app program/version/sign-in and roster changes, not check time',()=>{
     const o=options(),old=buildSetupTeamProposals(o)!.revision;o.apps.checkedAt='later';expect(buildSetupTeamProposals(o)!.revision).toBe(old)
     for(const change of [(n:typeof o)=>n.profile!.revision++,(n:typeof o)=>n.apps.apps[0]!.version='changed',(n:typeof o)=>n.apps.apps[0]!.program='/changed',(n:typeof o)=>n.apps.apps[0]!.signIn='signed-out',(n:typeof o)=>n.roster.file.hash='changed']){const n=options();change(n);expect(buildSetupTeamProposals(n)!.revision).not.toBe(old)}

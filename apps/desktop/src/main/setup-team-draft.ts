@@ -14,13 +14,13 @@ const ROLES = {
 
 export function buildSetupTeamProposals(options: {
   profile: FirstRunSetupRecord | null; apps: SetupAppsSnapshot; roster: AgentsSnapshot
-  defaults: SetupDefaultsReport; starterHash: string
+  defaults: SetupDefaultsReport; starterHash: string; intent?: 'propose' | 'approve'
 }): SetupTeamProposals | null {
   const { profile, apps, roster, defaults } = options
   if (!profile || profile.state === 'existing') return null
   const blocked = roster.approvalProblem && roster.approvalProblem.code !== 'NOT_APPROVED' ? 'The approved team needs fixing first.'
     : roster.file.exists && (!roster.file.data || !roster.approved && roster.file.hash !== options.starterHash) ? 'The existing team file needs review first.'
-      : (roster.differences?.length ?? 0) > 0 ? 'Keep or revert changes made outside BMN first.'
+      : (roster.differences?.length ?? 0) > 0 && (options.intent !== 'approve' || !roster.approved) ? 'Keep or revert changes made outside BMN first.'
         : !defaults.source ? 'Setup is preparing the default skills source. Check again shortly.' : null
   const ready = apps.platform === 'linux' ? apps.apps.filter(row => row.program && row.version && ['ready', 'confirmed'].includes(row.signIn)) : []
   const roles = Object.keys(ROLES).filter(role => classRefusal('queen', role) === null)
@@ -42,6 +42,7 @@ export function validateSetupTeamApproval(proposals: SetupTeamProposals | null, 
   const additions = data.agents.filter(agent => {
     const earlier = approved?.agents.find(earlier => earlier.id === agent.id)
     return !earlier || earlier.harness !== agent.harness || !earlier.enabled && agent.enabled || earlier.status === 'proposed' && agent.status === 'active'
+      || (!earlier.enabled || earlier.status === 'proposed') && data.roles.some(role => role.candidates.some(candidate => candidate.split('@')[0] === agent.id))
   })
   for (const agent of additions) {
     if (!agent.model || !/^[^\s\0]{1,128}$/.test(agent.model) || ['default', 'auto'].includes(agent.model) || !agent.provider || agent.efforts.length === 0 && agent.harness !== 'bmn') {

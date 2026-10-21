@@ -13,6 +13,11 @@ import { qualifySetupProbe } from './setup-probe-qualification'
 export type SignInProjection = Pick<SetupAppReadiness, 'signIn' | 'method'>
 const UNKNOWN: SignInProjection = { signIn: 'unknown', method: null }
 const MEASURED: Readonly<Record<SetupApp, string>> = { claude: '2.1.303', codex: '0.163.0', opencode: '2.0.32' }
+const VERSION_OUTPUT: Readonly<Record<SetupApp, RegExp>> = {
+  claude: /^(?:claude(?: code)?\s+)?(\d+\.\d+\.\d+)(?:\s+\(Claude Code\))?$/i,
+  codex: /^(?:codex(?:-cli)?\s+)?(\d+\.\d+\.\d+)$/i,
+  opencode: /^(?:opencode\s+)?v?(\d+\.\d+\.\d+)$/i
+}
 const sha = (value: string): string => createHash('sha256').update(value).digest('hex')
 
 /** Deliberately returns no provider, identity, key fragment, raw text or parser exception. */
@@ -134,7 +139,7 @@ export class SetupReadinessReader {
       if (!found) return row
       try {
       const versionRun = await this.run(found.path, ['--version'], { env: this.probeEnvironment(env), cwd: env.HOME ?? homedir() })
-      const match = versionRun.failure === null && versionRun.code === 0 ? /^(?:(?:claude(?: code)?|codex(?:-cli)?|opencode)\s+)?(\d+\.\d+\.\d+)(?:\s|$)/i.exec(versionRun.output.trim()) : null
+      const match = versionRun.failure === null && versionRun.code === 0 ? VERSION_OUTPUT[app].exec(versionRun.output.trim()) : null
       row.version = match?.[1] ?? null
       if (!row.version) return row
       row.qualification = this.qualification(app, row.version, found.path, env)

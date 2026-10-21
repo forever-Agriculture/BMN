@@ -1,10 +1,12 @@
 // MODULE: setup-readiness.test.ts - Secret projection, fixed paths and real disposable probe qualification
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { SETUP_APPS, SETUP_INSTALL_COMMANDS, SETUP_LOGIN_ARGUMENTS } from '@bmn/protocol'
+import { SETUP_APPS, SETUP_INSTALL_COMMANDS, SETUP_LOGIN_ARGUMENTS, type AgentsSnapshot } from '@bmn/protocol'
+import { parseRoster, sha256, starterRoster } from '../../bin/agents-roster.mjs'
 import { findSetupProgram, projectSetupSignIn, SetupReadinessReader } from './setup-readiness'
+import { buildSetupTeamProposals } from './setup-team-draft'
 
 const roots = new Set<string>()
 const root = (): string => { const dir = mkdtempSync(join(tmpdir(), 'bmn-setup-reader-')); roots.add(dir); return dir }
@@ -92,4 +94,75 @@ it('rejects a later version that prints a synthetic token and never retries that
   restored.confirm('claude', '9.0.0')
   expect((await restored.read()).apps[0]).toMatchObject({ signIn: 'confirmed', method: null })
   for (const file of readdirSync(state)) expect(readFileSync(join(state, file), 'utf8')).not.toContain('sk-')
+})
+
+function versionFixture(versions: Record<string, string>, qualifyPassed = true, versionCode = 0) {
+  const home = root(), bin = join(home, 'bin'), state = join(home, 'state')
+  mkdirSync(bin)
+  for (const app of Object.keys(versions)) writeFileSync(join(bin, app), '#!/bin/sh\nexit 65\n', { mode: 0o755 })
+  let qualifications = 0
+  const env = { HOME: home, PATH: bin }
+  const seams: ConstructorParameters<typeof SetupReadinessReader>[0] = { environment: () => env, skipDirectory: null, stateDirectory: state,
+    run: async (program, argv) => ({ code: argv[0] === '--version' ? versionCode : 0, failure: null, output: argv[0] === '--version' ? versions[basename(program)]! :
+      basename(program) === 'claude' ? '{"loggedIn":true,"authMethod":"claude.ai"}' :
+        basename(program) === 'codex' ? 'Logged in using ChatGPT' : '[{"connections":[{"type":"credential"}]}]' }),
+    qualify: async () => { qualifications++; return qualifyPassed } }
+  return { reader: new SetupReadinessReader(seams), reopen: () => new SetupReadinessReader(seams), env, versions, qualifications: () => qualifications }
+}
+
+function teamFromReadiness(apps: Awaited<ReturnType<SetupReadinessReader['read']>>) {
+  const hash = sha256(starterRoster())
+  return buildSetupTeamProposals({ apps, profile: { state: 'active', revision: 1, workspaceId: null, updatedAt: 'synthetic' },
+    roster: { approvalProblem: { code: 'NOT_APPROVED' }, approved: null, differences: null,
+      file: { exists: true, hash, data: parseRoster(starterRoster()).data } } as AgentsSnapshot,
+    starterHash: hash, defaults: { code: 'OK', source: '/synthetic/skills', names: [], rows: [] } })!
+}
+
+it('reads all exact 79.1 measured version strings into ready Team proposals without qualification', async () => {
+  const f = versionFixture({ claude: '2.1.303 (Claude Code)', codex: 'codex-cli 0.163.0', opencode: 'opencode v2.0.32' })
+  const apps = await f.reader.read()
+  expect(apps.apps.map(({ app, version, qualification, signIn }) => ({ app, version, qualification, signIn }))).toEqual([
+    { app: 'claude', version: '2.1.303', qualification: 'measured', signIn: 'ready' },
+    { app: 'codex', version: '0.163.0', qualification: 'measured', signIn: 'ready' },
+    { app: 'opencode', version: '2.0.32', qualification: 'measured', signIn: 'ready' }
+  ])
+  expect(f.qualifications()).toBe(0)
+  expect(teamFromReadiness(apps).proposals.map(proposal => [proposal.app, proposal.needs])).toEqual([
+    ['claude', null], ['codex', null], ['opencode', 'OpenCode Console availability for BMN team asks']
+  ])
+})
+
+it.each([true, false])('qualifies an unmeasured OpenCode v version once, with confirmation bound to version and profile (pass=%s)', async passed => {
+  const f = versionFixture({ opencode: 'opencode v2.0.33' }, passed)
+  expect((await f.reader.read()).apps[2]).toMatchObject({ version: '2.0.33', qualification: 'checking', signIn: 'unknown' })
+  await f.reader.idle()
+  expect((await f.reader.read()).apps[2]).toMatchObject({ version: '2.0.33', qualification: passed ? 'passed' : 'failed', signIn: passed ? 'ready' : 'unknown' })
+  expect(f.qualifications()).toBe(1)
+  expect((await f.reopen().read()).apps[2]).toMatchObject({ version: '2.0.33', qualification: passed ? 'passed' : 'failed' })
+  expect(f.qualifications()).toBe(1)
+  if (!passed) {
+    f.reader.confirm('opencode', '2.0.33')
+    const confirmed = await f.reader.read()
+    expect(confirmed.apps[2]).toMatchObject({ signIn: 'confirmed', qualification: 'failed' })
+    expect(teamFromReadiness(confirmed).availableApps).toEqual(['opencode'])
+    f.env.HOME = root()
+    expect((await f.reader.read()).apps[2]).toMatchObject({ signIn: 'unknown', qualification: 'failed' })
+    f.reader.confirm('opencode', '2.0.33')
+    f.versions.opencode = 'opencode v2.0.34'
+    expect((await f.reader.read()).apps[2]).toMatchObject({ version: '2.0.34', signIn: 'unknown', qualification: 'checking' })
+    await f.reader.idle()
+    expect((await f.reader.read()).apps[2]).toMatchObject({ signIn: 'unknown', qualification: 'failed' })
+  }
+})
+
+it.each(['noise opencode v2.0.32', 'opencode v2.0', 'codex-cli 2.0.32', 'opencode v2.0.32 unexpected'])('leaves malformed or wrong-app version output unknown: %s', async version => {
+  const f = versionFixture({ opencode: version })
+  expect((await f.reader.read()).apps[2]).toMatchObject({ version: null, signIn: 'unknown', qualification: 'unavailable' })
+  expect(f.qualifications()).toBe(0)
+})
+
+it('does not trust a version printed by a failed command', async () => {
+  const f = versionFixture({ opencode: 'opencode v2.0.32' }, true, 1)
+  expect((await f.reader.read()).apps[2]).toMatchObject({ version: null, signIn: 'unknown', qualification: 'unavailable' })
+  expect(f.qualifications()).toBe(0)
 })

@@ -2208,4 +2208,74 @@ describe('fresh setup Team approval', () => {
     await expect(call('agents:save',{shown:s.shown,data:s.next})).rejects.toThrow('verified outside setup')
     expect(readFileSync(rosterFile(),'utf8')).toBe(before)
   })
+  async function outsideName(state: 'active' | 'finished') {
+    const s = await fresh()
+    expect((await call<AgentsOutcome>('agents:save', { shown: s.shown, data: s.next })).ok).toBe(true)
+    setupTeamInput!.profile!.state = state
+    setupTeamInput!.profile!.revision++
+    writeFileSync(rosterFile(), readFileSync(rosterFile(), 'utf8').replace('Synthetic Codex', 'Synthetic Renamed Codex'))
+    const outside = await snapshot()
+    expect(outside.differences?.map(diff => [diff.id, diff.field])).toEqual([['synthetic-codex', 'name']])
+    expect(outside.setupTeam).toMatchObject({ blocked: 'Keep or revert changes made outside BMN first.', proposals: [] })
+    return { outside, shown: { ...shownOf(outside), setupRevision: outside.setupTeam!.revision } }
+  }
+  it.each(['active', 'finished'] as const)('keeps an explicitly reviewed outside name edit for a %s fresh profile', async state => {
+    const s = await outsideName(state), bytes = readFileSync(rosterFile(), 'utf8')
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'sections', scope: ['synthetic-codex'], setupRevision: s.shown.setupRevision } })
+    expect(preview.valid).toBe(true)
+    expect(preview.differences.map(diff => [diff.id, diff.field])).toEqual([['synthetic-codex', 'name']])
+    const result = await call<AgentsOutcome>('agents:approve', { shown: s.shown, scope: ['synthetic-codex'], teamUpdate: bindings(preview) })
+    expect(result).toMatchObject({ ok: true, message: 'Kept · version 2' })
+    const kept = await snapshot()
+    expect(kept.approved?.data.agents[0]?.name).toBe('Synthetic Renamed Codex')
+    expect(kept.differences).toEqual([])
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(bytes)
+    expect(openCodeGo.calls).toEqual([])
+  })
+  it('scoped Keep validates only the published member and leaves a private outside addition unapproved', async () => {
+    const s = await outsideName('finished'), file = structuredClone(s.outside.file.data!)
+    file.agents.push({ ...file.agents[0]!, id: 'private-new', name: 'Private New', harness: 'claude', provider: 'private-provider' })
+    file.providers.push({ id: 'private-provider', name: 'Private', hosts: [], private_work: 'allowed' })
+    file.harness_routes.push({ harness: 'claude', provider: 'private-provider', basis: 'owner-declared' })
+    const { rewriteRoster } = await import('../../bin/agents-roster.mjs')
+    writeFileSync(rosterFile(), rewriteRoster(readFileSync(rosterFile(), 'utf8'), file))
+    const outside = await snapshot(), revision = outside.setupTeam!.revision
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'sections', scope: ['synthetic-codex'], setupRevision: revision } })
+    expect(preview.valid).toBe(true)
+    expect((await call<AgentsOutcome>('agents:approve', { shown: { ...shownOf(outside), setupRevision: revision }, scope: ['synthetic-codex'], teamUpdate: bindings(preview) })).ok).toBe(true)
+    const kept = await snapshot(), before = readFileSync(rosterFile(), 'utf8')
+    expect(kept.approved?.data.agents.map(agent => agent.id)).toEqual(['synthetic-codex'])
+    expect(kept.approved?.data.providers.map(provider => provider.id)).toEqual(['openai'])
+    expect(kept.file.data?.agents).toHaveLength(2)
+    await expect(call('agents:preview', { request: { kind: 'file', setupRevision: kept.setupTeam!.revision } })).rejects.toThrow('public work only')
+    await expect(call('agents:approve', { shown: { ...shownOf(kept), setupRevision: kept.setupTeam!.revision } })).rejects.toThrow('public work only')
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(before)
+    expect((await snapshot()).approved?.generation).toBe(2)
+  })
+  it('keeps stale-revision and Restore pending-edits refusals when explicit Keep is available', async () => {
+    const s = await outsideName('finished'), bytes = readFileSync(rosterFile(), 'utf8')
+    await expect(call('agents:preview', { request: { kind: 'sections', scope: ['synthetic-codex'], setupRevision: 'stale' } })).rejects.toThrow('Setup changed')
+    await expect(call('agents:approve', { shown: { ...s.shown, setupRevision: 'stale' }, scope: ['synthetic-codex'] })).rejects.toThrow('Setup changed')
+    const restored = await call<AgentsOutcome>('agents:restore', { shown: s.shown, number: 1 })
+    expect(restored).toMatchObject({ ok: false, code: 'PENDING_CHANGES' })
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(bytes)
+    expect((await snapshot()).approved?.generation).toBe(1)
+  })
+  it.each(['activate', 'chain'] as const)('refuses an outside unavailable OpenCode %s even after removing its display note', async kind => {
+    const s = await fresh()
+    s.next.agents.push({ ...s.next.agents[0]!, id: 'synthetic-opencode', name: 'Synthetic OpenCode', harness: 'opencode', enabled: false, status: 'proposed', enabled_note: 'Needs Console' })
+    s.next.harness_routes.push({ harness: 'opencode', provider: 'openai', basis: 'owner-declared' })
+    expect((await call<AgentsOutcome>('agents:save', { shown: s.shown, data: s.next })).ok).toBe(true)
+    const file = structuredClone((await snapshot()).file.data!), unavailable = file.agents.find(agent => agent.id === 'synthetic-opencode')!
+    delete unavailable.enabled_note
+    if (kind === 'activate') { unavailable.enabled = true; unavailable.status = 'active' }
+    else { unavailable.roles.push(file.roles[0]!.id); file.roles[0]!.candidates.push('synthetic-opencode@medium') }
+    const { rewriteRoster } = await import('../../bin/agents-roster.mjs')
+    writeFileSync(rosterFile(), rewriteRoster(readFileSync(rosterFile(), 'utf8'), file))
+    const outside = await snapshot(), before = readFileSync(rosterFile(), 'utf8')
+    await expect(call('agents:preview', { request: { kind: 'file', setupRevision: outside.setupTeam!.revision } })).rejects.toThrow('keep it proposed and off')
+    await expect(call('agents:approve', { shown: { ...shownOf(outside), setupRevision: outside.setupTeam!.revision } })).rejects.toThrow('keep it proposed and off')
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(before)
+    expect((await snapshot()).approved).toEqual(outside.approved)
+  })
 })

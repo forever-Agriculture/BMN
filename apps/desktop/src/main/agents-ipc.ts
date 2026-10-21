@@ -352,7 +352,8 @@ const NOT_PREVIEWED = { differences: [], consequences: [], teamUpdate: [] }
  * would publish it, its differences and consequences against the approved version, and the rules
  * files whose Team phrase the approval would also update (60.4 AC6).
  */
-export async function previewApproval(request: AgentsApprovalRequest, environment: NodeJS.ProcessEnv): Promise<AgentsPreview> {
+export async function previewApproval(request: AgentsApprovalRequest, environment: NodeJS.ProcessEnv,
+  validate?: (data: RosterDataShape) => Promise<void>): Promise<AgentsPreview> {
   let text: string
   try {
     text = readFileSync(rosterPath(), 'utf8')
@@ -375,6 +376,7 @@ export async function previewApproval(request: AgentsApprovalRequest, environmen
     errors = staged.errors
   }
   if (next === null) return { valid: false, errors, ...NOT_PREVIEWED }
+  if (errors.length === 0) await validate?.(next)
   // A new or changed project choice whose agent cannot answer it is refused here, before he approves (73.2); a restore keeps its
   // choices as they were approved, but no version with two choices for one project is offered either (epic recheck 2).
   try {
@@ -1131,11 +1133,11 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return result.ok && !result.copied ? null : result
   }
 
-  const setupProposals = async (snapshot: AgentsSnapshot = agentsSnapshot()): Promise<import('@bmn/protocol').SetupTeamProposals | null> =>
-    options.setupTeam ? buildSetupTeamProposals({ ...await options.setupTeam(), roster: snapshot, starterHash: sha256(starterRoster()) }) : null
+  const setupProposals = async (snapshot: AgentsSnapshot = agentsSnapshot(), intent: 'propose' | 'approve' = 'propose'): Promise<import('@bmn/protocol').SetupTeamProposals | null> =>
+    options.setupTeam ? buildSetupTeamProposals({ ...await options.setupTeam(), roster: snapshot, starterHash: sha256(starterRoster()), intent }) : null
   const validateSetup = async (revision: unknown, data: RosterDataShape): Promise<void> => {
     const snapshot = agentsSnapshot()
-    validateSetupTeamApproval(await setupProposals(snapshot), revision, data, snapshot.approved?.data ?? null)
+    validateSetupTeamApproval(await setupProposals(snapshot, 'approve'), revision, data, snapshot.approved?.data ?? null)
   }
   handle('aiterm:agents:snapshot', async () => {
     const snapshot = agentsSnapshot()
@@ -1167,16 +1169,15 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   })
   handle('aiterm:agents:preview', async (params) => {
     const request = requestParam(params)
-    const data = request.kind === 'staged' ? request.data : request.kind === 'restore'
-      ? readGeneration(request.number)?.data as RosterDataShape | undefined : agentsSnapshot().file.data
-    if (data) await validateSetup(objectParams(params.request).setupRevision, data)
-    return previewApproval(request, context().env)
+    return previewApproval(request, context().env, data => validateSetup(objectParams(params.request).setupRevision, data))
   })
   handle('aiterm:agents:approve', async (params) => {
     const shown = shownParam(params)
-    const data = agentsSnapshot().file.data
-    if (data) await validateSetup(objectParams(params.shown).setupRevision, data)
     const scope = scopeParam(params)
+    const snapshot = agentsSnapshot()
+    const data = snapshot.file.data && scope !== null && snapshot.approved
+      ? mergeSections(snapshot.approved.data as RosterData, snapshot.file.data as RosterData, scope) : snapshot.file.data
+    if (data) await validateSetup(objectParams(params.shown).setupRevision, data)
     return approving(params, () => scope === null
       ? `Approved · version ${approveRoster(shown, seams).number}`
       : `Kept · version ${approveSections(shown, scope, seams).number}`)
