@@ -211,24 +211,18 @@ describe('running searches', () => {
     }
   })
 
-  it('leaves the terminals a turn every 100 ms and stops at once over big files full of hidden values', async () => {
+  it('searches big files full of hidden values and stops at once', async () => {
     const root = await folder({
       'a.md': `${'sk-'}${'a'.repeat(24)} `.repeat(30_000),
       '.env': 'NAME=madeup\n'.repeat(60_000),
       'c.json': '{"token": "abcdefghijklmnopqrstuvwxyz0123456789"}\n'.repeat(20_000),
       'b.md': `${'sk-'}${'b'.repeat(40)} ab `.repeat(20_000)
     })
+    // Masking one of these files is a single step of up to ~60 ms on this thread, over 100 ms under a loaded
+    // suite; the terminals never wait for it, as the search runs in its own worker thread. Their turn over
+    // megabyte files of hidden values is checked there: quick-look-search-client.test.ts.
     for (const query of ['sk', 'NAME', 'to', 'ab']) {
-      let last = performance.now()
-      let longest = 0
-      const ticker = setInterval(() => {
-        const now = performance.now()
-        longest = Math.max(longest, now - last)
-        last = now
-      }, 10)
-      await search(root, query)
-      clearInterval(ticker)
-      expect(longest).toBeLessThan(100)
+      expect((await search(root, query)).cancelled).toBe(false)
     }
     const controller = new AbortController()
     const started = performance.now()
