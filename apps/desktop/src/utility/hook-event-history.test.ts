@@ -19,6 +19,28 @@ async function fixture(options: { replace?: typeof rename } = {}) {
   return { root, live, known, history, path, saved: async () => JSON.parse(await readFile(path, 'utf8')) as { version: number; rows: HookEventRecord[] } }
 }
 describe('bounded retained hook metadata', () => {
+  it('projects observed-agent state across restart without replaying payloads or trusting deleted sessions', async () => {
+    const f = await fixture()
+    expect(f.history.observedAgent('codex')).toBeNull()
+    await f.history.load(); expect(f.history.observedAgent('codex')).toBe(false)
+    f.live.push({ ...row(), agent: 'codex', sessionId: randomUUID() })
+    expect(f.history.observedAgent('codex')).toBe(false)
+    f.live.push({ ...row(), agent: 'codex' })
+    expect(f.history.observedAgent('codex')).toBe(true)
+    f.history.markDirty(); await f.history.flush(); await f.history.close()
+    const next = new HookEventHistory({ root: f.root, sessionExists: id => f.known.has(id), live: () => [] })
+    await next.load(); expect(next.observedAgent('codex')).toBe(true)
+    f.known.clear(); next.sessionsChanged(); expect(next.observedAgent('codex')).toBe(false)
+    await next.close()
+  })
+
+  it('keeps missing/corrupt evidence unknown but accepts a validated live event', async () => {
+    const f = await fixture(); await writeFile(f.path, '{synthetic invalid history')
+    await f.history.load(); expect(f.history.observedAgent('codex')).toBeNull()
+    f.live.push({ ...row(), agent: 'codex' }); expect(f.history.observedAgent('codex')).toBe(true)
+    await f.history.close()
+  })
+
   it('projects only allowlisted fields/categories and omits secret-shaped labels and payloads', () => {
     const event = { ...row(), event: 'secret-event-token', source: 'secret-api-host', toolName: 'mcp__secret_tool',
       model: 'secret-model', apiHost: 'secret-provider', payload: { body: 'secret-prompt' }, repeat: 900 }

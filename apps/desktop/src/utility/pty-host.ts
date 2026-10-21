@@ -10,6 +10,7 @@ import {
   METHOD_REGISTRY,
   PROTOCOL_VERSION,
   isCompatibleProtocol,
+  isFirstRunSetupUpdate,
   isRpcRequest,
   isSessionCohortResumeParams,
   isRepositoryInspectParams,
@@ -646,6 +647,29 @@ async function start(): Promise<void> {
       }
       case METHOD_REGISTRY.healthGet:
         return selfTestHealthProbe(params) ?? manager.health()
+      case METHOD_REGISTRY.setupInitialize: {
+        if (Object.keys(params).length !== 1 || typeof params.existingProfile !== 'boolean') {
+          throw new HostControlError(ERROR_CODES.invalidArgument, 'Existing-profile evidence is required')
+        }
+        const progress = await database.initializeSetup(params.existingProfile, homedir())
+        companionService.catalogueChanged()
+        return progress
+      }
+      case METHOD_REGISTRY.setupGet:
+        if (Object.keys(params).length !== 0) throw new HostControlError(ERROR_CODES.invalidArgument, 'Setup read takes no parameters')
+        return database.getSetup()
+      case METHOD_REGISTRY.setupDefaultsClaim:
+        if (Object.keys(params).length !== 0) throw new HostControlError(ERROR_CODES.invalidArgument, 'Defaults claim takes no parameters')
+        return database.claimSetupDefaults()
+      case METHOD_REGISTRY.setupWorkspace: {
+        if (Object.keys(params).length !== 0) throw new HostControlError(ERROR_CODES.invalidArgument, 'Setup workspace takes no parameters')
+        const progress = await database.ensureSetupWorkspace(homedir())
+        companionService.catalogueChanged()
+        return progress
+      }
+      case METHOD_REGISTRY.setupUpdate:
+        if (!isFirstRunSetupUpdate(params)) throw new HostControlError(ERROR_CODES.invalidArgument, 'Setup progress parameters are invalid')
+        return database.updateSetup(params)
       case METHOD_REGISTRY.workspaceList:
         if ('includeArchived' in params && typeof params.includeArchived !== 'boolean') {
           throw new HostControlError(
@@ -701,6 +725,7 @@ async function start(): Promise<void> {
           name: params.name,
           ...('backgroundChoice' in params ? { backgroundChoice: params.backgroundChoice ?? null } : {}),
           ...('terminalGraphics' in params ? { terminalGraphics: params.terminalGraphics ?? null } : {}),
+          ...(params.setup ? { setup: params.setup } : {}),
           cwd: stringValue(params, 'cwd'),
           executable: stringValue(params, 'executable'),
           argv: params.argv,

@@ -26,6 +26,7 @@ export interface TeamUpdateResult extends InstallResult { skipped: RulesHarness[
 export interface ProbeEntry { harness: RulesHarness; at: string; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; version: string | null; host?: string | null; route: string; rendered_hash: string; master_hash: string; by?: 'bmn' }
 export declare const TEAM_LIMIT_BYTES: number
 export declare function masterPath(): string
+export declare function targetPath(harness: RulesHarness, environment?: NodeJS.ProcessEnv): string
 export declare function parseMaster(text: string): { parts: Master['parts']; errors: MasterIssue[] }
 export declare function readMaster(path?: string): Master
 export declare function teamPhrase(generation: RosterView | null): TeamPhrase
@@ -35,6 +36,9 @@ export declare function publicRendering(harness: RulesHarness): string
 export declare function planTeamUpdate(nextData: RosterData, options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<{ targets: TeamUpdateTarget[] }>
 export declare function applyTeamUpdate(shown: Pick<TeamUpdateTarget, 'harness' | 'binding'>[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; beforeTarget?: (harness: RulesHarness, index: number) => void }): Promise<TeamUpdateResult>
 export declare function checkTargets(environment?: NodeJS.ProcessEnv | Record<string, string>): TargetCheck[]
+export declare function rulesRecord(path: string): string | null
+export declare function changeRulesRecord(path: string, expected: string | null, next: string | null): void
+export declare function rememberSetupMaster(path: string, hash: string, reason: string, now?: Date): ReturnType<typeof masterHistory>[number]
 export declare function installRules(harnesses: RulesHarness[], options?: { yes?: boolean; asJson?: boolean; environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; afterConfirm?: () => void; beforeTarget?: (harness: RulesHarness, index: number) => void; expectedPlanHash?: string }): Promise<InstallResult>
 declare function planInstall(harnesses: RulesHarness[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<{ code: string; message?: string; planHash: string | null; plans: unknown[] }>
 export declare function planView(result: Awaited<ReturnType<typeof planInstall>>): { code: string; message?: string; plan_hash: string | null; targets: { harness: RulesHarness; path: string; resolved_path: string; kind: string; change: string; rendering: RenderingKind; reason: string; team_form: string; link_target?: string; diff: string; fold: string[] }[] }
@@ -75,7 +79,7 @@ export interface ProbeAutoPlanEntry { harness: RulesHarness; version: string; ke
 export declare function probeAutoPlan(options?: { versions?: Partial<Record<RulesHarness, string | null>>; environment?: NodeJS.ProcessEnv | Record<string, string> }): ProbeAutoPlanEntry[]
 export declare function runRulesCommand(argv: string[]): Promise<number>
 export declare function confirm(question: string, details: string, options: { yes: boolean; asJson: boolean }): Promise<boolean>
-export declare function writePrivate(path: string, text: string): void
+export declare function writePrivate(path: string, text: string, options?: { guard?: () => void }): void
 export declare function newTransaction(now: Date): { id: string; folder: string }
 export declare function routeStillMatches(harness: string, decision: { kind: RenderingKind; route: { provider: string } | null }, environment: NodeJS.ProcessEnv | Record<string, string>): Promise<{ ok: boolean; reason?: string; remedy?: string; inspected?: unknown }>
 export declare function findRollout(root: string, cwd: string, since: number): string | null

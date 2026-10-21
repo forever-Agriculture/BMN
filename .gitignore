@@ -1,3 +1,4 @@
+# MODULE: .gitignore - Keep secrets, dependencies, generated output and local run state out of Git
 # Secrets, dependencies and generated output.
 .env
 .env.*
@@ -31,6 +32,7 @@ __pycache__/
 
 # Local whisper.cpp build from `pnpm run voice:build`.
 /apps/desktop/resources/whisper/
+/apps/desktop/resources/defaults/
 
 # Local agent and editor state.
 /.claude/

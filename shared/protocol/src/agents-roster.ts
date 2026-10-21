@@ -176,7 +176,7 @@ export interface RosterDiffShape {
 }
 
 /** What the page showed; an approval or save carries it back and is refused when either moved. */
-export interface AgentsShownRevision { generation: number | null; fileHash: string; link?: string | null; directory?: string | null }
+export interface AgentsShownRevision { generation: number | null; fileHash: string; link?: string | null; directory?: string | null; setupRevision?: string }
 
 export interface AgentsGenerationSummary {
   number: number
@@ -195,6 +195,7 @@ export interface AgentsGenerationSummary {
 }
 
 export interface AgentsSnapshot {
+  setupTeam?: import('./first-run-setup').SetupTeamProposals | null
   rosterPath: string
   /** The home directory, for showing files as `~/…` (display only). */
   home: string | null
@@ -244,11 +245,11 @@ export interface AgentsPreview {
 export type AgentsTeamUpdateShown = Pick<TeamUpdateTarget, 'harness' | 'binding'>[]
 
 /** What an approving control approves: the staged data, the whole file, some of its outside changes, or an earlier version. */
-export type AgentsApprovalRequest =
+export type AgentsApprovalRequest = { setupRevision?: string } & (
   | { kind: 'staged'; data: RosterDataShape }
   | { kind: 'file' }
   | { kind: 'sections'; scope: string[] }
-  | { kind: 'restore'; number: number }
+  | { kind: 'restore'; number: number })
 
 /**
  * What happened to the rules files after an approval that showed them. `installed` (Story 75.9) says what the

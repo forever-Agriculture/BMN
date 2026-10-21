@@ -910,7 +910,7 @@ const APP_PROVIDERS: Readonly<Record<RosterHarness, { id: string; name: string }
   opencode: { id: 'opencode-go', name: 'OpenCode Go' }
 }
 
-interface Landing {
+export interface Landing {
   /** The provider a new agent would run on. */
   provider: { id: string; name: string }
   /** True when the roster has no such provider yet, so its private-work answer must be asked. */
@@ -933,6 +933,9 @@ export function landingFor(data: RosterDataShape, harness: RosterHarness, host: 
 }
 
 export interface NewAgent {
+  /** Setup requires an explicit destination and keeps unknown account access off. Never persisted. */
+  setup?: { needs: string | null }
+  destination?: Landing
   name: string
   class: RosterClass
   harness: RosterHarness
@@ -990,12 +993,14 @@ export function changeModel(data: RosterDataShape, id: string, model: string, ap
  * runs brings its recorded price and capacity along.
  */
 export function addAgent(data: RosterDataShape, draft: NewAgent, apps?: readonly AgentAppView[] | null): { data: RosterDataShape; id: string } {
-  const landing = landingFor(data, draft.harness, draft.host)
+  if (draft.setup && (!draft.destination || draft.efforts.length === 0 || !draft.model.trim())) throw new Error('Choose a model, a provider and an effort first.')
+  const landing = draft.destination ?? landingFor(data, draft.harness, draft.host)
   const id = idFor(draft.name, data.agents.map((agent) => agent.id))
-  const twin = modelTwin(data, draft.harness, landing.provider.id, draft.model)
+  const twin = draft.setup ? undefined : modelTwin(data, draft.harness, landing.provider.id, draft.model)
   const agent: RosterAgentShape = {
     id, name: draft.name.trim(), class: draft.class, harness: draft.harness, model: draft.model.trim(), provider: landing.provider.id,
-    host: landing.host ?? 'default', enabled: true, status: 'active', efforts: draft.efforts, roles: [],
+    host: landing.host ?? 'default', enabled: !draft.setup?.needs, status: draft.setup?.needs ? 'proposed' : 'active', efforts: draft.efforts, roles: [],
+    ...(draft.setup?.needs ? { enabled_note: `Needs ${draft.setup.needs}` } : {}),
     ...(draft.contextLimit === undefined ? {} : { context_limit: draft.contextLimit }),
     ...((draft.price ?? twin?.price) === undefined ? {} : { price: (draft.price ?? twin?.price) as RosterPriceShape }),
     ...((draft.contextWindow ?? twin?.context_window) === undefined ? {} : { context_window: (draft.contextWindow ?? twin?.context_window) as number })
@@ -1011,6 +1016,7 @@ export function addAgent(data: RosterDataShape, draft: NewAgent, apps?: readonly
       : data.harness_routes
   }
   for (const role of draft.roles) next = toggleAgentRole(next, id, role)
+  if (draft.setup?.needs) next = { ...next, roles: next.roles.map(role => withoutAgent(role, id)) }
   return { data: next, id }
 }
 

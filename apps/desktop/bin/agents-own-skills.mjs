@@ -1,4 +1,5 @@
 // MODULE: agents-own-skills.mjs - Story 77.4: BMN's own skills (plan, team-ask, report-artifact, web-question, jev-judge) install themselves into the skills folder as BMN's entries, pointing at a copy that stays readable with BMN closed; a renamed skill's old name is retired
+import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { randomBytes } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -7,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { agentsDirectory } from './agents-roster.mjs'
 import { copyTree, entryOf, treeHash } from './agents-skills.mjs'
 import { realOrNull } from './shared-helpers.mjs'
+import { optionalDefaultsOwnership } from './defaults-ownership.mjs'
+import { maintainSetupOwnSkills } from './setup-own-skills.mjs'
 
 /**
  * BMN ships a few skills of its own, listed in `skills/manifest.json` beside them (in the repository, and in a
@@ -50,6 +53,13 @@ function shippedNames(root) {
   return manifest.skills.filter((name) => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/u.test(name))
 }
 
+/** Names only, for the fresh-profile approval proposal before any asset is installed. */
+export function shippedSkillNames(environment = process.env) {
+  const root = shippedSkillsRoot(environment)
+  if (root === null) throw new Error('BMN shipped skills are unavailable')
+  return shippedNames(root)
+}
+
 /** Old names of renamed skills, from the manifest's `retired` list; a name still shipped is never retired. */
 function retiredNames(root, shipped) {
   const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
@@ -66,6 +76,7 @@ function readRecord() {
 }
 
 function writeRecord(record) {
+  assertDefaultsAdmission()
   const path = ownSkillsRecordPath()
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const temporary = `${path}.${process.pid}-${randomBytes(3).toString('hex')}.tmp`
@@ -83,13 +94,16 @@ export function pointsIntoBmn(target, name) {
 
 /** Put the shipped skill's current tree in BMN's copy, replacing an older or unreadable one whole. */
 function refreshCopy(from, copy) {
+  assertDefaultsAdmission()
   mkdirSync(dirname(copy), { recursive: true, mode: 0o700 })
   const staged = `${copy}.new-${process.pid}-${randomBytes(3).toString('hex')}`
   copyTree(from, staged)
   const old = `${copy}.old-${process.pid}-${randomBytes(3).toString('hex')}`
   let moved = false
   try {
+    assertDefaultsAdmission()
     if (existsSync(copy) || lstatOrNull(copy)) { renameSync(copy, old); moved = true }
+    assertDefaultsAdmission()
     renameSync(staged, copy)
   } catch (error) {
     rmSync(staged, { recursive: true, force: true })
@@ -105,9 +119,10 @@ function lstatOrNull(path) {
 
 /** A link at `path` to `target`, made beside it and renamed over whatever link was there. */
 function placeLink(path, target) {
+  assertDefaultsAdmission()
   const temporary = `${path}.bmn-${process.pid}-${randomBytes(3).toString('hex')}`
   symlinkSync(target, temporary)
-  try { renameSync(temporary, path) } catch (error) { rmSync(temporary, { force: true }); throw error }
+  try { assertDefaultsAdmission(); renameSync(temporary, path) } catch (error) { rmSync(temporary, { force: true }); throw error }
 }
 
 function copyCurrent(from, copy) {
@@ -120,7 +135,14 @@ function copyCurrent(from, copy) {
  * added back) or unavailable (the shipped skill or the skills folder cannot be read); plus one `retired` row per old
  * name whose BMN entry, copy or record it takes away.
  */
-export function installOwnSkills({ source, environment = process.env, apply = true, now = new Date() } = {}) {
+export function installOwnSkills(options = {}) {
+  if (options.apply === false) return installOwnSkillsAdmitted(options)
+  return withDefaultsAdmission(() => installOwnSkillsAdmitted(options))
+}
+
+function installOwnSkillsAdmitted({ source, environment = process.env, apply = true, now = new Date() } = {}) {
+  let setupJournal
+  try { setupJournal = optionalDefaultsOwnership() } catch (error) { return { ok: false, code: error.code, message: error.message, rows: [] } }
   const root = shippedSkillsRoot(environment)
   if (root === null) return { ok: false, code: 'NO_SHIPPED_SKILLS', message: 'BMN\'s own skills were not found beside this bmn', rows: [] }
   let names
@@ -129,6 +151,8 @@ export function installOwnSkills({ source, environment = process.env, apply = tr
     if (!existsSync(dirname(source))) return { ok: false, code: 'NO_SKILLS_FOLDER', message: `${dirname(source)} does not exist`, rows: [] }
     if (apply) mkdirSync(source, { recursive: true, mode: 0o755 })
   }
+  if (setupJournal) return maintainSetupOwnSkills({ journal: setupJournal, source, copies: ownCopiesRoot(environment), root,
+    names, retired: retiredNames(root, names), apply })
   const record = readRecord()
   const copies = ownCopiesRoot(environment)
   const rows = []
@@ -184,6 +208,7 @@ export function installOwnSkills({ source, environment = process.env, apply = tr
     if (!ours && !known && lstatOrNull(copy) === null) continue
     // BMN's copy and record go; the link goes only when it is BMN's, so a folder or link the owner made stays.
     if (apply) {
+      assertDefaultsAdmission()
       if (ours) rmSync(path, { force: true })
       rmSync(copy, { recursive: true, force: true })
       delete record.skills[name]; delete record.removed[name]; changed = true

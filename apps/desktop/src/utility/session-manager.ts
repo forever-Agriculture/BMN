@@ -1,3 +1,4 @@
+// MODULE: session-manager.ts - Own PTYs, session admission and terminal retention
 import { randomUUID } from 'node:crypto'
 import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -16,6 +17,7 @@ import {
   decsetResetSequence,
   lifecycleStopDetail,
   lifecycleStopSource,
+  isSetupSessionPurpose,
   type BackgroundChoice,
   type BoundConversationBinding,
   type ConversationBindingState,
@@ -34,6 +36,7 @@ import {
   type SavedOutputUnreadableEntry,
   type SessionProcessStatus,
   type SessionRecord,
+  type SetupSessionPurpose,
   type InterruptedSessionCohort,
   type InterruptedSessionEntry,
   type SessionCohortOfferedResult,
@@ -179,6 +182,7 @@ export interface CreateStartingRecord {
   processStartIdentity: string
   startedAt: string
   binding: PersistedConversationBinding
+  setup?: SetupSessionPurpose
 }
 
 export interface CreateResumingRecord {
@@ -258,6 +262,7 @@ export interface CreateSessionParams extends PtyLaunchParams {
   workspaceId: string
   name: string
   backgroundChoice?: BackgroundChoice | null
+  setup?: SetupSessionPurpose
 }
 
 export interface SessionIdentity {
@@ -329,7 +334,7 @@ interface UndeliveredOutputState {
 interface LiveSession extends SessionIdentity {
   pty: PtyLike
   /** Host ownership survives a failed record write until the process confirms exit. */
-  ownership: Pick<SessionRecord, 'workspaceId' | 'name'>
+  ownership: Pick<SessionRecord, 'workspaceId' | 'name' | 'setup'>
   dataSubscription?: Disposable
   exitSubscription?: Disposable
   cwd: string
@@ -346,6 +351,8 @@ interface LiveSession extends SessionIdentity {
   outputTail: OutputTail
   /** A headless copy of the screen, only for sessions running an agent (Epic 30). */
   mirror?: ScreenMirror | undefined
+  /** An ended setup command waits in memory for its first view, then publishes exit after its output. */
+  pendingSetupExit?: (() => void) | undefined
   undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -629,7 +636,12 @@ export class SessionManager {
   async create(
     requested: CreateSessionParams
   ): Promise<SessionIdentity & { binding: PersistedConversationBinding }> {
-    return this.withWorkspaceAdmission(requested.workspaceId, { name: requested.name }, () => this.createAdmitted(requested))
+    if ('setup' in requested && !isSetupSessionPurpose(requested.setup)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The setup session purpose is invalid')
+    }
+    // Copy before admission can await: the caller cannot change this lifetime policy mid-create.
+    const params = { ...requested, ...(requested.setup ? { setup: Object.freeze({ ...requested.setup }) } : {}) }
+    return this.withWorkspaceAdmission(params.workspaceId, { name: params.name }, () => this.createAdmitted(params))
   }
 
   private async createAdmitted(
@@ -661,6 +673,13 @@ export class SessionManager {
         throw error
       }
     }
+    // At most one ended, unopened setup transcript per app. A retry replaces only this in-memory view.
+    if (params.setup) for (const previous of this.sessions.values()) {
+      if (previous.exited && previous.ownership.setup?.app === params.setup.app) {
+        this.revokeAttachment(previous)
+        this.removeIfCurrent(previous)
+      }
+    }
     let recordPersisted = false
     let live: LiveSession
     try {
@@ -673,7 +692,7 @@ export class SessionManager {
         },
         this.environment,
         captureStartedAt,
-        { workspaceId: params.workspaceId, name: params.name.trim() },
+        { workspaceId: params.workspaceId, name: params.name.trim(), ...(params.setup ? { setup: params.setup } : {}) },
         async (record) => {
           await this.store.createStarting({
             ...record,
@@ -684,7 +703,8 @@ export class SessionManager {
             argv: params.argv,
             backgroundChoice: params.backgroundChoice ?? null,
             terminalGraphics: params.terminalGraphics ?? null,
-            binding: prepared.binding
+            binding: prepared.binding,
+            ...(params.setup ? { setup: params.setup } : {})
           })
           recordPersisted = true
         },
@@ -1445,7 +1465,7 @@ export class SessionManager {
     params: PtyLaunchParams,
     environment: Readonly<Record<string, string | undefined>>,
     captureStartedAt: string,
-    ownership: Pick<SessionRecord, 'workspaceId' | 'name'>,
+    ownership: Pick<SessionRecord, 'workspaceId' | 'name' | 'setup'>,
     createRecord: (record: CreateResumingRecord) => Promise<void>,
     injectedArguments: readonly string[] = [],
     reservation?: ConversationReservation
@@ -1453,7 +1473,7 @@ export class SessionManager {
     let pty: PtyLike
     const incarnationId = randomUUID()
     try {
-      pty = this.spawnValidatedPty(params, environment, { sessionId, incarnationId })
+      pty = this.spawnValidatedPty(params, environment, ownership.setup ? undefined : { sessionId, incarnationId })
     } catch (error) {
       if (reservation) this.removeIfCurrent(reservation)
       if (injectedArguments.length === 0) throw error
@@ -1477,7 +1497,7 @@ export class SessionManager {
       sessionId,
       incarnationId,
       pty,
-      ownership: { workspaceId: ownership.workspaceId, name: ownership.name },
+      ownership: { workspaceId: ownership.workspaceId, name: ownership.name, ...(ownership.setup ? { setup: ownership.setup } : {}) },
       cwd: params.cwd,
       executable: params.executable,
       captureStartedAt,
@@ -1525,7 +1545,7 @@ export class SessionManager {
       })
       await this.store.markRunning(incarnationId)
       live.resolveRecordReady()
-      if (live.exited) {
+      if (live.exited && !live.ownership.setup) {
         await live.exitComplete
         throw new HostControlError(
           ERROR_CODES.ioError,
@@ -1749,6 +1769,12 @@ export class SessionManager {
       disclosure.droppedBytes += queue.skippedBytes
       disclosure.truncated = true
     }
+    if (session.pendingSetupExit) void queue.whenPublished().then(() => {
+      if (session.outputQueue !== queue) return
+      const finish = session.pendingSetupExit
+      delete session.pendingSetupExit
+      finish?.()
+    })
     return { activated: true, undeliveredOutput: disclosure }
   }
 
@@ -1843,12 +1869,15 @@ export class SessionManager {
   }
 
   detach(params: { attachmentId: string }): void {
-    this.revokeAttachment(this.byAttachment(params.attachmentId))
+    const session = this.byAttachment(params.attachmentId)
+    this.revokeAttachment(session)
+    if (session.exited) this.removeIfCurrent(session)
   }
 
   rendererDisconnected(): void {
     for (const session of this.sessions.values()) {
       if (session.attachmentId) this.revokeAttachment(session)
+      if (session.exited) this.removeIfCurrent(session)
     }
   }
 
@@ -1975,6 +2004,7 @@ export class SessionManager {
       processState?: SavedOutputProcessState
     } = {}
   ): Promise<SavedOutputSnapshot> {
+    await this.requireSavedOutputAllowed(identity.sessionId)
     if (!this.savedOutputStore) {
       throw new HostControlError(ERROR_CODES.ioError, 'Saved output storage is unavailable')
     }
@@ -2149,6 +2179,7 @@ export class SessionManager {
       processState: SavedOutputProcessState
     }
   ): Promise<SavedOutputFinalCaptureUnavailable> {
+    await this.requireSavedOutputAllowed(identity.sessionId)
     if (!this.savedOutputStore) {
       throw new HostControlError(ERROR_CODES.ioError, 'Saved output storage is unavailable')
     }
@@ -2172,6 +2203,16 @@ export class SessionManager {
       detail: params.detail.slice(0, 240),
       processState: params.processState
     })
+  }
+
+  /** Check policy before inspecting content, including late requests after the live entry is gone. */
+  private async requireSavedOutputAllowed(sessionId: string): Promise<void> {
+    const live = this.sessions.get(sessionId)
+    const record = live?.ownership ?? await findStoredSession(this.store, sessionId)
+    if (!record) throw new HostControlError(ERROR_CODES.notFound, 'The saved-output session is unavailable')
+    if (record.setup) {
+      throw new HostControlError(ERROR_CODES.unauthorized, 'Setup sessions do not save terminal output')
+    }
   }
 
   /**
@@ -2371,7 +2412,11 @@ export class SessionManager {
   }
 
   private async performTeardownSession(session: LiveSession): Promise<string | undefined> {
-    if (session.exited) return undefined
+    if (session.exited) {
+      this.revokeAttachment(session)
+      this.removeIfCurrent(session)
+      return undefined
+    }
     const identityMatches = async (): Promise<boolean> => {
       try {
         return session.processStartIdentity.length > 0 &&
@@ -2495,26 +2540,31 @@ export class SessionManager {
     const lifecycleDetail = lifecycleCause
       ? lifecycleStopDetail(lifecycleCause, exit)
       : undefined
-    if (session.attachmentId && session.outputQueue === outputQueue) {
-      this.sendTerminalMessage(lifecycleCause
-        ? {
-            kind: 'terminal-exit',
-            state: 'interrupted',
-            attachmentId: session.attachmentId,
-            cause: lifecycleCause,
-            exitCode: exit.exitCode,
-            ...(exit.signal === undefined ? {} : { signal: exit.signal })
-          }
-        : {
-            kind: 'terminal-exit',
-            state: 'exited',
-            attachmentId: session.attachmentId,
-            exitCode: exit.exitCode,
-            ...(exit.signal === undefined ? {} : { signal: exit.signal })
-          })
+    const publishExit = (): void => {
+      const publishedQueue = session.ownership.setup && !outputQueue ? session.outputQueue : outputQueue
+      if (session.attachmentId && session.outputQueue === publishedQueue) {
+        this.sendTerminalMessage(lifecycleCause
+          ? {
+              kind: 'terminal-exit',
+              state: 'interrupted',
+              attachmentId: session.attachmentId,
+              cause: lifecycleCause,
+              exitCode: exit.exitCode,
+              ...(exit.signal === undefined ? {} : { signal: exit.signal })
+            }
+          : {
+              kind: 'terminal-exit',
+              state: 'exited',
+              attachmentId: session.attachmentId,
+              exitCode: exit.exitCode,
+              ...(exit.signal === undefined ? {} : { signal: exit.signal })
+            })
+      }
+      this.revokeAttachment(session)
+      this.removeIfCurrent(session)
     }
-    this.revokeAttachment(session)
-    this.removeIfCurrent(session)
+    if (session.ownership.setup && !outputQueue) session.pendingSetupExit = publishExit
+    else publishExit()
     try {
       await session.recordReady
       await Promise.all([

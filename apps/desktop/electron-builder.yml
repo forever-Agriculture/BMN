@@ -93,6 +93,41 @@ extraResources:
     to: bin/agents-check-team-ask.mjs
   - from: bin/agents-rules.mjs
     to: bin/agents-rules.mjs
+  # Story79.4: shared admission and setup-owned configuration transactions.
+  - from: bin/defaults-admission.mjs
+    to: bin/defaults-admission.mjs
+  - from: bin/defaults-ownership.mjs
+    to: bin/defaults-ownership.mjs
+  - from: bin/defaults-publish.mjs
+    to: bin/defaults-publish.mjs
+  - from: resources/defaults/defaults-publish
+    to: bin/defaults-publish
+  - from: bin/setup-file-defaults.mjs
+    to: bin/setup-file-defaults.mjs
+  - from: bin/setup-master-template.mjs
+    to: bin/setup-master-template.mjs
+  - from: bin/setup-defaults.mjs
+    to: bin/setup-defaults.mjs
+  - from: bin/setup-recovery.mjs
+    to: bin/setup-recovery.mjs
+  - from: bin/setup-config-write.mjs
+    to: bin/setup-config-write.mjs
+  - from: bin/setup-skill-records.mjs
+    to: bin/setup-skill-records.mjs
+  - from: bin/setup-skill-fs.mjs
+    to: bin/setup-skill-fs.mjs
+  - from: bin/setup-skill-defaults.mjs
+    to: bin/setup-skill-defaults.mjs
+  - from: bin/setup-own-skills.mjs
+    to: bin/setup-own-skills.mjs
+  - from: bin/setup-app-skills.mjs
+    to: bin/setup-app-skills.mjs
+  - from: bin/setup-tool-defaults.mjs
+    to: bin/setup-tool-defaults.mjs
+  - from: bin/setup-hook-defaults.mjs
+    to: bin/setup-hook-defaults.mjs
+  - from: bin/setup-opencode-hooks.mjs
+    to: bin/setup-opencode-hooks.mjs
   # The prompt guard and the context, skills and tools commands; agents-check.mjs imports two of them,
   # so without these the dispatch check does not load either. scripts/lib/cli-modules.mjs finds the set.
   - from: bin/agents-guard.mjs

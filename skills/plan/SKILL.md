@@ -1,6 +1,7 @@
 ---
 name: plan
-description: Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml, or a BMAD project's own files). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
+description: >-
+  Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml, or a BMAD project's own files). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
 ---
 # MODULE: SKILL.md - Story 77.3 (revision 5: a BMAD project read through one table, Sol review F8; revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
 
@@ -39,7 +40,7 @@ Every other rule holds as written.
 
 0. **Build on the vision and the architecture.** Every epic serves named `VISION.md` principles (its Why says which) and keeps `PLAN.md`'s Architecture: its invariants, contracts and targets, or it proposes the change openly. A plan that pulls against a principle goes to the owner as a card; only he changes the vision.
 1. **Ground it.** Read the code and the measured use before writing a word: what exists today, with `file:line` starting points you opened yourself, for every story, in code and not only in docs (a later story's code or a README line is not a starting point on its own). Count real use where it decides scope (rows in a database, transcripts, logs), read-only. A claim you did not check is marked as such.
-2. **His words, dated.** Quote the owner's words with their date in the epic's Why and wherever a decision rests on them. Never invent a past decision; look it up (`~/brain`, the plan's Decisions, the epic Logs).
+2. **His words, dated.** Quote the owner's words with their date in the epic's Why and wherever a decision rests on them. Never invent a past decision; look it up in the plan's Decisions and epic Logs, and in the project's shared memory if it keeps one.
 3. **One card per decision.** A choice only he can make (scope, money, privacy, public interfaces, a trade-off the evidence cannot settle) goes to him as one selectable card with your recommendation first, in the session (AskUserQuestion; `bmn ask` only mirrors it). Log each answer in the epic's Decisions with its date. Decide everything else yourself and say so in one line.
 4. **Small stories.** One lead session finishes a story. A story has a user-visible or owner-visible result, depends only on earlier stories, and creates only what it needs (no "set up everything" stories). A stop gate (measure first) is its own story, first.
 5. **Testable criteria.** Numbered Given/When/Then criteria, each observable, with a **Verification** naming the check, where it runs (unit, isolated live run, packaged build, the owner's phone), what it observes and who runs it. The real system must expose what each criterion needs; when that is not yet known, measure first. No criterion says "works well".

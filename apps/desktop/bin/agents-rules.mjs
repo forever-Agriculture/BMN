@@ -1,4 +1,5 @@
 // MODULE: agents-rules.mjs - Epic 60.4: one rules master rendered into each harness's own rules file, with check, install, restore and probes
+import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { spawnSync } from 'node:child_process'
 import {
   appendFileSync, chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
@@ -61,7 +62,7 @@ function probeLogPath() {
 }
 
 /** Each harness's own global rules file, resolved the way `bmn hooks` resolves its config folder. */
-function targetPath(harness, environment = process.env) {
+export function targetPath(harness, environment = process.env) {
   const home = environment.HOME || homedir()
   if (harness === 'claude') return `${absoluteUncollapsed(environment.CLAUDE_CONFIG_DIR || `${home}/.claude`)}/CLAUDE.md`
   if (harness === 'codex') return `${absoluteUncollapsed(environment.CODEX_HOME || `${home}/.codex`)}/AGENTS.md`
@@ -229,7 +230,8 @@ function ensurePrivate(path) {
   chmodSync(path, 0o700)
 }
 
-export function writePrivate(path, text) {
+export function writePrivate(path, text, { guard } = {}) {
+  guard?.()
   ensurePrivate(dirname(path))
   const temporary = `${path}.tmp-${process.pid}-${Date.now()}`
   const handle = openSync(temporary, 'wx', 0o600)
@@ -239,7 +241,12 @@ export function writePrivate(path, text) {
   } finally {
     closeSync(handle)
   }
+  guard?.()
   renameSync(temporary, path)
+}
+
+function writeAdmittedPrivate(path, text) {
+  return writePrivate(path, text, { guard: assertDefaultsAdmission })
 }
 
 /** The JSON in a file: `fallback` when the file is missing, a RosterError (STATE_CORRUPT) when it cannot be read or parsed. */
@@ -254,6 +261,35 @@ function readJsonMissingAs(path, fallback) {
 
 function lastWritten() {
   return readJsonMissingAs(lastWrittenPath(), {})
+}
+
+/** Setup uses the same Health binding as manual installs; a stale binding grants no ownership. */
+export function rulesRecord(path) {
+  const records = lastWritten()
+  if (!records || typeof records !== 'object' || Array.isArray(records) ||
+    Object.values(records).some(value => typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value))) {
+    throw new RosterError('STATE_CORRUPT', 'the rules last-written records are corrupt; nothing was written')
+  }
+  return records[path] ?? null
+}
+
+export function changeRulesRecord(path, expected, next) {
+  assertDefaultsAdmission()
+  if (rulesRecord(path) !== expected) throw new RosterError('REVISION_CONFLICT', 'the rules last-written record changed; it is left as it is')
+  if (next !== null && (typeof next !== 'string' || !/^[a-f0-9]{64}$/.test(next))) throw new RosterError('STATE_CORRUPT', 'invalid rules last-written hash')
+  const records = lastWritten()
+  if (next === null) delete records[path]
+  else records[path] = next
+  writeAdmittedPrivate(lastWrittenPath(), JSON.stringify(records, null, 2))
+  if (rulesRecord(path) !== next) throw new RosterError('STATE_CORRUPT', 'the rules last-written read-back failed')
+}
+
+export function rememberSetupMaster(path, hash, reason, now = new Date()) {
+  assertDefaultsAdmission()
+  if (path !== masterPath()) throw new RosterError('REVISION_CONFLICT', 'setup cannot register another rules master')
+  const master = readMaster()
+  if (master.hash !== hash) throw new RosterError('REVISION_CONFLICT', 'the setup master changed before its history was recorded')
+  return snapshotMaster(master, reason, now)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -375,8 +411,8 @@ function snapshotMaster(master, reason, now = new Date()) {
   const last = index.revisions[index.revisions.length - 1]
   if (last?.hash === master.hash) return last
   const revision = { revision: (last?.revision ?? 0) + 1, hash: master.hash, bytes: Buffer.byteLength(master.text), at: now.toISOString(), reason }
-  writePrivate(`${folder}/${String(revision.revision).padStart(6, '0')}.md`, master.text)
-  writePrivate(`${folder}/index.json`, JSON.stringify({ revisions: [...index.revisions, revision] }, null, 2))
+  writeAdmittedPrivate(`${folder}/${String(revision.revision).padStart(6, '0')}.md`, master.text)
+  writeAdmittedPrivate(`${folder}/index.json`, JSON.stringify({ revisions: [...index.revisions, revision] }, null, 2))
   return revision
 }
 
@@ -474,23 +510,25 @@ export async function planSave(text, { environment = process.env } = {}) {
  * reported for its app and the others are still written; the master stays saved.
  */
 export async function saveRules(text, { expectedHash, expectedLink = null, expectedDirectory = null, expectedPlanHash, environment = process.env, now = new Date(), beforeTarget } = {}) {
-  const planned = await planSave(text, { environment })
-  if (planned.code !== 'OK') return { code: planned.code, message: planned.message, errors: planned.errors, transaction: null, written: [], failed: [], blocked: [] }
-  const prior = planned.prior
-  const priorText = prior.kind === 'file' ? prior.text : prior.kind === 'link' ? linkedText(masterPath()) : null
-  // The same bytes in another folder are not the rules that were shown: a link on the way moved (R60-NFR2).
-  if ((priorText === null ? null : sha256(priorText)) !== expectedHash || (prior.kind === 'link' ? prior.target : null) !== expectedLink
-    || (expectedDirectory !== null && expectedDirectory !== prior.directory)) {
-    return { code: 'REVISION_CONFLICT', message: 'the rules changed since they were shown; reload to see them', transaction: null, written: [], failed: [], blocked: [] }
-  }
-  if (expectedPlanHash !== undefined && expectedPlanHash !== planned.planHash) {
-    return { code: 'REVISION_CONFLICT', message: 'the apps\' files or the rendering changed since the plan was shown; review it again', transaction: null, written: [], failed: [], blocked: [] }
-  }
-  if (!planned.changesMaster && planned.plans.length === 0) return { code: 'OK', transaction: null, written: [], failed: [], blocked: planned.blocked, master: false }
-  const result = writeTransaction(planned.master, planned.plans, {
-    now, beforeTarget, reason: 'save', keepGoing: true, ...(planned.changesMaster ? { masterChange: { prior, priorText } } : {})
+  return withDefaultsAdmission(async () => {
+    const planned = await planSave(text, { environment })
+    if (planned.code !== 'OK') return { code: planned.code, message: planned.message, errors: planned.errors, transaction: null, written: [], failed: [], blocked: [] }
+    const prior = planned.prior
+    const priorText = prior.kind === 'file' ? prior.text : prior.kind === 'link' ? linkedText(masterPath()) : null
+    // The same bytes in another folder are not the rules that were shown: a link on the way moved (R60-NFR2).
+    if ((priorText === null ? null : sha256(priorText)) !== expectedHash || (prior.kind === 'link' ? prior.target : null) !== expectedLink
+      || (expectedDirectory !== null && expectedDirectory !== prior.directory)) {
+      return { code: 'REVISION_CONFLICT', message: 'the rules changed since they were shown; reload to see them', transaction: null, written: [], failed: [], blocked: [] }
+    }
+    if (expectedPlanHash !== undefined && expectedPlanHash !== planned.planHash) {
+      return { code: 'REVISION_CONFLICT', message: 'the apps\' files or the rendering changed since the plan was shown; review it again', transaction: null, written: [], failed: [], blocked: [] }
+    }
+    if (!planned.changesMaster && planned.plans.length === 0) return { code: 'OK', transaction: null, written: [], failed: [], blocked: planned.blocked, master: false }
+    const result = writeTransaction(planned.master, planned.plans, {
+      now, beforeTarget, reason: 'save', keepGoing: true, ...(planned.changesMaster ? { masterChange: { prior, priorText } } : {})
+    })
+    return { ...result, blocked: planned.blocked, master: planned.changesMaster && result.code !== 'REVISION_CONFLICT' }
   })
-  return { ...result, blocked: planned.blocked, master: planned.changesMaster && result.code !== 'REVISION_CONFLICT' }
 }
 
 /** The plan as the panel and `--plan --json` show it: no file bytes beyond the diffs. */
@@ -528,12 +566,14 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
   if (!await confirm('Write these rules files?', details, { yes, asJson })) return { code: 'NOT_CONFIRMED', transaction: null, written: [] }
   // The answer may come long after the diff: plan again and write only what was confirmed.
   afterConfirm?.()
-  const confirmed = await planInstall(harnesses, { environment })
-  if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [] }
-  if (confirmed.planHash !== planned.planHash) {
-    return { code: 'REVISION_CONFLICT', message: 'the targets or the rendering changed while the confirmation was open; nothing was written', transaction: null, written: [] }
-  }
-  return writeTransaction(master, plans, { now, beforeTarget })
+  return withDefaultsAdmission(async () => {
+    const confirmed = await planInstall(harnesses, { environment })
+    if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [] }
+    if (confirmed.planHash !== planned.planHash) {
+      return { code: 'REVISION_CONFLICT', message: 'the targets or the rendering changed while the confirmation was open; nothing was written', transaction: null, written: [] }
+    }
+    return writeTransaction(master, plans, { now, beforeTarget })
+  })
 }
 
 /**
@@ -542,6 +582,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
  * overwrite another's manifest or backups.
  */
 export function newTransaction(now) {
+  assertDefaultsAdmission()
   ensurePrivate(transactionsDirectory())
   const base = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
   for (let count = 1; ; count += 1) {
@@ -561,6 +602,7 @@ export function newTransaction(now) {
  * failure part-way stops and keeps the manifest so `restore` can undo what changed.
  */
 function writeTransaction(master, plans, { now = new Date(), beforeTarget, reason = 'install', keepGoing = false, masterChange } = {}) {
+  assertDefaultsAdmission()
   const { id, folder } = newTransaction(now)
   const records = lastWritten()
   const manifest = {
@@ -575,10 +617,10 @@ function writeTransaction(master, plans, { now = new Date(), beforeTarget, reaso
     }))
   }
   plans.forEach((plan, index) => {
-    if (plan.prior.kind === 'file') writePrivate(`${folder}/${index}.bak`, plan.prior.text)
+    if (plan.prior.kind === 'file') writeAdmittedPrivate(`${folder}/${index}.bak`, plan.prior.text)
   })
-  if (masterChange?.prior.kind === 'file') writePrivate(`${folder}/master.bak`, masterChange.prior.text)
-  writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+  if (masterChange?.prior.kind === 'file') writeAdmittedPrivate(`${folder}/master.bak`, masterChange.prior.text)
+  writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
   if (masterChange !== undefined) {
     try {
       writeMaster(masterChange.prior, master.text, `${reason} ${id}`, { now })
@@ -590,11 +632,11 @@ function writeTransaction(master, plans, { now = new Date(), beforeTarget, reaso
       }
       // The master may hold the new text already (a read-back that failed): the transaction stays, so Undo can put it back.
       manifest.state = 'failed'
-      writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+      writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
       return { code: error.code ?? 'IO_ERROR', transaction: id, written: [], failed: [], message: `${masterPath()}: ${error.message}; no app's file was written` }
     }
     manifest.master.done = true
-    writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+    writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
   } else {
     snapshotMaster(master, `${reason} ${id}`, now)
   }
@@ -603,25 +645,25 @@ function writeTransaction(master, plans, { now = new Date(), beforeTarget, reaso
   for (const [index, plan] of plans.entries()) {
     try {
       beforeTarget?.(plan.harness, index)
-      replaceFileSafely(plan.path, plan.prior, plan.rendering.text)
+      replaceFileSafely(plan.path, plan.prior, plan.rendering.text, { beforeCommit: assertDefaultsAdmission })
     } catch (error) {
       if (keepGoing) {
         failed.push({ harness: plan.harness, path: plan.path, code: error.code ?? 'IO_ERROR', message: error.message })
         continue
       }
       manifest.state = 'failed'
-      writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+      writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
       return { code: 'INSTALL_FAILED', transaction: id, written, message: `${plan.path}: ${error.code ?? 'write failed'}: ${error.message}; ${written.length} target(s) changed; undo with bmn rules restore --transaction ${id}` }
     }
     const next = lastWritten()
     next[plan.path] = plan.rendering.hash
-    writePrivate(lastWrittenPath(), JSON.stringify(next, null, 2))
+    writeAdmittedPrivate(lastWrittenPath(), JSON.stringify(next, null, 2))
     manifest.targets[index].done = true
-    writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+    writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
     written.push({ harness: plan.harness, path: plan.path, kind: plan.rendering.kind })
   }
   manifest.state = failed.length === 0 ? 'complete' : 'partial'
-  writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+  writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
   return { code: 'OK', transaction: id, written, ...(keepGoing ? { failed } : {}) }
 }
 
@@ -690,30 +732,32 @@ export async function planTeamUpdate(nextData, { environment = process.env } = {
  * nothing outside `shown` is ever written. Returns what was written and what was skipped.
  */
 export async function applyTeamUpdate(shown, { environment = process.env, now = new Date(), beforeTarget } = {}) {
-  if (shown.length === 0) return { code: 'OK', transaction: null, written: [], skipped: [] }
-  const master = readMaster()
-  const generation = approvedOrNull()
-  const plans = []
-  const skipped = []
-  for (const target of shown) {
-    if (!HARNESSES.includes(target.harness)) continue
-    const path = targetPath(target.harness, environment)
-    let prior
-    try {
-      prior = pathState(path)
-    } catch {
-      prior = null
+  return withDefaultsAdmission(async () => {
+    if (shown.length === 0) return { code: 'OK', transaction: null, written: [], skipped: [] }
+    const master = readMaster()
+    const generation = approvedOrNull()
+    const plans = []
+    const skipped = []
+    for (const target of shown) {
+      if (!HARNESSES.includes(target.harness)) continue
+      const path = targetPath(target.harness, environment)
+      let prior
+      try {
+        prior = pathState(path)
+      } catch {
+        prior = null
+      }
+      const rendering = render(master, target.harness, generation)
+      const route = prior?.kind === 'file' ? await routeStillMatches(target.harness, routeFor(target.harness, generation), environment) : { ok: false }
+      if (!route.ok || teamBinding(master, target.harness, path, prior, route.inspected, rendering) !== target.binding) {
+        skipped.push(target.harness)
+        continue
+      }
+      plans.push({ harness: target.harness, path, prior, rendering })
     }
-    const rendering = render(master, target.harness, generation)
-    const route = prior?.kind === 'file' ? await routeStillMatches(target.harness, routeFor(target.harness, generation), environment) : { ok: false }
-    if (!route.ok || teamBinding(master, target.harness, path, prior, route.inspected, rendering) !== target.binding) {
-      skipped.push(target.harness)
-      continue
-    }
-    plans.push({ harness: target.harness, path, prior, rendering })
-  }
-  if (plans.length === 0) return { code: 'OK', transaction: null, written: [], skipped }
-  return { ...writeTransaction(master, plans, { now, beforeTarget, reason: 'team update' }), skipped }
+    if (plans.length === 0) return { code: 'OK', transaction: null, written: [], skipped }
+    return { ...writeTransaction(master, plans, { now, beforeTarget, reason: 'team update' }), skipped }
+  })
 }
 
 export function listTransactions() {
@@ -750,6 +794,11 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
   const kept = { ...manifest, targets: manifest.targets.filter((target) => !isRetired(target.harness)) }
   const naming = (result) => (left.length === 0 ? result : { ...result, left })
   const leftWords = left.map((target) => `${target.harness}: ${target.path} -> left as it is (${target.reason})`)
+  if (manifest.kind === 'setup-file') return naming(await (await import('./setup-file-defaults.mjs')).restoreSetupFileTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
+  if (manifest.kind === 'setup-tool') return naming(await (await import('./setup-tool-defaults.mjs')).restoreSetupToolTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
+  if (manifest.kind === 'setup-hook') return naming(await (await import('./setup-hook-defaults.mjs')).restoreSetupHookTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
+  if (manifest.kind === 'setup-opencode-hooks') return naming(await (await import('./setup-opencode-hooks.mjs')).restoreSetupOpenCodeHooks(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
+  if (manifest.kind === 'setup-skill') return naming(await (await import('./setup-skill-defaults.mjs')).restoreSetupSkillTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
   // A skills install shares the transactions folder and this command; its entries are folders and links, undone by their own module.
   if (manifest.kind === 'skills') return naming(await (await import('./agents-skills.mjs')).restoreSkillsTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash, leftWords }))
   // A tools install changed single entries inside the apps' own settings files; only those entries go back.
@@ -782,27 +831,31 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
     ...targets.map((target) => `${target.harness}: ${target.path}${target.resolved_path === target.path ? '' : ` (written at ${target.resolved_path})`} -> ${target.becomes}\n${target.diff}`), ...leftWords
   ].join('\n\n')
   if (!await confirm(`Restore transaction ${id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
-  if (masterPlan !== null) {
-    if (!sameState(pathState(masterPlan.path), masterPlan.current)) {
-      return { code: 'REVISION_CONFLICT', message: `${masterPlan.path} changed while BMN was reading it; nothing was restored`, restored: [] }
+  return withDefaultsAdmission(async () => {
+    if (masterPlan !== null) {
+      if (!sameState(pathState(masterPlan.path), masterPlan.current)) {
+        return { code: 'REVISION_CONFLICT', message: `${masterPlan.path} changed while BMN was reading it; nothing was restored`, restored: [] }
+      }
+      assertDefaultsAdmission()
+      restorePathState(masterPlan.path, masterPlan.priorState)
+      const text = masterPlan.priorState.kind === 'file' ? masterPlan.priorState.text : masterPlan.priorState.kind === 'link' ? linkedText(masterPlan.path) : null
+      if (text !== null) snapshotMaster({ text, hash: sha256(text) }, `undo ${id}`)
     }
-    restorePathState(masterPlan.path, masterPlan.priorState)
-    const text = masterPlan.priorState.kind === 'file' ? masterPlan.priorState.text : masterPlan.priorState.kind === 'link' ? linkedText(masterPlan.path) : null
-    if (text !== null) snapshotMaster({ text, hash: sha256(text) }, `undo ${id}`)
-  }
-  const restored = []
-  for (const plan of plans) {
-    if (!sameState(pathState(plan.path), plan.current)) {
-      return { code: 'REVISION_CONFLICT', message: `${plan.path} changed while BMN was reading it; ${restored.length} target(s) restored`, restored, ...(masterPlan === null ? {} : { master: true }) }
+    const restored = []
+    for (const plan of plans) {
+      if (!sameState(pathState(plan.path), plan.current)) {
+        return { code: 'REVISION_CONFLICT', message: `${plan.path} changed while BMN was reading it; ${restored.length} target(s) restored`, restored, ...(masterPlan === null ? {} : { master: true }) }
+      }
+      assertDefaultsAdmission()
+      restorePathState(plan.path, plan.priorState)
+      const records = lastWritten()
+      if (plan.prior_record === null) delete records[plan.path]
+      else records[plan.path] = plan.prior_record
+      writeAdmittedPrivate(lastWrittenPath(), JSON.stringify(records, null, 2))
+      restored.push(plan.harness)
     }
-    restorePathState(plan.path, plan.priorState)
-    const records = lastWritten()
-    if (plan.prior_record === null) delete records[plan.path]
-    else records[plan.path] = plan.prior_record
-    writePrivate(lastWrittenPath(), JSON.stringify(records, null, 2))
-    restored.push(plan.harness)
-  }
-  return naming({ code: 'OK', restored, ...(masterPlan === null ? {} : { master: true }) })
+    return naming({ code: 'OK', restored, ...(masterPlan === null ? {} : { master: true }) })
+  })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -833,17 +886,19 @@ export function masterHistory() {
  * master that would not render is refused. Used by `revert-master`, `import` and the Rules panel.
  */
 export function writeMaster(expected, text, reason, { now = new Date() } = {}) {
-  const parsed = parseMaster(text)
-  if (parsed.errors.length > 0) throw new RosterError('MASTER_INVALID', 'the new master would not render', { errors: parsed.errors })
-  ensurePrivate(agentsDirectory())
-  // The text being replaced is kept first, so no master is lost to a save; an unreadable history
-  // refuses before anything is written.
-  const prior = expected.kind === 'file' ? expected.text : expected.kind === 'link' ? linkedText(masterPath()) : null
-  if (prior === null) readHistoryIndex()
-  else snapshotMaster({ text: prior, hash: sha256(prior) }, `before ${reason}`, now)
-  const written = replaceFileSafely(masterPath(), expected, text)
-  snapshotMaster({ text, hash: sha256(text) }, reason, now)
-  return written
+  return withDefaultsAdmission(() => {
+    const parsed = parseMaster(text)
+    if (parsed.errors.length > 0) throw new RosterError('MASTER_INVALID', 'the new master would not render', { errors: parsed.errors })
+    ensurePrivate(agentsDirectory())
+    // The text being replaced is kept first, so no master is lost to a save; an unreadable history
+    // refuses before anything is written.
+    const prior = expected.kind === 'file' ? expected.text : expected.kind === 'link' ? linkedText(masterPath()) : null
+    if (prior === null) readHistoryIndex()
+    else snapshotMaster({ text: prior, hash: sha256(prior) }, `before ${reason}`, now)
+    const written = replaceFileSafely(masterPath(), expected, text, { beforeCommit: assertDefaultsAdmission })
+    snapshotMaster({ text, hash: sha256(text) }, reason, now)
+    return written
+  })
 }
 
 async function revertMaster(revision, { yes = false, asJson = false } = {}) {

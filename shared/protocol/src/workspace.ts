@@ -1,3 +1,4 @@
+// MODULE: workspace.ts - Workspace and session records, commands and validation
 import type { BoundConversationBinding, PersistedConversationBinding } from './binding'
 import { hasExactKeys } from './closed-shape'
 import { parseReportedResumeCommand, type ReportedResumeCommand } from './resume-command'
@@ -95,6 +96,18 @@ export interface SessionProcessStatus {
   detail: string | null
 }
 
+/** Create-only purpose: setup terminals never retain output, even after exit or restart. */
+export interface SetupSessionPurpose {
+  app: 'claude' | 'codex' | 'opencode'
+  action: 'install' | 'login' | 'check'
+}
+
+export function isSetupSessionPurpose(value: unknown): value is SetupSessionPurpose {
+  return isRecord(value) && hasExactKeys(value, ['app', 'action']) &&
+    (value.app === 'claude' || value.app === 'codex' || value.app === 'opencode') &&
+    (value.action === 'install' || value.action === 'login' || value.action === 'check')
+}
+
 export interface SessionRecord {
   sessionId: string
   workspaceId: string
@@ -114,6 +127,7 @@ export interface SessionRecord {
   launchDisabledReason?: string
   /** The command a program in the session reported for resuming it (Story 43.1); absent when none is kept. */
   reportedResume?: ReportedResumeCommand
+  setup?: SetupSessionPurpose
 }
 
 export interface WorkspaceLayoutState {
@@ -166,6 +180,7 @@ export interface SessionCreateParams {
   rows: number
   backgroundChoice?: BackgroundChoice | null
   terminalGraphics?: TerminalGraphicsChoice
+  setup?: SetupSessionPurpose
 }
 
 export interface SessionUpdateParams {
@@ -351,7 +366,7 @@ const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
 ] as const
-const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason', 'reportedResume'] as const
+const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason', 'reportedResume', 'setup'] as const
 const SESSION_PROCESS_KEYS = ['incarnationId', 'state', 'exitCode', 'signal', 'detail'] as const
 const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths'] as const
 const SESSION_UPDATE_FIELDS = [
@@ -466,7 +481,8 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
       (typeof value.launchDisabledReason === 'string' &&
         value.launchDisabledReason.trim().length > 0)) &&
     (value.lastProcess === null || isSessionProcessStatus(value.lastProcess)) &&
-    (!('reportedResume' in value) || parseReportedResumeCommand(value.reportedResume) !== null)
+    (!('reportedResume' in value) || parseReportedResumeCommand(value.reportedResume) !== null) &&
+    (!('setup' in value) || isSetupSessionPurpose(value.setup))
   )
 }
 
@@ -510,7 +526,7 @@ export function isSessionCreateParams(value: unknown): value is SessionCreatePar
     !hasExactKeys(
       value,
       ['workspaceId', 'name', 'cwd', 'executable', 'argv', 'cols', 'rows'],
-      ['backgroundChoice', 'terminalGraphics']
+      ['backgroundChoice', 'terminalGraphics', 'setup']
     )
   ) {
     return false
@@ -520,6 +536,7 @@ export function isSessionCreateParams(value: unknown): value is SessionCreatePar
     isName(value.name) &&
     (!('backgroundChoice' in value) || isBackgroundChoice(value.backgroundChoice)) &&
     (!('terminalGraphics' in value) || isTerminalGraphicsChoice(value.terminalGraphics)) &&
+    (!('setup' in value) || isSetupSessionPurpose(value.setup)) &&
     typeof value.cwd === 'string' &&
     isIdentifier(value.executable) &&
     isStringArray(value.argv) &&

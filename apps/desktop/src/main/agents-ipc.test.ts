@@ -44,6 +44,7 @@ let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>
 let openCodeGo: { listed: boolean; signedIn: boolean | null; copy: { ok: boolean; copied: boolean; message: string } | Error; calls: Array<{ kind: string; home: string | undefined }> }
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
+let setupTeamInput: Awaited<ReturnType<NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]['setupTeam']>>> | null
 /** The tests BMN may start by itself here: none, unless a test names the ones it is about, so no test starts a stand-in app behind another's back. */
 const autoKinds: AutoTestKind[] = []
 let notices: { title: string; body: string }[]
@@ -74,6 +75,7 @@ beforeEach(() => {
   process.env.BMN_SHIPPED_SKILLS = join(home, 'shipped')
   handlers = new Map()
   appEnv = {}
+  setupTeamInput = null
   researchPages = null
   researchFetch = null
   researchLimitMs = undefined
@@ -86,6 +88,8 @@ beforeEach(() => {
   openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
   autoKinds.length = 0
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
+    get setupDefaults() { return setupTeamInput ? async () => [] : undefined },
+    setupTeam: async () => setupTeamInput ?? { profile: null, apps: { apps: [], platform: 'linux', checkedAt: '', curlAvailable: true }, defaults: { code: 'EXISTING_PROFILE', source: null, names: [], rows: [] } },
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, BMN_SHIPPED_SKILLS: join(home, 'shipped'), ...appEnv }),
     openPath: async (path) => (existsSync(path) ? '' : 'no such file'), openExternal: async (address) => { openedInBrowser.push(address) }, resolvesPublic: async (host) => !host.startsWith('intranet.') && !host.startsWith('unknown.'), researchPages: () => researchPages,
     researchFetch: (address, limits) => (researchFetch ?? fetchPublicPage)(address, limits), researchLimitMs: () => researchLimitMs, judgeTestPort: () => judgeTestPort,
@@ -2159,5 +2163,49 @@ describe('Agents › Asks through the app (73.1 AC2, AC3)', () => {
     expect(existsSync(ended)).toBe(false)
     await expect(call('asks:detail', { id: ENDED })).rejects.toThrow(`no ask ${ENDED} on this computer`)
     await expect(call('asks:detail', { id: '../roster.md' })).rejects.toThrow('id must be the id of an ask')
+  })
+})
+
+describe('fresh setup Team approval', () => {
+  async function fresh() {
+    setupTeamInput = { profile: { state: 'active', workspaceId: null, revision: 1, updatedAt: '2026-10-21T00:00:00Z' },
+      apps: { platform: 'linux', checkedAt: '2026-10-21T00:00:00Z', curlAvailable: true, apps: [{ app: 'codex', program: join(stubs,'codex'), version: '0.161.0', onPath: true, signIn: 'ready', method: 'chatgpt', qualification: 'passed' }] },
+      defaults: { code:'OK', source:join(home,'shipped'), names:[], rows:[] } }
+    const missing=await snapshot();expect(missing.setupTeam?.proposals).toHaveLength(1);expect(existsSync(rosterFile())).toBe(false)
+    await call('agents:start');const state=await snapshot(),next=structuredClone(state.file.data!)
+    next.agents=[{id:'synthetic-codex',name:'Synthetic Codex',class:'queen',harness:'codex',model:'synthetic-model',provider:'openai',host:'default',efforts:['medium'],roles:[],enabled:true,status:'active'}]
+    next.providers=[{id:'openai',name:'OpenAI',hosts:[],private_work:'public_only'}]
+    next.harness_routes=[{harness:'codex',provider:'openai',basis:'owner-declared'}]
+    return {state,next,revision:state.setupTeam!.revision,shown:{...shownOf(state),setupRevision:state.setupTeam!.revision}}
+  }
+  it('reads proposals without writes and requires fresh setup revision at preview and save',async()=>{
+    const s=await fresh(),before=readFileSync(rosterFile(),'utf8')
+    await expect(call('agents:preview',{request:{kind:'staged',data:s.next}})).rejects.toThrow('Setup changed')
+    await expect(call('agents:save',{shown:shownOf(s.state),data:s.next})).rejects.toThrow('Setup changed')
+    expect(readFileSync(rosterFile(),'utf8')).toBe(before);expect((await snapshot()).approved).toBeNull()
+    expect(openCodeGo.calls).toEqual([])
+  })
+  it('previews and saves explicit public choices through existing approval without copying credentials',async()=>{
+    const s=await fresh()
+    const preview=await call<AgentsPreview>('agents:preview',{request:{kind:'staged',data:s.next,setupRevision:s.revision}})
+    expect(preview.valid).toBe(true)
+    const result=await call<AgentsOutcome>('agents:save',{shown:s.shown,data:s.next})
+    expect(result.ok).toBe(true);expect((await snapshot()).approved?.data.agents[0]?.model).toBe('synthetic-model')
+    expect(openCodeGo.calls).toEqual([])
+    expect(await call<OpenCodeGoView>('agents:opencode-go',{copy:true})).toMatchObject({listed:false,signedIn:null})
+    expect(openCodeGo.calls).toEqual([])
+  })
+  it('refuses stale app readiness even when roster generation and hash still match',async()=>{
+    const s=await fresh(),before=readFileSync(rosterFile(),'utf8');setupTeamInput!.apps.apps[0]!.version='changed'
+    await expect(call('agents:save',{shown:s.shown,data:s.next})).rejects.toThrow('Setup changed')
+    expect(readFileSync(rosterFile(),'utf8')).toBe(before)
+  })
+  it('rejects unverified called members and private allowance before writing',async()=>{
+    const s=await fresh(),before=readFileSync(rosterFile(),'utf8')
+    s.next.providers[0]!.private_work='allowed'
+    await expect(call('agents:save',{shown:s.shown,data:s.next})).rejects.toThrow('public work only')
+    s.next.providers[0]!.private_work='public_only';s.next.agents[0]!.harness='bmn';s.next.agents[0]!.efforts=[]
+    await expect(call('agents:save',{shown:s.shown,data:s.next})).rejects.toThrow('verified outside setup')
+    expect(readFileSync(rosterFile(),'utf8')).toBe(before)
   })
 })

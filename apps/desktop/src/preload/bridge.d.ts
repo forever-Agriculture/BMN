@@ -144,6 +144,7 @@ export interface TerminalStartupSuccess {
   name: string
   testMode: boolean
   viewRestored?: true
+  setup?: import('@bmn/protocol').SetupSessionPurpose
 }
 
 /** One checked row of the resume-after-stop dialog, carrying the command that row showed. */
@@ -181,6 +182,7 @@ export interface ApplicationStartupSuccess {
   /** Visible notices for workspaces whose persisted layout was unreadable and opened empty. */
   layoutNotices: string[]
   liveSessions: TerminalStartupSuccess[]
+  setup?: import('@bmn/protocol').FirstRunSetupRecord
 }
 
 export type ApplicationStartup = ApplicationStartupSuccess | TerminalStartupFailure
@@ -227,6 +229,12 @@ export interface AiTerminalBridge {
   markCohortOffered(cohortId: string): Promise<SessionCohortOfferedResult>
   resumeCohort(request: RendererCohortResumeRequest): Promise<RendererCohortResumeResult>
   listWorkspaces(includeArchived?: boolean): Promise<WorkspaceRecord[]>
+  getSetupProgress(): Promise<import('@bmn/protocol').FirstRunSetupRecord | null>
+  getSetupApps(): Promise<import('@bmn/protocol').SetupAppsSnapshot>
+  getSetupDefaults(): Promise<import('@bmn/protocol').SetupDefaultsReport | null>
+  startSetupSession(app: import('@bmn/protocol').SetupApp, action: import('@bmn/protocol').SetupSessionPurpose['action'], expectedProgram: string | null): Promise<CreatedSession>
+  confirmSetupSignIn(app: import('@bmn/protocol').SetupApp, sessionId: string, version: string): Promise<import('@bmn/protocol').SetupAppsSnapshot>
+  updateSetupProgress(params: import('@bmn/protocol').FirstRunSetupUpdate): Promise<import('@bmn/protocol').FirstRunSetupRecord>
   createWorkspace(params: WorkspaceCreateParams): Promise<WorkspaceRecord>
   updateWorkspace(params: WorkspaceUpdateParams): Promise<WorkspaceRecord>
   listSessions(workspaceId: string): Promise<SessionRecord[]>

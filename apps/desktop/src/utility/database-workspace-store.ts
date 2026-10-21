@@ -1,9 +1,11 @@
+// MODULE: database-workspace-store.ts - Workspace, session and layout persistence
 import {
   isPinnedFilePaths,
   DEFAULT_WORKSPACE_MARKER,
   ERROR_CODES,
   emptyWorkspaceLayout,
   isSessionRecord,
+  isSetupSessionPurpose,
   parseReportedResumeCommand,
   isWorkspaceCreateParams,
   isWorkspaceLayoutState,
@@ -57,6 +59,7 @@ interface SessionRow {
   background_choice: string | null
   terminal_graphics: string | null
   reported_resume_json: string | null
+  setup_purpose_json: string | null
   revision: number
   created_at: string
   archived_at: string | null
@@ -72,7 +75,7 @@ interface SessionRow {
  * it never claims a process is live — the host liveness owner decides that.
  */
 const SESSION_SELECT = `SELECT s.session_id, s.workspace_id, s.name, s.cwd, s.executable, s.argv_json,
-              s.position, s.background_choice, s.terminal_graphics, s.reported_resume_json, s.revision, s.created_at,
+              s.position, s.background_choice, s.terminal_graphics, s.reported_resume_json, s.setup_purpose_json, s.revision, s.created_at,
               s.archived_at, i.incarnation_id AS last_incarnation_id, i.state AS last_state,
               i.exit_code AS last_exit_code, i.exit_signal AS last_exit_signal,
               i.exit_detail AS last_exit_detail
@@ -189,6 +192,13 @@ function recordedProcessStatus(row: SessionRow): SessionProcessStatus | null {
 }
 
 function sessionRecord(row: SessionRow): SessionRecord {
+  let setup: unknown
+  if (row.setup_purpose_json !== null) {
+    try { setup = JSON.parse(row.setup_purpose_json) } catch { /* Refuse damaged policy below. */ }
+    if (!isSetupSessionPurpose(setup)) {
+      throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored setup session purpose is invalid')
+    }
+  }
   const record: SessionRecord = {
     sessionId: row.session_id,
     workspaceId: row.workspace_id,
@@ -211,7 +221,8 @@ function sessionRecord(row: SessionRow): SessionRecord {
     createdAt: row.created_at,
     archivedAt: row.archived_at,
     lastProcess: recordedProcessStatus(row),
-    ...storedReportedResume(row.reported_resume_json)
+    ...storedReportedResume(row.reported_resume_json),
+    ...(isSetupSessionPurpose(setup) ? { setup } : {})
   }
   if (!isSessionRecord(record)) {
     throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored session record is invalid')

@@ -1,3 +1,4 @@
+// MODULE: workspace-ipc.ts - Sender-checked workspace and session IPC routes
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
@@ -53,6 +54,8 @@ const ROUTES = {
   'aiterm:workspace:list': METHOD_REGISTRY.workspaceList,
   'aiterm:workspace:create': METHOD_REGISTRY.workspaceCreate,
   'aiterm:workspace:update': METHOD_REGISTRY.workspaceUpdate,
+  'aiterm:setup:get': METHOD_REGISTRY.setupGet,
+  'aiterm:setup:update': METHOD_REGISTRY.setupUpdate,
   'aiterm:session:list': METHOD_REGISTRY.sessionList,
   'aiterm:session:update': METHOD_REGISTRY.sessionUpdate,
   'aiterm:repository:inspect': METHOD_REGISTRY.repositoryInspect,

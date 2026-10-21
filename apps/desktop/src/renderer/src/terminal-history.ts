@@ -1,3 +1,4 @@
+// MODULE: terminal-history.ts - Live terminal capture and saved-output presentation
 import { SearchAddon } from '@xterm/addon-search'
 import { failureDetail, hasBridgeErrorCode } from './bridge-error'
 import type { Terminal as BrowserTerminal, ITerminalOptions } from '@xterm/xterm'
@@ -108,7 +109,8 @@ export function startSavedOutputCapture(
   terminal: CaptureTerminal,
   save: (capture: SavedOutputCapture) => Promise<unknown>,
   onFailure: (message: string) => void,
-  transportDroppedBytes: () => number = () => 0
+  transportDroppedBytes: () => number = () => 0,
+  enabled = true
 ): {
   write(bytes: Uint8Array, settled: () => void): void
   captureNow(): Promise<void>
@@ -116,6 +118,15 @@ export function startSavedOutputCapture(
   finish(): void
   dispose(): void
 } {
+  if (!enabled) {
+    return {
+      write: (bytes, settled) => terminal.write(bytes, settled),
+      captureNow: async () => undefined,
+      schedule: () => undefined,
+      finish: () => undefined,
+      dispose: () => undefined
+    }
+  }
   let scheduled: ReturnType<typeof setTimeout> | undefined
   let acceptedWrites = 0
   let completedWrites = 0

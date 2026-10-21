@@ -1,7 +1,8 @@
 // MODULE: agents-tools.mjs - Story 60.12: one list of MCP tools for every agent app: each app's own settings entry, one state per app and tool, install and undo as one transaction, import of what the apps already hold, and the tools of one agent's run
+import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute } from 'node:path'
 import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, appName, appRefusal, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
@@ -421,9 +422,10 @@ function edited(harness, text, id, value, raw) {
 // ---------------------------------------------------------------------------------------------
 // Check
 
-function written() {
+function written({ strict = false } = {}) {
   try {
     const value = JSON.parse(readFileSync(writtenPath(), 'utf8'))
+    if (strict && !isObject(value)) throw new RosterError('STATE_CORRUPT', 'the tools last-written records are corrupt')
     return isObject(value) ? value : {}
   } catch (error) {
     if (error.code === 'ENOENT') return {}
@@ -432,6 +434,40 @@ function written() {
 }
 
 const recordKey = (harness, id) => `${harness}|${id}`
+
+/** Setup shares Health's binding without adopting a legacy record as proof of authorship. */
+export function setupToolRecord(harness, id) {
+  const record = written({ strict: true })[recordKey(harness, id)] ?? null
+  if (record !== null && (!isObject(record) || record.harness !== harness || record.tool !== id ||
+    typeof record.hash !== 'string' || !/^[a-f0-9]{64}$/.test(record.hash))) throw new RosterError('STATE_CORRUPT', 'the tool last-written binding is corrupt')
+  return record
+}
+
+export function changeSetupToolRecord(harness, id, expected, next) {
+  assertDefaultsAdmission()
+  if (next !== null && (!isObject(next) || next.harness !== harness || next.tool !== id ||
+    typeof next.hash !== 'string' || !/^[a-f0-9]{64}$/.test(next.hash))) throw new RosterError('STATE_CORRUPT', 'invalid tool last-written binding')
+  if (canonicalJson(setupToolRecord(harness, id)) !== canonicalJson(expected)) throw new RosterError('REVISION_CONFLICT', 'the tool last-written binding changed')
+  const records = written({ strict: true }), key = recordKey(harness, id)
+  if (next === null) delete records[key]
+  else records[key] = next
+  writePrivateToolRecord(records)
+  if (canonicalJson(setupToolRecord(harness, id)) !== canonicalJson(next)) throw new RosterError('STATE_CORRUPT', 'the tool last-written read-back failed')
+}
+
+function writePrivateToolRecord(records) {
+  // Keep the same metadata location and writer as existing installs, under the shared admission.
+  const folder = dirname(writtenPath())
+  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  const temporary = `${writtenPath()}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`
+  try {
+    writeFileSync(temporary, JSON.stringify(records, null, 2), { mode: 0o600, flag: 'wx', flush: true })
+    assertDefaultsAdmission()
+    renameSync(temporary, writtenPath())
+    const fd = openSync(folder, constants.O_RDONLY | constants.O_DIRECTORY)
+    try { fsyncSync(fd) } finally { closeSync(fd) }
+  } finally { rmSync(temporary, { force: true }) }
+}
 
 /** Whether an app may have a tool installed: the tool's own scope, and Public on a destination that gets public work only. */
 function eligible(tool, harness, kind) {
@@ -673,7 +709,8 @@ function entryTextIn(harness, text, id) {
  * that text: anything else stops here and is never taken for what BMN wrote.
  * Returns `{ hash, text }`, the entry's parsed-value hash and its exact-text hash.
  */
-function writeEntry(harness, path, id, expected, value, raw, { beforeCommit, journal } = {}) {
+function writeEntry(harness, path, id, expected, value, raw, { beforeCommit, journal, afterPublish, durable = false, publish = replaceFileSafely } = {}) {
+  assertDefaultsAdmission()
   const read = () => readAppTools(harness, undefined, { path })
   let intended
   for (let attempt = 0; ; attempt += 1) {
@@ -689,11 +726,11 @@ function writeEntry(harness, path, id, expected, value, raw, { beforeCommit, jou
     intended = entryTextIn(harness, next, id)
     journal?.(intended)
     try {
-      replaceFileSafely(path, file.state, next, attempt === 0 ? { beforeCommit } : {})
+      publish(path, file.state, next, { beforeCommit: () => { if (attempt === 0) beforeCommit?.(); assertDefaultsAdmission() }, afterCommit: afterPublish, durable })
       break
     } catch (error) {
       // Refused before the file was replaced: the file is as the app left it, and nothing of this attempt is in it.
-      if (!(error instanceof ConfigWriteError) || error.code !== 'REVISION_CONFLICT' || attempt >= 2) throw error
+      if (publish !== replaceFileSafely || !(error instanceof ConfigWriteError) || error.code !== 'REVISION_CONFLICT' || attempt >= 2) throw error
     }
   }
   const after = read().entries.get(id)
@@ -702,6 +739,8 @@ function writeEntry(harness, path, id, expected, value, raw, { beforeCommit, jou
   if (!good) throw new ToolsError('READBACK_FAILED', `${path} does not hold what BMN wrote for ${id}; check it by hand`)
   return { hash: after?.hash ?? null, text: after?.text_hash ?? null }
 }
+
+export { writeEntry as writeSetupToolEntry }
 
 /**
  * One install transaction (60.12 AC4): show every entry, ask (default No), plan again and write
@@ -725,59 +764,62 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
   if (!await confirm('Change these tool entries?', planDetails(planned), { yes, asJson })) return { code: 'NOT_CONFIRMED', transaction: null, written: [], ...open }
   // The answer may come long after the list: plan again and write only what was confirmed.
   afterConfirm?.()
-  const confirmed = await planToolsInstall(harnesses, options)
-  if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [], exposed: [], blocked: [] }
-  if (confirmed.planHash !== planned.planHash) {
-    return { code: 'REVISION_CONFLICT', message: 'the tools or the apps\' settings changed while the confirmation was open; nothing was written', transaction: null, written: [], exposed: confirmed.exposed, blocked: confirmed.blocked }
-  }
-  const { newTransaction, writePrivate } = await import('./agents-rules.mjs')
-  const { id, folder } = newTransaction(now)
-  const records = written()
-  const manifest = {
-    id, created_at: now.toISOString(), kind: 'tools', reason: 'tools install', state: 'started',
-    targets: confirmed.targets.map((target) => ({
-      harness: target.harness, tool: target.tool, path: target.path, directory: target.directory, action: target.action,
-      // What the entry held, as its own text: the plan refuses to touch one that holds a value inline, so none is kept here.
-      prior: target.prior, prior_hash: target.prior_hash, prior_text: target.prior_text ?? null, prior_record: records[recordKey(target.harness, target.tool)] ?? null, written_hash: target.wanted_hash,
-      // `started` and the exact text the entry will have are written down before each write (see writeEntry).
-      started: false, written_text: null, done: false
-    }))
-  }
-  const save = () => writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
-  save()
-  const done = []
-  for (const [index, target] of confirmed.targets.entries()) {
-    try {
-      beforeTarget?.(target, index)
-      writeEntry(target.harness, target.path, target.tool, { hash: target.prior_hash, text: target.prior_text, directory: target.directory }, target.entry, undefined, {
-        beforeCommit: beforeCommit === undefined ? undefined : () => beforeCommit(target, index),
-        journal: (intended) => {
-          manifest.targets[index].started = true
-          manifest.targets[index].written_text = intended
-          save()
-          // The note must be on disk before the entry is: an install that cannot keep it writes nothing.
-          const kept = JSON.parse(readFileSync(`${folder}/manifest.json`, 'utf8')).targets[index]
-          if (kept.started !== true || kept.written_text !== intended) throw new ToolsError('WRITE_FAILED', 'BMN could not keep its note of this change, so nothing was written')
-        }
-      })
-      afterTarget?.(target, index)
-    } catch (error) {
-      manifest.state = 'failed'
-      save()
-      return { code: 'INSTALL_FAILED', transaction: id, written: done, exposed: confirmed.exposed, blocked: confirmed.blocked,
-        message: `${target.path}: ${error.code ?? 'write failed'}: ${error.message}; ${done.length} entr${done.length === 1 ? 'y' : 'ies'} changed; undo with bmn rules restore --transaction ${id}` }
+  return withDefaultsAdmission(async () => {
+    const confirmed = await planToolsInstall(harnesses, options)
+    if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [], exposed: [], blocked: [] }
+    if (confirmed.planHash !== planned.planHash) {
+      return { code: 'REVISION_CONFLICT', message: 'the tools or the apps\' settings changed while the confirmation was open; nothing was written', transaction: null, written: [], exposed: confirmed.exposed, blocked: confirmed.blocked }
     }
-    const next = written()
-    if (target.action === 'remove') delete next[recordKey(target.harness, target.tool)]
-    else next[recordKey(target.harness, target.tool)] = { harness: target.harness, tool: target.tool, hash: target.wanted_hash }
-    writePrivate(writtenPath(), JSON.stringify(next, null, 2))
-    manifest.targets[index].done = true
+    const { newTransaction, writePrivate } = await import('./agents-rules.mjs')
+    const { id, folder } = newTransaction(now)
+    const records = written()
+    const manifest = {
+      id, created_at: now.toISOString(), kind: 'tools', reason: 'tools install', state: 'started',
+      targets: confirmed.targets.map((target) => ({
+        harness: target.harness, tool: target.tool, path: target.path, directory: target.directory, action: target.action,
+        // What the entry held, as its own text: the plan refuses to touch one that holds a value inline, so none is kept here.
+        prior: target.prior, prior_hash: target.prior_hash, prior_text: target.prior_text ?? null, prior_record: records[recordKey(target.harness, target.tool)] ?? null, written_hash: target.wanted_hash,
+        // `started` and the exact text the entry will have are written down before each write (see writeEntry).
+        started: false, written_text: null, done: false
+      }))
+    }
+    const save = () => { assertDefaultsAdmission(); writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2)) }
     save()
-    done.push({ harness: target.harness, tool: target.tool, path: target.path, action: target.action })
-  }
-  manifest.state = 'complete'
-  save()
-  return { code: 'OK', transaction: id, written: done, exposed: confirmed.exposed, blocked: confirmed.blocked }
+    const done = []
+    for (const [index, target] of confirmed.targets.entries()) {
+      try {
+        beforeTarget?.(target, index)
+        writeEntry(target.harness, target.path, target.tool, { hash: target.prior_hash, text: target.prior_text, directory: target.directory }, target.entry, undefined, {
+          beforeCommit: beforeCommit === undefined ? undefined : () => beforeCommit(target, index),
+          journal: (intended) => {
+            manifest.targets[index].started = true
+            manifest.targets[index].written_text = intended
+            save()
+            // The note must be on disk before the entry is: an install that cannot keep it writes nothing.
+            const kept = JSON.parse(readFileSync(`${folder}/manifest.json`, 'utf8')).targets[index]
+            if (kept.started !== true || kept.written_text !== intended) throw new ToolsError('WRITE_FAILED', 'BMN could not keep its note of this change, so nothing was written')
+          }
+        })
+        afterTarget?.(target, index)
+      } catch (error) {
+        manifest.state = 'failed'
+        save()
+        return { code: 'INSTALL_FAILED', transaction: id, written: done, exposed: confirmed.exposed, blocked: confirmed.blocked,
+          message: `${target.path}: ${error.code ?? 'write failed'}: ${error.message}; ${done.length} entr${done.length === 1 ? 'y' : 'ies'} changed; undo with bmn rules restore --transaction ${id}` }
+      }
+      assertDefaultsAdmission()
+      const next = written()
+      if (target.action === 'remove') delete next[recordKey(target.harness, target.tool)]
+      else next[recordKey(target.harness, target.tool)] = { harness: target.harness, tool: target.tool, hash: target.wanted_hash }
+      writePrivate(writtenPath(), JSON.stringify(next, null, 2))
+      manifest.targets[index].done = true
+      save()
+      done.push({ harness: target.harness, tool: target.tool, path: target.path, action: target.action })
+    }
+    manifest.state = 'complete'
+    save()
+    return { code: 'OK', transaction: id, written: done, exposed: confirmed.exposed, blocked: confirmed.blocked }
+  })
 }
 
 /**
@@ -813,32 +855,34 @@ export async function restoreToolsTransaction(manifest, _folder, { yes = false, 
   if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the entries changed since the restore was shown; review it again' }
   const details = [...targets.map((target) => `${target.harness}: ${target.tool} in ${target.path} -> ${target.becomes}`), ...leftWords].join('\n')
   if (!await confirm(`Restore transaction ${manifest.id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
-  const restored = []
-  for (const plan of plans) {
-    const count = `${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`
-    // What BMN wrote must still be there, to the letter (no entry at all, where it removed one): an entry
-    // changed since is the owner's, and stays. A manifest from before the exact text was noted has only the
-    // parsed value to go by for a finished change, and nothing for an unfinished one.
-    const exact = plan.started === true || typeof plan.written_text === 'string'
-    if (plan.unreadable || plan.current_hash !== plan.written_hash || (exact ? plan.current_text !== plan.written_text : plan.done !== true)) {
-      return { code: 'REVISION_CONFLICT', message: `${plan.tool} in ${plan.path} changed since BMN wrote it; ${count}`, restored }
+  return withDefaultsAdmission(async () => {
+    const restored = []
+    for (const plan of plans) {
+      const count = `${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`
+      // What BMN wrote must still be there, to the letter (no entry at all, where it removed one): an entry
+      // changed since is the owner's, and stays. A manifest from before the exact text was noted has only the
+      // parsed value to go by for a finished change, and nothing for an unfinished one.
+      const exact = plan.started === true || typeof plan.written_text === 'string'
+      if (plan.unreadable || plan.current_hash !== plan.written_hash || (exact ? plan.current_text !== plan.written_text : plan.done !== true)) {
+        return { code: 'REVISION_CONFLICT', message: `${plan.tool} in ${plan.path} changed since BMN wrote it; ${count}`, restored }
+      }
+      if (typeof plan.directory === 'string' && plan.current_directory !== plan.directory) {
+        return { code: 'REVISION_CONFLICT', message: `${plan.path} now leads to another folder than the one BMN wrote in; ${count}`, restored }
+      }
+      try {
+        writeEntry(plan.harness, plan.path, plan.tool, { hash: plan.current_hash, text: plan.current_text, ...(plan.current_directory === null ? {} : { directory: plan.current_directory }) }, undefined, plan.prior ?? undefined)
+      } catch (error) {
+        if (!(error instanceof ToolsError) && !(error instanceof ConfigWriteError) && !(error instanceof ToolFileError)) throw error
+        return { code: error.code, message: `${error.message}; ${count}`, restored }
+      }
+      const records = written()
+      if (plan.prior_record === null) delete records[recordKey(plan.harness, plan.tool)]
+      else records[recordKey(plan.harness, plan.tool)] = plan.prior_record
+      writePrivate(writtenPath(), JSON.stringify(records, null, 2))
+      restored.push(plan.harness)
     }
-    if (typeof plan.directory === 'string' && plan.current_directory !== plan.directory) {
-      return { code: 'REVISION_CONFLICT', message: `${plan.path} now leads to another folder than the one BMN wrote in; ${count}`, restored }
-    }
-    try {
-      writeEntry(plan.harness, plan.path, plan.tool, { hash: plan.current_hash, text: plan.current_text, ...(plan.current_directory === null ? {} : { directory: plan.current_directory }) }, undefined, plan.prior ?? undefined)
-    } catch (error) {
-      if (!(error instanceof ToolsError) && !(error instanceof ConfigWriteError) && !(error instanceof ToolFileError)) throw error
-      return { code: error.code, message: `${error.message}; ${count}`, restored }
-    }
-    const records = written()
-    if (plan.prior_record === null) delete records[recordKey(plan.harness, plan.tool)]
-    else records[recordKey(plan.harness, plan.tool)] = plan.prior_record
-    writePrivate(writtenPath(), JSON.stringify(records, null, 2))
-    restored.push(plan.harness)
-  }
-  return { code: 'OK', kind: 'tools', restored: [...new Set(restored)] }
+    return { code: 'OK', kind: 'tools', restored: [...new Set(restored)] }
+  })
 }
 
 // ---------------------------------------------------------------------------------------------

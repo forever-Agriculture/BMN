@@ -1,3 +1,4 @@
+// MODULE: session-manager.test.ts - PTY lifecycle, persistence and retention regression tests
 import { readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -365,6 +366,7 @@ class FakeStore implements SessionStore {
         createdAt: created?.startedAt ?? '2026-09-13T00:00:00.000Z',
         archivedAt: null,
         lastProcess: null,
+        ...(created?.setup ? { setup: created.setup } : {}),
         ...((reported) => reported ? { reportedResume: { argv: [...reported.argv], reportedAt: reported.reportedAt } } : {})(
           this.reportedResume.get(sessionId))
       }
@@ -581,6 +583,66 @@ async function flowFixture(
 }
 
 describe('shell session lifecycle', () => {
+  it.each(['before-attach', 'before-activation', 'during-record'] as const)('delivers setup output and exit when the command ends %s', async phase => {
+    const { manager, pty, store, savedOutputStore, sent, cwd } = await fixture()
+    if (phase === 'during-record') store.onCreateStarting = () => {
+      pty.emit('synthetic install failure\r\n'); pty.emitExit({ exitCode: 42 })
+    }
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath,
+      argv: [], cols: 80, rows: 43, setup: { app: 'claude', action: 'install' } })
+    const firstAttachment = phase === 'before-activation' ? manager.attach(created) : null
+    if (phase !== 'during-record') { pty.emit('synthetic install failure\r\n'); pty.emitExit({ exitCode: 42 }) }
+    await vi.waitFor(() => expect(store.exited.get(created.incarnationId)).toEqual({ exitCode: 42 }))
+    const attachment = firstAttachment ?? manager.attach(created)
+    expect(sent.filter(row => row.kind === 'terminal-exit')).toHaveLength(0)
+    manager.activateAttachment(attachment.attachmentId)
+    await vi.waitFor(() => expect(sent.at(-1)).toMatchObject({ kind: 'terminal-exit', exitCode: 42 }))
+    expect(new TextDecoder().decode(terminalOutput(sent, attachment.attachmentId))).toBe('synthetic install failure\r\n')
+    expect(manager.hasAttachment(attachment.attachmentId)).toBe(false)
+    expect(savedOutputStore.snapshots.size).toBe(0)
+    await expect(manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+  })
+
+  it('releases an unopened ended setup view on renderer loss and never retains two for one app', async () => {
+    const { manager, pty, store, savedOutputStore, cwd } = await fixture()
+    const params = { ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24,
+      setup: { app: 'claude' as const, action: 'install' as const } }
+    const first = await manager.create(params), old = manager.attach(first)
+    pty.emit('synthetic first output'); pty.emitExit({ exitCode: 42 })
+    await vi.waitFor(() => expect(store.exited.has(first.incarnationId)).toBe(true))
+    const second = await manager.create(params)
+    expect(manager.hasAttachment(old.attachmentId)).toBe(false)
+    expect(() => manager.attach(first)).toThrow('not live')
+    const current = manager.attach(second)
+    pty.emit('synthetic second output'); pty.emitExit({ exitCode: 42 })
+    await vi.waitFor(() => expect(store.exited.has(second.incarnationId)).toBe(true))
+    manager.rendererDisconnected()
+    expect(manager.hasAttachment(current.attachmentId)).toBe(false)
+    expect(() => manager.attach(second)).toThrow('not live')
+    expect(savedOutputStore.snapshots.size).toBe(0)
+  })
+
+  it('publishes retained setup output under credit before publishing its exit', async () => {
+    const { manager, pty, store, sent, cwd } = await fixture(undefined, { consumerBytes: 4, hostBytes: 1024 })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath,
+      argv: [], cols: 80, rows: 24, setup: { app: 'claude', action: 'install' } })
+    const attached = manager.attach(created)
+    pty.emit('synthetic failure\r\n'); pty.emitExit({ exitCode: 42 })
+    await vi.waitFor(() => expect(store.exited.has(created.incarnationId)).toBe(true))
+    manager.activateAttachment(attached.attachmentId)
+    expect(sent.some(message => message.kind === 'terminal-exit')).toBe(false)
+    let acknowledged = 0
+    while (!sent.some(message => message.kind === 'terminal-exit')) {
+      const outputs = sent.filter(message => message.kind === 'terminal-output')
+      expect(outputs.length).toBeGreaterThan(acknowledged)
+      const next = outputs[acknowledged++]!
+      manager.acknowledge({ attachmentId: attached.attachmentId, streamSeq: next.streamSeq })
+      await Promise.resolve()
+    }
+    expect(new TextDecoder().decode(terminalOutput(sent, attached.attachmentId))).toBe('synthetic failure\r\n')
+    expect(manager.hasAttachment(attached.attachmentId)).toBe(false)
+  })
+
   it('builds a user shell environment without Electron, Chromium, or app-internal launch variables', () => {
     expect(
       buildShellEnvironment({
@@ -3525,6 +3587,142 @@ describe('shell session lifecycle', () => {
     expect(manager.hasAttachment(view.attachmentId)).toBe(false)
     expect(pty.killed).toBe(false)
     await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+  })
+
+  describe('79.3 setup saved-output refusal', () => {
+    const secret = 'sk-SYNTHETIC-setup-output-must-never-be-stored'
+
+    it('keeps the purpose in SQLite across host loss and fails closed on damaged metadata', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'bmn-setup-retention-test-'))
+      createdRoots.add(root)
+      const path = join(root, 'state.sqlite')
+      let database = new BetterSqlite3(path)
+      const savedOutputStore = new FileSavedOutputStore(root)
+      const pty = new FakePty()
+      const makeManager = (spawnPty = () => pty) => new SessionManager({
+        store: sqliteSessionStore(database), savedOutputStore, spawnPty,
+        processStartIdentity: async () => 'linux-proc-start:setup',
+        sendTerminalMessage: () => undefined
+      })
+      try {
+        initializeDatabase(database, '2026-10-20T00:00:00.000Z')
+        const manager = makeManager()
+        const setup = { app: 'codex', action: 'login' } as const
+        const identity = await manager.create({
+          ...DEFAULT_SESSION_CREATION, cwd: root, executable: process.execPath, argv: [],
+          cols: 80, rows: 24, setup
+        })
+        const view = manager.attach(identity)
+        pty.emit(secret)
+        expect(listSessions(database, DEFAULT_SESSION_CREATION.workspaceId)[0]?.setup).toEqual(setup)
+        await expect(manager.saveTerminalSnapshot(identity, validCapture({ content: secret })))
+          .rejects.toMatchObject({ code: ERROR_CODES.unauthorized })
+        database.close()
+        database = new BetterSqlite3(path)
+        initializeDatabase(database, '2026-10-20T00:01:00.000Z')
+        const spawn = vi.fn(() => pty)
+        const restored = makeManager(spawn)
+        expect(listSessions(database, DEFAULT_SESSION_CREATION.workspaceId)[0]).toMatchObject({
+          setup, lastProcess: { state: 'interrupted' }
+        })
+        await expect(restored.saveTerminalSnapshot(identity, validCapture({ content: secret }), {
+          viewEpoch: view.attachmentId, captureStartedAt: view.captureStartedAt, processState: 'interrupted'
+        })).rejects.toMatchObject({ code: ERROR_CODES.unauthorized })
+        await expect(restored.recordFinalCaptureUnavailable(identity, {
+          viewEpoch: view.attachmentId, captureStartedAt: view.captureStartedAt,
+          unavailableAt: '2026-10-20T00:01:00.000Z', reason: 'no-renderer', detail: secret, processState: 'interrupted'
+        })).rejects.toMatchObject({ code: ERROR_CODES.unauthorized })
+        expect(spawn).not.toHaveBeenCalled()
+        expect(await savedOutputStore.loadCatalog()).toMatchObject({ snapshots: [], finalCaptureUnavailable: [] })
+        database.prepare('UPDATE session SET setup_purpose_json = ? WHERE session_id = ?')
+          .run('{"app":"unknown","action":"login"}', identity.sessionId)
+        await expect(restored.saveTerminalSnapshot(identity, validCapture({ content: secret }), {
+          captureStartedAt: view.captureStartedAt, processState: 'interrupted'
+        })).rejects.toMatchObject({ code: ERROR_CODES.ioError })
+        expect(readFileSync(path).includes(Buffer.from(secret))).toBe(false)
+        expect(readFileSync(`${path}-wal`).includes(Buffer.from(secret))).toBe(false)
+      } finally {
+        database.close()
+      }
+    })
+
+    it('launches the exact setup command without conversation flags or BMN hook identity', async () => {
+      const { store, savedOutputStore, cwd, pty } = await fixture()
+      const executable = join(cwd, 'claude')
+      await writeFile(executable, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      const spawn = vi.fn<ConstructorParameters<typeof SessionManager>[0]['spawnPty']>(() => pty)
+      const manager = new SessionManager({
+        store, savedOutputStore, spawnPty: spawn,
+        processStartIdentity: async () => 'linux-proc-start:setup', sendTerminalMessage: () => undefined,
+        sessionEnvironment: () => ({ BMN_SESSION_ID: 'synthetic-hook-identity' })
+      })
+      await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable, argv: ['auth', 'login'],
+        cols: 80, rows: 24, setup: { app: 'claude', action: 'login' } })
+      expect(spawn).toHaveBeenCalledOnce()
+      expect(spawn.mock.calls[0]).toMatchObject([executable, ['auth', 'login'], { env: expect.any(Object) }])
+      expect(spawn.mock.calls[0]?.[2].env).not.toHaveProperty('BMN_SESSION_ID')
+      expect(store.startingRecords[0]?.binding.status).toBe('unsupported')
+    })
+
+    async function setupPhase(phase: 'live' | 'exited' | 'restored') {
+      const state = await fixture()
+      const setup = { app: 'codex', action: 'login' } as const
+      const created = await state.manager.create(Object.assign({
+        ...DEFAULT_SESSION_CREATION,
+        cwd: state.cwd,
+        executable: process.execPath,
+        argv: [],
+        cols: 80,
+        rows: 24
+      }, { setup }))
+      // Model the durable record independently of the manager's live-session map.
+      const list = state.store.listSessions.bind(state.store)
+      vi.spyOn(state.store, 'listSessions').mockImplementation(async (workspaceId) =>
+        (await list(workspaceId)).map((record) => ({ ...record, setup }))
+      )
+      const view = state.manager.attach(created)
+      if (phase !== 'live') {
+        state.pty.emitExit({ exitCode: 0 })
+        await vi.waitFor(() => expect(state.store.exited.has(created.incarnationId)).toBe(true))
+      }
+      const manager = phase === 'restored'
+        ? new SessionManager({
+            store: state.store,
+            savedOutputStore: state.savedOutputStore,
+            spawnPty: () => new FakePty(),
+            processStartIdentity: async () => 'linux-proc-start:restored',
+            sendTerminalMessage: () => undefined
+          })
+        : state.manager
+      return { ...state, manager, created, view }
+    }
+
+    it.each(['live', 'exited', 'restored'] as const)(
+      'refuses terminal content before saving in the %s phase', async (phase) => {
+        const { manager, savedOutputStore, created, view } = await setupPhase(phase)
+        await expect(manager.saveTerminalSnapshot(created, validCapture({ content: secret }), {
+          viewEpoch: view.attachmentId,
+          captureStartedAt: '2026-10-20T00:00:00.000Z',
+          processState: phase === 'live' ? 'live' : 'exited'
+        })).rejects.toMatchObject({ code: ERROR_CODES.unauthorized })
+        expect(await savedOutputStore.loadCatalog()).toMatchObject({ snapshots: [], finalCaptureUnavailable: [] })
+      }
+    )
+
+    it.each(['live', 'exited', 'restored'] as const)(
+      'refuses final-capture failure details in the %s phase', async (phase) => {
+        const { manager, savedOutputStore, created, view } = await setupPhase(phase)
+        await expect(manager.recordFinalCaptureUnavailable(created, {
+          viewEpoch: view.attachmentId,
+          captureStartedAt: '2026-10-20T00:00:00.000Z',
+          unavailableAt: '2026-10-20T00:00:01.000Z',
+          reason: 'no-renderer',
+          detail: secret,
+          processState: phase === 'live' ? 'live' : 'exited'
+        })).rejects.toMatchObject({ code: ERROR_CODES.unauthorized })
+        expect(await savedOutputStore.loadCatalog()).toMatchObject({ snapshots: [], finalCaptureUnavailable: [] })
+      }
+    )
   })
 
   it('persists Part A retention disclosure and never labels a genuinely exited PTY as live', async () => {

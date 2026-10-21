@@ -3,6 +3,7 @@ name: jev-judge
 description: Ask the team's judge Jev typed questions about one text with `bmn judge ask` and read its numbers by the proof's one rule. Use for a second opinion on one fact of a text, never for a decision.
 ---
 
+# MODULE: SKILL.md - Ask the available team judge without requiring the owner's proof directory
 # Jev, the judge
 
 Jev (`jev-1.13`, TypeSafe AI's "System One" model, reached through OpenCode's gateway) writes no
@@ -13,9 +14,13 @@ and costs about two thousandths of a cent. BMN itself makes the call; no agent a
 An answer is advice for whoever reads it. Nothing may be granted, accepted, stopped or spent
 because of one.
 
+Jev needs an OpenCode sign-in with access to its gateway and an approved team route that permits
+the text. If no such sign-in or route is available, skip the judge and assess the evidence yourself
+or ask an available teammate. Do not request or copy a key to make this optional check run.
+
 ## What the proof measured
 
-The owner's proof (`~/code/jev-eval`, 2026-10-12) asked 150 invented cases three times each under
+The owner's proof (`~/code/jev-eval`, 2026-10-12; historical evidence, not needed to run Jev) asked 150 invented cases three times each under
 a rule fixed beforehand. On the 100 held-out cases all 84 confident answers were right; Jev
 stayed silent on about a quarter of the cases where it should have spoken. The bar was 95% of
 confident answers right, speaking on 60% of the cases that call for it, and at most 2% of

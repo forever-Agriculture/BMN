@@ -1207,6 +1207,12 @@ export class CompanionService {
       case METHOD_REGISTRY.portsList:
         // Read-only: what the last scan found, with a stopped session's leftovers marked. Nothing here reads /proc.
         return this.ports.list() satisfies SessionPorts[]
+      case METHOD_REGISTRY.setupHookEvidence: {
+        if (Object.keys(params).length !== 0) invalidHostControl('Hook evidence takes no parameters')
+        await this.sessionsChanged()
+        const observed = this.retainedHooks.observedAgent('codex')
+        return { codex: observed === true ? 'observed' : observed === false ? 'not-observed' : 'unavailable' }
+      }
       case METHOD_REGISTRY.hookOriginsList:
         // Read-only: each session's own latest origin, never another session's facts beside it.
         return [...this.hookOrigins.values()]
@@ -1574,38 +1580,59 @@ export class CompanionService {
     }
   }
 
-  /** Refreshes the session cache the control socket uses to check owner targets. */
-  async sessionsChanged(): Promise<void> {
-    const workspaces = await this.options.database.listWorkspaces(true)
-    const lists = await Promise.all(workspaces.map((workspace) => this.options.database.listSessions(workspace.workspaceId)))
-    this.knownSessions.clear()
-    for (const session of lists.flat()) {
-      this.knownSessions.set(session.sessionId, this.options.manager.sessionWithCurrentProcessState(session))
-    }
-    // A deleted session keeps no hook events: the log, and everything else kept per session in
-    // memory here, follows the sessions that still exist.
-    let removedHooks = false
-    for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
-      this.usageReadings, this.guardStops, this.codexUsageReads, this.terminalNotices, this.repeatStates, this.attentionChanges]) {
-      for (const sessionId of map.keys()) {
-        if (!this.knownSessions.has(sessionId)) {
-          if (map === this.hookEvents) removedHooks = true
-          map.delete(sessionId)
+  private sessionRefreshSequence = 0
+  private hookArrivalSequence = 0
+  private latestSessionRefresh: Promise<void> = Promise.resolve()
+
+  /** Only the newest requested enumeration may publish or prune per-session state. */
+  sessionsChanged(): Promise<void> {
+    const sequence = ++this.sessionRefreshSequence
+    const refresh = Promise.resolve().then(async () => {
+      try {
+        for (;;) {
+          const hookSequence = this.hookArrivalSequence
+          const workspaces = await this.options.database.listWorkspaces(true)
+          const lists = await Promise.all(workspaces.map(workspace => this.options.database.listSessions(workspace.workspaceId)))
+          if (sequence !== this.sessionRefreshSequence) { await this.latestSessionRefresh; return }
+          // A hook can precede a newly created session's enumeration. Read again before pruning its evidence.
+          if (hookSequence !== this.hookArrivalSequence) continue
+          this.knownSessions.clear()
+          for (const session of lists.flat()) {
+            this.knownSessions.set(session.sessionId, this.options.manager.sessionWithCurrentProcessState(session))
+          }
+          // A deleted session keeps no hook events: the log, and everything else kept per session in
+          // memory here, follows the sessions that still exist.
+          let removedHooks = false
+          for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
+            this.usageReadings, this.guardStops, this.codexUsageReads, this.terminalNotices, this.repeatStates, this.attentionChanges]) {
+            for (const sessionId of map.keys()) {
+              if (!this.knownSessions.has(sessionId)) {
+                if (map === this.hookEvents) removedHooks = true
+                map.delete(sessionId)
+              }
+            }
+          }
+          this.retainedHooks.sessionsChanged()
+          if (removedHooks) this.retainedHooks.markDirty()
+          this.ports.sessionsChanged()
+          if (this.turns !== null) {
+            // Recording is on for the sessions of every unarchived workspace, wherever a session is now (Story 75.4).
+            const recording = new Set(workspaces.filter((workspace) => workspace.archivedAt === null)
+              .map((workspace) => workspace.workspaceId))
+            for (const sessionId of this.turnSessions) if (!this.knownSessions.has(sessionId)) this.turns.forget(sessionId)
+            this.turnSessions = new Set(this.knownSessions.keys())
+            this.turns.setSwitches(new Set([...this.knownSessions.values()].filter((session) => recording.has(session.workspaceId))
+              .map((session) => session.sessionId)))
+          }
+          return
         }
+      } catch (error) {
+        if (sequence !== this.sessionRefreshSequence) { await this.latestSessionRefresh; return }
+        throw error
       }
-    }
-    this.retainedHooks.sessionsChanged()
-    if (removedHooks) this.retainedHooks.markDirty()
-    this.ports.sessionsChanged()
-    if (this.turns !== null) {
-      // Recording is on for the sessions of every unarchived workspace, wherever a session is now (Story 75.4).
-      const recording = new Set(workspaces.filter((workspace) => workspace.archivedAt === null)
-        .map((workspace) => workspace.workspaceId))
-      for (const sessionId of this.turnSessions) if (!this.knownSessions.has(sessionId)) this.turns.forget(sessionId)
-      this.turnSessions = new Set(this.knownSessions.keys())
-      this.turns.setSwitches(new Set([...this.knownSessions.values()].filter((session) => recording.has(session.workspaceId))
-        .map((session) => session.sessionId)))
-    }
+    })
+    this.latestSessionRefresh = refresh
+    return refresh
   }
 
   /** Epic 69: the comparisons the window waits for now. A prompt that needs the worker stops them. */
@@ -2428,6 +2455,7 @@ export class CompanionService {
     })
     if (log.length > HOOK_EVENT_LOG_LIMIT) log.splice(0, log.length - HOOK_EVENT_LOG_LIMIT)
     this.hookEvents.set(p.sessionId, log)
+    this.hookArrivalSequence += 1
     this.retainedHooks.markDirty()
     return { recorded: true }
   }

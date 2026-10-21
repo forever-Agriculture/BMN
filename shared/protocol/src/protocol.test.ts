@@ -68,6 +68,12 @@ describe('protocol surface', () => {
         'workspace.list',
         'workspace.create',
         'workspace.update',
+        'setup.initialize',
+        'setup.get',
+        'setup.update',
+        'setup.workspace',
+        'setup.defaults.claim',
+        'setup.hookEvidence',
         'session.create',
         'session.list',
         'session.update',
@@ -164,7 +170,10 @@ describe('protocol surface', () => {
     // (82 before); Story 67.5 its search of names and contents and that search's cancel (83 before); Story 68.1 its one
     // writer, Save (85 before). Story 83.3 adds the push policy's read and the owner's change in Health (86 before).
     // Story 84.3 adds the Away grant's read and the owner's answer to a card (88 before).
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(90)
+    // Story79.3 adds first-run initialization, progress read and owner completion.
+    // Story79.4 adds the one-time ownership identity claim.
+    // Story79.3 also reads state-only evidence that a Codex hook was observed.
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(96)
   })
 
   it('exports the initial stable error codes', () => {
@@ -352,6 +361,24 @@ describe('protocol surface', () => {
     expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'sixel' })).toBe(true)
     expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'kitty' })).toBe(false)
     expect(isSessionUpdateParams({ sessionId: 's', expectedRevision: 1, terminalGraphics: null })).toBe(true)
+  })
+
+  it('accepts a constrained create-only setup purpose and refuses a later policy change', () => {
+    for (const app of ['claude', 'codex', 'opencode']) {
+      for (const action of ['install', 'login', 'check']) {
+        const setup = { app, action }
+        expect(isSessionCreateParams({ ...sessionCreate, setup })).toBe(true)
+        expect(isSessionRecord({ ...sessionRecord, setup })).toBe(true)
+        expect(isSessionUpdateParams({ sessionId: 's', expectedRevision: 1, setup })).toBe(false)
+      }
+    }
+    for (const setup of [undefined, null, {}, { app: 'other', action: 'login' },
+      { app: 'codex', action: 'login', secret: 'synthetic' }, { app: 'codex', action: 'capture' }]) {
+      expect(isSessionCreateParams({ ...sessionCreate, setup })).toBe(false)
+      expect(isSessionRecord({ ...sessionRecord, setup })).toBe(false)
+    }
+    expect(isSessionCreateParams(sessionCreate)).toBe(true)
+    expect(isSessionRecord(sessionRecord)).toBe(true)
   })
 
   it('accepts only a non-empty per-record launch-disabled reason', () => {

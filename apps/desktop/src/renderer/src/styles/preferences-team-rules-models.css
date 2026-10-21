@@ -1362,6 +1362,14 @@
 
 /* Narrow: the navigation becomes one horizontal strip above the page. */
 @media (max-width: 560px) {
+  .setup-provider-choices {
+    width: 100%;
+  }
+
+  .setup-provider-choices .segmented.fit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   /* A repository's level goes under its name, full width, its three steps sharing it. */
   .preferences-dialog .health-row.policy-repository {
     grid-template-columns: minmax(0, 1fr);

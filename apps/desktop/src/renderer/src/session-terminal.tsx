@@ -43,6 +43,7 @@ import { searchStatusText } from './terminal-view'
 import { TERMINAL_THEMES } from './theme'
 import { TurnPlate } from './turn-changes-plate'
 import { readRecentLines } from './voice-suggestions'
+import { readSetupLastLines } from './setup-output'
 import type { SessionView, SessionViewUpdate } from './workspace-layout'
 
 type ApplicationRendererStartup = Parameters<Parameters<Window['aiTerminal']['onStartup']>[0]>[0]
@@ -79,6 +80,7 @@ export interface TerminalController {
    * text; rows xterm wrapped are joined. Reads only.
    */
   recentText(maxRows: number, maxBytes: number): string[]
+  setupLastLines(): Promise<string[]>
 }
 
 export function SessionTerminal(props: {
@@ -126,6 +128,8 @@ export function SessionTerminal(props: {
   requestControl: React.ReactNode
   focusCue: string | null
   onSelect(focusTerminal?: boolean): void
+  onSetup?: (() => void) | undefined
+  onCloseSetup?: (() => void) | undefined
   onSplit(): void
   onFocusMode(): void
   onFiles(): void
@@ -168,6 +172,8 @@ export function SessionTerminal(props: {
   const onOpenFileReference = useRef(props.onOpenFileReference)
   const onTitle = useRef(props.onTitle)
   const activated = useRef(false)
+  /** An exit can beat a queued fit/resize response; the ended view still fits, but has no PTY to resize. */
+  const processEnded = useRef(false)
   /** The presented exit status; undefined while the process is running. */
   const [exitStatus, setExitStatus] = useState<string>()
   const [searchOpen, setSearchOpen] = useState(false)
@@ -238,7 +244,9 @@ export function SessionTerminal(props: {
     const capture = startSavedOutputCapture(
       terminal,
       (snapshot) => window.aiTerminal.saveTerminalSnapshot(props.startup.sessionId, snapshot),
-      (message) => onFailure.current(`${startup.current.name}: ${message}`)
+      (message) => onFailure.current(`${startup.current.name}: ${message}`),
+      () => 0,
+      !props.startup.setup
     )
     const tracking = trackTerminalView({
       terminal,
@@ -255,11 +263,12 @@ export function SessionTerminal(props: {
       if (!visible.current || !container.offsetParent) return
       refitCount += 1
       tracking.quietly(() => fit.fit())
+      if (processEnded.current) return
       void window.aiTerminal
         .resizeTerminal(props.startup.sessionId, terminal.cols, terminal.rows)
         .then((dimensions) => (ptyDimensions = dimensions))
         .catch((error: unknown) => {
-          onFailure.current(sessionFailureDetail(startup.current.name, error, 'Terminal resize failed'))
+          if (!processEnded.current) onFailure.current(sessionFailureDetail(startup.current.name, error, 'Terminal resize failed'))
         })
     }
     refit.current = resize
@@ -403,6 +412,7 @@ export function SessionTerminal(props: {
       },
       exit: (message) => {
         if (message.attachmentId !== startup.current.attachmentId) return
+        processEnded.current = true
         applyTerminalExit(message, {
           detach: (attachmentId) => flow.detach(attachmentId),
           setStatus: setExitStatus,
@@ -432,7 +442,8 @@ export function SessionTerminal(props: {
         requestAnimationFrame(() => searchInput.current?.select())
       },
       focus: () => terminal.focus(),
-      recentText: (maxRows, maxBytes) => readRecentLines(terminal.buffer.active, maxRows, maxBytes)
+      recentText: (maxRows, maxBytes) => readRecentLines(terminal.buffer.active, maxRows, maxBytes),
+      setupLastLines: () => readSetupLastLines(terminal)
     }
     props.register(props.startup.sessionId, controller)
     const testHandle: TerminalTestHandle<Terminal> = {
@@ -535,7 +546,7 @@ export function SessionTerminal(props: {
 
   /** Asks the host to start streaming this session's output; the first caller wins and a failure may retry. */
   const ensureActive = (): void => {
-    if (activated.current) return
+    if (activated.current || processEnded.current) return
     activated.current = true
     void window.aiTerminal.activateTerminal(props.startup.sessionId).catch((error: unknown) => {
       activated.current = false
@@ -583,6 +594,7 @@ export function SessionTerminal(props: {
     <section
       ref={section}
       className={`session-terminal${props.visible ? '' : ' session-terminal-hidden'}${props.selected ? ' selected' : ''}${dropTarget ? ' drop-target' : ''}`}
+      inert={!props.visible}
       aria-label={`${name} terminal`}
       data-session-id={props.startup.sessionId}
       style={{ order: props.order, flexGrow: props.ratio }}
@@ -617,6 +629,9 @@ export function SessionTerminal(props: {
           />
         ) : null}
         <strong title={name}>{name}</strong>
+        {props.startup.setup ? <><span className="chip">Not saved</span>
+          <button type="button" className="small" onClick={props.onSetup}>Setup</button>
+          <button type="button" className="small" onClick={props.onCloseSetup}>Close session</button></> : null}
         {props.record ? <span className="chip">{props.modelOrigin === null || exitStatus
           ? agentTag(props.record.executable, props.record.argv)
           : observedAgentName(props.modelOrigin.agent)}</span> : null}

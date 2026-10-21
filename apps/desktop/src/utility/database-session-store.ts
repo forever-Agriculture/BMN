@@ -1,3 +1,4 @@
+// MODULE: database-session-store.ts - Persist session starts, bindings and process outcomes
 import type {
   ConversationRouteSummary,
   PersistedConversationBinding,
@@ -46,9 +47,9 @@ export function createStartingSession(
       .prepare(
         `INSERT INTO session(
           session_id, workspace_id, name, cwd, executable, argv_json,
-          revision, created_at, position, background_choice, terminal_graphics
+          revision, created_at, position, background_choice, terminal_graphics, setup_purpose_json
         ) VALUES (?, ?, ?, ?, ?, ?, 1, ?,
-          COALESCE((SELECT MAX(position) + 1 FROM session WHERE workspace_id = ?), 0), ?, ?)`
+          COALESCE((SELECT MAX(position) + 1 FROM session WHERE workspace_id = ?), 0), ?, ?, ?)`
       )
       .run(
         record.sessionId,
@@ -60,7 +61,8 @@ export function createStartingSession(
         record.startedAt,
         record.workspaceId,
         record.backgroundChoice,
-        record.terminalGraphics
+        record.terminalGraphics,
+        record.setup ? JSON.stringify(record.setup) : null
       )
     insertConversationBinding(database, record.binding)
     insertIncarnation(database, record)

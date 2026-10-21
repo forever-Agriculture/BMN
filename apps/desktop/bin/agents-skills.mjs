@@ -1,4 +1,5 @@
 // MODULE: agents-skills.mjs - Story 60.11: one skills folder for every agent app: where each app reads skills (the owner's test, per version), one state per app and skill, and install, removal and undo as one transaction
+import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import {
@@ -11,6 +12,8 @@ import { approvedIfAny } from './agents-state.mjs'
 import { linkTarget } from './safe-config-write.mjs'
 import { installOwnSkills, ownSkillNames } from './agents-own-skills.mjs'
 import { canonicalRoute, home, pause } from './shared-helpers.mjs'
+import { optionalDefaultsOwnership } from './defaults-ownership.mjs'
+import { applySetupSkillPlan, assertCompatibleSkillMetadata, writeCompatibleSkillMetadata } from './setup-app-skills.mjs'
 
 /**
  * The owner keeps his skills in one folder (`~/.claude/skills/` unless the approved team file names
@@ -560,11 +563,13 @@ function swapIn(staged, path, prior) {
 }
 
 function unchanged(path, expected) {
+  assertDefaultsAdmission()
   if (!sameEntry(entryOf(path), expected)) throw new SkillsError('REVISION_CONFLICT', `${path} changed while BMN was reading it; nothing was written there`)
 }
 
 /** Writes one planned entry and reads it back. */
 function writeTarget(target, skill) {
+  assertDefaultsAdmission()
   unchanged(target.path, target.prior)
   if (target.action === 'remove') {
     rmSync(target.path, { recursive: true, force: true })
@@ -622,15 +627,30 @@ export async function installSkills(harnesses = [], { yes = false, asJson = fals
   if (!await confirm('Change these skills entries?', planDetails(planned), { yes, asJson })) return { code: 'NOT_CONFIRMED', transaction: null, written: [], exposed: planned.exposed }
   // The answer may come long after the list: plan again and write only what was confirmed.
   afterConfirm?.()
-  const confirmed = await planSkillsInstall(harnesses, { environment, versions, absent })
-  if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [], exposed: [] }
-  if (confirmed.planHash !== planned.planHash) {
-    return { code: 'REVISION_CONFLICT', message: 'the skills or the folders changed while the confirmation was open; nothing was written', transaction: null, written: [], exposed: confirmed.exposed }
-  }
-  return writeSkillsTransaction(confirmed, { now, beforeTarget, afterTarget })
+  return withDefaultsAdmission(async () => {
+    const confirmed = await planSkillsInstall(harnesses, { environment, versions, absent })
+    if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [], exposed: [] }
+    if (confirmed.planHash !== planned.planHash) {
+      return { code: 'REVISION_CONFLICT', message: 'the skills or the folders changed while the confirmation was open; nothing was written', transaction: null, written: [], exposed: confirmed.exposed }
+    }
+    return writeSkillsTransaction(confirmed, { now, beforeTarget, afterTarget })
+  })
 }
 
 async function writeSkillsTransaction(planned, { now, beforeTarget, afterTarget }) {
+  const routed = applySetupSkillPlan(planned, { now, beforeTarget, afterTarget })
+  if (routed === null) return writeLegacySkillsTransaction(planned, { now, beforeTarget, afterTarget })
+  const { legacy, ...result } = routed
+  if (result.code !== 'OK' || legacy.length === 0) return result
+  const rest = await writeLegacySkillsTransaction({ ...planned, targets: legacy }, {
+    now, beforeTarget: beforeTarget && (target => beforeTarget(target, planned.targets.indexOf(target))),
+    afterTarget: afterTarget && (target => afterTarget(target, planned.targets.indexOf(target)))
+  })
+  return { ...rest, written: [...result.written, ...rest.written], transactions: [...result.transactions, ...(rest.transaction ? [rest.transaction] : [])] }
+}
+
+async function writeLegacySkillsTransaction(planned, { now, beforeTarget, afterTarget }) {
+  assertCompatibleSkillMetadata()
   const { newTransaction, writePrivate } = await import('./agents-rules.mjs')
   const { id, folder } = newTransaction(now)
   const records = written()
@@ -644,7 +664,7 @@ async function writeSkillsTransaction(planned, { now, beforeTarget, afterTarget 
       prior_record: records[target.path] ?? null, written: target.wanted, started: false, done: false
     }))
   }
-  const save = () => writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
+  const save = () => { assertDefaultsAdmission(); writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2)) }
   planned.targets.forEach((target, index) => {
     if (target.prior.kind === 'tree') copyTree(target.path, `${folder}/${index}.tree`)
   })
@@ -663,10 +683,11 @@ async function writeSkillsTransaction(planned, { now, beforeTarget, afterTarget 
       return { code: 'INSTALL_FAILED', transaction: id, written: done, exposed: planned.exposed,
         message: `${target.path}: ${error.code ?? 'write failed'}: ${error.message}; ${done.length} entr${done.length === 1 ? 'y' : 'ies'} changed; undo with bmn rules restore --transaction ${id}` }
     }
+    assertDefaultsAdmission()
     const next = written()
     if (target.action === 'remove') delete next[target.path]
     else next[target.path] = recordOf(target)
-    writePrivate(writtenPath(), JSON.stringify(next, null, 2))
+    writeCompatibleSkillMetadata(next, folder)
     manifest.targets[index].done = true
     save()
     done.push({ harness: target.harness, skill: target.skill, path: target.path, action: target.action })
@@ -693,7 +714,14 @@ function holdsWritten(current, wanted) {
  * undone too, known the same way; one it never began, or began and did not change, is left out.
  */
 export async function restoreSkillsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash, leftWords = [] } = {}) {
-  const { confirm, writePrivate } = await import('./agents-rules.mjs')
+  const ownershipConflict = () => {
+    const setupJournal = optionalDefaultsOwnership()
+    return setupJournal && manifest.targets.some(target => Object.values(setupJournal.snapshot().entries).some(entry => entry.target.path === target.path)) ?
+      { code: 'REVISION_CONFLICT', message: 'a target belongs to a setup transaction; use its original Earlier installs Undo', restored: [] } : null
+  }
+  const conflict = ownershipConflict()
+  if (conflict) return conflict
+  const { confirm } = await import('./agents-rules.mjs')
   const plans = manifest.targets.map((target) => ({ ...target, current: entryOf(target.path) })).filter((plan) => {
     if (plan.done === true) return true
     if (plan.started !== true) return false
@@ -707,36 +735,42 @@ export async function restoreSkillsTransaction(manifest, folder, { yes = false, 
   if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the entries changed since the restore was shown; review it again' }
   const details = [...targets.map((target) => `${target.harness}: ${target.path}${target.resolved_path === target.path ? '' : ` (written at ${target.resolved_path})`} -> ${target.becomes}`), ...leftWords].join('\n')
   if (!await confirm(`Restore transaction ${manifest.id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
-  const restored = []
-  for (const plan of plans) {
-    if (!sameEntry(entryOf(plan.path), plan.current)) {
-      return { code: 'REVISION_CONFLICT', message: `${plan.path} changed while BMN was reading it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
-    }
-    if (!holdsWritten(plan.current, plan.written)) {
-      return { code: 'REVISION_CONFLICT', message: `${plan.path} changed since BMN wrote it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
-    }
-    if (plan.prior.kind === 'missing') {
-      rmSync(plan.path, { recursive: true, force: true })
-    } else {
-      mkdirSync(dirname(plan.path), { recursive: true })
-      const staged = stagePath(plan.path)
-      try {
-        if (plan.prior.kind === 'link') symlinkSync(plan.prior.target, staged)
-        else copyTree(`${folder}/${plan.prior.backup}`, staged)
-        if (plan.current.kind === 'missing') renameSync(staged, plan.path)
-        else swapIn(staged, plan.path, plan.current)
-      } catch (error) {
-        rmSync(staged, { recursive: true, force: true })
-        throw error
+  return withDefaultsAdmission(async () => {
+    const conflict = ownershipConflict()
+    if (conflict) return conflict
+    assertCompatibleSkillMetadata()
+    const restored = []
+    for (const plan of plans) {
+      if (!sameEntry(entryOf(plan.path), plan.current)) {
+        return { code: 'REVISION_CONFLICT', message: `${plan.path} changed while BMN was reading it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
       }
+      if (!holdsWritten(plan.current, plan.written)) {
+        return { code: 'REVISION_CONFLICT', message: `${plan.path} changed since BMN wrote it; ${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`, restored }
+      }
+      assertDefaultsAdmission()
+      if (plan.prior.kind === 'missing') {
+        rmSync(plan.path, { recursive: true, force: true })
+      } else {
+        mkdirSync(dirname(plan.path), { recursive: true })
+        const staged = stagePath(plan.path)
+        try {
+          if (plan.prior.kind === 'link') symlinkSync(plan.prior.target, staged)
+          else copyTree(`${folder}/${plan.prior.backup}`, staged)
+          if (plan.current.kind === 'missing') renameSync(staged, plan.path)
+          else swapIn(staged, plan.path, plan.current)
+        } catch (error) {
+          rmSync(staged, { recursive: true, force: true })
+          throw error
+        }
+      }
+      const records = written()
+      if (plan.prior_record === null) delete records[plan.path]
+      else records[plan.path] = plan.prior_record
+      writeCompatibleSkillMetadata(records, folder)
+      restored.push(plan.harness)
     }
-    const records = written()
-    if (plan.prior_record === null) delete records[plan.path]
-    else records[plan.path] = plan.prior_record
-    writePrivate(writtenPath(), JSON.stringify(records, null, 2))
-    restored.push(plan.harness)
-  }
-  return { code: 'OK', kind: 'skills', restored: [...new Set(restored)] }
+    return { code: 'OK', kind: 'skills', restored: [...new Set(restored)] }
+  })
 }
 
 // ---------------------------------------------------------------------------------------------

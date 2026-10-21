@@ -1,3 +1,4 @@
+// MODULE: conversation-binding.ts - Native conversation identity, launch and resume contracts
 import { access, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -200,6 +201,7 @@ interface ConversationLaunchInput {
   cwd: string
   executable: string
   argv: readonly string[]
+  setup?: import('@bmn/protocol').SetupSessionPurpose
 }
 
 interface PreparedConversationLaunch {
@@ -548,7 +550,7 @@ export async function prepareConversationLaunch(
     argv: [...input.argv],
     environment: captureRelevantLaunchEnvironment(environment)
   }
-  if (cli === 'other') {
+  if (input.setup || cli === 'other') {
     return {
       executable: input.executable,
       argv: [...input.argv],
@@ -557,7 +559,9 @@ export async function prepareConversationLaunch(
         sessionId,
         cli,
         launchContext,
-        'Native conversation resume is available only for direct Claude, Codex or OpenCode CLI launches',
+        input.setup
+          ? 'Setup runs the app’s exact command without conversation capture or injected arguments'
+          : 'Native conversation resume is available only for direct Claude, Codex or OpenCode CLI launches',
         capturedAt
       )
     }

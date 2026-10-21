@@ -129,7 +129,7 @@ export function useTeamState(): TeamState {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [staged, setStaged] = useState<RosterDataShape | null>(null)
   // The preview remembers the staged data it was computed for, so the footer never offers a stale diff.
-  const [computed, setComputed] = useState<{ data: RosterDataShape; result: AgentsPreview } | null>(null)
+  const [computed, setComputed] = useState<{ data: RosterDataShape; setupRevision: string | undefined; result: AgentsPreview } | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<TeamNotice | null>(null)
   const [confirmation, setConfirmation] = useState<TeamConfirmation | null>(null)
@@ -175,8 +175,8 @@ export function useTeamState(): TeamState {
   const approved = snapshot?.approved?.data ?? null
   const data = staged ?? base
   const shown: AgentsShownRevision | null = snapshot?.file.hash
-    ? { generation: snapshot.approved?.generation ?? null, fileHash: snapshot.file.hash, link: snapshot.file.link, directory: snapshot.file.directory } : null
-  const preview = computed !== null && computed.data === staged ? computed.result : null
+    ? { generation: snapshot.approved?.generation ?? null, fileHash: snapshot.file.hash, link: snapshot.file.link, directory: snapshot.file.directory, ...(snapshot.setupTeam ? { setupRevision: snapshot.setupTeam.revision } : {}) } : null
+  const preview = computed !== null && computed.data === staged && computed.setupRevision === snapshot?.setupTeam?.revision ? computed.result : null
 
   useEffect(() => {
     if (staged === null) {
@@ -185,15 +185,15 @@ export function useTeamState(): TeamState {
     }
     let cancelled = false
     const timer = setTimeout(() => {
-      window.aiTerminal.previewAgents({ kind: 'staged', data: staged })
-        .then((result) => { if (!cancelled) setComputed({ data: staged, result }) })
+      window.aiTerminal.previewAgents({ kind: 'staged', data: staged, ...(snapshot?.setupTeam ? { setupRevision: snapshot.setupTeam.revision } : {}) })
+        .then((result) => { if (!cancelled) setComputed({ data: staged, setupRevision: snapshot?.setupTeam?.revision, result }) })
         .catch((error: unknown) => { if (!cancelled) setNotice({ ok: false, text: failureDetail(error, 'Could not preview the change') }) })
     }, PREVIEW_DELAY_MS)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [staged])
+  }, [staged, snapshot?.setupTeam?.revision])
 
   const outsideDiffs = snapshot?.approved ? snapshot.differences ?? [] : []
   const outside = groupDifferences(outsideDiffs, base, approved, snapshot?.approved ? snapshot.consequences : [])
@@ -263,6 +263,7 @@ export function useTeamState(): TeamState {
       }
     }
     setSnapshot(latest)
+    await reload()
   }
 
   async function requestApproval(request: AgentsApprovalRequest, words: { title: string; action: string }, always = false, unstage?: TeamConfirmation['unstage']): Promise<void> {
@@ -272,7 +273,7 @@ export function useTeamState(): TeamState {
     let result: AgentsPreview
     try {
       // The preview is reused only for the data it was computed for; data staged by this same press is previewed afresh.
-      result = request.kind === 'staged' && preview !== null && computed?.data === request.data ? preview : await window.aiTerminal.previewAgents(request)
+      result = request.kind === 'staged' && preview !== null && computed?.data === request.data ? preview : await window.aiTerminal.previewAgents({ ...request, ...(snapshot?.setupTeam ? { setupRevision: snapshot.setupTeam.revision } : {}) })
     } catch (error) {
       // What this press staged goes out again, as Cancel would take it out (Story 75.10).
       if (unstage) setStaged(unstage.staged)

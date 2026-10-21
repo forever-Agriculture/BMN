@@ -157,19 +157,21 @@ pnpm --filter @bmn/desktop run dev
 
 ## Your first session
 
-1. Press `Ctrl+Shift+P`, choose **New workspace…**, and name a project. You can give it a default
-   directory.
-2. Choose **New session…** in that workspace. Pick a launch template or enter a command and working
-   directory. A shell works without agent integration; an agent CLI uses its own existing settings
-   and authentication.
-3. Use the terminal normally. `Ctrl+Shift+Enter` opens a second session beside it; the Files panel
+1. On a fresh profile, **Setup** finds Claude Code, Codex and OpenCode. **Install…** and
+   **Sign in…** show the exact command, then run the app's own flow in a visible session.
+   Setup sessions keep no saved output. You can skip setup and use ordinary sessions at any time.
+2. **Review team…** proposes the ready apps and their roles. **Choose settings…** asks for a
+   model, provider and effort when those settings cannot be read safely. Review and approve the
+   team; private work starts off. BMN then installs its default rules, skills, hooks and the
+   approved Playwright MCP entry. Setup shows anything that still needs attention, including
+   Codex's one-time `/hooks` trust. An existing rules master or approved team skips first-run setup.
+3. Press `Ctrl+Shift+P`, choose **New workspace…**, and name a project. Choose **New session…**
+   there, then pick a launch template or enter a command and working directory. A shell works
+   without agent integration; each agent keeps its own settings and authentication.
+4. Use the terminal normally. `Ctrl+Shift+Enter` opens a second session beside it; the Files panel
    accepts attachments and shows agent-published output.
-4. If you use Claude Code, Codex or OpenCode, run `bmn hooks check` inside its session to see
-   whether its questions can appear in **Needs you**. `bmn hooks install <agent>` adds missing BMN
-   entries after showing the target and diff for approval. Scripts need `--yes`; BMN backs up
-   existing files before writing.
-5. Stop a session to keep its saved screen. **Start again** runs a fresh process; **Resume** reopens
-   a conversation BMN knows, after showing the command it will run.
+5. Stop an ordinary session to keep its saved screen. **Start again** runs a fresh process;
+   **Resume** reopens a conversation BMN knows, after showing the command it will run.
 
 The [feature guide](docs/features.md) follows each workflow in more detail.
 

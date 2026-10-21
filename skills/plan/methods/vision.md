@@ -1,10 +1,11 @@
+# MODULE: vision.md - Record the owner's vision using project evidence and optional shared memory
 # Vision
 
 Use when a project has no `plan/VISION.md`, when the owner states a new principle, or when an epic seems to pull against what the project is for. The result is `plan/VISION.md` (template in `../templates/VISION.md`): the foundation `PLAN.md` and every epic build on.
 
 ## Steps
 
-1. **Collect his recorded words.** Read the owner's project note (`~/brain/projects/<name>.md`, its Vision or Goal and its Log), the linked philosophy notes, the plan's Decisions, the epics' Why sections and the cards he answered. Note each principle-like statement with its date and source. Never invent one; a strong pattern without a quote is a sourced synthesis.
+1. **Collect his recorded words.** Read the plan's Decisions, the epics' Why sections and the cards the owner answered. If the project keeps a shared memory, also read its project note (Vision or Goal and Log) and linked philosophy notes. Work from the project's records when it has no shared memory. Note each principle-like statement with its date and source. Never invent one; a strong pattern without a quote is a sourced synthesis.
 2. **Write the vision.** One paragraph: what the project becomes, for whom, what it changes for them.
 3. **Write the principles.** Numbered, one line each, then the source: his words with their date, or "synthesis of <sources>". Five to twelve is typical; merge overlaps; keep only rules that would change a decision. Mark anything he has not confirmed *provisional*.
 4. **We refuse.** Only the refusals he has stated or that follow directly from a principle.

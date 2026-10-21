@@ -39,12 +39,18 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
 are reachable from the session request control after restart, including a stopped session. Cleared
 notice snapshots belong only to the current renderer selection and are not a persistent history.
 
+Setup install and sign-in sessions are created with saved output off. Every saved-output promise
+below excludes them: they retain no periodic, stop or quit capture, including after a crash.
+Story79.3 synthetic Electron receipts cover periodic/stop refusal and an ordinary restart; killed-main
+recovery remains **UNVERIFIED**, pending the owner-only disruptive-test approval. The historical
+ordinary-session receipts below do not prove that setup exception.
+
 ## Rows
 
 ### Close the window, keep the sessions
 
 - Promise per column — process: keeps running. Live screen: kept: the window is minimized, not
-  destroyed. Saved output: captured on the same cadence. Session record and layout: unchanged.
+  destroyed. Saved output: captured on the same cadence; setup sessions have none. Session record and layout: unchanged.
   Conversation resume: not needed; nothing stopped. Open requests: stay open.
 - Trial steps: in an isolated Electron instance with a live synthetic session, invoke the window
   close and choose the keep-sessions answer in the close prompt; then read the session's process
@@ -73,7 +79,7 @@ notice snapshots belong only to the current renderer selection and are not a per
 ### Close the window and stop the sessions
 
 - Promise per column — process: stopped, recorded *interrupted · last window close*. Live screen:
-  ends with the process. Saved output: a final capture is taken before the stop. Session record
+  ends with the process. Saved output: a final capture is taken before the stop; setup sessions have none. Session record
   and layout: unchanged; the pane keeps its place. Conversation resume: resume reopens a bound
   conversation. Open requests: stay open; a harness that sends `SessionEnd` withdraws the ones its
   hook opened.
@@ -102,7 +108,7 @@ notice snapshots belong only to the current renderer selection and are not a per
 
 - Promise per column — process: stopped after BMN lists the running sessions and asks, recorded
   *interrupted · application quit*. Live screen: ends with the process. Saved output: a final
-  capture is taken before the stop. Session record and layout: unchanged. Conversation resume:
+  capture is taken before the stop; setup sessions have none. Session record and layout: unchanged. Conversation resume:
   resume reopens a bound conversation; the next start offers to resume them all in one dialog.
   Open requests: stay open; `SessionEnd` withdraws the hook's own.
 - Trial steps: in an isolated Electron instance with live synthetic sessions (at least one bound
@@ -129,7 +135,7 @@ notice snapshots belong only to the current renderer selection and are not a per
 
 - Promise per column — process: stopped; an unconfirmed stop stays *exit unconfirmed* until the
   host reports the exit. Live screen: ends with the process. Saved output: a final capture is
-  taken before the stop. Session record and layout: unchanged. Conversation resume: resume
+  taken before the stop; setup sessions have none. Session record and layout: unchanged. Conversation resume: resume
   reopens a bound conversation. Open requests: stay open; `SessionEnd` withdraws the hook's own.
 - Trial steps: in an isolated Electron instance with a live synthetic session bound to a
   conversation and carrying a hook-opened request, stop the session explicitly; verify the
@@ -147,7 +153,7 @@ notice snapshots belong only to the current renderer selection and are not a per
 
 - Promise per column — process: keeps running. Live screen: a new view is created, brought to the
   private terminal mode state the program is in, and the program is asked to repaint once; bytes
-  from before the crash are not replayed. Saved output: unaffected. Session record and layout:
+  from before the crash are not replayed. Saved output: unaffected; setup sessions have none. Session record and layout:
   unchanged; order, selection, scroll position and follow-tail are restored. Conversation resume:
   not needed; nothing stopped. Open requests: stay open.
 - Trial steps: in an isolated Electron instance with live synthetic sessions, crash the renderer
@@ -163,7 +169,8 @@ notice snapshots belong only to the current renderer selection and are not a per
 
 - Promise per column — process: ends when its pseudo-terminal closes (UNVERIFIED); the next start
   marks earlier incarnations *interrupted* and starts nothing by itself. Live
-  screen: gone. Saved output: the last periodic capture; output written after it is lost. Session
+  screen: gone. Saved output: the last periodic capture; output written after it is lost; setup sessions
+  have none. Session
   record and layout: unchanged. Conversation resume: resume reopens a bound conversation,
   including one a `SessionStart` hook reported. Open requests: stay open.
 - Trial steps (app crash): on the disposable OS user or VM, with the app running synthetic
@@ -184,7 +191,7 @@ notice snapshots belong only to the current renderer selection and are not a per
   sessions. The owner can Quit (records *interrupted · application quit*), close the last window
   and choose Stop (records *interrupted · last window close*), or Keep running (updater still
   waits). Live screen: ends with BMN, or stays in the minimized window when kept. Saved output:
-  Quit and close-stop take a final capture; the updater takes none. Session record and layout:
+  Quit and close-stop take a final capture; the updater takes none; setup sessions have none. Session record and layout:
   unchanged. Conversation resume: individual Resume reopens a bound Claude/Codex conversation or
   OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not.
   Open requests: stay open unless their harness sends `SessionEnd`.

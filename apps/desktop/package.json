@@ -7,9 +7,9 @@
   "desktopName": "bmn.desktop",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "node ../../scripts/test/electron-dev.mjs",
+    "dev": "node ../../scripts/build/defaults-native.mjs && node ../../scripts/test/electron-dev.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
-    "build": "electron-vite build",
+    "build": "node ../../scripts/build/defaults-native.mjs && electron-vite build",
     "test:self": "electron . --self-test",
     "package": "pnpm run build && electron-builder --linux dir"
   },

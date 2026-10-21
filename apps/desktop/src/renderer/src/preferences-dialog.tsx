@@ -190,6 +190,8 @@ export function PreferencesDialog(props: {
   sessionName?(id: string): string | undefined
   /** Opens a new shell session and runs a command there; Integrations › Health offers it for an app's update command. */
   onRunInSession?: RunInSession | undefined
+  onSetupCreated?: import('./first-run-setup').SetupNavigation['onCreated']
+  onOpenSetupSession?: import('./first-run-setup').SetupNavigation['onOpenSession']
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
@@ -263,8 +265,8 @@ export function PreferencesDialog(props: {
   // without asking the apps, and whether OpenCode lists Luna's model only while Agents › Team shows, since it starts OpenCode.
   const peekForProposals = research.peek
   useEffect(() => { if (page === 'agents') peekForProposals() }, [page, peekForProposals])
-  const openCodeGo = useOpenCodeGo(team, page === 'agents' && shown.agents === 'team')
-  const proposals = team.data === null ? null : teamProposals(team.data, { lunaListed: openCodeGo.view?.listed === true, researchers: research.snapshot?.choice ?? null })
+  const openCodeGo = useOpenCodeGo(team, !team.snapshot?.setupTeam && page === 'agents' && shown.agents === 'team')
+  const proposals = team.data === null || team.snapshot?.setupTeam ? null : teamProposals(team.data, { lunaListed: openCodeGo.view?.listed === true, researchers: research.snapshot?.choice ?? null })
   // Staged edits are approved from the footer on the views that stage them; New agent has its own.
   const ledger = (page === 'agents' && shownTeamPage.name !== 'new') || (page === 'integrations' && shown.integrations !== 'rules')
   const pageOf = (id: PreferencesPage, children: ReactNode): React.JSX.Element => <div className="preferences-page" hidden={page !== id}>{children}</div>
@@ -651,7 +653,8 @@ export function PreferencesDialog(props: {
       {page === 'integrations' ? (
         <div className="preferences-page rules-page">
           <PageViewsContext.Provider value={integrationsViews}>
-            <RulesPreferences rules={rules} team={team} page={shown.integrations === 'rules' ? 'editor' : shown.integrations} recognised={props.recognisedSessions ?? {}} onRunInSession={props.onRunInSession} />
+            <RulesPreferences rules={rules} team={team} page={shown.integrations === 'rules' ? 'editor' : shown.integrations} recognised={props.recognisedSessions ?? {}} onRunInSession={props.onRunInSession}
+              onSetupCreated={props.onSetupCreated} onOpenSetupSession={props.onOpenSetupSession} />
           </PageViewsContext.Provider>
           {shown.integrations === 'health' ? localControl : null}
         </div>

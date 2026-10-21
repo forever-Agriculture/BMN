@@ -1,7 +1,11 @@
+// MODULE: database-client.ts - Typed requests to the database's owning worker
 import { Worker } from 'node:worker_threads'
 import {
   ERROR_CODES,
   type ArtifactRecord,
+  type FirstRunSetupRecord,
+  type FirstRunSetupUpdate,
+  type SetupDefaultsClaim,
   type LayoutGetResult,
   type ConversationRouteSummary,
   type PersistedConversationBinding,
@@ -137,6 +141,26 @@ export class DatabaseWorkerClient implements SessionStore {
 
   async createWorkspace(params: WorkspaceCreateParams): Promise<WorkspaceRecord> {
     return (await this.request('workspace-create', { ...params })) as WorkspaceRecord
+  }
+
+  async initializeSetup(existingProfile: boolean, home: string): Promise<FirstRunSetupRecord> {
+    return await this.request('setup-initialize', { existingProfile, home }) as FirstRunSetupRecord
+  }
+
+  async getSetup(): Promise<FirstRunSetupRecord | null> {
+    return await this.request('setup-get') as FirstRunSetupRecord | null
+  }
+
+  async claimSetupDefaults(): Promise<SetupDefaultsClaim> {
+    return await this.request('setup-defaults-claim') as SetupDefaultsClaim
+  }
+
+  async ensureSetupWorkspace(home: string): Promise<FirstRunSetupRecord> {
+    return await this.request('setup-workspace', { home }) as FirstRunSetupRecord
+  }
+
+  async updateSetup(params: FirstRunSetupUpdate): Promise<FirstRunSetupRecord> {
+    return await this.request('setup-update', { ...params }) as FirstRunSetupRecord
   }
 
   async updateWorkspace(params: WorkspaceUpdateParams): Promise<WorkspaceRecord> {

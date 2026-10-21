@@ -14,6 +14,61 @@ specialist pages carry the detail this page links to.
 Install BMN from source as described in the [README](../README.md#install-from-source), then start
 it like any desktop application.
 
+## First run
+
+Approved design, Story 79.2, 2026-10-20. Implementation and runtime proof follow in 79.3–79.6.
+
+A fresh profile with no setup record, rules master or approved team opens one **Setup** screen in a
+Setup workspace. An existing master or approved team records setup as already complete, so the
+owner's existing profile does not open it automatically. **Skip for now** and **Finish** persist
+independently of sessions. Setup remains available in its workspace afterwards. Ordinary workspaces
+and sessions can be used throughout; readiness never prevents an ordinary session from starting.
+
+**Agent apps** shows Claude Code, Codex and OpenCode, with each installed version and executable path.
+Its states are checking, not installed, installing, install failed, root command required,
+unsupported, installed and signed out, signing in, sign-in unknown and ready. The same readiness
+appears under Health's existing Agent apps rows, alongside their current destinations and controls.
+Health's other sections, including the read-only Doctor, stay available.
+
+**Install…** and **Sign in…** show the program and exact command first. Confirmation starts a visible
+session whose own command is the app's measured installer or login. BMN never runs `sudo`; a missing
+root prerequisite is shown with Copy for the user to run. Credentials stay in the app's own flow:
+BMN has no sign-in form. Setup sessions are created with saved output off and show **Not saved**;
+periodic, stop, quit and crash recovery save none of their output. An install failure shows its exit
+code and bounded transient last lines. Restarting never replays an install or sign-in.
+
+The session receives terminal focus. Its **Setup** action returns to the screen while it runs.
+Closing the session ends its process, rereads the app and returns focus to that app's row. Selecting
+the Setup workspace heading also returns to the screen; individual session rows open their terminals.
+Sheets keep focus and Escape restores their opener.
+
+Status probes keep only the state and run only after qualification for that app version. A timeout
+or unqualified result reads **Sign-in unknown**. After running an app session, the user can confirm
+sign-in; this reads **Confirmed by you**, distinguishable from a probe result. Neither state blocks
+ordinary work. New installed versions receive the bounded disposable-profile qualification once.
+Programs found at the three measured install paths remain usable even when the desktop's PATH has
+not caught up. The screen shows that path and its limitation; reopening BMN is not advertised as a
+PATH repair. Codex hooks show their `/hooks` trust step until an actual hook is observed.
+
+**Team** proposes ready apps with recommended roles and one-line reasons. When model, provider or
+effort cannot be read safely, **Choose settings…** opens the existing New agent form with those
+choices empty. Nothing is guessed or inherited. Review and approval use the existing Team UI.
+Missing keys or subscriptions read **Needs…**
+and those members cannot become usable. Private work starts not allowed. A later-ready app proposes
+an update and changes nothing silently. Setup grants no account, push or merge authority.
+
+**Defaults** shows waiting for the team, installing, installed or a partial count with the failed
+kinds. The default rules text has its separate approval. Writes remain absent-only, individually
+undoable under Earlier installs, and refuse changed or foreign targets. Removal stays removed through
+the defaults coordination and durable opt-out contract; Doctor performs no removal. Retry belongs to
+the affected existing Health control. A partial result remains visible after Finish.
+
+The screen follows the [shared design rules](design.md): solid panels, existing tokens, gold
+attention dots, hairline rows and one primary Finish plate. At 1280 px it uses a 720 px content width;
+at 800 px the 64 px rail remains and row details wrap onto a second line. Vertical scrolling is allowed;
+page-wide horizontal scrolling is not. Commands wrap in a scrolling well. Keyboard order follows
+app actions top to bottom, Team, Defaults, Finish and Skip; updates use shared polite status regions.
+
 ## Workspaces and sessions
 
 The sidebar groups sessions into workspaces. A workspace is a named group of sessions with its own

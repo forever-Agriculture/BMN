@@ -20,6 +20,8 @@ async function main(argv) {
   if (argv[0] === 'hook') return runHook(argv.slice(1)).catch(() => 0)
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
+  // Internal fresh-profile coordinator; its caller supplies the durable SQLite creation claim.
+  if (argv[0] === 'setup-defaults') return (await import('./setup-defaults.mjs')).runSetupDefaultsCommand(argv.slice(1))
   // Epic 83: the push policy, read through the socket; the repository's owner and default branch through the agent's own gh.
   if (argv[0] === 'policy') return (await import('./policy-cli.mjs')).runPolicyCommand(argv.slice(1), { readCredentials, call })
   // Epic 84: a run's card before the owner leaves, his grant and its uses; all decided in BMN, through the socket.

@@ -1,6 +1,7 @@
 // MODULE: agents-ipc.ts - Epic 60.5/60.6: renderer channels for the Preferences Team and Rules pages
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { buildSetupTeamProposals, validateSetupTeamApproval } from './setup-team-draft'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname } from 'node:path'
@@ -143,6 +144,10 @@ interface AgentsIpcOptions {
   autoTestKinds?: readonly AutoTestKind[]
   /** What BMN installs by itself at start (Story 75.9); all where absent. A test run names what it means to see, so nothing is written into the owner's own apps. */
   startInstalls?: readonly StartInstall[]
+  /** Fresh profiles use setup ownership for every automatic install; existing profiles omit this seam. */
+  setupDefaults?: (() => Promise<string[]>) | undefined
+  /** Main reads durable profile provenance and credential-free app state; proposal reads install nothing. */
+  setupTeam?(): Promise<{ profile: import('@bmn/protocol').FirstRunSetupRecord | null; apps: import('@bmn/protocol').SetupAppsSnapshot; defaults: import('@bmn/protocol').SetupDefaultsReport }>
   /** Real app startup runs the doctor; isolated acceptance runs opt in with a synthetic profile. */
   doctorAtStart?: boolean
   /** Agents › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
@@ -966,6 +971,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     plan: (known) => {
       const kinds = options.autoTestKinds ?? AUTO_TEST_KINDS
       if (kinds.length === 0) return []
+      if (options.setupDefaults && approvedData() === null) return []
       const ctx = context()
       const versions = Object.fromEntries((HARNESSES as RosterHarness[]).map((harness) => [harness,
         known !== undefined && harness in known ? known[harness] ?? null : inspectApp(harness, ctx.env).resolution.version]))
@@ -1042,6 +1048,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
    * changed outside it, is left as it is (`--absent`), and so is one that is not on the list. What changed or failed comes back in words; it never rejects.
    */
   const installSkillsAndTools = async (kinds: readonly ('skills' | 'tools')[] = ['skills', 'tools']): Promise<string[]> => {
+    if (options.setupDefaults) return options.setupDefaults()
     const said: string[] = []
     for (const kind of kinds) {
       const name = kind === 'skills' ? 'Skills' : 'Tools'
@@ -1081,7 +1088,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     void autoTests.trigger()
     const ctx = context()
     let done: AgentsOutcome = result
-    if (shownTargets.length > 0) {
+    if (shownTargets.length > 0 && !options.setupDefaults) {
       let rulesUpdate: AgentsRulesUpdate
       try {
         const update = await applyTeamUpdate(shownTargets, { environment: ctx.env, now: ctx.now() })
@@ -1119,13 +1126,23 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
    * already held one.
    */
   const signInAfterApproval = async (snapshot: AgentsSnapshot): Promise<OpenCodeSignInResult | null> => {
-    if (goSignedIn || !namesOpenCodeGo(snapshot.approved?.data)) return null
+    if (options.setupDefaults || goSignedIn || !namesOpenCodeGo(snapshot.approved?.data)) return null
     const result = await copyGoSignIn()
     return result.ok && !result.copied ? null : result
   }
 
-  handle('aiterm:agents:snapshot', () => agentsSnapshot())
+  const setupProposals = async (snapshot: AgentsSnapshot = agentsSnapshot()): Promise<import('@bmn/protocol').SetupTeamProposals | null> =>
+    options.setupTeam ? buildSetupTeamProposals({ ...await options.setupTeam(), roster: snapshot, starterHash: sha256(starterRoster()) }) : null
+  const validateSetup = async (revision: unknown, data: RosterDataShape): Promise<void> => {
+    const snapshot = agentsSnapshot()
+    validateSetupTeamApproval(await setupProposals(snapshot), revision, data, snapshot.approved?.data ?? null)
+  }
+  handle('aiterm:agents:snapshot', async () => {
+    const snapshot = agentsSnapshot()
+    return { ...snapshot, setupTeam: await setupProposals(snapshot) }
+  })
   handle('aiterm:agents:opencode-go', async (params): Promise<OpenCodeGoView> => {
+    if (options.setupDefaults) return { listed: false, signedIn: null, reason: 'Setup never reads or copies an OpenCode sign-in.' }
     const approved = approvedOrProblem().generation?.data as RosterDataShape | undefined
     let copy: OpenCodeSignInResult | undefined
     if (params.copy === true) {
@@ -1148,17 +1165,26 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     }
     return { listed: listing.listed, signedIn, reason, ...(copy === undefined ? {} : { copy }) }
   })
-  handle('aiterm:agents:preview', (params) => previewApproval(requestParam(params), context().env))
-  handle('aiterm:agents:approve', (params) => {
+  handle('aiterm:agents:preview', async (params) => {
+    const request = requestParam(params)
+    const data = request.kind === 'staged' ? request.data : request.kind === 'restore'
+      ? readGeneration(request.number)?.data as RosterDataShape | undefined : agentsSnapshot().file.data
+    if (data) await validateSetup(objectParams(params.request).setupRevision, data)
+    return previewApproval(request, context().env)
+  })
+  handle('aiterm:agents:approve', async (params) => {
     const shown = shownParam(params)
+    const data = agentsSnapshot().file.data
+    if (data) await validateSetup(objectParams(params.shown).setupRevision, data)
     const scope = scopeParam(params)
     return approving(params, () => scope === null
       ? `Approved · version ${approveRoster(shown, seams).number}`
       : `Kept · version ${approveSections(shown, scope, seams).number}`)
   })
-  handle('aiterm:agents:save', (params) => {
+  handle('aiterm:agents:save', async (params) => {
     const shown = shownParam(params)
     const data = stagedParam(params)
+    await validateSetup(objectParams(params.shown).setupRevision, data)
     return approving(params, () => `Approved · version ${saveAndApprove(shown, data as RosterData, seams).number}`)
   })
   handle('aiterm:agents:guard-allow', (params) => {
@@ -1182,9 +1208,11 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const scope = scopeParam(params)
     return outcome(() => revertFileToApproved(shown, scope).changed ? 'Team file put back to the approved version' : 'The team file already matched the approved version')
   })
-  handle('aiterm:agents:restore', (params) => {
+  handle('aiterm:agents:restore', async (params) => {
     const shown = shownParam(params)
     const number = numberParam(params)
+    const restoring = readGeneration(number)?.data as RosterDataShape | undefined
+    if (restoring) await validateSetup(objectParams(params.shown).setupRevision, restoring)
     return approving(params, () => {
       // The team file follows the restored version, so edits nobody reviewed would go with it unseen: its sheet never showed them.
       const before = agentsSnapshot()
@@ -1773,6 +1801,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       await runCli(ctx.script, ['doctor', '--startup', doctorStartupId, '--json'], ctx.env, 13 * 60 * 1000)
     },
     installsAtStart: async () => {
+      if (options.setupDefaults) {
+        if (startKinds.size > 0) await options.setupDefaults()
+        return
+      }
       if (startKinds.has('hooks')) {
         const ctx = context()
         hooksAtStart = hooksFrom(await runCli(ctx.script, ['hooks', 'install', '--absent', '--yes', '--json'], ctx.env), ctx.now().toISOString())

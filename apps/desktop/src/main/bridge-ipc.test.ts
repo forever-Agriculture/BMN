@@ -19,6 +19,21 @@ import { captureLayoutScroll, selectLayoutSession } from '../renderer/src/worksp
 
 vi.mock('electron', () => ({ utilityProcess: { fork: vi.fn() } }))
 
+const WORKSPACE_CHANNELS = [
+  'aiterm:workspace:list',
+  'aiterm:workspace:create',
+  'aiterm:workspace:update',
+  'aiterm:setup:get',
+  'aiterm:setup:update',
+  'aiterm:session:list',
+  'aiterm:session:update',
+  'aiterm:repository:inspect',
+  'aiterm:dev-auto:runs',
+  'aiterm:layout:get',
+  'aiterm:layout:put',
+  'aiterm:session:create',
+]
+
 const readyMessage = {
   kind: 'host-ready',
   electronVersion: '44.3.0',
@@ -210,8 +225,8 @@ describe('typed bridge error contract (main -> preload -> renderer)', () => {
       ok: false, code: ERROR_CODES.ioError, message: 'disk vanished'
     })
     await expect(unwrapBridgeInvoke(() => direct.get('aiterm:test:ok')!(event))).resolves.toBeUndefined()
-    // Story 75.3 removed the two template and five launch-set channels (17 before).
-    expect(handlers.size).toBe(10)
+    // Include setup's two authenticated invokes in the exact public channel contract.
+    expect([...handlers.keys()].sort()).toEqual([...WORKSPACE_CHANNELS].sort())
   })
 
   it('rejects malformed envelopes and transport failures with typed codes', async () => {
@@ -229,7 +244,7 @@ describe('typed bridge error contract (main -> preload -> renderer)', () => {
     const event = { allowed: false } as unknown as IpcMainInvokeEvent
     const answers = await Promise.all(registrations.map((registration) => registration.invoke(event)))
 
-    expect(registrations.map((registration) => registration.channel)).toHaveLength(10)
+    expect(registrations.map((registration) => registration.channel).sort()).toEqual([...WORKSPACE_CHANNELS].sort())
     expect(answers).toEqual(registrations.map(() => ({
       ok: false,
       code: ERROR_CODES.unauthorized,

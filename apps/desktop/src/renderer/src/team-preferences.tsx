@@ -28,6 +28,8 @@ import {
   type RosterRoleShape
 } from '@bmn/protocol'
 import { Segmented } from './history-preferences'
+import type { SetupTeamProposal } from '@bmn/protocol'
+import { newSetupAgent, setupDestination, setupProviderOptions, stageSetupAgent } from './setup-team-staging'
 import { ModelField } from './model-field'
 import { modelSourceWords, modelSuggestions, type ReportedModel } from './model-suggestions'
 import { ModelsPage, researchedModels, type ResearchState } from './models-preferences'
@@ -109,7 +111,7 @@ type Context = readonly ContextLimitView[] | null
 /** What the apps reported in sessions that are running now. */
 type Reported = readonly ReportedModel[]
 
-export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new'; fill?: ResearchFill } | { name: 'roles' } | { name: 'asks' } | { name: 'models' } | { name: 'changes' }
+export type TeamPage = { name: 'agents'; focusProposal?: string } | { name: 'agent'; id: string } | { name: 'new'; fill?: ResearchFill; proposal?: string } | { name: 'roles' } | { name: 'asks' } | { name: 'models' } | { name: 'changes' }
 
 /** "Oct 9, 22:13": the short date every Team and Rules page uses. */
 export function shortDate(iso: string | undefined): string {
@@ -275,10 +277,15 @@ function TurnOff(props: { agent: RosterAgentShape; onDone(reason: string | null)
 /** What the card of an agent BMN calls says where another shows the first line of its notes, while it has none. */
 const CALLED_CARD_LINE = 'Says whether a statement is true of a text'
 
+function setupMemberNeeds(team: TeamState, agent: RosterAgentShape): string | undefined {
+  return team.snapshot?.setupTeam && agent.enabled_note?.startsWith('Needs ') ? agent.enabled_note : undefined
+}
+
 function AgentCard(props: { agent: RosterAgentShape; data: RosterDataShape; notes: string; changed: boolean; team: TeamState; open(): void }): React.JSX.Element {
   const { agent, data, team } = props
   const [asking, setAsking] = useState(false)
   const off = agent.status === 'active' && !agent.enabled
+  const unavailable = setupMemberNeeds(team, agent)
   const price = priceWords(agent)
   const called = isCalled(agent)
   return (
@@ -290,7 +297,7 @@ function AgentCard(props: { agent: RosterAgentShape; data: RosterDataShape; note
           <span className="class-word">{CLASS_WORDS[agent.class].name}{called && agent.roles.includes(ROSTER_JUDGE_ROLE) ? ' · Judge' : ''}</span>
           {props.changed ? <Dot label="Unapproved change" /> : null}
         </div>
-        <div className="agent-notes">{off ? agent.enabled_note ?? 'Off' : firstLine(props.notes) || (called ? CALLED_CARD_LINE : '')}</div>
+        <div className="agent-notes">{off || unavailable ? agent.enabled_note ?? 'Off' : firstLine(props.notes) || (called ? CALLED_CARD_LINE : '')}</div>
         <div className="agent-app">{appWords(agent)} · <span className="mono">{agent.model}</span>{publicOnly(data, agent) ? ' · public work only' : ''}</div>
         {asking ? <TurnOff agent={agent} onDone={(reason) => { setAsking(false); if (reason !== null) team.stage(setAgentOn(data, agent.id, false, reason)) }} /> : null}
       </div>
@@ -299,7 +306,7 @@ function AgentCard(props: { agent: RosterAgentShape; data: RosterDataShape; note
         {isRetiredApp(agent.harness)
           ? <Switch label={`${agent.name} on`} on={false} disabled onChange={() => undefined} />
           : agent.status === 'proposed'
-            ? <button type="button" className="small" onClick={(event) => { event.stopPropagation(); team.stage(activateAgent(data, agent.id)) }}>Activate</button>
+            ? <button type="button" className="small" disabled={Boolean(unavailable)} title={unavailable} onClick={(event) => { event.stopPropagation(); team.stage(activateAgent(data, agent.id)) }}>Activate</button>
             : <Switch label={`${agent.name} on`} on={agent.enabled} onChange={(on) => { if (on) team.stage(setAgentOn(data, agent.id, true)); else setAsking(true) }} />}
         {price ? <span className="price mono">{price}</span> : null}
       </div>
@@ -500,7 +507,27 @@ function ProposalsCard(props: { team: TeamState; proposals: TeamProposals | null
   )
 }
 
-function AgentsPage(props: { team: TeamState; data: RosterDataShape; proposals: TeamProposals | null; openCodeGo: OpenCodeGoState | null; go(page: TeamPage): void }): React.JSX.Element {
+function SetupProposalCards(props: { team: TeamState; data: RosterDataShape; focusProposal?: string | undefined; go(page: TeamPage): void }): React.JSX.Element | null {
+  const envelope = props.team.snapshot?.setupTeam
+  useEffect(() => {
+    if (props.focusProposal) document.querySelector<HTMLButtonElement>(`[data-setup-proposal="${props.focusProposal}"] button`)?.focus()
+  }, [props.focusProposal])
+  if (!envelope) return null
+  if (envelope.blocked) return <p className="page-note" role="status">{envelope.blocked}</p>
+  return <>{envelope.proposals.filter(row => !props.data.agents.some(agent => agent.harness === row.app)).map(row => (
+    <div className="page-note with-action" role="status" key={row.id} data-setup-proposal={row.id}>
+      <div className="note-text"><Dot label="Needs you" /> <strong>{row.name} {row.version} is ready.</strong>
+        <p>Model: not chosen yet</p><p>Effort: not chosen yet</p><p>Provider: not chosen yet</p>
+        <p>Recommended: {CLASS_WORDS[row.class].name} · {row.roles.join(', ')}</p>
+        <p>{row.reasons[0]?.reason}</p>
+        {row.needs ? <p>Needs {row.needs}. BMN cannot confirm it from the app’s sign-in.</p> : null}
+      </div>
+      <button type="button" className="small" aria-label={`Choose settings for ${row.name}…`} disabled={props.team.busy} onClick={() => props.go({ name: 'new', proposal: row.id })}>Choose settings…</button>
+    </div>
+  ))}</>
+}
+
+function AgentsPage(props: { focusProposal?: string | undefined; team: TeamState; data: RosterDataShape; proposals: TeamProposals | null; openCodeGo: OpenCodeGoState | null; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const groups = agentGroups(data)
   const prose = team.snapshot?.file.prose ?? {}
@@ -521,6 +548,7 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; proposals: 
         <button type="button" onClick={() => props.go({ name: 'new' })}>New agent</button>
       </PageHead>
       <ProposalsCard team={team} proposals={props.proposals} />
+      <SetupProposalCards team={team} data={data} go={props.go} focusProposal={props.focusProposal} />
       {props.openCodeGo ? <OpenCodeSignInNote team={team} state={props.openCodeGo} /> : null}
       {team.snapshot?.file.link ? (
         <div className="page-note">
@@ -721,6 +749,7 @@ function AgentTop(props: { team: TeamState; data: RosterDataShape; agent: Roster
   const [asking, setAsking] = useState(false)
   useEffect(() => setNotes(team.pendingNotes[agent.id] ?? saved ?? ''), [agent.id, saved])
   const off = agent.status === 'active' && !agent.enabled
+  const unavailable = setupMemberNeeds(team, agent)
   const patch = (change: Parameters<typeof updateAgent>[2]): void => team.stage(updateAgent(data, agent.id, change))
   const keepNotes = (): void => {
     if (saved === undefined) team.setPendingNote(agent.id, notes)
@@ -731,12 +760,12 @@ function AgentTop(props: { team: TeamState; data: RosterDataShape; agent: Roster
       <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents' })}>Team</button> <span className="faint">›</span> {agent.name}</>}
         status={isRetiredApp(agent.harness) ? 'Retired app' : agent.status === 'proposed' ? 'Proposed' : off ? 'Off' : 'Active'}>
         {team.changed.has(agent.id) ? <Dot label="Unapproved change" /> : null}
-        {agent.status === 'proposed' ? <button type="button" onClick={() => team.stage(activateAgent(data, agent.id))}>Activate</button>
+        {agent.status === 'proposed' ? <button type="button" disabled={Boolean(unavailable)} title={unavailable} onClick={() => team.stage(activateAgent(data, agent.id))}>Activate</button>
           : off ? <button type="button" onClick={() => team.stage(setAgentOn(data, agent.id, true))}>Turn on</button>
             : <button type="button" onClick={() => setAsking(true)}>Turn off…</button>}
       </PageHead>
       {asking ? <TurnOff agent={agent} onDone={(reason) => { setAsking(false); if (reason !== null) team.stage(setAgentOn(data, agent.id, false, reason)) }} /> : null}
-      {off && agent.enabled_note ? <p className="page-note">Off: {agent.enabled_note}</p> : null}
+      {unavailable ? <p className="page-note">{unavailable}</p> : off && agent.enabled_note ? <p className="page-note">Off: {agent.enabled_note}</p> : null}
 
       {props.note}
       <h4 className="group-head">Identity</h4>
@@ -899,9 +928,23 @@ function withoutFill(draft: NewAgent): NewAgent {
   return rest
 }
 
-function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; reported: Reported; research: ResearchState | null; fill?: ResearchFill | undefined; go(page: TeamPage): void }): React.JSX.Element {
+function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; reported: Reported; research: ResearchState | null; fill?: ResearchFill | undefined; proposal?: SetupTeamProposal | undefined; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data, research } = props
-  const [draft, setDraft] = useState<NewAgent>(() => newDraft(props.fill))
+  const setup = props.proposal
+  const [providerChoice, setProviderChoice] = useState('')
+  const setupName = useRef<HTMLInputElement>(null)
+  const cancelSetup = useRef(() => props.go({ name: 'agents', ...(setup ? { focusProposal: setup.id } : {}) }))
+  cancelSetup.current = () => props.go({ name: 'agents', ...(setup ? { focusProposal: setup.id } : {}) })
+  const setupId = setup?.id
+  useEffect(() => {
+    if (!setupId) return
+    setupName.current?.focus()
+    const dialog = setupName.current?.closest('dialog')
+    const cancel = (event: Event): void => { event.preventDefault(); event.stopImmediatePropagation(); cancelSetup.current() }
+    dialog?.addEventListener('cancel', cancel, true)
+    return () => dialog?.removeEventListener('cancel', cancel, true)
+  }, [setupId])
+  const [draft, setDraft] = useState<NewAgent>(() => setup ? newSetupAgent(setup) : newDraft(props.fill))
   // What research filled in, said once with the draft as it was before, so one Undo takes it all back.
   const [filled, setFilled] = useState<{ words: string; before: NewAgent } | null>(() => (props.fill ? { words: fillWords(props.fill), before: newDraft() } : null))
   const [lookup, setLookup] = useState<{ ok: boolean; text: string } | null>(null)
@@ -912,23 +955,29 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
   const appId = useId()
   const answerId = useId()
   const set = (change: Partial<NewAgent>): void => setDraft((current) => ({ ...current, ...change }))
-  const landing = landingFor(data, draft.harness, draft.host)
+  const explicit = setup ? setupDestination(data, draft.harness, providerChoice, draft.host) : null
+  const landing = setup ? explicit ?? { provider: { id: '', name: 'Provider not chosen' }, isNew: false, host: null } : landingFor(data, draft.harness, draft.host)
   const known = data.providers.find((provider) => provider.id === landing.provider.id)
   const answer: RosterPrivateWork = landing.isNew ? draft.privateWork : known?.private_work ?? 'public_only'
   const declared = landing.host === null
     && (data.harness_routes.find((route) => route.harness === draft.harness)?.basis ?? unrecordedBasis(draft.harness, landing.provider.id, props.apps)) === 'owner-declared'
   const twin = modelTwin(data, draft.harness, landing.provider.id, draft.model)
   // Until the owner picks efforts himself, a new agent takes the ones of an agent on the same model.
-  const [ownEfforts, setOwnEfforts] = useState(false)
+  const [ownEfforts, setOwnEfforts] = useState(Boolean(setup))
   const efforts = ownEfforts || !twin ? draft.efforts : twin.efforts
-  const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && efforts.length > 0
+  const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && efforts.length > 0 && (!setup || (!known || known.private_work === 'public_only') && explicit !== null && /^[^\s\0]{1,128}$/.test(draft.model) && !['default', 'auto'].includes(draft.model))
+  const missing = [!draft.model.trim() ? 'a model' : null, !explicit ? 'a provider' : null, efforts.length === 0 ? 'an effort' : null].filter(Boolean)
+  const roleData = setup ? { ...data, roles: [...data.roles, ...setup.roles.filter(role => !data.roles.some(row => row.id === role)).map(role => ({ id: role, candidates: [], then: 'owner-chooses' as const }))].map(role => {
+    const reason = setup.reasons.find(row => row.role === role.id)?.reason
+    return reason ? { ...role, description: reason.replace('the model you choose', draft.model || 'the model you choose') } : role
+  }) } : data
   const price = draft.price ?? twin?.price
   const capacity = draft.contextWindow ?? twin?.context_window
   // The form as it is at this moment, for an answer that arrives later than the render that asked.
   const latest = useRef(draft)
   latest.current = draft
   const lookUp = async (): Promise<void> => {
-    if (research === null) return
+    if (research === null || setup && !explicit) return
     const asked = { model: draft.model.trim(), provider: landing.provider.id }
     const name = asked.model
     setLooking(true)
@@ -938,7 +987,7 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
     if (!result.ok || result.model === null) return setLookup({ ok: false, text: result.message })
     // The fields stayed open meanwhile: an answer about one model never fills the form of another.
     const now = latest.current
-    if (!lookupFits(asked, { model: now.model.trim(), provider: landingFor(data, now.harness, now.host).provider.id }, result.model.id)) {
+    if (!lookupFits(asked, { model: now.model.trim(), provider: (setup ? setupDestination(data, now.harness, providerChoice, now.host) : landingFor(data, now.harness, now.host))?.provider.id ?? '' }, result.model.id)) {
       return setLookup({ ok: false, text: `Research answered for ${name}, but the model, app or host changed meanwhile. Nothing was filled in; look it up again.` })
     }
     const fill = fillFrom(result.model, data)
@@ -948,7 +997,7 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
   }
   return (
     <>
-      <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents' })}>Team</button> <span className="faint">›</span> New agent</>} />
+      <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents', ...(setup ? { focusProposal: setup.id } : {}) })}>Team</button> <span className="faint">›</span> New agent</>} status={setup ? 'From setup' : undefined} />
       {filled ? (
         <div className="page-note with-action" role="status">
           <span className="note-text">{filled.words}</span>
@@ -958,27 +1007,31 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
       {lookup ? <p className={lookup.ok ? 'preferences-success' : 'preferences-error'} role={lookup.ok ? 'status' : 'alert'}>{lookup.text}</p> : null}
       <h4 className="group-head">Model</h4>
       <Row label="Agent app" id={appId}>
-        <Segmented labelledBy={appId} fit options={ROSTER_HARNESSES} value={draft.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]} onChange={(harness: RosterHarness) => set({ harness })} />
+        <Segmented labelledBy={appId} fit disabled={Boolean(setup)} options={ROSTER_HARNESSES} value={draft.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]} onChange={(harness: RosterHarness) => set({ harness })} />
       </Row>
       <Row label="Model">
-        <ModelField value={draft.model} placeholder="The model name the app takes" hint={modelSourceWords(draft.model, data, draft.harness, props.reported, researched ? { research: researched } : {})}
+        <ModelField value={draft.model} placeholder={setup ? 'Choose the model this app should run' : 'The model name the app takes'} hint={modelSourceWords(draft.model, data, draft.harness, props.reported, researched ? { research: researched } : {})}
           suggest={(query) => modelSuggestions(data, draft.harness, props.reported, query, undefined, researched)}
           onChange={(model) => {
             // A price and a capacity belong to the name they were found for.
             setDraft((current) => ({ ...withoutFill(current), model }))
             setFilled(null)
           }} />
-        <button type="button" className="small" disabled={looking || !canResearch || draft.model.trim() === ''} aria-label="Look up this model"
+        <button type="button" className="small" disabled={looking || !canResearch || draft.model.trim() === '' || Boolean(setup && !explicit)} aria-label="Look up this model"
           title={canResearch ? 'Asks your researcher for this model\'s published price and capacity' : 'No agent on your team can research'} onClick={() => void lookUp()}>
           {looking ? 'Looking up…' : 'Look up'}
         </button>
       </Row>
-      <Row label="Host" hint={`${landing.provider.name}${landing.isNew ? ' · new provider' : ''}`}>
-        <input className="field mono" aria-label="Host" placeholder="Provider default" value={draft.host} onChange={(event) => set({ host: event.currentTarget.value })} />
-      </Row>
+      {setup ? <Row label="Provider" id={appId + '-provider'} hint="Where this app sends its work. New providers start as public work only.">
+        <div className="setup-provider-choices"><Segmented labelledBy={appId + '-provider'} fit options={[...setupProviderOptions(data).map(row => row.id), 'other']} value={providerChoice}
+          optionLabel={id => id === 'other' ? 'Other host…' : setupProviderOptions(data).find(row => row.id === id)!.name} onChange={(choice: string) => setProviderChoice(choice)} /></div>
+      </Row> : null}
+      {!setup || providerChoice === 'other' ? <Row label="Host" hint={`${landing.provider.name}${landing.isNew ? ' · new provider' : ''}`}>
+        <input className="field mono" aria-label="Host" placeholder={setup ? 'Provider hostname' : 'Provider default'} value={draft.host} onChange={(event) => set({ host: event.currentTarget.value })} />
+      </Row> : null}
       <Row label="Private work" id={answerId}
-        hint={landing.isNew ? `First agent on ${landing.provider.name}. This answer covers every agent there.` : `Set once for ${landing.provider.name}; change it on any of its agents.`}>
-        {landing.isNew
+        hint={setup ? explicit ? 'This provider gets public work only. Its Team setting controls private work.' : 'Choose a provider first. Setup starts with public work only.' : landing.isNew ? `First agent on ${landing.provider.name}. This answer covers every agent there.` : `Set once for ${landing.provider.name}; change it on any of its agents.`}>
+        {setup ? <span>Public work only</span> : landing.isNew
           ? <Segmented labelledBy={answerId} fit options={['allowed', 'public_only'] as const} value={draft.privateWork} optionLabel={(value) => PRIVATE_WORK_WORDS[value]} onChange={(privateWork) => set({ privateWork })} />
           : <span>{PRIVATE_WORK_WORDS[answer]}</span>}
       </Row>
@@ -997,7 +1050,7 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
         })} />
       </Row>
       <h4 className="group-head">Identity</h4>
-      <Row label="Name"><input className="field" aria-label="Name" maxLength={40} value={draft.name} onChange={(event) => set({ name: event.currentTarget.value })} /></Row>
+      <Row label="Name"><input ref={setupName} className="field" aria-label="Name" maxLength={40} value={draft.name} onChange={(event) => set({ name: event.currentTarget.value })} /></Row>
       <Row label="Class">
         <ClassChoice name="class-new" value={draft.class} onChange={(next) => set({ class: next, roles: draft.roles.filter((role) => roleBar({ class: next, harness: draft.harness }, role) === null) })} />
       </Row>
@@ -1005,25 +1058,25 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
         <textarea className="field wide" aria-label="Notes" rows={2} maxLength={8000} placeholder="What it's good at, in your words" value={notes} onChange={(event) => setNotes(event.currentTarget.value)} />
       </Row>
       <h4 className="group-head">Work</h4>
-      <Row label="Roles">
-        <RoleChoices data={data} agent={draft} held={draft.roles}
+      <Row label="Roles" hint={setup ? 'Recommended roles are checked. You can change any role.' : undefined}>
+        <RoleChoices data={roleData} agent={draft} held={draft.roles}
           onToggle={(role) => set({ roles: draft.roles.includes(role) ? draft.roles.filter((entry) => entry !== role) : [...draft.roles, role] })} />
       </Row>
-      <Row label="Efforts" hint={!ownEfforts && twin ? `Taken from ${twin.name}, which uses the same model.` : undefined}>
+      <Row label="Efforts" hint={setup ? 'Pick at least one. Nothing is taken from another agent.' : !ownEfforts && twin ? `Taken from ${twin.name}, which uses the same model.` : undefined}>
         <EffortChips efforts={efforts} onToggle={(effort) => {
           setOwnEfforts(true)
           set({ efforts: ROSTER_EFFORTS.filter((entry) => (entry === effort ? !efforts.includes(entry) : efforts.includes(entry))) })
         }} />
       </Row>
       <div className="page-foot">
-        <span className="muted">{newAgentConsequence(draft.name, landing.provider.name, answer, declared)}</span>
+        <span className="muted">{setup ? known?.private_work === 'allowed' ? 'This provider allows private work. Change its Team setting before adding a setup member.' : missing.length > 0 ? `Choose ${missing.length < 2 ? missing.join('') : `${missing.slice(0, -1).join(', ')} and ${missing.at(-1)}`} to add ${draft.name || setup.name}.` : setup.needs ? `${draft.name} stays proposed and off: needs ${setup.needs}.` : `${draft.name} gets public work only.` : newAgentConsequence(draft.name, landing.provider.name, answer, declared)}</span>
         <span className="spacer" />
-        <button type="button" onClick={() => props.go({ name: 'agents' })}>Cancel</button>
+        <button type="button" onClick={() => props.go({ name: 'agents', ...(setup ? { focusProposal: setup.id } : {}) })}>Cancel</button>
         <button type="button" className="primary" disabled={!ready} onClick={() => {
-          const added = addAgent(data, { ...draft, efforts }, props.apps)
+          const added = setup && team.snapshot?.setupTeam ? stageSetupAgent(data, { ...draft, efforts, ...(explicit ? { destination: explicit } : {}) }, setup, team.snapshot.setupTeam) : addAgent(data, { ...draft, efforts }, props.apps)
           team.stage(added.data)
           if (notes.trim() !== '') team.setPendingNote(added.id, notes)
-          props.go({ name: 'agents' })
+          props.go({ name: 'agents', ...(setup ? { focusProposal: setup.id } : {}) })
         }}>Add to team</button>
       </div>
     </>
@@ -1343,13 +1396,14 @@ export function TeamPreferences(props: {
   const apps = props.apps ?? null
   const reported = props.reported ?? []
   const research = props.research ?? null
-  if (page.name === 'new') return <NewAgentPage key={page.fill?.model ?? ''} team={team} data={data} apps={apps} reported={reported} research={research} fill={page.fill} go={props.go} />
+  if (page.name === 'new' && page.proposal && !team.snapshot?.setupTeam?.proposals.some(row => row.id === page.proposal)) return <><PageHead title="Team" /><p className="page-note">This setup proposal changed. Check the apps again before choosing settings.</p><button type="button" onClick={() => props.go({ name: 'agents' })}>Back to Team</button></>
+  if (page.name === 'new') return <NewAgentPage key={page.proposal ?? page.fill?.model ?? ''} team={team} data={data} apps={apps} reported={reported} research={research} fill={page.fill} proposal={team.snapshot?.setupTeam?.proposals.find(row => row.id === page.proposal)} go={props.go} />
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
   if (page.name === 'models' && research !== null) return <ModelsPage team={team} data={data} research={research} add={(fill) => props.go({ name: 'new', fill })} {...(props.sessionName ? { sessionName: props.sessionName } : {})} />
   if (page.name === 'changes') return <ChangesPage team={team} proposals={props.proposals ?? null} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
   if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} sessionName={props.sessionName ?? (() => undefined)} go={props.go} />
-  return <AgentsPage team={team} data={data} proposals={props.proposals ?? null} openCodeGo={props.openCodeGo ?? null} go={props.go} />
+  return <AgentsPage focusProposal={page.name === 'agents' ? page.focusProposal : undefined} team={team} data={data} proposals={props.proposals ?? null} openCodeGo={props.openCodeGo ?? null} go={props.go} />
 }
 
 function ReviewGroups(props: { groups: readonly DiffGroup[]; general: readonly string[]; data: RosterDataShape | null }): React.JSX.Element {

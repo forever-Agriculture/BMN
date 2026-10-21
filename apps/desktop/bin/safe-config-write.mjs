@@ -256,7 +256,7 @@ export function resolvedPath(path, state) {
  * replaces a symbolic link's own entry and never writes through it to the file it points at,
  * unlike `writeAtomically`. The result is read back. `beforeCommit` is a test seam between checks.
  */
-export function replaceFileSafely(path, expected, nextText, { beforeCommit, mode = 0o600 } = {}) {
+export function replaceFileSafely(path, expected, nextText, { beforeCommit, afterCommit, durable = false, mode = 0o600 } = {}) {
   const unchanged = () => {
     const now = pathState(path)
     if (!sameState(now, expected)) {
@@ -268,11 +268,12 @@ export function replaceFileSafely(path, expected, nextText, { beforeCommit, mode
   mkdirSync(directory, { recursive: true })
   const temporary = join(directory, `.${basename(path)}.bmn-${process.pid}-${Date.now()}.tmp`)
   try {
-    writeFileSync(temporary, nextText, { mode: expected.kind === 'file' ? expected.mode : mode, flag: 'wx' })
+    writeFileSync(temporary, nextText, { mode: expected.kind === 'file' ? expected.mode : mode, flag: 'wx', flush: durable })
     if (expected.kind === 'file') chmodSync(temporary, expected.mode)
     beforeCommit?.()
     unchanged()
     renameSync(temporary, path)
+    afterCommit?.()
   } catch (error) {
     try {
       unlinkSync(temporary)

@@ -46,6 +46,8 @@ import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
 import { DoctorHealth, doctorNeedsCount, useDoctorClock } from './doctor-health'
+import { SetupReadiness, useSetupApps, type SetupNavigation } from './first-run-setup'
+import { setupAppNeedsAction } from './setup-app-view'
 import { PushPolicyHealth } from './push-policy-health'
 import { destinationProviders, diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -1737,9 +1739,10 @@ function useHealthRule<T extends HTMLElement>(rules: RulesState): React.RefObjec
   return top
 }
 
-function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: RunInSession | undefined }): React.JSX.Element {
+function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: RunInSession | undefined } & SetupNavigation): React.JSX.Element {
   const { rules, team, onRun: runInSession } = props
   const snapshot = rules.snapshot as RulesSnapshot
+  const setup = useSetupApps(props)
   const [action, setAction] = useState<AppAction | null>(null)
   // Apps whose before-and-now line was shown on this visit: said once, their watch ends when the owner leaves Health.
   const told = useRef(new Set<RosterHarness>())
@@ -1814,6 +1817,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       ) : null}
       {snapshot.apps.map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
+        const readiness = setup.snapshot?.apps.find(row => row.app === app.harness)
+        const setupSession = readiness ? setup.latest(readiness) : undefined
         const route = data?.harness_routes.find((entry) => entry.harness === app.harness)
         const accepted = route?.accepted_versions ?? []
         const updating = action?.kind === 'update' && action.harness === app.harness
@@ -1832,8 +1837,12 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
               <span className="health-state">
                 <span>{destinationWords(app, providerName)}</span>
                 <span className="faint">{route ? `Recorded: ${providerName(route.provider)}, ${route.basis === 'observed-default' ? 'as inspected' : 'on your word'}` : 'No destination recorded'}</span>
+                {readiness ? <SetupReadiness row={readiness} session={setupSession} /> : null}
+                {readiness?.program && !readiness.onPath ? <span className="path mono wrap" title={readiness.program}>Not on your PATH · {readiness.program}</span> : null}
               </span>
               <span className="app-actions">
+                {readiness && (setupAppNeedsAction(readiness, setupSession)) ?
+                  <button type="button" className="small" disabled={setup.busy || action !== null} onClick={() => setup.begin(readiness)}>{setup.actionWords(readiness)}</button> : null}
                 <button type="button" className="small" disabled={app.program === null || action !== null} aria-label={`Update ${name}`} aria-expanded={updating}
                   title={app.program === null ? `BMN finds no ${name} program to update` : undefined}
                   onClick={(event) => { opener.current = event.currentTarget; setAction({ kind: 'update', harness: app.harness }) }}>Update…</button>
@@ -1880,6 +1889,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
 
       <HooksHealth hooks={snapshot.hooks} home={snapshot.home} />
       <DoctorHealth view={doctorView} now={doctorNow} />
+      {setup.error ? <p className="preferences-error" role="alert">{setup.error}</p> : null}
+      {setup.modal}
     </>
   )
 }
@@ -1925,6 +1936,8 @@ export function RulesPreferences(props: {
   rules: RulesState; team: TeamState; page: RulesPage; recognised?: RecognisedSessions
   /** Opens a new shell session and runs `command` there; Health offers it for an app's update command. */
   onRunInSession?: RunInSession | undefined
+  onSetupCreated?: SetupNavigation['onCreated']
+  onOpenSetupSession?: SetupNavigation['onOpenSession']
 }): React.JSX.Element {
   const { rules } = props
   const { ensure, setNotice } = rules
@@ -1941,5 +1954,6 @@ export function RulesPreferences(props: {
   if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>
   if (props.page === 'skills') return <SkillsPage rules={rules} team={props.team} />
   if (props.page === 'tools') return <ToolsPage rules={rules} team={props.team} />
-  return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} onRun={props.onRunInSession} />
+  return props.page === 'editor' ? <EditorPage rules={rules} /> : <><HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} onRun={props.onRunInSession}
+    onCreated={props.onSetupCreated} onOpenSession={props.onOpenSetupSession} /></>
 }

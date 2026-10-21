@@ -1,3 +1,4 @@
+// MODULE: terminal-history.test.ts - Terminal capture cadence and saved-output presentation checks
 import { Terminal } from '@xterm/headless'
 import {
   ERROR_CODES,
@@ -59,6 +60,31 @@ const runtimeGone = {
 describe('saved output capture cadence (Story 38.1)', () => {
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('79.3 setup displays output without reading it for periodic, scheduled, explicit or exit capture', async () => {
+    vi.useFakeTimers()
+    const terminal = instantTerminal()
+    const inspect = vi.spyOn(terminal.buffer.active, 'getLine')
+    const save = vi.fn(async () => undefined)
+    const failure = vi.fn()
+    const settled = vi.fn()
+    const capture = startSavedOutputCapture(terminal, save, failure, () => 0, false)
+    try {
+      capture.write(new TextEncoder().encode('sk-SYNTHETIC-setup-secret'), settled)
+      capture.schedule()
+      await vi.advanceTimersByTimeAsync(3 * TICK)
+      await capture.captureNow()
+      capture.finish()
+      await vi.advanceTimersByTimeAsync(3 * TICK)
+      expect(settled).toHaveBeenCalledOnce()
+      expect(terminal.buffer.active.length).toBe(1)
+      expect(inspect).not.toHaveBeenCalled()
+      expect(save).not.toHaveBeenCalled()
+      expect(failure).not.toHaveBeenCalled()
+    } finally {
+      capture.dispose()
+    }
   })
 
   it('writes nothing on a tick when no output arrived since the last successful save', async () => {

@@ -22,7 +22,9 @@ import {
   type WorkspaceLayoutState,
   type WorkspaceRecord,
   AUTO_TEST_KINDS,
-  type AutoTestKind
+  type AutoTestKind,
+  type FirstRunSetupRecord,
+  type SetupDefaultsClaim
 } from '@bmn/protocol'
 import {
   app,
@@ -116,6 +118,10 @@ import {
   requireSessionRuntime
 } from './workspace-ipc'
 import type { SelfTestTaps } from './self-test/contract'
+import { createSetupProfileReadiness, hasExistingSetupProfile } from './first-run-setup'
+import { SetupReadinessReader } from './setup-readiness'
+import { installSetupIpcHandlers } from './setup-ipc'
+import { SetupDefaultsCoordinator, runSetupDefaults } from './setup-defaults'
 
 const EXPECTED_ELECTRON_VERSION = '44.3.0'
 
@@ -176,6 +182,7 @@ interface StartupSuccess extends AttachmentIdentity {
   name: string
   testMode: boolean
   viewRestored?: true
+  setup?: SessionRecord['setup']
 }
 
 interface StartupFailure {
@@ -193,6 +200,7 @@ interface ApplicationStartupSuccess {
   layouts: WorkspaceLayoutState[]
   layoutNotices: string[]
   liveSessions: StartupSuccess[]
+  setup?: import('@bmn/protocol').FirstRunSetupRecord
 }
 
 type StartupResult = ApplicationStartupSuccess | StartupFailure
@@ -222,6 +230,7 @@ let quitRequested = false
 let developmentRoot: ReturnType<typeof createDevelopmentRoot>
 let savedOutputCaptureCoordinator: SavedOutputCaptureCoordinator | undefined
 let closePromptCoordinator: ClosePromptCoordinator | undefined
+const setupProfileReadiness = createSetupProfileReadiness()
 /** Present only while `--self-test` runs; production code calls it with optional chaining. */
 let selfTestTaps: SelfTestTaps | undefined
 
@@ -420,6 +429,7 @@ async function createSessionRuntime(
 
 async function loadApplicationStartup(testMode: boolean): Promise<ApplicationStartupSuccess> {
   const state = await loadWorkspaceStartup(requireHostClient())
+  const setup = await requireHostClient().request<import('@bmn/protocol').FirstRunSetupRecord | null>(METHOD_REGISTRY.setupGet, {})
   sessionRecords.clear()
   for (const session of state.sessions) sessionRecords.set(session.sessionId, session)
   const rendererState = selfTestTaps && testMode ? selfTestTaps.rendererState(state) : state
@@ -427,6 +437,10 @@ async function loadApplicationStartup(testMode: boolean): Promise<ApplicationSta
     ok: true,
     testMode,
     ...rendererState,
+    ...(setup ? { setup } : {}),
+    activeWorkspaceId: setup?.state === 'active' && !hasExplicitApplicationLaunch(process.argv) &&
+      rendererState.workspaces.some(w => w.workspaceId === setup.workspaceId && w.archivedAt === null)
+      ? setup.workspaceId : rendererState.activeWorkspaceId,
     liveSessions: [...runtimes.values()].map((runtime) => startupForRuntime(runtime))
   }
 }
@@ -462,6 +476,8 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   launched.client.answerMessageTeam(messageTeamAnswer)
   void appEvents.prime()
   reportPresence()
+  const setupProfile = await launched.client.request<FirstRunSetupRecord>(METHOD_REGISTRY.setupInitialize, { existingProfile: hasExistingSetupProfile() })
+  setupProfileReadiness.initialize(setupProfile.state)
   let startup = await loadApplicationStartup(testMode)
   if (hasExplicitApplicationLaunch(process.argv)) {
     const launch = parseApplicationLaunchSpec(process.argv, process.env, process.cwd())
@@ -586,8 +602,36 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   const productionVoiceBinary = whisperBinaryPath()
   // Sessions start the owner's shell, whose settings may add to PATH; the Team and Rules pages look where the sessions do.
   const sessionEnvironment = createSessionEnvironmentReader(() => process.env)
+  const setupReader = new SetupReadinessReader({ environment: () => sessionEnvironment.current().env,
+    skipDirectory: join(bmnCliScript(), '..') })
+  const setupDefaults = new SetupDefaultsCoordinator({
+    profile: () => requireHostClient().request<FirstRunSetupRecord | null>(METHOD_REGISTRY.setupGet, {}),
+    claim: () => requireHostClient().request<SetupDefaultsClaim>(METHOD_REGISTRY.setupDefaultsClaim, {}),
+    apps: () => setupReader.read(),
+    run: request => runSetupDefaults(bmnCliScript(), request, sessionEnvironment.current().env)
+  })
+  const setupDefaultsEnabled = (): boolean => setupProfileReadiness.fresh && (!(rendererTestMode || selfTest) || testRunStartInstalls(process.env.BMN_START_INSTALLS).length > 0)
+  installSetupIpcHandlers(bridgeIpc, {
+    senderIsAllowed, reader: setupReader, client: requireHostClient,
+    createSession: params => createSessionRuntime(params, rendererTestMode), session: id => sessionRecords.get(id),
+    onRead: async snapshot => { if (setupDefaultsEnabled()) await setupDefaults.refresh(snapshot) },
+    defaultsReport: () => setupDefaults.report()
+  })
   const agentsIpc = installAgentsIpcHandlers(bridgeIpc, {
     senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), openExternal: (address) => shell.openExternal(address), notifyApp: showAppNotice,
+    setupTeam: async () => {
+      await setupProfileReadiness.ready
+      const profile = await requireHostClient().request<FirstRunSetupRecord | null>(METHOD_REGISTRY.setupGet, {})
+      return { profile, apps: !profile || profile.state === 'existing'
+        ? { apps: [], platform: process.platform, curlAvailable: false, checkedAt: profile?.updatedAt ?? '' } : await setupReader.read(), defaults: setupDefaults.report() }
+    },
+    get setupDefaults() {
+      if (!setupProfileReadiness.fresh) return undefined
+      return async () => {
+        const report = await setupDefaults.refresh()
+        return report.code === 'OK' ? [] : [`Setup defaults: ${report.code}`]
+      }
+    },
     // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
     researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null),
     judgeTestPort: () => (rendererTestMode ? process.env.BMN_JUDGE_TEST_PORT ?? null : null),
@@ -616,7 +660,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   })
   // Once the shell's own program path is known, so an app is tested with the program a session would start (Story 75.8),
   // after BMN's hook entries, skills and tools are installed, so the tests read them in place (Story 75.9).
-  void sessionEnvironment.refresh().finally(() => {
+  void setupProfileReadiness.ready.then(() => sessionEnvironment.refresh()).finally(() => {
     void agentsIpc.installsAtStart().finally(() => {
       void agentsIpc.doctorAtStart()
       return agentsIpc.autoTestsAtStart()
@@ -917,6 +961,7 @@ function startupForRuntime(current: ApplicationRuntime, viewRestored = false): S
     workspaceId: current.workspaceId,
     name: current.name,
     testMode: current.testMode,
+    ...(sessionRecords.get(current.session.sessionId)?.setup ? { setup: sessionRecords.get(current.session.sessionId)!.setup } : {}),
     ...(viewRestored ? { viewRestored: true as const } : {})
   }
 }
@@ -1075,10 +1120,11 @@ async function stopCurrentTargets(
 
 async function flushAllSavedOutput(targets?: readonly RunningSessionTarget[]): Promise<SavedOutputCaptureOutcome> {
   const current = [...runtimes.values()].filter((runtime) =>
-    targets === undefined || targets.some((target) =>
+    !sessionRecords.get(runtime.session.sessionId)?.setup &&
+    (targets === undefined || targets.some((target) =>
       target.sessionId === runtime.session.sessionId &&
       target.incarnationId === runtime.session.incarnationId
-    )
+    ))
   )
   const view = captureWebContents(current.length > 0, applicationWindow)
   let aggregate: SavedOutputCaptureOutcome = { status: 'saved' }

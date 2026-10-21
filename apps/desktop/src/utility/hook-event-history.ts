@@ -127,6 +127,12 @@ export class HookEventHistory {
     this.markDirty()
   }
 
+  /** State only, over the same bounded metadata already retained for the owner. */
+  observedAgent(agent: HookEventRecord['agent']): boolean | null {
+    for (const event of this.sample()) if (event.agent === agent) return true
+    return this.loaded && !this.unavailable ? false : null
+  }
+
   history(sessionId: string): HookEventRecord[] {
     return this.options.sessionExists(sessionId) ? this.earlier.filter(row => row.sessionId === sessionId) : []
   }

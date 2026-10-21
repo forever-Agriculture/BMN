@@ -138,6 +138,7 @@ interface StartupSuccess {
   name: string
   testMode: boolean
   viewRestored?: true
+  setup?: import('@bmn/protocol').SetupSessionPurpose
 }
 
 interface StartupFailure {
@@ -171,6 +172,7 @@ interface ApplicationStartupSuccess {
   layouts: WorkspaceLayoutState[]
   layoutNotices: string[]
   liveSessions: StartupSuccess[]
+  setup?: import('@bmn/protocol').FirstRunSetupRecord
 }
 
 type StartupResult = ApplicationStartupSuccess | StartupFailure
@@ -481,6 +483,26 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   listWorkspaces(includeArchived = false): Promise<WorkspaceRecord[]> {
     return invokeBridge('aiterm:workspace:list', { includeArchived })
+  },
+  getSetupProgress(): Promise<import('@bmn/protocol').FirstRunSetupRecord | null> {
+    return invokeBridge('aiterm:setup:get')
+  },
+  getSetupApps(): Promise<import('@bmn/protocol').SetupAppsSnapshot> {
+    return invokeBridge('aiterm:setup:apps')
+  },
+  getSetupDefaults(): Promise<import('@bmn/protocol').SetupDefaultsReport | null> {
+    return invokeBridge('aiterm:setup:defaults')
+  },
+  async startSetupSession(app: import('@bmn/protocol').SetupApp, action: import('@bmn/protocol').SetupSessionPurpose['action'], expectedProgram: string | null): Promise<{ session: SessionRecord; startup: StartupSuccess }> {
+    const created = await invokeBridge<{ session: SessionRecord; startup: StartupSuccess }>('aiterm:setup:start', { app, action, expectedProgram })
+    recordLiveSession(created.startup, created.session)
+    return created
+  },
+  confirmSetupSignIn(app: import('@bmn/protocol').SetupApp, sessionId: string, version: string): Promise<import('@bmn/protocol').SetupAppsSnapshot> {
+    return invokeBridge('aiterm:setup:confirm', { app, sessionId, version })
+  },
+  updateSetupProgress(params: import('@bmn/protocol').FirstRunSetupUpdate): Promise<import('@bmn/protocol').FirstRunSetupRecord> {
+    return invokeBridge('aiterm:setup:update', params)
   },
   createWorkspace(params: WorkspaceCreateParams): Promise<WorkspaceRecord> {
     return invokeBridge('aiterm:workspace:create', params)

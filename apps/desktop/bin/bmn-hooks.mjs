@@ -1,4 +1,5 @@
 // MODULE: bmn-hooks.mjs - the bmn command line behind bin/bmn: hook events as attention calls, the agents' hook files and `bmn hooks` check, install and install --absent
+import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { copyFileSync, existsSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -1000,6 +1001,18 @@ function installHooks(agent, data, missing) {
   return next
 }
 
+/** Setup adds only absent groups: no legacy timeout raising or matcher widening. */
+export function setupHookGroups(agent, text) {
+  if (!HOOK_FILES[agent]) throw new CliError('INVALID_ARGUMENT', 'setup hook groups require Claude Code or Codex')
+  if (typeof text !== 'string' || Buffer.byteLength(text) > 1024 * 1024 || rewrittenNumbers(text).length > 0) throw new CliError('REVISION_CONFLICT', 'the hooks file cannot be rewritten without changing an existing value')
+  let data
+  try { data = text.trim() === '' ? {} : JSON.parse(text) } catch { throw new CliError('REVISION_CONFLICT', 'the hooks file is not a JSON object') }
+  if (!isObject(data) || unusableShape(data, agent)) throw new CliError('REVISION_CONFLICT', 'the hooks file has a shape setup leaves as it is')
+  const verdicts = absentVerdicts(agent, checkHooks(agent, '', { state: 'read', text, data }))
+  return { data, absent: verdicts.absent, left: verdicts.left, placed: verdicts.placed,
+    groups: Object.fromEntries(HOOK_FILES[agent].events.map(event => [event, installHooks(agent, {}, [event]).hooks[event][0]])) }
+}
+
 
 /** Epic 71: an agent BMN retired is named as retired, with where its support is kept, in place of `words`. */
 async function retiredOr(agent, words) {
@@ -1267,47 +1280,50 @@ async function installOpenCodePlugin(path, asJson, yes) {
   if (!await confirmHookWrite(path, targets.get(path), entries, diff, yes, asJson, writePlugin ? OPENCODE_PLUGIN : null)) {
     return confirmationResult(path, asJson)
   }
-  const unchanged = (file, expected) => () => {
-    if (linkTarget(file) !== targets.get(file)) throw new CliError('REVISION_CONFLICT', `${file} changed target while bmn was reading it; nothing more was written`)
-    if (currentText(file) !== expected) throw new CliError('REVISION_CONFLICT', `${file} changed while bmn was reading it; nothing more was written`)
-  }
-  const stamp = new Date().toISOString()
-  const backups = []
-  const removed = []
-  // Every file that exists is copied before it changes. The plugin goes first and the cli.json entry
-  // second, so a stop between them leaves a plugin OpenCode does not load yet, never an entry naming nothing.
-  const copy = (file, to) => {
-    copyFileSync(file, to)
-    backups.push(to)
-  }
-  try {
-    if (writePlugin) {
-      unchanged(path, before)()
-      if (before !== null) copy(path, `${path}.bmn-backup-${stamp}`)
-      writeAtomically(path, OPENCODE_PLUGIN, unchanged(path, before))
+  return withDefaultsAdmission(async () => {
+    const unchanged = (file, expected) => () => {
+      assertDefaultsAdmission()
+      if (linkTarget(file) !== targets.get(file)) throw new CliError('REVISION_CONFLICT', `${file} changed target while bmn was reading it; nothing more was written`)
+      if (currentText(file) !== expected) throw new CliError('REVISION_CONFLICT', `${file} changed while bmn was reading it; nothing more was written`)
     }
-    if (cliNext !== null) {
-      unchanged(cliPath, cli.text)()
-      if (cli.text !== null) copy(cliPath, `${cliPath}.bmn-backup-${stamp}`)
-      writeAtomically(cliPath, cliNext, unchanged(cliPath, cli.text))
+    const stamp = new Date().toISOString()
+    const backups = []
+    const removed = []
+    // Every file that exists is copied before it changes. The plugin goes first and the cli.json entry
+    // second, so a stop between them leaves a plugin OpenCode does not load yet, never an entry naming nothing.
+    const copy = (file, to) => {
+      copyFileSync(file, to)
+      backups.push(to)
     }
-    for (const old of older) {
-      unchanged(old.file, old.text)()
-      // Kept in BMN's own folder, outside plugin/ and plugins/, where OpenCode would try to load it.
-      copy(old.file, `${entry}/${basename(dirname(old.file))}-bmn.ts.bmn-backup-${stamp}`)
-      unlinkSync(old.file)
-      removed.push(old.file)
+    try {
+      if (writePlugin) {
+        unchanged(path, before)()
+        if (before !== null) copy(path, `${path}.bmn-backup-${stamp}`)
+        writeAtomically(path, OPENCODE_PLUGIN, unchanged(path, before))
+      }
+      if (cliNext !== null) {
+        unchanged(cliPath, cli.text)()
+        if (cli.text !== null) copy(cliPath, `${cliPath}.bmn-backup-${stamp}`)
+        writeAtomically(cliPath, cliNext, unchanged(cliPath, cli.text))
+      }
+      for (const old of older) {
+        unchanged(old.file, old.text)()
+        // Kept in BMN's own folder, outside plugin/ and plugins/, where OpenCode would try to load it.
+        copy(old.file, `${entry}/${basename(dirname(old.file))}-bmn.ts.bmn-backup-${stamp}`)
+        unlinkSync(old.file)
+        removed.push(old.file)
+      }
+    } catch (error) {
+      process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)
+      return 1
     }
-  } catch (error) {
-    process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)
-    return 1
-  }
-  const result = { installed, backups, removed, file: path }
-  const lines = [`Installed OpenCode plugin: ${path}`, ...(installed.includes('cli.json') ? [`Named in: ${cliPath}`] : []),
-    ...removed.map((file) => `Removed OpenCode 1's plugin: ${file}`), ...backups.map((file) => `Backup: ${file}`),
-    'Restart OpenCode to load it. `bmn hooks check` reports configuration, not that a hook fired.']
-  process.stdout.write(`${asJson ? JSON.stringify(result, null, 2) : lines.join('\n')}\n`)
-  return 0
+    const result = { installed, backups, removed, file: path }
+    const lines = [`Installed OpenCode plugin: ${path}`, ...(installed.includes('cli.json') ? [`Named in: ${cliPath}`] : []),
+      ...removed.map((file) => `Removed OpenCode 1's plugin: ${file}`), ...backups.map((file) => `Backup: ${file}`),
+      'Restart OpenCode to load it. `bmn hooks check` reports configuration, not that a hook fired.']
+    process.stdout.write(`${asJson ? JSON.stringify(result, null, 2) : lines.join('\n')}\n`)
+    return 0
+  })
 }
 
 async function installHooksCommand(agent, path, asJson, yes) {
@@ -1352,49 +1368,52 @@ async function installHooksCommand(agent, path, asJson, yes) {
   const changes = [...report.missing, ...raised.map((event) => `${event} timeout ${hookEntryTimeout(agent, event)} s`),
     ...widened.map((event) => `${event} matcher ${HOOK_FILES[agent].matchers[event]}`)]
   if (!await confirmHookWrite(path, target, changes, diff, yes, asJson)) return confirmationResult(path, asJson)
-  const unchanged = () => {
-    holdAtTestGate()
-    if (linkTarget(path) !== target) {
-      throw new CliError('REVISION_CONFLICT', `${path} changed target while bmn was reading it; nothing was written`)
+  return withDefaultsAdmission(async () => {
+    const unchanged = () => {
+      holdAtTestGate()
+      assertDefaultsAdmission()
+      if (linkTarget(path) !== target) {
+        throw new CliError('REVISION_CONFLICT', `${path} changed target while bmn was reading it; nothing was written`)
+      }
+      const now = currentText(path)
+      if ((now ?? '') !== file.text) {
+        throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
+      }
     }
-    const now = currentText(path)
-    if ((now ?? '') !== file.text) {
-      throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
-    }
-  }
-  let backup = null
-  try {
-    unchanged()
-    // Every file that exists is copied first, whatever BMN thinks of its shape. Keying this on one
-    // state meant a file BMN could not vouch for was written over without a copy of it.
-    if (file.state !== 'missing') {
-      backup = `${path}.bmn-backup-${new Date().toISOString()}`
-      copyFileSync(path, backup)
-    }
-    // Checked once more with the replacement already staged, so the window is as small as a rename.
-    writeAtomically(path, nextText, unchanged)
-  } catch (error) {
-    if (error instanceof CliError) {
-      process.stderr.write(`bmn: ${error.code}: ${error.message}\n`)
+    let backup = null
+    try {
+      unchanged()
+      // Every file that exists is copied first, whatever BMN thinks of its shape. Keying this on one
+      // state meant a file BMN could not vouch for was written over without a copy of it.
+      if (file.state !== 'missing') {
+        backup = `${path}.bmn-backup-${new Date().toISOString()}`
+        copyFileSync(path, backup)
+      }
+      // Checked once more with the replacement already staged, so the window is as small as a rename.
+      writeAtomically(path, nextText, unchanged)
+    } catch (error) {
+      if (error instanceof CliError) {
+        process.stderr.write(`bmn: ${error.code}: ${error.message}\n`)
+        return 1
+      }
+      process.stderr.write(`bmn: cannot write ${path} (${error.code ?? error.message})\n`)
       return 1
     }
-    process.stderr.write(`bmn: cannot write ${path} (${error.code ?? error.message})\n`)
-    return 1
-  }
-  const trust = agent === 'codex'
-    ? 'Codex must trust the hooks once: run /hooks in Codex. `bmn hooks check` reports configuration, not that a hook fired.'
-    : '`bmn hooks check` reports configuration, not that a hook fired.'
-  if (asJson) {
-    process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), backup, file: path, diff, note: trust }, null, 2)}\n`)
+    const trust = agent === 'codex'
+      ? 'Codex must trust the hooks once: run /hooks in Codex. `bmn hooks check` reports configuration, not that a hook fired.'
+      : '`bmn hooks check` reports configuration, not that a hook fired.'
+    if (asJson) {
+      process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), backup, file: path, diff, note: trust }, null, 2)}\n`)
+      return 0
+    }
+    const lines = report.missing.length === 0 ? [] : [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]
+    if (raised.length > 0) lines.push(`Raised BMN's own entry timeout in ${path}: ${raised.map((event) => `${event} to ${hookEntryTimeout(agent, event)} s`).join(', ')}`)
+    if (widened.length > 0) lines.push(`Widened BMN's own matcher in ${path}: ${widened.map((event) => `${event} to ${HOOK_FILES[agent].matchers[event]}`).join(', ')}`)
+    if (backup !== null) lines.push(`Backup: ${backup}`)
+    lines.push('', diff, '', trust)
+    process.stdout.write(`${lines.join('\n')}\n`)
     return 0
-  }
-  const lines = report.missing.length === 0 ? [] : [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]
-  if (raised.length > 0) lines.push(`Raised BMN's own entry timeout in ${path}: ${raised.map((event) => `${event} to ${hookEntryTimeout(agent, event)} s`).join(', ')}`)
-  if (widened.length > 0) lines.push(`Widened BMN's own matcher in ${path}: ${widened.map((event) => `${event} to ${HOOK_FILES[agent].matchers[event]}`).join(', ')}`)
-  if (backup !== null) lines.push(`Backup: ${backup}`)
-  lines.push('', diff, '', trust)
-  process.stdout.write(`${lines.join('\n')}\n`)
-  return 0
+  })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1447,8 +1466,10 @@ function unusableFile(file, path) {
  * and checked once more against the bytes and the link that were read. Returns the backup's path, if any.
  */
 function writeHookFile(path, before, target, nextText) {
+  assertDefaultsAdmission()
   const unchanged = () => {
     holdAtTestGate()
+    assertDefaultsAdmission()
     if (linkTarget(path) !== target) throw new CliError('REVISION_CONFLICT', `${path} changed target while bmn was reading it; nothing was written`)
     if ((currentText(path) ?? null) !== before) throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
   }
@@ -1530,42 +1551,44 @@ function absentOpenCode(path) {
  * every set-up app has every entry BMN expects, 1 when one was left or could not be written.
  */
 async function installAbsentCommand(agents, pathFor, asJson) {
-  const results = []
-  for (const agent of agents) {
-    const path = pathFor(agent)
-    if (!appSetUp(agent, path)) {
-      results.push({ agent, file: path, state: 'not-set-up', placed: [], older: [], installed: [], left: [] })
-      continue
+  return withDefaultsAdmission(async () => {
+    const results = []
+    for (const agent of agents) {
+      const path = pathFor(agent)
+      if (!appSetUp(agent, path)) {
+        results.push({ agent, file: path, state: 'not-set-up', placed: [], older: [], installed: [], left: [] })
+        continue
+      }
+      try {
+        results.push({ agent, file: path, ...(agent === 'opencode' ? absentOpenCode(path) : absentClaudeOrCodex(agent, path)) })
+      } catch (error) {
+        const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
+        results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail })
+      }
     }
-    try {
-      results.push({ agent, file: path, ...(agent === 'opencode' ? absentOpenCode(path) : absentClaudeOrCodex(agent, path)) })
-    } catch (error) {
-      const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
-      results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail })
+    const ok = results.every((result) => result.state !== 'failed' && result.state !== 'left' && result.left.length === 0)
+    if (asJson) {
+      writeSync(1, `${JSON.stringify({ ok, agents: results }, null, 2)}\n`)
+      return ok ? 0 : 1
     }
-  }
-  const ok = results.every((result) => result.state !== 'failed' && result.state !== 'left' && result.left.length === 0)
-  if (asJson) {
-    writeSync(1, `${JSON.stringify({ ok, agents: results }, null, 2)}\n`)
+    const lines = results.map((result) => {
+      const name = HOOK_AGENTS[result.agent]
+      if (result.state === 'not-set-up') return `${name}: not set up on this computer; nothing written`
+      const head = `${name}  ${result.file}`
+      const body = [
+        ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
+        ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
+        ...((result.widened ?? []).length > 0 ? [`  matcher widened: ${result.widened.join(', ')}`] : []),
+        `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,
+        ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
+        ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
+        ...(result.backups ?? []).map((backup) => `  backup: ${backup}`)
+      ]
+      return [head, ...body].join('\n')
+    })
+    process.stdout.write(`${lines.join('\n\n')}\n`)
     return ok ? 0 : 1
-  }
-  const lines = results.map((result) => {
-    const name = HOOK_AGENTS[result.agent]
-    if (result.state === 'not-set-up') return `${name}: not set up on this computer; nothing written`
-    const head = `${name}  ${result.file}`
-    const body = [
-      ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
-      ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
-      ...((result.widened ?? []).length > 0 ? [`  matcher widened: ${result.widened.join(', ')}`] : []),
-      `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,
-      ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
-      ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
-      ...(result.backups ?? []).map((backup) => `  backup: ${backup}`)
-    ]
-    return [head, ...body].join('\n')
   })
-  process.stdout.write(`${lines.join('\n\n')}\n`)
-  return ok ? 0 : 1
 }
 
 /**

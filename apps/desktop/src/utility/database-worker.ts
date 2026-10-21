@@ -1,6 +1,8 @@
+// MODULE: database-worker.ts - Serialize database operations on the owning worker
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { parentPort, workerData } from 'node:worker_threads'
+import { isFirstRunSetupUpdate, isSetupSessionPurpose } from '@bmn/protocol'
 import type {
   SessionUpdateParams,
   WorkspaceCreateParams,
@@ -38,6 +40,7 @@ import {
   updateWorkspace
 } from './database-workspace-store'
 import { COMPANION_OPERATIONS, listReadyArtifacts, scrubBackupProducerBindings, type CompanionOperationName } from './database-companion-store'
+import { claimSetupDefaults, ensureSetupWorkspace, getFirstRunSetup, initializeFirstRunSetup, updateFirstRunSetup } from './database-setup-store'
 
 type DatabaseConstructor = new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection
 
@@ -132,7 +135,23 @@ function handle(request: WorkerRequest): unknown {
   switch (request.operation) {
     case 'initialize':
       return initializeDatabase(database)
+    case 'setup-initialize':
+      if (typeof params.existingProfile !== 'boolean') throw new WorkspaceStoreError('INVALID_ARGUMENT', 'Existing-profile evidence is required')
+      return initializeFirstRunSetup(database, params.existingProfile, requiredString(params, 'home'), new Date().toISOString())
+    case 'setup-get':
+      return getFirstRunSetup(database)
+    case 'setup-defaults-claim':
+      if (Object.keys(params).length !== 0) throw new WorkspaceStoreError('INVALID_ARGUMENT', 'Defaults claim takes no parameters')
+      return claimSetupDefaults(database)
+    case 'setup-workspace':
+      return ensureSetupWorkspace(database, requiredString(params, 'home'), new Date().toISOString())
+    case 'setup-update':
+      if (!isFirstRunSetupUpdate(params)) throw new WorkspaceStoreError('INVALID_ARGUMENT', 'Setup progress parameters are invalid')
+      return updateFirstRunSetup(database, params, new Date().toISOString())
     case 'create-starting':
+      if ('setup' in params && !isSetupSessionPurpose(params.setup)) {
+        throw new WorkspaceStoreError('INVALID_ARGUMENT', 'The setup session purpose is invalid')
+      }
       return createStartingSession(database, {
         sessionId: requiredString(params, 'sessionId'),
         incarnationId: requiredString(params, 'incarnationId'),
@@ -149,7 +168,8 @@ function handle(request: WorkerRequest): unknown {
           ? params.terminalGraphics : null,
         processStartIdentity: requiredString(params, 'processStartIdentity'),
         startedAt: requiredString(params, 'startedAt'),
-        binding: params.binding as never
+        binding: params.binding as never,
+        ...(isSetupSessionPurpose(params.setup) ? { setup: params.setup } : {})
       })
     case 'create-resuming':
       return createResumingSession(database, {

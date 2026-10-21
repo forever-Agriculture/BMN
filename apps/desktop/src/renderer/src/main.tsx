@@ -97,6 +97,8 @@ import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdraw
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { paneMenu, readOnlyViewCommands, sessionMenu, workspaceMenu } from './shell-menus'
 import { PreferencesDialog } from './preferences-dialog'
+import { FirstRunSetup } from './first-run-setup'
+import type { CreatedSession } from '../../preload/bridge'
 import { reportedModels, sessionsByApp } from './model-suggestions'
 import {
   ACTIVITY_TICK_MS,
@@ -188,6 +190,10 @@ function App(): React.JSX.Element {
   const commandRef = useRef<(command: AppCommand) => void>(() => undefined)
   const sessionArea = useRef<HTMLElement>(null)
   const [startup, setStartup] = useState<SuccessfulStartup>()
+  const [setupProgress, setSetupProgress] = useState<import('@bmn/protocol').FirstRunSetupRecord>()
+  const [setupPage, setSetupPage] = useState(false)
+  const [setupFocusApp, setSetupFocusApp] = useState<import('@bmn/protocol').SetupApp>()
+  const [setupLastLines, setSetupLastLines] = useState<Record<string, string>>({})
   const [failure, setFailure] = useState<string>()
   const [notice, setNotice] = useState<string>()
   const [archiveUndo, setArchiveUndo] = useState<ArchiveUndoTarget>()
@@ -335,7 +341,8 @@ function App(): React.JSX.Element {
         !workspaces.some(workspace => workspace.workspaceId === dialog.request.workspaceId && workspace.archivedAt === null))) setDialog(null)
   }, [activeWorkspaceId, dialog, workspaces])
   const layout = activeWorkspaceId ? layouts[activeWorkspaceId] : undefined
-  const selectedSessionId = layout?.selectedSessionId ?? null
+  const showingSetup = setupPage && setupProgress?.workspaceId === activeWorkspaceId
+  const selectedSessionId = showingSetup ? null : layout?.selectedSessionId ?? null
   const activeSessions = useMemo(
     () => activeWorkspaceId ? orderedWorkspaceSessions(sessions, activeWorkspaceId) : [],
     [sessions, activeWorkspaceId]
@@ -512,6 +519,8 @@ function App(): React.JSX.Element {
 
   const applyStartup = (next: SuccessfulStartup): void => {
     setStartup(next)
+    setSetupProgress(next.setup)
+    setSetupPage(next.setup?.state === 'active' && next.setup.workspaceId === next.activeWorkspaceId)
     setWorkspaces(next.workspaces)
     setSessions(next.sessions)
     writer.reset(next.layouts)
@@ -593,6 +602,15 @@ function App(): React.JSX.Element {
   const recordSessionExit = (sessionId: string): void => {
     const record = sessionsRef.current.find((item) => item.sessionId === sessionId)
     if (!record) return
+    if (record.setup?.action === 'install') {
+      const controller = controllers.current.get(sessionId)
+      const incarnation = liveRef.current.get(sessionId)?.incarnationId
+      void controller?.setupLastLines().then(lines => {
+        if (controllers.current.get(sessionId) !== controller || liveRef.current.get(sessionId)?.incarnationId !== incarnation) return
+        const text = lines.join('\n')
+        if (text) setSetupLastLines(current => ({ ...current, [sessionId]: text }))
+      }).catch(fail('Install output is unavailable'))
+    }
     void reloadWorkspaceSessions(record.workspaceId).catch(fail('Session refresh failed'))
   }
 
@@ -831,6 +849,8 @@ function App(): React.JSX.Element {
   }
 
   const navigateWorkspace = (workspaceId: string): void => {
+    setSetupFocusApp(undefined)
+    setSetupPage(workspaceId === setupProgress?.workspaceId)
     const target = writer.layouts()[workspaceId]?.selectedSessionId ??
       visibleWorkspaceSessions(sessions, workspaceId, false)[0]?.sessionId ?? null
     navigateAttention(target)
@@ -839,6 +859,7 @@ function App(): React.JSX.Element {
 
   const applyTreeSessionAction = (action: TreeSessionAction | null): void => {
     if (!action) return
+    setSetupPage(false)
     navigateAttention(action.sessionId)
     recentSessions.current = rememberRecentSession(recentSessions.current, action.sessionId)
     setTree(action.tree)
@@ -1000,6 +1021,11 @@ function App(): React.JSX.Element {
         return next
       })
       await reloadWorkspaceSessions(record.workspaceId)
+      if (record.setup) {
+        setSetupFocusApp(record.setup.app)
+        setTree(current => selectTreeWorkspace(current, record.workspaceId))
+        setSetupPage(true)
+      }
       brief(`Stopped ${record.name}.`)
     }).catch((error: unknown) => setFailure(sessionFailureDetail(record.name, error, 'Stop failed')))
   }
@@ -1800,7 +1826,7 @@ function App(): React.JSX.Element {
     if (!record || record.archivedAt !== null) return 'session'
     return sessionIncarnation(record) === incarnationId ? null : 'process'
   }
-  const panes = layout?.split.panes ?? []
+  const panes = showingSetup ? [] : layout?.split.panes ?? []
   const orientation = layout?.split.orientation ?? 'side-by-side'
   const firstRatio = dragRatio ?? panes[0]?.ratio ?? 1
   /** Stopped sessions keep their pane's place and share of a split. */
@@ -1808,6 +1834,21 @@ function App(): React.JSX.Element {
     const index = panes.findIndex((pane) => pane.sessionId === sessionId)
     if (panes.length < 2 || index === -1) return { order: 0 }
     return { order: index * 2, flexGrow: index === 0 ? firstRatio : 1 - firstRatio }
+  }
+
+  const setupCreated = async (created: CreatedSession): Promise<void> => {
+    const listed = await window.aiTerminal.listWorkspaces(true)
+    const { layout: nextLayout } = await window.aiTerminal.getLayout(created.session.workspaceId)
+    writer.adopt(nextLayout)
+    setWorkspaces(listed)
+    setSessions(current => [...current.filter(row => row.sessionId !== created.session.sessionId), created.session])
+    setLive(current => ({ ...current, [created.session.sessionId]: created.startup }))
+    const progress = await window.aiTerminal.getSetupProgress()
+    if (progress) setSetupProgress(progress)
+    setSetupPage(false)
+    setDialog(null)
+    applyTreeSessionAction(selectTreeSession([...sessionsRef.current.filter(row => row.sessionId !== created.session.sessionId), created.session], created.session.sessionId))
+    requestAnimationFrame(() => controllers.current.get(created.session.sessionId)?.focus())
   }
 
   const guardCardStop = guardCard ? guardStops.find(item => item.sessionId === guardCard.sessionId) ?? null : null
@@ -2030,6 +2071,18 @@ function App(): React.JSX.Element {
           </aside>
         )}
         <section ref={sessionArea} tabIndex={-1} className={`session-area ${orientation}${panes.length > 1 ? ' split' : ''}`} aria-label="Sessions">
+          {showingSetup && setupProgress ? <FirstRunSetup progress={setupProgress} onProgress={setSetupProgress} focusApp={setupFocusApp}
+            preferencesOpen={dialog?.kind === 'preferences'}
+            onCreated={setupCreated} onOpenSession={id => openSession(id)} lastLines={setupLastLines}
+            onTeam={() => { void (async () => {
+              const snapshot = await window.aiTerminal.agentsSnapshot()
+              if (!snapshot.file.exists && snapshot.setupTeam && !snapshot.setupTeam.blocked) {
+                const started = await window.aiTerminal.startTeam()
+                if (!started.ok && started.code !== 'REVISION_CONFLICT') throw new Error(started.message)
+              }
+              setDialog({ kind: 'preferences', page: 'team' })
+            })().catch(error => brief(failureDetail(error, 'Could not open the setup team'))) }}
+            onHealth={() => setDialog({ kind: 'preferences', page: 'health' })} /> : null}
           {Object.values(live).map((terminalStartup) => {
             const paneIndex = panes.findIndex((pane) => pane.sessionId === terminalStartup.sessionId)
             const record = sessions.find((session) => session.sessionId === terminalStartup.sessionId)
@@ -2073,6 +2126,12 @@ function App(): React.JSX.Element {
                 onView={(update) => applySessionView(writer, sessionsRef.current, terminalStartup.sessionId, update)}
                 onFailure={setFailure}
                 onSelect={(focusTerminal) => focusLayoutSession(terminalStartup.sessionId, focusTerminal)}
+                onSetup={terminalStartup.setup ? () => { setSetupFocusApp(terminalStartup.setup!.app); setTree(current => selectTreeWorkspace(current, terminalStartup.workspaceId)); setSetupPage(true) } : undefined}
+                onCloseSetup={record?.setup ? () => {
+                  setSetupFocusApp(record.setup!.app)
+                  if (record.lastProcess?.state === 'live') stopSession(record)
+                  else { setTree(current => selectTreeWorkspace(current, record.workspaceId)); setSetupPage(true) }
+                } : undefined}
                 onSplit={() => toggleSplit(terminalStartup.sessionId)}
                 onFocusMode={() => setFocusMode((value) => !value)}
                 onFiles={() => setPanel((value) => value === 'files' ? null : 'files')}
@@ -2231,7 +2290,7 @@ function App(): React.JSX.Element {
                 .then(() => refresh.attention()).catch(fail('Request update failed'))
                 .finally(() => answering.current.delete(request.requestId))
             }} onClose={closeRequestCard} /> : null}
-          {!selectedRecord ? (
+          {!selectedRecord && !showingSetup ? (
             <div className="empty-state">
               {activeWorkspace ? (
                 <>
@@ -2672,6 +2731,8 @@ function App(): React.JSX.Element {
           reportedModels={reportedModels(hookOrigins, sessions, live)}
           recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
           sessionName={(id) => sessions.find((session) => session.sessionId === id)?.name}
+          onSetupCreated={setupCreated}
+          onOpenSetupSession={id => { setDialog(null); openSession(id) }}
           onRunInSession={activeWorkspaceId ? async (name, command, onEnded, left) => {
             // Listening from before the session exists: its shell may write its first prompt before the answer that names it arrives.
             const run = sessionCommandRun(command, { readyWithinMs: SHELL_READY_WAIT_MS }, onEnded)

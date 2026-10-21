@@ -1,0 +1,28 @@
+/* MODULE: first-run-setup.css - Approved Setup layout using the existing Chancel tokens */
+.first-run-setup { width: min(100%, 768px); margin-inline: auto; padding: 28px 24px; overflow: auto; display: grid; gap: 24px; align-content: start; }
+.first-run-setup > header { display: grid; gap: 7px; }
+.first-run-setup h1 { margin: 0; font-size: 24px; font-weight: 500; }
+.first-run-setup > header p { margin: 0; color: var(--muted); }
+.first-run-setup > section > h2 { margin: 0; padding-bottom: 7px; border-bottom: 1px solid var(--hairline); color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+.setup-app-row { display: grid; grid-template-columns: 90px minmax(0, 1fr) minmax(0, 1.35fr) auto; gap: 14px; align-items: center; padding-block: 14px; border-bottom: 1px solid var(--hairline); font-size: 13px; }
+.setup-app-row > *, .setup-group-row > * { min-width: 0; }
+.setup-stack { display: grid; gap: 4px; }
+.setup-stack .faint { color: var(--faint); }
+.setup-stack .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); }
+.setup-group-row { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 14px; align-items: start; padding-block: 14px; font-size: 13px; }
+.setup-last-lines, .setup-command-sheet pre { padding: 12px; border-radius: 6px; background: var(--ground); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; margin: 0; font-size: 12px; }
+.first-run-setup > footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
+.first-run-setup > footer > span { margin-right: auto; font-size: 12px; }
+@media (max-width: 1000px) {
+  .setup-app-row { grid-template-columns: 80px minmax(0, 1fr) auto; gap: 8px 12px; }
+  .setup-app-row > :nth-child(3) { grid-column: 2; grid-row: 2; }
+  .setup-app-row > :last-child { grid-column: 3; grid-row: 1 / span 2; }
+  .first-run-setup { padding: 24px 20px; }
+}
+@media (max-width: 600px) {
+  .first-run-setup { padding: 20px 16px; }
+  .setup-app-row, .setup-group-row { grid-template-columns: 74px minmax(0, 1fr); }
+  .setup-app-row > :last-child { grid-column: 2; grid-row: 3; justify-self: start; }
+  .setup-group-row > button { grid-column: 2; justify-self: start; }
+  .first-run-setup > footer > span { width: 100%; }
+}

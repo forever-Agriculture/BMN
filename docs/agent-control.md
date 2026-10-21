@@ -665,6 +665,35 @@ token, never through a shell. If the program is no longer on `PATH`, Resume says
 **Start again**. The **Resume interrupted sessions…** dialog lists such a session with its command,
 unchecked.
 
+### Fresh-profile defaults
+
+A profile with no rules master or approved team opens Setup. Setup reads qualified app readiness,
+then proposes one member per ready app in the existing Team approval. Unavailable model, effort
+and provider settings require explicit choices; none are guessed. Missing account capabilities
+leave a member proposed and off, outside role chains. New providers allow public work only.
+Approval does not enable any account in `bmn policy`.
+
+Before approval, setup prepares an empty portable skills folder at
+`~/.config/bmn/agents/skills` and records ownership. The approved team names that source, so Codex
+or OpenCode works without a Claude folder. After approval, BMN writes its shipped pointer-only
+master at `~/.config/bmn/agents/global-rules.md` only when absent. It leaves an existing master
+alone. Ready apps receive the setup-owned master, shipped skills, hooks and approved tools;
+tools wait for that app's capability test. A later-ready app receives defaults at the next read.
+A later team member still requires explicit Team approval.
+
+Each default install has its own transaction and Earlier installs Undo. Ownership and durable
+removal opt-outs live in `~/.config/bmn/agents/state/setup-defaults.json`. Automatic installation,
+conflicting installs and Undo serialize through the permanent `defaults-admission.lock` in that
+same folder. Admission is checked again before mutation. Removed defaults stay removed across
+reads and restarts; changed targets and ambiguous ownership records are refused.
+
+Shared-config updates, Undo and shipped-skill refresh journal the previous whole file or displaced
+object at a holding path and publish only into an absent name. A concurrent replacement can be
+preserved at a reported holding path when the original name is occupied. BMN never overwrites that
+replacement or automatically deletes the holding. Partial results identify successful and failed
+kinds plus retained recovery paths. Doctor only reads these results. Ordinary existing profiles
+keep their current startup behavior and personal configuration.
+
 ### Wiring the hooks
 
 **At every start** BMN runs `bmn hooks install --absent --yes` for each app set up on this computer, one whose settings

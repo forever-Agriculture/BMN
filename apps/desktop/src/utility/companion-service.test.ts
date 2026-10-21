@@ -1982,6 +1982,139 @@ describe('progress evidence through the service', () => {
 })
 
 describe('hook event log', () => {
+  function heldReads() {
+    const client = service['options'].database
+    const original = client.listSessions.bind(client)
+    const spy = vi.spyOn(client, 'listSessions')
+    return { spy, hold: () => {
+      let release!: () => void, entered!: () => void
+      const blocked = new Promise<void>(resolve => { release = resolve })
+      const started = new Promise<void>(resolve => { entered = resolve })
+      spy.mockImplementationOnce(async workspaceId => {
+        const snapshot = await original(workspaceId)
+        entered(); await blocked
+        return snapshot
+      })
+      return { started, release }
+    } }
+  }
+
+  it('waits for the replacing refresh before a superseded caller reports completion', async () => {
+    await service.start()
+    const reads = heldReads(), first = reads.hold()
+    let settled = false
+    const earlier = service.sessionsChanged().then(() => { settled = true })
+    await first.started
+    const second = reads.hold(), later = service.sessionsChanged()
+    await second.started
+    try {
+      first.release()
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(settled).toBe(false)
+    } finally { first.release(); second.release(); await Promise.allSettled([earlier, later]) }
+  })
+
+  it('propagates a failed replacement without publishing a superseded snapshot', async () => {
+    await service.start()
+    const reads = heldReads(), first = reads.hold()
+    const earlier = service.sessionsChanged()
+    await first.started
+    reads.spy.mockRejectedValueOnce(new Error('synthetic replacement failed'))
+    await expect(service.sessionsChanged()).rejects.toThrow('synthetic replacement failed')
+    first.release()
+    await expect(earlier).rejects.toThrow('synthetic replacement failed')
+    expect(service['knownSessions'].size).toBe(2)
+  })
+
+  it('never resurrects a deleted session through three overlapping reads and prunes every cache', async () => {
+    const sid = randomUUID(), incarnationId = randomUUID()
+    database.prepare('UPDATE session SET session_id = ? WHERE session_id = ?').run(sid, 's1')
+    liveIncarnations.delete('s1'); liveIncarnations.set(sid, incarnationId)
+    await service.start()
+    await service['observeHookEvent']({ sessionId: sid, incarnationId, agent: 'codex', event: 'SessionStart',
+      source: 'startup', toolName: null, effects: [] })
+    const maps = ['hookEvents', 'hookReporters', 'hookObservations', 'hookOrigins', 'hookCompactions',
+      'usageReadings', 'guardStops', 'codexUsageReads', 'terminalNotices', 'repeatStates', 'attentionChanges'] as const
+    for (const key of maps) if (!service[key].has(sid)) (service[key] as Map<string, unknown>).set(sid, {})
+    const reads = heldReads(), first = reads.hold()
+    const earlier = service.sessionsChanged()
+    await first.started
+    const second = reads.hold(), middle = service.sessionsChanged()
+    await second.started
+    database.prepare('DELETE FROM session WHERE session_id = ?').run(sid)
+    try {
+      await service.sessionsChanged()
+      first.release(); await earlier
+      expect(service['knownSessions'].has(sid)).toBe(false)
+      for (const key of maps) expect(service[key].has(sid), key).toBe(false)
+      expect(service['retainedHooks'].observedAgent('codex')).toBe(false)
+    } finally { first.release(); second.release(); await Promise.allSettled([earlier, middle]) }
+    expect(service['knownSessions'].has(sid)).toBe(false)
+  })
+
+  it('re-enumerates after a hook arrives during a lone read, then honours a later deletion', async () => {
+    await service.start()
+    const reads = heldReads(), first = reads.hold(), earlier = service.sessionsChanged()
+    await first.started
+    const sid = randomUUID(), incarnationId = randomUUID()
+    database.prepare(`INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+      VALUES (?, ?, 'Check Codex', '/synthetic', '/synthetic/codex', '[]', 1, ?, 2)`).run(sid, DEFAULT_WORKSPACE_ID, now)
+    liveIncarnations.set(sid, incarnationId)
+    try {
+      await service['observeHookEvent']({ sessionId: sid, incarnationId, agent: 'codex', event: 'SessionStart',
+        source: 'startup', toolName: null, effects: [] })
+    } finally { first.release() }
+    await earlier
+    expect(service['knownSessions'].has(sid)).toBe(true)
+    expect(service['retainedHooks'].observedAgent('codex')).toBe(true)
+    database.prepare('DELETE FROM session WHERE session_id = ?').run(sid)
+    await service.sessionsChanged()
+    expect(service['hookEvents'].has(sid)).toBe(false)
+    expect(service['retainedHooks'].observedAgent('codex')).toBe(false)
+  })
+
+  it('keeps new-session hook evidence when an older session refresh finishes later', async () => {
+    await service.start()
+    const client = service['options'].database
+    const original = client.listSessions.bind(client)
+    let release!: () => void
+    let entered!: () => void
+    const blocked = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { entered = resolve })
+    vi.spyOn(client, 'listSessions').mockImplementationOnce(async workspaceId => {
+      const snapshot = await original(workspaceId)
+      entered(); await blocked
+      return snapshot
+    })
+    const earlier = service.sessionsChanged()
+    await started
+    const sid = randomUUID(), incarnationId = randomUUID()
+    database.prepare(`INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+      VALUES (?, ?, 'Check Codex', '/synthetic', '/synthetic/codex', '[]', 1, ?, 2)`).run(sid, DEFAULT_WORKSPACE_ID, now)
+    liveIncarnations.set(sid, incarnationId)
+    try {
+      await service.sessionsChanged()
+      await service['observeHookEvent']({ sessionId: sid, incarnationId, agent: 'codex', event: 'SessionStart',
+        source: 'startup', toolName: null, effects: [] })
+      expect(await service.route(METHOD_REGISTRY.setupHookEvidence, {})).toEqual({ codex: 'observed' })
+    } finally { release(); await earlier }
+    expect(await service.route(METHOD_REGISTRY.setupHookEvidence, {})).toEqual({ codex: 'observed' })
+  })
+
+  it('gives the owner only Codex hook evidence state, with no origins, models or payloads', async () => {
+    const sid = randomUUID(), incarnationId = randomUUID()
+    database.prepare('UPDATE session SET session_id = ? WHERE session_id = ?').run(sid, 's1')
+    liveIncarnations.delete('s1'); liveIncarnations.set(sid, incarnationId)
+    await service.start()
+    expect(await service.route(METHOD_REGISTRY.setupHookEvidence, {})).toEqual({ codex: 'not-observed' })
+    await service['observeHookEvent']({ sessionId: sid, incarnationId, agent: 'codex', event: 'SessionStart',
+      source: 'startup', toolName: null, effects: [], model: 'synthetic-secret-model', apiHost: 'synthetic-secret.invalid' })
+    expect(await service.route(METHOD_REGISTRY.setupHookEvidence, {})).toEqual({ codex: 'observed' })
+    await service.close(); service = new CompanionService(service['options']); liveIncarnations.clear(); await service.start()
+    expect(await service.route(METHOD_REGISTRY.setupHookEvidence, {})).toEqual({ codex: 'observed' })
+    await expect(service.route(METHOD_REGISTRY.setupHookEvidence, { agent: 'codex' })).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+  })
+
   it('retains metadata through reconstruction without replaying live state, and filters owner reads', async () => {
     const sid = randomUUID(), incarnationId = randomUUID()
     database.prepare('UPDATE session SET session_id = ? WHERE session_id = ?').run(sid, 's1')

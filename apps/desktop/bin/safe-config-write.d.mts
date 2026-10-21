@@ -27,6 +27,6 @@ export declare function replaceFileSafely(
   path: string,
   expected: PathState,
   nextText: string,
-  options?: { beforeCommit?: () => void; mode?: number }
+  options?: { beforeCommit?: () => void; afterCommit?: () => void; durable?: boolean; mode?: number }
 ): PathState
 export declare function restorePathState(path: string, state: PathState): void

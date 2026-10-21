@@ -9,6 +9,7 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'attention_request',
   'control_receipt',
   'conversation_binding',
+  'first_run_setup',
   'input_draft',
   'launch_set',
   'launch_template',
@@ -788,5 +789,26 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       CREATE UNIQUE INDEX attention_decision_key ON attention_request(session_id, request_key)
         WHERE state = 'recorded';
     `
+  },
+  {
+    // Setup's immutable output-retention policy must survive utility loss and late capture requests.
+    version: 30,
+    sql: `ALTER TABLE session ADD COLUMN setup_purpose_json TEXT NULL
+      CHECK (setup_purpose_json IS NULL OR json_valid(setup_purpose_json));`
+  },
+  {
+    version: 31,
+    sql: `CREATE TABLE first_run_setup (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      state TEXT NOT NULL CHECK (state IN ('active', 'skipped', 'finished', 'existing')),
+      workspace_id TEXT REFERENCES workspace(workspace_id) ON DELETE SET NULL,
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      updated_at TEXT NOT NULL
+    );`
+  },
+  {
+    version: 32,
+    sql: `ALTER TABLE first_run_setup ADD COLUMN defaults_id TEXT NULL
+      CHECK (defaults_id IS NULL OR length(defaults_id) = 36);`
   }
 ])

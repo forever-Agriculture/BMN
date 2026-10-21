@@ -80,7 +80,9 @@ launching terminal's identity and the launching agent's session identity. The ex
 bounded MessagePort. There is no tmux, no headless mirror and no replay of old bytes into a live
 terminal, because a second emulator tracking the same state drifts. Each view loads bounded Sixel
 decoding; the addon is disposed with the view. *Saved output* is a separate,
-read-only plain-text snapshot of the live screen, written periodically, on stop and on quit. After a
+read-only plain-text snapshot of the live screen, written periodically, on stop and on quit. Setup
+install and sign-in sessions are created with saved output off: no periodic, stop or quit capture,
+and no saved output after a crash. The host also refuses their capture writes after exit or restart. After a
 renderer crash, a new view is created and the program is asked to repaint; the process keeps
 running. Old image pixels are not replayed. A new view starts where a fresh terminal parser reads
 the output as the old view's parser does, so it skips the rest of an image or escape sequence whose
@@ -226,16 +228,17 @@ agent has to guess.
 
 | Ending | Process | Live screen | Saved output | Session record and layout | Conversation resume | Open Needs you requests |
 | --- | --- | --- | --- | --- | --- | --- |
-| Close the window, keep the sessions | Keeps running | Kept: the window is minimized, not destroyed | Captured on the same cadence | Unchanged | Not needed; nothing stopped | Stay open |
-| Close the window and stop the sessions | Stopped, recorded *interrupted · last window close* | Ends with the process | A final capture is taken before the stop | Unchanged; the pane keeps its place | Resume reopens a bound conversation | Stay open; a harness that sends `SessionEnd` withdraws the ones its hook opened |
-| Quit | Stopped after BMN lists the running sessions and asks, recorded *interrupted · application quit* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open; `SessionEnd` withdraws the hook's own |
-| Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
-| Renderer crash | Keeps running | A new view is created, brought to the private terminal mode state the program is in, and the program is asked to repaint once; bytes from before the crash are not replayed | Unaffected | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
-| App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
-| Desktop source update | The updater waits for BMN to exit; it does not stop sessions. Quit stops them as *interrupted · application quit*; closing the last window and choosing Stop records *interrupted · last window close*. Keep running leaves the updater waiting | Ends when BMN exits; a keep-running close minimizes the window | Quit or close-stop takes the final capture before stopping; the updater takes none | Unchanged | Individual Resume reopens a bound Claude/Codex conversation or OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not | Stay open; a harness that sends `SessionEnd` withdraws its own |
+| Close the window, keep the sessions | Keeps running | Kept: the window is minimized, not destroyed | Captured on the same cadence; setup sessions: none | Unchanged | Not needed; nothing stopped | Stay open |
+| Close the window and stop the sessions | Stopped, recorded *interrupted · last window close* | Ends with the process | A final capture is taken before the stop; setup sessions: none | Unchanged; the pane keeps its place | Resume reopens a bound conversation | Stay open; a harness that sends `SessionEnd` withdraws the ones its hook opened |
+| Quit | Stopped after BMN lists the running sessions and asks, recorded *interrupted · application quit* | Ends with the process | A final capture is taken before the stop; setup sessions: none | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open; `SessionEnd` withdraws the hook's own |
+| Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop; setup sessions: none | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
+| Renderer crash | Keeps running | A new view is created, brought to the private terminal mode state the program is in, and the program is asked to repaint once; bytes from before the crash are not replayed | Unaffected; setup sessions: none | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
+| App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost; setup sessions: none | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
+| Desktop source update | The updater waits for BMN to exit; it does not stop sessions. Quit stops them as *interrupted · application quit*; closing the last window and choosing Stop records *interrupted · last window close*. Keep running leaves the updater waiting | Ends when BMN exits; a keep-running close minimizes the window | Quit or close-stop takes the final capture before stopping; the updater takes none; setup sessions: none | Unchanged | Individual Resume reopens a bound Claude/Codex conversation or OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not | Stay open; a harness that sends `SessionEnd` withdraws its own |
 
-Saved output is a plain-text snapshot of the live screen, taken periodically, on stop and on quit;
-it is never replayed into a terminal. *Resume* reopens the stored Claude Code or Codex conversation
+Ordinary saved output is a plain-text snapshot of the live screen, taken periodically, on stop and
+on quit; it is never replayed into a terminal. Setup sessions have no saved output in any row above,
+including a crash; their install and sign-in commands are never restarted automatically. *Resume* reopens the stored Claude Code or Codex conversation
 through each CLI's own resume, or an OpenCode conversation with `opencode --session <id>`, and only
 for a session whose conversation BMN knows: one it pinned at launch, one you located by hand, or one
 the harness reported through its `SessionStart` hook or OpenCode plugin. A
