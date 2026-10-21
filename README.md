@@ -1,3 +1,4 @@
+<!-- MODULE: README.md - Build BMN and start a first session. -->
 # BMN
 
 *Be a man: use a proper terminal.*
@@ -168,6 +169,8 @@ pnpm --filter @bmn/desktop run dev
 3. Press `Ctrl+Shift+P`, choose **New workspace…**, and name a project. Choose **New session…**
    there, then pick a launch template or enter a command and working directory. A shell works
    without agent integration; each agent keeps its own settings and authentication.
+   Before an agent can read a private project, approve its destination in **Health › Set destination**,
+   choose **Allow here**, and resend the first prompt if it was stopped.
 4. Use the terminal normally. `Ctrl+Shift+Enter` opens a second session beside it; the Files panel
    accepts attachments and shows agent-published output.
 5. Stop an ordinary session to keep its saved screen. **Start again** runs a fresh process;
