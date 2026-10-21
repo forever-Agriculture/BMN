@@ -80,6 +80,14 @@ describe('fresh setup defaults coordinator', () => {
     assert(!readFileSync(targetPath(app), 'utf8').includes('Synthetic personal data'))
   })
 
+  it('reports skills an app already holds as current on the next read, not waiting', async () => {
+    await prepare(); approve(); qualify('codex')
+    const first = await apply(['codex']); assert.equal(first.code, 'OK', JSON.stringify(first))
+    assert.equal(first.rows.find(row => row.kind === 'skills' && row.app === 'codex').state, 'installed')
+    const next = await apply(['codex']); assert.equal(next.code, 'OK', JSON.stringify(next))
+    assert.equal(next.rows.find(row => row.kind === 'skills' && row.app === 'codex').state, 'current')
+  })
+
   it('adds a later ready app on the next read while keeping an undone rules file absent after restart', async () => {
     await prepare(); approve(); qualify('codex'); qualify('claude')
     const first = await apply(['codex']); assert.equal(first.code, 'OK', JSON.stringify(first))

@@ -122,7 +122,12 @@ export async function coordinateSetupDefaults(request) {
       // Keep the row's path available even where an existing foreign group made no write.
       for (const row of rows.filter(row => row.kind === 'hooks' && row.app === app)) if (row.paths.length === 0) row.paths.push(path)
     }
-    if (own.code === 'OK') await run('skills', app, () => installSkills([app], { yes: true, asJson: true, absent: true, versions }))
+    if (own.code === 'OK') await run('skills', app, async () => {
+      const result = await installSkills([app], { yes: true, asJson: true, absent: true, versions })
+      // Nothing to write and nothing held back: the app already has every skill.
+      const held = result.written?.length === 0 && result.transaction === null && Array.isArray(result.exposed) && result.exposed.length === 0
+      return result.code === 'OK' && held ? { ...result, state: 'current' } : result
+    })
     else rows.push(project('skills', app, { code: 'DEFAULTS_SOURCE_UNAVAILABLE' }))
     for (const tool of generation.data.tools ?? []) await run('tools', app, () => installSetupTool(app, tool.id, { setupId, versions }))
   }
