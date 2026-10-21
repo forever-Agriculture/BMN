@@ -713,7 +713,8 @@ function shortTimeouts(agent, data) {
   const short = []
   for (const event of HOOK_FILES[agent]?.events ?? []) {
     const wanted = hookEntryTimeout(agent, event)
-    if (wanted === HOOK_ENTRY_TIMEOUT || !Array.isArray(data.hooks[event])) continue
+    // Only a timeout above the ordinary one is raised; Codex's shorter caps never touch an existing entry.
+    if (wanted <= HOOK_ENTRY_TIMEOUT || !Array.isArray(data.hooks[event])) continue
     const ours = data.hooks[event].flatMap((group) => isObject(group) && !gatesEvent(group.matcher, agent, event) && Array.isArray(group.hooks) ? group.hooks : [])
       .filter((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)))
     if (ours.some((entry) => typeof entry.timeout === 'number' && entry.timeout > 0 && entry.timeout < wanted)) short.push(event)
@@ -765,8 +766,12 @@ function widenMatchers(agent, data, events) {
   return { ...data, hooks }
 }
 
+/** Codex 0.163.0 clamps these to 3 s and warns at every start for a longer entry (Story 79.6's clean run). */
+const CODEX_SHORT_EVENTS = new Set(['SessionEnd', 'Interrupt'])
+
 /** The timeout BMN writes for one event's entry: Claude's permission hook waits for the phone (Epic 78). */
 function hookEntryTimeout(agent, event) {
+  if (agent === 'codex' && CODEX_SHORT_EVENTS.has(event)) return 3
   return agent === 'claude' && event === 'PermissionRequest' ? PERMISSION_HOOK_TIMEOUT : HOOK_ENTRY_TIMEOUT
 }
 

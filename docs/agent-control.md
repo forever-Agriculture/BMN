@@ -820,7 +820,8 @@ already there:
   entry with its earlier matcher `"AskUserQuestion"` reads `wired (older wording)`, and `install` and BMN's start widen
   it in place when its group holds only BMN's entry. Any other matcher on BMN's entry gates it.
 - For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`, `PostToolUse`,
-  `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`; Codex must then trust them once with
+  `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`, the last two with `"timeout": 3`, the
+  most Codex 0.163.0 allows there (a longer one is clamped with a warning at every start); Codex must then trust them once with
   `/hooks`, which no command can do for you. `PreToolUse` carries queued `request_user_input_async` questions, as Codex
   has no `Notification` event. `PermissionRequest` is optional and `install` never adds it: Codex fires it before Auto
   Review decides whether you must approve, so add it only without Auto Review.

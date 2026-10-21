@@ -61,6 +61,14 @@ describe('setup hook groups', () => {
     })
   }
 
+  it('keeps Codex session-end and interrupt entries within the 3 s Codex allows', () => {
+    // Codex 0.163.0 warns "clamping SessionEnd hook timeout to 3s" at every start for a longer one (79.6 clean run).
+    const groups = setupHookGroups('codex', '{}').groups
+    assert.deepEqual(['SessionEnd', 'Interrupt'].map(event => groups[event].hooks[0].timeout), [3, 3])
+    assert.equal(groups.Stop.hooks[0].timeout, 5)
+    assert.equal(setupHookGroups('claude', '{}').groups.SessionEnd.hooks[0].timeout, 5)
+  })
+
   it('does not install before team approval', () => {
     rmSync(join(root, '.config/bmn/agents/state/current'))
     assert.equal(install().code, 'NOT_APPROVED'); assert(!existsSync(setupHookPath('codex', environment)))
