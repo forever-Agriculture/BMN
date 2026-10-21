@@ -17,7 +17,7 @@ export const PROBLEMS = Object.freeze({
   'sandbox-check': ['App sandbox needs attention', 'Inspect the app doctor yourself.'],
   'state-check': ['App state needs attention', 'Inspect the app doctor yourself.'],
   'disk-check': ['Disk space needs attention', 'Inspect the app doctor yourself.'],
-  'terminal-check': ['Terminal environment needs attention', 'Inspect the app doctor yourself.'],
+  'terminal-check': ['Terminal environment needs attention', 'Warning from BMN’s unattended check. Your interactive terminal was not assessed.'],
   'updates-check': ['App updates need attention', 'Inspect the app doctor yourself.'],
   'hook-check': ['Hook is not wired', 'Review Hooks in Health.'],
   'skill-check': ['Skill needs attention', 'Review Skills in Health.'],

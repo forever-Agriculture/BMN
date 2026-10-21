@@ -1,7 +1,7 @@
 // MODULE: doctor-state.test.ts - Exact cadence, crash recovery and startup-only retry contracts
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { CHECKS } from '../../bin/doctor-results.mjs'
+import { CHECKS, parseCodexDoctor } from '../../bin/doctor-results.mjs'
 import { DAY, beginDoctorAttempt, doctorPlan, doctorView, emptyDoctorState, recoverDoctorAttempt, validateDoctorState } from '../../bin/doctor-state.mjs'
 
 const V1 = 'a'.repeat(64)
@@ -61,6 +61,33 @@ describe('shared doctor schedule', () => {
     const view = doctorView(state, { now: START + 20 })
     expect(view.exitCode).toBe(3)
     expect(view.problemCount).toBe(1)
+  })
+
+  it.each([
+    { label: 'unattended warning', status: 'warning', details: { TERM: 'dumb', NO_COLOR: '1' }, mixed: false },
+    { label: 'terminal failure', status: 'fail', details: { TERM: 'xterm', diagnostic: 'sk-SYNTHETIC-private' }, mixed: false },
+    { label: 'mixed findings', status: 'warning', details: { TERM: 'dumb' }, mixed: true }
+  ])('keeps $label actionable with unattended context through saved-state publication', ({ status, details, mixed }) => {
+    const checks = { 'terminal.env': { id: 'terminal.env', status, details, remediation: 'sk-SYNTHETIC-private' },
+      ...(mixed ? { 'state.paths': { id: 'state.paths', status: 'fail' }, unknown: { status: 'warning' } } : {}) }
+    const parsed = parseCodexDoctor(JSON.stringify({ schemaVersion: 1, overallStatus: mixed || status === 'fail' ? 'fail' : 'warning', checks }), 0)
+    const state = completed()
+    state.results.codex = { ...parsed, version: V1, checkedAt: START }
+    const restored = validateDoctorState(JSON.parse(JSON.stringify(state)))!
+    const view = doctorView(restored, { now: START + 20 })
+    const published = view.rows.find(row => row.check === 'codex')!
+    expect(published.state).toBe(parsed.state)
+    expect(published.problems.map(({ code, item }) => ({ code, item }))).toEqual(parsed.problems)
+    expect(published.problems.find(row => row.code === 'terminal-check')).toMatchObject({
+      reason: 'Terminal environment needs attention',
+      fix: 'Warning from BMN’s unattended check. Your interactive terminal was not assessed.'
+    })
+    expect(published.problems.some(row => row.code === 'additional-details')).toBe(true)
+    expect(published.problems.some(row => row.code === 'state-check')).toBe(mixed)
+    expect(view.problemCount).toBe(parsed.problems.length)
+    expect(view.allWell).toBe(false)
+    expect(view.exitCode).toBe(3)
+    expect(JSON.stringify(view)).not.toContain('SYNTHETIC')
   })
 
   it('rejects malformed state and projects away untrusted saved text', () => {
