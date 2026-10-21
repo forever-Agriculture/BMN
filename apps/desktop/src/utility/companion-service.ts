@@ -1208,7 +1208,7 @@ export class CompanionService {
         // Read-only: what the last scan found, with a stopped session's leftovers marked. Nothing here reads /proc.
         return this.ports.list() satisfies SessionPorts[]
       case METHOD_REGISTRY.setupHookEvidence: {
-        if (Object.keys(params).length !== 0) invalidHostControl('Hook evidence takes no parameters')
+        if (Object.keys(params).length !== 0) invalid('Hook evidence takes no parameters')
         await this.sessionsChanged()
         const observed = this.retainedHooks.observedAgent('codex')
         return { codex: observed === true ? 'observed' : observed === false ? 'not-observed' : 'unavailable' }
