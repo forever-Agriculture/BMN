@@ -6,7 +6,7 @@ import { join, resolve, isAbsolute, basename, dirname } from 'node:path'
 
 import { projectLeftovers } from './doctor-leftover-results.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
-import { bindLocation, locationRoots, observeDatabases, observeFile, observeTree, resolveLocation, unchangedAt, unresolvedLocation } from './doctor-locations.mjs'
+import { bindLocation, locationRoots, observeDatabases, observeFile, observeTree, resolveLocation, unchangedSince, unresolvedLocation } from './doctor-locations.mjs'
 import { readJsonEntries, readJsonItems, readTomlEntries } from './agents-tool-files.mjs'
 
 export const leftoversModule = import.meta.url
@@ -20,9 +20,14 @@ const H = profile.home
 const roots = locationRoots(profile)
 const observed = new Map()
 const databaseAbsences = []
-const locateTree = (path) => { try { return observeTree(path, roots) } catch { errors.push('unstable-tree'); return null } }
-// Only the location depends on this observation, so a folder too large to observe is listed without one.
-const treeLocation = (path) => { try { return observeTree(path, roots) } catch { return null } }
+// Folders and databases read outside `observed`, rechecked before publication.
+const held = []
+const hold = (observation) => { held.push(observation); return observation }
+const locateTree = (path) => { try { return hold(observeTree(path, roots)) } catch { errors.push('unstable-tree'); return null } }
+// Only the location depends on this observation, so a folder too large to observe is listed without one; one BMN cannot read is not.
+const treeLocation = (path) => {
+  try { return hold(observeTree(path, roots)) } catch (error) { if (error.code !== 'BOUND_EXCEEDED') errors.push('unstable-tree'); return null }
+}
 const tilde = (path) => (path.startsWith(`${H}/`) ? `~/${path.slice(H.length + 1)}` : path === H ? '~' : path)
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 const errors = []
@@ -173,6 +178,7 @@ async function codexMemory() {
   const { DatabaseSync } = await import('node:sqlite')
   const [memorySource, stateSource] = observeDatabases([path, join(profile.codex, 'state_5.sqlite')], roots)
   if (memorySource === null) throw new Error('memory observation unavailable')
+  hold(memorySource)
   if (stateSource === null) errors.push('unknown-memory-project-coverage')
   const scratch = mkdtempSync('/tmp/bmn-doctor-memory-')
   const opened = []
@@ -513,9 +519,10 @@ const dependencies = [...observed.values()].filter((item) => item.text !== null)
 let coverageStable = true
 let locatable = true
 for (const source of observed.values()) {
-  if (source.missing ? existsSync(source.path) : source.text !== null && !unchangedAt(source.path, source.locator)) coverageStable = false
+  if (source.missing ? existsSync(source.path) : source.text !== null && !unchangedSince(source)) coverageStable = false
   else if (source.text !== null && resolveLocation(source.locator, roots) === null) locatable = false
 }
+if (held.some((observation) => !unchangedSince(observation))) coverageStable = false
 if (databaseAbsences.some((path) => existsSync(path))) coverageStable = false
 if (!coverageStable) errors.push('observation-changed-before-publication')
 for (const section of Object.values(report)) {

@@ -18,10 +18,12 @@ const absent = (error) => ['ENOENT', 'ENOTDIR'].includes(error.code)
 const optional = (path, follow = false) => { try { return metadata(path, follow) } catch (error) { if (absent(error)) return null; throw error } }
 const sorted = (path) => {
   const names = readdirSync(path, { encoding: 'buffer' })
-  if (names.length > 10000) fail()
+  if (names.length > 10000) exceeded()
   return names.sort(Buffer.compare)
 }
 const fail = () => { throw new Error('observation unavailable') }
+/** A size bound, told apart from an unreadable or changing source: only a location may be given up for it. */
+const exceeded = () => { throw Object.assign(new Error('observation bound exceeded'), { code: 'BOUND_EXCEEDED' }) }
 const LIMIT = 256
 
 export function locationRoots(profile) {
@@ -71,7 +73,8 @@ export function observeFile(path, roots, { maxBytes = 1024 * 1024, expected = nu
   try {
     if (!sameCurrent(path, source)) fail()
     const expectedFile = source.target ?? source.object
-    if (expectedFile.type !== 'file' || Number(expectedFile.size) > maxBytes) fail()
+    if (expectedFile.type !== 'file') fail()
+    if (Number(expectedFile.size) > maxBytes) exceeded()
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK)
     if (!equal(record(fstatSync(descriptor, { bigint: true })), expectedFile)) fail()
     const bytes = Buffer.alloc(Number(expectedFile.size))
@@ -84,7 +87,7 @@ export function observeFile(path, roots, { maxBytes = 1024 * 1024, expected = nu
     if (!equal(record(fstatSync(descriptor, { bigint: true })), expectedFile) || !sameCurrent(path, source)) fail()
     const text = bytes.toString('utf8')
     if (!binary && !Buffer.from(text).equals(bytes)) fail()
-    return { path, bytes, text, locator: publish(source) }
+    return { path, bytes, text, locator: publish(source), revisions: [{ path, snapshot: source }] }
   } finally { if (descriptor !== undefined) closeSync(descriptor) }
 }
 
@@ -100,13 +103,13 @@ export function observeTree(path, roots) {
   if (source.object.type === 'link') link = readlinkSync(path)
   const body = source.object.type === 'link' && source.target !== null ? realpathSync(path) : path
   const walk = (current, name, depth) => {
-    if (dependencies.length >= LIMIT - 1 || depth > 12) fail()
+    if (dependencies.length >= LIMIT - 1 || depth > 12) exceeded()
     const snapshot = capture(current, roots)
     dependencies.push({ path: current, snapshot })
     if (snapshot.object.type === 'file') {
       const observed = observeFile(current, roots, { expected: snapshot, binary: true })
       total += observed.bytes.length
-      if (total > 16 * 1024 * 1024) fail()
+      if (total > 16 * 1024 * 1024) exceeded()
       files.set(name, observed.bytes)
       entries.push([name, 'file', snapshot.object.mode, createHash('sha256').update(observed.bytes).digest('hex')])
     } else if (snapshot.object.type === 'directory') {
@@ -129,7 +132,7 @@ export function observeTree(path, roots) {
   if (!sameCurrent(path, source) || dependencies.some((item) => !sameCurrent(item.path, item.snapshot))) fail()
   return { path, body, link, kind: source.object.type, missingTarget: source.object.type === 'link' && source.target === null,
     files, directories, hash: createHash('sha256').update(JSON.stringify(entries)).digest('hex'),
-    locator: publish(source, dependencies.map((item) => item.snapshot)) }
+    locator: publish(source, dependencies.map((item) => item.snapshot)), revisions: [{ path, snapshot: source }, ...dependencies] }
 }
 
 /** Both DBs, WAL lifecycle and rollback-journal absence are one source vector, captured before any copy. */
@@ -153,7 +156,8 @@ export function observeDatabases(paths, roots) {
   if (vector.some((item) => item.source === null ? optional(item.path) !== null || !equal(metadata(dirname(item.path), true), item.parent)
     : !sameCurrent(item.path, item.source) || item.wal !== null && !sameCurrent(`${item.path}-wal`, item.wal))) fail()
   const dependencies = vector.filter((item) => item.source !== null).map((item) => item.source)
-  return observations.map((item) => item === null ? null : { ...item, locator: { ...item.locator, witnesses: dependencies } })
+  const revisions = vector.map((item) => ({ path: item.path, snapshot: item.source }))
+  return observations.map((item) => item === null ? null : { ...item, locator: { ...item.locator, witnesses: dependencies }, revisions })
 }
 
 /** Never recapture a newer source to attach coordinates to old bytes. */
@@ -178,10 +182,19 @@ export function bindLocation(observation, roots, { start = null, rowid = null, d
   return clean?.status === 'located' && resolveLocation(clean, roots) !== null ? clean : unresolvedLocation()
 }
 
-/** Whether the revision observed at a known path is still there, without searching for it. */
-export function unchangedAt(path, value) {
-  const locator = validateLocation(value)
-  return locator?.status === 'located' && sameCurrent(path, locator)
+/** The object itself, its followed target and SQLite WAL and journal; a sibling's churn in the parent moves only the location. */
+function sameObject(path, value) {
+  try {
+    return equal(metadata(path), value.object) && (value.target === undefined || equal(optional(path, true), value.target)) &&
+      (value.wal === undefined || equal(optional(`${path}-wal`), value.wal)) && (!value.journalAbsent || optional(`${path}-journal`) === null)
+  } catch { return false }
+}
+
+/** Whether every revision an observation was read from is still at its known path (an absent one still absent), without searching. */
+export function unchangedSince(observation) {
+  return Array.isArray(observation?.revisions) && observation.revisions.every(({ path, snapshot }) => {
+    try { return snapshot === null ? optional(path) === null : sameObject(path, snapshot) } catch { return false }
+  })
 }
 
 /** Coordinates with text acquire and compare that text; callers cannot attach stale parsed bytes. */

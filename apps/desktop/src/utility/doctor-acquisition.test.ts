@@ -1,6 +1,6 @@
 // MODULE: doctor-acquisition.test.ts - Deterministic mutations at the actual scanner filesystem boundaries
 import { DatabaseSync } from 'node:sqlite'
-import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -227,4 +227,49 @@ it('resolves unchanged numeric memory rows with both databases actively using WA
   expect(JSON.stringify(result)).not.toMatch(/ordinary|password|missing-a/)
   state.exec("update threads set cwd='/other'")
   expect(result.leftovers?.every((row) => resolveLocation(row.locator, map) === null)).toBe(true)
+})
+
+// Astra review 20261022T154230-1f24cfba: only a location lookup is exempt from partial, never an unreadable or changed source.
+it.skipIf(process.getuid?.() === 0)('keeps a plugin cache folder BMN cannot read partial', async () => {
+  const folder = join(home, '.codex/plugins/cache/market/ordinary/1')
+  put(join(folder, 'file'), 'bytes')
+  chmodSync(folder, 0)
+  try {
+    const result = await scan()
+    expect(result.state).toBe('partial')
+  } finally { chmodSync(folder, 0o700) }
+})
+
+it('keeps a plugin cache folder changed after observation and before publication partial', async () => {
+  const folder = join(home, '.codex/plugins/cache/market/ordinary/1')
+  put(join(folder, 'file'), 'bytes')
+  const later = join(home, '.config/opencode/plugins'); mkdirSync(later, { recursive: true })
+  const fired = mutateOnce(later, ['readdirSync'], () => put(join(folder, 'file'), 'other bytes'))
+  const result = await scan()
+  expect(fired()).toBe(true)
+  expect(result.state).toBe('partial')
+})
+
+it('keeps a check passed when only a sibling of an unchanged source appears during the scan', async () => {
+  const path = join(home, '.config/opencode/opencode.json')
+  put(path, '{"plugin":["./ordinary","./password"]}')
+  const later = join(home, '.config/opencode/plugins'); mkdirSync(later, { recursive: true })
+  const fired = mutateOnce(later, ['readdirSync'], () => put(join(home, '.config/opencode/zzz'), 'bytes'))
+  const result = await scan()
+  expect(fired()).toBe(true)
+  expect(result.state).toBe('passed')
+  expect(result.leftovers).toHaveLength(2)
+})
+
+it('keeps a memory database changed after observation and before publication partial', async () => {
+  const path = join(home, '.codex/memories_1.sqlite'); mkdirSync(join(path, '..'), { recursive: true })
+  const db = new DatabaseSync(path); databases.push(db)
+  db.exec("create table stage1_outputs(thread_id text, usage_count integer, selected_for_phase2 integer); insert into stage1_outputs values ('ordinary',0,0),('password',0,0)")
+  const state = new DatabaseSync(join(home, '.codex/state_5.sqlite')); databases.push(state)
+  state.exec("create table threads(id text,cwd text); insert into threads values ('ordinary','/missing-a'),('password','/missing-b')")
+  const later = join(home, '.config/opencode/plugins'); mkdirSync(later, { recursive: true })
+  const fired = mutateOnce(later, ['readdirSync'], () => db.exec("insert into stage1_outputs values ('added',0,0)"))
+  const result = await scan()
+  expect(fired()).toBe(true)
+  expect(result.state).toBe('partial')
 })

@@ -2416,7 +2416,9 @@ recheck the original revisions and every witness. Legacy coordinates become unre
 acquired observations. A bounded metadata lookup marks changed, reordered, replaced or unverifiable
 coordinates stale. A source that changed during the scan, an exhausted bound on an input a reason depends on, or an
 unreadable item makes the check partial; an item whose location cannot be found again is listed as "location
-unavailable" and does not (owner card 2026-10-22). `locationHelp` explains manual
+unavailable" and does not (owner card 2026-10-22). Before publishing, every file, folder and database the scan read is
+rechecked at the path it was read from. A plugin cache folder too large to observe is listed without a location; one
+BMN cannot read makes the check partial. `locationHelp` explains manual
 resolution and revision verification. A stale item coordinate stays show-only and does not make a fresh,
 successful check stale. Text output also lists each show-only item. Leftovers do not count as
 problems or Needs-you. Saved state is schema-validated and atomic
