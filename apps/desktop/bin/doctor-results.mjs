@@ -111,7 +111,8 @@ export function parseClaudeDoctor(text, exitCode) {
   for (const line of lines.slice(1)) {
     const count = /^(\d+) warnings? found$/.exec(line)
     if (count) { warnings = Number(count[1]); continue }
-    if (line === 'No issues found' || line === 'No warnings found') { warnings = 0; continue }
+    // Claude 2.1.308 says "No installation issues found."; earlier versions use the two shorter lines.
+    if (['No issues found', 'No warnings found', 'No installation issues found.'].includes(line)) { warnings = 0; continue }
     if (line.startsWith('- ')) {
       const content = line.slice(2)
       if (warnings === null && CLAUDE_REMOTE.test(content)) {

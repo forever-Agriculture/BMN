@@ -58,6 +58,17 @@ describe('doctor result projection', () => {
     expect(parsed).toEqual({ state: 'problems', problems: [{ code: 'auth-check', item: 1 }] })
   })
 
+  it('reads Claude 2.1.308 reporting no installation issues as passed', () => {
+    const text = ['Claude Code doctor', 'Running: native (2.1.308)', 'Commit: 320f66eb8f83', 'Platform: linux-x64', `Path: ${SECRET}`,
+      'Config install method: native', 'Search: OK (bundled)', 'Auto-updates: disabled (set by env: DISABLE_AUTOUPDATER)', 'Remote Control',
+      'Remote Control requires feature-flag evaluation, which is disabled because CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set. Unset it (or run in a shell without it) to use Remote Control.',
+      '- Feature-flag evaluation disabled (disabled by CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)',
+      '- Remote Control availability could not be verified (no server response this session)', '', 'No installation issues found.', '',
+      'For a full setup checkup that can also fix issues, run /doctor in a Claude Code session.'].join('\n')
+    expect(parseClaudeDoctor(text, 0)).toEqual({ state: 'passed', problems: [] })
+    expect(parseClaudeDoctor(text.replace('No installation issues found.', 'No installation issues found'), 0).state).toBe('partial')
+  })
+
   it('validates saved facts and drops unknown state fields before display', () => {
     expect(projectedResult({ state: 'passed', problems: [], secret: SECRET })).toEqual({ state: 'passed', problems: [] })
     expect(projectedResult({ state: 'problems', problems: [{ code: SECRET, item: 1 }] })).toBeNull()
