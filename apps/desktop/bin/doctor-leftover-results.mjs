@@ -41,9 +41,10 @@ export function validateLeftovers(value) {
 export function projectLeftovers(report) {
   const leftovers = []
   let partial = !report || !Array.isArray(report.errors) || report.errors.length > 0
+  // A location that cannot be found again is not a gap (owner card 2026-10-22); an item BMN could not read is.
   const add = (kind, app, reason, row = {}) => {
     const locator = validateLocation(row.locator) ?? unresolvedLocation()
-    if (locator.status !== 'located') partial = true
+    if (reason === 'unreadable') partial = true
     leftovers.push({ kind, app, reason, item: leftovers.length + 1, identity: 'withheld', locator })
   }
   const section = (key) => {

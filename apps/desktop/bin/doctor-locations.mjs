@@ -178,6 +178,12 @@ export function bindLocation(observation, roots, { start = null, rowid = null, d
   return clean?.status === 'located' && resolveLocation(clean, roots) !== null ? clean : unresolvedLocation()
 }
 
+/** Whether the revision observed at a known path is still there, without searching for it. */
+export function unchangedAt(path, value) {
+  const locator = validateLocation(value)
+  return locator?.status === 'located' && sameCurrent(path, locator)
+}
+
 /** Coordinates with text acquire and compare that text; callers cannot attach stale parsed bytes. */
 export function locateItem(path, roots, { text = null, start = null, rowid = null } = {}) {
   try {

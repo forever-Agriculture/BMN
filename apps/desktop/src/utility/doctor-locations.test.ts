@@ -99,6 +99,15 @@ it('individually resolves every retained kind, plugin install/cache and numeric 
   expect(resolveLocation(memory.locator, map)).toBeNull()
 })
 
+it('lists a plugin cache folder too large to observe without making the check partial', async () => {
+  const home = fixture()
+  const folder = join(home, '.codex/plugins/cache/market/ordinary/1')
+  for (let index = 0; index < 300; index++) put(join(folder, `file-${index}`), 'bytes')
+  const result = await runLeftoversDoctor(home, { HOME: home, PATH: '/usr/bin:/bin' }, {})
+  expect(result.state).toBe('passed')
+  expect(result.leftovers?.map((row) => [row.reason, row.locator?.status])).toEqual([['app-managed', 'unresolved']])
+})
+
 it('keeps selected temporary symlink roots at their actual absolute paths and refuses writes', async () => {
   const home = fixture()
   const outside = fixture()

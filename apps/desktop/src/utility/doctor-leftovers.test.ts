@@ -1,8 +1,8 @@
 // MODULE: doctor-leftovers.test.ts - Show-only projection preserves predicates while withholding all source names and contents
 import { describe, expect, it } from 'vitest'
-import { projectLeftovers, validateLeftovers } from '../../bin/doctor-leftover-results.mjs'
+import { leftoverLocation, projectLeftovers, validateLeftovers } from '../../bin/doctor-leftover-results.mjs'
 import { CHECKS } from '../../bin/doctor-results.mjs'
-import { doctorView, emptyDoctorState } from '../../bin/doctor-state.mjs'
+import { doctorView, emptyDoctorState, validateDoctorState } from '../../bin/doctor-state.mjs'
 
 const SECRET = 'sk-SYNTHETIC-NAME-123456abcdef'
 const stat = { device: '1', inode: '2', size: '3', modified: '4', changed: '5', mode: '33188', type: 'file' }
@@ -37,6 +37,29 @@ describe('show-only leftover inventory', () => {
     expect(projected.leftovers).toHaveLength(1)
     expect(JSON.stringify(projected)).not.toContain(SECRET)
     expect(validateLeftovers([{ kind: 'skills', app: null, reason: SECRET, item: 1 }])).toBeNull()
+  })
+
+  // Owner card 2026-10-22 "Show items, no locations": a location that cannot be found again is not a gap in the check.
+  it('lists items whose location cannot be found as a passed check, each without a location', () => {
+    const projected = projectLeftovers({ ...empty(), plugins_claude: { rows: [{ class: 'disabled' }, { class: 'app-managed' }] } })
+    expect(projected).toMatchObject({ state: 'passed', problems: [] })
+    expect(projected.leftovers?.map((row) => leftoverLocation(row))).toEqual(['Identity withheld · location unavailable', 'Identity withheld · location unavailable'])
+  })
+
+  it('keeps an unreadable item partial even when every section was read', () => {
+    const projected = projectLeftovers({ ...empty(), mcp: { rows: [{ ...source, app: 'codex', verdict: 'show-only: unreadable' }] } })
+    expect(projected.state).toBe('partial')
+    expect(projected.leftovers?.[0]?.locator?.status).toBe('located')
+  })
+
+  it('keeps a saved passed check passed when its items have no location', () => {
+    const state = emptyDoctorState()
+    state.versions = 'a'.repeat(64)
+    for (const check of CHECKS) state.results[check] = { state: 'passed', problems: [], checkedAt: 1000, version: state.versions }
+    state.results.leftovers!.leftovers = [{ kind: 'plugins', app: 'claude', reason: 'disabled', item: 1, identity: 'withheld', locator: { status: 'unresolved' } }]
+    const read = validateDoctorState(JSON.parse(JSON.stringify(state)))
+    expect(read?.results.leftovers).toMatchObject({ state: 'passed', problems: [] })
+    expect(doctorView(read!, { now: 1100 }).allWell).toBe(true)
   })
 
   it('does not turn leftovers into problems or suppress an otherwise fresh All well', () => {

@@ -50,10 +50,6 @@ export function validateDoctorState(value) {
     const row = value.results[check]
     const projected = projectedResult(row)
     if (projected === null || !time(row.checkedAt) || !digest(row.version)) return null
-    if (projected.leftovers?.some((item) => item.locator?.status === 'unresolved')) {
-      projected.state = 'partial'
-      if (!projected.problems.some((problem) => problem.code === 'additional-details')) projected.problems.push({ code: 'additional-details', item: 1 })
-    }
     state.results[check] = { ...projected, checkedAt: row.checkedAt, version: row.version }
   }
   for (const app of ['claude', 'codex']) {

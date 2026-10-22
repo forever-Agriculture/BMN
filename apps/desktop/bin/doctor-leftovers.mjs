@@ -6,7 +6,7 @@ import { join, resolve, isAbsolute, basename, dirname } from 'node:path'
 
 import { projectLeftovers } from './doctor-leftover-results.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
-import { bindLocation, locationRoots, observeDatabases, observeFile, observeTree, resolveLocation, unresolvedLocation } from './doctor-locations.mjs'
+import { bindLocation, locationRoots, observeDatabases, observeFile, observeTree, resolveLocation, unchangedAt, unresolvedLocation } from './doctor-locations.mjs'
 import { readJsonEntries, readJsonItems, readTomlEntries } from './agents-tool-files.mjs'
 
 export const leftoversModule = import.meta.url
@@ -21,6 +21,8 @@ const roots = locationRoots(profile)
 const observed = new Map()
 const databaseAbsences = []
 const locateTree = (path) => { try { return observeTree(path, roots) } catch { errors.push('unstable-tree'); return null } }
+// Only the location depends on this observation, so a folder too large to observe is listed without one.
+const treeLocation = (path) => { try { return observeTree(path, roots) } catch { return null } }
 const tilde = (path) => (path.startsWith(`${H}/`) ? `~/${path.slice(H.length + 1)}` : path === H ? '~' : path)
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 const errors = []
@@ -330,7 +332,7 @@ function cacheItems(cache, referenced) {
   for (const market of isDir(cache) ? readdirSync(cache) : []) for (const plugin of isDir(join(cache, market)) ? readdirSync(join(cache, market)) : []) {
     for (const version of isDir(join(cache, market, plugin)) ? readdirSync(join(cache, market, plugin)) : []) {
       const path = join(cache, market, plugin, version)
-      if (isDir(path) && !referenced(path, plugin, market)) rows.push({ class: 'app-managed', locator: bindLocation(locateTree(path), roots) })
+      if (isDir(path) && !referenced(path, plugin, market)) rows.push({ class: 'app-managed', locator: bindLocation(treeLocation(path), roots) })
     }
   }
   return rows
@@ -507,9 +509,12 @@ await step('plugins_opencode', openCodePlugins)
 await step('mcp', mcpInventory)
 // Publication uses only the original observations; a later read can never repair their provenance.
 const dependencies = [...observed.values()].filter((item) => item.text !== null)
+// A changed source makes the scan incomplete; one that is unchanged but cannot be found again only withholds the coordinates.
 let coverageStable = true
+let locatable = true
 for (const source of observed.values()) {
-  if (source.missing ? existsSync(source.path) : source.text !== null && resolveLocation(source.locator, roots) === null) coverageStable = false
+  if (source.missing ? existsSync(source.path) : source.text !== null && !unchangedAt(source.path, source.locator)) coverageStable = false
+  else if (source.text !== null && resolveLocation(source.locator, roots) === null) locatable = false
 }
 if (databaseAbsences.some((path) => existsSync(path))) coverageStable = false
 if (!coverageStable) errors.push('observation-changed-before-publication')
@@ -517,7 +522,7 @@ for (const section of Object.values(report)) {
   if (!section || typeof section !== 'object' || Array.isArray(section)) continue
   for (const row of [...(section.rows ?? []), ...(section.items ?? [])]) {
     if (!row.locator) continue
-    row.locator = coverageStable ? bindLocation({ locator: row.locator }, roots, { dependencies }) : unresolvedLocation()
+    row.locator = coverageStable && locatable ? bindLocation({ locator: row.locator }, roots, { dependencies }) : unresolvedLocation()
   }
 }
 return projectLeftovers(report)
