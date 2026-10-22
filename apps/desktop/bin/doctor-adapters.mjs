@@ -79,6 +79,9 @@ export function sandboxArguments(home, command, args, environment = {}) {
     } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error }
   }
   for (const path of Object.values(profile.paths)) restore(path)
+  // OpenCode opens its log for writing even for --version; it gets a throwaway folder in place of the real one.
+  const openCodeLog = join(profile.paths.XDG_DATA_HOME, 'opencode/log')
+  try { if (lstatSync(openCodeLog).isDirectory()) mounts.push('--tmpfs', openCodeLog) } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error }
   // The scratch directory must never be placed inside a selected read-only subtree.
   const scratch = '/tmp/bmn-doctor-work'
   if (Object.values(profile.paths).some((path) => scratch === path || scratch.startsWith(`${path}/`))) throw new Error('scratch overlaps selected profile')

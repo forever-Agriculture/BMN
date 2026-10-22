@@ -1,9 +1,9 @@
 // MODULE: doctor-profile.test.ts - Selected-profile and individually locatable Doctor regression evidence
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { doctorEnvironment, doctorVersions, runLeftoversDoctor, sandboxArguments } from '../../bin/doctor-adapters.mjs'
+import { doctorEnvironment, doctorVersions, runLeftoversDoctor, sandboxArguments, sandboxProcess } from '../../bin/doctor-adapters.mjs'
 import { doctorPaths, doctorWorker, loadDoctorState, readDoctorView, runDoctorCommand } from '../../bin/doctor.mjs'
 import { locateItem, locationRoots } from '../../bin/doctor-locations.mjs'
 import { selectedProfile } from '../../bin/doctor-profile.mjs'
@@ -167,6 +167,17 @@ it('reports a missing explicit profile as unavailable instead of a successful em
 it('refuses a selected whole private temporary root rather than checking an empty replacement', () => {
   const home = fixture()
   expect(() => sandboxArguments(home, process.execPath, ['--version'], { HOME: home, XDG_CACHE_HOME: '/var/tmp' })).toThrow()
+})
+
+it('lets OpenCode write its log into a throwaway folder while the selected profile stays read-only', async () => {
+  const home = fixture()
+  const log = join(home, '.local/share/opencode/log')
+  mkdirSync(log, { recursive: true })
+  const run = await sandboxProcess(home, '/bin/sh', ['-c', 'echo synthetic > "$1/opencode.log" && ! (echo blocked > "$2/blocked") 2>/dev/null', 'sh', log, home],
+    { HOME: home, PATH: '/usr/bin:/bin' })
+  expect(run).toMatchObject({ code: 0, failure: null })
+  expect(readdirSync(log)).toEqual([])
+  expect(existsSync(join(home, 'blocked'))).toBe(false)
 })
 
 it('keeps a changed show-only item locatable as stale without creating a check problem or attention', async () => {
