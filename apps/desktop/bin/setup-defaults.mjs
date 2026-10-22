@@ -14,6 +14,7 @@ import { installSetupHook, setupHookPath } from './setup-hook-defaults.mjs'
 import { setupHookGroups } from './bmn-hooks.mjs'
 import { installSetupOpenCodeHooks } from './setup-opencode-hooks.mjs'
 import { installSetupTool } from './setup-tool-defaults.mjs'
+import { toolReachesApp } from './agents-tools.mjs'
 import { readSetupRecovery } from './setup-recovery.mjs'
 
 const fail = code => Object.assign(new Error(code), { code })
@@ -129,7 +130,10 @@ export async function coordinateSetupDefaults(request) {
       return result.code === 'OK' && held ? { ...result, state: 'current' } : result
     })
     else rows.push(project('skills', app, { code: 'DEFAULTS_SOURCE_UNAVAILABLE' }))
-    for (const tool of generation.data.tools ?? []) await run('tools', app, () => installSetupTool(app, tool.id, { setupId, versions }))
+    const tools = (generation.data.tools ?? []).filter(tool => toolReachesApp(tool, app))
+    for (const tool of tools) await run('tools', app, () => installSetupTool(app, tool.id, { setupId, versions }))
+    // No approved tool is meant for this app (owner 2026-10-22: OpenCode gets none), so its tools step is settled.
+    if (tools.length === 0) rows.push(project('tools', app, { code: 'OK', state: 'excluded' }))
   }
   return finish({ code: rows.every(row => row.code === 'OK') ? 'OK' : 'DEFAULTS_PARTIAL', source, names, rows })
 }

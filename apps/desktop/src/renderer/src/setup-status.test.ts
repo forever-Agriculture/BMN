@@ -47,3 +47,8 @@ it('honours deliberate removals and retains every recovery location for the owne
   report.rows[2]!.recoveryPaths = ['/synthetic/held-one']
   expect(setupStatus(apps, team, report)).toMatchObject({ canFinish: true, recoveryPaths: ['/synthetic/held-one', '/synthetic/held-two'] })
 })
+
+it('counts an app that no approved tool reaches as ready', () => {
+  const report: SetupDefaultsReport = { ...good, rows: good.rows.map(row => row.kind === 'tools' ? { ...row, state: 'excluded', transaction: null } : row) }
+  expect(setupStatus(apps, team, report)).toMatchObject({ defaults: 'Ready for 1 app', canFinish: true })
+})

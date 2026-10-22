@@ -469,11 +469,14 @@ function writePrivateToolRecord(records) {
   } finally { rmSync(temporary, { force: true }) }
 }
 
+/** Whether a tool's own scope reaches an app: a tool kept to some agents reaches none, one kept to some apps only those. */
+export function toolReachesApp(tool, harness) {
+  return tool.agents === undefined && (tool.apps === undefined || tool.apps.includes(harness))
+}
+
 /** Whether an app may have a tool installed: the tool's own scope, and Public on a destination that gets public work only. */
 function eligible(tool, harness, kind) {
-  if (tool.agents !== undefined) return false
-  if (tool.apps !== undefined && !tool.apps.includes(harness)) return false
-  return kind === 'full' || tool.public === true
+  return toolReachesApp(tool, harness) && (kind === 'full' || tool.public === true)
 }
 
 /** A tool's program or address in a few words, never an argument: an argument may be long or private. Mirrored in renderer tools-view.ts, which cannot load bin modules. */

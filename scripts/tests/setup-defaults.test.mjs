@@ -23,11 +23,11 @@ let root, saved
 const request = (mode = 'apply', apps = ['codex'], initialize = false) => ({ mode, claim: { setupId, initialize }, ready: apps.map(app => ({ app, version: versions[app] })) })
 const apply = apps => coordinateSetupDefaults(request('apply', apps))
 const prepare = () => coordinateSetupDefaults(request('prepare', [], true))
-function approve(source = setupSkillsSource()) {
+function approve(source = setupSkillsSource(), scope = '') {
   const example = readFileSync(new URL('../../apps/desktop/src/utility/test-fixtures/agents/roster-example.md', import.meta.url), 'utf8')
   writeFileSync(join(agentsDirectory(), 'roster.md'), example.replaceAll('private_work: allowed', 'private_work: public_only') +
     `\n## skills\n\n\`\`\`yaml\nsource: ${source}\npublic: [plan]\n\`\`\`\n\n## tools\n\n` +
-    '```yaml\nplaywright: {name: Playwright, command: npx, args: ["-y", "@playwright/mcp@0.0.55"], public: true}\n```\n')
+    `\`\`\`yaml\nplaywright: {name: Playwright, command: npx, args: ["-y", "@playwright/mcp@0.0.55"], public: true${scope}}\n\`\`\`\n`)
   approveRoster({ generation: null, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
 }
 function qualify(app) {
@@ -138,6 +138,24 @@ describe('fresh setup defaults coordinator', () => {
     const result = await apply(); assert.equal(result.code, 'DEFAULTS_PARTIAL')
     assert.equal(readFileSync(masterPath(), 'utf8'), '# Synthetic personal data\n'); assert(!existsSync(targetPath('codex')))
     assert.equal(result.rows.find(row => row.kind === 'rules').code, 'DEFAULTS_MASTER_UNAVAILABLE')
+  })
+
+  it('settles an app that no approved tool reaches without running or writing its tools', async () => {
+    await prepare(); approve(setupSkillsSource(), ', apps: [claude, codex]')
+    appendFileSync(skillsTestsPath(), JSON.stringify({ harness: 'opencode', kind: 'capability', version: versions.opencode, outcome: 'pass',
+      roots: [{ root: '.config/opencode/skills', folder: true, link: true }] }) + '\n')
+    const result = await apply(['opencode']); assert.equal(result.code, 'OK', JSON.stringify(result))
+    const tools = result.rows.filter(row => row.kind === 'tools')
+    assert.deepEqual(tools.map(row => [row.app, row.code, row.state, row.paths.length]), [['opencode', 'OK', 'excluded', 0]])
+    assert(!Object.values(readDefaultsOwnership(setupId).snapshot().entries).some(row => row.target.kind === 'tools'))
+    assert(!existsSync(join(root, '.config/opencode/opencode.jsonc')))
+  })
+
+  it('installs a tool kept to some agents into no app', async () => {
+    await prepare(); approve(setupSkillsSource(), ', agents: [sol]'); qualify('codex')
+    const result = await apply(['codex']); assert.equal(result.code, 'OK', JSON.stringify(result))
+    assert.deepEqual(result.rows.filter(row => row.kind === 'tools').map(row => [row.app, row.code, row.state]), [['codex', 'OK', 'excluded']])
+    assert(!existsSync(join(root, '.codex/config.toml')))
   })
 
   it('reports completed rules separately from a tools test that has not passed', async () => {

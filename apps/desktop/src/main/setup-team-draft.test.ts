@@ -23,7 +23,7 @@ describe('setup Team proposals',()=>{
     const o=options(),before=structuredClone(o),p=buildSetupTeamProposals(o)!
     expect(p.proposals).toHaveLength(3);expect(p.proposals.map(p=>p.app)).toEqual(SETUP_APPS)
     for(const proposal of p.proposals){expect(proposal).not.toHaveProperty('model');expect(proposal.roles).toEqual(expect.arrayContaining(['epic-reviewer','consultant','designer']));for(const role of proposal.roles)expect(classRefusal(proposal.class,role)).toBeNull()}
-    expect(p.tools[0]?.args).toEqual(['-y',BROWSER_MCP_PACKAGE]);expect(o).toEqual(before)
+    expect(p.tools[0]?.args).toEqual(['-y',BROWSER_MCP_PACKAGE]);expect(p.tools[0]?.apps).toEqual(['claude','codex']);expect(o).toEqual(before)
   })
   it('requires durable fresh-profile provenance even when approval is absent',()=>{
     const o=options();o.profile!.state='existing';expect(buildSetupTeamProposals(o)).toBeNull();o.profile=null;expect(buildSetupTeamProposals(o)).toBeNull()

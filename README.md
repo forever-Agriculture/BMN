@@ -163,9 +163,10 @@ pnpm --filter @bmn/desktop run dev
    Setup sessions keep no saved output. You can skip setup and use ordinary sessions at any time.
 2. **Review team…** proposes the ready apps and their roles. **Choose settings…** asks for a
    model, provider and effort when those settings cannot be read safely. Review and approve the
-   team; private work starts off. BMN then installs its default rules, skills, hooks and the
-   approved Playwright MCP entry. Setup shows anything that still needs attention, including
-   Codex's one-time `/hooks` trust. An existing rules master or approved team skips first-run setup.
+   team; private work starts off. BMN then installs its default rules, skills, hooks and, for
+   Claude Code and Codex, the approved Playwright MCP entry. Setup shows anything that still
+   needs attention, including Codex's one-time `/hooks` trust. An existing rules master or
+   approved team skips first-run setup.
 3. Press `Ctrl+Shift+P`, choose **New workspace…**, and name a project. Choose **New session…**
    there, then pick a launch template or enter a command and working directory. A shell works
    without agent integration; each agent keeps its own settings and authentication.
