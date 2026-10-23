@@ -4,8 +4,9 @@
 // closed. Its only outputs are nothing, Claude Code's `ask` (Claude's own permission prompt, measured in Story 83.1 to show in
 // default and auto mode, for an allow-listed command too, and to leave a deny standing) and Codex's block with a reason that
 // tells the agent to ask him. It never allows. The pattern list reads shell commands, not comments, string arguments or
-// heredoc data. Expansions and explicit shell code are inspected too. This is not a shell interpreter or a sandbox: encoded
-// code, arbitrary program languages and scripts read from disk are outside it; GitHub's rules are the hard guard there.
+// heredoc data. Expansions, explicit shell code and the listed wrappers and package runners are inspected too. This is not
+// a shell interpreter or a sandbox: launchers outside that list, encoded code, arbitrary program languages and scripts read
+// from disk are outside it; GitHub's rules are the hard guard there.
 
 /** The shell tool each app's PreToolUse names, as Story 83.1 measured it (Claude Code 2.1.302, codex-cli 0.162.1). */
 export const GUARDED_TOOLS = { claude: 'Bash', codex: 'Bash' }
@@ -152,7 +153,44 @@ const WRAPPER_VALUES = {
   command: [], builtin: [], exec: ['-a'], nohup: [], nice: ['-n', '--adjustment'], setsid: [],
   time: ['-f', '--format', '-o', '--output'], doas: ['-u', '-C'],
   timeout: ['-s', '--signal', '-k', '--kill-after'],
-  xargs: ['-n', '--max-args', '-P', '--max-procs', '-L', '--max-lines', '-I', '--replace', '-E', '--eof', '-d', '--delimiter', '-s', '--max-chars', '-a', '--arg-file']
+  xargs: ['-n', '--max-args', '-P', '--max-procs', '-L', '--max-lines', '-I', '--replace', '-E', '--eof', '-d', '--delimiter', '-s', '--max-chars', '-a', '--arg-file'],
+  stdbuf: ['-i', '--input', '-o', '--output', '-e', '--error'],
+  ionice: ['-c', '--class', '-n', '--classdata'],
+  'systemd-run': ['-u', '--unit', '-p', '--property', '--description', '--slice', '--service-type', '--uid', '--gid', '--nice',
+    '--working-directory', '-E', '--setenv', '-H', '--host', '-M', '--machine', '--on-active', '--on-boot', '--on-startup',
+    '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--path-property', '--socket-property', '--timer-property']
+}
+
+/** npm, pnpm and yarn options that take a separate value before the subcommand. */
+const PACKAGE_VALUES = ['-w', '--workspace', '--prefix', '--registry', '--userconfig', '--filter', '-F', '-C', '--dir']
+/** The options of npx, `npm exec` and the other package runners that take a separate value. */
+const RUNNER_VALUES = ['-p', '--package', '-w', '--workspace', '--filter', '-F', '-C', '--dir', '--resume-from', '--workspace-concurrency', '--allow-build']
+
+/** Words of an `env -S` string as env splits them: blanks separate, quotes group, a backslash escapes. */
+const splitString = (text) => [...text.matchAll(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s'"\\])+/g)].map(([word]) =>
+  word.replace(/'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)/g, (_, single, double, escaped) => single ?? double?.replace(/\\(.)/g, '$1') ?? escaped))
+
+/**
+ * What npx, `npm exec` (`npm x`), `pnpm exec`, `pnpm dlx`, `yarn exec` and `yarn dlx` run: their first operand as a
+ * program, or with -c, --call or --shell-mode a shell string; null for any other command.
+ */
+function packageRunner(list) {
+  const name = nameOf(list[0])
+  let rest
+  if (name === 'npx') rest = list.slice(1)
+  else if (['npm', 'pnpm', 'yarn'].includes(name)) {
+    const [verb, ...after] = subcommand(list, PACKAGE_VALUES)
+    if (!(verb === 'exec' || verb === 'dlx' || (name === 'npm' && verb === 'x'))) return null
+    rest = after
+  } else return null
+  while (rest[0]?.startsWith('-') && rest[0] !== '--') {
+    const option = rest.shift()
+    if (/^--call=/.test(option)) return ['sh', '-c', option.slice('--call='.length)]
+    if (/^(-c|--call|--shell-mode)$/.test(option)) return ['sh', '-c', rest.join(' ')]
+    if (RUNNER_VALUES.includes(option)) rest.shift()
+  }
+  if (rest[0] === '--') rest.shift()
+  return rest
 }
 
 /** Locate the executable behind ordinary shell wrappers, without interpreting string arguments as commands. */
@@ -162,11 +200,21 @@ function executable(words) {
     if (assignments(list[0]) || /^(if|then|elif|while|until|do|else|!|\{|\})$/.test(list[0])) { list.shift(); continue }
     if (list[0] === 'function') { list.splice(0, 2); continue }
     const name = nameOf(list[0])
-    if (!Object.hasOwn(WRAPPER_VALUES, name)) break
+    if (!Object.hasOwn(WRAPPER_VALUES, name)) {
+      const run = packageRunner(list)
+      if (run === null) break
+      list = run
+      continue
+    }
     list.shift()
     while (list[0]?.startsWith('-') && list[0] !== '--') {
       const option = list.shift()
       if (name === 'command' && /^-[pVv]*[Vv][pVv]*$/.test(option)) return []
+      // env -S splits one string into arguments, its own options included.
+      if (name === 'env' && /^(-S|--split-string(=|$))/.test(option)) {
+        list.unshift(...splitString(option === '-S' || option === '--split-string' ? list.shift() ?? '' : option.replace(/^(-S|--split-string=)/, '')))
+        continue
+      }
       if (WRAPPER_VALUES[name].includes(option)) list.shift()
     }
     if (list[0] === '--') list.shift()
@@ -295,7 +343,7 @@ export function heldCommand(command, depth = 0, inheritedSelector = false) {
       if (verb === 'release' && /^(create|edit|delete)$/.test(action)) return 'a release'
     }
     if (['npm', 'pnpm', 'yarn'].includes(name)) {
-      const [verb, action] = subcommand(words, ['-w', '--workspace', '--prefix', '--registry', '--userconfig', '--filter', '-F', '-C', '--dir'])
+      const [verb, action] = subcommand(words, PACKAGE_VALUES)
       if (verb === 'publish' || (name === 'yarn' && verb === 'npm' && action === 'publish')) return 'publishing a package'
       if (depth < 16 && name === 'yarn' && (verb === 'workspace' || (verb === 'workspaces' && action === 'foreach'))) {
         const nested = verb === 'workspace' ? args.slice(2) : subcommand(['foreach', ...args.slice(2)], ['--from', '--include', '--exclude', '-j', '--jobs'])

@@ -883,7 +883,7 @@ allows anything and never loosens a hold or deny the app makes itself:
   command it does not hold returns at once and sends BMN nothing. The hook adds about 70 ms to a Bash command
   (measured median, BMN running or closed).
 
-What it holds, matched over the whole command text, quoted parts included:
+What it holds, in the shell commands of the text:
 
 - force pushes: `--force`, `-f`, `--force-with-lease`, `--force-if-includes` and `+` refspecs;
 - branch or tag deletion on a remote: `--delete`, `-d` on a push, `:ref` refspecs and `--prune`;
@@ -895,9 +895,13 @@ What it holds, matched over the whole command text, quoted parts included:
 - `npm`, `pnpm` and `yarn` `publish`;
 - `kill`, `pkill` or `killall` in a command that names `bmn`, packaged BMN's executable.
 
-A false match only asks: a commit message that merely mentions `git push --force` is held too. The guard does not
-stop an agent that hides a command on purpose (encoded text, a script it writes first); GitHub's own repository
-rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
+It reads shell commands, not data: string arguments, comments and heredoc bodies pass, so a commit message that
+merely mentions `git push --force` is not held. It looks through pipes, `$(…)` and backtick substitutions, `sh -c`,
+`eval`, shell code fed to a shell's input, the wrappers `env` (`env -S` too), `sudo`, `doas`, `command`, `builtin`,
+`exec`, `nohup`, `nice`, `ionice`, `setsid`, `stdbuf`, `systemd-run`, `time`, `timeout` and `xargs`, and the package
+runners `npx`, `npm exec`, `pnpm exec`, `pnpm dlx`, `yarn exec` and `yarn dlx`. A launcher outside that list passes
+untouched, and the guard does not stop an agent that hides a command on purpose (encoded text, a script it writes
+first); GitHub's own repository rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
 session; deploys in general, CI changes and secrets stay the agents' own rule.
 
 ### The Away grant
