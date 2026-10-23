@@ -68,6 +68,7 @@ import { openCodeHistoryAdapter } from './agent-history-opencode'
 import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
 import { testTelegramOrigin } from './telegram-connector'
+import { testAwayWakeTimes } from './away-wake'
 import { TurnChangesClient } from './turn-changes-client'
 import { TurnRetention } from './turn-changes-retention'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
@@ -358,6 +359,8 @@ async function start(): Promise<void> {
     // A test-mode run (Story 76.8): Telegram talks to the run's own loopback fake Bot API.
     ...(testTelegramOrigin(process.argv, process.env) === null ? {} : { telegramApiOrigin: testTelegramOrigin(process.argv, process.env)! }),
     historyAdapters: historyAdapters(),
+    // A test-mode run (Story 90.6): the Away wake-up's times, shortened only in a test-mode host.
+    awayWake: testAwayWakeTimes(process.argv, process.env),
     // Electron self-test only (Story 62.2): the health watch reads a fixture tree and starts no nvidia-smi.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_SYSFS_ROOT
       ? { health: { root: process.env.BMN_SELF_TEST_SYSFS_ROOT, run: () => Promise.reject(new Error('no nvidia-smi in the self-test')) } }

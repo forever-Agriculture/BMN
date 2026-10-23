@@ -961,6 +961,29 @@ levels do not change, every merge still has no admin bypass, and GitHub's rules 
 condition, what is left, until he is back), so an agent app's own approval reviewer, which reads the policy, sees
 what he granted; without a grant there the output, `--json` included, is as before.
 
+### The Away wake-up
+
+While the owner is Away (said, not measured), BMN types one fixed line into agent sessions that stalled, every 2 hours
+from the moment he left (Epic 90, `apps/desktop/src/utility/away-wake.ts`), so a dropped connection or an unexpected
+stop does not waste the night. Times are T + 2 h, T + 4 h and so on for the period that began at T; each is claimed once
+per session before anything is read, so overlapping sweeps type nothing twice. After a restart of BMN the next time is
+the next one after now; missed times are not made up. Back, or only leaving, types nothing, and a new period starts its
+own times.
+
+A session is woken only when all of these hold: it runs Claude Code or Codex; its latest hook event is a finished turn
+reported after he left, with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
+together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
+another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
+app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim
+placeholder text after the marker, as recorded from real sessions). Any state BMN cannot read skips the session for that
+time. OpenCode sessions are not woken: BMN keeps no screen mirror for them, so their prompt cannot be read.
+
+The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
+continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never
+an approval, an answer to a question or permission, or a resume of a run he stopped. BMN logs each wake and each skipped
+session with its reason in its app log, and keeps no other record or screen. A test-mode host may shorten the 2 hours and
+15 minutes (`BMN_TEST_AWAY_WAKE_EVERY_MS`, `BMN_TEST_AWAY_WAKE_QUIET_MS`); every other build ignores them.
+
 ## The team: team file, check and rules
 
 The team lives in two files you own under `~/.config/bmn/agents/`, outside every repository and BMN's own data, so
