@@ -5069,6 +5069,16 @@ describe('the command guard in the hook (Story 83.4)', () => {
   const socketCalls = (fixture: Awaited<ReturnType<typeof cliFixture>>): number =>
     Object.values(fixture.handlers).reduce((sum, handler) => sum + ((handler as { mock?: { calls: unknown[] } }).mock?.calls.length ?? 0), 0)
 
+  it('leaves heredoc fixture data alone and still holds executable BMN shutdown commands for both apps', async () => {
+    const fixture = await cliFixture()
+    const data = "cat <<'JS'\nconst bmn = spawn('fixture'); bmn.kill('SIGTERM');\nJS"
+    for (const agent of ['claude', 'codex']) {
+      expect(await runHook(fixture, agent, bash(data))).toEqual(QUIET)
+      const held = JSON.parse((await runHook(fixture, agent, bash("sh -c 'pkill bmn'"))).stdout)
+      expect(held.hookSpecificOutput.permissionDecision).toBe(agent === 'claude' ? 'ask' : 'deny')
+    }
+  })
+
   it('answers Claude\'s held command with its own prompt and Codex\'s with a block, calling BMN for neither', async () => {
     const fixture = await cliFixture()
     const claude = await runHook(fixture, 'claude', bash('git push --force origin main'))
