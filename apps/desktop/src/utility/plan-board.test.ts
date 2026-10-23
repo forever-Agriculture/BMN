@@ -124,11 +124,13 @@ describe('the plan format, its reader and its check (Story 77.1)', () => {
 
   it('passes a project made from the templates', async () => {
     const main = repo(join(fixture(), 'main'))
-    const fill = (text: string): string => text.replaceAll('<N>', '1').replaceAll('<slug>', 'first')
+    const fill = (text: string): string => text.replaceAll('<N+1>', '2').replaceAll('<N>', '1').replaceAll('<slug>', 'first')
     file(main, 'plan/VISION.md', visionText())
     file(main, 'plan/PLAN.md', planText())
     file(main, 'plan/status.yaml', fill(readFileSync(join(TEMPLATES, 'status.yaml'), 'utf8')))
     file(main, 'plan/epics/001-first.md', fill(readFileSync(join(TEMPLATES, 'epic.md'), 'utf8')))
+    // The board template shows two epics, an empty line between them.
+    file(main, 'plan/epics/002-first.md', fill(readFileSync(join(TEMPLATES, 'epic.md'), 'utf8').replaceAll('<N>', '2')))
     const result = bmn(main, fixture(), 'check')
     expect(result.out).toContain('PASS')
     expect(result.code).toBe(0)

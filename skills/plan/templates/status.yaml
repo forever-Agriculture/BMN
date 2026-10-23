@@ -10,7 +10,6 @@ queue:
 development_status:
   epic-<N>: backlog # <short note>
   <N>-1-<slug>: backlog
-  <N>-2-<slug>: backlog
 
   epic-<N+1>: backlog # <short note>
   <N+1>-1-<slug>: backlog
