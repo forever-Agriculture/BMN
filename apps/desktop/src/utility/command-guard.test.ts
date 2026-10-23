@@ -123,7 +123,25 @@ const HELD: Array<[string, string]> = [
   ['npx --yes pkill bmn', 'stopping BMN'],
   ["npx -c 'killall bmn'", 'stopping BMN'],
   ['yarn exec git push --force', 'force'],
-  ['yarn dlx -p fixture pkill bmn', 'stopping BMN']
+  ['yarn dlx -p fixture pkill bmn', 'stopping BMN'],
+  // Forms Astra's review found passing (2026-10-23): clustered env options, env -S escapes, shell mode before the
+  // subcommand, a separator after it, and runner options that take a value or that the list does not know.
+  ["env -iS 'pkill bmn'", 'stopping BMN'],
+  ["env -vS 'pkill bmn'", 'stopping BMN'],
+  ["env -i -S 'git push -f'", 'force'],
+  ["env -S 'pkill\\_bmn'", 'stopping BMN'],
+  ["env -S 'pkill bmn\\c ignored'", 'stopping BMN'],
+  ["pnpm --shell-mode exec 'pkill bmn'", 'stopping BMN'],
+  ["pnpm -c exec 'pkill bmn'", 'stopping BMN'],
+  ["pnpm exec --shell-mode -- 'pkill bmn'", 'stopping BMN'],
+  ['npm exec --registry https://registry.npmjs.org -- git push -f', 'force'],
+  ['npm exec --registry https://registry.npmjs.org git push -f', 'force'],
+  ['npm --registry https://registry.npmjs.org exec git push -f', 'force'],
+  ['npm exec --some-new-option value -- git push -f', 'force'],
+  ["npm --call 'pkill bmn' exec", 'stopping BMN'],
+  // More places a command may start than the guard reads: the likeliest ones are read first.
+  [`npm exec ${Array.from({ length: 20 }, (_, i) => `--opt${i} v${i}`).join(' ')} -- git push -f`, 'force'],
+  [`npx --f1 pkill ${Array.from({ length: 20 }, (_, i) => `--a${i} x${i}`).join(' ')} bmn`, 'stopping BMN']
 ]
 
 const LEFT: string[] = [
@@ -200,6 +218,10 @@ const LEFT: string[] = [
   'pnpm run exec',
   "npx -c 'echo pkill bmn'",
   "npm exec --package 'pkill bmn' -- fixture",
+  "env -iS 'echo pkill bmn'",
+  'env -u BMN_FIXTURE printenv',
+  'npm exec --registry https://registry.npmjs.org -- vitest run',
+  "pnpm --shell-mode exec 'echo pkill bmn'",
   ''
 ]
 

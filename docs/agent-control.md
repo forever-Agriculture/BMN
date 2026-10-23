@@ -897,11 +897,14 @@ What it holds, in the shell commands of the text:
 
 It reads shell commands, not data: string arguments, comments and heredoc bodies pass, so a commit message that
 merely mentions `git push --force` is not held. It looks through pipes, `$(…)` and backtick substitutions, `sh -c`,
-`eval`, shell code fed to a shell's input, the wrappers `env` (`env -S` too), `sudo`, `doas`, `command`, `builtin`,
-`exec`, `nohup`, `nice`, `ionice`, `setsid`, `stdbuf`, `systemd-run`, `time`, `timeout` and `xargs`, and the package
-runners `npx`, `npm exec`, `pnpm exec`, `pnpm dlx`, `yarn exec` and `yarn dlx`. A launcher outside that list passes
-untouched, and the guard does not stop an agent that hides a command on purpose (encoded text, a script it writes
-first); GitHub's own repository rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
+`eval`, shell code fed to a shell's input, the wrappers `env` (clustered options and `env -S` strings too), `sudo`,
+`doas`, `command`, `builtin`, `exec`, `nohup`, `nice`, `ionice`, `setsid`, `stdbuf`, `systemd-run`, `time`, `timeout`
+and `xargs`, and the package runners `npx`, `npm exec`, `pnpm exec`, `pnpm dlx`, `yarn exec` and `yarn dlx`, with
+their options before or after the subcommand and their shell-string forms (`-c`, `--call`, `--shell-mode`). Where a
+runner option's arity is unknown, the guard reads the next word both as its value and as the command, and holds when
+either reading holds; it reads at most 16 places a command may start, the likeliest first. A launcher outside that
+list passes untouched, and the guard does not stop an agent that hides a command on purpose (encoded text, a script it
+writes first); GitHub's own repository rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
 session; deploys in general, CI changes and secrets stay the agents' own rule.
 
 ### The Away grant
