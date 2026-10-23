@@ -1,4 +1,5 @@
 // MODULE: away-wake.test.ts - Story 90.6 with a fake clock: ticks, claims, every eligibility and pre-write check, restarts, the recorded idle prompts
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { EMPTY_AWAY_RECORD, type AwayRecord } from '@bmn/protocol'
 import { AWAY_WAKE_LINE, AwayWake, idlePrompt, testAwayWakeTimes, type WakeAttention, type WakeObservation } from './away-wake'
@@ -69,6 +70,22 @@ describe('the Away wake-up (Story 90.6)', () => {
     expect(idlePrompt('codex', ['• ok', '', '›', '  unsent second line', '', '  GPT-6.1-Sol xhigh · ~/scratch'])).toBe(false)
     expect(idlePrompt('codex', ['• ok', '', '› first', '  second', '', '  GPT-6.1-Sol xhigh · ~/scratch'])).toBe(false)
     expect(idlePrompt('codex', ['• ok', '', '›'])).toBe(false)
+  })
+
+  it('reads a Codex draft that starts with blank lines as a draft, and types nothing into it (epic recheck)', async () => {
+    // As recorded from Codex 0.164.0 (evidence 90.6/screens/codex-blank2.raw): two newlines, then text.
+    const blankFirst = ['• ok', '', '›', '', '  unsent third line', '', '  GPT-6.1-Sol xhigh · ~/scratch', '']
+    expect(idlePrompt('codex', blankFirst)).toBe(false)
+    expect(idlePrompt('codex', ['• ok', '', '›', '', '', '  GPT-6.1-Sol xhigh · ~/scratch'])).toBe(false)
+    expect(idlePrompt('codex', [...CODEX_IDLE, '', ''])).toBe(true)
+    const w = world(T)
+    w.add('a', 'codex', { screen: blankFirst })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR
+    await wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs.at(-1)).toContain('its prompt is not empty and idle')
   })
 
   it('types the exact line once into each idle Claude Code and Codex session at T + 2 h, never before, and again at T + 4 h', async () => {
@@ -187,8 +204,19 @@ describe('the Away wake-up (Story 90.6)', () => {
     expect(idlePrompt('codex', ['nothing here'])).toBe(false)
   })
 
+  it('replays recorded Codex screens through the mirror: the empty prompt is idle, both drafts are not (epic recheck)', async () => {
+    const replay = async (name: string, columns: number, rows: number): Promise<boolean> => {
+      const mirror = new ScreenMirror(columns, rows, new Uint8Array(readFileSync(new URL(`./test-fixtures/away-wake/${name}.raw`, import.meta.url))))
+      await mirror.settled()
+      return idlePrompt('codex', mirror.undimmedLines())
+    }
+    expect(await replay('codex-idle', 120, 40)).toBe(true)
+    expect(await replay('codex-multiline', 100, 32)).toBe(false)
+    expect(await replay('codex-blank2', 100, 32)).toBe(false)
+  })
+
   it('blanks dim placeholder text on the mirror, keeping typed text', async () => {
-    const placeholder = new ScreenMirror(80, 6, new TextEncoder().encode('\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\r\n'))
+    const placeholder = new ScreenMirror(80, 6, new TextEncoder().encode('\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\r\n\r\n  \x1b[38;2;246;226;183mGPT-6.1-Sol xhigh\x1b[39m · ~/scratch\r\n'))
     await placeholder.settled()
     expect(idlePrompt('codex', placeholder.undimmedLines())).toBe(true)
     expect(placeholder.lines()[0]).toBe('› Ask Codex to do anything')
