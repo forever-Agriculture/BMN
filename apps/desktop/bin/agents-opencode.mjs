@@ -106,25 +106,35 @@ export function openCodeAskConfig(kind, rules = null) {
  */
 const CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false, websearch: { provider: OPENCODE_WEBSEARCH_PROVIDER }, plugins: ['./plugins/bmn-reader'] }, null, 2)}\n`
 
-/** Every file of BMN's OpenCode configuration folder, by its path inside `config/opencode`. */
-export const OPENCODE_CONFIG_FILES = Object.freeze({
-  'opencode.json': CONFIG_TEXT,
-  'plugins/bmn-reader/package.json': JSON.stringify({ name: 'bmn-read-only', version: '1.0.0', type: 'module', exports: { '.': './index.mjs' } }) + '\n',
-  'plugins/bmn-reader/index.mjs': readFileSync(new URL('./opencode-reader-plugin.mjs', import.meta.url), 'utf8'),
-  'plugins/bmn-reader/opencode-project-reader.mjs': readFileSync(new URL('./opencode-project-reader.mjs', import.meta.url), 'utf8'),
-  'plugins/bmn-reader/opencode-project-git.mjs': readFileSync(new URL('./opencode-project-git.mjs', import.meta.url), 'utf8'),
-  'plugins/bmn-reader/opencode-reader-child.mjs': readFileSync(new URL('./opencode-reader-child.mjs', import.meta.url), 'utf8'),
-  'plugins/bmn-reader/opencode-child-accounting.mjs': readFileSync(new URL('./opencode-child-accounting.mjs', import.meta.url), 'utf8'),
-  'plugins/bmn-reader/ask-git.sh': readFileSync(new URL('./ask-git.sh', import.meta.url), 'utf8'),
-  [`agents/${OPENCODE_HELPER_AGENT}.md`]: HELPER_AGENT_TEXT,
-  [`agents/${OPENCODE_RESEARCH_AGENT}.md`]: RESEARCH_AGENT_TEXT
-})
+let configFiles
+
+/**
+ * Every file of BMN's OpenCode configuration folder, by its path inside `config/opencode`. Read on
+ * first use: the main process bundles this module without the plugin files beside it.
+ */
+export function openCodeConfigFiles() {
+  configFiles ??= Object.freeze({
+    'opencode.json': CONFIG_TEXT,
+    'plugins/bmn-reader/package.json': JSON.stringify({ name: 'bmn-read-only', version: '1.0.0', type: 'module', exports: { '.': './index.mjs' } }) + '\n',
+    'plugins/bmn-reader/index.mjs': readFileSync(new URL('./opencode-reader-plugin.mjs', import.meta.url), 'utf8'),
+    'plugins/bmn-reader/opencode-project-reader.mjs': readFileSync(new URL('./opencode-project-reader.mjs', import.meta.url), 'utf8'),
+    'plugins/bmn-reader/opencode-project-git.mjs': readFileSync(new URL('./opencode-project-git.mjs', import.meta.url), 'utf8'),
+    'plugins/bmn-reader/opencode-reader-child.mjs': readFileSync(new URL('./opencode-reader-child.mjs', import.meta.url), 'utf8'),
+    'plugins/bmn-reader/opencode-child-accounting.mjs': readFileSync(new URL('./opencode-child-accounting.mjs', import.meta.url), 'utf8'),
+    'plugins/bmn-reader/ask-git.sh': readFileSync(new URL('./ask-git.sh', import.meta.url), 'utf8'),
+    [`agents/${OPENCODE_HELPER_AGENT}.md`]: HELPER_AGENT_TEXT,
+    [`agents/${OPENCODE_RESEARCH_AGENT}.md`]: RESEARCH_AGENT_TEXT
+  })
+  return configFiles
+}
 
 /** A mark of the agent's text, carried on a receipt. */
 export const OPENCODE_HELPER_AGENT_SHA256 = sha256(HELPER_AGENT_TEXT)
 
 /** A mark of the whole folder as BMN writes it: a fence test counts only for the research form it tested. */
-export const OPENCODE_FOLDER_SHA256 = sha256(JSON.stringify(Object.entries(OPENCODE_CONFIG_FILES).sort(([one], [other]) => one.localeCompare(other))))
+export function openCodeFolderSha256() {
+  return sha256(JSON.stringify(Object.entries(openCodeConfigFiles()).sort(([one], [other]) => one.localeCompare(other))))
+}
 
 /** Where BMN keeps the folder: under its own state, never in the owner's OpenCode folders. */
 export function openCodeFolder() {
@@ -253,13 +263,13 @@ export function installOpenCodeFolder(base = openCodeFolder(), { ownerCache = `$
   }
   const configFolder = `${folders.config}/opencode`
   mkdirSync(configFolder, { recursive: true, mode: 0o700 })
-  const wanted = new Set(Object.keys(OPENCODE_CONFIG_FILES))
+  const wanted = new Set(Object.keys(openCodeConfigFiles()))
   for (const entry of listAll(folders.config)) {
     const inside = entry.path.slice(`${configFolder}/`.length)
     const keep = entry.path.startsWith(`${configFolder}/`) && (wanted.has(inside) || (entry.directory && [...wanted].some((file) => file.startsWith(`${inside}/`))))
     if (!keep && entry.path !== configFolder) rmSync(entry.path, { recursive: true, force: true })
   }
-  for (const [name, text] of Object.entries(OPENCODE_CONFIG_FILES)) {
+  for (const [name, text] of Object.entries(openCodeConfigFiles())) {
     const path = `${configFolder}/${name}`
     let current
     try {
@@ -319,7 +329,7 @@ function listAll(folder) {
 export function openCodeFolderProblem(base = openCodeFolder()) {
   const folders = openCodeFolders(base)
   const configFolder = `${folders.config}/opencode`
-  const wanted = Object.keys(OPENCODE_CONFIG_FILES)
+  const wanted = Object.keys(openCodeConfigFiles())
   let entries
   try {
     if (!lstatSync(folders.config).isDirectory() || !lstatSync(folders.home).isDirectory()) return `BMN's OpenCode folder ${base} is not there`
@@ -340,7 +350,7 @@ export function openCodeFolderProblem(base = openCodeFolder()) {
     } catch {
       return `${configFolder}/${name} is missing`
     }
-    if (text !== OPENCODE_CONFIG_FILES[name]) return `${configFolder}/${name} differs from BMN's text`
+    if (text !== openCodeConfigFiles()[name]) return `${configFolder}/${name} differs from BMN's text`
   }
   if (readdirSync(folders.home).length > 0) return `${folders.home} is not empty, and OpenCode would read what is there`
   return null

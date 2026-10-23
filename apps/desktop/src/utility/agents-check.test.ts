@@ -17,7 +17,7 @@ import { LUNA_GO_PROPOSAL, type RosterDataShape } from '@bmn/protocol'
 import { approveRoster } from '../main/agents-approval'
 import { OPENCODE_FOLDERS } from './test-fixtures/opencode-destinations'
 import { startStandin, type Standin } from './test-fixtures/opencode-standin'
-import { OPENCODE_CONFIG_FILES, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeEnvironment, openCodeFolder, openCodeFolderProblem } from '../../bin/agents-opencode.mjs'
+import { OPENCODE_HELPER_AGENT_SHA256, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeConfigFiles, openCodeEnvironment, openCodeFolder, openCodeFolderProblem } from '../../bin/agents-opencode.mjs'
 import { OPENCODE_NEXT_STEP } from '../../bin/agents-check.mjs'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -290,7 +290,7 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
 
   it('refuses a folder that is not BMN\'s, and roster role puts it back', async () => {
     const config = join(openCodeFolder(), 'config/opencode')
-    const loosened = (OPENCODE_CONFIG_FILES['agents/bmn-helper.md'] ?? '').replace('"effect":"deny"', '"effect":"allow"')
+    const loosened = (openCodeConfigFiles()['agents/bmn-helper.md'] ?? '').replace('"effect":"deny"', '"effect":"allow"')
     writeFileSync(join(config, 'agents/bmn-helper.md'), loosened)
     expect(kimi(form())).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: `${config}/agents/bmn-helper.md differs from BMN's text; \`bmn roster role <role> --json\` puts BMN's folder back` })
     installOpenCodeFolder()

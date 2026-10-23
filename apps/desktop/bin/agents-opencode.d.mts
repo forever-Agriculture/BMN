@@ -3,9 +3,9 @@ export declare const OPENCODE_FORM_TESTED: { version: string; on: string }
 export declare function openCodeManagedProblem(): string | null
 export declare const OPENCODE_HELPER_AGENT: string
 export declare const OPENCODE_RESEARCH_AGENT: string
-export declare const OPENCODE_FOLDER_SHA256: string
+export declare function openCodeFolderSha256(): string
 export declare const OPENCODE_SESSION_ID: RegExp
-export declare const OPENCODE_CONFIG_FILES: Readonly<Record<string, string>>
+export declare function openCodeConfigFiles(): Readonly<Record<string, string>>
 export declare const OPENCODE_HELPER_AGENT_SHA256: string
 export interface OpenCodeFolders { home: string; config: string; data: string; state: string; cache: string }
 export interface OpenCodeItems { env: string[]; argv: string[]; then: string[]; stdin: string; agent_sha256: string; form_tested_on: string }

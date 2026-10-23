@@ -6,7 +6,7 @@ import { APP_NAMES, agentState, canonicalJson, classRefusal, isCalled, namedRese
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { CLAUDE_CONTEXT_KEY, checkContext, provenControls, provenPrecedence } from './agents-context.mjs'
 import { appTools, checkRunTools } from './agents-tools.mjs'
-import { OPENCODE_FOLDER_SHA256, OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, installOpenCodeFolder, openCodeEnvironment } from './agents-opencode.mjs'
+import { OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, installOpenCodeFolder, openCodeEnvironment, openCodeFolderSha256 } from './agents-opencode.mjs'
 import { NEXT_STEP, OPENCODE_NEXT_STEP, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, Refusal, TESTED_HARNESS_VERSIONS, WEB_NEXT_STEP, WEB_TOOLS_NOTE, listDirectory, namesWebTool, reachedForWeb, readText, refuse } from './agents-check-base.mjs'
 import { dispatchEnvironment, harnessOf, parseDispatch } from './agents-check-argv.mjs'
 import { resolveClaudeRoute, resolveCodexRoute, resolveOpenCodeRoute } from './agents-check-routes.mjs'
@@ -473,7 +473,7 @@ const RESEARCH_TOOLS_SEEN = { codex: CODEX_RESEARCH_TOOLS_SEEN, opencode: OPENCO
 
 /** Names the research form of an app as it is built now: a fence test counts only for the form it tested. */
 export function researchFormHash(harness) {
-  if (harness === 'opencode') return sha256(canonicalJson({ environment: RESEARCH_ENVIRONMENT.opencode, agent: OPENCODE_RESEARCH_AGENT, folder: OPENCODE_FOLDER_SHA256, titled: true })).slice(0, 16)
+  if (harness === 'opencode') return sha256(canonicalJson({ environment: RESEARCH_ENVIRONMENT.opencode, agent: OPENCODE_RESEARCH_AGENT, folder: openCodeFolderSha256(), titled: true })).slice(0, 16)
   return sha256(canonicalJson(harness === 'codex'
     ? { environment: RESEARCH_ENVIRONMENT.codex, config: CODEX_RESEARCH_CONFIG, disabled: CODEX_RESEARCH_DISABLED, sandbox: 'read-only', strict: true }
     : { environment: RESEARCH_ENVIRONMENT[harness] ?? [], tools: RESEARCH_TOOLS })).slice(0, 16)

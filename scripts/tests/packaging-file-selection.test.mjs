@@ -1,6 +1,6 @@
 // MODULE: packaging-file-selection.test.mjs - staged builds never include older releases or source files, and carry the whole bmn CLI
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -66,4 +66,32 @@ it('loads every CLI module without starting a child program, as the packaged smo
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout.trim()).toBe('loaded')
   } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+it('loads every CLI module the app bundles without the files beside it, as in app.asar', () => {
+  const desktop = resolve(dirname(fileURLToPath(import.meta.url)), '../../apps/desktop')
+  const bin = join(desktop, 'bin')
+  const sources = readdirSync(join(desktop, 'src'), { recursive: true })
+    .filter(file => /\.ts$/u.test(file) && !/\.test\.ts$|test-fixtures/u.test(file))
+  const bundled = new Set(sources.flatMap(file =>
+    [...readFileSync(join(desktop, 'src', file), 'utf8').matchAll(/from '(?:\.\.\/)+bin\/([\w-]+\.mjs)'/gu)].map(match => match[1])))
+  // The bundler inlines a module's imports and nothing else: copy only that graph.
+  for (const name of bundled) {
+    for (const match of readFileSync(join(bin, name), 'utf8').matchAll(/(?:from |import\()'\.\/([\w-]+\.mjs)'/gu)) bundled.add(match[1])
+  }
+  const folder = mkdtempSync(join(tmpdir(), 'bmn-bundled-cli-'))
+  try {
+    for (const name of bundled) copyFileSync(join(bin, name), join(folder, name))
+    const result = spawnSync(process.execPath, [
+      '-e', 'Promise.all(process.argv.slice(1).map(file => import(file))).then(() => console.log("loaded")).catch(error => { console.error(error.stack); process.exitCode = 1 })',
+      ...[...bundled].map(name => join(folder, name))
+    ], { encoding: 'utf8', timeout: 10_000, env: {
+      ...process.env, HOME: folder,
+      XDG_CONFIG_HOME: join(folder, 'config'), XDG_DATA_HOME: join(folder, 'data'),
+      XDG_STATE_HOME: join(folder, 'state'), XDG_CACHE_HOME: join(folder, 'cache')
+    } })
+    expect(bundled.has('agents-opencode.mjs')).toBe(true)
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe('loaded')
+  } finally { rmSync(folder, { recursive: true, force: true }) }
 })
