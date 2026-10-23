@@ -32,6 +32,8 @@ export interface AwayWakeOptions {
   /** The said-away record as the service holds it now; read again right before the write. */
   away(): AwayRecord
   observations(): Iterable<WakeObservation>
+  /** The session's latest hook observation now, read again right before the write. */
+  observation(sessionId: string): WakeObservation | undefined
   openAttention(): Promise<readonly WakeAttention[]>
   liveIncarnation(sessionId: string): string | null | undefined
   foreground(sessionId: string): string | null
@@ -50,9 +52,9 @@ const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || age
 
 /**
  * The app's empty prompt, recorded from real sessions on 2026-10-23 (plan/references/090, evidence 90.6/screens):
- * Claude Code's input line starts with `❯` directly between two rules; Codex's is its last line starting with `›`.
- * Empty means nothing after the marker once dim placeholder text is blanked; anything else (a draft, a dialog's
- * options, an unknown screen) is not idle.
+ * Claude Code's input line starts with `❯` directly between two rules; Codex's is its last line starting with `›`,
+ * with a blank line under it (a draft's further lines would be there). Empty means nothing after the marker once dim
+ * placeholder text is blanked; anything else (a draft, a dialog's options, an unknown screen) is not idle.
  */
 export function idlePrompt(app: WakeApp, lines: readonly string[]): boolean {
   const rule = (line: string | undefined): boolean => line !== undefined && /^─{10,}\s*$/u.test(line)
@@ -61,8 +63,10 @@ export function idlePrompt(app: WakeApp, lines: readonly string[]): boolean {
     const inputs = lines.flatMap((line, index) => line.startsWith('❯') && rule(lines[index - 1]) && rule(lines[index + 1]) ? [line] : [])
     return inputs.length === 1 && empty(inputs[0]!, '❯')
   }
-  const last = [...lines].reverse().find((line) => line.startsWith('›'))
-  return last !== undefined && empty(last, '›')
+  let index = lines.length - 1
+  while (index >= 0 && !lines[index]!.startsWith('›')) index -= 1
+  const below = lines[index + 1]
+  return index >= 0 && empty(lines[index]!, '›') && below !== undefined && below.trim() === ''
 }
 
 export class AwayWake {
@@ -123,6 +127,8 @@ export class AwayWake {
     const now = this.options.away()
     if (now.state !== 'away' || now.periodId !== period) return 'the owner is no longer away in this period'
     if (this.options.liveIncarnation(seen.sessionId) !== seen.incarnationId) return 'its run changed'
+    const latest = this.options.observation(seen.sessionId)
+    if (!latest || latest.event !== seen.event || latest.observedAt !== seen.observedAt) return 'its agent reported again'
     const front = this.options.foreground(seen.sessionId)
     if (front === null || seen.foreground === null || front !== seen.foreground) return 'its agent is not in the foreground'
     const changes = this.options.generation(seen.sessionId)

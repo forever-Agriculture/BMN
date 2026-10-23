@@ -33,6 +33,7 @@ function world(now0 = T + 2 * HOUR) {
     now: () => new Date(now),
     away: () => away,
     observations: () => [...sessions.values()].map((session) => session.seen),
+    observation: (id) => sessions.get(id)?.seen,
     openAttention: async () => attention,
     liveIncarnation: (id) => sessions.get(id)?.live,
     foreground: (id) => sessions.get(id)?.front ?? null,
@@ -51,6 +52,25 @@ function world(now0 = T + 2 * HOUR) {
 }
 
 describe('the Away wake-up (Story 90.6)', () => {
+  it('types nothing when the agent reports again while the screen is read, such as a tool starting (epic review)', async () => {
+    const w = world(T)
+    w.add('a', 'codex')
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR
+    w.beforeScreen = () => { const session = w.sessions.get('a')!; session.seen = { ...session.seen, event: 'PreToolUse', observedAt: at(T + 2 * HOUR - 1) } }
+    await wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs.at(-1)).toContain('its agent reported again')
+  })
+
+  it('reads a Codex draft that runs on below an empty first line as a draft (epic review)', () => {
+    expect(idlePrompt('codex', CODEX_IDLE)).toBe(true)
+    expect(idlePrompt('codex', ['• ok', '', '›', '  unsent second line', '', '  GPT-6.1-Sol xhigh · ~/scratch'])).toBe(false)
+    expect(idlePrompt('codex', ['• ok', '', '› first', '  second', '', '  GPT-6.1-Sol xhigh · ~/scratch'])).toBe(false)
+    expect(idlePrompt('codex', ['• ok', '', '›'])).toBe(false)
+  })
+
   it('types the exact line once into each idle Claude Code and Codex session at T + 2 h, never before, and again at T + 4 h', async () => {
     const w = world(T)
     w.add('a', 'claude'); w.add('b', 'codex')

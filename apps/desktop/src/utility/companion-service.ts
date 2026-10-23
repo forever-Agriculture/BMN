@@ -532,6 +532,7 @@ export class CompanionService {
       now: () => this.now(),
       away: () => this.awayRecord,
       observations: () => this.hookObservations.values(),
+      observation: (sessionId) => this.hookObservations.get(sessionId),
       openAttention: async () => (await options.database.companion('listAttention')).filter((row) => row.state === 'open'),
       liveIncarnation: (sessionId) => options.manager.liveIncarnationId(sessionId),
       foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),

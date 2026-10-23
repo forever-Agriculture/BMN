@@ -50,23 +50,25 @@ without his explicit approval for that worktree; needed evidence is preserved fi
 An epic planned from Epic 90 on lists its **Run needs** ([planning.md](planning.md)): extra repair rounds
 per boundary, the criteria or stories that may be deferred and when, a money cap, and named actions for an
 Away card. Your go on the epic approves them as your instruction for its runs, day or night. A run reads
-them with the skill's `scripts/run_needs.py`, from the plan commit that recorded your go: an edit made after
-the go does not count until you give a new go, and the run tells you about it. An epic without Run needs, or
+them with the skill's `scripts/run_needs.py`, from the plan commit that moved the epic's row to `ready` with
+`go YYYY-MM-DD` (a date first written in a later status is not a go): an edit made after the go does not count
+until you give a new go, and the run tells you about it. An epic without Run needs, or
 without a recorded go, runs as before.
 
 A run decides a technical point itself only when the evidence is complete; otherwise it asks the consultant
-first. A point that is yours (spend beyond what you approved, a change to the work or its criteria, a
-reserved action, credentials or private data, your own check, a model choice), or one still uncertain after
-the consultant, goes at once under **Needs your decision** in its handoff, and the run carries on with every
+first and follows a confident answer. A point that is yours (spend beyond what you approved, a change to the work or its criteria, a
+reserved action, credentials or private data, your own check, a model choice), or one the consultant cannot
+settle, goes at once under **Needs your decision** in its handoff, and the run carries on with every
 story that point does not block. It asks you only when no remaining work can go on, and never while you are
 Away; its final report lists every open entry. When a boundary's rounds are used up, a criterion your Run
 needs list as deferrable is deferred (the story is marked done with the deferral noted and named under Known
 limits, and a new story is proposed); anything else waits as Needs your decision.
 
 Money: every paid job a run launches goes through the skill's `scripts/spend_ledger.py`, one ledger per plan
-and epic under `~/.local/state/dev-auto/budgets/`. It reserves the job's maximum against your go's cap before
-the job starts and refuses what does not fit; a cap of `none` refuses every paid launch, and a new go never
-resets what was already spent or reserved. The ledger covers dev-auto's own paid launches only, not every
+and epic under `~/.local/state/dev-auto/budgets/`, the same from every worktree of the plan's repository. It
+reserves the job's maximum against your go's cap before the job starts and refuses what does not fit; a cap of
+`none` refuses every paid launch, a new go never resets what was already spent or reserved, a go older than the
+one recorded is refused, and a launch whose outcome is unknown keeps its reservation until it is settled. The ledger covers dev-auto's own paid launches only, not every
 provider call an agent might make, so it is a guard on those launches, not a hard limit on all spending.
 
 ## The Away grant
