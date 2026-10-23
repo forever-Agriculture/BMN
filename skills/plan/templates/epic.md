@@ -12,7 +12,7 @@ The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it
 
 ## Boundary and dependencies
 
-<What it depends on and what follows it; story order; what is out of scope.>
+<Story order; what is out of scope. Independent: it depends on no unfinished epic and runs on its own branch, in parallel; name what it shares with unfinished epics (files, migrations, generated text) and how it stays mergeable.>
 
 ## Truth impact
 

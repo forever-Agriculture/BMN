@@ -58,13 +58,14 @@ queue:
 development_status:
   epic-77: done # accepted on dev-auto/epic-77; delivered main f00ba12
   77-1-the-plan-format: done
+
   epic-78: ready # go 2026-10-17
   78-1-measure: backlog
 ```
 
 - `format` and `schema_version` come first. A reader that finds another schema version stops with an error, never guesses.
 - `queue` is the one order of unfinished epics: every `ready` epic is in it; nothing `done` or `dropped` is. `project`-scope work takes the queue first, then any unqueued unfinished epics by number.
-- `development_status` holds one line per epic and story in BMAD's row grammar: two spaces, key, colon, status, optionally `# note`. A note is one line of at most 160 characters; the run log belongs in the epic's Log and the run's evidence.
+- `development_status` holds one line per epic and story in BMAD's row grammar: two spaces, key, colon, status, optionally `# note`. An empty line separates one epic's rows from the next; readers skip empty lines. A note is one line of at most 160 characters; the run log belongs in the epic's Log and the run's evidence.
 - The owner edits this file by hand whenever he likes. Agents change it one row at a time with `bmn plan set`.
 
 | Status | Meaning |
