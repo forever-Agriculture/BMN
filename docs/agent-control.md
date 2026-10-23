@@ -981,7 +981,8 @@ time. OpenCode sessions are not woken: BMN keeps no screen mirror for them, so t
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never
 an approval, an answer to a question or permission, or a resume of a run he stopped. BMN logs each wake and each skipped
-session with its reason in its app log, and keeps no other record or screen. A test-mode host may shorten the 2 hours and
+session with its reason in its app log (the bounded local `away-wake.log` under BMN's state folder, beside
+`repeat-watch.log`), and keeps no other record or screen. A test-mode host may shorten the 2 hours and
 15 minutes (`BMN_TEST_AWAY_WAKE_EVERY_MS`, `BMN_TEST_AWAY_WAKE_QUIET_MS`); every other build ignores them.
 
 ## The team: team file, check and rules

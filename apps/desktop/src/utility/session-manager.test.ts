@@ -5728,6 +5728,28 @@ describe('screen mirror for sessions running an agent (Epic 30.2)', () => {
     pty.emitExit({ exitCode: 0 })
     expect(manager.screenMirror(created.sessionId)).toBeUndefined()
   })
+
+  it('starts when Codex reports its state, so a long start-up animation cannot push its prompt out of the tail (Story 90.6)', async () => {
+    const { manager, pty, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    // Its prompt is drawn once; then over 64 KB of animation redraws another row before its first hook asks for a mirror.
+    pty.emit('\x1b[24;1H› Ask Codex to do anything\x1b]7501;state=idle:app=codex\x1b\\')
+    for (let frame = 0; frame < 2000; frame += 1) pty.emit(`\x1b[5;1H${'⣿'.repeat(20)} frame ${frame}`)
+    const mirror = manager.screenMirror(created.sessionId, created.incarnationId)!
+    await mirror.settled()
+    expect(mirror.lines()[23]).toBe('› Ask Codex to do anything')
+    expect(mirror.lines()[4]).toContain('frame 1999')
+  })
+
+  it('does not start for a plain program, nor for another app\'s report', async () => {
+    const { manager, pty, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    pty.emit('\x1b[1;1Hdrawn once\x1b]7501;state=idle:app=other\x1b\\')
+    for (let line = 0; line < 2000; line += 1) pty.emit(`\x1b[5;1H${'x'.repeat(40)} ${line}`)
+    const mirror = manager.screenMirror(created.sessionId, created.incarnationId)!
+    await mirror.settled()
+    expect(mirror.lines()[0]).not.toBe('drawn once')
+  })
 })
 
 describe('a command a program in the session reports to resume it (Epic 43)', () => {

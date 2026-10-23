@@ -454,6 +454,18 @@ export function buildShellEnvironment(
   return shellEnvironment
 }
 
+const AGENT_STATE_REPORT = Buffer.from('\x1b]7501;')
+
+/** Whether this output carries an agent's own state report (`OSC 7501;state=…:app=codex`) for an app BMN mirrors. */
+function announcesMirroredAgent(bytes: Uint8Array): boolean {
+  const chunk = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  for (let at = chunk.indexOf(AGENT_STATE_REPORT); at !== -1; at = chunk.indexOf(AGENT_STATE_REPORT, at + 1)) {
+    const report = chunk.subarray(at, at + 64).toString('latin1')
+    if (/^\x1b\]7501;[^\x07\x1b]*\bapp=(?:codex|claude)\b/u.test(report)) return true
+  }
+  return false
+}
+
 export class HostControlError extends Error {
   constructor(
     readonly code: ProtocolErrorCode,
@@ -2485,7 +2497,10 @@ export class SessionManager {
     // the view is gone, because that is exactly when the next view will need it.
     session.decsetModes.read(bytes)
     session.outputTail.push(bytes)
-    session.mirror?.write(bytes)
+    if (session.mirror) session.mirror.write(bytes)
+    // Codex reports its state on screen long before its first hook, and its start-up animation can outgrow the tail a
+    // late mirror is seeded from, which then misses the prompt it drew once (Story 90.6): that report starts the mirror.
+    else if (announcesMirroredAgent(bytes)) session.mirror = new ScreenMirror(session.pty.cols, session.pty.rows, session.outputTail.read())
     // Neither the port watch nor a clipboard write may cost the view this chunk: a failure in one stops here.
     try {
       this.onOutput?.(session.sessionId, bytes)

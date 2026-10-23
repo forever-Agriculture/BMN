@@ -519,6 +519,7 @@ export class CompanionService {
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
   private refusalWrites: Promise<void> = Promise.resolve()
+  private awayWakeWrites: Promise<void> = Promise.resolve()
   private telegramDeliveryWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
@@ -542,7 +543,13 @@ export class CompanionService {
         return mirror.undimmedLines()
       },
       write: (sessionId, text) => options.manager.writeToSession(sessionId, bracketedPaste(text, true)),
-      log: (line) => process.stderr.write(`[BMN] ${this.iso()} ${line}\n`)
+      log: (line) => {
+        const entry = `${this.iso()} ${line}\n`
+        process.stderr.write(`[BMN] ${entry}`)
+        this.awayWakeWrites = this.awayWakeWrites
+          .then(() => this.appendBoundedLog(join(options.roots.state, 'away-wake.log'), entry))
+          .catch(() => undefined)
+      }
     })
     this.quietDelivery = new QuietHoursDelivery({
       read: () => options.database.companion('getRawSetting', QUIET_LEDGER_KEY),
