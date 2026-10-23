@@ -922,7 +922,9 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   shows it): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
   boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
   or up to N of this run's PRs when their required checks are green), push a branch to the default branch, or open
-  or update a pull request in another repository (from a named branch, or a named PR). `--nothing` says the run needs nothing. BMN binds the asking
+  or update a pull request in another repository (from a named branch, or a named PR). `--nothing` says the run needs nothing. A run on an epic with a go (Epic 90) fills the card from the plan:
+  only its Run needs' named actions, never rounds the go already gave, and `--nothing` when it names none
+  ([dev-auto.md](dev-auto.md), "Runs on the plan's decisions"). BMN binds the asking
   session itself; it does not check that a session owns the run id it names, so a new lead resuming the run
   asks and uses under that id. A second ask for the same run is a new revision, and his earlier answer holds until he answers
   it. Never on a card: force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance

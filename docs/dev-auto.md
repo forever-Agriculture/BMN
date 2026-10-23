@@ -45,24 +45,51 @@ does not recognize squash merges. Active, dirty, unmerged or unknown runs are ma
 worktrees the owner names are removed. Uncommitted files never get a forced removal
 without his explicit approval for that worktree; needed evidence is preserved first.
 
+## Runs on the plan's decisions
+
+An epic planned from Epic 90 on lists its **Run needs** ([planning.md](planning.md)): extra repair rounds
+per boundary, the criteria or stories that may be deferred and when, a money cap, and named actions for an
+Away card. Your go on the epic approves them as your instruction for its runs, day or night. A run reads
+them with the skill's `scripts/run_needs.py`, from the plan commit that recorded your go: an edit made after
+the go does not count until you give a new go, and the run tells you about it. An epic without Run needs, or
+without a recorded go, runs as before.
+
+A run decides a technical point itself only when the evidence is complete; otherwise it asks the consultant
+first. A point that is yours (spend beyond what you approved, a change to the work or its criteria, a
+reserved action, credentials or private data, your own check, a model choice), or one still uncertain after
+the consultant, goes at once under **Needs your decision** in its handoff, and the run carries on with every
+story that point does not block. It asks you only when no remaining work can go on, and never while you are
+Away; its final report lists every open entry. When a boundary's rounds are used up, a criterion your Run
+needs list as deferrable is deferred (the story is marked done with the deferral noted and named under Known
+limits, and a new story is proposed); anything else waits as Needs your decision.
+
+Money: every paid job a run launches goes through the skill's `scripts/spend_ledger.py`, one ledger per plan
+and epic under `~/.local/state/dev-auto/budgets/`. It reserves the job's maximum against your go's cap before
+the job starts and refuses what does not fit; a cap of `none` refuses every paid launch, and a new go never
+resets what was already spent or reserved. The ledger covers dev-auto's own paid launches only, not every
+provider call an agent might make, so it is a guard on those launches, not a hard limit on all spending.
+
 ## The Away grant
 
 When you say you are leaving, or press Away, BMN tells each running session once. A dev-auto run with
-authorised work left for the night then asks you on one card, with `bmn grant ask`, for only what that
-work needs: extra repair rounds per boundary (2, 3 or 4) and named actions with their targets, such as
-merging one of its PRs. A run that needs nothing says so. You answer in the window or on Telegram; an
-unanswered card grants nothing, and every grant ends when you are back.
+authorised work left for the night then sends one card with `bmn grant ask`. For an epic with a go, the
+card is filled from its Run needs: only the named actions it lists (such as merging one of its PRs), never
+repair rounds, which your go already gave; with no named actions, the run says it needs nothing. A run
+without a go asks for only what its work needs: extra repair rounds per boundary (2, 3 or 4) and named
+actions with their targets. You answer in the window or on Telegram; an unanswered card grants nothing, and
+every grant ends when you are back.
 
 The skill's `references/away-grant.md` says how a run uses it. Right before each step a grant would pay
 for, it reads the grant fresh (`scripts/check.py grant`, which reads `bmn grant --run`), never from the
 handoff. It records the use first with `bmn grant use`; a refused use means the step waits as it would
-without a grant. A granted round at a parked boundary still needs new evidence and a method the consultant
-agrees, recorded first. Before the last granted round the run puts the whole boundary to the consultant
-once (the step back), and when the rounds are used the boundary parks BLOCKED with that consult's options.
-Rounds count per boundary across resumes, new leads and Away periods. After each step the run reports
-what it did with `bmn grant report`, and the morning summary shows those reports apart from BMN's own
-record. What code enforces (who answers, expiry, the counts it records) and what is the run's rule are in
-[agent-control.md](agent-control.md), "The Away grant".
+without a grant. A round at a parked boundary, from your go or from a grant, still needs new evidence and a
+method the consultant agrees, recorded first; your go's rounds come first. Before the last round the run
+puts the whole boundary to the consultant once (the step back), and when the rounds are used the boundary
+defers what Run needs allow or waits as Needs your decision. Rounds count per boundary across resumes, new
+leads, gos and Away periods. After each granted step the run reports what it did with `bmn grant report`,
+and the morning summary shows those reports apart from BMN's own record. What code enforces (who answers,
+expiry, the counts it records) and what is the run's rule are in [agent-control.md](agent-control.md), "The
+Away grant".
 
 
 ## Morning digest
