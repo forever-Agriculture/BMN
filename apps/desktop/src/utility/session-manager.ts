@@ -460,8 +460,10 @@ const AGENT_STATE_REPORT = Buffer.from('\x1b]7501;')
 function announcesMirroredAgent(bytes: Uint8Array): boolean {
   const chunk = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   for (let at = chunk.indexOf(AGENT_STATE_REPORT); at !== -1; at = chunk.indexOf(AGENT_STATE_REPORT, at + 1)) {
-    const report = chunk.subarray(at, at + 64).toString('latin1')
-    if (/^\x1b\]7501;[^\x07\x1b]*\bapp=(?:codex|claude)\b/u.test(report)) return true
+    const body = chunk.subarray(at + AGENT_STATE_REPORT.byteLength, at + 64).toString('latin1')
+    const ends = [body.indexOf('\x07'), body.indexOf('\x1b')].filter((end) => end !== -1)
+    const fields = (ends.length > 0 ? body.slice(0, Math.min(...ends)) : body).split(/[;:]/u)
+    if (fields.includes('app=codex') || fields.includes('app=claude')) return true
   }
   return false
 }

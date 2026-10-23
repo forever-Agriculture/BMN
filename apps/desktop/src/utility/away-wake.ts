@@ -56,7 +56,7 @@ const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || age
  */
 export function idlePrompt(app: WakeApp, lines: readonly string[]): boolean {
   const rule = (line: string | undefined): boolean => line !== undefined && /^─{10,}\s*$/u.test(line)
-  const empty = (line: string, marker: string): boolean => line.slice(line.indexOf(marker) + marker.length).replace(/[\s ]/gu, '') === ''
+  const empty = (line: string, marker: string): boolean => line.slice(line.indexOf(marker) + marker.length).replace(/\s/gu, '') === ''
   if (app === 'claude') {
     const inputs = lines.flatMap((line, index) => line.startsWith('❯') && rule(lines[index - 1]) && rule(lines[index + 1]) ? [line] : [])
     return inputs.length === 1 && empty(inputs[0]!, '❯')

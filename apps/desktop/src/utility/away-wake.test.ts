@@ -175,7 +175,7 @@ describe('the Away wake-up (Story 90.6)', () => {
     const draft = new ScreenMirror(80, 6, new TextEncoder().encode('\x1b[1m›\x1b[0m draft text\r\n'))
     await draft.settled()
     expect(idlePrompt('codex', draft.undimmedLines())).toBe(false)
-    const claude = new ScreenMirror(80, 6, new TextEncoder().encode(`${RULE}\r\n\x1b[39m❯ \x1b[2mTry "how do I log an error?"\x1b[0m\r\n${RULE}\r\n`))
+    const claude = new ScreenMirror(80, 6, new TextEncoder().encode(`${RULE}\r\n\x1b[39m❯\u00a0\x1b[2mTry "how do I log an error?"\x1b[0m\r\n${RULE}\r\n`))
     await claude.settled()
     expect(idlePrompt('claude', claude.undimmedLines())).toBe(true)
   })
