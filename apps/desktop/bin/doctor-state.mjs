@@ -104,7 +104,7 @@ export function doctorView(state, { now = Date.now(), running = false, versions 
     if (!row) return { check, state: 'unqualified', problems: [], leftovers: [], checkedAt: null, stale: false }
     return { check, state: row.state, problems: row.problems.map((problem) => ({ ...problem,
       reason: PROBLEMS[problem.code][0], fix: PROBLEMS[problem.code][1] })),
-      leftovers: (row.leftovers ?? []).map((item) => ({ ...item, reasonText: LEFTOVER_REASONS[item.reason], location: leftoverLocation(item) })), checkedAt: row.checkedAt,
+      leftovers: (row.leftovers ?? []).map((item) => ({ ...item, reasonText: LEFTOVER_REASONS[item.reason] + (item.source === 'managed' ? ' OpenCode reads this entry from managed configuration.' : ''), location: leftoverLocation(item) })), checkedAt: row.checkedAt,
       stale: !profileMatches || changed ||
         now - row.checkedAt > DAY || row.version !== state.versions || (versions !== null && state.versions !== versions) }
   })

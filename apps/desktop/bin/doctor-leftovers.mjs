@@ -7,13 +7,14 @@ import { join, resolve, isAbsolute, basename, dirname } from 'node:path'
 import { projectLeftovers } from './doctor-leftover-results.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
 import { bindLocation, locationRoots, observeDatabases, observeFile, observeTree, resolveLocation, unchangedSince, unresolvedLocation } from './doctor-locations.mjs'
-import { readJsonEntries, readJsonItems, readTomlEntries } from './agents-tool-files.mjs'
+import { readJsonEntries, readJsonItems, readOpenCodeEntries, readTomlEntries } from './agents-tool-files.mjs'
 
 export const leftoversModule = import.meta.url
 
 export async function inspectLeftovers(currentVersions = {}) {
 const { SKILL_APPS, rootPath, skillsTests } = await import('./agents-skills.mjs')
 const { TOOL_APPS, neutralOf } = await import('./agents-tools.mjs')
+const { canonicalJson } = await import('./agents-roster.mjs')
 const env = process.env
 const profile = selectedProfile(env)
 const H = profile.home
@@ -387,15 +388,24 @@ function codexPlugins() {
 }
 
 function openCodePlugins() {
-  const rows = []
-  for (const path of profile.opencodeFiles) for (const entry of jsonItems(path, ['plugin'])) {
-    const spec = entry.value
-    if (typeof spec !== 'string') { errors.push('unreadable-plugin-entry'); rows.push({ locator: entry.locator, class: 'unreadable' }); continue }
-    const value = spec.startsWith('file:') ? spec.slice(5) : spec
-    const local = value.startsWith('.') || value.startsWith('/') || value.startsWith('~')
-    const full = local ? resolve(dirname(path), value.replace(/^~/, H)) : null
-    if (local && !existsSync(full)) rows.push({ locator: entry.locator, class: 'failing: file missing' })
-    else if (!local) rows.push({ locator: entry.locator, class: 'app-managed' })
+  const rows = [], seen = new Set()
+  // Managed sources come first so a shared reference retains its managed origin.
+  const files = [...profile.opencodeFiles.flatMap((path) => [['plugin'], ['plugins']].map((at) => [path, at])),
+    [join(profile.opencode, 'cli.json'), ['plugins']]]
+  for (const [path, at] of files) for (const entry of jsonItems(path, at)) {
+    const source = profile.opencodeManagedFiles.includes(path) ? { source: 'managed' } : {}
+    const reference = typeof entry.value === 'string' ? entry.value : at[0] === 'plugins' ? entry.value?.package : null
+    if (typeof reference !== 'string' || reference.length === 0) {
+      errors.push('unreadable-plugin-entry'); rows.push({ locator: entry.locator, class: 'unreadable', ...source }); continue
+    }
+    const raw = reference.startsWith('file:') ? reference.slice(5) : reference
+    const local = raw.startsWith('.') || raw.startsWith('/') || raw.startsWith('~')
+    const full = local ? resolve(dirname(path), raw.replace(/^~/, H)) : null
+    const key = local ? `local:${full}` : `package:${reference}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (local && !existsSync(full)) rows.push({ locator: entry.locator, class: 'failing: file missing', ...source })
+    else if (!local) rows.push({ locator: entry.locator, class: 'app-managed', ...source })
   }
   for (const folder of ['plugin', 'plugins']) {
     const dir = join(profile.opencode, folder)
@@ -403,11 +413,6 @@ function openCodePlugins() {
       const path = join(dir, name)
       const snapshot = locateTree(path)
       if (!snapshot || snapshot.missingTarget) rows.push({ locator: bindLocation(snapshot, roots), class: 'install folder missing' })
-    }
-  }
-  for (const entry of jsonItems(join(profile.opencode, 'cli.json'), ['plugins'])) {
-    if (typeof entry.value === 'string' && (entry.value.startsWith('.') || entry.value.startsWith('/')) && !existsSync(resolve(profile.opencode, entry.value))) {
-      rows.push({ locator: entry.locator, class: 'failing: file missing' })
     }
   }
   return { rows }
@@ -420,11 +425,11 @@ function readTools(harness, { path = TOOL_APPS[harness].file(env), at = TOOL_APP
   const observation = readObservation(path)
   if (observation.text === null) return { path, readable: false, missing: observation.missing, entries: new Map() }
   try {
-    const raw = harness === 'codex' ? readTomlEntries(observation.text) : readJsonEntries(observation.text, at)
+    const raw = harness === 'codex' ? readTomlEntries(observation.text) : harness === 'opencode' ? readOpenCodeEntries(observation.text, { strict: true }) : readJsonEntries(observation.text, at)
     const entries = new Map()
     for (const [id, entry] of raw) {
       const neutral = entry.unreadable === undefined ? neutralOf(entry.value, harness) : null
-      entries.set(id, neutral === null ? { unreadable: true } : { value: entry.value, ...neutral })
+      entries.set(id, neutral === null ? { unreadable: true, start: entry.start } : { value: entry.value, start: entry.start, ...neutral })
     }
     return { path, observation, readable: true, entries, text: observation.text }
   } catch { errors.push('unreadable-mcp-configuration'); return { path, readable: false, missing: false, entries: new Map() } }
@@ -437,11 +442,12 @@ function mcpRows(harness, file, scope, projectPath = null, at = TOOL_APPS[harnes
     if (!missing) errors.push('unreadable-mcp-configuration')
     return [{ app: harness, scope, file: tilde(file.path), state: missing ? 'file-missing' : 'file-unreadable' }]
   }
-  const positions = harness === 'codex' ? readTomlEntries(file.text) : new Map(readJsonItems(file.text, at).map((entry) => [entry.key, entry]))
+  const positions = harness === 'codex' ? readTomlEntries(file.text) : harness === 'opencode' ? file.entries : new Map(readJsonItems(file.text, at).map((entry) => [entry.key, entry]))
   for (const [id, entry] of file.entries) {
     const row = { locator: bindLocation(file.observation, roots, { start: positions.get(id)?.start }), app: harness, id, scope, file: tilde(file.path), ...(projectPath ? { project: tilde(projectPath), project_exists: isDir(projectPath) } : {}) }
     if (entry.unreadable !== undefined) { errors.push('unreadable-mcp-entry'); rows.push({ ...row, state: 'unreadable' }); continue }
     const value = entry.value ?? {}
+    if (harness === 'opencode') row.valueHash = sha(canonicalJson(value))
     const definition = entry.definition ?? {}
     row.transport = definition.url !== undefined ? 'remote' : 'stdio'
     row.program = definition.url !== undefined ? 'remote (no program)' : programClass(definition.command, (definition.args ?? []).filter((arg) => typeof arg === 'string'))
@@ -457,7 +463,18 @@ function mcpRows(harness, file, scope, projectPath = null, at = TOOL_APPS[harnes
 function mcpInventory() {
   const rows = []
   for (const harness of ['claude', 'codex']) rows.push(...mcpRows(harness, readTools(harness), 'user'))
-  for (const path of profile.opencodeFiles) rows.push(...mcpRows('opencode', readTools('opencode', { path }), 'user'))
+  const openCode = new Map()
+  for (const path of profile.opencodeFiles) for (const item of mcpRows('opencode', readTools('opencode', { path }), 'user')) {
+    const row = profile.opencodeManagedFiles.includes(path) ? { ...item, source: 'managed' } : item
+    if (row.id === undefined) { rows.push(row); continue }
+    const prior = openCode.get(row.id)
+    if (prior === undefined) { openCode.set(row.id, row); rows.push(row); continue }
+    if (prior.state !== undefined || row.state !== undefined || prior.valueHash !== row.valueHash) {
+      prior.state = 'unreadable'
+      for (const field of ['program', 'transport', 'disabled', 'secret_inline', 'bmn_written', 'in_team', 'valueHash']) delete prior[field]
+      errors.push('conflicting-mcp-definitions')
+    }
+  }
   // Claude Code's local scope: entries kept per project inside ~/.claude.json.
   const claudeJson = tryJson(`${profile.claudeJson}`).data ?? {}
   const projects = Object.keys(claudeJson.projects ?? {})

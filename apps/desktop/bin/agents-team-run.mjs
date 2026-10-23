@@ -6,7 +6,8 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
-import { openCodeFolder, openCodeSessionInfo } from './agents-opencode.mjs'
+import { openCodeFolder, openCodeSessionInfo, openCodeChildSessions } from './agents-opencode.mjs'
+import { readChildAccounting } from './opencode-child-accounting.mjs'
 import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
 import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
 import { browserRecord, browserTemporary } from './agents-team-browser.mjs'
@@ -503,42 +504,43 @@ export function observeAsk(folder, harness, request, { startedAt = null, endedAt
       if (typeof event.sessionID === 'string') sessions.add(event.sessionID)
       if (event.type === 'text' && typeof event.part?.text === 'string') answer = event.part.text
       if (event.type === 'error') failure = typeof event.error?.message === 'string' ? `OpenCode reported an error: ${event.error.message.slice(0, 200)}` : `OpenCode reported an error (${event.error?.type ?? 'unknown'})`
-      if (event.type === 'tool_use' && ['subagent', 'task'].includes(event.part?.tool)) {
+      if (event.type === 'tool_use' && ['subagent', 'task', 'bmn_subagent'].includes(event.part?.tool)) {
         const child = event.part.state?.metadata?.metadata?.sessionID ?? event.part.state?.metadata?.sessionId ?? null
-        if (typeof child === 'string') children.set(child, { session: child, name: event.part.state?.input?.description ?? null, role: event.part.state?.input?.agent ?? null, status: event.part.state?.status ?? null })
+        if (typeof child === 'string') children.set(child, { session: child, name: event.part.state?.input?.description ?? null, role: event.part.tool === 'bmn_subagent' ? 'bmn-reader' : event.part.state?.input?.agent ?? null, status: event.part.state?.status ?? null })
       }
     }
-    const started = [...children.values()]
     const record = readJsonOrNull(join(folder, OPENCODE_SESSION_INFO))
+    for (const child of record?.subagents ?? []) if (typeof child.session === 'string') children.set(child.session, { ...child, ...children.get(child.session), session: child.session })
+    const started = [...children.values()]
     const info = record?.info
     if (info !== undefined && info !== null && info.id === observed.session) {
       if (typeof info.model?.id === 'string') Object.assign(observed, { model: info.model.id, model_source: 'session export' })
       if (typeof info.model?.variant === 'string') Object.assign(observed, { effort: info.model.variant, effort_source: 'session export (variant)' })
       if (typeof info.model?.provider === 'string' && typeof request.provider === 'string' && info.model.provider !== request.provider) problems.push(`the session ran on ${info.model.provider}, not ${request.provider}`)
       const tokens = { input_tokens: info.tokens?.input ?? 'unknown', cached_input_tokens: info.tokens?.cache_read ?? 'unknown', output_tokens: info.tokens?.output ?? 'unknown', reasoning_tokens: info.tokens?.reasoning ?? 'unknown', reported_cost: info.reported_cost ?? 'unknown' }
-      let complete = true
+      let complete = record.discovery?.complete ?? !events.some(event => event.type === 'tool_use' && event.part?.tool === 'bmn_subagent')
       for (const child of started) {
         const found = (record.subagents ?? []).find((entry) => entry.info?.id === child.session || entry.session === child.session)
         const own = found?.info
         if (own === undefined || own === null) {
           // Named by the teammate's own event, its export unread: the sub-agent stands, its usage is incomplete.
           complete = false
-          subagents.push({ ...child, parent: null, kind: 'OpenCode sub-agent', model: null, effort: null, usage: 'incomplete', usage_reason: found?.failed ?? 'its session export could not be read' })
+          subagents.push({ session: child.session, name: child.name ?? null, role: child.role ?? null, status: child.status ?? null, parent: child.parent ?? null, kind: 'OpenCode sub-agent', model: null, effort: null, usage: 'incomplete', usage_reason: found?.failed ?? 'its session export could not be read' })
           continue
         }
         if (own.parent !== observed.session) {
           // Its own export says it is not the teammate's: a session BMN cannot identify (exit 17).
           complete = false
           problems.push(`the run named a sub-agent session whose export names ${own.parent === null ? 'no parent' : `another parent, ${own.parent}`}, ${child.session}`)
-          subagents.push({ ...child, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: 'incomplete', usage_reason: 'its session export does not name the teammate as its parent' })
+          subagents.push({ session: child.session, name: child.name ?? null, role: child.role ?? null, status: child.status ?? null, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: 'incomplete', usage_reason: 'its session export does not name the teammate as its parent' })
           continue
         }
         const childTokens = { input_tokens: own.tokens?.input ?? 'unknown', cached_input_tokens: own.tokens?.cache_read ?? 'unknown', output_tokens: own.tokens?.output ?? 'unknown', reasoning_tokens: own.tokens?.reasoning ?? 'unknown', reported_cost: own.reported_cost ?? 'unknown' }
         for (const key of Object.keys(tokens)) tokens[key] = addTokens(tokens[key], childTokens[key])
-        subagents.push({ ...child, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: childTokens })
+        subagents.push({ session: child.session, name: child.name ?? null, role: child.role ?? null, status: child.status ?? null, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: childTokens })
       }
       Object.assign(usage, tokens, { source: started.length === 0 ? 'session export' : 'session exports', complete })
-      if (!complete) usage.incomplete_reason = 'a sub-agent\'s session could not be read'
+      if (!complete) usage.incomplete_reason = record.discovery?.reason ?? 'a sub-agent\'s session could not be read'
     } else {
       const why = record?.failed ?? 'no session export'
       Object.assign(observed, { model_source: `unknown: ${why}`, effort_source: `unknown: ${why}` })
@@ -568,11 +570,26 @@ export function observeAsk(folder, harness, request, { startedAt = null, endedAt
 function recordOpenCodeSessions(folder) {
   const { events } = eventsOf(folder)
   const session = events.find((event) => typeof event.sessionID === 'string')?.sessionID ?? null
-  const children = events.filter((event) => event.type === 'tool_use' && ['subagent', 'task'].includes(event.part?.tool))
-    .map((event) => event.part.state?.metadata?.metadata?.sessionID ?? event.part.state?.metadata?.sessionId ?? null).filter((id) => typeof id === 'string')
+  const brokerAttempted = events.some(event => event.type === 'tool_use' && event.part?.tool === 'bmn_subagent')
+  const children = new Map(events.filter((event) => event.type === 'tool_use' && ['subagent', 'task', 'bmn_subagent'].includes(event.part?.tool))
+    .map((event) => event.part.state?.metadata?.metadata?.sessionID ?? event.part.state?.metadata?.sessionId ?? null)
+    .filter((id) => typeof id === 'string').map(id => [id, { session: id }]))
+  const ledger = readChildAccounting(join(openCodeFolder(), 'state/bmn-reader'), session)
+  for (const child of ledger.children) children.set(child.session, child)
+  const discovery = { complete: ledger.missing ? !brokerAttempted : ledger.complete,
+    ...(!ledger.complete && (!ledger.missing || brokerAttempted) ? { reason: ledger.reason ?? 'child accounting is missing for an observed child call' } : {}) }
   const launcher = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))?.launcher?.path
-  const read = (id) => (typeof launcher === 'string' ? openCodeSessionInfo(id, openCodeFolder(), { launcher, environment: { PATH: launchEnvironment(folder).PATH ?? '/usr/bin:/bin' } }) : { failed: 'the run\'s program is not recorded' })
-  writeWhole(join(folder, OPENCODE_SESSION_INFO), `${JSON.stringify({ version: 1, ...read(session), subagents: [...new Set(children)].map((id) => ({ session: id, ...read(id) })) }, null, 2)}\n`)
+  const environment = { PATH: launchEnvironment(folder).PATH ?? '/usr/bin:/bin' }
+  if (!discovery.complete && typeof launcher === 'string') {
+    const listed = openCodeChildSessions(session, openCodeFolder(), { launcher, environment })
+    for (const id of listed.children) if (!children.has(id)) children.set(id, { session: id, parent: session, role: 'bmn-reader' })
+    // Enumeration recovers identities, but a snapshot cannot settle a pending create or termination.
+    if (!listed.complete) discovery.reason += '; native child enumeration was incomplete'
+  }
+  const read = (id) => (typeof launcher === 'string' ? openCodeSessionInfo(id, openCodeFolder(), { launcher, environment }) : { failed: 'the run\'s program is not recorded' })
+  writeWhole(join(folder, OPENCODE_SESSION_INFO), `${JSON.stringify({ version: 1, ...read(session), discovery,
+    subagents: [...children.values()].map((child) => ({ ...child, ...read(child.session) })) }, null, 2)}\n`)
+
 }
 
 /** Masks any credential in the run's raw output in place, and says which patterns were masked (R72-NFR5). */

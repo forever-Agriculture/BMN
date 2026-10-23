@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
+import { OPENCODE_FORM_TESTED, openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
 import { BROWSER_SERVER, browserServer, browserTools } from './agents-team-browser.mjs'
 import { realOrNull } from './shared-helpers.mjs'
 
@@ -22,7 +22,7 @@ export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
 export const ASK_FORMS_CHECKED = Object.freeze({
   codex: { version: '0.162.1', on: '2026-10-15' },
   claude: { version: '2.1.300', on: '2026-10-15' },
-  opencode: { version: '2.0.29', on: '2026-10-15' }
+  opencode: OPENCODE_FORM_TESTED
 })
 
 /** What an app's form does not offer, and why, in the words a refusal gives (R72-NFR12). */
@@ -52,7 +52,7 @@ export const ASK_RUN_FILES = Object.freeze({
 export const ASK_READS = Object.freeze({
   'codex-read-only': { scope: 'computer', reach: 'any file your user can read', words: 'Codex\'s read-only sandbox: any file your user can read, with its shell, Git, web search and sub-agents; it writes nothing' },
   'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history through BMN\'s git, web search and sub-agents; it writes nothing' },
-  'opencode-reader': { scope: 'computer', reach: 'the project and wherever its tracked links lead', words: 'OpenCode\'s read-only agent: the project, and wherever its tracked links lead, with read, glob, grep, Git history through BMN\'s git, web search and BMN\'s read-only sub-agent; it writes nothing' },
+  'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
   'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
 })
 
@@ -101,8 +101,8 @@ export function askProgram(harness, environment = process.env) {
 /**
  * The name of the form an ask gets: the app's one form, and OpenCode's asker where it may read nothing but the
  * asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public
- * work only (`textOnly`). OpenCode's reader can read beyond the project (its tracked links), which no folder
- * exception covers, so there only the asker's text, which an exception can cover, is given (72.6's measured route).
+ * work only (`textOnly`). Those providers still get the text-only form; the project reader uses BMN's
+ * confined broker rather than OpenCode's native filesystem tools.
  */
 export function askFormName(harness, { project, label, textOnly = false }) {
   if (harness === 'codex') return 'codex-read-only'

@@ -1,6 +1,6 @@
 // MODULE: agents-opencode.mjs - Epic 70: the OpenCode folder BMN keeps for helper runs, its read-only agent, the one `opencode run` form the check reads, and Luna through OpenCode Go
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeSync, chmodSync } from 'node:fs'
+import { closeSync, constants, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeSync, chmodSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname } from 'node:path'
 import { sha256 } from './agents-roster.mjs'
@@ -15,7 +15,27 @@ import { stateDirectory } from './agents-state.mjs'
  * files and nothing else, so no rules file, agent, skill, plugin or MCP server of the owner's is read,
  * and its agent denies every action but reading inside the project.
  */
-export const OPENCODE_FORM_TESTED = { version: '2.0.29', on: '2026-10-14' }
+export const OPENCODE_FORM_TESTED = { version: '2.0.32', on: '2026-10-23' }
+
+/** The measured Linux binaries also load machine-wide sources, outside BMN's configuration folder. */
+export function openCodeManagedProblem() {
+  const path = '/etc/opencode'
+  const problem = 'OpenCode managed configuration cannot be isolated for this BMN run'
+  let before, fd
+  try { before = lstatSync(path, { bigint: true }) }
+  catch (error) { return error.code === 'ENOENT' ? null : problem }
+  try {
+    if (!before.isDirectory() || before.isSymbolicLink()) return problem
+    fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    const same = stat => stat.isDirectory() && ['dev', 'ino', 'mtimeNs', 'ctimeNs'].every(key => stat[key] === before[key])
+    if (!same(fstatSync(fd, { bigint: true }))) return problem
+    const stream = opendirSync(`/proc/self/fd/${fd}`)
+    let occupied
+    try { occupied = stream.readSync() !== null } finally { stream.closeSync() }
+    return occupied || !same(fstatSync(fd, { bigint: true })) || !same(lstatSync(path, { bigint: true })) ? problem : null
+  } catch { return problem }
+  finally { if (fd !== undefined) closeSync(fd) }
+}
 
 /** BMN's read-only agent, as `--agent` names it. */
 export const OPENCODE_HELPER_AGENT = 'bmn-helper'
@@ -38,55 +58,27 @@ export const OPENCODE_SESSION_ID = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
  * OpenCode offers only `read`, `glob` and `grep`, and refuses every other tool, a read outside the
  * project and a question, with and without `--auto`.
  */
-const HELPER_AGENT_TEXT = `---
-description: BMN read-only helper
+const PROJECT_READ_PERMISSION = Object.freeze([
+  { action: '*', resource: '*', effect: 'deny' },
+  ...['bmn_read', 'bmn_glob', 'bmn_grep'].map(action => ({ action, resource: '*', effect: 'allow' }))
+])
+const ASK_READER_PERMISSION = Object.freeze([
+  ...PROJECT_READ_PERMISSION,
+  ...['bmn_git', 'websearch', 'bmn_subagent'].map(action => ({ action, resource: '*', effect: 'allow' }))
+])
+const agentText = (description, permissions, prompt) => `---
+description: ${description}
 mode: primary
-permission:
-  "*": deny
-  read: allow
-  glob: allow
-  grep: allow
-  list: allow
-  external_directory: deny
-  edit: deny
-  bash: deny
-  task: deny
-  skill: deny
-  webfetch: deny
-  websearch: deny
-  todowrite: deny
-  question: deny
-  lsp: deny
-  doom_loop: deny
+permissions: ${JSON.stringify(permissions)}
 ---
 
-You are a read-only helper started by BMN. Answer the request; you cannot change anything.
+${prompt}
 `
-
-/**
- * The research agent: every action denied but web search. With it OpenCode offers only `websearch`
- * (70.3 probe); a page is read by BMN itself, never by the run.
- */
-const RESEARCH_AGENT_TEXT = `---
-description: BMN researcher
-mode: primary
-permission:
-  "*": deny
-  websearch: allow
----
-
-You are a researcher started by BMN. Search the web and answer the request; you cannot read or change anything on this computer.
-`
-
-/** The read-only permissions 72.9 measured on OpenCode 2.0.29 (`readersafe`): read, history through BMN's git, web search and BMN's own sub-agent. */
-const ASK_READER_PERMISSION = Object.freeze({
-  '*': 'deny', read: 'allow', glob: 'allow', grep: 'allow', list: 'allow', external_directory: 'deny', edit: 'deny', webfetch: 'deny', websearch: 'allow',
-  todowrite: 'deny', question: 'deny', lsp: 'deny', skill: 'deny',
-  // OpenCode matches a command's whole text and splits chains, substitutions and pipes but not redirections: `git log -1 > file`
-  // passed `git log*` until every command holding a redirection was refused (72.9 AC1).
-  bash: { '*': 'deny', 'git log*': 'allow', 'git show*': 'allow', 'git diff*': 'allow', 'git blame*': 'allow', '*>*': 'deny' },
-  task: { '*': 'deny', 'bmn-reader': 'allow' }
-})
+const HELPER_AGENT_TEXT = agentText('BMN read-only helper', PROJECT_READ_PERMISSION,
+  'You are a read-only helper started by BMN. Use the BMN project tools; you cannot change anything.')
+const RESEARCH_AGENT_TEXT = agentText('BMN researcher', [
+  { action: '*', resource: '*', effect: 'deny' }, { action: 'websearch', resource: '*', effect: 'allow' }
+], 'You are a researcher started by BMN. Search the web and answer the request; you cannot read or change anything on this computer.')
 
 /** BMN's agents for an asked teammate: the project reader with its read-only sub-agent, and the asker with every action denied (72.5). */
 export const OPENCODE_ASK_AGENTS = Object.freeze({ reader: 'bmn-ask-reader', asker: 'bmn-ask-asker', subagent: 'bmn-reader' })
@@ -101,22 +93,29 @@ export function openCodeAskConfig(kind, rules = null) {
   const own = (text) => (rules === null ? text : `${text}\n\n${rules}`)
   const agent = kind === 'reader'
     ? {
-        [OPENCODE_ASK_AGENTS.reader]: { description: 'BMN asked teammate, read-only', mode: 'primary', prompt: own('You are a read-only teammate asked by BMN.'), permission: ASK_READER_PERMISSION },
-        [OPENCODE_ASK_AGENTS.subagent]: { description: 'BMN read-only sub-agent', mode: 'subagent', prompt: 'You are a read-only sub-agent started by BMN\'s teammate.', permission: { ...ASK_READER_PERMISSION, task: 'deny' } }
+        [OPENCODE_ASK_AGENTS.reader]: { description: 'BMN asked teammate, read-only', mode: 'primary', system: own('You are a read-only teammate asked by BMN. Use the BMN project tools for files, searches, Git history and your one bounded read-only child.'), permissions: ASK_READER_PERMISSION },
+        [OPENCODE_ASK_AGENTS.subagent]: { description: 'BMN read-only sub-agent', mode: 'subagent', system: 'You are a read-only sub-agent started by BMN\'s teammate.', permissions: ASK_READER_PERMISSION.filter(rule => rule.action !== 'bmn_subagent') }
       }
-    : { [OPENCODE_ASK_AGENTS.asker]: { description: 'BMN asked teammate, no tools', mode: 'primary', prompt: own('You are a teammate asked one question by BMN; you have no tools.'), permission: { '*': 'deny' } } }
-  return { agent: kind === 'reader' ? OPENCODE_ASK_AGENTS.reader : OPENCODE_ASK_AGENTS.asker, content: JSON.stringify({ agent }) }
+    : { [OPENCODE_ASK_AGENTS.asker]: { description: 'BMN asked teammate, no tools', mode: 'primary', system: own('You are a teammate asked one question by BMN; you have no tools.'), permissions: [{ action: '*', resource: '*', effect: 'deny' }] } }
+  return { agent: kind === 'reader' ? OPENCODE_ASK_AGENTS.reader : OPENCODE_ASK_AGENTS.asker, content: JSON.stringify({ agents: agent }) }
 }
 
 /**
  * OpenCode's own settings for the folder: no update, no sharing, no file snapshots, and the search
  * service for the research agent. It names no model or provider.
  */
-const CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false, websearch: { provider: OPENCODE_WEBSEARCH_PROVIDER } }, null, 2)}\n`
+const CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.json', autoupdate: false, share: 'disabled', snapshot: false, websearch: { provider: OPENCODE_WEBSEARCH_PROVIDER }, plugins: ['./plugins/bmn-reader'] }, null, 2)}\n`
 
 /** Every file of BMN's OpenCode configuration folder, by its path inside `config/opencode`. */
 export const OPENCODE_CONFIG_FILES = Object.freeze({
   'opencode.json': CONFIG_TEXT,
+  'plugins/bmn-reader/package.json': JSON.stringify({ name: 'bmn-read-only', version: '1.0.0', type: 'module', exports: { '.': './index.mjs' } }) + '\n',
+  'plugins/bmn-reader/index.mjs': readFileSync(new URL('./opencode-reader-plugin.mjs', import.meta.url), 'utf8'),
+  'plugins/bmn-reader/opencode-project-reader.mjs': readFileSync(new URL('./opencode-project-reader.mjs', import.meta.url), 'utf8'),
+  'plugins/bmn-reader/opencode-project-git.mjs': readFileSync(new URL('./opencode-project-git.mjs', import.meta.url), 'utf8'),
+  'plugins/bmn-reader/opencode-reader-child.mjs': readFileSync(new URL('./opencode-reader-child.mjs', import.meta.url), 'utf8'),
+  'plugins/bmn-reader/opencode-child-accounting.mjs': readFileSync(new URL('./opencode-child-accounting.mjs', import.meta.url), 'utf8'),
+  'plugins/bmn-reader/ask-git.sh': readFileSync(new URL('./ask-git.sh', import.meta.url), 'utf8'),
   [`agents/${OPENCODE_HELPER_AGENT}.md`]: HELPER_AGENT_TEXT,
   [`agents/${OPENCODE_RESEARCH_AGENT}.md`]: RESEARCH_AGENT_TEXT
 })
@@ -477,6 +476,36 @@ function ownerEnvironment(environment) {
   return { ...kept, OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
 }
 
+/** The judge's one key, chosen from OpenCode 2's export; no other sign-in escapes this call. */
+export async function openCodeJudgeKey({ environment = process.env, timeoutMs = 5000 } = {}) {
+  const env = ownerEnvironment(environment)
+  if (typeof environment.OPENCODE_DB === 'string') env.OPENCODE_DB = environment.OPENCODE_DB
+  const result = await runOpenCode(['auth', 'export', '--standalone'], {
+    env, cwd: environment.HOME || homedir(), timeoutMs
+  })
+  if (result.missing || result.status !== 0) return { reason: 'OpenCode could not export its sign-ins on this computer' }
+  let entries
+  try {
+    entries = JSON.parse(result.stdout)
+  } catch {
+    return { reason: 'OpenCode exported its sign-ins in a form BMN does not read' }
+  }
+  if (!Array.isArray(entries) || entries.some((entry) => entry === null || typeof entry !== 'object' ||
+    typeof entry.integrationID !== 'string' || typeof entry.active !== 'boolean' ||
+    entry.value === null || typeof entry.value !== 'object' || typeof entry.value.type !== 'string')) {
+    return { reason: 'OpenCode exported its sign-ins in a form BMN does not read' }
+  }
+  for (const integration of ['opencode-go', 'opencode']) {
+    const matches = entries.filter((entry) => entry.integrationID === integration && entry.active === true && entry.value.type === 'key')
+    if (matches.length === 0) continue
+    if (matches.length !== 1) return { reason: 'OpenCode holds more than one active API-key sign-in for the judge\'s integration' }
+    const key = matches[0].value.key
+    if (typeof key !== 'string' || !/^[\x21-\x7e]{8,512}$/.test(key)) return { reason: 'OpenCode exported its sign-ins in a form BMN does not read' }
+    return { key }
+  }
+  return { reason: 'OpenCode holds no active API-key sign-in for its Go or OpenCode integration' }
+}
+
 /**
  * Copies the owner's OpenCode Go sign-in into BMN's folder, once (70.4; his card of 2026-10-14: when
  * he approves Luna (Go), BMN copies his Go key into its own folder with OpenCode's `auth export` and
@@ -542,4 +571,28 @@ export function openCodeSessionInfo(session, runBase = openCodeFolder(), { launc
       reported_cost: number(info.cost)
     }
   }
+}
+
+/** Recover actual children through the native paginated API, never the top-level-only session list. */
+export function openCodeChildSessions(session, runBase = openCodeFolder(), { launcher = 'opencode', environment = process.env, timeoutMs = 5000 } = {}) {
+  if (!OPENCODE_SESSION_ID.test(session ?? '')) return { children: [], complete: false, reason: 'the parent identity is unavailable' }
+  const deadline = Date.now() + timeoutMs, found = new Set(), cursors = new Set()
+  let cursor
+  for (let page = 0; page < 100 && Date.now() < deadline; page++) {
+    const args = ['api', '--standalone', 'session.list', '--param', `parentID=${session}`, '--param', 'limit=100']
+    if (cursor) args.push('--param', `cursor=${cursor}`)
+    const result = runSync(launcher, args, { env: folderEnvironment(runBase, environment), cwd: openCodeFolders(runBase).home, timeoutMs: Math.max(1, deadline - Date.now()), limit: 1024 * 1024 })
+    let value
+    try { value = result.status === 0 ? JSON.parse(result.stdout) : null } catch { value = null }
+    if (!Array.isArray(value?.data) || typeof value.cursor !== 'object' || value.cursor === null) break
+    for (const child of value.data) {
+      if (!OPENCODE_SESSION_ID.test(child?.id ?? '') || child.parentID !== session) return { children: [...found], complete: false, reason: 'native child enumeration returned invalid linkage' }
+      found.add(child.id)
+    }
+    cursor = value.cursor.next
+    if (cursor === undefined || cursor === null) return { children: [...found], complete: true }
+    if (typeof cursor !== 'string' || cursors.has(cursor)) break
+    cursors.add(cursor)
+  }
+  return { children: [...found], complete: false, reason: 'native child enumeration was incomplete' }
 }

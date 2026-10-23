@@ -10,7 +10,7 @@ type Versions = Partial<Record<ToolsHarness, string | null>>
 
 export declare const TOOL_APPS: Record<ToolsHarness, {
   command: string; format: 'json' | 'toml'; path: string[]; file: (environment: Environment) => string
-  list: string[]; add: ((id: string, program: string) => string[]) | null; remove: ((id: string) => string[]) | null
+  list: string[] | null; add: ((id: string, program: string) => string[]) | null; remove: ((id: string) => string[]) | null
 }>
 export declare function toolsTestsPath(): string
 
@@ -21,6 +21,8 @@ export interface ToolsTestEntry {
   version: string | null
   outcome: ToolsOutcome
   detail: string
+  /** OpenCode capability records from before the native layout do not authorize new writes. */
+  entry_layout?: 'mcp.servers'
   /** Where the app was seen reading its tools, with the home folder as ~. */
   file?: string
   variable: 'pass' | 'unproven'
@@ -73,9 +75,9 @@ export declare function neutralOf(value: unknown, harness: string): { definition
 export declare function maskedEntry(value: unknown, harness: string): unknown
 
 export type AppToolEntry =
-  | { unreadable: string; value?: undefined }
-  | { value: Record<string, unknown>; raw: string; hash: string; text_hash: string; definition: ToolDefinition; secrets: string[]; extras: string[]; unreadable?: undefined }
-export interface AppToolsFile { harness: string; path: string; readable: boolean; detail?: string; entries: Map<string, AppToolEntry>; text?: string; link?: string }
+  | { unreadable: string; value?: undefined; at?: string[] }
+  | { value: Record<string, unknown>; raw: string; hash: string; text_hash: string; definition: ToolDefinition; secrets: string[]; extras: string[]; unreadable?: undefined; at?: string[] }
+export interface AppToolsFile { harness: string; path: string; readable: boolean; detail?: string; entries: Map<string, AppToolEntry>; text?: string; link?: string; directory?: string }
 export declare function readAppTools(harness: string, environment?: Environment, options?: { path?: string; at?: string[] }): AppToolsFile
 export declare function transportWords(tool: Pick<RosterTool, 'command' | 'args' | 'url'>): string
 
@@ -102,8 +104,15 @@ export declare function appStateWord(app: ToolsApp): 'Not supported yet' | 'Diff
 
 export interface ToolsTarget {
   harness: ToolsHarness; tool: string; path: string; action: 'set' | 'remove'; change: string; words: string
-  before: string | null; after: string | null; unlisted?: true
+  before: string | null; after: string | null; unlisted?: true; at?: string[]
 }
+export declare function writeSetupToolEntry(harness: string, path: string, id: string,
+  expected: { hash: string | null; text?: string | null; directory?: string; at?: string[] }, value?: unknown, raw?: string,
+  options?: { at?: string[]; beforeCommit?: () => void; afterPublish?: () => void; journal?: (hash: string | null, note?: unknown) => void; durable?: boolean;
+    publish?: typeof import('./safe-config-write.mjs').replaceFileSafely;
+    publishMissing?: (path: string, state: import('./safe-config-write.mjs').PathState, options: { beforeCommit: () => void; afterCommit: () => void; durable: boolean }) => unknown;
+    inverse?: unknown; priorHash?: string | null; priorText?: string | null; undoing?: boolean; expectedWitness?: unknown }): { hash: string | null; text: string | null }
+export declare function validToolRemovalWitness(value: unknown, path: string, text: string): boolean
 export interface ToolsOpen { harness: ToolsHarness; tool: string; path: string; fix: string; unlisted?: true }
 export interface ToolsPlan { code: string; message?: string; targets: ToolsTarget[]; exposed: ToolsOpen[]; blocked: ToolsOpen[]; planHash: string | null }
 interface InstallOptions { environment?: Environment; versions?: Versions; tests?: ToolsTestEntry[]; removeUnlisted?: boolean; /** Leaves an entry BMN did not write, or one changed outside it (Story 75.9). */ absent?: boolean }
@@ -119,7 +128,7 @@ export declare function installTools(harnesses?: string[], options?: InstallOpti
   beforeTarget?: (target: ToolsTarget, index: number) => void; beforeCommit?: (target: ToolsTarget, index: number) => void
   afterTarget?: (target: ToolsTarget, index: number) => void
 }): Promise<ToolsInstallResult>
-export declare function restoreToolsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string; leftWords?: string[] }): Promise<Record<string, unknown>>
+export declare function restoreToolsTransaction(manifest: unknown, folder: string, options?: { yes?: boolean; asJson?: boolean; planOnly?: boolean; expectedPlanHash?: string; leftWords?: string[]; beforeCommit?: (target: ToolsTarget) => void; afterEntry?: (target: ToolsTarget) => void }): Promise<Record<string, unknown>>
 
 export interface ToolProposal { id: string; state: 'ready' | 'secret' | 'known' | 'conflict' | 'unreadable'; apps: ToolsHarness[]; tool?: RosterTool; notes: string[] }
 export declare function proposeTools(options?: { environment?: Environment; generation?: Generation | null }): { files: { harness: ToolsHarness; path: string; readable: boolean; detail?: string }[]; proposals: ToolProposal[] }

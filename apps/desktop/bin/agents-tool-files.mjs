@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 // MODULE: agents-tool-files.mjs - Story 60.12: reading one MCP entry out of an app's own settings file and changing only that entry, every other byte left as it is (JSON with comments, and Codex's TOML)
 
 /**
@@ -53,14 +55,14 @@ function stringEnd(text, start) {
 }
 
 /** The index just after the value that starts at `start`. */
-function valueEnd(text, start) {
+function valueEnd(text, start, strict = false) {
   const char = text[start]
   if (char === '"') return stringEnd(text, start)
-  if (char === '{') return objectSpans(text, start).close + 1
+  if (char === '{') return objectSpans(text, start, strict).close + 1
   if (char === '[') {
     let index = skipSpace(text, start + 1)
     while (text[index] !== ']') {
-      index = skipSpace(text, valueEnd(text, index))
+      index = skipSpace(text, valueEnd(text, index, strict))
       if (text[index] === ',') index = skipSpace(text, index + 1)
       else if (text[index] !== ']') fail('a list is not closed')
     }
@@ -75,9 +77,10 @@ function valueEnd(text, start) {
  * The members of the object that opens at `open`: each key with where it starts, where its value
  * starts and ends, and where the comma after it ends (-1 when there is none).
  */
-function objectSpans(text, open) {
+function objectSpans(text, open, strict = false) {
   if (text[open] !== '{') fail('an object was expected')
   const members = []
+  const names = strict ? new Set() : null
   let index = skipSpace(text, open + 1)
   while (text[index] !== '}') {
     if (text[index] !== '"') fail('a name was expected')
@@ -89,17 +92,20 @@ function objectSpans(text, open) {
     } catch {
       fail('a name cannot be read')
     }
+    if (names?.has(key)) fail('a name is there twice')
+    names?.add(key)
     index = skipSpace(text, keyEnd)
     if (text[index] !== ':') fail('a ":" was expected')
+    const colon = index
     const start = skipSpace(text, index + 1)
-    const end = valueEnd(text, start)
+    const end = valueEnd(text, start, strict)
     index = skipSpace(text, end)
     let commaEnd = -1
     if (text[index] === ',') {
       commaEnd = index + 1
       index = skipSpace(text, commaEnd)
     } else if (text[index] !== '}') fail('an object is not closed')
-    members.push({ key, keyStart, valueStart: start, valueEnd: end, commaEnd })
+    members.push({ key, keyStart, keyEnd, colon, valueStart: start, valueEnd: end, commaEnd })
   }
   return { open, close: index, members }
 }
@@ -138,10 +144,10 @@ function parseValue(text) {
   }
 }
 
-function rootOf(text) {
+function rootOf(text, strict = false) {
   const open = skipSpace(text, 0)
   if (open >= text.length) return null
-  const root = objectSpans(text, open)
+  const root = objectSpans(text, open, strict)
   if (skipSpace(text, root.close + 1) < text.length) fail('the file holds more than one object')
   return root
 }
@@ -180,7 +186,8 @@ export function readJsonEntries(text, path) {
 }
 
 /** Parser-derived entry coordinates for read-only inventory, including nested arrays. Offsets are UTF-16. */
-export function readJsonItems(text, path = []) {
+export function readJsonItems(text, path = [], { strict = false } = {}) {
+  if (strict) rootOf(text, true)
   let start = skipSpace(text, 0)
   if (start >= text.length) return []
   const items = (at) => {
@@ -230,34 +237,73 @@ function rendered(value, unit, indent) {
   return JSON.stringify(value, null, unit).split('\n').join(`\n${indent}`)
 }
 
-/** `text` with one member of the object `spans` set to `value` (or to the exact text `raw`), or removed when both are undefined. */
-function editMember(text, spans, key, value, unit, raw) {
+/** Non-comment tokens and whether the range contains comments. Trivia always stays live. */
+function tokensOf(text, start, end) {
+  const tokens = []
+  let comments = false
+  for (let index = start; index < end;) {
+    const char = text[index]
+    if (/\s/.test(char)) { index += 1; continue }
+    if (char === '/' && (text[index + 1] === '/' || text[index + 1] === '*')) {
+      comments = true
+      index = skipSpace(text, index)
+      continue
+    }
+    const next = char === '"' ? stringEnd(text, index) : '{}[],:'.includes(char) ? index + 1 : valueEnd(text, index)
+    if (next > end) fail('an edit crosses its token boundary')
+    tokens.push({ start: index, end: next })
+    index = next
+  }
+  return { tokens, comments }
+}
+
+const patch = (text, start, end, insert = '') => ({ start, delete: text.slice(start, end), insert })
+
+function tokenRemoval(text, spans, index, preserveComments) {
+  const member = spans.members[index]
+  const tokens = [...tokensOf(text, member.keyStart, member.valueStart).tokens,
+    ...(preserveComments ? tokensOf(text, member.valueStart, member.valueEnd).tokens : [{ start: member.valueStart, end: member.valueEnd }])]
+  const edits = tokens.map((token) => patch(text, token.start, token.end))
+  const comma = member.commaEnd !== -1 ? member.commaEnd : index > 0 ? spans.members[index - 1].commaEnd : -1
+  if (comma !== -1) edits.push(patch(text, comma - 1, comma))
+  return edits
+}
+
+/** Plan the same entry edit for ordinary writes and inverse receipts. */
+function editMember(text, spans, key, value, unit, raw, preserveComments) {
   const written = (indent) => raw ?? rendered(value, unit, indent)
   const index = spans.members.findIndex((member) => member.key === key)
   const outer = indentAt(text, spans.open)
   const inner = spans.members.length > 0 && ownLine(text, spans.members[0].keyStart) ? indentAt(text, spans.members[0].keyStart) : `${outer}${unit}`
   if (value === undefined && raw === undefined) {
-    if (index === -1) return text
+    if (index === -1) return []
     const member = spans.members[index]
-    if (spans.members.length === 1) return `${text.slice(0, spans.open + 1)}${text.slice(spans.close)}`
-    if (member.commaEnd !== -1) {
-      // The member and its comma go; a member on a line of its own takes that line with it.
+    let start, end
+    if (spans.members.length === 1) { start = spans.open + 1; end = spans.close }
+    else if (member.commaEnd !== -1) {
       const lineEnd = text.indexOf('\n', member.commaEnd)
       const alone = ownLine(text, member.keyStart) && lineEnd !== -1 && /^[ \t\r]*$/.test(text.slice(member.commaEnd, lineEnd))
-      return alone ? `${text.slice(0, lineStart(text, member.keyStart))}${text.slice(lineEnd + 1)}` : `${text.slice(0, member.keyStart)}${text.slice(skipBlanks(text, member.commaEnd))}`
-    }
-    // The last member takes the comma before it along.
-    const before = spans.members[index - 1]
-    return `${text.slice(0, before.valueEnd)}${text.slice(member.valueEnd)}`
+      start = alone ? lineStart(text, member.keyStart) : member.keyStart
+      end = alone ? lineEnd + 1 : skipBlanks(text, member.commaEnd)
+    } else { start = spans.members[index - 1].valueEnd; end = member.valueEnd }
+    const comments = preserveComments ? tokensOf(text, start, end).comments :
+      tokensOf(text, start, member.valueStart).comments || tokensOf(text, member.valueEnd, end).comments
+    return comments ? tokenRemoval(text, spans, index, preserveComments) : [patch(text, start, end)]
   }
   if (index !== -1) {
-    const member = spans.members[index]
-    return `${text.slice(0, member.valueStart)}${written(indentAt(text, member.keyStart))}${text.slice(member.valueEnd)}`
+    const member = spans.members[index], next = written(indentAt(text, member.keyStart))
+    const old = tokensOf(text, member.valueStart, member.valueEnd)
+    if (!preserveComments || !old.comments) return [patch(text, member.valueStart, member.valueEnd, next)]
+    return old.tokens.map((token, i) => patch(text, token.start, token.end, i === 0 ? next : ''))
   }
   const entry = `${JSON.stringify(key)}: ${written(inner)}`
-  if (spans.members.length === 0) return `${text.slice(0, spans.open + 1)}\n${inner}${entry}\n${outer}${text.slice(spans.close)}`
+  if (spans.members.length === 0) {
+    const insert = `\n${inner}${entry}\n${outer}`
+    return tokensOf(text, spans.open + 1, spans.close).comments
+      ? [patch(text, spans.close, spans.close, insert)] : [patch(text, spans.open + 1, spans.close, insert)]
+  }
   const last = spans.members.at(-1)
-  return `${text.slice(0, last.valueEnd)},\n${inner}${entry}${text.slice(last.valueEnd)}`
+  return [patch(text, last.valueEnd, last.valueEnd, `,\n${inner}${entry}`)]
 }
 
 function skipBlanks(text, start) {
@@ -266,28 +312,120 @@ function skipBlanks(text, start) {
   return index
 }
 
-/**
- * The settings text with the entry `id` under `path` set to `value`, or removed when `value` is
- * undefined. Only that entry's bytes change, plus the comma and line it needs; a missing key path
- * is added when an entry is set, and a file with no object at all becomes one. `raw` puts an
- * entry back as the exact text it had (an undo), instead of a value written anew.
- */
-export function editJsonEntry(text, path, id, value, { raw } = {}) {
+function applyPatches(text, edits) {
+  let end = 0
+  for (const edit of edits) {
+    if (!Number.isSafeInteger(edit.start) || edit.start < end || edit.start > text.length ||
+      typeof edit.delete !== 'string' || typeof edit.insert !== 'string' || text.slice(edit.start, edit.start + edit.delete.length) !== edit.delete) fail('an edit no longer matches its tokens')
+    end = edit.start + edit.delete.length
+  }
+  for (const edit of [...edits].reverse()) text = `${text.slice(0, edit.start)}${edit.insert}${text.slice(edit.start + edit.delete.length)}`
+  return text
+}
+
+const digest = (text) => createHash('sha256').update(text).digest('hex')
+const receiptLimit = 1024 * 1024
+
+function jsonEditPlan(text, path, id, value, raw, preserveComments = false) {
   const unit = indentUnit(text)
   if (raw !== undefined) value = parseValue(raw)
+  const nestedRaw = (steps) => steps.reverse().reduce((inner, key) => `{${JSON.stringify(key)}:${inner}}`, raw)
+  let edits
   if (rootOf(text) === null) {
-    if (value === undefined) return text
-    const nested = [...path].reverse().reduce((inner, step) => ({ [step]: inner }), { [id]: value })
-    return `${JSON.stringify(nested, null, 2)}\n`
+    if (value === undefined) edits = []
+    else {
+      const nested = raw === undefined ? JSON.stringify([...path].reverse().reduce((inner, step) => ({ [step]: inner }), { [id]: value }), null, 2) : nestedRaw([...path, id])
+      // A comment-only file remains intact; a newline ends a possible EOF line comment.
+      edits = [patch(text, text.length, text.length, `${text === '' || text.endsWith('\n') ? '' : '\n'}${nested}\n`)]
+    }
+  } else {
+    let depth = path.length
+    while (depth > 0 && containerOf(text, path.slice(0, depth)) === null) depth -= 1
+    const spans = containerOf(text, path.slice(0, depth))
+    if (depth === path.length) edits = editMember(text, spans, id, value, unit, raw, preserveComments)
+    else if (value === undefined) edits = []
+    else {
+      const missing = path.slice(depth + 1).reverse().reduce((inner, step) => ({ [step]: inner }), { [id]: value })
+      edits = editMember(text, spans, path[depth], missing, unit, raw === undefined ? undefined : nestedRaw([...path.slice(depth + 1), id]), preserveComments)
+    }
   }
-  // The deepest step of the path that is there, and what is missing below it.
-  let depth = path.length
-  while (depth > 0 && containerOf(text, path.slice(0, depth)) === null) depth -= 1
-  const spans = containerOf(text, path.slice(0, depth))
-  if (depth === path.length) return editMember(text, spans, id, value, unit, raw)
-  if (value === undefined) return text
-  const missing = path.slice(depth + 1).reverse().reduce((inner, step) => ({ [step]: inner }), { [id]: value })
-  return editMember(text, spans, path[depth], missing, unit)
+  edits.sort((a, b) => a.start - b.start)
+  return { text: applyPatches(text, edits), edits }
+}
+
+/** Set/remove one JSONC entry, preserving surrounding comments and the existing raw-value API. */
+export function editJsonEntry(text, path, id, value, { raw } = {}) {
+  return jsonEditPlan(text, path, id, value, raw).text
+}
+
+/** A comment-free prior value; callers must separately admit every literal before persisting it. */
+export function commentFreeJson(text) {
+  return plainJson(text)
+}
+
+/** Exact inverse metadata contains only the planner's edited tokens and structural trivia. */
+export function editJsonEntryWithReceipt(text, path, id, value, { raw } = {}) {
+  const plan = jsonEditPlan(text, path, id, value, raw, true)
+  const receipt = { version: 1, raw: raw !== undefined, before: digest(text), after: digest(plan.text), edits: plan.edits }
+  if (receipt.edits.length > 8192 || Buffer.byteLength(JSON.stringify(receipt)) > receiptLimit ||
+    receipt.edits.some((edit) => tokensOf(edit.delete, 0, edit.delete.length).comments || tokensOf(edit.insert, 0, edit.insert.length).comments)) fail('the entry cannot be journaled without keeping comments or exceeding the receipt limit')
+  return { text: plan.text, receipt }
+}
+
+/** Validate scope by independently replaying the same entry planner; null means unrelated file edits. */
+export function invertJsonEntry(text, path, id, receipt) {
+  if (receipt === null || typeof receipt !== 'object' || receipt.version !== 1 || typeof receipt.raw !== 'boolean' ||
+    typeof receipt.before !== 'string' || typeof receipt.after !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(receipt.before) || !/^[a-f0-9]{64}$/.test(receipt.after) || !Array.isArray(receipt.edits) ||
+    receipt.edits.length > 8192 || Buffer.byteLength(JSON.stringify(receipt)) > receiptLimit ||
+    Object.keys(receipt).sort().join(',') !== 'after,before,edits,raw,version') fail('the inverse receipt is malformed')
+  let end = 0, delta = 0
+  const inverse = []
+  for (const edit of receipt.edits) {
+    if (edit === null || typeof edit !== 'object' || Object.keys(edit).sort().join(',') !== 'delete,insert,start' ||
+      !Number.isSafeInteger(edit.start) || edit.start < end || typeof edit.delete !== 'string' || typeof edit.insert !== 'string' ||
+      tokensOf(edit.delete, 0, edit.delete.length).comments || tokensOf(edit.insert, 0, edit.insert.length).comments) fail('the inverse receipt contains an invalid token edit')
+    inverse.push({ start: edit.start + delta, delete: edit.insert, insert: edit.delete })
+    end = edit.start + edit.delete.length
+    delta += edit.insert.length - edit.delete.length
+  }
+  if (digest(text) !== receipt.after) return null
+  const before = applyPatches(text, inverse)
+  if (digest(before) !== receipt.before) fail('the inverse receipt does not reconstruct its bound file')
+  const current = readJsonEntries(text, path).get(id)
+  const replay = editJsonEntryWithReceipt(before, path, id, current?.value, { raw: receipt.raw ? current?.raw : undefined })
+  if (replay.text !== text || JSON.stringify(replay.receipt) !== JSON.stringify(receipt)) fail('the inverse receipt is not an edit of this entry')
+  return before
+}
+
+/** Both OpenCode layouts, with parser-derived provenance; metadata is never a tool. */
+export function readOpenCodeEntries(text, { strict = false } = {}) {
+  if (strict) rootOf(text, true)
+  const entries = new Map(), root = containerOf(text, ['mcp'])
+  if (!root) return entries
+  const seen = new Set()
+  const add = (member, at) => {
+    if (entries.has(member.key)) fail(`"${member.key}" is in both MCP layouts`)
+    const raw = text.slice(member.valueStart, member.valueEnd)
+    entries.set(member.key, { value: parseValue(raw), raw, at, start: member.keyStart })
+  }
+  for (const member of root.members) {
+    if (seen.has(member.key)) fail(`"${member.key}" is there twice`)
+    seen.add(member.key)
+    if (member.key === 'timeout') continue
+    if (member.key !== 'servers') { add(member, ['mcp']); continue }
+    if (text[member.valueStart] !== '{') fail('"mcp.servers" is not an object')
+    const value = parseValue(text.slice(member.valueStart, member.valueEnd))
+    // A legacy server named "servers" remains readable; a canonical add must refuse this namespace collision.
+    if (typeof value.type === 'string' || Array.isArray(value.command) || typeof value.url === 'string') { add(member, ['mcp']); continue }
+    const nested = objectSpans(text, member.valueStart), names = new Set()
+    for (const server of nested.members) {
+      if (names.has(server.key)) fail(`"${server.key}" is there twice`)
+      names.add(server.key)
+      add(server, ['mcp', 'servers'])
+    }
+  }
+  return entries
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -329,7 +467,7 @@ function keyParts(text) {
 }
 
 /** One TOML value of the kinds an MCP entry uses: text, true or false, a whole number, a list of those, or an inline table of them. Returns [value, rest]. */
-function tomlValue(source) {
+function tomlValue(source, strict = false) {
   const text = source.replace(/^[ \t\r\n]+/, '')
   if (text[0] === '"') {
     if (text.startsWith('"""')) return fail('a multi-line text is not read')
@@ -357,7 +495,7 @@ function tomlValue(source) {
       rest = rest.replace(/^(?:[ \t\r\n]|#[^\n]*)+/, '')
       if (rest[0] === ']') return [list, rest.slice(1)]
       if (rest === '') fail('a list is not closed')
-      const [value, after] = tomlValue(rest)
+      const [value, after] = tomlValue(rest, strict)
       list.push(value)
       rest = after.replace(/^(?:[ \t\r\n]|#[^\n]*)+/, '')
       if (rest[0] === ',') rest = rest.slice(1)
@@ -365,14 +503,15 @@ function tomlValue(source) {
     }
   }
   if (text[0] === '{') {
-    const table = {}
+    const table = strict ? Object.create(null) : {}
     let rest = text.slice(1).replace(/^[ \t]+/, '')
     if (rest[0] === '}') return [table, rest.slice(1)]
     for (;;) {
       const equals = rest.indexOf('=')
       const parts = equals === -1 ? null : keyParts(rest.slice(0, equals))
       if (parts === null || parts.length !== 1) fail('an inline table cannot be read')
-      const [value, after] = tomlValue(rest.slice(equals + 1))
+      if (strict && Object.hasOwn(table, parts[0])) fail('an inline name is there twice')
+      const [value, after] = tomlValue(rest.slice(equals + 1), strict)
       table[parts[0]] = value
       rest = after.replace(/^[ \t]+/, '')
       if (rest[0] === '}') return [table, rest.slice(1)]
@@ -408,7 +547,7 @@ function tomlLines(text) {
  * `[mcp_servers]`, dotted keys, tables apart from each other, a value kind it does not read) is
  * `unreadable` with the reason, and is never changed.
  */
-export function readTomlEntries(text, root = 'mcp_servers') {
+export function readTomlEntries(text, root = 'mcp_servers', { strict = false } = {}) {
   const entries = new Map()
   const lines = tomlLines(text)
   const mark = (id, reason) => {
@@ -418,13 +557,14 @@ export function readTomlEntries(text, root = 'mcp_servers') {
   let table = []
   let current = null
   const closed = new Set()
+  const tables = new Set()
   let pending = null
   for (const line of lines) {
     if (pending !== null) {
       // A value that runs over several lines (a list): gathered until it reads whole.
       pending.text += `\n${line.body}`
       try {
-        const [value, rest] = tomlValue(pending.text)
+        const [value, rest] = tomlValue(pending.text, strict)
         if (!/^[ \t]*(?:#.*)?$/.test(rest)) fail('text follows a value')
         pending.target[pending.key] = value
         pending.entry.lastLine = line
@@ -438,16 +578,26 @@ export function readTomlEntries(text, root = 'mcp_servers') {
       continue
     }
     if (line.unreadableHeader) {
+      // Unsupported MCP scope must not silently disappear from an entry commitment.
+      const array = /^[ \t]*\[\[(.*?)\]\][ \t]*(?:#.*)?$/.exec(line.body)
+      const scope = array ? keyParts(array[1]) : null
+      if (strict && (!scope || scope[0] === root)) fail('a table scope cannot be read completely')
       table = ['?']
       current = null
       continue
     }
+    if (strict && /^[ \t]*\[/.test(line.body) && line.header === null) fail('a table scope cannot be read completely')
     if (line.header !== null) {
       table = line.header
       if (table[0] !== root) {
         if (current !== null) closed.add(current)
         current = null
         continue
+      }
+      if (strict) {
+        const name = JSON.stringify(table)
+        if (tables.has(name)) fail('a table is there twice')
+        tables.add(name)
       }
       if (table.length === 1) {
         current = null
@@ -458,15 +608,16 @@ export function readTomlEntries(text, root = 'mcp_servers') {
         if (current !== null) closed.add(current)
         // The same id opened again after another table: its parts stand apart, which BMN does not edit.
         if (closed.has(id) || entries.has(id)) mark(id, 'its tables stand apart from each other')
-        else entries.set(id, { value: {}, raw: '', start: line.start, end: line.end, firstLine: line, lastLine: line })
+        else entries.set(id, { value: strict ? Object.create(null) : {}, raw: '', start: line.start, end: line.end, firstLine: line, lastLine: line })
         current = id
       }
       const entry = entries.get(id)
       entry.lastLine = line
       if (entry.unreadable === undefined) {
         let target = entry.value
-        for (const step of table.slice(2)) {
-          target[step] ??= {}
+        for (const [index, step] of table.slice(2).entries()) {
+          if (strict && index === table.length - 3 && Object.hasOwn(target, step)) fail('a table is defined twice')
+          target[step] ??= strict ? Object.create(null) : {}
           if (typeof target[step] !== 'object' || Array.isArray(target[step])) {
             mark(id, `${step} is written twice`)
             break
@@ -496,7 +647,8 @@ export function readTomlEntries(text, root = 'mcp_servers') {
     let target = entry.value
     for (const step of table.slice(2)) target = target[step]
     try {
-      const [value, rest] = tomlValue(line.body.slice(equals + 1))
+      if (strict && Object.hasOwn(target, parts[0])) fail('a name is there twice')
+      const [value, rest] = tomlValue(line.body.slice(equals + 1), strict)
       if (!/^[ \t]*(?:#.*)?$/.test(rest)) fail('text follows a value')
       target[parts[0]] = value
     } catch (error) {

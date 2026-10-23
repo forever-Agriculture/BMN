@@ -9,8 +9,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  CALLS_KEPT, EXIT, LINE, MAX_CHOICES, MAX_LEVELS, NO_ANSWER, STATE_MAX_BYTES, SYSTEM_ONE_PATH, TEST_KEY_START, agreed, judgeDirectory, judgeLimit, judgeLines, judgeRecordPath, judgeTotals, limitWords, openCodeSignInFile,
-  questionsProblem, readBody, readJudgeRecord, readingOf, runJudge, setJudgeLimit, sizeProblem, type JudgeQuestions, type JudgeRequest, type JudgeResult
+  CALLS_KEPT, EXIT, LINE, MAX_CHOICES, MAX_LEVELS, NO_ANSWER, STATE_MAX_BYTES, SYSTEM_ONE_PATH, TEST_KEY_START, agreed, judgeDirectory, judgeLimit, judgeLines, judgeRecordPath, judgeTotals, limitWords,
+  questionsProblem, readBody, readJudgeRecord, readingOf, runJudge as candidateJudge, setJudgeLimit, sizeProblem, type JudgeQuestions, type JudgeRequest, type JudgeResult
 } from '../../bin/agents-judge.mjs'
 import { visibilityPath } from '../../bin/agents-check.mjs'
 import { parseRoster } from '../../bin/agents-roster.mjs'
@@ -20,6 +20,8 @@ import { approveRoster } from '../main/agents-approval'
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const BIN = fileURLToPath(new URL('../../bin/', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
+const runJudge: typeof candidateJudge = process.env.BMN_JUDGE_SOURCE_FILE
+  ? (await import(process.env.BMN_JUDGE_SOURCE_FILE)).runJudge : candidateJudge
 /** A key no service ever gave out: planted in the stand-in sign-in file, and searched for in everything BMN writes or says. */
 const PLANTED_KEY = 'sk-synthetic-PLANTED-0123456789abcdef'
 const HOST = 'gateway.example.test'
@@ -67,10 +69,13 @@ function approve(text: string): void {
   approved = approveRoster({ generation: approved, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} }).number
 }
 
-function signIn(entries: unknown = { 'opencode-go': { type: 'api', key: PLANTED_KEY } }): void {
-  const file = openCodeSignInFile({ HOME: home })
-  mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(entries))
+const credential = (integrationID = 'opencode-go', key = PLANTED_KEY, active = true): Record<string, unknown> =>
+  ({ id: `synthetic-${integrationID}`, integrationID, label: 'Synthetic only', active, value: { type: 'key', key } })
+const exportFile = (): string => join(home, 'synthetic-export.json')
+const fixturePath = (): string => `${join(home, 'bin')}:/usr/bin:/bin`
+
+function signIn(entries: unknown = [credential()]): void {
+  writeFileSync(exportFile(), JSON.stringify(entries))
 }
 
 const QUESTIONS = {
@@ -98,7 +103,8 @@ const ok = (body: string) => (_request: unknown, response: ServerResponse): void
 }
 
 function ask(overrides: Partial<JudgeRequest> = {}): Promise<JudgeResult> {
-  return runJudge({ state: STATE, questions: QUESTIONS, data: 'public', environment: { HOME: home, BMN_JUDGE_TEST_PORT: String(port) }, ...overrides })
+  const { environment, ...rest } = overrides
+  return runJudge({ state: STATE, questions: QUESTIONS, data: 'public', environment: { HOME: home, PATH: fixturePath(), BMN_JUDGE_TEST_PORT: String(port), ...environment }, ...rest })
 }
 
 function runCli(args: string[], { input, environment = {} }: { input?: string; environment?: Record<string, string> } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -107,7 +113,7 @@ function runCli(args: string[], { input, environment = {} }: { input?: string; e
     if (!key.startsWith('BMN_') && !key.startsWith('AITERM_') && key !== 'XDG_DATA_HOME' && key !== 'CLAUDECODE') clean[key] = value
   }
   return new Promise((resolve) => {
-    const child = execFile(process.execPath, [CLI, ...args], { env: { ...clean, HOME: home, BMN_JUDGE_TEST_PORT: String(port), ...environment }, timeout: 20_000 },
+    const child = execFile(process.execPath, [CLI, ...args], { env: { ...clean, HOME: home, PATH: fixturePath(), BMN_JUDGE_TEST_PORT: String(port), ...environment }, timeout: 20_000 },
       (error, stdout, stderr) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr }))
     child.stdin?.end(input ?? '')
   })
@@ -173,6 +179,16 @@ async function holdRecord(): Promise<{ letGo(): Promise<void> }> {
 beforeEach(async () => {
   home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-judge-')))
   process.env.HOME = home
+  mkdirSync(join(home, 'bin'))
+  writeFileSync(join(home, 'bin/opencode'), `#!${process.execPath}
+const {readFileSync,writeFileSync,existsSync}=require('node:fs');const {join}=require('node:path');
+const root=process.env.HOME;
+writeFileSync(join(root,'synthetic-export-invocation.json'),JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),project:process.env.OPENCODE_DISABLE_PROJECT_CONFIG,update:process.env.OPENCODE_DISABLE_AUTOUPDATE,models:process.env.OPENCODE_DISABLE_MODELS_FETCH,database:process.env.OPENCODE_DB}));
+if(process.argv.slice(2).join(' ')!=='auth export --standalone')process.exit(91);
+const payload=readFileSync(join(root,'synthetic-export.json'),'utf8');
+if(existsSync(join(root,'synthetic-export-failure'))){process.stdout.write(payload);process.stderr.write(payload);process.exit(7)}
+process.stdout.write(payload);
+`, { mode: 0o700 })
   approved = null
   requests = []
   respond = ok(answer())
@@ -509,13 +525,95 @@ describe('nothing is sent unless every check passes (65.2 AC2)', () => {
     expect(await ask()).toMatchObject({ ok: true })
   })
 
-  it('no key in OpenCode\'s sign-in file', async () => {
+  it('no key in OpenCode\'s sign-ins', async () => {
     approve(teamWithJudge())
     expect(await refusal()).toMatchObject({ code: 'NO_KEY', next: expect.stringContaining('opencode auth login') })
-    signIn({ 'some-other': { key: PLANTED_KEY } })
+    signIn([credential('some-other')])
     expect(await refusal()).toMatchObject({ code: 'NO_KEY' })
-    signIn({ opencode: { type: 'api', key: PLANTED_KEY } })
+    signIn([credential('opencode')])
     expect(await ask()).toMatchObject({ ok: true })
+  })
+})
+
+describe('OpenCode 2 judge sign-ins (85.5)', () => {
+  it.each(['synthetic-relative.db', '/synthetic/absolute.db'])('preserves the judge database selector %s', async (database) => {
+    signIn([credential()])
+    expect(await ask({ environment: { OPENCODE_DB: database } })).toMatchObject({ ok: true })
+    const invocation = JSON.parse(readFileSync(join(home, 'synthetic-export-invocation.json'), 'utf8'))
+    expect(invocation.database).toBe(database)
+  })
+
+  const other = 'sk-synthetic-OTHER-0123456789abcdef'
+  beforeEach(() => { approve(teamWithJudge()) })
+
+  function staleFile(): string {
+    const file = join(home, '.local/share/opencode/auth.json')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ 'opencode-go': { type: 'api', key: other } }))
+    return file
+  }
+
+  it('chooses Go before OpenCode from the measured export, ignoring the stale file', async () => {
+    const old = staleFile(), before = readFileSync(old, 'utf8')
+    signIn([credential('opencode', other), credential()])
+    expect(await ask()).toMatchObject({ ok: true })
+    expect(requests[0]?.headers.authorization === `Bearer ${PLANTED_KEY}`).toBe(true)
+    expect(JSON.parse(readFileSync(join(home, 'synthetic-export-invocation.json'), 'utf8'))).toEqual({
+      args: ['auth', 'export', '--standalone'], cwd: home, project: '1', update: '1', models: '1'
+    })
+    expect(readFileSync(old, 'utf8') === before).toBe(true)
+    expect(readFileSync(judgeRecordPath(), 'utf8').includes(other)).toBe(false)
+  })
+
+  it('never reads a stale key after an export failure, and says none of the export', async () => {
+    staleFile()
+    signIn([credential(), credential('unrelated', other)])
+    writeFileSync(join(home, 'synthetic-export-failure'), '')
+    const result = await ask()
+    expect(result).toMatchObject({ ok: false, code: 'NO_KEY', message: 'OpenCode could not export its sign-ins on this computer' })
+    expect(requests).toHaveLength(0)
+    for (const key of [PLANTED_KEY, other]) {
+      expect(JSON.stringify(result).includes(key)).toBe(false)
+      expect(readFileSync(judgeRecordPath(), 'utf8').includes(key)).toBe(false)
+    }
+  })
+
+  it('uses OpenCode when Go has no active API key', async () => {
+    signIn([credential('opencode-go', other, false), { ...credential(), value: { type: 'oauth', access: other } }, credential('opencode')])
+    expect(await ask()).toMatchObject({ ok: true })
+    expect(requests[0]?.headers.authorization === `Bearer ${PLANTED_KEY}`).toBe(true)
+  })
+
+  it.each([
+    ['not an array', {}],
+    ['malformed row', [null]],
+    ['missing active marker', [{ integrationID: 'opencode-go', value: { type: 'key', key: PLANTED_KEY } }, credential('opencode')]],
+    ['invalid key bytes', [credential('opencode-go', 'bad key with spaces'), credential('opencode')]],
+    ['ambiguous Go keys', [credential(), credential('opencode-go', other), credential('opencode')]],
+    ['ambiguous OpenCode keys', [credential('opencode'), credential('opencode', other)]],
+    ['no eligible key', [credential('unrelated'), credential('opencode-go', other, false)]]
+  ])('refuses %s without choosing another sign-in', async (_name, entries) => {
+    signIn(entries)
+    const result = await ask()
+    expect(result).toMatchObject({ ok: false, code: 'NO_KEY' })
+    expect(requests).toHaveLength(0)
+    for (const key of [PLANTED_KEY, other]) expect(JSON.stringify(result).includes(key)).toBe(false)
+  })
+
+  it('refuses malformed JSON without exposing it', async () => {
+    writeFileSync(exportFile(), `[{"key":"${other}"`)
+    const result = await ask()
+    expect(result).toMatchObject({ ok: false, code: 'NO_KEY' })
+    expect(JSON.stringify(result).includes(other)).toBe(false)
+    expect(requests).toHaveLength(0)
+  })
+
+  it('bounds a stalled export and sends no request', async () => {
+    writeFileSync(join(home, 'bin/opencode'), `#!${process.execPath}\nsetInterval(()=>{},1000)\n`, { mode: 0o700 })
+    const started = Date.now()
+    expect(await ask({ deadlineMs: 200 })).toMatchObject({ ok: false, code: 'NO_KEY' })
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(requests).toHaveLength(0)
   })
 })
 
@@ -663,7 +761,7 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
   it('the stand-in is sent a test\'s key and no other: a key that could be his own never leaves over plain http, whatever the port variable says', async () => {
     const others = ['not-a-test-key-0123456789abcdef', `x${PLANTED_KEY}`, 'SK-SYNTHETIC-0123456789abcdef']
     for (const key of others) {
-      signIn({ 'opencode-go': { type: 'api', key } })
+      signIn([credential('opencode-go', key)])
       expect(await ask()).toMatchObject({ ok: false, outcome: 'failed', note: 'the approved host is a test name and no test is running', input_tokens: 0, cost_usd: 0 })
       const told = await runCli(['judge', 'ask', ...files(), '--data', 'public', '--json'])
       expect(told.code).toBe(EXIT.failed)
@@ -897,11 +995,11 @@ describe('the key appears nowhere (65.2 AC3, R65-NFR3)', () => {
     expect(requests.every((request) => request.headers.authorization === `Bearer ${PLANTED_KEY}`)).toBe(true)
     expect(said.join('\n')).not.toContain(PLANTED_KEY)
     expect(said.join('\n')).not.toContain(PLANTED_KEY.slice(3, 20))
-    const signInFile = openCodeSignInFile({ HOME: home })
+    const signInFile = exportFile()
     const holding = everyFile(home).filter((file) => file.path !== signInFile && file.text.includes(PLANTED_KEY.slice(3, 20))).map((file) => file.path)
     expect(holding).toEqual([])
-    // BMN reads the sign-in file and never writes it.
-    expect(JSON.parse(readFileSync(signInFile, 'utf8'))).toEqual({ 'opencode-go': { type: 'api', key: PLANTED_KEY } })
+    // The stand-in prints the export; BMN never writes or changes it.
+    expect(JSON.parse(readFileSync(signInFile, 'utf8'))).toEqual([credential()])
   })
 })
 

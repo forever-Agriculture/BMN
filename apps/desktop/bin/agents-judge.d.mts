@@ -36,7 +36,6 @@ export declare function readBody(questions: JudgeQuestions, body: unknown):
   { ok: true; answers: Record<string, JudgeAnswer>; readings: Record<string, JudgeReading>; tokens: number | null } | { ok: false }
 export declare function agreed(first: Record<string, JudgeReading>, second: Record<string, JudgeReading>): Record<string, JudgeReading>
 
-export declare function openCodeSignInFile(environment?: Environment): string
 export declare function judgeDirectory(): string
 export declare function judgeRecordPath(): string
 

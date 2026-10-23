@@ -79,11 +79,16 @@ const text = (path) => {
 const agent = value('--agent') ?? 'build'
 const config = join(process.env.XDG_CONFIG_HOME ?? join(process.env.HOME ?? '', '.config'), 'opencode')
 const definition = text(join(config, 'agents', `${agent}.md`)) ?? ''
-const allowed = (tool) => new RegExp(`^\\s+${tool}: allow$`, 'm').test(definition)
-const offered = ['websearch', 'read', 'glob', 'grep', 'list'].filter(allowed).concat(mode.extraTool === undefined ? [] : [mode.extraTool])
+const permissions = JSON.parse(/^permissions: (.+)$/m.exec(definition)?.[1] ?? '[]')
+const allowed = tool => permissions.filter(rule => rule.action === '*' || rule.action === tool).at(-1)?.effect === 'allow'
+const offered = ['websearch', 'bmn_read', 'bmn_glob', 'bmn_grep', 'bmn_git', 'bmn_subagent'].filter(allowed).concat(mode.extraTool === undefined ? [] : [mode.extraTool])
 let base
 try {
-  base = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}').provider?.[(value('-m') ?? '').split('/')[0]]?.options?.baseURL
+  const reference = (value('-m') ?? '').split('#')[0], provider = reference.split('/')[0], model = reference.slice(provider.length + 1)
+  const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? '{}')
+  const settings = config.providers?.[provider] ?? config.provider?.[provider]
+  const own = settings?.models?.[model]
+  base = own?.settings?.baseURL ?? own?.options?.baseURL ?? mode.modelBaseURL ?? settings?.settings?.baseURL ?? settings?.options?.baseURL
 } catch {
   base = undefined
 }

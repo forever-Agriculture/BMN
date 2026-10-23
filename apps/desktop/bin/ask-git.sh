@@ -66,6 +66,9 @@ for argument in "$@"; do
   esac
 done
 
+# The OpenCode broker validates this same option policy before its isolated Git invocation.
+[ "${BMN_ASK_GIT_VALIDATE_ONLY:-}" = 1 ] && exit 0
+
 GIT_CONFIG_NOSYSTEM=1
 GIT_CONFIG_GLOBAL=/dev/null
 GIT_PAGER=cat

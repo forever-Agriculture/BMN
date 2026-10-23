@@ -161,6 +161,16 @@ extraResources:
   # Epic 70: BMN's folder for OpenCode helper runs, its agent and the one `opencode run` form the check reads.
   - from: bin/agents-opencode.mjs
     to: bin/agents-opencode.mjs
+  - from: bin/opencode-project-reader.mjs
+    to: bin/opencode-project-reader.mjs
+  - from: bin/opencode-project-git.mjs
+    to: bin/opencode-project-git.mjs
+  - from: bin/opencode-reader-child.mjs
+    to: bin/opencode-reader-child.mjs
+  - from: bin/opencode-reader-plugin.mjs
+    to: bin/opencode-reader-plugin.mjs
+  - from: bin/opencode-child-accounting.mjs
+    to: bin/opencode-child-accounting.mjs
   # A research run is started under this file as a program of its own, by the command line and by the app alike.
   - from: bin/agents-supervised.mjs
     to: bin/agents-supervised.mjs

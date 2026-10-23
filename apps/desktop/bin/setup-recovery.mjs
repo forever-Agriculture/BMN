@@ -5,6 +5,7 @@ import { agentsDirectory, canonicalJson } from './agents-roster.mjs'
 import { withDefaultsAdmission } from './defaults-admission.mjs'
 import { defaultsTargetKey, optionalDefaultsOwnership } from './defaults-ownership.mjs'
 import { setupSkillRecordPath } from './setup-skill-records.mjs'
+import { setupConfigAbsence } from './setup-config-write.mjs'
 
 const originalId = value => /^[0-9TZ-]+-\d+$/.test(value)
 const refreshId = value => /^refresh-[a-f0-9]{24}$/.test(value)
@@ -76,9 +77,13 @@ export function readSetupRecovery(setupId, { maxEntries = 8192, maxBytes = 32 * 
       for (const key of ['configInstall', 'configUndo']) {
         const operation = setup[key], holding = setup[`${key}Holding`]
         if (operation === undefined) { if (holding !== undefined) invalid(); continue }
-        if (operation.version !== 1 || !paths.includes(operation.path) || !parents(operation.path).includes(operation.directory)) invalid()
+        const absence = key === 'configUndo' && value.kind === 'setup-tool' && setup.target?.app === 'opencode' && setupConfigAbsence(operation)
+        if (!(operation.version === 1 || absence) || !paths.includes(operation.path) || !parents(operation.path).includes(operation.directory)) invalid()
         // Completed stages have been consumed by publication; incomplete stages are recorded even if currently missing.
-        if (operation.phase !== 'complete') location(row, operation.stagedPath, `.bmn-stage-${value.id}-`, operation.directory)
+        if (absence) {
+          if (operation.phase !== 'complete') incomplete = true
+          else if (holding === undefined) invalid()
+        } else if (operation.phase !== 'complete') location(row, operation.stagedPath, `.bmn-stage-${value.id}-`, operation.directory)
         if (holding !== undefined) {
           if (holding.version !== 1 || holding.sourcePath !== operation.path) invalid()
           location(row, holding.holdingPath, `.bmn-hold-${value.id}-`, operation.directory)

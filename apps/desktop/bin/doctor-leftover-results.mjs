@@ -29,10 +29,11 @@ export function validateLeftovers(value) {
   for (const row of value) {
     if (!row || !KINDS.includes(row.kind) || (row.app !== null && !APPS.includes(row.app)) ||
       (row.kind !== 'skills' && row.app === null) || (row.kind === 'memory' && row.app === 'opencode') ||
+      (row.source !== undefined && (row.source !== 'managed' || row.app !== 'opencode' || !['plugins', 'mcp'].includes(row.kind))) ||
       !Object.hasOwn(LEFTOVER_REASONS, row.reason) || !Number.isSafeInteger(row.item) || row.item < 1 || row.item > 10000) return null
     const locator = row.locator === undefined ? unresolvedLocation() : validateLocation(row.locator)
     if (locator === null) return null
-    out.push({ kind: row.kind, app: row.app, reason: row.reason, item: row.item, identity: 'withheld', locator })
+    out.push({ kind: row.kind, app: row.app, reason: row.reason, item: row.item, identity: 'withheld', ...(row.source === 'managed' ? { source: 'managed' } : {}), locator })
   }
   return out
 }
@@ -45,7 +46,7 @@ export function projectLeftovers(report) {
   const add = (kind, app, reason, row = {}) => {
     const locator = validateLocation(row.locator) ?? unresolvedLocation()
     if (reason === 'unreadable') partial = true
-    leftovers.push({ kind, app, reason, item: leftovers.length + 1, identity: 'withheld', locator })
+    leftovers.push({ kind, app, reason, item: leftovers.length + 1, identity: 'withheld', ...(row.source === 'managed' && app === 'opencode' && ['plugins', 'mcp'].includes(kind) ? { source: 'managed' } : {}), locator })
   }
   const section = (key) => {
     const value = report?.[key]

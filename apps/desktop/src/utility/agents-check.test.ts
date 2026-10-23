@@ -259,7 +259,7 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
       'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max, kimi@low], then: lead, read_only: true}')))
     const passed = kimi(form())
     expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
-    expect(passed.receipt?.sandbox).toEqual({ mode: 'read-only', source: '--agent bmn-helper', agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: '2.0.29' })
+    expect(passed.receipt?.sandbox).toEqual({ mode: 'read-only', source: '--agent bmn-helper', agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: '2.0.32' })
   })
 
   it.each([
@@ -290,17 +290,17 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
 
   it('refuses a folder that is not BMN\'s, and roster role puts it back', async () => {
     const config = join(openCodeFolder(), 'config/opencode')
-    const loosened = (OPENCODE_CONFIG_FILES['agents/bmn-helper.md'] ?? '').replace('  edit: deny', '  edit: allow')
+    const loosened = (OPENCODE_CONFIG_FILES['agents/bmn-helper.md'] ?? '').replace('"effect":"deny"', '"effect":"allow"')
     writeFileSync(join(config, 'agents/bmn-helper.md'), loosened)
     expect(kimi(form())).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: `${config}/agents/bmn-helper.md differs from BMN's text; \`bmn roster role <role> --json\` puts BMN's folder back` })
     installOpenCodeFolder()
     writeFileSync(join(config, 'AGENTS.md'), 'rules OpenCode would read')
     expect(kimi(form()).message).toBe(`${config}/AGENTS.md is not one of BMN's OpenCode files, and OpenCode would read it; \`bmn roster role <role> --json\` puts BMN's folder back`)
     rmSync(join(config, 'AGENTS.md'))
-    mkdirSync(join(config, 'plugins'))
+    mkdirSync(join(config, 'plugins'), { recursive: true })
     symlinkSync('/etc/hostname', join(config, 'plugins/linked.ts'))
     expect(kimi(form()).message).toContain('plugins/linked.ts is a link, and BMN\'s OpenCode folder holds none')
-    rmSync(join(config, 'plugins'), { recursive: true })
+    rmSync(join(config, 'plugins/linked.ts'))
     writeFileSync(join(openCodeFolder(), 'home/.gitconfig'), '[user]')
     expect(kimi(form()).message).toBe(`${openCodeFolder()}/home is not empty, and OpenCode would read what is there; \`bmn roster role <role> --json\` puts BMN's folder back`)
     // `roster role` puts the folder back for a role with an OpenCode candidate.
@@ -309,7 +309,7 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
     await runCli(['roster', 'role', 'helper', '--json'])
     expect(kimi(form()).verdict).toBe('PASS')
     expect(readdirSync(join(openCodeFolder(), 'home'))).toEqual([])
-    expect(readdirSync(config).sort()).toEqual(['agents', 'opencode.json'])
+    expect(readdirSync(config).sort()).toEqual(['agents', 'opencode.json', 'plugins'])
   })
 
   it('reads the model and effort from -m, and the destination needs a title', () => {
@@ -346,7 +346,7 @@ describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
     const role = JSON.parse((await runCli(['roster', 'role', 'helper', '--json'])).stdout)
     const candidate = role.candidates.find((entry: { agent: string }) => entry.agent === 'kimi')
     expect(candidate.opencode).toMatchObject({ folder: openCodeFolder(), argv: ['run', '--standalone', '--format', 'json', '--agent', 'bmn-helper'],
-      then: ['-m', '<provider>/<model>#<effort>', '--title', '<title>'], agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: '2.0.29' })
+      then: ['-m', '<provider>/<model>#<effort>', '--title', '<title>'], agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: '2.0.32' })
     expect(candidate.opencode.env).toEqual(Object.entries(openCodeEnvironment()).map(([name, value]) => `${name}=${value}`))
     expect(role.candidates.find((entry: { agent: string }) => entry.agent === 'luna').opencode).toBeUndefined()
     expect(kimi(form()).verdict).toBe('PASS')
@@ -2015,4 +2015,38 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
     })
     expect(output).toContain('If approved:\n  Changing OpenAI to Public work only stops Sol, Astra and Luna receiving private work')
   })
+})
+
+it('Epic 85 full review: managed sources refuse every OpenCode dispatch before execution', () => {
+  const managed = join(home, 'synthetic-managed'), base = join(home, 'synthetic-run')
+  mkdirSync(managed)
+  const code = `
+    const [routesUrl, openCodeUrl, argvUrl, base] = process.argv.slice(1);
+    const {resolveOpenCodeRoute} = await import(routesUrl);
+    const {openCodeEnvironment,openCodeAskConfig,OPENCODE_HELPER_AGENT,OPENCODE_RESEARCH_AGENT} = await import(openCodeUrl);
+    const {parseDispatch} = await import(argvUrl);
+    const rows=[];
+    for(const kind of ['helper','reader','asker','researcher']) {
+      const ask = ['reader','asker'].includes(kind) ? openCodeAskConfig(kind) : null;
+      const agent = ask?.agent ?? (kind==='helper' ? OPENCODE_HELPER_AGENT : OPENCODE_RESEARCH_AGENT);
+      const env={...openCodeEnvironment(base),PATH:'/usr/bin:/bin',...(ask ? {OPENCODE_CONFIG_CONTENT:ask.content}:{})};
+      const parsed=parseDispatch(['env','-i',...Object.entries(env).map(([k,v])=>k+'='+v),'opencode','run','--standalone','--format','json','--agent',agent,'-m','opencode-go/gpt-6-luna#high','--title','Synthetic']);
+      rows.push({kind,result:resolveOpenCodeRoute(parsed,{base,folder:false,agent,inline:ask?.content??null})});
+    }
+    console.log(JSON.stringify(rows));
+  `
+  const run = () => JSON.parse(execFileSync('/usr/bin/bwrap', [
+    '--unshare-all', '--cap-drop', 'ALL', '--new-session', '--die-with-parent', '--ro-bind', '/', '/',
+    '--tmpfs', '/etc', '--dir', '/etc/opencode', '--ro-bind', managed, '/etc/opencode', '--proc', '/proc', '--dev', '/dev',
+    '--', process.execPath, '--input-type=module', '-e', code,
+    new URL('../../bin/agents-check-routes.mjs', import.meta.url).href,
+    new URL('../../bin/agents-opencode.mjs', import.meta.url).href,
+    new URL('../../bin/agents-check-argv.mjs', import.meta.url).href, base
+  ], { env: { HOME: home, PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 5000 })) as Array<{ kind: string; result: { unsupported?: string; route?: unknown } }>
+  expect(run().every(row => row.result.route !== undefined)).toBe(true)
+  writeFileSync(join(managed, 'opencode.jsonc'), '{"plugins":["./synthetic-plugin"]}')
+  for (const row of run()) expect(row.result.unsupported, row.kind).toMatch(/managed/i)
+  rmSync(join(managed, 'opencode.jsonc'))
+  mkdirSync(join(managed, 'plugins')); writeFileSync(join(managed, 'plugins/synthetic.mjs'), 'throw new Error("must never execute")')
+  for (const row of run()) expect(row.result.unsupported, row.kind).toMatch(/managed/i)
 })

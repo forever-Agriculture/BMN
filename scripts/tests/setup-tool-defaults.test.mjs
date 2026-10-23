@@ -1,17 +1,18 @@
 // MODULE: setup-tool-defaults.test.mjs - Qualified MCP setup ownership, entry-only Undo and interrupted recovery
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'vitest'
 import { withDefaultsAdmission } from '../../apps/desktop/bin/defaults-admission.mjs'
-import { initializeDefaultsOwnership } from '../../apps/desktop/bin/defaults-ownership.mjs'
+import { defaultsTargetKey, initializeDefaultsOwnership, readDefaultsOwnership } from '../../apps/desktop/bin/defaults-ownership.mjs'
 import { restoreTransaction } from '../../apps/desktop/bin/agents-rules.mjs'
 import { checkTools, readAppTools, TOOL_APPS, toolsTestsPath } from '../../apps/desktop/bin/agents-tools.mjs'
 import { readValidRoster } from '../../apps/desktop/bin/agents-state.mjs'
 import { installSetupTool, restoreSetupToolTransaction } from '../../apps/desktop/bin/setup-tool-defaults.mjs'
 import { approveRoster } from '../../apps/desktop/src/main/agents-approval.ts'
+import { readSetupRecovery } from '../../apps/desktop/bin/setup-recovery.mjs'
 
 const setupId = 'synthetic-tools-79', versions = { claude: '2.1.303', codex: '0.163.0', opencode: '2.0.32' }
 const example = readFileSync(new URL('../../apps/desktop/src/utility/test-fixtures/agents/roster-example.md', import.meta.url), 'utf8')
@@ -28,7 +29,7 @@ beforeEach(() => {
   for (const [harness, version] of Object.entries(versions)) {
     mkdirSync(dirname(TOOL_APPS[harness].file(environment)), { recursive: true })
     appendFileSync(toolsTestsPath(), JSON.stringify({ harness, kind: 'capability', at: '2026-10-20T12:00:00.000Z', version,
-      outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', detail: 'synthetic qualification' }) + '\n')
+      outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', detail: 'synthetic qualification', ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {}) }) + '\n')
   }
 })
 afterEach(() => {
@@ -141,4 +142,140 @@ describe('setup MCP defaults', () => {
       }
     })
   }
+})
+
+// Epic85 full review: drive Setup's production coordinator and shared-config publication.
+describe('Epic 85 Setup OpenCode exact undo', () => {
+  for (const [filename, original] of [
+    ['opencode.json', '{"theme":"synthetic"}'],
+    ['opencode.jsonc', '// original comment\n{\n  "theme": "synthetic",\n}\n'],
+    ['opencode.json', ''],
+    ['opencode.jsonc', '// comment-only\n'],
+    ['opencode.jsonc', '{"mcp":{"sibling":{"type":"local","command":["synthetic-missing"]}}}\n'],
+    ['opencode.json', '{"mcp":{"servers":{"sibling":{"type":"local","command":["synthetic-missing"]}}}}\n']
+  ]) {
+    it(`restores exact ${filename} bytes after unchanged Setup install/undo (${original.length} bytes)`, async () => {
+      const path = join(dirname(TOOL_APPS.opencode.file(environment)), filename)
+      writeFileSync(path, original)
+      const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+      const undone = await restoreTransaction(installed.transaction, { yes: true, asJson: true })
+      assert.equal(undone.code, 'OK', undone.message)
+      assert(existsSync(path)); assert.equal(readFileSync(path, 'utf8'), original)
+      assert.equal((await install('opencode')).state, 'opted-out')
+    })
+  }
+  it('restores original absence after unchanged Setup install/undo', async () => {
+    const path = TOOL_APPS.opencode.file(environment); assert(!existsSync(path))
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const undone = await restoreTransaction(installed.transaction, { yes: true, asJson: true })
+    assert.equal(undone.code, 'OK', undone.message); assert(!existsSync(path))
+    assert.equal((await install('opencode')).state, 'opted-out')
+  })
+  it('keeps unrelated changes while undoing the Setup entry', async () => {
+    put('opencode', '{"theme":"synthetic"}\n')
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment)
+    writeFileSync(path, readFileSync(path, 'utf8').replace('synthetic', 'later-unrelated'))
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'OK')
+    assert(!entry('opencode')); assert(readFileSync(path, 'utf8').includes('later-unrelated'))
+  })
+  it('refuses an externally changed Setup entry', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), changed = readFileSync(path, 'utf8').replace('@0.0.55', '@9.9.9')
+    writeFileSync(path, changed)
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'REVISION_CONFLICT')
+    assert.equal(readFileSync(path, 'utf8'), changed)
+  })
+  it('does not remove a recreated postimage after interrupted absence restoration', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), postimage = readFileSync(path, 'utf8'), tx = transaction(installed.transaction)
+    const undone = await restoreSetupToolTransaction(tx.manifest, tx.folder, { yes: true, asJson: true,
+      afterRemove: () => { writeFileSync(path, postimage); throw new Error('synthetic interruption') } })
+    assert.notEqual(undone.code, 'OK'); assert.equal(readFileSync(path, 'utf8'), postimage)
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'REVISION_CONFLICT')
+    assert.equal(readFileSync(path, 'utf8'), postimage); assert.equal((await install('opencode')).state, 'opted-out')
+  })
+})
+
+describe('Epic 85 Setup recovery boundaries', () => {
+  it('retains the whole installed file and exposes its holding after absence undo', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), postimage = readFileSync(path, 'utf8')
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'OK')
+    const tx = transaction(installed.transaction), operation = tx.manifest.setup.configUndo
+    assert.equal(operation.stagedPath, null); assert.equal(operation.after.kind, 'absent'); assert(!existsSync(path))
+    const holding = tx.manifest.setup.configUndoHolding.holdingPath
+    assert.equal(readFileSync(holding, 'utf8'), postimage)
+    const recovery = readSetupRecovery(setupId)
+    assert.equal(recovery.code, 'OK'); assert(recovery.rows.some(row => row.recoveryPaths.includes(holding)))
+  })
+  it('resumes only metadata after a completed physical absence undo', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), tx = transaction(installed.transaction)
+    const interrupted = await restoreSetupToolTransaction(tx.manifest, tx.folder, { yes: true, asJson: true,
+      afterPhysical: () => { throw new Error('synthetic metadata interruption') } })
+    assert.notEqual(interrupted.code, 'OK'); assert(!existsSync(path))
+    assert.equal(transaction(installed.transaction).manifest.setup.configUndo.phase, 'complete')
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'OK')
+    assert(!existsSync(path)); assert.equal((await install('opencode')).state, 'opted-out')
+  })
+  for (const recreated of ['empty', 'unrelated', 'postimage', 'link']) it(`refuses ${recreated} recreation before metadata-only completion`, async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), postimage = readFileSync(path, 'utf8'), tx = transaction(installed.transaction)
+    const foreign = join(root, 'synthetic-foreign.json'); writeFileSync(foreign, '{}')
+    const bytes = recreated === 'empty' ? '' : recreated === 'unrelated' ? '{"theme":"foreign"}' : postimage
+    const interrupted = await restoreSetupToolTransaction(tx.manifest, tx.folder, { yes: true, asJson: true, afterPhysical: () => {
+      if (recreated === 'link') symlinkSync(foreign, path); else writeFileSync(path, bytes)
+      throw new Error('synthetic metadata interruption')
+    } })
+    assert.notEqual(interrupted.code, 'OK')
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'REVISION_CONFLICT')
+    if (recreated === 'link') assert.equal(readlinkSync(path), foreign); else assert.equal(readFileSync(path, 'utf8'), bytes)
+    assert.equal(readFileSync(foreign, 'utf8'), '{}')
+    const journal = withDefaultsAdmission(() => readDefaultsOwnership(setupId).snapshot())
+    assert.equal(journal.entries[defaultsTargetKey(tx.manifest.setup.target)].optOut, true)
+    const next = await install('opencode')
+    if (recreated === 'link') assert.equal(next.code, 'REVISION_CONFLICT'); else assert.equal(next.state, 'opted-out')
+  })
+  it('refuses missing or corrupt new inverse bindings without touching the installed file', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), postimage = readFileSync(path, 'utf8'), tx = transaction(installed.transaction)
+    for (const mutate of [
+      value => { delete value.setup.inverse },
+      value => { value.setup.inverse.edit.after = 'a'.repeat(64) },
+      value => { value.setup.inverse.file_kind = 'file' }
+    ]) {
+      const altered = structuredClone(tx.manifest); mutate(altered); writeFileSync(join(tx.folder, 'manifest.json'), JSON.stringify(altered))
+      assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'REVISION_CONFLICT')
+      assert.equal(readFileSync(path, 'utf8'), postimage)
+    }
+  })
+  it('refuses malformed completed absence operations and undo notes', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), tx = transaction(installed.transaction)
+    await restoreSetupToolTransaction(tx.manifest, tx.folder, { yes: true, asJson: true, afterPhysical: () => { throw new Error('synthetic metadata interruption') } })
+    const complete = transaction(installed.transaction).manifest
+    for (const mutate of [
+      value => { value.setup.configUndo.version = 1 },
+      value => { value.setup.configUndo.stagedPath = join(root, 'synthetic-stage') },
+      value => { value.setup.configUndo.after.kind = 'file' },
+      value => { delete value.setup.configUndoHolding },
+      value => { value.setup.configUndo.phase = 'intent' },
+      value => { value.setup.undo.file_missing = false },
+      value => { value.setup.undo.before = 'a'.repeat(64) },
+      value => { value.setup.undo.file_witness.file.ino = '1' }
+    ]) {
+      const altered = structuredClone(complete); mutate(altered); writeFileSync(join(tx.folder, 'manifest.json'), JSON.stringify(altered))
+      assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'REVISION_CONFLICT')
+      assert(!existsSync(path))
+    }
+  })
+  it('keeps legacy receipt-free undo entry-only without inferring original file absence', async () => {
+    const installed = await install('opencode'); assert.equal(installed.code, 'OK', installed.message)
+    const path = TOOL_APPS.opencode.file(environment), tx = transaction(installed.transaction)
+    delete tx.manifest.setup.inverseVersion; delete tx.manifest.setup.inverse
+    writeFileSync(join(tx.folder, 'manifest.json'), JSON.stringify(tx.manifest))
+    assert.equal((await restoreTransaction(installed.transaction, { yes: true, asJson: true })).code, 'OK')
+    assert(existsSync(path)); assert(!entry('opencode'))
+  })
 })

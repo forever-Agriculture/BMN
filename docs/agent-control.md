@@ -748,7 +748,7 @@ any process with file access can still edit these files.
 lost and the backup, taken before the check, does not hold it. Neither harness offers a lock, so close the harness, or
 keep it from rewriting its settings, while `install` runs.
 
-**OpenCode 2** (2.0.28). `bmn hooks print opencode` prints the terminal plugin shipped with this CLI. `install` writes it
+**OpenCode 2** (2.0.29 and 2.0.32; forms and permission replies measured against a local stand-in). `bmn hooks print opencode` prints the terminal plugin shipped with this CLI. `install` writes it
 as `bmn/tui.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn`
 folder to `plugins` in `cli.json` there: OpenCode 2 loads a local terminal plugin only as a folder named in that list,
 and skips an entry naming a file without a word. `check` reports `plugin` (`tui.ts` byte for byte: `wired`, `wired
@@ -1329,7 +1329,11 @@ so Codex, like OpenCode, is never recorded as keeping a run to its own tools.
 | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude.json` | `mcpServers` | `${NAME}` | not yet |
 | Codex | `~/.codex/config.toml` | `[mcp_servers.<id>]` | `env_vars = ["NAME"]`, `env_http_headers` | not yet |
-| OpenCode | `~/.config/opencode/opencode.jsonc` | `mcp` | `{env:NAME}` | not yet |
+| OpenCode | `~/.config/opencode/opencode.json`, or the existing `.jsonc` | writes `mcp.servers`; reads that and legacy `mcp` | `{env:NAME}` | not yet |
+
+OpenCode's root `mcp.timeout` is metadata. A name in both server layouts, or both config filenames present, makes the
+file unreadable for changes. Existing entries keep their layout and disabled state; a new entry uses `mcp.servers`.
+Capability records from before this layout do not authorize writes; BMN schedules the tools test again.
 
 Codex passes a variable only under its own name and has none for an argument, so a tool that needs either reads
 `blocked` for Codex. A variable, or an argument from one, is written only where the test saw that app version pass it.
@@ -1362,6 +1366,32 @@ until you ask for their removal (`--remove-unlisted`). It is one transaction, ea
 write, so **Undo…** (or `bmn rules restore --transaction <id>`) knows every entry the install wrote, even after a crash,
 and puts one back only while it still reads exactly as the install left it, else stops and names it. An entry that
 holds a value inline is never replaced or removed: move the value into an environment variable first.
+
+For OpenCode, the transaction keeps admitted entry tokens and the punctuation they need. Comments stay in the live
+file, including comments inside an old entry; unknown literal settings are left in place when BMN cannot safely keep
+them for undo. A checked inverse restores an unchanged file's exact text. A config BMN created from an absent path
+is removed only after an exact inverse and fresh file and parent checks; a preexisting empty file stays. If unrelated
+bytes changed, undo changes
+only the guarded entry and keeps those edits and any new siblings. Layout, filename and ownership changes are checked
+again at publication and readback; an interrupted undo records its progress before restoring ownership metadata.
+An interrupted removal also keeps a typed file and parent metadata witness. Before retrying a pending removal,
+BMN requires the same file revision; a recreated path or uncertain witness is left for you to review.
+
+Setup's OpenCode tools install also records this checked inverse before publication. Undo restores exact
+unchanged bytes or original absence; removal retains the installed file in the transaction's holding area.
+Completed physical undo can resume only its metadata work after a fresh readback. An interrupted or uncertain
+physical operation needs inspection. Older Setup transactions without an inverse remove only their owned entry
+and never infer that the original file was absent. Setup's opt-out survives either outcome.
+
+There is still a final-write window, as with BMN's existing config writer: another program's write between the
+last check and the final rename or removal can be lost while BMN reports success. Keep OpenCode from rewriting
+its settings, including through `opencode mcp add`, while install or undo runs. These checks do not provide a lock.
+
+OpenCode's tools test starts a private loopback server on a free port, with a temporary password, and asks only
+that server through `api --server <its URL> mcp.list`. Polling and teardown share a time limit. A pass requires the
+stand-in to confirm its argument and environment value, and the test's server process group to be gone. There is
+no fallback to the owner's background service or `opencode mcp list`. The new method has its own bounded automatic
+retry record; earlier results and exhausted retries are retained.
 
 **Import.** `bmn tools import` proposes the apps' entries as tools: one where the apps agree on what it runs and the
 variables it names, separate ones where they differ, each kept to the apps that hold it and none Public. A value held
@@ -1601,7 +1631,7 @@ your team has an agent on OpenCode, and BMN runs it by itself the same way.
 
 **The run.** A research run starts from BMN's own OpenCode folder (see
 [Checking an OpenCode helper run](#checking-an-opencode-helper-run)) with BMN's research agent
-`bmn-researcher`: every action denied but web search. On OpenCode 2.0.29 the only tool it is
+`bmn-researcher`: every action denied but web search. On OpenCode 2.0.29 and 2.0.32 the only tool it is
 offered is `websearch`. A search sends its text to the search service the folder names, TinyFish,
 which answers without an account; it is not sent to the model's provider. BMN reads each cited
 page itself, as for every research.
@@ -1737,8 +1767,13 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
   after a 4xx (also one whose body breaks off), and is repeated once after a network error, a 5xx or a 200 whose body
   breaks off, while time is left. The host's name must lead to public addresses; a host under `.test` is the stand-in of
   BMN's own tests, sent only a key starting `sk-synthetic-`.
-- **The key** is OpenCode's own, read from `~/.local/share/opencode/auth.json` (or under `$XDG_DATA_HOME`) for that one
-  request, held in memory and written nowhere: in no output, record or error, also when a server sends it back, as BMN
+- **The key** is OpenCode's own, read with `opencode auth export --standalone` for that one request. BMN chooses one
+  active API-key sign-in, `opencode-go` before `opencode`; multiple eligible keys in the winning integration are refused.
+  The judge preserves the selected `OPENCODE_DB` verbatim, including a relative path interpreted by OpenCode;
+  an empty selected database does not fall back to another sign-in. The separate Go sign-in import is unchanged.
+  The export is bounded by the request's deadline (at most five seconds); a failed, malformed or unmatched export is refused
+  without reading an old `auth.json`. Only the chosen key is retained in memory, written nowhere: in no output, record or error,
+  also when a server sends it back, as BMN
   passes on nothing a server said but Jev's numbers under names the caller chose (a choice's labels, a level).
 - **The reading** is the one rule the proof tested (`~/code/jev-eval`): a `noul` of 0.90 or more reads "yes"; a `choice`
   whose confidence and winning probability are both 0.90 or more reads its label; a `score` with a confidence of 0.90 or
@@ -1949,16 +1984,28 @@ options, every shell redirection, a background shell) and every tool not given. 
 | --- | --- | --- | --- |
 | Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c mcp_servers={} -c approval_policy="never" --sandbox read-only [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read, with its shell, Git, web search and sub-agents; its sandbox writes nothing and keeps the shell off the network |
 | Claude Code | `claude-read-tools` | `claude -p --model <model> --effort <effort> --restricted --tools Read,Grep,Glob,Bash,WebSearch,Agent --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' WebSearch Agent --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose`, BMN's `git` first on `PATH` | its working folder only (`--restricted`), with Read, Grep, Glob, Git history, web search and sub-agents |
-| OpenCode, a private project ask to a teammate whose provider takes private work | `opencode-reader` | `opencode run --standalone --format json --agent bmn-ask-reader -m <provider>/<model>#<effort> --title 'BMN ask'` in BMN's own OpenCode folder (its Go sign-in, 70.4), the agents given in `OPENCODE_CONFIG_CONTENT`, BMN's `git` first on `PATH` | the project, and wherever its tracked links lead (OpenCode follows a link; `external_directory: deny` does not stop it), with read, glob, grep, list, Git history, web search and BMN's read-only sub-agent `bmn-reader` |
-| OpenCode, any other ask | `opencode-asker` | the same with `--agent bmn-ask-asker`, every action denied (`"*": "deny"`) | nothing beyond the asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public work only, where the owner's folder exceptions can cover the question and files but never a reader that follows links out (72.6's measured route) |
+| OpenCode, a private project ask to a teammate whose provider takes private work | `opencode-reader` | `opencode run --standalone --format json --agent bmn-ask-reader -m <provider>/<model>#<effort> --title 'BMN ask'` in BMN's own OpenCode folder (its Go sign-in, 70.4), the agents given in `OPENCODE_CONFIG_CONTENT`, BMN's `git` first on `PATH` | the project folder only, through BMN's read/glob/grep/Git broker, with web search and one bounded read-only sub-agent `bmn-reader`; outside and symlink escapes are refused |
+| OpenCode, any other ask | `opencode-asker` | the same with `--agent bmn-ask-asker`, every action denied (`"*": "deny"`) | nothing beyond the asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public work only, where the owner's folder exceptions can cover the question and files but never the project reader |
 
-- **BMN's `git`** (`bin/ask-git.sh`, shipped with 72.3) is the `git` the Claude Code and OpenCode reader
-  forms find. It allows only `log`, `show`, `diff` and `blame`, and takes an option only when it is
+OpenCode's agents use V2 `agents` and ordered `permissions` keys. Its native filesystem, shell and delegation tools
+are denied; the installed BMN enforcement plugin supplies confined equivalents and fails closed if unavailable.
+Reads hold verified descriptors. Each search shares one five-second budget across traversal and matching;
+cancellation waits for its matcher to exit before releasing those descriptors. Git runs in a read-only namespace with project-scoped paths, immutable commit IDs,
+empty configuration and no external diff, pager, hooks or object alternates. The one child's durable creation intent,
+identity and confirmed termination survive cancellation and resumed asks; uncertain discovery leaves usage incomplete.
+The child keeps its parent's model and effort and cannot delegate. Project skills remain disabled.
+
+On the measured Linux OpenCode 2.0.29 and 2.0.32 paths, dispatch also checks the fixed managed root
+`/etc/opencode`, even for public asks and research. A missing root or stable empty real directory is admitted;
+a populated, linked, unreadable or changing root is refused before dispatch. Native OpenCode can load managed
+plugins and provider settings outside BMN's folder, so BMN cannot offer its confined form with that configuration.
+
+- **BMN's `git`** (`bin/ask-git.sh`, shipped with 72.3) is the `git` the Claude Code reader finds; the OpenCode broker uses its same argument validator. It allows only `log`, `show`, `diff` and `blame`, and takes an option only when it is
   spelled whole as one of its read-only options (Git takes any unique beginning of a long option, so
   `--cont=` would be `--contents=`). It takes no option that names a file, runs no external diff, text
-  conversion, pager or hook, and reads no configuration but the project's own. Claude Code's
+  conversion, pager or hook, and, for Claude Code, reads no configuration but the project's own. Claude Code's
   prefix rules alone let `git blame --contents` or `--output` read or write any file (72.1). OpenCode
-  splits command chains but not redirections, so its reader also denies every command holding `>`.
+  uses brokered Git operations without a shell; redirections are refused.
 - **What is not offered, said plainly:** Claude Code's `WebFetch` and every Bash command but those
   four Git reads; OpenCode's `webfetch`, `execute`, `patch`, `question`, `skill`, its own sub-agents and
   its shell beyond the four Git reads. Codex's `request_user_input` is refused by Codex in an exec run.
@@ -1970,7 +2017,7 @@ options, every shell redirection, a background shell) and every tool not given. 
 - **What it read is recorded.** The receipt, `bmn team asks show` and Agents › Asks say what the
   teammate's mode could read. A private ask's consent is judged for it (R72-NFR6): a form that reads
   beyond the asker's text joins the request's inputs as its mode, its root the project for Claude
-  Code and none for Codex and OpenCode's reader (no folder exception covers the whole computer).
+  Code and OpenCode's reader, and none for Codex (no folder exception covers the whole computer).
 - **Public asks** (`--data public`) go only to a form that reads nothing beyond the asker's text:
   OpenCode's asker. Codex and Claude Code read with their own tools beyond what was handed over, so an
   ask to them is private (`PUBLIC_NOT_VERIFIED`).
@@ -2395,6 +2442,16 @@ Qualification masks owner/default/selected profiles, even through absolute and s
 the approved executable and its runtime dependencies beneath those masks. No owner profile is used to qualify.
 The bounded raw streams remain transient; allowlisted facts and BMN-authored reasons/fixes are the only output.
 Unknown diagnostics make a check partial. Arbitrary names, paths, messages and credential fragments are withheld.
+
+The OpenCode version check accepts its `v2.x` spelling. Its sandbox supplies missing runtime folders in a private
+view, preserving existing files and symlink targets read-only; only the log folder is writable on tmpfs. It writes
+no folders into the selected home. Leftovers keeps the original filesystem view for its location checks and reads
+both `plugin`/`plugins` and MCP layouts; entries from fixed `/etc/opencode`
+sources carry the fixed managed-origin label. Managed precedence that BMN cannot establish is reported unknown.
+Identical complete MCP definitions across managed and user sources produce one managed-labelled diagnostic.
+Conflicting definitions, or an unreadable definition of the same entry, produce one partial diagnostic;
+the managed label does not claim that BMN established which definition wins. Every observed source is still
+checked for changes, including sources whose duplicate diagnostic was suppressed.
 
 JSON has `schemaVersion: 1`, `running`, `cycleStartedAt`, `attemptStartedAt`, `retryUsed`, `retryAtNextStart`,
 `error`, `rows`, `problemCount`, `allWell`, `exitCode` and fixed `locationHelp`. Times are Unix milliseconds or null. Each row names

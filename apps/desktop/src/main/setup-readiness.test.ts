@@ -43,6 +43,17 @@ it('keeps the measured command table non-root and uses only the three approved f
   }
 })
 
+it('Epic 85: keeps an empty OpenCode auth listing unknown when JSONC config may supply sign-in', async () => {
+  const home = root(), bin = join(home, 'bin'), config = join(home, '.config/opencode')
+  mkdirSync(bin); mkdirSync(config, { recursive: true })
+  writeFileSync(join(bin, 'opencode'), '#!/bin/sh\nexit 65\n', { mode: 0o755 })
+  writeFileSync(join(config, 'opencode.jsonc'), '// synthetic configuration\n{}\n')
+  const reader = new SetupReadinessReader({ environment: () => ({ HOME: home, PATH: bin }), skipDirectory: null,
+    stateDirectory: join(home, 'bmn-state'),
+    run: async (_program, argv) => ({ code: 0, failure: null, output: argv[0] === '--version' ? 'opencode v2.0.32' : '[]' }) })
+  expect((await reader.read()).apps.find(row => row.app === 'opencode')).toMatchObject({ signIn: 'unknown', method: null })
+})
+
 function installedFixture(leak: boolean): { reader: SetupReadinessReader; home: string; state: string; count: () => number } {
   const home = root(), bin = join(home, 'bin'), state = join(home, 'bmn-state')
   mkdirSync(bin)

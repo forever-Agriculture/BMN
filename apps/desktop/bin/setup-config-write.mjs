@@ -18,18 +18,28 @@ const fingerprint = value => exact(value, ['kind', 'hash', 'parent', 'object']) 
   (value.kind === 'absent' ? value.hash === null && value.object === null : value.kind === 'file' &&
     typeof value.hash === 'string' && /^[a-f0-9]{64}$/.test(value.hash) && typeof value.object === 'string' && /^\d+:\d+$/.test(value.object))
 
+/** An absence has no stage to publish: its complete preimage is retained in a holding instead. */
+export function setupConfigAbsence(operation) {
+  return exact(operation, ['version', 'phase', 'path', 'directory', 'stagedPath', 'before', 'after']) && operation.version === 2 &&
+    ['preparing', 'intent', 'held', 'published', 'complete', 'unresolved'].includes(operation.phase) && operation.stagedPath === null &&
+    fingerprint(operation.before) && operation.before.kind === 'file' && fingerprint(operation.after) && operation.after.kind === 'absent' &&
+    operation.before.parent === operation.after.parent
+}
+
 /** No restart adopts bytes from an unfinished or corrupt physical publication. */
 export function assertSetupConfigRecovery(manifest, path) {
   for (const key of keys) {
     const operation = manifest.setup?.[key]
     if (operation === undefined) continue
     const holding = manifest.setup[`${key}Holding`]
-    const valid = exact(operation, ['version', 'phase', 'path', 'directory', 'stagedPath', 'before', 'after']) && operation.version === 1 &&
-      operation.path === path && operation.directory === realpathSync(dirname(path)) &&
+    const absence = key === 'configUndo' && manifest.kind === 'setup-tool' && manifest.setup.target?.app === 'opencode' &&
+      setupConfigAbsence(operation) && holding !== undefined
+    const file = exact(operation, ['version', 'phase', 'path', 'directory', 'stagedPath', 'before', 'after']) && operation.version === 1 &&
       typeof operation.stagedPath === 'string' && dirname(operation.stagedPath) === operation.directory &&
       basename(operation.stagedPath).startsWith('.bmn-stage-') && fingerprint(operation.before) && fingerprint(operation.after) &&
       operation.after.kind === 'file' && operation.before.parent === operation.after.parent &&
       (operation.before.kind === 'absent' ? holding === undefined : holding !== undefined)
+    const valid = (absence || file) && operation.path === path && operation.directory === realpathSync(dirname(path))
     if (!valid || operation.phase !== 'complete') throw conflict('an interrupted or corrupt setup config publication needs inspection; no automatic recovery is attempted')
     if (holding !== undefined) assertSetupHoldingRecovery(manifest, `${key}Holding`, path, operation.before)
   }
@@ -40,11 +50,24 @@ export function setupConfigRecovery(manifest) {
   return paths.length ? { recoveryPaths: paths, message: `Previous configuration preserved at ${paths.join(', ')}` } : {}
 }
 
+/** Metadata-only Undo completion is admitted by the completed physical operation, never entry absence alone. */
+export function assertSetupConfigUndoAfter(manifest, path) {
+  assertSetupConfigRecovery(manifest, path)
+  const operation = manifest.setup?.configUndo
+  if (operation?.phase !== 'complete') throw conflict('the physical setup config undo has not completed')
+  const parent = setupFileParent(path)
+  try {
+    if (!same(observeSetupFile(path, parent), operation.after)) throw conflict('the setup config changed after physical undo; ownership is left unresolved')
+  } finally { closeSync(parent.fd) }
+}
+
 /** Existing shared files are preserved whole; the replacement is published only into an absent name. */
 export function replaceSetupConfig(path, expected, text, { manifest, folder, key = 'configInstall', beforeCommit, afterCommit, mode = 0o600, afterHold } = {}) {
   assertDefaultsAdmission()
-  if (!keys.includes(key) || !manifest?.setup || !['file', 'missing'].includes(expected?.kind) || typeof text !== 'string' ||
-    Buffer.byteLength(text) > 1024 * 1024 || text.includes('\0')) throw conflict('invalid setup config publication')
+  const removing = text === null
+  if (!keys.includes(key) || !manifest?.setup || !['file', 'missing'].includes(expected?.kind) ||
+    (removing ? key !== 'configUndo' || expected.kind !== 'file' || manifest.kind !== 'setup-tool' || manifest.setup.target?.app !== 'opencode'
+      : typeof text !== 'string' || Buffer.byteLength(text) > 1024 * 1024 || text.includes('\0'))) throw conflict('invalid setup config publication')
   assertSetupConfigRecovery(manifest, path)
   if (manifest.setup[key] !== undefined) throw conflict('this setup config publication has already been used')
   const parent = setupFileParent(path)
@@ -54,18 +77,20 @@ export function replaceSetupConfig(path, expected, text, { manifest, folder, key
     if (expected.directory !== parent.real || before.kind !== (expected.kind === 'missing' ? 'absent' : 'file') ||
       before.kind === 'file' && before.hash !== sha(expected.text)) throw conflict('the shared setup config changed before publication')
     const stage = `.bmn-stage-${manifest.id}-${randomBytes(8).toString('hex')}`
-    operation = { version: 1, phase: 'preparing', path, directory: parent.real, stagedPath: join(parent.real, stage), before,
-      after: { kind: 'file', hash: sha(text), parent: parent.identity, object: null } }
+    operation = { version: removing ? 2 : 1, phase: 'preparing', path, directory: parent.real, stagedPath: removing ? null : join(parent.real, stage), before,
+      after: removing ? { kind: 'absent', hash: null, parent: parent.identity, object: null } : { kind: 'file', hash: sha(text), parent: parent.identity, object: null } }
     manifest.setup[key] = operation; saveSetupManifest(folder, manifest)
-    const fd = openSync(setupPinnedPath(parent, stage), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-      expected.kind === 'file' ? expected.mode : mode)
-    let after
-    try {
-      if (expected.kind === 'file') fchmodSync(fd, expected.mode)
-      writeFileSync(fd, text); fsyncSync(fd)
-      const stat = fstatSync(fd)
-      after = { kind: 'file', hash: sha(text), parent: parent.identity, object: `${stat.dev}:${stat.ino}` }
-    } finally { closeSync(fd) }
+    let after = operation.after
+    if (!removing) {
+      const fd = openSync(setupPinnedPath(parent, stage), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        expected.kind === 'file' ? expected.mode : mode)
+      try {
+        if (expected.kind === 'file') fchmodSync(fd, expected.mode)
+        writeFileSync(fd, text); fsyncSync(fd)
+        const stat = fstatSync(fd)
+        after = { kind: 'file', hash: sha(text), parent: parent.identity, object: `${stat.dev}:${stat.ino}` }
+      } finally { closeSync(fd) }
+    }
     operation.after = after; operation.phase = 'intent'; saveSetupManifest(folder, manifest)
     beforeCommit?.(); assertDefaultsAdmission(); assertSetupFileParent(parent)
     if (!same(observeSetupFile(path, parent), before)) throw conflict('the shared setup config changed before preservation')
@@ -74,7 +99,10 @@ export function replaceSetupConfig(path, expected, text, { manifest, folder, key
       operation.phase = 'held'; saveSetupManifest(folder, manifest)
       afterHold?.()
     }
-    publishSetupEntry(parent.fd, stage, basename(path), after)
+    if (removing) {
+      if (!same(observeSetupFile(path, parent), after)) throw conflict('the shared setup config was recreated after preservation')
+      fsyncSync(parent.fd)
+    } else publishSetupEntry(parent.fd, stage, basename(path), after)
     operation.phase = 'published'
     afterCommit?.()
     if (!same(observeSetupFile(path, parent), after)) throw conflict('the shared setup config changed during publication')
@@ -84,11 +112,12 @@ export function replaceSetupConfig(path, expected, text, { manifest, folder, key
     return pathState(path)
   } catch (error) {
     if (operation) {
-      const physicalPublication = operation.phase === 'published' || error.published ? 'reported' : error.publicationUnknown ? 'unknown' : 'none'
+      const heldRemoval = removing && manifest.setup[`${key}Holding`]?.phase === 'verified'
+      const physicalPublication = operation.phase === 'published' || heldRemoval || error.published ? 'reported' : error.publicationUnknown ? 'unknown' : 'none'
       operation.phase = 'unresolved'
       try { saveSetupManifest(folder, manifest) } catch { /* The durable intent still blocks automatic adoption. */ }
       error.recovery = { ...operation, physicalPublication, ...setupConfigRecovery(manifest) }
-      error.message += `; inspect target ${path}, stage ${operation.stagedPath}${manifest.setup[`${key}Holding`] ? `, holding ${manifest.setup[`${key}Holding`].holdingPath}` : ''}`
+      error.message += `; inspect target ${path}${operation.stagedPath === null ? '' : `, stage ${operation.stagedPath}`}${manifest.setup[`${key}Holding`] ? `, holding ${manifest.setup[`${key}Holding`].holdingPath}` : ''}`
     }
     throw error
   } finally { closeSync(parent.fd) }

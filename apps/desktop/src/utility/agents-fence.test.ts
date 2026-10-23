@@ -397,6 +397,12 @@ describe('the fence test of an OpenCode research run (70.3)', () => {
     expect(existsSync(openCodeFolder())).toBe(false)
   }, 60_000)
 
+  it('Epic 85: overrides the selected catalog model address in the isolated fence test', async () => {
+    opencode({ modelBaseURL: 'http://127.0.0.1:1' })
+    const entry = await testOpenCode()
+    expect(entry, JSON.stringify(entry)).toMatchObject({ verdict: 'pass' })
+  })
+
   it.each([
     ['the owner\'s rules file reaches the provider', { leaks: true }, 'reached the provider: the OpenCode rules file'],
     ['a tool BMN has not looked at is offered', { extraTool: 'bash' }, 'a tool BMN has not looked at: function:bash'],

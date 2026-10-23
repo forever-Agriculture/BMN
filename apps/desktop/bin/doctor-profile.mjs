@@ -26,9 +26,11 @@ export function selectedProfile(environment = process.env) {
     } catch { return true }
   })
   const inline = Boolean(environment.OPENCODE_CONFIG_CONTENT)
+  const opencodeManagedFiles = ['/etc/opencode/opencode.json', '/etc/opencode/opencode.jsonc']
   return { paths, invalid, unavailable, inline, home, claude: paths.CLAUDE_CONFIG_DIR, codex: paths.CODEX_HOME,
     opencode: paths.OPENCODE_CONFIG_DIR, claudeJson: join(environment.CLAUDE_CONFIG_DIR ?? home, '.claude.json'),
-    bmn: join(home, '.config/bmn/agents'), opencodeFiles: [...new Set([
+    bmn: join(home, '.config/bmn/agents'), opencodeManagedFiles, opencodeFiles: [...new Set([
+      ...opencodeManagedFiles,
       join(config, 'opencode/opencode.json'), join(config, 'opencode/opencode.jsonc'),
       join(paths.OPENCODE_CONFIG_DIR, 'opencode.json'), join(paths.OPENCODE_CONFIG_DIR, 'opencode.jsonc'),
       ...(paths.OPENCODE_CONFIG ? [paths.OPENCODE_CONFIG] : [])

@@ -3,13 +3,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { homedir } from 'node:os'
 import { JUDGE_ROLE, RosterError, agentState, calledParties, isCalled, judges } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { workspaceRoot, workspaceVisibility } from './agents-check.mjs'
 import { isPublicAddress, publicHostName, resolveHost, takeLock } from './agents-research.mjs'
 import { writePrivate } from './agents-rules.mjs'
 import { isObject, pause } from './shared-helpers.mjs'
+import { openCodeJudgeKey } from './agents-opencode.mjs'
 
 /**
  * Jev writes no text. One call carries a text (`state`) and a map of typed questions about it, and
@@ -200,31 +200,6 @@ export function agreed(first, second) {
 
 // ---------------------------------------------------------------------------------------------
 // The key: read for one request, held in memory, written nowhere (R65-NFR3)
-
-/** OpenCode's own sign-in file, where its key lies. BMN reads it and never writes it. */
-export function openCodeSignInFile(environment = process.env) {
-  const data = typeof environment.XDG_DATA_HOME === 'string' && environment.XDG_DATA_HOME.startsWith('/') ? environment.XDG_DATA_HOME : `${environment.HOME ?? homedir()}/.local/share`
-  return `${data}/opencode/auth.json`
-}
-
-/** The entries of the sign-in file that hold a key the gateway takes, in the order BMN tries them; the proof used the first. */
-const KEY_ENTRIES = ['opencode-go', 'opencode']
-
-/** The key for one request, or null where OpenCode is not signed in. Nothing of the file is kept or said. */
-function readKey(environment) {
-  let entries
-  try {
-    entries = JSON.parse(readFileSync(openCodeSignInFile(environment), 'utf8'))
-  } catch {
-    return null
-  }
-  if (!isObject(entries)) return null
-  for (const name of KEY_ENTRIES) {
-    const key = entries[name]?.key
-    if (typeof key === 'string' && /^[\x21-\x7e]{8,512}$/.test(key)) return key
-  }
-  return null
-}
 
 /** How the key of BMN's own tests starts; a key a service gave out never does. */
 export const TEST_KEY_START = 'sk-synthetic-'
@@ -672,7 +647,7 @@ const NEXT = {
   NO_PRICE: 'the owner records the model\'s price for the agent in the team file (price: {input: <dollars per million tokens>, output: 0}) and approves it',
   RECORD_UNREADABLE: 'the owner mends the file or folder the message names, or moves it away (BMN then counts on from what is left); nothing is asked meanwhile',
   LIMIT_UNREADABLE: 'the owner sets the monthly limit again on the judge\'s page in Preferences › Agents, on or off: that writes the setting anew; nothing is asked meanwhile',
-  NO_KEY: 'sign in to OpenCode on this computer (`opencode auth login`); BMN reads the key from OpenCode\'s own sign-in file and keeps none',
+  NO_KEY: 'sign in to OpenCode on this computer (`opencode auth login`); keep one active API-key sign-in for Go or OpenCode; BMN keeps no key',
   QUESTIONS_INVALID: 'see `bmn judge --help` for the three question types',
   TOO_LARGE: 'send a shorter text, or fewer questions in one call',
   STATE_EMPTY: 'pass the text to judge with --state-file <path>'
@@ -787,10 +762,10 @@ export async function runJudge({
     if (spent >= limit.usd) return refused('LIMIT_REACHED', `this month's calls to ${agent.name} cost $${spent.toFixed(4)}, which reaches the monthly limit of $${limitWords(limit.usd)}; asking is stopped until next month or a higher limit`)
   }
 
-  const key = readKey(environment)
-  if (key === null) return refused('NO_KEY', 'BMN found no key for OpenCode\'s gateway in OpenCode\'s sign-in file on this computer')
-
   const deadline = clock + Math.min(Math.max(1, deadlineMs), DEADLINE_MAX_MS)
+  const signIn = await openCodeJudgeKey({ environment, timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())) })
+  if (signIn.key === undefined) return refused('NO_KEY', signIn.reason)
+  const key = signIn.key
   const price = agent.price.input
   // A request that may have been charged while no count came back is counted by its own size, and the call is marked
   // estimated: a token is at least a byte, so its bytes and a little for what is put around them is a count on the dear side. Never nothing.

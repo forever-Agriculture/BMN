@@ -8,7 +8,7 @@ export interface DoctorLocationSource {
   target?: DoctorLocationStat | null; wal?: DoctorLocationStat | null; journalAbsent?: true
 }
 export type DoctorLocator = { status: 'unresolved' } | (DoctorLocationSource & { status: 'located' | 'stale'; acquisition: 1; witnesses: DoctorLocationSource[]; line?: number; column?: number; rowid?: number })
-export interface DoctorLeftover { kind: 'memory' | 'skills' | 'plugins' | 'mcp'; app: 'claude' | 'codex' | 'opencode' | null; reason: string; item: number; identity?: 'withheld'; locator?: DoctorLocator }
+export interface DoctorLeftover { kind: 'memory' | 'skills' | 'plugins' | 'mcp'; app: 'claude' | 'codex' | 'opencode' | null; reason: string; item: number; identity?: 'withheld'; source?: 'managed'; locator?: DoctorLocator }
 export interface DoctorRow {
   check: DoctorCheck
   state: DoctorState

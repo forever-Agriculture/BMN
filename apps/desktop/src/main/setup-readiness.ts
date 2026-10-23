@@ -158,7 +158,9 @@ export class SetupReadinessReader {
       } else result = await this.run(found.path, setupProbeArguments(app), { env: this.probeEnvironment(env), cwd: env.HOME ?? homedir() })
       Object.assign(row, projectSetupSignIn(app, result))
       if (app === 'opencode' && row.signIn === 'signed-out' && (env.OPENCODE_CONFIG_CONTENT || env.OPENCODE_CONFIG || env.OPENCODE_CONFIG_DIR ||
-        env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || existsSync(join(env.XDG_CONFIG_HOME ?? join(env.HOME ?? homedir(), '.config'), 'opencode/opencode.json')))) row.signIn = 'unknown'
+        env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || ['opencode.json', 'opencode.jsonc'].some(name =>
+          existsSync(join(env.XDG_CONFIG_HOME ?? join(env.HOME ?? homedir(), '.config'), 'opencode', name)) ||
+          existsSync(join('/etc/opencode', name))))) row.signIn = 'unknown'
       if (row.signIn === 'unknown' && this.confirmed(app, row.version, env)) row.signIn = 'confirmed'
       return row
       } catch { return { ...row, signIn: 'unknown', method: null } }

@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { parseYaml } from './agents-roster.mjs'
 import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
-import { OPENCODE_ASK_AGENTS, OPENCODE_HELPER_AGENT, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders } from './agents-opencode.mjs'
+import { OPENCODE_ASK_AGENTS, OPENCODE_HELPER_AGENT, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders, openCodeManagedProblem } from './agents-opencode.mjs'
 import { Refusal, optionalNames, optionalText, traceRead } from './agents-check-base.mjs'
 import { CODEX_ACCESS_KEYS, CODEX_NEUTRAL_KEYS, CODEX_ROUTE_KEYS, dispatchEnvironment, parseDispatch, readCodexConfig, tomlKeyPath, unquoteToml } from './agents-check-argv.mjs'
 import { isObject, spellings } from './shared-helpers.mjs'
@@ -368,6 +368,8 @@ export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HEL
     if (name === 'OPENCODE_DISABLE_MODELS_FETCH') return { unsupported: 'env -i must carry OPENCODE_DISABLE_MODELS_FETCH=1, so the run takes the model list built into OpenCode instead of fetching one' }
     return { unsupported: `env -i ${name} must be ${value}, a folder of BMN's own for OpenCode runs` }
   }
+  const managed = openCodeManagedProblem()
+  if (managed !== null) return { unsupported: managed }
   // A dry research question is asked before BMN puts its folder in order for the run; the run's own check reads the folder.
   const problem = folder ? openCodeFolderProblem(base) : null
   if (problem !== null) return { unsupported: `${problem}; \`bmn roster role <role> --json\` puts BMN's folder back` }
@@ -674,6 +676,14 @@ function openCodeAgentFiles(folder) {
  */
 function inspectOpenCode(environment) {
   const unknown = (reason, sources) => ({ basis: 'unknown', provider: null, host: null, reason, sources })
+  for (const name of ['opencode.json', 'opencode.jsonc']) {
+    try {
+      statSync(`/etc/opencode/${name}`)
+      return unknown('OpenCode also reads managed configuration; its effective model is unknown', ['managed configuration'])
+    } catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code)) return unknown('OpenCode managed configuration could not be inspected', ['managed configuration'])
+    }
+  }
   for (const name of ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT']) {
     if (environment[name]) return unknown(`${name} names another OpenCode configuration`, [name])
   }

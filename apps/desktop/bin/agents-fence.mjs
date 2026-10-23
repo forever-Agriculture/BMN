@@ -702,7 +702,10 @@ const OPENCODE_FENCE_MARKERS = {
 
 /** The address OpenCode reaches the provider at during the test: the stand-in, given as a setting the test adds to the very command. */
 function openCodeStandIn(agent, port) {
-  return JSON.stringify({ provider: { [agent.provider]: { options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: 'synthetic-not-a-key' } } } })
+  const settings = { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: 'synthetic-not-a-key' }
+  const model = agent.model.startsWith(`${agent.provider}/`) ? agent.model.slice(agent.provider.length + 1) : agent.model
+  // Catalog models can carry their own address; retain their capabilities and redirect that address too.
+  return JSON.stringify({ providers: { [agent.provider]: { settings, models: { [model]: { settings } } } } })
 }
 
 /**
@@ -729,7 +732,7 @@ function plantOpenCode(root, port, agent) {
     $schema: 'https://opencode.ai/config.json', instructions: [join(home, 'fence-instructions.md')],
     agent: { 'fence-config': { description: `${markers.CONFIG} an agent the settings name`, mode: 'subagent' } },
     mcp: { fence: { type: 'local', command: [process.execPath, join(root, 'fence-mcp.mjs'), markers.MCP], enabled: true } },
-    provider: JSON.parse(openCodeStandIn(agent, port)).provider
+    providers: JSON.parse(openCodeStandIn(agent, port)).providers
   }, null, 2)}\n`)
   put(join(own, 'agents/fence-agent.md'), `---\ndescription: ${markers.AGENT} a synthetic agent\nmode: subagent\n---\n\n${markers.AGENT} agent body.\n`)
   put(join(own, 'skills/fence-probe/SKILL.md'), `---\nname: fence-probe\ndescription: ${markers.SKILL} a synthetic skill description\n---\n\n${markers.SKILL} skill body.\n`)

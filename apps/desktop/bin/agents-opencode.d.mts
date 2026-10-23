@@ -1,5 +1,6 @@
 // MODULE: agents-opencode.d.mts - types for the OpenCode helper folder module (Epic 70)
 export declare const OPENCODE_FORM_TESTED: { version: string; on: string }
+export declare function openCodeManagedProblem(): string | null
 export declare const OPENCODE_HELPER_AGENT: string
 export declare const OPENCODE_RESEARCH_AGENT: string
 export declare const OPENCODE_FOLDER_SHA256: string
@@ -21,8 +22,11 @@ export declare const LUNA_GO_MODEL: string
 type Environment = NodeJS.ProcessEnv | Record<string, string>
 export declare function openCodeListsLuna(options?: { environment?: Environment; timeoutMs?: number }): Promise<{ listed: boolean; reason?: string }>
 export declare function openCodeGoSignedIn(options?: { environment?: Environment; base?: string; timeoutMs?: number }): Promise<{ signedIn: boolean | null; reason?: string }>
+export declare function openCodeJudgeKey(options?: { environment?: Environment; timeoutMs?: number }): Promise<{ key: string; reason?: undefined } | { reason: string; key?: undefined }>
 export declare function copyOpenCodeGoSignIn(options?: { environment?: Environment; base?: string; timeoutMs?: number }): Promise<{ ok: boolean; copied: boolean; message: string }>
 export declare const OPENCODE_ASK_AGENTS: Readonly<{ reader: string; asker: string; subagent: string }>
 export declare function openCodeAskConfig(kind: 'reader' | 'asker', rules?: string | null): { agent: string; content: string }
 export interface OpenCodeSessionInfo { id: string; parent: string | null; agent: string | null; model: { id: string | null; provider: string | null; variant: string | null }; tokens: Record<string, number | 'unknown'>; reported_cost: number | 'unknown' }
 export declare function openCodeSessionInfo(session: string | null, runBase?: string, options?: { launcher?: string; environment?: Environment; timeoutMs?: number }): { info: OpenCodeSessionInfo; failed?: undefined } | { failed: string; info?: undefined }
+
+export declare function openCodeChildSessions(session: string | null, runBase?: string, options?: { launcher?: string; environment?: Environment; timeoutMs?: number }): { children: string[]; complete: boolean; reason?: string }

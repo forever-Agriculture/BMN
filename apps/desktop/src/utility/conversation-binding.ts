@@ -886,11 +886,12 @@ export function bindingFromObservation(
   }
 }
 
-/** TUI resume policy checked against OpenCode --help on 2026-09-22. */
-export const OPENCODE_RESUME_OPTIONS_CLI_VERSION = '1.18.31'
+/** TUI flags measured on OpenCode 2.0.29 and 2.0.32; legacy selectors remain supported. */
+export const OPENCODE_RESUME_OPTIONS_CLI_VERSION = '2.0.32'
 const OPENCODE_RESUME_OPTIONS: ReadonlySet<string> = new Set([
-  '--model', '-m', '--agent', '--port', '--hostname'
+  '--model', '-m', '--agent', '--port', '--hostname', '--server'
 ])
+const OPENCODE_RESUME_FLAGS: ReadonlySet<string> = new Set(['--standalone', '--auto'])
 
 interface OpenCodeResumeArguments extends CodexResumeArguments {
   projectPath?: string
@@ -900,10 +901,6 @@ export function opencodeResumeArguments(argv: readonly string[]): OpenCodeResume
   const result: OpenCodeResumeArguments = { carried: [], droppedOptions: [], droppedPositionals: 0 }
   const droppedValues = new Set([
     '--session', '-s', '--prompt', '--log-level', '--mdns-domain', '--cors', '--replay-limit'
-  ])
-  const droppedBooleans = new Set([
-    '--continue', '-c', '--fork', '--auto', '--help', '-h', '--version', '-v',
-    '--print-logs', '--pure', '--mdns', '--mini', '--no-replay'
   ])
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]!
@@ -922,7 +919,8 @@ export function opencodeResumeArguments(argv: readonly string[]): OpenCodeResume
     const equals = token.indexOf('=')
     const name = equals < 0 ? token : token.slice(0, equals)
     const next = argv[index + 1]
-    if (OPENCODE_RESUME_OPTIONS.has(name)) {
+    if (OPENCODE_RESUME_FLAGS.has(token)) result.carried.push(token)
+    else if (OPENCODE_RESUME_OPTIONS.has(name)) {
       if (equals >= 0 && token.slice(equals + 1).length > 0) result.carried.push(token)
       else if (equals < 0 && next !== undefined && !next.startsWith('-')) {
         result.carried.push(token, next)
@@ -930,10 +928,9 @@ export function opencodeResumeArguments(argv: readonly string[]): OpenCodeResume
       } else result.droppedOptions.push(name)
     } else {
       result.droppedOptions.push(name)
-      // Consume unknown values conservatively: never mistake them for a project directory.
-      if (equals < 0 && !droppedBooleans.has(name) && next !== undefined && !next.startsWith('-')) {
+      // Only known value options own the next argument; an unknown flag must not swallow cwd.
+      if (equals < 0 && droppedValues.has(name) && next !== undefined && !next.startsWith('-')) {
         index += 1
-        if (!droppedValues.has(name)) result.droppedPositionals += 1
       }
     }
   }

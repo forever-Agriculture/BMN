@@ -11,7 +11,7 @@ export { NEXT_STEP, Refusal, firstLine, listDirectory, namesWebTool, optionalNam
  * Health carry beside the version. The destination itself is resolved and checked at every
  * dispatch, and for OpenCode at every inspection.
  */
-export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'], opencode: ['2.0.28', '2.0.29'] }
+export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'], opencode: ['2.0.28', '2.0.29', '2.0.32'] }
 /**
  * Codex versions on which a test showed that `exec resume` talks to the destination the current
  * configuration resolves, not one saved with the session (60.3 AC8). A resume on any other

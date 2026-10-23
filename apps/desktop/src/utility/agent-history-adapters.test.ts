@@ -151,6 +151,21 @@ describe('Codex history adapter', () => {
 })
 
 describe('OpenCode history adapter', () => {
+  it.each(['relative', 'absolute'])('Epic 85: reads the %s OPENCODE_DB instead of the default store', async kind => {
+    const home = await root(), bin = join(home, 'bin')
+    await fakeOpenCode(bin, 'opencode v2.0.32')
+    await openCodeStore(home)
+    const selected = join(home, '.local/share/opencode/selected.db')
+    const database = new BetterSqlite3(selected)
+    database.exec('CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, time_updated INTEGER)')
+    database.prepare('INSERT INTO session_v2 VALUES (?, NULL, ?)').run(OPENCODE_IDS[0], NOW - 40 * DAY)
+    openStores.push(database)
+    const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin, OPENCODE_DB: kind === 'relative' ? 'selected.db' : selected } })
+    const look = await adapter.available()
+    expect(look).toMatchObject({ ok: true, sessions: 1 })
+    expect(await adapter.candidates(NOW - 30 * DAY, passOf(look))).toEqual([{ id: OPENCODE_IDS[0], updatedAt: NOW - 40 * DAY }])
+  })
+
   it('reads sessions across every project and removes with `opencode session delete <id> --pure`', async () => {
     const home = await root()
     const bin = join(home, 'bin')

@@ -1,3 +1,4 @@
+// MODULE: conversation-binding.test.ts - Native conversation identity and safe resume arguments
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
@@ -650,7 +651,7 @@ describe('conversation identity reported by the harness SessionStart hook', () =
   })
 })
 
-describe('OpenCode 1.18.31 conversation binding', () => {
+describe('OpenCode conversation binding', () => {
   // One real id read locally and confirmed by `opencode export` on 2026-09-22.
   const reference = 'ses_0123456789abSyntheticTest0'
   const context = {
@@ -662,6 +663,21 @@ describe('OpenCode 1.18.31 conversation binding', () => {
     captureRoute: 'hook-session-start', launchContext: context, detail: 'Reported by OpenCode', capturedAt
   }
 
+  it.each([
+    { flags: ['--server', 'http://127.0.0.1:4321', '--auto'] },
+    { flags: ['--standalone', '--auto'] }
+  ])('Epic 85: preserves the OpenCode 2 server and mode flags $flags', ({ flags }) => {
+    const launch = buildNativeResumeLaunch({ ...bound, launchContext: { ...context, argv: [...flags, '-c', '/project'] } })
+    expect(launch.cwd).toBe('/project')
+    expect(launch.argv).toEqual(['--session', reference, ...flags])
+  })
+
+  it('Epic 85: does not consume the project after an unknown OpenCode flag', () => {
+    const launch = buildNativeResumeLaunch({ ...bound, launchContext: { ...context, argv: ['--future-flag', '/project'] } })
+    expect(launch.cwd).toBe('/project')
+    expect(launch.argv).toEqual(['--session', reference])
+  })
+
   it('classifies direct launches and waits for the hook without probing Claude', async () => {
     expect(agentCli('/bin/opencode')).toBe('opencode')
     const capability = vi.fn(supportedCapability)
@@ -672,7 +688,7 @@ describe('OpenCode 1.18.31 conversation binding', () => {
   })
 
   it('pins the observed case-sensitive id grammar independently from UUIDs', () => {
-    expect(OPENCODE_RESUME_OPTIONS_CLI_VERSION).toBe('1.18.31')
+    expect(OPENCODE_RESUME_OPTIONS_CLI_VERSION).toBe('2.0.32')
     expect(isConversationReference('opencode', reference)).toBe(true)
     expect(isConversationReference('opencode', conversationId)).toBe(false)
     expect(isConversationReference('claude', reference)).toBe(false)
@@ -699,7 +715,7 @@ describe('OpenCode 1.18.31 conversation binding', () => {
   })
 
   it('drops malformed options without swallowing selectors and retains the project as cwd', () => {
-    expect(opencodeResumeArguments(['--model', '--fork', '--agent=', '--unknown', 'value', '/project'])).toEqual({
+    expect(opencodeResumeArguments(['--model', '--fork', '--agent=', '--unknown', '/project', 'value'])).toEqual({
       carried: [], droppedOptions: ['--model', '--fork', '--agent', '--unknown'], droppedPositionals: 1, projectPath: '/project'
     })
     expect(buildNativeResumeLaunch({ ...bound, launchContext: { ...context, argv: ['--', '/other'] } }).cwd).toBe('/other')

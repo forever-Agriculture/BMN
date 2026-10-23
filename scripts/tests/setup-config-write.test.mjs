@@ -84,3 +84,26 @@ describe('setup shared-config preservation', () => {
     assertSetupConfigRecovery(stored(), path)
   })
 })
+
+describe('Epic 85 guarded absence publication', () => {
+  for (const seam of ['afterHold', 'afterCommit']) it(`retains the installed file and blocks restart after ${seam}`, () => {
+    manifest.kind = 'setup-tool'; manifest.setup.target = { app: 'opencode', path }
+    writeFileSync(path, 'synthetic installed config')
+    assert.throws(() => withDefaultsAdmission(() => replaceSetupConfig(path, pathState(path), null, {
+      manifest, folder, key: 'configUndo', [seam]: () => { throw new Error('synthetic interruption') }
+    })), error => { assert.equal(error.recovery.physicalPublication, 'reported'); return true })
+    const state = stored(); assert.equal(state.setup.configUndo.stagedPath, null)
+    assert.equal(readFileSync(state.setup.configUndoHolding.holdingPath, 'utf8'), 'synthetic installed config')
+    assert(!existsSync(path)); assert.throws(() => assertSetupConfigRecovery(state, path), /inspection/)
+  })
+  it('preserves a foreign recreation in the holding gap', () => {
+    manifest.kind = 'setup-tool'; manifest.setup.target = { app: 'opencode', path }
+    writeFileSync(path, 'synthetic installed config')
+    assert.throws(() => withDefaultsAdmission(() => replaceSetupConfig(path, pathState(path), null, {
+      manifest, folder, key: 'configUndo', afterHold: () => writeFileSync(path, 'synthetic foreign', { flag: 'wx' })
+    })), /recreated/)
+    const state = stored(); assert.equal(readFileSync(path, 'utf8'), 'synthetic foreign')
+    assert.equal(readFileSync(state.setup.configUndoHolding.holdingPath, 'utf8'), 'synthetic installed config')
+    assert.throws(() => assertSetupConfigRecovery(state, path), /inspection/)
+  })
+})

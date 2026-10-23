@@ -79,9 +79,9 @@ describe('an OpenCode teammate\'s ask, before it starts (72.5, 72.9)', () => {
     const folder = join(home, '.config/bmn/agents/state/opencode')
     expect(variables.get('HOME')).toBe(join(folder, 'home'))
     expect(variables.get('XDG_DATA_HOME')).toBe(join(folder, 'data'))
-    const agents = JSON.parse(variables.get('OPENCODE_CONFIG_CONTENT')!).agent
+    const agents = JSON.parse(variables.get('OPENCODE_CONFIG_CONTENT')!).agents
     expect(Object.keys(agents)).toEqual(['bmn-ask-asker'])
-    expect(agents['bmn-ask-asker'].permission).toEqual({ '*': 'deny' })
+    expect(agents['bmn-ask-asker'].permissions).toEqual([{ action: '*', resource: '*', effect: 'deny' }])
     expect(variables.get('PATH')).not.toContain(join(prepared.folder, 'bin'))
     expect(existsSync(join(prepared.folder, 'inputs/rules.md'))).toBe(false)
     expect(existsSync(join(prepared.folder, 'bin/git'))).toBe(false)
@@ -95,22 +95,23 @@ describe('an OpenCode teammate\'s ask, before it starts (72.5, 72.9)', () => {
     const root = projectRoot()
     const prepared = ask({ data: undefined, project: root })
     expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
-    expect(prepared.verdict.receipt).toMatchObject({ form: 'opencode-reader', reads: { scope: 'computer' }, cwd: root, project: root })
+    expect(prepared.verdict.receipt).toMatchObject({ form: 'opencode-reader', reads: { scope: 'folder' }, cwd: root, project: root })
     const { variables, command } = split(prepared.argv)
     expect(command).toEqual(expect.arrayContaining(['--agent', 'bmn-ask-reader']))
     expect(variables.get('PATH')).toMatch(new RegExp(`^${prepared.folder}/bin:`, 'u'))
-    const agents = JSON.parse(variables.get('OPENCODE_CONFIG_CONTENT')!).agent
+    const agents = JSON.parse(variables.get('OPENCODE_CONFIG_CONTENT')!).agents
     expect(Object.keys(agents).sort()).toEqual(['bmn-ask-reader', 'bmn-reader'])
-    expect(agents['bmn-ask-reader'].prompt).toContain('RULES-SENTINEL')
-    expect(agents['bmn-ask-reader'].prompt).not.toContain('PRIVATE-RULES-SENTINEL')
-    // OpenCode matches a command's whole text, and splits chains but not redirections: every redirection is denied (72.9 AC1).
-    expect(agents['bmn-ask-reader'].permission).toMatchObject({ '*': 'deny', read: 'allow', edit: 'deny', webfetch: 'deny', bash: { '*': 'deny', 'git log*': 'allow', '*>*': 'deny' }, task: { '*': 'deny', 'bmn-reader': 'allow' } })
-    expect(agents['bmn-reader'].permission).toMatchObject({ task: 'deny' })
+    expect(agents['bmn-ask-reader'].system).toContain('RULES-SENTINEL')
+    expect(agents['bmn-ask-reader'].system).not.toContain('PRIVATE-RULES-SENTINEL')
+    const actions = ['bmn_read', 'bmn_glob', 'bmn_grep', 'bmn_git', 'websearch', 'bmn_subagent']
+    expect(agents['bmn-ask-reader'].permissions).toEqual([{ action: '*', resource: '*', effect: 'deny' },
+      ...actions.map(action => ({ action, resource: '*', effect: 'allow' }))])
+    expect(agents['bmn-reader'].permissions).toEqual(agents['bmn-ask-reader'].permissions.filter((rule: { action: string }) => rule.action !== 'bmn_subagent'))
     expect(readFileSync(join(prepared.folder, 'inputs/rules.md'), 'utf8')).toContain('RULES-SENTINEL')
     // A private ask with no project gets the rules, and every action denied.
     const plain = ask({ data: undefined })
     expect(plain.verdict.receipt).toMatchObject({ form: 'opencode-asker', cwd: join(plain.folder, 'work') })
-    expect(JSON.parse(split(plain.argv).variables.get('OPENCODE_CONFIG_CONTENT')!).agent['bmn-ask-asker'].prompt).toContain('RULES-SENTINEL')
+    expect(JSON.parse(split(plain.argv).variables.get('OPENCODE_CONFIG_CONTENT')!).agents['bmn-ask-asker'].system).toContain('RULES-SENTINEL')
   })
 
   it('a private ask to a public-only provider is refused before anything is written (AC1)', () => {
@@ -122,7 +123,7 @@ describe('an OpenCode teammate\'s ask, before it starts (72.5, 72.9)', () => {
     stubOpenCode(stubs, '2.1.0')
     const prepared = ask()
     expect(prepared.verdict.verdict).toBe('PASS')
-    expect(prepared.verdict.receipt).toMatchObject({ harness_version: { version: '2.1.0', form_checked_on: { version: '2.0.29' } } })
+    expect(prepared.verdict.receipt).toMatchObject({ harness_version: { version: '2.1.0', form_checked_on: { version: '2.0.32' } } })
   })
 
   it('without a sign-in in BMN\'s folder the teammate is passed over with the reason (AC1)', () => {
@@ -134,7 +135,7 @@ describe('an OpenCode teammate\'s ask, before it starts (72.5, 72.9)', () => {
     const prepared = ask()
     const judge = (argv: string[]) => evaluateAsk({ agent: 'luna-go', role: 'helper', effort: 'high', data: 'public', run: prepared.folder, argv, cwd: prepared.cwd }, { environment: env, program: prepared.program })
     expect(judge(prepared.argv.map((value) => (value === 'bmn-ask-asker' ? 'bmn-helper' : value)))).toMatchObject({ verdict: 'REFUSED' })
-    const wider = prepared.argv.map((value) => (value.startsWith('OPENCODE_CONFIG_CONTENT=') ? `OPENCODE_CONFIG_CONTENT=${JSON.stringify({ agent: { 'bmn-ask-asker': { permission: { '*': 'allow' } } } })}` : value))
+    const wider = prepared.argv.map((value) => (value.startsWith('OPENCODE_CONFIG_CONTENT=') ? `OPENCODE_CONFIG_CONTENT=${JSON.stringify({ agents: { 'bmn-ask-asker': { permissions: [{ action: '*', resource: '*', effect: 'allow' }] } } })}` : value))
     expect(judge(wider)).toMatchObject({ verdict: 'REFUSED' })
   })
 })
@@ -224,4 +225,17 @@ describe.skipIf(!SCOPES)('an OpenCode teammate\'s ask, run (72.5, 72.9)', { time
     expect(first.observed.session).toBe(`ses_${hash('First?')}AAAAAAAAAAAAAA`)
     expect(second.observed.session).toBe(`ses_${hash('Second?')}AAAAAAAAAAAAAA`)
   })
+})
+
+it.skipIf(!SCOPES)('Epic 85: records a broker child through finishAsk once with complete parent-linked usage', { timeout: 30_000 }, async () => {
+  approve(home, PRIVATE_TEAM)
+  const root = projectRoot(), prepared = ask({ data: undefined, project: root, question: 'BROKER TWICE' })
+  startAsk(prepared, { timeLimitMinutes: 1 })
+  const result = await waitAsk(prepared.folder, { timeoutMs: 20_000 })
+  expect(result).toMatchObject({ state: 'answered', usage: { input_tokens: 90, output_tokens: 28, complete: true },
+    subagents: [{ parent: result.observed.session, role: 'bmn-reader', usage: { input_tokens: 30 } }] })
+  expect(result.subagents).toHaveLength(1)
+  const record = JSON.parse(readFileSync(join(prepared.folder, 'session-info.json'), 'utf8'))
+  expect(record.discovery.complete).toBe(true)
+  expect(record.subagents).toHaveLength(1)
 })

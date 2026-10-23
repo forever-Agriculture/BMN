@@ -1,6 +1,6 @@
 // MODULE: agents-tools.test.ts - Story 60.12: one list of MCP tools for every app, over a synthetic team, synthetic settings files in a temporary home and stub apps; no real app is started
 import { execFile } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,17 +10,28 @@ import { parseRoster, rewriteRoster, type RosterTool } from '../../bin/agents-ro
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import {
-  appStateWord, appTools, checkExit, checkRunTools, checkTools, claudeRunSeen, installTools, looksSecret, maskedEntry, neutralOf, pendingCounts, plainArgument, planToolsInstall, proposeTools,
-  readAppTools, renderTool, runTools, testTools, toolItems, toolsAutoPlan, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, type ToolState, type ToolsTestEntry
+  appStateWord, appTools, checkExit, checkRunTools, checkTools, claudeRunSeen, installTools as candidateInstall, looksSecret, maskedEntry, neutralOf, pendingCounts, plainArgument, planToolsInstall, proposeTools,
+  readAppTools as candidateRead, renderTool, restoreToolsTransaction as candidateRestore, runTools, testTools as candidateTest, toolItems, toolsAutoPlan, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, writeSetupToolEntry as candidateWrite, type ToolState, type ToolsTestEntry
 } from '../../bin/agents-tools.mjs'
+import { withDefaultsAdmission } from '../../bin/defaults-admission.mjs'
+import { replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { approveRoster } from '../main/agents-approval'
+import { autoTestId, createAutoTests, type AutoTestTry } from '../main/auto-tests'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
+const baselineTools = process.env.BMN_TOOLS_SOURCE_FILE ? await import(process.env.BMN_TOOLS_SOURCE_FILE) : null
+const readAppTools: typeof candidateRead = baselineTools?.readAppTools ?? candidateRead
+const installTools: typeof candidateInstall = baselineTools?.installTools ?? candidateInstall
+const testTools: typeof candidateTest = baselineTools?.testTools ?? candidateTest
+const restoreToolsTransaction: typeof candidateRestore = baselineTools?.restoreToolsTransaction ?? candidateRestore
+const writeToolEntry: typeof candidateWrite = baselineTools?.writeSetupToolEntry ?? candidateWrite
+const toolAdmission: typeof withDefaultsAdmission = process.env.BMN_TOOLS_SOURCE_FILE
+  ? (await import(process.env.BMN_TOOLS_SOURCE_FILE.replace(/agents-tools\.mjs$/, 'defaults-admission.mjs'))).withDefaultsAdmission : withDefaultsAdmission
 const NOW = new Date('2026-10-10T12:00:00.000Z')
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
-const OPENCODE = '1.18.31'
+const OPENCODE = '2.0.29'
 const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE }
 /** A value only an app's own entry holds: no plan, result, record or team file may carry it. */
 const SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
@@ -70,7 +81,7 @@ function approve(text: string): void {
  * its settings for the folder and in the folder's `.mcp.json`. `leaky` is an app whose run keeps
  * the settings' tools whatever it is told, `leakyFolder` one that keeps the folder's.
  */
-function app(name: string, version: string, { reads = true, starts = false, leaky = false, signIn = false, folders = false, leakyFolder = false, listFails = false } = {}): void {
+function app(name: string, version: string, { reads = true, starts = false, leaky = false, signIn = false, folders = false, leakyFolder = false, listFails = false, serverMode = 'ok', emptyPolls = 0 } = {}): void {
   const kind = name
   writeFileSync(join(stubs, name), `#!${process.execPath}
 const fs = require('fs'); const cp = require('child_process'); const path = require('path')
@@ -79,7 +90,7 @@ if (argv[0] === '--version') { console.log('${name} ${version}'); process.exit(0
 fs.appendFileSync(${JSON.stringify(join(home, `calls-${name}.log`))}, JSON.stringify({ argv, env: Object.keys(process.env).sort(), home: process.env.HOME }) + '\\n')
 if (${signIn}) { console.error('Please sign in'); process.exit(1) }
 const HOME = process.env.HOME
-const file = { claude: HOME + '/.claude.json', codex: HOME + '/.codex/config.toml', opencode: HOME + '/.config/opencode/opencode.jsonc' }['${kind}']
+const file = { claude: HOME + '/.claude.json', codex: HOME + '/.codex/config.toml', opencode: HOME + '/.config/opencode/' + (fs.existsSync(HOME + '/.config/opencode/opencode.json') ? 'opencode.json' : 'opencode.jsonc') }['${kind}']
 const text = (() => { try { return fs.readFileSync(file, 'utf8') } catch { return '' } })()
 const fromEnv = (value) => String(value).replace(/\\$\\{(?:env:)?(\\w+)\\}|\\{env:(\\w+)\\}/g, (_all, a, b) => process.env[a || b] || '')
 let servers = {}
@@ -89,7 +100,7 @@ if ('${kind}' === 'codex') {
     servers[id[1]] = { command: (/^command = "(.*)"$/m.exec(block) || [])[1], vars: JSON.parse((/^env_vars = (\\[.*\\])$/m.exec(block) || [null, '[]'])[1]) }
   }
 } else if (text.trim() !== '') {
-  const data = JSON.parse(text); const held = '${kind}' === 'opencode' ? data.mcp : data.mcpServers
+  const data = JSON.parse(text); const held = '${kind}' === 'opencode' ? { ...Object.fromEntries(Object.entries(data.mcp || {}).filter(([key]) => !['servers','timeout'].includes(key))), ...(data.mcp?.servers || {}) } : data.mcpServers
   for (const [id, entry] of Object.entries(held || {})) servers[id] = entry
 }
 if (!${reads}) servers = {}
@@ -100,6 +111,34 @@ if (${folders}) {
     else if ('${kind}' === 'claude') inFolder = JSON.parse(fs.readFileSync('.mcp.json', 'utf8')).mcpServers
   } catch {}
   try { if ('${kind}' === 'claude') Object.assign(inFolder, JSON.parse(text).projects[process.cwd()].mcpServers) } catch {}
+}
+if ('${kind}' === 'opencode' && argv[0] === 'serve') {
+  fs.appendFileSync(${JSON.stringify(join(home, 'private-pids.log'))}, String(process.pid) + '\\n')
+  if ('${serverMode}' === 'never-listen') { setInterval(() => {}, 1000); return }
+  if ('${serverMode}' === 'ignore-term') process.on('SIGTERM', () => {})
+  let count = 0
+  require('http').createServer((req, res) => {
+    if (req.headers['bmn-test-password'] !== process.env.OPENCODE_PASSWORD) { res.writeHead(401); res.end(); return }
+    if ('${serverMode}' === 'api-fails') { res.writeHead(500); res.end(); return }
+    if ('${serverMode}' === 'malformed') { res.end('{invalid'); return }
+    if ('${serverMode}' === 'api-hangs') return
+    const entries = ++count <= ${emptyPolls} ? [] : Object.entries(servers)
+    if (${starts}) for (const [, entry] of entries) {
+      const command = Array.isArray(entry.command) ? entry.command : [entry.command, ...(entry.args || [])]
+      const given = Object.fromEntries(Object.entries(entry.env || entry.environment || {}).map(([key, value]) => [key, fromEnv(value)]))
+      cp.spawnSync(command[0], command.slice(1).map(fromEnv), { env: { ...process.env, ...given } })
+    }
+    res.end(JSON.stringify({ data: entries.map(([name]) => ({ name, status: { status: 'connected' } })) }))
+  }).listen(0, '127.0.0.1', function () { console.log('server listening on http://127.0.0.1:' + this.address().port) })
+  return
+}
+if ('${kind}' === 'opencode' && argv[0] === 'api') {
+  if (argv[1] !== '--server' || argv[3] !== 'mcp.list') process.exit(9)
+  fetch(argv[2] + '/mcp', { headers: { 'bmn-test-password': process.env.OPENCODE_PASSWORD } }).then(async response => {
+    if (!response.ok) process.exit(3)
+    process.stdout.write(await response.text())
+  }).catch(() => process.exit(4))
+  return
 }
 const sub = argv.indexOf('mcp')
 if (argv.includes('-p')) {
@@ -154,7 +193,7 @@ process.exit(4)
 }
 
 const passed = (harness: string, version: string, fields: Partial<ToolsTestEntry> = {}): ToolsTestEntry =>
-  ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_signs: ['start-line', 'tool-start'], isolation_covers: ['settings', 'local', 'folder'], isolation_empty: 'pass', own_command: 'pass', detail: 'synthetic', ...fields }) as ToolsTestEntry
+  ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_signs: ['start-line', 'tool-start'], isolation_covers: ['settings', 'local', 'folder'], isolation_empty: 'pass', own_command: 'pass', detail: 'synthetic', ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {}), ...fields }) as ToolsTestEntry
 
 /** Records a test as the owner's test would. */
 function tested(harness: string, version: string, fields: Partial<ToolsTestEntry> = {}): ToolsTestEntry {
@@ -166,7 +205,7 @@ function tested(harness: string, version: string, fields: Partial<ToolsTestEntry
 
 const claudeFile = (): string => join(home, '.claude.json')
 const codexFile = (): string => join(home, '.codex/config.toml')
-const opencodeFile = (): string => join(home, '.config/opencode/opencode.jsonc')
+const opencodeFile = (): string => join(home, '.config/opencode/opencode.json')
 const put = (path: string, text: string): void => {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, text, { mode: 0o600 })
@@ -292,7 +331,7 @@ describe('what the owner\'s test proved for a version (60.12 AC1)', () => {
   })
 
   it('names for BMN\'s own run every app at a version no test settled: a first install, an update, or one that showed nothing (Story 75.8 AC1)', () => {
-    const test = (harness: string, version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): ToolsTestEntry => ({ harness, at: '2026-10-16T12:00:00.000Z', version, outcome, detail: 'synthetic' } as ToolsTestEntry)
+    const test = (harness: string, version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): ToolsTestEntry => ({ harness, at: '2026-10-16T12:00:00.000Z', version, outcome, detail: 'synthetic', ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {}) } as ToolsTestEntry)
     const versions = { claude: '2.1.300', codex: '0.162.0', opencode: '2.0.29' }
     const plan = (tests: ToolsTestEntry[], at: Record<string, string | null> = versions) => toolsAutoPlan({ versions: at, tests }).map((one) => [one.harness, one.version, one.reason])
     expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'untested']])
@@ -523,6 +562,295 @@ describe('one state per app and per tool (60.12 AC4)', () => {
   })
 })
 
+describe('OpenCode 2 layout and entry undo (85.2)', () => {
+  const owned = 'owned: {name: Owned, command: owned-tool, public: true}'
+  const jsonc = (): string => join(home, '.config/opencode/opencode.jsonc')
+  const saved = (transaction: string) => {
+    const folder = join(home, '.config/bmn/agents/state/rules/transactions', transaction), path = join(folder, 'manifest.json')
+    return { folder, path, manifest: JSON.parse(readFileSync(path, 'utf8')) as {
+      targets: Array<{ harness: string; tool: string; path: string; at: string[]; prior: string | null; edit_receipt: { at: string[]; edit: { edits: Array<{ start: number }> } }; undoStarted?: boolean; undone?: boolean; undo_file_missing?: boolean; undo_file_witness?: unknown }>
+    } }
+  }
+  beforeEach(() => { approve(withTools([owned])) })
+
+  it.each(['legacy', 'native'])('preserves %s disabled state while replacing and undoing an entry', async layout => {
+    const file = layout === 'legacy' ? jsonc() : opencodeFile()
+    const entry = { type: 'local', command: ['old-tool'], ...(layout === 'legacy' ? { enabled: false } : { disabled: true }) }
+    const prior = JSON.stringify({ mcp: layout === 'legacy' ? { owned: entry } : { servers: { owned: entry } } }, null, 2) + '\n'
+    put(file, prior)
+    const installed = await install(['opencode'])
+    expect(installed.code).toBe('OK')
+    const after = readAppTools('opencode', env).entries.get('owned')!.value!
+    expect(after.command).toEqual(['owned-tool'])
+    expect(after).toMatchObject(layout === 'legacy' ? { enabled: false } : { disabled: true })
+    if (layout === 'native') expect(after).not.toHaveProperty('enabled')
+    expect((await restoreTransaction(installed.transaction!, { yes: true })).code).toBe('OK')
+    expect(readFileSync(file, 'utf8')).toBe(prior)
+  })
+
+  it('new native entries omit the ignored legacy enabled setting', async () => {
+    const installed = await install(['opencode'])
+    expect(installed.code).toBe('OK')
+    expect(readAppTools('opencode', env).entries.get('owned')!.value).toEqual({ type: 'local', command: ['owned-tool'] })
+  })
+
+  it('lists both layouts once and skips timeout through the public reader', () => {
+    put(jsonc(), '{"mcp":{"legacy":{"type":"local","command":["a"]},"timeout":5,"servers":{"native":{"type":"local","command":["b"]}}}}')
+    const file = readAppTools('opencode', env)
+    expect(file.readable).toBe(true)
+    expect([...file.entries.keys()]).toEqual(['legacy', 'native'])
+    expect(file.entries.get('native')?.at).toEqual(['mcp', 'servers'])
+  })
+
+  it('chooses the native json filename when neither config exists', () => {
+    expect(readAppTools('opencode', env).path).toBe(opencodeFile())
+  })
+
+  it.each(['missing', 'empty'])('restores %s original config path state', async original => {
+    if (original === 'empty') put(opencodeFile(), '')
+    const installed = await install(['opencode'])
+    expect(installed.code).toBe('OK')
+    expect(existsSync(opencodeFile())).toBe(true)
+    const state = saved(installed.transaction!)
+    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(existsSync(opencodeFile())).toBe(original === 'empty')
+    if (original === 'empty') expect(readFileSync(opencodeFile(), 'utf8')).toBe('')
+  })
+
+  it('keeps a created config when unrelated bytes change before undo removal', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => {
+      put(opencodeFile(), readFileSync(opencodeFile(), 'utf8').replace('{', '{"unrelated":"kept",'))
+    } })).toMatchObject({ code: 'OK' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toContain('"unrelated":"kept"')
+    expect(readAppTools('opencode', env).entries.size).toBe(0)
+    expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_missing).toBe(false)
+    expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_witness).toBeNull()
+  })
+
+  it.each(['file', 'parent', 'hardlink'])('refuses a created config %s change before undo removal', async change => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    const before = readFileSync(opencodeFile(), 'utf8')
+    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => {
+      if (change === 'file') { put(`${opencodeFile()}.replacement`, before); renameSync(`${opencodeFile()}.replacement`, opencodeFile()) }
+      else if (change === 'parent') { renameSync(join(home, '.config/opencode'), join(home, '.config/opencode-kept')); put(opencodeFile(), before) }
+      else linkSync(opencodeFile(), `${opencodeFile()}.kept-link`)
+    } })).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+  })
+
+  it('resumes an interrupted undo after the created config was removed', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+    expect(existsSync(opencodeFile())).toBe(false)
+    expect(saved(installed.transaction!).manifest.targets[0]).toMatchObject({ undoStarted: true, undo_file_missing: true })
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(existsSync(opencodeFile())).toBe(false)
+    expect(saved(installed.transaction!).manifest.targets[0]?.undone).toBe(true)
+  })
+
+  it('refuses a config recreated after interrupted absence restoration', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+    put(opencodeFile(), '')
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe('')
+  })
+
+  it('refuses exact-postimage recreation after interrupted removal without rebinding its witness', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    const before = readFileSync(opencodeFile(), 'utf8'), fd = openSync(opencodeFile(), 'r')
+    try {
+      await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+      expect(existsSync(opencodeFile())).toBe(false)
+      const witness = saved(installed.transaction!).manifest.targets[0]?.undo_file_witness
+      put(opencodeFile(), before)
+      const resume = saved(installed.transaction!)
+      expect(await restoreToolsTransaction(resume.manifest, resume.folder, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
+      expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+      expect(saved(installed.transaction!).manifest.targets[0]?.undone).not.toBe(true)
+      expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_witness).toEqual(witness)
+    } finally { closeSync(fd) }
+  })
+
+  it('resumes pending removal after a journal-before-unlink interruption', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+    expect(existsSync(opencodeFile())).toBe(true)
+    const witness = saved(installed.transaction!).manifest.targets[0]?.undo_file_witness
+    expect(witness).toMatchObject({ version: 1, file: { ctimeNs: expect.stringMatching(/^\d+$/) } })
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(existsSync(opencodeFile())).toBe(false)
+    expect(saved(installed.transaction!).manifest.targets[0]?.undone).toBe(true)
+  })
+
+  it('refuses a pending removal after an identical file replacement', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    const before = readFileSync(opencodeFile(), 'utf8')
+    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+    put(`${opencodeFile()}.replacement`, before); renameSync(`${opencodeFile()}.replacement`, opencodeFile())
+    const witness = saved(installed.transaction!).manifest.targets[0]?.undo_file_witness
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+    expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_witness).toEqual(witness)
+  })
+
+  it.each(['missing', 'malformed', 'path', 'text'])('refuses a present pending removal with a %s witness and resumes only once absent', async fault => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    const before = readFileSync(opencodeFile(), 'utf8')
+    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+    const kept = saved(installed.transaction!), target = kept.manifest.targets[0]!
+    if (fault === 'missing') delete target.undo_file_witness
+    else if (fault === 'malformed') target.undo_file_witness = { version: 1 }
+    else target.undo_file_witness = { ...(target.undo_file_witness as Record<string, unknown>), [fault]: fault === 'path' ? `${opencodeFile()}.other` : '0'.repeat(64) }
+    writeFileSync(kept.path, JSON.stringify(kept.manifest))
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+    rmSync(opencodeFile())
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(existsSync(opencodeFile())).toBe(false)
+  })
+
+  it('requires native-layout evidence before old capability records authorize writes', () => {
+    const old = passed('opencode', OPENCODE)
+    delete old.entry_layout
+    expect(appTools('opencode', { version: OPENCODE, tests: [old] }).supported).toBe(false)
+    expect(toolsAutoPlan({ versions: { opencode: OPENCODE }, tests: [old] })).toMatchObject([{ harness: 'opencode', reason: 'untested' }])
+  })
+
+  it('keeps private comments live and absent from records, with byte-exact commented undo', async () => {
+    const before = `{\n "mcp": { "owned": {/* ${SECRET} */ "type":"local", "command":["old-tool"], "enabled":false } },\n "unrelated": {"token":"${SECRET}-unrelated"}\n}\n`
+    put(jsonc(), before)
+    const installed = await install(['opencode'])
+    expect(installed.code).toBe('OK')
+    expect(everythingBmnKeeps().includes(SECRET)).toBe(false)
+    expect(readFileSync(jsonc(), 'utf8').includes(SECRET)).toBe(true)
+    expect(readAppTools('opencode', env).entries.get('owned')?.value?.enabled).toBe(false)
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(readFileSync(jsonc(), 'utf8') === before).toBe(true)
+  })
+
+  it.each(['legacy', 'native'])('removes only a %s entry and undoes its exact bytes', async (layout) => {
+    approve(withTools([]))
+    const entry = '"owned": {/* SYNTHETIC-PRIVATE-COMMENT */"type":"local","command":["owned-tool"]}'
+    const before = layout === 'legacy' ? `{"mcp":{${entry},"timeout":123},"theme":2}` : `{"mcp":{"servers":{${entry}},"timeout":123},"theme":2}`
+    put(opencodeFile(), before)
+    const installed = await install(['opencode'], { removeUnlisted: true })
+    expect(installed.code).toBe('OK')
+    expect(readAppTools('opencode', env).entries.size).toBe(0)
+    expect(readFileSync(opencodeFile(), 'utf8')).toContain('SYNTHETIC-PRIVATE-COMMENT')
+    expect(everythingBmnKeeps()).not.toContain('SYNTHETIC-PRIVATE-COMMENT')
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+  })
+
+  it('reverses two canonical additions in order, preserving every original byte', async () => {
+    approve(withTools([owned, 'second: {name: Second, command: second-tool, public: true}']))
+    const before = '// SYNTHETIC-EOF-COMMENT'
+    put(opencodeFile(), before)
+    const installed = await install(['opencode'])
+    expect(installed.code).toBe('OK')
+    expect([...readAppTools('opencode', env).entries.keys()]).toEqual(['owned', 'second'])
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+  })
+
+  it('keeps unrelated edits and a new sibling instead of pruning their container', async () => {
+    put(opencodeFile(), '{"theme":"dark"}')
+    const installed = await install(['opencode'])
+    const changed = readFileSync(opencodeFile(), 'utf8').replace('"dark"', '"light"').replace('"servers": {', '"servers": {"sibling":{"type":"local","command":["sibling-tool"]},')
+    put(opencodeFile(), changed)
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect([...readAppTools('opencode', env).entries.keys()]).toEqual(['sibling'])
+    expect(readFileSync(opencodeFile(), 'utf8')).toContain('"theme":"light"')
+  })
+
+  it.each(['changed', 'moved'])('refuses an owned entry that was %s', async (change) => {
+    const installed = await install(['opencode'])
+    const data = JSON.parse(readFileSync(opencodeFile(), 'utf8'))
+    if (change === 'changed') data.mcp.servers.owned.command = ['changed-tool']
+    else data.mcp = { owned: data.mcp.servers.owned }
+    const before = JSON.stringify(data)
+    put(opencodeFile(), before)
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+  })
+
+  it('refuses duplicate IDs and both config filenames without writing a transaction', async () => {
+    const conflict = '{"mcp":{"owned":{"command":["a"]},"servers":{"owned":{"command":["b"]}}}}'
+    put(opencodeFile(), conflict)
+    expect(readAppTools('opencode', env).readable).toBe(false)
+    expect(await install(['opencode'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', transaction: null })
+    put(opencodeFile(), '{}'); put(jsonc(), '{}')
+    expect(await install(['opencode'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', transaction: null })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe('{}')
+    expect(readFileSync(jsonc(), 'utf8')).toBe('{}')
+  })
+
+  it('checks filename ambiguity again immediately before publication', async () => {
+    const installed = await install(['opencode'], { beforeCommit: () => { put(jsonc(), '{"external":true}') } })
+    expect(installed.code).toBe('INSTALL_FAILED')
+    expect(existsSync(opencodeFile())).toBe(false)
+    expect(readFileSync(jsonc(), 'utf8')).toBe('{"external":true}')
+  })
+
+  it('refuses unreadable readback instead of treating it as successful removal', () => {
+    put(jsonc(), '{"mcp":{"owned":{"type":"local","command":["owned-tool"]}}}')
+    const file = readAppTools('opencode', env), found = file.entries.get('owned')!
+    if (found.unreadable !== undefined) throw new Error('synthetic entry is unreadable')
+    let fault: unknown
+    try {
+      toolAdmission(() => writeToolEntry('opencode', jsonc(), 'owned', { hash: found.hash,
+        text: found.text_hash, ...(file.directory === undefined ? {} : { directory: file.directory }),
+        ...(found.at === undefined ? {} : { at: found.at }) }, undefined, undefined, {
+        publish: (path, state, text, options) => { const result = replaceFileSafely(path, state, text, options); put(path, '{invalid'); return result }
+      }))
+    } catch (error) { fault = error }
+    expect(fault).toMatchObject({ code: 'READBACK_FAILED' })
+    expect(readFileSync(jsonc(), 'utf8')).toBe('{invalid')
+  })
+
+  it('recomputes exact undo after an unrelated write wins the publication race', async () => {
+    put(opencodeFile(), '{"theme":"dark"}')
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    let calls = 0
+    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => {
+      calls += 1; put(opencodeFile(), readFileSync(opencodeFile(), 'utf8').replace('"dark"', '"light"'))
+    } })).toMatchObject({ code: 'OK' })
+    expect(calls).toBe(1)
+    expect(readFileSync(opencodeFile(), 'utf8')).toContain('"theme":"light"')
+    expect(readAppTools('opencode', env).entries.size).toBe(0)
+  })
+
+  it('recovers an interrupted undo after bytes were restored and before ownership was restored', async () => {
+    const before = '{"theme":1}'
+    put(opencodeFile(), before)
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+    expect(saved(installed.transaction!).manifest.targets[0]?.undoStarted).toBe(true)
+    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(saved(installed.transaction!).manifest.targets[0]?.undone).toBe(true)
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+  })
+
+  it('refuses a forged inverse binding without changing any config bytes', async () => {
+    const installed = await install(['opencode']), state = saved(installed.transaction!)
+    const before = readFileSync(opencodeFile(), 'utf8')
+    state.manifest.targets[0]!.edit_receipt.at = ['mcp']
+    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
+    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
+  })
+
+  it('leaves unknown literal fields in place and out of the plan and records', async () => {
+    put(opencodeFile(), `{"mcp":{"owned":{"type":"local","command":["old-tool"],"unknown":"${SECRET}"}}}`)
+    const plan = await planToolsInstall(['opencode'], { environment: env, versions: VERSIONS })
+    expect(plan).toMatchObject({ code: 'OK', targets: [], blocked: [{ tool: 'owned' }] })
+    expect(JSON.stringify(toolsPlanView(plan)).includes(SECRET)).toBe(false)
+    expect(everythingBmnKeeps().includes(SECRET)).toBe(false)
+  })
+})
+
 describe('install and undo (60.12 AC4)', () => {
   it('adds each app\'s entries to a file that holds much else, and changes no other byte', async () => {
     const claudeBefore = `{\n  "numStartups": 18446744073709551615,\n  // SYNTHETIC-COMMENT\n  "projects": { "/synthetic": { "history": ["a"] } },\n  "mcpServers": {\n    "mine": { "command": "mine-tool", "env": { "MINE_KEY": "${SECRET}" } }\n  },\n  "tips": {}\n}\n`
@@ -554,7 +882,7 @@ describe('install and undo (60.12 AC4)', () => {
       '', '[mcp_servers.docs]', 'url = "https://docs.example.test/mcp"', 'env_http_headers = { Authorization = "DOCS_TOKEN" }', '',
       '[mcp_servers.files]', 'command = "files-tool"', 'args = ["--root", "/srv/files"]', 'env_vars = ["FILES_KEY"]', '', '[mcp_servers.notes]', 'command = "notes-tool"', ''
     ].join('\n'))
-    expect(JSON.parse(readFileSync(opencodeFile(), 'utf8'))).toEqual({ mcp: { docs: { type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' }, enabled: true } } })
+    expect(JSON.parse(readFileSync(opencodeFile(), 'utf8'))).toEqual({ mcp: { servers: { docs: { type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' } } } } })
     // Entries BMN did not write stay, and stay named.
     expect(appOf('claude').unlisted).toEqual([{ id: 'mine', state: 'unmanaged', managed: false, secret: true }])
     expect(checkExit(check())).toBe(0)
@@ -1362,7 +1690,7 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     expect(codex).not.toHaveProperty('isolation_basis')
     expect(calls('codex').map((call) => call.argv.join(' ').replace(/bmn-own-\w+.*/, 'bmn-own'))).toEqual(['mcp list', 'mcp add bmn-own', 'mcp remove bmn-own'])
     expect(appTools('codex', { version: CODEX })).toMatchObject({ supported: true, variable: true, isolation: false })
-    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', file: '~/.config/opencode/opencode.jsonc', variable: 'pass', variable_basis: 'started', isolation: 'unproven', own_command: 'none',
+    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', file: '~/.config/opencode/opencode.json', variable: 'pass', variable_basis: 'started', isolation: 'unproven', own_command: 'none',
       detail: expect.stringContaining(NO_RUN_TEST('OpenCode')) })
   })
 
@@ -1371,7 +1699,7 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     app('claude', CLAUDE, { starts: false })
     expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', variable: 'unproven', detail: expect.stringContaining('BMN did not see it pass an environment variable to a tool') })
     app('opencode', OPENCODE, { reads: false })
-    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: 'OpenCode did not name a tool written to ~/.config/opencode/opencode.jsonc, so it reads its tools somewhere BMN does not know' })
+    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 350 })).toMatchObject({ outcome: 'inconclusive', detail: 'opencode did not finish' })
     expect(appTools('opencode', { version: OPENCODE })).toMatchObject({ supported: false })
     app('opencode', OPENCODE, { signIn: true })
     expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'opencode did not answer in a home folder without its sign-in' })
@@ -1381,6 +1709,74 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     app('codex', CODEX, { listFails: true })
     expect(await testTools('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'codex named the tool but ended with an error, so its answer proves nothing' })
     expect(appTools('codex', { version: CODEX })).toMatchObject({ supported: false })
+  })
+})
+
+describe('OpenCode 2 private tools test (85.3)', () => {
+  const calls = (): { argv: string[]; env: string[] }[] => readFileSync(join(home, 'calls-opencode.log'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  const stopped = (): void => {
+    const pids = readFileSync(join(home, 'private-pids.log'), 'utf8').trim().split('\n').map(Number)
+    expect(pids).toHaveLength(1)
+    for (const pid of pids) {
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+      expect(() => process.kill(pid, 0)).toThrow()
+      expect(() => process.kill(-pid, 0)).toThrow()
+    }
+  }
+
+  it('uses only its announced private server and confirms arguments, variables and teardown', async () => {
+    app('opencode', OPENCODE, { starts: true, emptyPolls: 2 })
+    const result = await testTools('opencode', { environment: { ...env, OPENCODE_SERVER: 'http://127.0.0.1:1',
+      OPENCODE_PASSWORD: SECRET, BMN_TOKEN: SECRET, OPENAI_API_KEY: SECRET }, now: NOW, timeoutMs: 4000 })
+    expect(result).toMatchObject({ outcome: 'pass', variable: 'pass', variable_basis: 'started', argument: 'pass', entry_layout: 'mcp.servers' })
+    const commands = calls()
+    expect(commands[0]?.argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', '0'])
+    const api = commands.slice(1)
+    expect(api.length).toBeGreaterThanOrEqual(4)
+    expect(api.every(call => call.argv.length === 4 && call.argv[0] === 'api' && call.argv[1] === '--server' && call.argv[3] === 'mcp.list')).toBe(true)
+    expect(new Set(api.map(call => call.argv[2])).size).toBe(1)
+    expect(api[0]!.argv[2]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+    expect(api[0]!.argv[2]).not.toBe('http://127.0.0.1:1')
+    expect(commands.every(call => call.env.includes('OPENCODE_PASSWORD') && call.env.includes('OPENCODE_DISABLE_PROJECT_CONFIG') &&
+      call.env.includes('OPENCODE_DISABLE_AUTOUPDATE') && call.env.includes('OPENCODE_DISABLE_MODELS_FETCH') &&
+      !call.env.includes('BMN_TOKEN') && !call.env.includes('OPENAI_API_KEY') && !call.env.includes('OPENCODE_SERVER'))).toBe(true)
+    expect(everythingBmnKeeps()).not.toContain(SECRET)
+    stopped()
+  })
+
+  it.each(['api-fails', 'malformed', 'never-listen', 'api-hangs'])('tears down its own server on %s without a default-service fallback', async serverMode => {
+    app('opencode', OPENCODE, { starts: true, serverMode })
+    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 600 })).toMatchObject({ outcome: 'inconclusive' })
+    expect(calls().every(call => call.argv[0] === 'serve' || call.argv[0] === 'api')).toBe(true)
+    stopped()
+  })
+
+  it('waits for a server that ignores TERM to exit after bounded escalation', async () => {
+    app('opencode', OPENCODE, { starts: true, serverMode: 'ignore-term' })
+    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 2000 })).toMatchObject({ outcome: 'pass', argument: 'pass', variable: 'pass' })
+    stopped()
+  })
+
+  it('refuses a connected name without the stand-in confirming its values', async () => {
+    app('opencode', OPENCODE, { starts: false })
+    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 2000 })).toMatchObject({ outcome: 'inconclusive',
+      detail: 'OpenCode named the tool, but its stand-in did not confirm both its argument and environment value' })
+    stopped()
+  })
+
+  it('gives the new method bounded tries while retaining the old exhausted retry record', async () => {
+    const old = { kind: 'tools' as const, harness: 'opencode' as const, version: OPENCODE, key: '' }
+    const oldTry: AutoTestTry = { count: 3, at: NOW.toISOString(), outcome: 'inconclusive' }
+    let tries: Record<string, AutoTestTry> = { [autoTestId(old)]: oldTry }, ran = 0
+    const plan = () => toolsAutoPlan({ versions: { opencode: OPENCODE }, tests: [] }).map(entry => ({ ...entry, kind: 'tools' as const }))
+    const entry = plan()[0]!
+    expect(autoTestId(entry)).not.toBe(autoTestId(old))
+    const tests = createAutoTests({ plan, read: () => tries, write: next => { tries = next }, tell: () => {}, now: () => NOW.getTime(),
+      test: async () => { ran += 1; return { outcome: 'pass', version: OPENCODE, detail: 'synthetic' } } })
+    await tests.trigger(); await tests.trigger()
+    expect(ran).toBe(1)
+    expect(tries[autoTestId(old)]).toEqual(oldTry)
+    expect(tries[autoTestId(entry)]).toMatchObject({ count: 1, outcome: 'pass' })
   })
 })
 

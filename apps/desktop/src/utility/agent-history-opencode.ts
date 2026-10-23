@@ -1,5 +1,6 @@
 // MODULE: agent-history-opencode.ts - OpenCode sessions for the history runner: opencode.db read-only, `opencode session delete` to remove (Story 31.2)
 import { existsSync, realpathSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { AgentHistoryAdapter, HistoryCandidate } from './agent-history'
 import {
   agentCommandEnvironment,
@@ -45,7 +46,7 @@ const OPENCODE_2: Layout = { table: 'session_v2', topLevelOnly: true, deleteFlag
  */
 export function openCodeHistoryAdapter(options: OpenCodeHistoryOptions): AgentHistoryAdapter {
   const env = options.env ?? process.env
-  const store = `${env.XDG_DATA_HOME || `${options.home}/.local/share`}/opencode/opencode.db`
+  const store = resolve(`${env.XDG_DATA_HOME || `${options.home}/.local/share`}/opencode`, env.OPENCODE_DB ?? 'opencode.db')
   const binary = (): string | null => findOnPath('opencode', env.PATH)
   const query = <T>(work: Parameters<typeof readOnlyQuery<T>>[2]): T => readOnlyQuery(options.open, store, work)
   let known: { binary: string; layout: Layout } | null = null

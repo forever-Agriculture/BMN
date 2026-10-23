@@ -1,6 +1,6 @@
 // MODULE: agents-tool-files.test.ts - Story 60.12: one MCP entry read from and changed in an app's settings text, every other byte kept; synthetic texts only
 import { describe, expect, it } from 'vitest'
-import { ToolFileError, editJsonEntry, editTomlEntry, readJsonEntries, readTomlEntries, renderTomlEntry } from '../../bin/agents-tool-files.mjs'
+import { ToolFileError, editJsonEntry, editJsonEntryWithReceipt, invertJsonEntry, editTomlEntry, readJsonEntries, readOpenCodeEntries, readTomlEntries, renderTomlEntry } from '../../bin/agents-tool-files.mjs'
 
 /** A settings file as an app keeps it: much besides the tools, comments, a trailing comma, its own indent. */
 const JSON_FILE = `{
@@ -106,6 +106,58 @@ describe('a JSON settings file (Claude Code, OpenCode)', () => {
     expect(() => readJsonEntries(twice, ['mcpServers'])).toThrow('"mcpServers" is there twice')
     expect(() => editJsonEntry(twice, ['mcpServers'], 'c', { command: 'c' })).toThrow(ToolFileError)
     expect(() => readJsonEntries('{ "projects": { "/w": {}, "/w": { "mcpServers": {} } } }', ['projects', '/w', 'mcpServers'])).toThrow('"/w" is there twice')
+  })
+})
+
+describe('OpenCode 2 entry receipts (85.2)', () => {
+  const comment = 'SYNTHETIC-COMMENT-PRIVATE-VALUE'
+  it.each([
+    ['empty file', '', ['mcp', 'servers'], { type: 'local', command: ['new'] }],
+    ['EOF comment', `// ${comment}`, ['mcp', 'servers'], { type: 'local', command: ['new'] }],
+    ['commented container', `{"mcp":{"servers":{/* ${comment} */}}}`, ['mcp', 'servers'], { type: 'local', command: ['new'] }],
+    ['commented replacement', `{"mcp":{"a":{/* ${comment} */"type":"local","command":["old"]}}}`, ['mcp'], { type: 'local', command: ['new'] }],
+    ['commented removal', `{"mcp":{"a":{/* ${comment} */"type":"local","command":["old"]}}}`, ['mcp'], undefined],
+    ['last entry and trailing comma', `{"mcp":{"servers":{"b":{"command":["b"]},/* ${comment} */}}}`, ['mcp', 'servers'], { type: 'local', command: ['new'] }]
+  ] as const)('inverts %s exactly without recording comments', (_name, before, path, value) => {
+    const change = editJsonEntryWithReceipt(before, [...path], 'a', value)
+    expect(invertJsonEntry(change.text, [...path], 'a', change.receipt)).toBe(before)
+    expect(invertJsonEntry(`${change.text} `, [...path], 'a', change.receipt)).toBeNull()
+    if (before.includes(comment)) expect(change.text.includes(comment)).toBe(true)
+    expect(JSON.stringify(change.receipt).includes(comment)).toBe(false)
+  })
+
+  it('keeps supplied raw syntax through a missing path, and reverses two entry edits', () => {
+    const before = '{"theme":1}', raw = '{ "type":"local", "command" : ["a"] }'
+    const first = editJsonEntryWithReceipt(before, ['mcp', 'servers'], 'a', undefined, { raw })
+    expect(readOpenCodeEntries(first.text).get('a')?.raw).toBe(raw)
+    const second = editJsonEntryWithReceipt(first.text, ['mcp', 'servers'], 'b', { command: ['b'] })
+    const middle = invertJsonEntry(second.text, ['mcp', 'servers'], 'b', second.receipt)!
+    expect(invertJsonEntry(middle, ['mcp', 'servers'], 'a', first.receipt)).toBe(before)
+  })
+
+  it('refuses a receipt for a sibling, malformed edits and comment-bearing payloads', () => {
+    const before = '{"mcp":{"a":{"command":["a"]},"b":{"command":["b"]}}}'
+    const change = editJsonEntryWithReceipt(before, ['mcp'], 'a', { command: ['new'] })
+    expect(() => invertJsonEntry(change.text, ['mcp'], 'b', change.receipt)).toThrow(ToolFileError)
+    expect(() => invertJsonEntry(change.text, ['mcp'], 'a', { ...change.receipt, edits: [{ start: -1, delete: '', insert: '' }] })).toThrow(ToolFileError)
+    expect(() => editJsonEntryWithReceipt(before, ['mcp'], 'a', undefined, { raw: `{/* ${comment} */"command":["new"]}` })).toThrow(ToolFileError)
+  })
+
+  it('preserves surrounding comments when the existing string API removes an entry', () => {
+    const before = `{"mcp":{"b":{"command":["b"]},/* ${comment} */"a":{"command":["a"]}}}`
+    const after = editJsonEntry(before, ['mcp'], 'a', undefined)
+    expect(after.includes(comment)).toBe(true)
+    expect([...readJsonEntries(after, ['mcp']).keys()]).toEqual(['b'])
+  })
+
+  it('reads both layouts with provenance and rejects decoded collisions before normalization', () => {
+    const before = '{"mcp":{"timeout":123,"legacy":{"command":["a"]},"servers":{"native":{"command":["b"]}}}}'
+    expect([...readOpenCodeEntries(before)].map(([id, entry]) => [id, entry.at])).toEqual([
+      ['legacy', ['mcp']], ['native', ['mcp', 'servers']]
+    ])
+    expect(() => readOpenCodeEntries(before.replace('"native":', '"legacy":'))).toThrow(ToolFileError)
+    expect(() => readOpenCodeEntries(String.raw`{"mcp":{"a":{},"servers":{"\u0061":{}}}}`)).toThrow(ToolFileError)
+    expect([...readOpenCodeEntries('{"mcp":{"servers":{"type":"local","command":["legacy"]}}}').keys()]).toEqual(['servers'])
   })
 })
 

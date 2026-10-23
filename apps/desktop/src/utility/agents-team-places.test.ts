@@ -475,7 +475,7 @@ describe('what may be asked here (72.4 AC5)', () => {
     expect(features.apps).toEqual([
       { app: 'codex', installed: true, version: '0.162.1', form_checked_on: { version: '0.162.1', on: '2026-10-15' }, forms: { project: form('codex-read-only'), 'no-project': form('codex-read-only'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: false },
       { app: 'claude', installed: true, version: '2.1.300', form_checked_on: { version: '2.1.300', on: '2026-10-15' }, forms: { project: form('claude-read-tools'), 'no-project': form('claude-read-tools'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: true },
-      { app: 'opencode', installed: false, version: null, form_checked_on: { version: '2.0.29', on: '2026-10-15' }, forms: { project: form('opencode-reader'), 'no-project': form('opencode-asker'), public: form('opencode-asker') },
+      { app: 'opencode', installed: false, version: null, form_checked_on: { version: '2.0.32', on: '2026-10-23' }, forms: { project: form('opencode-reader'), 'no-project': form('opencode-asker'), public: form('opencode-asker') },
         pictures: expect.stringMatching(/^not offered: /u), browser: expect.stringContaining('not offered: BMN adds a browser only to Codex and Claude Code'), usage_while_running: false }
     ])
     // A newer app is asked as it is: the form was last checked on another version, and that is all.
