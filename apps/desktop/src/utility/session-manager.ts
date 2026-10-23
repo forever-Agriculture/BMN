@@ -351,6 +351,8 @@ interface LiveSession extends SessionIdentity {
   outputTail: OutputTail
   /** A headless copy of the screen, only for sessions running an agent (Epic 30). */
   mirror?: ScreenMirror | undefined
+  /** The previous chunk's last bytes, so an agent's state report split between two chunks still starts the mirror. */
+  reportCarry: Uint8Array
   /** An ended setup command waits in memory for its first view, then publishes exit after its output. */
   pendingSetupExit?: (() => void) | undefined
   undeliveredOutput: TerminalFrame[]
@@ -455,12 +457,14 @@ export function buildShellEnvironment(
 }
 
 const AGENT_STATE_REPORT = Buffer.from('\x1b]7501;')
+/** Bytes read from the start of a report: its introducer and fields up to `app=…`. */
+const REPORT_WINDOW = 64
 
 /** Whether this output carries an agent's own state report (`OSC 7501;state=…:app=codex`) for an app BMN mirrors. */
 function announcesMirroredAgent(bytes: Uint8Array): boolean {
   const chunk = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   for (let at = chunk.indexOf(AGENT_STATE_REPORT); at !== -1; at = chunk.indexOf(AGENT_STATE_REPORT, at + 1)) {
-    const body = chunk.subarray(at + AGENT_STATE_REPORT.byteLength, at + 64).toString('latin1')
+    const body = chunk.subarray(at + AGENT_STATE_REPORT.byteLength, at + REPORT_WINDOW).toString('latin1')
     const ends = [body.indexOf('\x07'), body.indexOf('\x1b')].filter((end) => end !== -1)
     const fields = (ends.length > 0 ? body.slice(0, Math.min(...ends)) : body).split(/[;:]/u)
     if (fields.includes('app=codex') || fields.includes('app=claude')) return true
@@ -1519,6 +1523,7 @@ export class SessionManager {
       decsetModes: new DecsetModeTracker(),
       programCopy: new Osc52Reader(),
       outputTail: new OutputTail(),
+      reportCarry: new Uint8Array(0),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -2502,7 +2507,16 @@ export class SessionManager {
     if (session.mirror) session.mirror.write(bytes)
     // Codex reports its state on screen long before its first hook, and its start-up animation can outgrow the tail a
     // late mirror is seeded from, which then misses the prompt it drew once (Story 90.6): that report starts the mirror.
-    else if (announcesMirroredAgent(bytes)) session.mirror = new ScreenMirror(session.pty.cols, session.pty.rows, session.outputTail.read())
+    else {
+      const seam = session.reportCarry.byteLength > 0 ? Buffer.concat([session.reportCarry, bytes.subarray(0, REPORT_WINDOW)]) : null
+      if (announcesMirroredAgent(bytes) || (seam !== null && announcesMirroredAgent(seam))) {
+        session.mirror = new ScreenMirror(session.pty.cols, session.pty.rows, session.outputTail.read())
+        session.reportCarry = new Uint8Array(0)
+      } else {
+        const joined = bytes.byteLength >= REPORT_WINDOW || seam === null ? bytes : seam
+        session.reportCarry = Uint8Array.from(joined.subarray(Math.max(0, joined.byteLength - REPORT_WINDOW + 1)))
+      }
+    }
     // Neither the port watch nor a clipboard write may cost the view this chunk: a failure in one stops here.
     try {
       this.onOutput?.(session.sessionId, bytes)

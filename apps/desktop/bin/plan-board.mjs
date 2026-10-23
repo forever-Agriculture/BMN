@@ -31,7 +31,7 @@ const VISION_SECTIONS = ['Vision', 'Principles']
 const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
 /** Epics from 90 on are planned to run without asking (Epic 90, 90.2 AC5): Run needs, and each story's Owner line in order. */
 const RUN_NEEDS_FROM = 90
-const OWNER_LINE = /^\*\*Owner:\*\*\s*(none|before the go|at the end)?/iu
+const OWNER_LINE = /^\*\*Owner:\*\*\s*(?:(none|before the go|at the end)(?=[\s.,;:]|$))?/iu
 const OWNER_ORDER = ['before the go', 'none', 'at the end']
 const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }

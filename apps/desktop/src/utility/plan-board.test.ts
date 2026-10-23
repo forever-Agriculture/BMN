@@ -267,6 +267,8 @@ describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', 
     expect(found.map((finding) => finding.where)).toEqual([expect.stringMatching(/plan\/epics\/091-owned\.md:\d+$/u)])
     expect(found[0]?.reason).toBe('Story 91.1 has no **Owner:** line (none, before the go or at the end)')
     expect(await reasons(project(92, owned(92, ['sometimes'])))).toEqual(["092-owned.md: Story 92.1's **Owner:** is not none, before the go or at the end"])
+    // A valid value must end there: a longer word that starts like one is not it.
+    expect(await reasons(project(92, owned(92, ['noneTypo'])))).toEqual(["092-owned.md: Story 92.1's **Owner:** is not none, before the go or at the end"])
     expect(await reasons(project(93, owned(93, ['none', 'before the go'])))).toEqual(['093-owned.md: Story 93.2 is "before the go" after Story 93.1\'s "none": his steps go before the go or at the end'])
     expect(await reasons(project(94, owned(94, ['at the end', 'none'])))).toEqual(['094-owned.md: Story 94.2 is "none" after Story 94.1\'s "at the end": his steps go before the go or at the end'])
   })

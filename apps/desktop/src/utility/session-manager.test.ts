@@ -5741,6 +5741,17 @@ describe('screen mirror for sessions running an agent (Epic 30.2)', () => {
     expect(mirror.lines()[4]).toContain('frame 1999')
   })
 
+  it('also starts when that report arrives split between two chunks (Story 90.6)', async () => {
+    const { manager, pty, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    pty.emit('\x1b[24;1H› Ask Codex to do anything\x1b]7501;state=id')
+    pty.emit('le:app=codex\x1b\\')
+    for (let frame = 0; frame < 2000; frame += 1) pty.emit(`\x1b[5;1H${'⣿'.repeat(20)} frame ${frame}`)
+    const mirror = manager.screenMirror(created.sessionId, created.incarnationId)!
+    await mirror.settled()
+    expect(mirror.lines()[23]).toBe('› Ask Codex to do anything')
+  })
+
   it('does not start for a plain program, nor for another app\'s report', async () => {
     const { manager, pty, cwd } = await fixture()
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })

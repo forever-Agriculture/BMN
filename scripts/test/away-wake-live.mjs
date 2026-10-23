@@ -24,7 +24,7 @@ const SETTLE_MS = 40_000
 const WAKE = 'BMN wake-up (the owner is away; every 2 hours)'
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 const phase = (label) => console.error(`[BMN away wake] ${label}`)
-const report = { generatedAt: new Date().toISOString(), build: tested.build, commit: null, checks: [] }
+const report = { generatedAt: new Date().toISOString(), build: tested.build, commit: null, uncommitted: null, checks: [] }
 const check = (name, ok, detail = {}) => {
   report.checks.push({ name, result: ok ? 'PASS' : 'FAIL', ...detail })
   phase(`${ok ? 'PASS' : 'FAIL'} ${name} ${JSON.stringify(detail)}`)
@@ -32,7 +32,11 @@ const check = (name, ok, detail = {}) => {
   if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
 }
 const reportPath = tested.rest[1] ? resolve(tested.rest[1]) : null
-try { report.commit = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() } catch { /* no git */ }
+try {
+  report.commit = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
+  // The source build runs the working tree: its uncommitted files are named, so a report never passes for a clean commit.
+  report.uncommitted = execFileSync('git', ['-C', repoRoot, 'status', '--porcelain'], { encoding: 'utf8' }).split('\n').filter(Boolean)
+} catch { /* no git */ }
 mkdirSync(scratch, { recursive: true })
 const runtime = process.env.XDG_RUNTIME_DIR
 const wayland = runtime && process.env.WAYLAND_DISPLAY && !isAbsolute(process.env.WAYLAND_DISPLAY) ? join(runtime, process.env.WAYLAND_DISPLAY) : process.env.WAYLAND_DISPLAY
