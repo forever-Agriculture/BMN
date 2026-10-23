@@ -15,7 +15,7 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 9. **Architecture.** For each part, invariant, shared contract, quality target and provider the stories touch, the criteria keep it or the epic proposes the change (Truth impact names the document). An invariant a story would break, or a contract changed without its owner's consumers, is a finding. Open decisions the stories depend on are findings until decided.
 10. **Capability and proof.** For each criterion: does the real system expose what it needs (the hook event, the API field, the screen state, the permission), checked in its code, documentation or a measurement, not assumed? And can the named Verification observe it on the path the owner uses (packaged build, real app, his phone), not only in a unit test? A criterion that cannot be proved as written is a finding: add a measure-first story or change the check.
 11. **Design and rollout, when they apply.** A screen story cites an approved design and names its states and sizes ([design.md](design.md)). An epic that changes stored data, compatibility or the installed release has a Rollout section with recovery and an installed-build check.
-12. **Order and gates.** Stop gates (measure first) come first; owner-only checks are their own story; the Boundary names what is out of scope.
+12. **Order, gates and independence.** The epic depends on no unfinished epic, and its Boundary says how it stays mergeable on its own branch beside the others. Stop gates (measure first) come first; owner-only checks are their own story; the Boundary names what is out of scope.
 
 ## Verdict
 

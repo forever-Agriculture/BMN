@@ -102,7 +102,46 @@ const HELD: Array<[string, string]> = [
   ['yarn workspace pkg npm publish', 'publishing'],
   ['yarn workspaces foreach -A npm publish', 'publishing'],
   ['kill $(cat /run/user/1000/bmn.pid)', 'stopping BMN'],
-  ["sh <<<'pkill bmn'", 'stopping BMN']
+  ["sh <<<'pkill bmn'", 'stopping BMN'],
+  // Launchers and package runners the whole-text match used to hold (evaluation 2026-10-23).
+  ['systemd-run --user pkill bmn', 'stopping BMN'],
+  ['systemd-run --user --unit fixture -p MemoryMax=1G --setenv A=1 killall bmn', 'stopping BMN'],
+  ['stdbuf -oL pkill bmn', 'stopping BMN'],
+  ['stdbuf -o L git push --force origin main', 'force'],
+  ['ionice -c 3 pkill bmn', 'stopping BMN'],
+  ["env -S 'git push --force'", 'force'],
+  ["env -S'pkill bmn'", 'stopping BMN'],
+  ["env --split-string='-i git push -f origin main'", 'force'],
+  ['pnpm exec git push -f', 'force'],
+  ['pnpm --filter app exec -- pkill bmn', 'stopping BMN'],
+  ['pnpm exec npm publish', 'publishing'],
+  ['pnpm dlx --package fixture pkill bmn', 'stopping BMN'],
+  ["pnpm exec --shell-mode 'pkill bmn'", 'stopping BMN'],
+  ['npm exec -- git push --force origin main', 'force'],
+  ['npm x --yes -- pkill bmn', 'stopping BMN'],
+  ["npm exec --call='git push -f'", 'force'],
+  ['npx --yes pkill bmn', 'stopping BMN'],
+  ["npx -c 'killall bmn'", 'stopping BMN'],
+  ['yarn exec git push --force', 'force'],
+  ['yarn dlx -p fixture pkill bmn', 'stopping BMN'],
+  // Forms Astra's review found passing (2026-10-23): clustered env options, env -S escapes, shell mode before the
+  // subcommand, a separator after it, and runner options that take a value or that the list does not know.
+  ["env -iS 'pkill bmn'", 'stopping BMN'],
+  ["env -vS 'pkill bmn'", 'stopping BMN'],
+  ["env -i -S 'git push -f'", 'force'],
+  ["env -S 'pkill\\_bmn'", 'stopping BMN'],
+  ["env -S 'pkill bmn\\c ignored'", 'stopping BMN'],
+  ["pnpm --shell-mode exec 'pkill bmn'", 'stopping BMN'],
+  ["pnpm -c exec 'pkill bmn'", 'stopping BMN'],
+  ["pnpm exec --shell-mode -- 'pkill bmn'", 'stopping BMN'],
+  ['npm exec --registry https://registry.npmjs.org -- git push -f', 'force'],
+  ['npm exec --registry https://registry.npmjs.org git push -f', 'force'],
+  ['npm --registry https://registry.npmjs.org exec git push -f', 'force'],
+  ['npm exec --some-new-option value -- git push -f', 'force'],
+  ["npm --call 'pkill bmn' exec", 'stopping BMN'],
+  // More places a command may start than the guard reads: the likeliest ones are read first.
+  [`npm exec ${Array.from({ length: 20 }, (_, i) => `--opt${i} v${i}`).join(' ')} -- git push -f`, 'force'],
+  [`npx --f1 pkill ${Array.from({ length: 20 }, (_, i) => `--a${i} x${i}`).join(' ')} bmn`, 'stopping BMN']
 ]
 
 const LEFT: string[] = [
@@ -171,6 +210,18 @@ const LEFT: string[] = [
   "bash 3<<'EOF'\npkill bmn\nEOF",
   "bash <<'FIRST' <<'SECOND'\npkill bmn\nFIRST\nprintf ok\nSECOND",
   "echo 'pkill bmn' | bash < fixture.sh",
+  // A launcher's own option values and its program's string arguments stay data.
+  "systemd-run --user --description 'pkill bmn' true",
+  "stdbuf -oL printf '%s' 'pkill bmn'",
+  "env -S 'echo git push --force'",
+  'pnpm exec vitest run bmn',
+  'pnpm run exec',
+  "npx -c 'echo pkill bmn'",
+  "npm exec --package 'pkill bmn' -- fixture",
+  "env -iS 'echo pkill bmn'",
+  'env -u BMN_FIXTURE printenv',
+  'npm exec --registry https://registry.npmjs.org -- vitest run',
+  "pnpm --shell-mode exec 'echo pkill bmn'",
   ''
 ]
 

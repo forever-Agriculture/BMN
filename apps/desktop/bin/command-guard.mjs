@@ -4,8 +4,9 @@
 // closed. Its only outputs are nothing, Claude Code's `ask` (Claude's own permission prompt, measured in Story 83.1 to show in
 // default and auto mode, for an allow-listed command too, and to leave a deny standing) and Codex's block with a reason that
 // tells the agent to ask him. It never allows. The pattern list reads shell commands, not comments, string arguments or
-// heredoc data. Expansions and explicit shell code are inspected too. This is not a shell interpreter or a sandbox: encoded
-// code, arbitrary program languages and scripts read from disk are outside it; GitHub's rules are the hard guard there.
+// heredoc data. Expansions, explicit shell code and the listed wrappers and package runners are inspected too. This is not
+// a shell interpreter or a sandbox: launchers outside that list, encoded code, arbitrary program languages and scripts read
+// from disk are outside it; GitHub's rules are the hard guard there.
 
 /** The shell tool each app's PreToolUse names, as Story 83.1 measured it (Claude Code 2.1.302, codex-cli 0.162.1). */
 export const GUARDED_TOOLS = { claude: 'Bash', codex: 'Bash' }
@@ -147,33 +148,118 @@ const nameOf = (word = '') => word.slice(word.lastIndexOf('/') + 1)
 const assignments = (word) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)
 const SHELLS = /^(ba|da|z|k)?sh$/
 const WRAPPER_VALUES = {
-  env: ['-u', '--unset', '-C', '--chdir'],
+  env: ['-u', '--unset', '-C', '--chdir', '--argv0'],
   sudo: ['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-C', '--close-from', '-T', '--command-timeout', '-r', '--role', '-t', '--type'],
   command: [], builtin: [], exec: ['-a'], nohup: [], nice: ['-n', '--adjustment'], setsid: [],
   time: ['-f', '--format', '-o', '--output'], doas: ['-u', '-C'],
   timeout: ['-s', '--signal', '-k', '--kill-after'],
-  xargs: ['-n', '--max-args', '-P', '--max-procs', '-L', '--max-lines', '-I', '--replace', '-E', '--eof', '-d', '--delimiter', '-s', '--max-chars', '-a', '--arg-file']
+  xargs: ['-n', '--max-args', '-P', '--max-procs', '-L', '--max-lines', '-I', '--replace', '-E', '--eof', '-d', '--delimiter', '-s', '--max-chars', '-a', '--arg-file'],
+  stdbuf: ['-i', '--input', '-o', '--output', '-e', '--error'],
+  ionice: ['-c', '--class', '-n', '--classdata'],
+  'systemd-run': ['-u', '--unit', '-p', '--property', '--description', '--slice', '--service-type', '--uid', '--gid', '--nice',
+    '--working-directory', '-E', '--setenv', '-H', '--host', '-M', '--machine', '--on-active', '--on-boot', '--on-startup',
+    '--on-unit-active', '--on-unit-inactive', '--on-calendar', '--path-property', '--socket-property', '--timer-property']
 }
 
-/** Locate the executable behind ordinary shell wrappers, without interpreting string arguments as commands. */
-function executable(words) {
+/** npm, pnpm and yarn options that take a separate value before the subcommand. */
+const PACKAGE_VALUES = ['-w', '--workspace', '--prefix', '--registry', '--userconfig', '--filter', '-F', '-C', '--dir']
+/** The package runners' options that take a separate value: the subcommand's and the package manager's own. */
+const RUNNER_VALUES = [...PACKAGE_VALUES, '-p', '--package', '--resume-from', '--workspace-concurrency', '--allow-build', '--cache',
+  '--globalconfig', '--loglevel', '--node-options', '--script-shell', '--tag', '--otp', '--reporter', '--store-dir', '--cwd']
+/** Runner options known to take no value; any other option without `=` may take the next word. */
+const RUNNER_FLAGS = ['--yes', '-y', '--no', '--quiet', '-q', '--silent', '-s', '--recursive', '-r', '--parallel', '--workspaces',
+  '--include-workspace-root', '--offline', '--prefer-offline', '--shell-mode']
+/** At most this many places a runner's command may start, and readings of one command, the likeliest first. */
+const STARTS = 16
+const READINGS = 64
+
+const mayTakeValue = (word) => word !== undefined && word.startsWith('-') && word !== '--' && !word.includes('=') && !RUNNER_FLAGS.includes(word)
+
+/** Words of an `env -S` string as env splits them: blanks and `\_` separate, quotes group, a backslash escapes. */
+const splitString = (text) => [...text.replace(/\\_/g, ' ').matchAll(/(?:'[^']*'|"(?:\\.|[^"\\])*"|\\.|[^\s'"\\])+/g)].map(([word]) =>
+  word.replace(/'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)/g, (_, single, double, escaped) => single ?? double?.replace(/\\(.)/g, '$1') ?? escaped))
+
+/** env -S's readings: its split words, env's own options included, then the rest; with `\c` (end of string) cut there and not. */
+const splitReadings = (value, rest) => (/\\c/.test(value) ? [value.replace(/\\c[\s\S]*$/, ''), value] : [value])
+  .flatMap((text) => executables(['env', ...splitString(text), ...rest])).slice(0, READINGS)
+
+/**
+ * What npx, `npm exec` (`npm x`), `pnpm exec`, `pnpm dlx`, `yarn exec` and `yarn dlx` run: each reading of their first
+ * operand as a program, or with -c, --call or --shell-mode as a shell string; null for any other command. Options before
+ * the subcommand count as the runner's, and a word after an option of unknown arity is read both as its value and not.
+ */
+function packageRunner(list) {
+  const name = nameOf(list[0])
+  let words
+  if (name === 'npx') words = list.slice(1)
+  else if (['npm', 'pnpm', 'yarn'].includes(name)) {
+    let index = 1
+    for (; index < list.length && !/^(exec|dlx|x)$/.test(list[index]); index += 1) {
+      if (list[index] === '--' || (!list[index].startsWith('-') && !mayTakeValue(list[index - 1]))) return null
+    }
+    if (index === list.length) return null
+    words = [...list.slice(1, index), ...list.slice(index + 1)]
+  } else return null
+  // Where the command can start: the first word after the options, and each later word while the word before is an
+  // option that may take a value; after `--`, only the next word.
+  const starts = []
+  for (let index = 0; index < words.length; index += 1) {
+    if (words[index] === '--') { starts.push(index + 1); break }
+    if (words[index].startsWith('-')) continue
+    if (!RUNNER_VALUES.includes(words[index - 1])) starts.push(index)
+    if (!mayTakeValue(words[index - 1])) break
+  }
+  const options = words.slice(0, starts.length > 0 ? Math.max(...starts) : words.length)
+  const call = options.find((word) => word.startsWith('--call='))
+  if (call !== undefined) return [['sh', '-c', call.slice('--call='.length)]]
+  const shell = options.some((word) => /^(-c|--call|--shell-mode)$/.test(word))
+  // The last start (after `--`, or with every option taking a value) and the first (no option taking one) come first.
+  const likeliest = [...new Set([starts.at(-1), starts[0], ...starts.slice(1, -1)])].filter((start) => start !== undefined && start < words.length)
+  // npm's -c/--call takes the next word as the shell string; pnpm's --shell-mode joins the operands. Read both.
+  return likeliest.slice(0, STARTS).flatMap((start) => shell
+    ? [['sh', '-c', words.slice(start).join(' ')], ['sh', '-c', words[start]]]
+    : [words.slice(start)])
+}
+
+/**
+ * Every reading of the executable behind ordinary shell wrappers, without interpreting string arguments as commands.
+ * There is more than one only where an option's arity is unknown or an `env -S` string ends early; the guard holds a
+ * command when any reading holds.
+ */
+function executables(words) {
   let list = [...words]
   while (list.length > 0) {
     if (assignments(list[0]) || /^(if|then|elif|while|until|do|else|!|\{|\})$/.test(list[0])) { list.shift(); continue }
     if (list[0] === 'function') { list.splice(0, 2); continue }
     const name = nameOf(list[0])
-    if (!Object.hasOwn(WRAPPER_VALUES, name)) break
+    if (!Object.hasOwn(WRAPPER_VALUES, name)) {
+      const runs = packageRunner(list)
+      return runs === null || runs.length === 0 ? [list] : runs.flatMap(executables).slice(0, READINGS)
+    }
     list.shift()
     while (list[0]?.startsWith('-') && list[0] !== '--') {
       const option = list.shift()
-      if (name === 'command' && /^-[pVv]*[Vv][pVv]*$/.test(option)) return []
+      if (name === 'command' && /^-[pVv]*[Vv][pVv]*$/.test(option)) return [[]]
+      if (name === 'env' && /^--split-string(=|$)/.test(option)) return splitReadings(option.includes('=') ? option.slice(option.indexOf('=') + 1) : list.shift() ?? '', list)
+      if (name === 'env' && /^-[^-]/.test(option)) {
+        // A cluster of env's short options: -u, -C and -a take a value (the rest of the word, else the next word); -S
+        // splits its value into arguments.
+        const at = option.slice(1).search(/[uCaS]/) + 1
+        if (at > 0) {
+          const value = at + 1 < option.length ? option.slice(at + 1) : list.shift() ?? ''
+          if (option[at] === 'S') return splitReadings(value, list)
+        }
+        continue
+      }
       if (WRAPPER_VALUES[name].includes(option)) list.shift()
     }
     if (list[0] === '--') list.shift()
     if (name === 'timeout') list.shift() // duration
   }
-  return list
+  return [list]
 }
+
+const executable = (words) => executables(words)[0]
 
 const printfEscapes = (text) => text.replace(/\\([\\abefnrtv])/g, (_, char) => ({ '\\': '\\', a: '\x07', b: '\b', e: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' })[char])
 
@@ -277,7 +363,7 @@ function mergeHold(list) {
  */
 export function heldCommand(command, depth = 0, inheritedSelector = false) {
   if (typeof command !== 'string' || command === '') return null
-  const commands = shellCommands(command).map((entry) => ({ ...entry, words: executable(entry.words) }))
+  const commands = shellCommands(command).flatMap((entry) => executables(entry.words).map((words) => ({ ...entry, words })))
   const selectsBmn = inheritedSelector || commands.some(({ words }) => /^(pgrep|pidof|ps|grep|rg|awk|cat)$/.test(nameOf(words[0])) && words.slice(1).some((word) => /\bbmn\b/i.test(word)))
   for (const { words, input, pipe, inputFrom } of commands) {
     const [program, ...args] = words
@@ -295,7 +381,7 @@ export function heldCommand(command, depth = 0, inheritedSelector = false) {
       if (verb === 'release' && /^(create|edit|delete)$/.test(action)) return 'a release'
     }
     if (['npm', 'pnpm', 'yarn'].includes(name)) {
-      const [verb, action] = subcommand(words, ['-w', '--workspace', '--prefix', '--registry', '--userconfig', '--filter', '-F', '-C', '--dir'])
+      const [verb, action] = subcommand(words, PACKAGE_VALUES)
       if (verb === 'publish' || (name === 'yarn' && verb === 'npm' && action === 'publish')) return 'publishing a package'
       if (depth < 16 && name === 'yarn' && (verb === 'workspace' || (verb === 'workspaces' && action === 'foreach'))) {
         const nested = verb === 'workspace' ? args.slice(2) : subcommand(['foreach', ...args.slice(2)], ['--from', '--include', '--exclude', '-j', '--jobs'])
