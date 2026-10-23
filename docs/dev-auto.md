@@ -1,3 +1,4 @@
+# MODULE: dev-auto.md - run visibility, cleanup and owner-controlled worktree retirement
 # dev-auto runs
 
 Open **dev-auto runs…** in the command palette, or **Review results… → dev-auto runs…**
@@ -20,6 +21,29 @@ it while you were away, by the session and key `bmn decision record` returned, s
 identity, never by text, and only while the record is in the list. Lines without an id are legacy and
 are known only by their text; a line that kept only `(bmn: KEY)` proves no record and shows apart. dev-auto reads the away state with `bmn away --status --json`, which
 gives an agent the state, since and revision, never your note.
+
+## What a run leaves running
+
+dev-auto records each server, daemon and container it starts in its local handoff's
+`## Started` list, using a PID and its `/proc` start ticks or a full container id and
+name. Before a finished, blocked or paused report, `scripts/check.py leftovers CHECKOUT`
+in dev-auto lists live resources whose recorded identities still match as **Owned**,
+and processes or container mounts under that checkout as **Candidates**. It changes
+nothing and excludes BMN, the checker and its ancestors. Candidates need separate
+ownership confirmation; a path match alone never authorizes a stop. The lead rechecks
+identity immediately before stopping its resources and signals a process through a
+Linux pidfd, so PID reuse cannot redirect the signal. Containers use full ids. Commands
+show executables and option names, with operand values hidden. Unrecorded process
+discovery covers the current user; recorded identities are checked across user ids.
+The lead records any deliberately kept
+resource and its reason, then reruns the inventory. An incomplete scan is UNVERIFIED.
+
+`scripts/check.py worktrees CHECKOUT` lists each worktree's branch, handoff status,
+ancestry against the local default branch, uncommitted count and disk bytes. Ancestry
+does not recognize squash merges. Active, dirty, unmerged or unknown runs are marked
+**keep**. Finished, clean, merged runs can be offered on one card, and only the exact
+worktrees the owner names are removed. Uncommitted files never get a forced removal
+without his explicit approval for that worktree; needed evidence is preserved first.
 
 ## The Away grant
 
