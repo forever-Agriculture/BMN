@@ -29,6 +29,10 @@ const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signal
 /** The foundation every plan builds on (owner, 2026-10-17): what the project is for and its numbered principles. */
 const VISION_SECTIONS = ['Vision', 'Principles']
 const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
+/** Epics from 90 on are planned to run without asking (Epic 90, 90.2 AC5): Run needs, and each story's Owner line in order. */
+const RUN_NEEDS_FROM = 90
+const OWNER_LINE = /^\*\*Owner:\*\*\s*(none|before the go|at the end)?/iu
+const OWNER_ORDER = ['before the go', 'none', 'at the end']
 const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }
 
@@ -241,13 +245,15 @@ export function readEpicFile(path) {
     if (fence) return
     const story = /^### Story (\d+)\.(\d+)\b/u.exec(line)
     if (story) {
-      current = { id: `${Number(story[1])}.${Number(story[2])}`, epic: Number(story[1]), line: index + 1, criteria: [], verification: false }
+      current = { id: `${Number(story[1])}.${Number(story[2])}`, epic: Number(story[1]), line: index + 1, criteria: [], verification: false, owner: null }
       stories.push(current)
       inCriteria = false
       return
     }
     if (/^#{1,2} /u.test(line)) { current = null; return }
     if (!current) return
+    const owner = current.owner === null ? OWNER_LINE.exec(line) : null
+    if (owner) current.owner = { value: owner[1]?.toLowerCase() ?? null, line: index + 1 }
     if (/^\*\*Acceptance criteria:?\*\*/iu.test(line)) { inCriteria = true; return }
     if (/^\*\*Verification:?\*\*/iu.test(line)) { current.verification = true; inCriteria = false; return }
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
@@ -364,6 +370,7 @@ export async function checkPlan(resolved) {
       if (story.criteria.length === 0) add(`${at}:${story.line}`, `Story ${story.id} has no numbered acceptance criteria`)
       if (!story.verification) add(`${at}:${story.line}`, `Story ${story.id} has no **Verification:**`)
     }
+    if (!epic.legacy && epic.epic >= RUN_NEEDS_FROM) runNeedsProblems(epic, at, add)
   }
   for (const row of epicRows.values()) if (!epicsSeen.has(row.epic)) add(`${boardName}:${row.line}`, `epic-${row.epic} has no epic file under plan/epics/`)
   for (const row of storyRows.values()) {
@@ -371,6 +378,20 @@ export async function checkPlan(resolved) {
     else if (!epicRows.has(row.epic)) add(`${boardName}:${row.line}`, `${row.key} belongs to epic ${row.epic}, which has neither an epic-${row.epic} row nor an epic file`)
   }
   return { findings, board }
+}
+
+/** The owner's steps sit only before the go or at the end (Epic 90, D1): never between unattended stories. */
+function runNeedsProblems(epic, at, add) {
+  if (!epic.sections.includes('Run needs')) add(at, `missing section ## Run needs (epics from ${RUN_NEEDS_FROM} on)`)
+  let latest = null
+  for (const story of epic.stories) {
+    const owner = story.owner
+    if (!owner) { add(`${at}:${story.line}`, `Story ${story.id} has no **Owner:** line (none, before the go or at the end)`); continue }
+    if (!owner.value) { add(`${at}:${owner.line}`, `Story ${story.id}'s **Owner:** is not none, before the go or at the end`); continue }
+    const rank = OWNER_ORDER.indexOf(owner.value)
+    if (latest && rank < OWNER_ORDER.indexOf(latest.value)) add(`${at}:${owner.line}`, `Story ${story.id} is "${owner.value}" after Story ${latest.id}'s "${latest.value}": his steps go before the go or at the end`)
+    else latest = { id: story.id, value: owner.value }
+  }
 }
 
 /** One size check for callers that only stat: a board's size, for the status header. */

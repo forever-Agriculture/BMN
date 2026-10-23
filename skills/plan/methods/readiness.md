@@ -17,6 +17,8 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 11. **Design and rollout, when they apply.** A screen story cites an approved design and names its states and sizes ([design.md](design.md)). An epic that changes stored data, compatibility or the installed release has a Rollout section with recovery and an installed-build check.
 12. **Order, gates and independence.** The epic depends on no unfinished epic, and its Boundary says how it stays mergeable on its own branch beside the others. Stop gates (measure first) come first; owner-only checks are their own story; the Boundary names what is out of scope.
 
+13. **Runs without asking.** List every point where the run could need him: a decision, an approval, spend, an action, a credential, a check. Each is settled in the epic (Decisions, a stop gate's rule), covered by `## Run needs`, or is a step before the go or at the end (the story's **Owner:** line). Any other point is a finding. While the dev-auto in force cannot read Run needs, the run records them in its handoff as his instruction.
+
 ## Verdict
 
 - **PASS**: one line, then ask for the go (one card).
