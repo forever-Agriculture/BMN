@@ -17,7 +17,7 @@ const USAGE = `Usage: node scripts/measure/calibration-load.mjs [--sessions clau
   [--warmup S] [--minutes N] [--width W --height H] [--pane COLSxROWS] [--appearance MODE,FONT,IDENTITY]
   [--sidebar 9,5,2] [--idle | --working N] [--steady] [--status-ms MS[,MS...]] [--tick MS] [--history N]
   [--saved-output COUNT,KB]
-  [--profile DIR [--profile-only renderer,main,utility,gpu,window-trace]] --out FILE
+  [--profile DIR [--profile-only renderer,main,utility,gpu,window-trace,rows]] [--headless] --out FILE
 Starts this checkout's built BMN (pnpm run build first) with temporary data, config, state, cache and runtime folders,
 opens the sessions (each claude or codex one replays agent-like output with scripts/measure/agent-replay.mjs and reports
 its hook events, so BMN opens its screen mirror; shell sessions replay a quiet shell), shows one pane and hides the rest,
@@ -35,7 +35,9 @@ it runs scripts/measure/bmn-cpu.mjs for --minutes (5) and writes its JSON, with 
 --profile DIR it starts BMN with its main inspector listening and, instead of the long measurement, takes Story 91.1
 AC4's four 60-second profiles into DIR, then Story 91.2's timeline trace of the window, each beside a /proc measurement of the
 same minute (--profile-only takes some). BMN is stopped and the
-folders removed at the end.`
+folders removed at the end. A run whose window was minimized or hidden on the desktop (BMN minimizes instead of closing
+while sessions run) drew nothing, so it is reported ("window") and exits 1. --headless runs BMN on Chromium's headless
+display, off his desktop: a profile there compares builds with each other, never with the calibration.`
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const app = join(repo, 'apps/desktop')
@@ -54,6 +56,35 @@ export function sessionPlan(text) {
     return Array.from({ length: Number(count) }, () => agent)
   })
 }
+
+/**
+ * Whether BMN's window was on screen for the whole measured span: a minimized or hidden window draws nothing (BMN
+ * minimizes instead of closing while sessions run), so that span measured an idle window, not the load.
+ */
+export function windowShown(watch) {
+  if (!watch) return false
+  return watch.visible === true && watch.minimized === false && !watch.events.some((event) => event.name === 'minimize' || event.name === 'hide')
+}
+
+/**
+ * Main-process code: record the window's minimize, hide, restore, show and close events from now on, and each call BMN
+ * makes to minimize it with where it came from, so a minimize the desktop made is told apart from one BMN made.
+ */
+const WATCH_WINDOW = `(() => {
+  globalThis.__bmnMeasureWindow = []
+  const note = (name, extra = {}) => globalThis.__bmnMeasureWindow.push({ at: new Date().toISOString(), name, ...extra })
+  for (const one of require('electron').BrowserWindow.getAllWindows()) {
+    for (const name of ['minimize', 'hide', 'restore', 'show', 'close']) one.on(name, () => note(name))
+    const minimize = one.minimize.bind(one)
+    one.minimize = () => { note('minimize called', { stack: new Error().stack.split('\\n').slice(2, 6).join(' | ') }); return minimize() }
+  }
+  return true
+})()`
+/** Main-process code: the recorded events and the window's state now. */
+const READ_WINDOW = `(() => {
+  const one = require('electron').BrowserWindow.getAllWindows()[0]
+  return { events: globalThis.__bmnMeasureWindow ?? [], visible: one?.isVisible() ?? false, minimized: one?.isMinimized() ?? true }
+})()`
 
 const freePort = () => new Promise((done, fail) => {
   const server = createServer()
@@ -94,6 +125,7 @@ async function main(argv) {
   const scales = option(argv, '--scale', '1').split(',').map(Number)
   const scale = (index) => scales[Math.min(index, scales.length - 1)]
   const steady = argv.includes('--steady')
+  const headless = argv.includes('--headless')
   const warmup = Number(option(argv, '--warmup', '60'))
   const minutes = option(argv, '--minutes', '5')
   const profileDir = option(argv, '--profile', null) === null ? null : resolve(option(argv, '--profile'))
@@ -107,7 +139,7 @@ async function main(argv) {
   const history = option(argv, '--history', null)
   const savedOutput = option(argv, '--saved-output', null)?.split(',').map(Number) ?? null
   const electronPath = createRequire(join(app, 'package.json'))('electron')
-  const report = { settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', statusMs, tick, history, savedOutput, profile: profileDir !== null }, steps: [] }
+  const report = { settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', statusMs, tick, history, savedOutput, headless, profile: profileDir !== null }, steps: [] }
   const step = (name, detail = {}) => { report.steps.push({ at: new Date().toISOString(), name, ...detail }); console.error(`calibration: ${name}${detail.pid ? ` pid ${detail.pid} start ticks ${detail.startTicks}` : ''}`) }
   await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
     const bin = join(root, 'agents')
@@ -129,7 +161,9 @@ async function main(argv) {
     const inspectPort = await freePort()
     // Not BMN's test mode: its background services run as in his use. Both debugging ports listen in every run, so a
     // calibration and a profile run start alike; nothing is attached to them while BMN is measured.
-    const flags = [`--remote-debugging-port=${port}`, `--inspect=${inspectPort}`]
+    const flags = [`--remote-debugging-port=${port}`, `--inspect=${inspectPort}`,
+      // Off the desktop: Chromium's headless display, at a device scale of 1 as test:visual uses, large enough for the window.
+      ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=2560,1600', '--force-device-scale-factor=1'] : [])]
     const child = spawn(electronPath, [...flags, app], { cwd: root, env: environment, stdio: ['ignore', 'ignore', 'pipe'] })
     let log = ''
     child.stderr.on('data', (chunk) => { log = `${log}${chunk}`.slice(-20_000) })
@@ -210,6 +244,7 @@ async function main(argv) {
           fitted = await shown()
         }
       }
+      await main.send('Runtime.evaluate', { expression: WATCH_WINDOW, includeCommandLineAPI: true })
       main.close()
       const after = await page.evaluate(() => [window.innerWidth, window.innerHeight])
       step('resized', { before, after, window: at, pane: fitted, changed: before.join() !== after.join() })
@@ -233,6 +268,12 @@ async function main(argv) {
         report.cpu = await measure(minutes, join(dirname(out), `${out.split('/').at(-1)}.cpu.json`))
         step('measured', { valid: report.cpu?.valid ?? false })
       }
+      const watcher = await connect((await targets(inspectPort))[0].webSocketDebuggerUrl)
+      report.window = (await watcher.send('Runtime.evaluate', { expression: READ_WINDOW, includeCommandLineAPI: true, returnByValue: true })).result?.value ?? null
+      watcher.close()
+      report.window = { ...report.window, shown: windowShown(report.window) }
+      step('window', report.window)
+      if (!report.window.shown) console.error('calibration: the window was minimized or hidden during the run, so it measured an idle window; run it again')
     } finally {
       child.kill('SIGTERM')
       for (let waited = 0; child.exitCode === null && child.signalCode === null && waited < 15_000; waited += 500) await sleep(500)
@@ -246,7 +287,7 @@ async function main(argv) {
       writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`)
     }
   })
-  return report.cpu?.valid || report.profiles ? 0 : 1
+  return (report.cpu?.valid || report.profiles) && report.window?.shown ? 0 : 1
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main(process.argv.slice(2))

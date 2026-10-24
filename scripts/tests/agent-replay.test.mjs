@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { random, sixel, statusFrame, statusTick, styledLine } from '../measure/agent-replay.mjs'
 import { FileSavedOutputStore } from '../../apps/desktop/src/utility/saved-output-store.ts'
-import { seedSavedOutput, sessionPlan } from '../measure/calibration-load.mjs'
+import { seedSavedOutput, sessionPlan, windowShown } from '../measure/calibration-load.mjs'
 
 // What a terminal shows once the escape sequences are taken out.
 const SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[A-Za-z]`, 'gu')
@@ -82,5 +82,15 @@ describe('calibration load (Story 91.1 AC3)', () => {
   it('reads the sessions as agents in order and refuses an unknown one', () => {
     expect(sessionPlan('claude=2,codex=1,shell=0')).toEqual(['claude', 'claude', 'codex'])
     expect(() => sessionPlan('cursor=1')).toThrow('cursor=1 is not agent=count')
+  })
+
+  it('counts a run as measured only while its window stayed on screen', () => {
+    const shown = { events: [], visible: true, minimized: false }
+    expect(windowShown(shown)).toBe(true)
+    expect(windowShown({ ...shown, minimized: true })).toBe(false)
+    expect(windowShown({ ...shown, visible: false })).toBe(false)
+    expect(windowShown({ ...shown, events: [{ at: '2026-10-24T20:17:57Z', name: 'minimize' }, { at: '2026-10-24T20:18:30Z', name: 'restore' }] })).toBe(false)
+    expect(windowShown({ ...shown, events: [{ at: '2026-10-24T20:17:57Z', name: 'show' }] })).toBe(true)
+    expect(windowShown(null)).toBe(false)
   })
 })
