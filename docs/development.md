@@ -60,6 +60,7 @@ All commands run from the repository root.
 | `pnpm run voice:build` | Build the pinned whisper.cpp engine (`node scripts/voice/build-whisper.mjs --force` rebuilds) |
 | `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release` |
 | `pnpm run smoke:packaged [--root FOLDER]` | Start the packaged build (or the one in `FOLDER`) against a temporary data folder and check it |
+| `node scripts/measure/bmn-cpu.mjs --out FILE [--minutes 30]` | BMN's own CPU per process type (main, window, GPU, utilities), read-only from `/proc` and BMN's database; a session's terminal is left out, its BMN CLI and hooks are a line of their own; a gap over 10 s or a restart makes it invalid |
 | `pnpm run install:desktop [-- --pin]` | Install the launcher and icons, `--pin` adds it to the GNOME dock |
 | `pnpm run update:desktop` | Queue a clean pushed `main` build; wait for BMN to exit, package into `linux-unpacked.next`, smoke-test it, swap it into `linux-unpacked` (the replaced build stays as `linux-unpacked.prev` until the next update), install and notify. A failed check leaves the live build as it was; a desktop start during the update waits for it |
 
