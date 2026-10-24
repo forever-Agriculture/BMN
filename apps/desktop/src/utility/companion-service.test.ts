@@ -2925,6 +2925,20 @@ describe('repeat watch notices and calibration', () => {
     expect(all.find((row) => row.state === 'open')!.requestId).not.toBe(original)
   })
 
+  it('watches an OpenCode session too and withdraws its notice when the owner starts its next run (Story 92.2)', async () => {
+    await service.sessionsChanged()
+    const call = { agent: 'opencode' as const, event: 'tool.execute.after', toolName: 'read' }
+    for (let i = 0; i < 8; i++) await observe(call)
+    expect(await rows()).toEqual([expect.objectContaining({ requestKey: 'watch:repeat', state: 'open',
+      title: 'One repeated the same read call 8 times' })])
+    // A subagent's run starting is not the owner's message.
+    await observe({ ...call, event: 'session.status', source: 'subagent', fingerprint: undefined })
+    expect((await rows())[0]).toMatchObject({ state: 'open' })
+    await observe({ ...call, event: 'session.status', fingerprint: undefined })
+    expect((await rows())[0]).toMatchObject({ state: 'withdrawn', resolvedBy: 'watch:repeat' })
+    expect(writes).toEqual([])
+  })
+
   it('writes only calibration fields on qualifying resets, with successful notification status', async () => {
     await service.sessionsChanged()
     await calls(2)

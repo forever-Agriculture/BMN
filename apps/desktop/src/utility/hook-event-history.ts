@@ -11,8 +11,8 @@ const HOOK_HISTORY_MAX_ROWS = 1024
 const EVENTS = new Set(['other', 'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
   'PermissionRequest', 'Notification', 'Stop', 'SubagentStop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact',
   'sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd', 'session.created', 'session.idle',
-  'session.compacted', 'permission.asked', 'permission.updated', 'permission.replied', 'question.asked',
-  'question.replied', 'question.rejected', 'osc:9', 'osc:777', 'osc:99'])
+  'session.compacted', 'tool.execute.after', 'permission.asked', 'permission.updated', 'permission.replied',
+  'question.asked', 'question.replied', 'question.rejected', 'osc:9', 'osc:777', 'osc:99'])
 const SOURCES = new Set(['other', 'startup', 'resume', 'clear', 'compact', 'manual', 'auto', 'subagent'])
 const TOOLS = new Set(['other', 'Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'Task', 'Agent',
   'WebFetch', 'WebSearch', 'NotebookEdit', 'TodoWrite', 'AskUserQuestion', 'ExitPlanMode', 'EnterPlanMode',

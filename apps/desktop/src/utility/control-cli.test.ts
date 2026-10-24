@@ -4008,6 +4008,37 @@ describe('OpenCode hooks', () => {
     expect(listeners).toHaveLength(0)
   })
 
+  it('tells BMN each finished tool call of its session and subagents, with the name and input OpenCode gave earlier (Story 92.2)', async () => {
+    const CHILD = 'ses_0123456789abSyntheticChld'
+    const OTHER = 'ses_0123456789abSyntheticOthr'
+    const { spawn, calls } = fakePluginSpawn(() => ({ code: 0 }))
+    const { terminal, context, emit } = fakeOpenCodeTerminal()
+    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
+    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
+    const call = (sessionID: string, id: string, name: string, input: unknown) => {
+      emit('session.tool.input.started', { sessionID, assistantMessageID: 'msg_1', id, name })
+      emit('session.tool.called', { sessionID, assistantMessageID: 'msg_1', id, input, executed: true })
+    }
+    emit('session.created', { sessionID: CHILD, parentID: OPENCODE_SESSION })
+    call(OPENCODE_SESSION, 'call_1', 'read', { filePath: 'src/a.ts' })
+    emit('session.tool.success', { sessionID: OPENCODE_SESSION, assistantMessageID: 'msg_1', id: 'call_1', content: [{ type: 'text', text: 'made-up' }], executed: true })
+    call(CHILD, 'call_2', 'bash', { command: 'false' })
+    emit('session.tool.failed', { sessionID: CHILD, assistantMessageID: 'msg_1', id: 'call_2', error: { type: 'tool', message: 'exit 1' }, executed: true })
+    // Another terminal's call, and an end this plugin never saw start, are not sent.
+    call(OTHER, 'call_3', 'read', { filePath: 'x' })
+    emit('session.tool.success', { sessionID: OTHER, assistantMessageID: 'msg_1', id: 'call_3', content: [] })
+    emit('session.tool.success', { sessionID: OPENCODE_SESSION, assistantMessageID: 'msg_1', id: 'call_unknown', content: [] })
+    const hooks = () => calls.filter((spawned) => spawned.args.includes('hook')).map((spawned) => JSON.parse(spawned.input ?? 'null'))
+      .filter((event) => event.hook_event_name === 'tool.execute.after')
+    await vi.waitFor(() => expect(hooks()).toHaveLength(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(hooks()).toEqual([
+      { hook_event_name: 'tool.execute.after', sessionID: OPENCODE_SESSION, tool_name: 'read', tool_input: { filePath: 'src/a.ts' }, tool_response: [{ type: 'text', text: 'made-up' }] },
+      { hook_event_name: 'tool.execute.after', sessionID: CHILD, tool_name: 'bash', tool_input: { command: 'false' }, error: { type: 'tool', message: 'exit 1' } }
+    ])
+    stop?.()
+  })
+
   it('sends no answer that arrives after OpenCode unloaded the plugin, or after the terminal moved to another session (Astra review)', async () => {
     const answerNext: Array<(answers: unknown[]) => void> = []
     const { spawn, calls } = fakePluginSpawn(async (call) => {
@@ -5373,6 +5404,24 @@ describe('compaction events (Story 36.1)', () => {
     expect(owner).toMatchObject({ agent: 'opencode', event: 'session.compacted', source: null, effects: [] })
     expect(subagent).toMatchObject({ agent: 'opencode', event: 'session.compacted', source: 'subagent', effects: [] })
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+
+  it('fingerprints a finished OpenCode tool call, and marks a subagent run starting as the subagent\'s (Story 92.2)', async () => {
+    const fixture = await cliFixture()
+    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
+    const tool = { hook_event_name: 'tool.execute.after', sessionID: 'ses_main', tool_name: 'read', tool_input: { filePath: 'a' }, tool_response: [] }
+    for (const event of [tool, tool, { ...tool, tool_input: { filePath: 'b' } }, { hook_event_name: 'session.status', sessionID: 'ses_child', status: { type: 'busy' } },
+      { hook_event_name: 'session.status', sessionID: 'ses_main', status: { type: 'busy' } }]) {
+      expect((await runHook(bound, 'opencode', event, OPENCODE_FOREGROUND)).code).toBe(0)
+    }
+    const observed = fixture.handlers.observeHookEvent.mock.calls.map(([params]) => params as { event: string; source?: string; toolName?: string; fingerprint?: string })
+    expect(observed.map(({ event, source, toolName }) => [event, source ?? null, toolName ?? null])).toEqual([
+      ['tool.execute.after', null, 'read'], ['tool.execute.after', null, 'read'], ['tool.execute.after', null, 'read'],
+      ['session.status', 'subagent', null], ['session.status', null, null]])
+    expect(observed[0]!.fingerprint).toMatch(/^[0-9a-f]{16}$/)
+    expect(observed[1]!.fingerprint).toBe(observed[0]!.fingerprint)
+    expect(observed[2]!.fingerprint).not.toBe(observed[0]!.fingerprint)
+    expect(observed[3]!.fingerprint).toBeUndefined()
   })
 
   it('never installs PostCompact: it is optional like PermissionRequest', async () => {

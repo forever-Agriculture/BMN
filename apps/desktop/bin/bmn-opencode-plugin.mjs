@@ -221,6 +221,8 @@ export default {
 
     // The models each session last named, so a new one is told once.
     const models = new Map<string, string>()
+    // Each running tool call's name and input, by call, so its end reaches BMN's repeat watch as one call.
+    const tools = new Map<string, { name: string; input?: unknown }>()
 
     const handle = (event: any) => {
       const type = String(event?.type ?? "")
@@ -300,6 +302,27 @@ export default {
         case "session.compaction.ended":
           hook("session.compacted", { sessionID: id })
           return
+        // OpenCode 2 names a call only when its input starts and gives its input when it is called.
+        case "session.tool.input.started":
+          if (typeof data.id !== "string" || typeof data.name !== "string") return
+          // A call that never ends (its run was stopped) must not hold memory for the whole session.
+          if (tools.size >= 64) tools.delete(tools.keys().next().value as string)
+          tools.set(data.id, { name: data.name })
+          return
+        case "session.tool.called": {
+          const tool = tools.get(data.id)
+          if (tool !== undefined) tool.input = data.input
+          return
+        }
+        case "session.tool.success":
+        case "session.tool.failed": {
+          const tool = tools.get(data.id)
+          tools.delete(data.id)
+          if (tool === undefined) return
+          hook("tool.execute.after", { sessionID: id, tool_name: tool.name, tool_input: tool.input ?? null,
+            ...(type === "session.tool.failed" ? { error: data.error ?? null } : { tool_response: data.content ?? null }) })
+          return
+        }
         case "session.deleted":
           hook(type, { sessionID: id })
           return

@@ -452,13 +452,15 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
   // `source` and `toolName` take the same `RULES.source` shape as the event name: a tool called "Éditeur"
   // belongs in the log as much as one called "Bash".
   // Codex names what caused a compaction `trigger` (manual or auto), and a subagent's OpenCode
-  // compaction is logged as the subagent's, so neither is counted as the owner's (Story 36.1).
+  // compaction is logged as the subagent's, so neither is counted as the owner's (Story 36.1). A subagent's OpenCode
+  // run starting is not the owner's next message either, so it never resets the repeat watch (Story 92.2).
   const source = hookEventName(event.source) ??
     (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger)
-      : agent === 'opencode' && eventName === 'session.compacted' && openCodeSubagent(event) ? 'subagent' : undefined)
+      : agent === 'opencode' && ['session.compacted', 'session.status'].includes(eventName) && openCodeSubagent(event) ? 'subagent' : undefined)
   const toolName = hookEventName(event.tool_name)
   const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
-    (agent === 'codex' && eventName === 'PostToolUse') ? toolFingerprint(event, agent) : undefined
+    (agent === 'codex' && eventName === 'PostToolUse') || (agent === 'opencode' && eventName === 'tool.execute.after')
+    ? toolFingerprint(event, agent) : undefined
   return {
     method: 'hook.observe',
     params: {

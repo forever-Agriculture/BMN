@@ -3,8 +3,10 @@ const REPEAT_WINDOW = 20
 /** Tune against the local repeat-watch.log calibration segments. */
 export const REPEAT_NOTICE_AT = 8
 
+export type RepeatAgent = 'claude' | 'codex' | 'opencode'
+
 export interface RepeatSegment {
-  agent: 'claude' | 'codex'
+  agent: RepeatAgent
   toolName: string | null
   maxRepeat: number
   toolEvents: number
@@ -17,11 +19,16 @@ export interface RepeatState extends RepeatSegment {
 }
 export interface RepeatEvent {
   incarnationId: string | null
-  agent: 'claude' | 'codex'
+  agent: RepeatAgent
   event: string
   source: string | null
   toolName: string | null
   fingerprint?: string | undefined
+}
+
+/** The owner's next message: Claude's and Codex's prompt hook, or an OpenCode root run starting (OpenCode has no prompt hook). */
+export function ownerTurn(event: Pick<RepeatEvent, 'agent' | 'event' | 'source'>): boolean {
+  return event.event === 'UserPromptSubmit' || (event.agent === 'opencode' && event.event === 'session.status' && event.source !== 'subagent')
 }
 
 export function observeRepeat(previous: RepeatState | undefined, event: RepeatEvent): {
@@ -31,7 +38,7 @@ export function observeRepeat(previous: RepeatState | undefined, event: RepeatEv
   closed: RepeatSegment | null
 } {
   const reset = previous?.incarnationId !== event.incarnationId ||
-    ['UserPromptSubmit', 'SessionEnd', 'Interrupt'].includes(event.event) ||
+    ownerTurn(event) || ['SessionEnd', 'Interrupt'].includes(event.event) ||
     (event.event === 'SessionStart' && event.source !== 'compact')
   const closed = reset && previous && previous.maxRepeat >= 3
     ? { agent: previous.agent, toolName: previous.toolName, maxRepeat: previous.maxRepeat,

@@ -125,7 +125,7 @@ import { searchFileReferences } from './file-reference-search'
 import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
-import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
+import { observeRepeat, ownerTurn, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
 import { GRANT_TOKEN_PREFIX, GRANT_TYPED_REPLY, TelegramGrantCards } from './telegram-grant-cards'
 import { QUIET_LEDGER_KEY, QuietHoursDelivery, phoneField } from './quiet-hours-delivery'
@@ -2354,17 +2354,18 @@ export class CompanionService {
     const operation = async (): Promise<{ recorded: true }> => {
       let repeat: number | null = null
       const effects = [...p.effects]
-      if (p.agent === 'claude' || p.agent === 'codex') {
+      if (p.agent === 'claude' || p.agent === 'codex' || p.agent === 'opencode') {
         const result = observeRepeat(this.repeatStates.get(p.sessionId), { ...p, agent: p.agent })
         this.repeatStates.set(p.sessionId, result.state)
         repeat = result.repeat
         if (result.closed) await this.writeRepeatSegment(p.sessionId, result.closed)
-        if (p.event === 'UserPromptSubmit' || result.fire) {
+        const turn = ownerTurn({ ...p, agent: p.agent })
+        if (turn || result.fire) {
           try {
             const rows = await this.options.database.companion('listAttention')
             const open = rows.find((row) => row.sessionId === p.sessionId &&
               row.requestKey === 'watch:repeat' && row.state === 'open')
-            if (p.event === 'UserPromptSubmit' && open) {
+            if (turn && open) {
               const closed = await this.closeAttentionByKey(p.sessionId, 'watch:repeat', 'withdrawn', null, 'watch:repeat')
               if (closed.state === 'withdrawn' && !effects.includes('withdrew')) effects.push('withdrew')
             } else if (result.fire && !open && p.incarnationId !== null &&

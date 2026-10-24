@@ -604,13 +604,16 @@ shell keeps the flag until the run ends or another agent reports.
 
 ### Repeated tool calls
 
-For Claude Code and Codex, BMN counts identical tool calls, failed ones included, since your last message. Eight
+For Claude Code, Codex and OpenCode, BMN counts identical tool calls, failed ones included, since your last message. Eight
 matching calls among the last 20 open one **Needs you** notice; the hook log shows the count as
 `same call ×8`. The watch only tells you and never changes the agent or its process. The threshold
 is the `REPEAT_NOTICE_AT` constant in `repeat-watch.ts`; the bounded local `repeat-watch.log` under
 BMN's state directory records counts, tool names and whether a notice opened for calibration. BMN
 keeps no tool input or output in that log. Claude Code's free-text `description` label is left out
-of the comparison, so a relabelled retry still counts.
+of the comparison, so a relabelled retry still counts. OpenCode has no prompt hook: its terminal plugin reports
+each finished call of the session on screen and of its subagents (`tool.execute.after`, with the name and input
+OpenCode gave when the call started), and the count starts again when that session's next run starts. A subagent's
+run starting does not reset it, and a message you add while a run is still going counts only from the next run.
 
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
@@ -977,7 +980,7 @@ another program) in the foreground, its requests have not changed and none is be
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim
 placeholder text after the marker, as recorded from real sessions). Any state BMN cannot read skips the session for that
 time. OpenCode sessions are not woken: BMN keeps no screen mirror for them, so their prompt cannot be read.
-Epic 92 measured pinned OpenCode 2.0.32's screens (root, Home, child, drafts) but did not qualify every state a wake
+Epic 92 measured pinned OpenCode 2.0.32's screens (root, Home, child, typed drafts) but did not qualify every state a wake
 must refuse, such as an open dialog, so the wake waits for its own epic (2026-10-25).
 
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
