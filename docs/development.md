@@ -61,6 +61,8 @@ All commands run from the repository root.
 | `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release` |
 | `pnpm run smoke:packaged [--root FOLDER]` | Start the packaged build (or the one in `FOLDER`) against a temporary data folder and check it |
 | `node scripts/measure/bmn-cpu.mjs --out FILE [--minutes 30]` | BMN's own CPU per process type (main, window, GPU, utilities), read-only from `/proc` and BMN's database; a session's terminal is left out, its BMN CLI and hooks are a line of their own; a gap over 10 s or a restart makes it invalid |
+| `node scripts/measure/calibration-load.mjs --out FILE [--sessions claude=3,codex=1,shell=1] [--scale N]` | This checkout's build (after `pnpm run build`) in temporary folders, its sessions replaying agent-like output with their mirrors on, measured by the CPU script with no debugger attached |
+| `node scripts/audit/consumers.mjs [--json] [--exclude PATH]... TERM...` | Every place that may still use a name or a file before it is called dead: BMN's files and plan, dev-auto, the installed skills, names built from strings, packaging, and Git history; exit 1 when a term has a hit |
 | `pnpm run install:desktop [-- --pin]` | Install the launcher and icons, `--pin` adds it to the GNOME dock |
 | `pnpm run update:desktop` | Queue a clean pushed `main` build; wait for BMN to exit, package into `linux-unpacked.next`, smoke-test it, swap it into `linux-unpacked` (the replaced build stays as `linux-unpacked.prev` until the next update), install and notify. A failed check leaves the live build as it was; a desktop start during the update waits for it |
 
