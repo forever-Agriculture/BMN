@@ -365,7 +365,10 @@ would not list is refused in one wording, "That session is not one of your peers
 whatever the reason. A peer is refused too, with its reason, when no agent there takes messages:
 "That session is stopped", "runs no agent now, only its shell" (also an agent that exited into its
 still-running shell), "runs no agent whose hook BMN has heard from", or "runs <app>, which takes no
-messages" (OpenCode); each ends "nothing was sent". The agent in front is the one whose own hook
+messages" (OpenCode); each ends "nothing was sent". OpenCode is refused because a message reaches
+Claude Code and Codex through the hook that runs after a tool call and hands its text to the agent,
+and OpenCode's terminal plugin has no such way to give text to its agent (owner's decision,
+2026-10-16; kept 2026-10-25). The agent in front is the one whose own hook
 reported from the very process that holds the terminal now, not the last one seen there. Claude
 Code reports as it starts; Codex 0.162.1 reports nothing until its first turn starts, so a Codex
 that has not yet been given a prompt is one BMN has not heard from (measured 2026-10-16). The
