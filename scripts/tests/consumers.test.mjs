@@ -1,9 +1,10 @@
 // MODULE: consumers.test.mjs - Story 91.5 AC2: the consumer inventory finds a planted IPC name, a name built from strings and a mention only in a doc
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { builtFrom, hitsOf, spellings } from '../audit/consumers.mjs'
+import { builtFrom, historyOf, hitsOf, spellings } from '../audit/consumers.mjs'
 
 let roots = []
 afterEach(() => {
@@ -50,5 +51,17 @@ describe('consumer inventory (Story 91.5 AC2)', () => {
     })
     expect(spellings('scripts/test/demo-visual.mjs')).toEqual(['scripts/test/demo-visual.mjs', 'demo-visual.mjs', 'demo-visual'])
     expect(hitsOf('scripts/test/demo-visual.mjs', { roots: [root] }).map((hit) => [hit.file, hit.kind])).toEqual([['docs/development.md', 'doc'], ['skills/x/SKILL.md', 'skill']])
+  })
+
+  it('gives a file the commits that changed it, and a name the commits that added or removed it', () => {
+    const root = tree({ 'scripts/test/demo-visual.mjs': 'export const shot = 1\n' })
+    const git = (...args) => execFileSync('git', ['-C', root, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', ...args], { stdio: 'ignore' })
+    git('init', '-q')
+    git('add', '.')
+    git('commit', '-q', '-m', 'add the harness')
+    writeFileSync(join(root, 'scripts/test/demo-visual.mjs'), 'export const shot = 2\n')
+    git('commit', '-q', '-am', 'change the harness')
+    expect(historyOf('scripts/test/demo-visual.mjs', root)).toMatchObject({ commits: 2 })
+    expect(historyOf('shot', root)).toMatchObject({ commits: 1 })
   })
 })

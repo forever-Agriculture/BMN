@@ -11,9 +11,21 @@ Prints every hit of each TERM (a name, or a file's path) in BMN's code, docs and
 skills, with names built from strings, what electron-builder.yml packages, and the Git history of the term. A hit in
 an --exclude path (the candidate's own files) is left out. Exit 0 when no TERM has a hit, 1 when one does.`
 
-/** The places BMN's code, docs and skills are read from by default: this checkout with its plan, dev-auto, the installed skills. */
+/**
+ * The places BMN's code, docs and skills are read from by default: this checkout with its plan, dev-auto, the installed
+ * skills. A worktree has no plan/ of its own, so the default checkout's is read (it sits beside the shared .git).
+ */
 export function defaultRoots(repo) {
-  return [repo, join(homedir(), 'code/dev-auto'), join(homedir(), '.local/share/bmn/skills')].filter((root) => existsSync(root))
+  let plan = []
+  if (!existsSync(join(repo, 'plan'))) {
+    try {
+      const common = execFileSync('git', ['-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      plan = [join(dirname(common), 'plan')]
+    } catch {
+      plan = []
+    }
+  }
+  return [repo, ...plan, join(homedir(), 'code/dev-auto'), join(homedir(), '.local/share/bmn/skills')].filter((root) => existsSync(root))
 }
 
 /** The registries a name can be reached through without an import (Story 91.5's starting points). */
@@ -46,7 +58,9 @@ export function filesOf(root) {
   return [...tracked, ...(plan ?? []).map((file) => `plan/${file}`)]
 }
 
-function kindOf(file) {
+function kindOf(file, root) {
+  // BMN's planning: epics, references and review records.
+  if (basename(root) === 'plan' || file.startsWith('plan/')) return 'plan'
   if (file === PACKAGING) return 'packaged'
   if (REGISTRIES.includes(file)) return 'registry'
   if (/(^|\/)skills\//u.test(file) || file.endsWith('SKILL.md')) return 'skill'
@@ -55,7 +69,7 @@ function kindOf(file) {
   return 'code'
 }
 
-/** A file's path, as against a name (a channel, a command, a package such as @codemirror/search): it has an extension. */
+/** A file's path, as against a name (a channel, a command, a scoped package): it has an extension. */
 export const isPath = (term) => extname(term) !== '' && !term.startsWith('@')
 
 /** The words a term is matched by: itself, and for a path its file name with and without its extension. */
@@ -78,10 +92,11 @@ export function builtFrom(term, line) {
   return line.includes(last) && /\$\{|['"`]\s*\+|\+\s*['"`]|\.join\(/u.test(line) && parts.slice(0, -1).some((part) => line.includes(part))
 }
 
-/** Every hit of the term in the roots, outside the excluded paths. */
-export function hitsOf(term, { roots, exclude = [] }) {
-  const words = spellings(term)
-  const hits = []
+/** Every hit of each term in the roots, outside the excluded paths, reading each file once: a map from term to hits. */
+export function scan(terms, { roots, exclude = [] }) {
+  const escape = (word) => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  const matchers = terms.map((term) => ({ term, words: spellings(term).map((one) => new RegExp(`(^|[^\\w-])${escape(one)}($|[^\\w-])`, 'u')) }))
+  const found = new Map(terms.map((term) => [term, []]))
   for (const root of roots) {
     const real = realpathSync(root)
     for (const file of filesOf(root)) {
@@ -96,20 +111,25 @@ export function hitsOf(term, { roots, exclude = [] }) {
       }
       if (text.includes('\0')) continue
       const lines = text.split('\n')
-      lines.forEach((line, index) => {
-        const word = words.find((one) => new RegExp(`(^|[^\\w-])${one.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}($|[^\\w-])`, 'u').test(line))
-        const how = word !== undefined ? kindOf(file) : builtFrom(term, line) ? 'built' : null
-        if (how !== null) hits.push({ root: real, file, line: index + 1, kind: how, text: line.trim().slice(0, 200) })
-      })
+      for (const { term, words } of matchers) {
+        lines.forEach((line, index) => {
+          const how = words.some((word) => word.test(line)) ? kindOf(file, root) : builtFrom(term, line) ? 'built' : null
+          if (how !== null) found.get(term).push({ root: real, file, line: index + 1, kind: how, text: line.trim().slice(0, 200) })
+        })
+      }
     }
   }
-  return hits
+  return found
 }
 
-/** The term's Git history in a checkout: how many commits added or removed it, and the newest. */
+/** Every hit of the term in the roots, outside the excluded paths. */
+export const hitsOf = (term, options) => scan([term], options).get(term)
+
+/** The term's Git history in a checkout: the commits that changed the file (a path) or added or removed the name, the newest and the first. */
 export function historyOf(term, repo) {
   try {
-    const log = execFileSync('git', ['-C', repo, 'log', '--format=%h %ad %s', '--date=short', `-S${term}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const which = isPath(term) ? ['--follow', '--', term] : [`-S${term}`]
+    const log = execFileSync('git', ['-C', repo, 'log', '--format=%h %ad %s', '--date=short', ...which], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       .split('\n').filter(Boolean)
     return { commits: log.length, newest: log[0] ?? null, oldest: log.at(-1) ?? null }
   } catch {
@@ -124,7 +144,8 @@ function main(argv) {
   const roots = take('--root').length > 0 ? take('--root').map((root) => resolve(root)) : defaultRoots(repo)
   const exclude = take('--exclude').map((path) => resolve(path))
   const terms = argv.filter((part, index) => !part.startsWith('--') && !['--root', '--exclude'].includes(argv[index - 1]))
-  const report = terms.map((term) => ({ term, hits: hitsOf(term, { roots, exclude }), history: historyOf(term, repo) }))
+  const found = scan(terms, { roots, exclude })
+  const report = terms.map((term) => ({ term, hits: found.get(term), history: historyOf(term, repo) }))
   if (argv.includes('--json')) console.log(JSON.stringify(report, null, 2))
   else {
     for (const { term, hits, history } of report) {
