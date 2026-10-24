@@ -36,6 +36,7 @@ import { copyableText, createMouseClipboard } from './terminal-clipboard'
 import { TerminalOutputFlow } from './terminal-output-flow'
 import { applyTerminalExit } from './terminal-exit'
 import { createFocusReports } from './terminal-focus-reports'
+import { redrawOnlyWrittenRows } from './terminal-sync-update'
 import { trackTerminalView } from './terminal-view-tracking'
 import { SIXEL_SMOKE_FRAME, checkSixelRenderer, createTerminalImageAddon, registerTerminalImages } from './terminal-images'
 import { folderName } from './quick-look-open'
@@ -314,6 +315,7 @@ export function SessionTerminal(props: {
       }
       return true
     }))
+    const syncUpdates = redrawOnlyWrittenRows(terminal)
     const textareaFocus = (): void => focusReports.paneFocus(true)
     // Story 33.1: focus moving into this pane's own search bar is still the owner looking at this pane, so the
     // program is told nothing when search opens, is used or closes.
@@ -519,6 +521,7 @@ export function SessionTerminal(props: {
       keys.dispose()
       titles.dispose()
       for (const notice of notices) notice.dispose()
+      syncUpdates.dispose()
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)
       window.removeEventListener('mouseup', mouseUp, true)
