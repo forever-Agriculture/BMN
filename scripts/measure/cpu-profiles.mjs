@@ -122,15 +122,19 @@ export async function profileTarget(url, seconds, { workers = false } = {}) {
   return { profile, workers: threads }
 }
 
-/** contentTracing in the main process, through its inspector: the GPU process's slices over `seconds`. */
-export async function traceGpu(mainUrl, seconds, path) {
+const GPU_CATEGORIES = ['toplevel', 'gpu', 'viz', 'cc', 'disabled-by-default-gpu.service', 'disabled-by-default-viz.gpu_composite_time']
+/** What DevTools' Performance panel records: the window's style, layout, paint and script work per frame. */
+export const TIMELINE_CATEGORIES = ['toplevel', 'blink', 'cc', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute']
+
+/** contentTracing in the main process, through its inspector: every process's slices in `categories` over `seconds`. */
+export async function traceProcesses(mainUrl, seconds, path, categories = GPU_CATEGORIES) {
   const rpc = await connect(mainUrl)
   const evaluate = async (expression) => {
     const answer = await rpc.send('Runtime.evaluate', { expression, awaitPromise: true, includeCommandLineAPI: true, returnByValue: true })
     if (answer.exceptionDetails) throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text)
     return answer.result.value
   }
-  await evaluate(`require('electron').contentTracing.startRecording({ included_categories: ['toplevel', 'gpu', 'viz', 'cc', 'disabled-by-default-gpu.service', 'disabled-by-default-viz.gpu_composite_time'] }).then(() => true)`)
+  await evaluate(`require('electron').contentTracing.startRecording({ included_categories: ${JSON.stringify(categories)} }).then(() => true)`)
   await sleep(seconds * 1000)
   const written = await evaluate(`require('electron').contentTracing.stopRecording(${JSON.stringify(path)})`)
   rpc.close()
@@ -159,7 +163,28 @@ export function summarizeTrace(path, pid) {
   return { busyMs: Math.round([...byThread.values()].reduce((sum, ms) => sum + ms, 0)), threads: rank(byThread), slices: rank(bySlice) }
 }
 
-/** BMN's own processes under its main one: the GPU process and the utility host, by their Electron type. */
+/**
+ * One thread's slices at every depth, by name: each name's inclusive thread time and count, so a frame's style, layout
+ * and paint show inside the task that ran them. A name nested in itself is counted once, at its outermost slice.
+ */
+export function summarizeThreadSlices(path, pid, threadName) {
+  const parsed = JSON.parse(readFileSync(path, 'utf8'))
+  const events = Array.isArray(parsed) ? parsed : parsed.traceEvents
+  const tids = new Set(events.filter((event) => event.ph === 'M' && event.name === 'thread_name' && event.pid === pid && event.args?.name === threadName).map((event) => event.tid))
+  const byName = new Map()
+  const openUntil = new Map()
+  for (const event of events.filter((one) => one.pid === pid && tids.has(one.tid) && one.ph === 'X' && typeof one.tdur === 'number').sort((a, b) => a.ts - b.ts)) {
+    if (event.ts < (openUntil.get(event.name) ?? 0)) continue
+    openUntil.set(event.name, event.ts + event.dur)
+    const entry = byName.get(event.name) ?? { ms: 0, count: 0 }
+    entry.ms += event.tdur / 1000
+    entry.count += 1
+    byName.set(event.name, entry)
+  }
+  return [...byName].sort((a, b) => b[1].ms - a[1].ms).slice(0, 30).map(([label, { ms, count }]) => ({ label, ms: Math.round(ms), count }))
+}
+
+/** BMN's own processes under its main one: the GPU process, the window and the utility host, by their Electron type. */
 export function bmnProcesses(mainPid, procRoot = '/proc') {
   const parents = new Map()
   const argvs = new Map()
@@ -180,6 +205,7 @@ export function bmnProcesses(mainPid, procRoot = '/proc') {
   for (const [pid, argv] of argvs) {
     if (!under(pid)) continue
     if (argv.includes('--type=gpu-process')) found.gpu = pid
+    if (argv.includes('--type=renderer')) found.renderer = pid
     if (argv.includes('--type=utility') && argv.includes('--utility-sub-type=node.mojom.NodeService')) found.utility = pid
   }
   return found
@@ -259,9 +285,19 @@ export async function profileAll({ port, inspectPort, mainPid, seconds = 60, dir
   await side('gpu', 'gpu-process', async () => {
     if (!main) throw new Error('the main process inspector did not answer, so contentTracing could not start')
     if (!gpu) throw new Error('no GPU process found')
-    const path = await traceGpu(main.webSocketDebuggerUrl, seconds, join(dir, 'gpu-trace.json'))
+    const path = await traceProcesses(main.webSocketDebuggerUrl, seconds, join(dir, 'gpu-trace.json'))
     const summary = summarizeTrace(path, gpu)
     return { cores: summary.busyMs / (seconds * 1000), summary, note: 'top-level slices only: thread time outside a traced slice is not counted' }
+  })
+  // Story 91.2: where the window's own drawing time goes, frame by frame, beside the same minute's /proc.
+  await side('window-trace', 'renderer', async () => {
+    if (!main) throw new Error('the main process inspector did not answer, so contentTracing could not start')
+    const { renderer } = bmnProcesses(mainPid)
+    if (!renderer) throw new Error('no window process found')
+    const path = await traceProcesses(main.webSocketDebuggerUrl, seconds, join(dir, 'window-trace.json'), TIMELINE_CATEGORIES)
+    const summary = summarizeTrace(path, renderer)
+    return { cores: summary.busyMs / (seconds * 1000), summary, mainThread: summarizeThreadSlices(path, renderer, 'CrRendererMain'),
+      note: 'top-level slices only in cores; mainThread lists every depth by name' }
   })
   return results
 }

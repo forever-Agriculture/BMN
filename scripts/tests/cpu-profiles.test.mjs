@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { agreement, bmnProcesses, signalCaught, summarizeProfile, summarizeTrace } from '../measure/cpu-profiles.mjs'
+import { agreement, bmnProcesses, signalCaught, summarizeProfile, summarizeThreadSlices, summarizeTrace } from '../measure/cpu-profiles.mjs'
 
 let roots = []
 afterEach(() => {
@@ -33,7 +33,7 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
     expect(summary.total.find((entry) => entry.label.startsWith('render'))).toEqual({ label: 'render out/renderer/index.js:10', ms: 4 })
   })
 
-  it('finds the GPU process under the zygote and the utility host under main, and nothing outside BMN', () => {
+  it('finds the GPU process and the window under the zygote and the utility host under main, and nothing outside BMN', () => {
     const root = mkdtempSync(join(tmpdir(), 'bmn-proc-'))
     roots.push(root)
     const process = (pid, parent, argv) => {
@@ -45,8 +45,10 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
     process(11, 10, ['bmn', '--type=zygote'])
     process(12, 11, ['bmn', '--type=gpu-process'])
     process(13, 10, ['bmn', '--type=utility', '--utility-sub-type=node.mojom.NodeService'])
+    process(14, 11, ['bmn', '--type=renderer'])
     process(20, 1, ['other', '--type=gpu-process'])
-    expect(bmnProcesses(10, root)).toEqual({ gpu: 12, utility: 13 })
+    process(21, 1, ['other', '--type=renderer'])
+    expect(bmnProcesses(10, root)).toEqual({ gpu: 12, utility: 13, renderer: 14 })
   })
 
   it('reads from a process status whether it catches SIGUSR1 before the inspector is asked for', () => {
@@ -75,5 +77,24 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
     expect(summarizeTrace(path, 7)).toEqual({
       busyMs: 5, threads: [{ label: 'CrGpuMain', ms: 5 }], slices: [{ label: 'GpuChannel::ExecuteDeferredRequest', ms: 5 }]
     })
+  })
+
+  it('sums one thread\'s slices by name at every depth, a name nested in itself once', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-trace-'))
+    roots.push(root)
+    const path = join(root, 'trace.json')
+    writeFileSync(path, JSON.stringify({ traceEvents: [
+      { ph: 'M', name: 'thread_name', pid: 7, tid: 1, args: { name: 'CrRendererMain' } },
+      { ph: 'M', name: 'thread_name', pid: 7, tid: 2, args: { name: 'Compositor' } },
+      { ph: 'X', name: 'RunTask', pid: 7, tid: 1, ts: 0, dur: 10000, tdur: 9000 },
+      { ph: 'X', name: 'Layout', pid: 7, tid: 1, ts: 1000, dur: 3000, tdur: 3000 },
+      { ph: 'X', name: 'Layout', pid: 7, tid: 1, ts: 2000, dur: 1000, tdur: 1000 },
+      { ph: 'X', name: 'Paint', pid: 7, tid: 1, ts: 5000, dur: 2000, tdur: 2000 },
+      { ph: 'X', name: 'Layout', pid: 7, tid: 1, ts: 20000, dur: 1000, tdur: 500 },
+      { ph: 'X', name: 'Paint', pid: 7, tid: 2, ts: 0, dur: 4000, tdur: 4000 }
+    ] }))
+    expect(summarizeThreadSlices(path, 7, 'CrRendererMain')).toEqual([
+      { label: 'RunTask', ms: 9, count: 1 }, { label: 'Layout', ms: 4, count: 2 }, { label: 'Paint', ms: 2, count: 1 }
+    ])
   })
 })
