@@ -161,17 +161,26 @@ export function summarizeTrace(path, pid) {
 
 /** BMN's own processes under its main one: the GPU process and the utility host, by their Electron type. */
 export function bmnProcesses(mainPid, procRoot = '/proc') {
-  const found = {}
+  const parents = new Map()
+  const argvs = new Map()
   for (const name of readdirSync(procRoot).filter((entry) => /^\d+$/u.test(entry))) {
     try {
-      const stat = readFileSync(join(procRoot, name, 'stat'), 'utf8').replace(/^.*\) /su, '').split(' ')
-      if (Number(stat[1]) !== mainPid) continue
-      const argv = readFileSync(join(procRoot, name, 'cmdline'), 'utf8').split(/[\0 ]/u)
-      if (argv.includes('--type=gpu-process')) found.gpu = Number(name)
-      if (argv.includes('--type=utility') && argv.includes('--utility-sub-type=node.mojom.NodeService')) found.utility = Number(name)
+      parents.set(Number(name), Number(readFileSync(join(procRoot, name, 'stat'), 'utf8').replace(/^.*\) /su, '').split(' ')[1]))
+      argvs.set(Number(name), readFileSync(join(procRoot, name, 'cmdline'), 'utf8').split(/[\0 ]/u))
     } catch {
       // A process that ended while it was read.
     }
+  }
+  // Any descendant counts: Chromium starts the GPU process through its zygote, not from the main process itself.
+  const under = (pid) => {
+    for (let at = parents.get(pid), seen = 0; at !== undefined && seen < 64; at = parents.get(at), seen += 1) if (at === mainPid) return true
+    return false
+  }
+  const found = {}
+  for (const [pid, argv] of argvs) {
+    if (!under(pid)) continue
+    if (argv.includes('--type=gpu-process')) found.gpu = pid
+    if (argv.includes('--type=utility') && argv.includes('--utility-sub-type=node.mojom.NodeService')) found.utility = pid
   }
   return found
 }
@@ -202,10 +211,17 @@ async function waitForInspector(port, seconds) {
  * inspector (`inspectPort`), the utility host through the inspector SIGUSR1 opens in it (port 9229), with its worker
  * threads, and the GPU process through the main process's contentTracing.
  */
-export async function profileAll({ port, inspectPort, mainPid, seconds = 60, dir, measure }) {
+/** Whether a process catches `signal`, from its `/proc/PID/status` text (SigCgt, a hex mask with bit N-1 for signal N). */
+export function signalCaught(status, signal) {
+  const mask = /^SigCgt:\s*([0-9a-f]+)$/mu.exec(status)?.[1]
+  return mask !== undefined && ((BigInt(`0x${mask}`) >> BigInt(signal - 1)) & 1n) === 1n
+}
+
+export async function profileAll({ port, inspectPort, mainPid, seconds = 60, dir, measure, only = null }) {
   const results = {}
   const save = (name, value) => writeFileSync(join(dir, name), JSON.stringify(value))
   const side = async (name, kind, work) => {
+    if (only && !only.includes(name)) return
     const [cpu, outcome] = await Promise.all([measure(seconds / 60, join(dir, `${name}.cpu.json`)), work().catch((error) => ({ error: String(error).slice(0, 400) }))])
     const procCores = cpu?.cores?.byKind?.[kind] ?? null
     results[name] = { procCores, valid: cpu?.valid ?? false, ...outcome, ...(outcome.cores === undefined ? {} : agreement(outcome.cores, procCores)) }
@@ -228,6 +244,8 @@ export async function profileAll({ port, inspectPort, mainPid, seconds = 60, dir
   const { utility, gpu } = bmnProcesses(mainPid)
   await side('utility', 'utility:node.mojom.NodeService', async () => {
     if (!utility) throw new Error('no utility host found')
+    // SIGUSR1 opens Node's inspector only where Node catches it; uncaught, it would end the utility host.
+    if (!signalCaught(readFileSync(`/proc/${utility}/status`, 'utf8'), 10)) throw new Error('the utility host does not catch SIGUSR1')
     process.kill(utility, 'SIGUSR1')
     const listed = (await waitForInspector(9229, 10))?.[0]
     if (!listed) throw new Error('the utility host opened no inspector on SIGUSR1')

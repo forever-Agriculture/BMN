@@ -1,9 +1,9 @@
 // MODULE: cpu-profiles.test.mjs - Story 91.1 AC4: profiles are read into busy time and call sites, and compared with /proc by the 25% rule
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { agreement, summarizeProfile, summarizeTrace } from '../measure/cpu-profiles.mjs'
+import { agreement, bmnProcesses, signalCaught, summarizeProfile, summarizeTrace } from '../measure/cpu-profiles.mjs'
 
 let roots = []
 afterEach(() => {
@@ -31,6 +31,28 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
     expect(summary).toMatchObject({ wallMs: 10, busyMs: 4, idleMs: 6 })
     expect(summary.self[0]).toEqual({ label: 'parse node_modules/@xterm/xterm/lib/xterm.js:5', ms: 3 })
     expect(summary.total.find((entry) => entry.label.startsWith('render'))).toEqual({ label: 'render out/renderer/index.js:10', ms: 4 })
+  })
+
+  it('finds the GPU process under the zygote and the utility host under main, and nothing outside BMN', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-proc-'))
+    roots.push(root)
+    const process = (pid, parent, argv) => {
+      mkdirSync(join(root, String(pid)))
+      writeFileSync(join(root, String(pid), 'stat'), `${pid} (bmn) S ${parent} 1 1 0`)
+      writeFileSync(join(root, String(pid), 'cmdline'), argv.join('\0'))
+    }
+    process(10, 1, ['bmn'])
+    process(11, 10, ['bmn', '--type=zygote'])
+    process(12, 11, ['bmn', '--type=gpu-process'])
+    process(13, 10, ['bmn', '--type=utility', '--utility-sub-type=node.mojom.NodeService'])
+    process(20, 1, ['other', '--type=gpu-process'])
+    expect(bmnProcesses(10, root)).toEqual({ gpu: 12, utility: 13 })
+  })
+
+  it('reads from a process status whether it catches SIGUSR1 before the inspector is asked for', () => {
+    expect(signalCaught('Name:\tbmn\nSigCgt:\t0000000100004202\n', 10)).toBe(true)
+    expect(signalCaught('Name:\tbmn\nSigCgt:\t0000000100004002\n', 10)).toBe(false)
+    expect(signalCaught('Name:\tbmn\n', 10)).toBe(false)
   })
 
   it('marks a profile more than 25% apart from /proc as uncertain', () => {

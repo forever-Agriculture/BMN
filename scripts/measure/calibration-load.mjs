@@ -17,7 +17,7 @@ const USAGE = `Usage: node scripts/measure/calibration-load.mjs [--sessions clau
   [--warmup S] [--minutes N] [--width W --height H] [--pane COLSxROWS] [--appearance MODE,FONT,IDENTITY]
   [--sidebar 9,5,2] [--idle | --working N] [--steady] [--status-ms MS[,MS...]] [--tick MS] [--history N]
   [--saved-output COUNT,KB]
-  [--profile DIR] --out FILE
+  [--profile DIR [--profile-only renderer,main,utility,gpu]] --out FILE
 Starts this checkout's built BMN (pnpm run build first) with temporary data, config, state, cache and runtime folders,
 opens the sessions (each claude or codex one replays agent-like output with scripts/measure/agent-replay.mjs and reports
 its hook events, so BMN opens its screen mirror; shell sessions replay a quiet shell), shows one pane and hides the rest,
@@ -33,7 +33,7 @@ starts BMN with COUNT saved terminal outputs of about KB kilobytes each, as a BM
 TERMINAL_SAVED_OUTPUT_RETENTION). After --warmup seconds (60)
 it runs scripts/measure/bmn-cpu.mjs for --minutes (5) and writes its JSON, with the load's settings, to --out. With
 --profile DIR it starts BMN with its main inspector listening and, instead of the long measurement, takes Story 91.1
-AC4's four 60-second profiles into DIR, each beside a /proc measurement of the same minute. BMN is stopped and the
+AC4's four 60-second profiles into DIR, each beside a /proc measurement of the same minute (--profile-only takes some). BMN is stopped and the
 folders removed at the end.`
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -226,7 +226,7 @@ async function main(argv) {
       }
       if (profileDir) {
         mkdirSync(profileDir, { recursive: true })
-        report.profiles = await profileAll({ port, inspectPort, mainPid: child.pid, dir: profileDir, measure })
+        report.profiles = await profileAll({ port, inspectPort, mainPid: child.pid, dir: profileDir, measure, only: option(argv, '--profile-only', null)?.split(',') ?? null })
         step('profiled', { dir: profileDir })
       } else {
         report.cpu = await measure(minutes, join(dirname(out), `${out.split('/').at(-1)}.cpu.json`))
