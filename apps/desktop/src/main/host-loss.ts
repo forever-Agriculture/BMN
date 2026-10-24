@@ -308,24 +308,6 @@ export function adoptsStartedAttachment(
   return current === undefined || current.incarnationId !== started.incarnationId
 }
 
-export function recoverExistingSessionRenderer<HostPort, RendererPort>(
-  runtime: ExistingSessionRecoveryRuntime<HostPort>,
-  actions: ExistingSessionRecoveryActions<HostPort, RendererPort>
-): Promise<{ attachment: AttachmentIdentity; rendererPort: RendererPort }> {
-  return recoverRendererView(runtime, {
-    detach: (attachmentId) =>
-      runtime.client.request(METHOD_REGISTRY.terminalDetach, { attachmentId }),
-    createChannel: actions.createChannel,
-    connectHostPort: (port) => runtime.client.attachTerminalPort(port),
-    attach: (session) =>
-      runtime.client.request<AttachmentIdentity>(METHOD_REGISTRY.terminalAttach, session),
-    resize: (attachmentId, dimensions) =>
-      runtime.client.request(METHOD_REGISTRY.terminalResize, { attachmentId, ...dimensions }),
-    isMissingAttachment: actions.isMissingAttachment,
-    closeRendererPort: actions.closeRendererPort
-  })
-}
-
 export function wireLiveWindowLifecycle(actions: LiveWindowLifecycleActions): void {
   let startupDelivered = false
   actions.onDidFinishLoad(() => {

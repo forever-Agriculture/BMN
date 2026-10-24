@@ -11,7 +11,6 @@ import {
   adoptsStartedAttachment,
   connectRendererChannel,
   createRendererRecoveryCoalescer,
-  recoverExistingSessionRenderer,
   recoverExistingSessionRenderers,
   recoverRendererView,
   scheduleTerminalViewRecovery,
@@ -453,65 +452,6 @@ describe('host loss feedback', () => {
     expect(lifecycle.reloadRenderer).not.toHaveBeenCalled()
     lifecycle.rendererGone('crashed')
     expect(lifecycle.reloadRenderer).toHaveBeenCalledOnce()
-  })
-
-  it('composes renderer recovery from attach-existing-session operations without spawning', async () => {
-    const calls: string[] = []
-    const oldAttachment = {
-      sessionId: 'session-1',
-      incarnationId: 'incarnation-1',
-      attachmentId: 'old-attachment',
-      streamSeq: 0 as const,
-      captureStartedAt: '2026-09-13T10:00:00.000Z'
-    }
-    const replacement = { ...oldAttachment, attachmentId: 'replacement' }
-    const client = {
-      async request<Result>(method: ProtocolMethod, params: object): Promise<Result> {
-        if (method === METHOD_REGISTRY.sessionCreate) throw new Error('spawn must not be reachable')
-        if (method === METHOD_REGISTRY.terminalDetach) {
-          calls.push(`detach:${(params as { attachmentId: string }).attachmentId}`)
-          return { detached: true } as Result
-        }
-        if (method === METHOD_REGISTRY.terminalAttach) {
-          const session = params as { sessionId: string; incarnationId: string }
-          calls.push(`attach:${session.sessionId}:${session.incarnationId}`)
-          return replacement as Result
-        }
-        const resize = params as { attachmentId: string; cols: number; rows: number }
-        calls.push(`resize:${resize.attachmentId}:${resize.cols}x${resize.rows}`)
-        return { cols: resize.cols, rows: resize.rows } as Result
-      },
-      attachTerminalPort: (port: { side: string }) => {
-        expect(port.side).toBe('host')
-        calls.push('connect-host-port')
-      }
-    }
-
-    const recovered = await recoverExistingSessionRenderer(
-      {
-        client,
-        session: { sessionId: 'session-1', incarnationId: 'incarnation-1' },
-        attachment: oldAttachment,
-        dimensions: { cols: 80, rows: 24 }
-      },
-      {
-        createChannel: () => ({
-          hostPort: { side: 'host' },
-          rendererPort: { side: 'renderer' }
-        }),
-        isMissingAttachment: () => false,
-        closeRendererPort: vi.fn()
-      }
-    )
-
-    expect(calls).toEqual([
-      'detach:old-attachment',
-      'connect-host-port',
-      'attach:session-1:incarnation-1',
-      'resize:replacement:81x24',
-      'resize:replacement:80x24'
-    ])
-    expect(recovered.attachment).toEqual(replacement)
   })
 
   it('recovers a registry through one replacement renderer port without spawning', async () => {
