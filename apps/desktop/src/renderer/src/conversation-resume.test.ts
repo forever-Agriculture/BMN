@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
@@ -12,13 +12,12 @@ import {
   reportedResumeConfirmation,
   reportedResumeLine,
   resumeAvailable,
-  resumeBoundConversation,
   resumeConfirmationPresentation
 } from './conversation-resume'
 import { ResumeDialog } from './shell-dialogs'
 
 describe('visible conversation resume decisions', () => {
-  it('surfaces a missing reference and never invokes the resume process action', async () => {
+  it('presents a missing reference as a chat that cannot be resumed but can be found or started anew', () => {
     const binding: MissingConversationBinding = {
       sessionId: 'session-1',
       agentCli: 'claude',
@@ -34,8 +33,6 @@ describe('visible conversation resume decisions', () => {
       detail: 'The bound Claude conversation reference is missing; no process was started',
       capturedAt: '2026-09-12T12:00:00.000Z'
     }
-    const resume = vi.fn(async () => ({ incarnationId: 'new-process' }))
-
     expect(conversationBindingPresentation(binding)).toEqual({
       label: 'Chat unavailable',
       detail: binding.detail,
@@ -43,11 +40,6 @@ describe('visible conversation resume decisions', () => {
       canLocate: true,
       canStartNew: true
     })
-    await expect(resumeBoundConversation(binding, resume)).resolves.toEqual({
-      started: false,
-      message: binding.detail
-    })
-    expect(resume).not.toHaveBeenCalled()
   })
 
   it('names a conversation bound before Cursor was retired and offers nothing for it (Epic 71)', () => {

@@ -140,15 +140,6 @@ export function reportedResumeConfirmation(
   }
 }
 
-export async function resumeBoundConversation<Result>(
-  binding: ConversationBindingState | undefined,
-  resume: () => Promise<Result>
-): Promise<{ started: true; result: Result } | { started: false; message: string }> {
-  const presentation = conversationBindingPresentation(binding)
-  if (!presentation.canResume) return { started: false, message: presentation.detail }
-  return { started: true, result: await resume() }
-}
-
 interface ResumeConfirmationPresentation {
   /** What the owner is about to reopen, before any process starts. */
   message: string
