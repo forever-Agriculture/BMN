@@ -100,8 +100,9 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
     await next.trigger()
     expect(world.started).toHaveLength(3)
     expect(world.told).toEqual([{ title: 'Codex tools test stopped', body: 'BMN ran the tools test on Codex 0.162.1 3 times and it showed nothing, so it stopped trying. Integrations › Tools has Test again.' }])
-    expect(world.disk()[autoTestId(entry())]).toEqual({ count: 3, at: new Date(world.clock.now).toISOString(), outcome: null, told: true })
-    expect(next.view({ codex: '0.162.1' })).toEqual({ running: null, stopped: [{ kind: 'tools', harness: 'codex', version: '0.162.1', tries: 3, at: new Date(world.clock.now).toISOString() }] })
+    // The third try answered nothing; the stop names what the last try that answered said (Story 90.9).
+    expect(world.disk()[autoTestId(entry())]).toEqual({ count: 3, at: new Date(world.clock.now).toISOString(), outcome: null, told: true, detail: 'synthetic' })
+    expect(next.view({ codex: '0.162.1' })).toEqual({ running: null, stopped: [{ kind: 'tools', harness: 'codex', version: '0.162.1', tries: 3, at: new Date(world.clock.now).toISOString(), detail: 'synthetic' }] })
     // No fourth try, however late; nothing more said.
     world.clock.now += 7 * 86_400_000
     await next.trigger()

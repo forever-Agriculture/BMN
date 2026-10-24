@@ -1146,8 +1146,12 @@ context size, the research form or researcher model, or for a prompt test the si
 credential file, never its contents). Tests that send no prompt run first, one at a time; the loading tests and the
 Codex context test send one synthetic prompt each ("one prompt sent"). Each starts at most three times per version and
 binding, ten minutes apart, counted in `state/auto-tests.json` before each start; a pass or a failure settles it. A
-failure, or three tries that showed nothing, is told once; the row keeps the Needs-you dot ("BMN stopped after 3 tries on
-2.1.296") and offers **Test again…**, your own run. BMN runs your commands with `--auto`, recorded with `"by": "bmn"`. A
+failure, or three tries that showed nothing, is told once; the row keeps the Needs-you dot and says why in the last
+answering try's words ("BMN stopped after 3 tries on 2.0.29: opencode did not answer in a home folder without its
+sign-in"), and a failed context test names its reason the same way (a size in your own `~/.claude/settings.json`, for
+one, outranks an agent's own limit); both offer **Test again…**, your own run. Planning these tests reads BMN's
+OpenCode reader plugin from the packaged `bin` folder, since the main process bundles its module without the plugin
+beside it. BMN runs your commands with `--auto`, recorded with `"by": "bmn"`. A
 test run of BMN (test mode or the self-test) starts none unless `BMN_AUTO_TESTS` names them: `all`, or a comma-separated
 list of `rules`, `skills`, `skills-loading`, `tools`, `context` and `fence`.
 

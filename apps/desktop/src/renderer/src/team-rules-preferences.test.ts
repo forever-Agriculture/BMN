@@ -1178,7 +1178,7 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextValueWords({ limit: 272000, compact: null, unreadable: 'config.toml model_context_window is not a whole number' })).toBe("Can't be read")
     expect(contextStateWords({ harness: 'codex', limitProven: false, version: null, test: null })).toBe('Not supported yet · the app is not found')
     // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report.
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0 · one prompt sent')
+    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0: d · one prompt sent')
     expect(contextStateWords({ harness: 'claude', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
     expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · BMN tests 0.162.0 by itself')
   })
@@ -1202,7 +1202,7 @@ describe('context limits (60.9 AC3, AC4)', () => {
     const at = '2026-10-09T20:00:00.000Z'
     const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', limitProven: outcome === 'pass', version: '2.1.296', test: { at, version: '2.1.296', outcome, detail: 'd', by: 'bmn' } })
     expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · it takes the setting`)
-    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed`)
+    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed: d`)
     expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing`)
     // A test of another version is not this version's, whoever ran it; the owner's own test reads as before.
     expect(contextStateWords({ harness: 'claude', limitProven: false, version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('Not supported yet · BMN tests 2.1.297 by itself')

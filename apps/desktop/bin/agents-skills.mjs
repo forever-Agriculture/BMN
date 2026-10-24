@@ -1023,16 +1023,19 @@ export function claudeLoadingVerdict(stdout, token) {
 const CODEX_RECORDS = ['session_meta', 'turn_context', 'response_item', 'event_msg', 'compacted', 'world_state', 'token_usage_record']
 // An item of a turn that is words and not a tool: what the user said, what the model said, its reasoning.
 const CODEX_WORD_ITEMS = ['usermessage', 'agentmessage', 'reasoning']
+// A model item that runs no tool: words, reasoning, and the list of tools the turn offers, which Codex 0.164.0 writes
+// before the first message (seen 2026-10-24, Story 90.9); an offered tool is not one that ran.
+const CODEX_NO_TOOL_ITEMS = ['message', 'reasoning', 'additional_tools']
 
 /**
  * Whether a line of a Codex session record is a tool being called or answering: any model item
- * that is not a message or reasoning; an event about a turn's item (`item_started`,
+ * that is not a message, reasoning or the list of tools offered; an event about a turn's item (`item_started`,
  * `item_completed`) whose item is anything but words, or does not say what it is; and any other
  * event named like a tool.
  */
 function codexToolRecord(entry) {
   const type = entry.payload?.type
-  if (entry.type === 'response_item') return type !== 'message' && type !== 'reasoning'
+  if (entry.type === 'response_item') return !CODEX_NO_TOOL_ITEMS.includes(type)
   if (entry.type !== 'event_msg') return false
   if (typeof type !== 'string') return true
   if (type.startsWith('item_')) {

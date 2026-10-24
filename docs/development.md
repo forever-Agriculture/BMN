@@ -105,8 +105,9 @@ The app resolves its folders from the XDG variables, and each can be overridden 
 If `XDG_RUNTIME_DIR` is unset, the runtime root falls back to `$TMPDIR/bmn-<uid>`, and a very long
 `TMPDIR` can push the control socket over the limit named in Troubleshooting.
 
-The development launcher (`scripts/test/electron-dev.mjs`) points all of them at a new temporary
-folder and removes it on exit.
+The development launcher (`scripts/test/electron-dev.mjs`) points BMN's four `BMN_*_HOME` roots
+at a new temporary folder and removes it on exit. It preserves the inherited `XDG_*` paths for
+agent apps, so a Claude Code update cannot put its shared launcher in a folder deleted on exit.
 
 ## Code map
 

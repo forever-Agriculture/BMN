@@ -793,7 +793,7 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     // A pass is not tested again, by this start or the next.
     await first.runner.trigger()
     await bmn().runner.trigger()
-    expect([starts(), first.told, Object.values(kept)]).toEqual([1, [], [{ count: 1, at: NOW.toISOString(), outcome: 'pass' }]])
+    expect([starts(), first.told, Object.values(kept)]).toEqual([1, [], [{ count: 1, at: NOW.toISOString(), outcome: 'pass', detail: expect.any(String) }]])
     // The app is updated: its new version is untested, and BMN tests it at the next look.
     claude('2.1.296', '137k')
     expect(verdict()).toBe('PASS not applied')
@@ -813,7 +813,7 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     expect(starts()).toBe(1)
     expect(first.told).toEqual([{ title: 'Claude Code context test failed',
       body: `Opus's own context limit does not hold on Claude Code ${CLAUDE}: the test BMN ran by itself failed. Integrations › Health has the details and Test again.` }])
-    expect(Object.values(kept)).toEqual([{ count: 1, at: NOW.toISOString(), outcome: 'fail', told: true }])
+    expect(Object.values(kept)).toEqual([{ count: 1, at: NOW.toISOString(), outcome: 'fail', told: true, detail: expect.any(String) }])
     expect(check('opus', OPUS(), contextTests()).steps.join('\n')).toContain('not applied, the context test failed on this Claude Code version, so the setting is not used (bmn context test claude runs it again)')
     // The next start neither tests that version again nor says it again; a failure is not a stop.
     const next = bmn()
@@ -845,7 +845,7 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     expect(starts()).toBe(3)
     expect(next.told).toEqual([{ title: 'Claude Code context test stopped',
       body: `Opus's own context limit does not hold on Claude Code ${CLAUDE}: the test BMN ran by itself showed nothing, 3 times, so it stopped trying. Integrations › Health has Test again.` }])
-    expect(next.runner.view({ claude: CLAUDE })).toEqual({ running: null, stopped: [{ kind: 'context', harness: 'claude', version: CLAUDE, tries: 3, at: new Date(clock).toISOString() }] })
+    expect(next.runner.view({ claude: CLAUDE })).toEqual({ running: null, stopped: [{ kind: 'context', harness: 'claude', version: CLAUDE, tries: 3, at: new Date(clock).toISOString(), detail: expect.any(String) }] })
     // No fourth time, however often or late BMN looks, and nothing more is said.
     clock += 86_400_000
     await next.runner.trigger()

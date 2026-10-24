@@ -899,7 +899,8 @@ describe('BMN\'s own context testing on Integrations › Health (63.1)', () => {
     later()
     const stopped = await call<AutoTestsView>('rules:auto-tests', { fresh: true })
     expect(tests()).toBe(3)
-    expect(stopped).toEqual({ running: null, stopped: [{ kind: 'context', harness: 'codex', version: '0.161.0', tries: 3, at: expect.any(String) }] })
+    // The stop names why, in the last answering try's words (Story 90.9).
+    expect(stopped).toEqual({ running: null, stopped: [{ kind: 'context', harness: 'codex', version: '0.161.0', tries: 3, at: expect.any(String), detail: expect.any(String) }] })
     expect(notices).toEqual([{ title: 'Codex context test stopped',
       body: "Sol's own context limit does not hold on Codex 0.161.0: the test BMN ran by itself showed nothing, 3 times, so it stopped trying. Integrations › Health has Test again." }])
     expect(statSync(join(home, '.config/bmn/agents/state/auto-tests.json')).mode & 0o777).toBe(0o600)

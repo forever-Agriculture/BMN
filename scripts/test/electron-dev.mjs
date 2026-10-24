@@ -1,3 +1,4 @@
+// MODULE: electron-dev.mjs - Isolate BMN development data while preserving agent apps' installed paths
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -8,7 +9,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const requireFromApp = createRequire(join(appDirectory, 'package.json'))
-const electronVite = requireFromApp.resolve('electron-vite/bin/electron-vite.js')
+const electronVite = join(dirname(requireFromApp.resolve('electron-vite/package.json')), 'bin/electron-vite.js')
 const { temporaryRoot, value: child } = startWithTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
   ({ roots }) => spawn(process.execPath, [electronVite, 'dev'], {
@@ -16,10 +17,7 @@ const { temporaryRoot, value: child } = startWithTemporaryRoot(
     stdio: 'inherit',
     env: {
       ...process.env,
-      XDG_CONFIG_HOME: roots.config,
-      XDG_DATA_HOME: roots.data,
-      XDG_STATE_HOME: roots.state,
-      XDG_CACHE_HOME: roots.cache,
+      // Agents inherit this environment too: their updates must survive BMN's temporary-root cleanup.
       BMN_CONFIG_HOME: join(roots.config, 'bmn'),
       BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'),

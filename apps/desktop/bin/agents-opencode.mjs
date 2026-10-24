@@ -2,7 +2,8 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, constants, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeSync, chmodSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { sha256 } from './agents-roster.mjs'
 import { stateDirectory } from './agents-state.mjs'
 
@@ -109,19 +110,31 @@ const CONFIG_TEXT = `${JSON.stringify({ $schema: 'https://opencode.ai/config.jso
 let configFiles
 
 /**
+ * One of the reader plugin's files, named by its place beside this module: there for the command line, in the packaged app's `bin` folder, or in
+ * the app's `bin` folder beside its built files. The main process bundles this module without them beside it, and its
+ * own tests plan from this folder's mark (Story 90.9: none started while reading beside the bundle threw).
+ */
+function pluginFile(beside) {
+  const own = fileURLToPath(beside)
+  const name = basename(own)
+  const places = [own, ...(typeof process.resourcesPath === 'string' ? [join(process.resourcesPath, 'bin', name)] : []), join(dirname(own), '..', '..', 'bin', name)]
+  return readFileSync(places.find((place) => existsSync(place)) ?? places[0], 'utf8')
+}
+
+/**
  * Every file of BMN's OpenCode configuration folder, by its path inside `config/opencode`. Read on
- * first use: the main process bundles this module without the plugin files beside it.
+ * first use, from where `pluginFile` finds them.
  */
 export function openCodeConfigFiles() {
   configFiles ??= Object.freeze({
     'opencode.json': CONFIG_TEXT,
     'plugins/bmn-reader/package.json': JSON.stringify({ name: 'bmn-read-only', version: '1.0.0', type: 'module', exports: { '.': './index.mjs' } }) + '\n',
-    'plugins/bmn-reader/index.mjs': readFileSync(new URL('./opencode-reader-plugin.mjs', import.meta.url), 'utf8'),
-    'plugins/bmn-reader/opencode-project-reader.mjs': readFileSync(new URL('./opencode-project-reader.mjs', import.meta.url), 'utf8'),
-    'plugins/bmn-reader/opencode-project-git.mjs': readFileSync(new URL('./opencode-project-git.mjs', import.meta.url), 'utf8'),
-    'plugins/bmn-reader/opencode-reader-child.mjs': readFileSync(new URL('./opencode-reader-child.mjs', import.meta.url), 'utf8'),
-    'plugins/bmn-reader/opencode-child-accounting.mjs': readFileSync(new URL('./opencode-child-accounting.mjs', import.meta.url), 'utf8'),
-    'plugins/bmn-reader/ask-git.sh': readFileSync(new URL('./ask-git.sh', import.meta.url), 'utf8'),
+    'plugins/bmn-reader/index.mjs': pluginFile(new URL('./opencode-reader-plugin.mjs', import.meta.url)),
+    'plugins/bmn-reader/opencode-project-reader.mjs': pluginFile(new URL('./opencode-project-reader.mjs', import.meta.url)),
+    'plugins/bmn-reader/opencode-project-git.mjs': pluginFile(new URL('./opencode-project-git.mjs', import.meta.url)),
+    'plugins/bmn-reader/opencode-reader-child.mjs': pluginFile(new URL('./opencode-reader-child.mjs', import.meta.url)),
+    'plugins/bmn-reader/opencode-child-accounting.mjs': pluginFile(new URL('./opencode-child-accounting.mjs', import.meta.url)),
+    'plugins/bmn-reader/ask-git.sh': pluginFile(new URL('./ask-git.sh', import.meta.url)),
     [`agents/${OPENCODE_HELPER_AGENT}.md`]: HELPER_AGENT_TEXT,
     [`agents/${OPENCODE_RESEARCH_AGENT}.md`]: RESEARCH_AGENT_TEXT
   })

@@ -14,9 +14,9 @@ export function testRunning(auto: AutoTestsView, kind: AutoTestKind | readonly A
   return auto.running !== null && auto.running.harness === harness && kinds.includes(auto.running.kind)
 }
 
-/** Said in a row's faint line once BMN stopped trying: how often, and on which version. */
-export function stoppedWords(stop: Pick<Stop, 'tries' | 'version'>): string {
-  return `BMN stopped after ${stop.tries} tries on ${stop.version}`
+/** Said in a row's faint line once BMN stopped trying: how often, on which version, and why, as the last try said. */
+export function stoppedWords(stop: Pick<Stop, 'tries' | 'version' | 'detail'>): string {
+  return `BMN stopped after ${stop.tries} tries on ${stop.version}${stop.detail ? `: ${stop.detail}` : ''}`
 }
 
 /** Said while BMN runs the test. */

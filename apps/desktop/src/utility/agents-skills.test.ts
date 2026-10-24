@@ -790,6 +790,12 @@ describe('whether the app hands a skill to its model: the owner-run loading test
     expect(codexLoadingVerdict(turn([{ type: 'event_msg', payload: { type: 'item_started', item: {} } }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
     expect(codexLoadingVerdict(turn([{ type: 'event_msg', payload: {} }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
     expect(codexLoadingVerdict(turn([item('Reasoning'), item('user_message'), message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('pass')
+    // Codex 0.164.0 lists the tools a turn offers before its first message (Story 90.9): an offered tool is not one that ran.
+    const OFFERED = { type: 'response_item', payload: { type: 'additional_tools', role: 'developer', tools: [{ type: 'namespace', name: 'functions', tools: [] }] } }
+    const offeredFirst = (given: unknown[], happened: unknown[], said: string): string => turn(given, happened, said).replace(`${line(META)}\n`, `${line(META)}\n${line(OFFERED)}\n`)
+    expect(codexLoadingVerdict(offeredFirst([message('user', `<skill>reply with exactly ${TOKEN}</skill>`)], [CALL, OUTPUT], TOKEN), TOKEN)[0]).toBe('pass')
+    expect(codexLoadingVerdict(offeredFirst([], [CALL, OUTPUT], TOKEN), TOKEN)[0]).toBe('inconclusive')
+    expect(codexLoadingVerdict(turn([{ ...OFFERED, payload: { ...OFFERED.payload, type: 'tool_search_call' } }, message('user', TOKEN)], [], TOKEN), TOKEN)[0]).toBe('inconclusive')
     expect(codexLoadingVerdict(turn([], [{ type: 'response_item', payload: { type: 'web_search_call' } }], 'nothing'), TOKEN))
       .toEqual(['inconclusive', "a tool ran and the test skill's words never appeared, so BMN cannot tell what Codex itself gave the model"])
     expect(codexLoadingVerdict(turn([], [{ type: 'event_msg', payload: { type: 'agent_message', message: 'I know no such skill.' } }], 'I know no such skill.'), TOKEN))
