@@ -13,7 +13,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   SAVED_OUTPUT_CAPTURE_INTERVAL_MS,
   captureLiveTerminalSnapshot,
-  installLiveTerminalSearch,
   liveTerminalOptions,
   openSavedOutput,
   savedOutputPresentation,
@@ -229,55 +228,8 @@ describe('live terminal history and saved output', () => {
       terminal.dispose()
     }
   })
-  it('finds output beyond the visible screen inside the named scrollback bound', async () => {
-    const terminal = new Terminal({
-      cols: 24,
-      rows: 3,
-      allowProposedApi: true,
-      ...liveTerminalOptions()
-    })
-    try {
-      await write(
-        terminal,
-        Array.from({ length: 30 }, (_, index) =>
-          index === 4 ? 'hidden needle\r\n' : `line ${index}\r\n`
-        ).join('')
-      )
-      expect(terminal.buffer.active.baseY).toBeGreaterThan(0)
-      expect(terminal.buffer.active.viewportY).toBe(terminal.buffer.active.baseY)
-
-      let selection:
-        | { start: { x: number; y: number }; end: { x: number; y: number } }
-        | undefined
-      let selectedText = ''
-      const searchable = terminal as unknown as Terminal & {
-        getSelectionPosition(): typeof selection
-        clearSelection(): void
-        select(column: number, row: number, length: number): void
-      }
-      searchable.getSelectionPosition = () => selection
-      searchable.clearSelection = () => {
-        selection = undefined
-        selectedText = ''
-      }
-      searchable.select = (column, row, length) => {
-        selection = {
-          start: { x: column, y: row },
-          end: { x: column + length, y: row }
-        }
-        selectedText =
-          terminal.buffer.active.getLine(row)?.translateToString().slice(column, column + length) ?? ''
-      }
-
-      const search = installLiveTerminalSearch(searchable)
-      expect(search.findNext('needle')).toBe(true)
-      expect(selectedText).toBe('needle')
-      expect(terminal.buffer.active.viewportY).toBeLessThan(terminal.buffer.active.baseY)
-      expect(liveTerminalOptions().scrollback).toBe(TERMINAL_SCROLLBACK_LINES)
-      search.dispose()
-    } finally {
-      terminal.dispose()
-    }
+  it('gives the live terminal the named scrollback bound', () => {
+    expect(liveTerminalOptions().scrollback).toBe(TERMINAL_SCROLLBACK_LINES)
   })
 
   it('captures text and presents full saved-output disclosure in a separate model', async () => {

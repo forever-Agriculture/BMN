@@ -1,7 +1,6 @@
 // MODULE: terminal-history.ts - Live terminal capture and saved-output presentation
-import { SearchAddon } from '@xterm/addon-search'
 import { failureDetail, hasBridgeErrorCode } from './bridge-error'
-import type { Terminal as BrowserTerminal, ITerminalOptions } from '@xterm/xterm'
+import type { ITerminalOptions } from '@xterm/xterm'
 import {
   ERROR_CODES,
   TERMINAL_SCROLLBACK_LINES,
@@ -27,10 +26,6 @@ interface CaptureTerminal extends SnapshotTerminal {
   write(data: string | Uint8Array, callback?: () => void): void
 }
 
-interface SearchTerminal extends SnapshotTerminal {
-  clearSelection(): void
-}
-
 export interface SavedOutputPresentation {
   key: string
   capturedAt: string
@@ -53,26 +48,6 @@ export const SAVED_OUTPUT_CAPTURE_INTERVAL_MS = 30_000
 
 export function liveTerminalOptions(): Pick<ITerminalOptions, 'scrollback'> {
   return { scrollback: TERMINAL_SCROLLBACK_LINES }
-}
-
-export function installLiveTerminalSearch(terminal: SearchTerminal): {
-  findNext(term: string): boolean
-  findPrevious(term: string): boolean
-  clear(): void
-  dispose(): void
-} {
-  const addon = new SearchAddon()
-  addon.activate(terminal as unknown as BrowserTerminal)
-  const options = { caseSensitive: false, incremental: false, regex: false, wholeWord: false }
-  return {
-    findNext: (term) => addon.findNext(term, options),
-    findPrevious: (term) => addon.findPrevious(term, options),
-    clear: () => {
-      addon.clearDecorations()
-      terminal.clearSelection()
-    },
-    dispose: () => addon.dispose()
-  }
 }
 
 export function captureLiveTerminalSnapshot(
