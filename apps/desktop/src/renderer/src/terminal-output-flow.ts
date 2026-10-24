@@ -1,4 +1,3 @@
-import { failureDetail } from './bridge-error'
 import {
   CONSUMER_OUTPUT_QUEUE_BYTES,
   TERMINAL_WRITE_BYTES,
@@ -13,46 +12,7 @@ interface TerminalOutputActions {
   recover(reason: TerminalViewDisconnectReason): void
 }
 
-interface TerminalRecoveryActions {
-  clearAttachment(): void
-  setStatus(status: string): void
-  setFailure(message: string): void
-  recover(reason: TerminalViewDisconnectReason): Promise<unknown>
-}
-
-export async function handleTerminalViewFailure(
-  reason: TerminalViewDisconnectReason,
-  actions: TerminalRecoveryActions
-): Promise<void> {
-  actions.clearAttachment()
-  actions.setStatus('Terminal view recovering')
-  actions.setFailure(terminalViewDisconnectNotice(reason))
-  try {
-    await actions.recover(reason)
-  } catch (error) {
-    const detail = failureDetail(error, 'the recovery request failed')
-    actions.setStatus('Terminal view disconnected')
-    actions.setFailure(
-      `Terminal view recovery failed: ${detail.slice(0, 240)}. Fix: reopen BMN; the shell process was not stopped.`
-    )
-  }
-}
-
 type OutputChunk = Pick<TerminalOutputMessage, 'attachmentId' | 'streamSeq' | 'bytes'>
-
-function terminalViewDisconnectNotice(reason: TerminalViewDisconnectReason): string {
-  if (reason === 'sequence-gap') {
-    return 'Terminal output sequence was invalid. Rebuilding this view; the shell process was not stopped.'
-  }
-  if (reason === 'acknowledgement-timeout') {
-    return 'Terminal output acknowledgements stalled. Rebuilding this view; the shell process was not stopped.'
-  }
-  return `Terminal output exceeded the ${CONSUMER_OUTPUT_QUEUE_BYTES / (1024 * 1024)} MiB view queue. Rebuilding this view; the shell process was not stopped.`
-}
-
-export function undeliveredOutputLossNotice(droppedBytes: number): string {
-  return `${droppedBytes.toLocaleString('en-US')} bytes of terminal output made without a view were dropped. Earlier output is only in Saved Output.`
-}
 
 export class TerminalOutputFlow {
   private attachmentId: string | undefined

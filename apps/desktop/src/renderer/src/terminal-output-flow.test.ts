@@ -1,16 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  handleTerminalViewFailure,
-  TerminalOutputFlow,
-  undeliveredOutputLossNotice
-} from './terminal-output-flow'
+import { TerminalOutputFlow } from './terminal-output-flow'
 
 describe('renderer terminal output flow', () => {
-  it('turns typed no-view loss into an explicit Saved Output notice', () => {
-    expect(undeliveredOutputLossNotice(12_345)).toBe(
-      '12,345 bytes of terminal output made without a view were dropped. Earlier output is only in Saved Output.'
-    )
-  })
   it('disconnects slow and sequence-invalid flows and ignores callbacks from the abandoned view', () => {
     const recover = vi.fn()
     const writes: Array<() => void> = []
@@ -33,25 +24,5 @@ describe('renderer terminal output flow', () => {
     flow.attach('attachment-2')
     expect(flow.accept({ attachmentId: 'attachment-2', streamSeq: 1, bytes: new Uint8Array(1) }, actions)).toBe(false)
     expect(recover).toHaveBeenCalledWith('sequence-gap')
-  })
-
-  it('shows the acknowledgement-stall notice and requests fresh-renderer recovery', async () => {
-    const clearAttachment = vi.fn()
-    const setStatus = vi.fn()
-    const setFailure = vi.fn()
-    const recover = vi.fn(async () => ({ recovering: true }))
-
-    await handleTerminalViewFailure('acknowledgement-timeout', {
-      clearAttachment,
-      setStatus,
-      setFailure,
-      recover
-    })
-
-    expect(clearAttachment).toHaveBeenCalledOnce()
-    expect(setStatus).toHaveBeenCalledWith('Terminal view recovering')
-    expect(setFailure).toHaveBeenCalledWith(expect.stringContaining('acknowledgements stalled'))
-    expect(setFailure).toHaveBeenCalledWith(expect.stringContaining('shell process was not stopped'))
-    expect(recover).toHaveBeenCalledWith('acknowledgement-timeout')
   })
 })
