@@ -112,7 +112,7 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
       () => { third.innerHTML = '<span>c</span>'; observe([{ type: 'childList', target: third }]) }
     ]
     const context = {
-      document: { querySelectorAll: () => [first, second, third] },
+      document: { querySelectorAll: () => [first, second, third], visibilityState: 'visible' },
       MutationObserver: class { constructor(callback) { observe = callback } observe() {} disconnect() {} },
       performance: { now: () => now },
       requestAnimationFrame: (callback) => { const change = frames.shift(); setTimeout(() => { change?.(); now += 400; callback() }, 0) },
@@ -122,5 +122,6 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
     expect({ frames: counts.frames, rebuilt: counts.rebuilt, unchanged: counts.unchanged }).toEqual({ frames: 3, rebuilt: 3, unchanged: 2 })
     expect({ ...counts.rowsPerFrame }).toEqual({ 0: 1, 1: 1, 2: 1 })
     expect({ ...counts.attributes }).toEqual({ 'span.status-dot.running@class': 1 })
+    expect(counts.visibility).toBe('visible')
   })
 })

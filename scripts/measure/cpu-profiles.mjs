@@ -125,6 +125,8 @@ export async function profileTarget(url, seconds, { workers = false } = {}) {
 /**
  * Page code: for `seconds`, how many terminal rows xterm rebuilds in each animation frame, how many of those rebuilds
  * leave the row's markup as it was, and which other elements change their attributes, counted by tag, class and name.
+ * A hidden or covered window draws few frames (Wayland sends no frame callbacks to it), so the frame count and the
+ * page's visibility say whether the minute measured drawing at all.
  */
 export const ROW_RENDERS = `async (seconds) => {
   const counts = { frames: 0, rebuilt: 0, unchanged: 0, rowsPerFrame: {}, attributes: {}, other: {} }
@@ -156,7 +158,7 @@ export const ROW_RENDERS = `async (seconds) => {
   })
   observer.disconnect()
   const top = (table) => Object.fromEntries(Object.entries(table).sort((a, b) => b[1] - a[1]).slice(0, 25))
-  return { ...counts, attributes: top(counts.attributes), other: top(counts.other) }
+  return { ...counts, visibility: document.visibilityState, attributes: top(counts.attributes), other: top(counts.other) }
 }`
 
 const GPU_CATEGORIES = ['toplevel', 'gpu', 'viz', 'cc', 'disabled-by-default-gpu.service', 'disabled-by-default-viz.gpu_composite_time']
