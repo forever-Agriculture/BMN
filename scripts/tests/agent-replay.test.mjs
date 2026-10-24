@@ -1,7 +1,12 @@
 // MODULE: agent-replay.test.mjs - Story 91.1 AC3: the calibration load's screens are the same for one seed and carry what an agent's screen does
+import { spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { random, sixel, statusFrame, styledLine } from '../measure/agent-replay.mjs'
-import { sessionPlan } from '../measure/calibration-load.mjs'
+import { FileSavedOutputStore } from '../../apps/desktop/src/utility/saved-output-store.ts'
+import { seedSavedOutput, sessionPlan } from '../measure/calibration-load.mjs'
 
 // What a terminal shows once the escape sequences are taken out.
 const SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;?]*[A-Za-z]`, 'gu')
@@ -30,6 +35,43 @@ describe('calibration load (Story 91.1 AC3)', () => {
     expect(image.startsWith('\u001bPq')).toBe(true)
     expect(image.endsWith('\u001b\\')).toBe(true)
     expect(image.split('-')).toHaveLength(8)
+  })
+
+  it('keeps an idle session running at its prompt and its terminal size in the size file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-replay-'))
+    try {
+      const sizeFile = join(root, 'size')
+      const environment = { ...process.env }
+      delete environment.BMN_CONTROL_SOCKET
+      const child = spawn(process.execPath, [new URL('../measure/agent-replay.mjs', import.meta.url).pathname, '--idle', '--size-file', sizeFile], { env: environment, stdio: ['ignore', 'pipe', 'ignore'] })
+      let output = ''
+      child.stdout.on('data', (chunk) => { output += chunk })
+      for (let waited = 0; !existsSync(sizeFile) && waited < 5_000; waited += 50) await new Promise((done) => setTimeout(done, 50))
+      await new Promise((done) => setTimeout(done, 300))
+      // Still running: an await that never settles would have ended it with exit code 13.
+      expect(child.exitCode).toBeNull()
+      child.kill()
+      expect(readFileSync(sizeFile, 'utf8')).toBe('80x24')
+      expect(visible(output)).toContain('> ')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('seeds saved outputs that BMN\'s own store reads as captures of about the asked size', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-seed-'))
+    try {
+      seedSavedOutput(root, 3, 20)
+      const catalog = await new FileSavedOutputStore(root).loadCatalog()
+      expect(catalog.unreadable).toEqual([])
+      expect(catalog.snapshots).toHaveLength(3)
+      for (const snapshot of catalog.snapshots) {
+        expect(snapshot.content.length).toBeGreaterThanOrEqual(20 * 1024)
+        expect(snapshot.content.length).toBeLessThan(21 * 1024)
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('reads the sessions as agents in order and refuses an unknown one', () => {

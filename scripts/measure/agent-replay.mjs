@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 // MODULE: agent-replay.mjs - Story 91.1 AC3: one session's agent-like output for the CPU calibration, run as the session's program
 import { execFileSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 
-const USAGE = `Usage: node scripts/measure/agent-replay.mjs [--agent claude|codex|shell] [--scale N] [--seed N]
+const USAGE = `Usage: node scripts/measure/agent-replay.mjs [--agent claude|codex|shell] [--scale N] [--seed N] [--idle [--tick MS] | --steady] [--history N]
+  [--size-file FILE]
 Writes what an agent's terminal shows while it works and while it waits: a status line redrawn in synchronized updates,
 streamed styled text in bursts, tool blocks, a Sixel image once, scrolling, a full redraw on resize, and idle stretches.
 For claude and codex it reports hook events through BMN's \`bmn hook <agent>\`, as the real apps do, so BMN opens the
 session's screen mirror. --scale multiplies how often things happen (1 by default). Started as \`claude\` or \`codex\`
-(a link with that name), the agent is taken from the name. Runs until stopped.`
+(a link with that name), the agent is taken from the name. --idle starts the app and waits at its prompt, as a session
+nobody is using does; --steady starts the next turn a second after one ends, as an agent left to work does. --tick redraws an idle session's
+status every MS milliseconds, as an app's clock does. --history prints N lines first, as a session open for hours has
+in its scrollback. --size-file keeps the terminal's size there as COLSxROWS. Runs until stopped.`
 
 const ESC = '\u001b'
 const CSI = `${ESC}[`
@@ -90,14 +95,24 @@ const CONVERSATION = randomUUID()
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function run({ agent, scale, seed }) {
+async function run({ agent, scale, seed, idle, tick, steady, history, sizeFile }) {
   const next = random(seed)
   const write = (text) => process.stdout.write(text)
   const columns = () => process.stdout.columns || 80
+  const keepSize = () => { if (sizeFile) writeFileSync(sizeFile, `${columns()}x${process.stdout.rows || 24}`) }
   let resized = false
-  process.stdout.on('resize', () => { resized = true })
+  process.stdout.on('resize', () => { resized = true; keepSize() })
+  keepSize()
   write(`${CSI}2J${CSI}H`)
+  for (let line = 0; line < history; line += 1) write(`${styledLine(next, columns())}\r\n`)
   hook(agent, 'SessionStart', { source: 'startup' })
+  if (idle) {
+    write(`${CSI}2m> ${CSI}22m`)
+    let shown = 0
+    if (tick > 0) setInterval(() => { shown += 1; write(`\r${CSI}2K${CSI}2m> ${CSI}22m${CSI}2m(${shown})${CSI}22m`) }, tick)
+    // A timer keeps the process alive: an await that never settles alone would end it (exit code 13).
+    await new Promise(() => setInterval(() => undefined, 60_000))
+  }
   let sentImage = false
   for (let turn = 0; ; turn += 1) {
     hook(agent, 'UserPromptSubmit', { prompt: 'made-up prompt' })
@@ -141,7 +156,7 @@ async function run({ agent, scale, seed }) {
     // The turn ends: the status line gives way to a quiet prompt, and the app waits.
     write(`\r${CSI}2A${CSI}2K${CSI}32m✓ Done${CSI}39m\r\n${CSI}2K> \r\n`)
     hook(agent, 'Stop', {})
-    await sleep((30_000 + next() * 90_000) / Math.max(scale, 0.1))
+    await sleep(steady ? 1_000 : (30_000 + next() * 90_000) / Math.max(scale, 0.1))
   }
 }
 
@@ -157,6 +172,6 @@ if (isMain) {
   else {
     const named = basename(process.argv[1])
     const agent = option(argv, '--agent', named === 'agent-replay.mjs' ? 'claude' : named)
-    await run({ agent, scale: Number(option(argv, '--scale', '1')), seed: Number(option(argv, '--seed', '1')) })
+    await run({ agent, scale: Number(option(argv, '--scale', '1')), seed: Number(option(argv, '--seed', '1')), idle: argv.includes('--idle'), tick: Number(option(argv, '--tick', '0')), steady: argv.includes('--steady'), history: Number(option(argv, '--history', '0')), sizeFile: option(argv, '--size-file', null) })
   }
 }
