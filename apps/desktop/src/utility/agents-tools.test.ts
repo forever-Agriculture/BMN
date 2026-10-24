@@ -388,10 +388,10 @@ describe('a tool as each app writes it', () => {
 
   it('names each variable the way that app does, and never a value', () => {
     expect(renderTool(docs, 'claude', SEEN).entry).toEqual({ type: 'http', url: 'https://docs.example.test/mcp', headers: { Authorization: '${DOCS_TOKEN}' } })
-    expect(renderTool(docs, 'opencode', SEEN).entry).toEqual({ type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' }, enabled: true })
+    expect(renderTool(docs, 'opencode', SEEN).entry).toEqual({ type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' } })
     expect(renderTool(docs, 'codex', SEEN).entry).toEqual({ url: 'https://docs.example.test/mcp', env_http_headers: { Authorization: 'DOCS_TOKEN' } })
     expect(renderTool(local, 'claude', SEEN).entry).toEqual({ type: 'stdio', command: 'local-tool', args: ['--root', '/srv', '${LOCAL_ARG}'], env: { LOCAL_KEY: '${OWNER_KEY}' } })
-    expect(renderTool(local, 'opencode', SEEN).entry).toEqual({ type: 'local', command: ['local-tool', '--root', '/srv', '{env:LOCAL_ARG}'], environment: { LOCAL_KEY: '{env:OWNER_KEY}' }, enabled: true })
+    expect(renderTool(local, 'opencode', SEEN).entry).toEqual({ type: 'local', command: ['local-tool', '--root', '/srv', '{env:LOCAL_ARG}'], environment: { LOCAL_KEY: '{env:OWNER_KEY}' } })
     expect(renderTool(plain, 'codex').entry).toEqual({ command: 'plain-tool' })
     expect(renderTool(plain, 'claude').entry).toEqual({ type: 'stdio', command: 'plain-tool', args: [] })
     expect(renderTool({ ...plain, env: { SAME: 'SAME' } }, 'codex', SEEN).entry).toEqual({ command: 'plain-tool', env_vars: ['SAME'] })

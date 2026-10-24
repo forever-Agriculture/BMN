@@ -754,7 +754,7 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
   })
 
   it('a test name is no site: without the test\'s own port nothing is asked', async () => {
-    expect(await ask({ environment: { HOME: home } })).toMatchObject({ ok: false, outcome: 'failed', note: expect.stringContaining('test name') })
+    expect(await ask({ environment: { BMN_JUDGE_TEST_PORT: '' } })).toMatchObject({ ok: false, outcome: 'failed', note: expect.stringContaining('test name') })
     expect(requests).toHaveLength(0)
   })
 
@@ -1310,7 +1310,8 @@ describe('the command works by itself (65.2 AC1, AC8)', () => {
     const args = files()
     const before = everyFile(home).map((file) => file.path).sort()
     expect((await runCli(['judge', 'ask', ...args, '--data', 'public'])).code).toBe(0)
-    const added = everyFile(home).map((file) => file.path).filter((path) => !before.includes(path)).sort()
+    // The stand-in opencode notes how it was run (Story 85's auth export); that file is the stand-in's, not BMN's.
+    const added = everyFile(home).map((file) => file.path).filter((path) => !before.includes(path) && path !== join(home, 'synthetic-export-invocation.json')).sort()
     expect(added.every((path) => path === judgeRecordPath() || path.startsWith(`${judgeRecordPath()}.writing`))).toBe(true)
     expect(added).toContain(judgeRecordPath())
   })

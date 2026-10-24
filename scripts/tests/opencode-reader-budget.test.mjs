@@ -1,6 +1,6 @@
 // MODULE: opencode-reader-budget.test.mjs - Real subprocess deadline and cancellation on a flat project
 import assert from 'node:assert/strict'
-import {test} from 'node:test'
+import {test} from 'vitest'
 import {execFile} from 'node:child_process'
 import {mkdtempSync,writeFileSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
@@ -24,4 +24,4 @@ const elapsed=performance.now()-start;assert(refused,'operation must refuse rath
   const result=await exec(process.execPath,[program],{timeout:12000,maxBuffer:65536})
   const row=JSON.parse(result.stdout.trim());assert.equal(row.refused,true)
  }finally{rmSync(root,{recursive:true,force:true})}
-})
+},15000)

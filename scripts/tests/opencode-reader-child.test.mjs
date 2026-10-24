@@ -1,6 +1,6 @@
 // MODULE: opencode-reader-child.test.mjs - Bounded lifetime, late creation and attribution with the one-argument native SDK contract
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

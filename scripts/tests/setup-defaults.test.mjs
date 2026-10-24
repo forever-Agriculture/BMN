@@ -34,7 +34,7 @@ function qualify(app) {
   appendFileSync(skillsTestsPath(), JSON.stringify({ harness: app, kind: 'capability', version: versions[app], outcome: 'pass',
     roots: [{ root: app === 'codex' ? '.agents/skills' : app === 'claude' ? '.claude/skills' : '.config/opencode/skills', folder: true, link: true }] }) + '\n')
   appendFileSync(toolsTestsPath(), JSON.stringify({ harness: app, kind: 'capability', version: versions[app], outcome: 'pass',
-    at: '2026-10-20T22:00:00.000Z', variable: 'pass', argument: 'pass', header: 'pass' }) + '\n')
+    at: '2026-10-20T22:00:00.000Z', variable: 'pass', argument: 'pass', header: 'pass', ...(app === 'opencode' ? { entry_layout: 'mcp.servers' } : {}) }) + '\n')
 }
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'bmn-setup-coordinator-'))

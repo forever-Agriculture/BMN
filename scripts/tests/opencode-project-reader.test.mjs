@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, renameSync, rmSync,
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test } from 'vitest'
 import { Worker } from 'node:worker_threads'
 import { once } from 'node:events'
 import { openProjectReader, singleReaderChild } from '../../apps/desktop/bin/opencode-project-reader.mjs'
