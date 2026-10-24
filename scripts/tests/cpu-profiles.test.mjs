@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { agreement, bmnProcesses, signalCaught, summarizeProfile, summarizeThreadSlices, summarizeTrace } from '../measure/cpu-profiles.mjs'
+import { runInNewContext } from 'node:vm'
+import { ROW_RENDERS, agreement, bmnProcesses, signalCaught, summarizeProfile, summarizeThreadSlices, summarizeTrace } from '../measure/cpu-profiles.mjs'
 
 let roots = []
 afterEach(() => {
@@ -96,5 +97,30 @@ describe('CPU profiles (Story 91.1 AC4)', () => {
     expect(summarizeThreadSlices(path, 7, 'CrRendererMain')).toEqual([
       { label: 'RunTask', ms: 9, count: 1 }, { label: 'Layout', ms: 4, count: 2 }, { label: 'Paint', ms: 2, count: 1 }
     ])
+  })
+
+  it('counts the rows rebuilt in each frame, the rebuilds that left a row as it was, and other attribute changes', async () => {
+    const rowsParent = { classList: { contains: (name) => name === 'xterm-rows' } }
+    const row = (markup) => ({ nodeType: 1, tagName: 'DIV', classList: [], parentElement: rowsParent, innerHTML: markup })
+    const [first, second, third] = [row('<span>a</span>'), row('<span>b</span>'), row('<span>c</span>')]
+    const dot = { nodeType: 1, tagName: 'SPAN', classList: ['status-dot', 'running'], parentElement: null }
+    let observe
+    let now = 0
+    const frames = [
+      () => { first.innerHTML = '<span>a</span>'; second.innerHTML = '<span>B</span>'; observe([{ type: 'childList', target: first }, { type: 'childList', target: second }, { type: 'attributes', target: dot, attributeName: 'class' }]) },
+      () => undefined,
+      () => { third.innerHTML = '<span>c</span>'; observe([{ type: 'childList', target: third }]) }
+    ]
+    const context = {
+      document: { querySelectorAll: () => [first, second, third] },
+      MutationObserver: class { constructor(callback) { observe = callback } observe() {} disconnect() {} },
+      performance: { now: () => now },
+      requestAnimationFrame: (callback) => { const change = frames.shift(); setTimeout(() => { change?.(); now += 400; callback() }, 0) },
+      setTimeout, Object
+    }
+    const counts = await runInNewContext(`(${ROW_RENDERS})(1)`, context)
+    expect({ frames: counts.frames, rebuilt: counts.rebuilt, unchanged: counts.unchanged }).toEqual({ frames: 3, rebuilt: 3, unchanged: 2 })
+    expect({ ...counts.rowsPerFrame }).toEqual({ 0: 1, 1: 1, 2: 1 })
+    expect({ ...counts.attributes }).toEqual({ 'span.status-dot.running@class': 1 })
   })
 })

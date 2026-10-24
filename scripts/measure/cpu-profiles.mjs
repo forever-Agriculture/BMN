@@ -122,6 +122,43 @@ export async function profileTarget(url, seconds, { workers = false } = {}) {
   return { profile, workers: threads }
 }
 
+/**
+ * Page code: for `seconds`, how many terminal rows xterm rebuilds in each animation frame, how many of those rebuilds
+ * leave the row's markup as it was, and which other elements change their attributes, counted by tag, class and name.
+ */
+export const ROW_RENDERS = `async (seconds) => {
+  const counts = { frames: 0, rebuilt: 0, unchanged: 0, rowsPerFrame: {}, attributes: {}, other: {} }
+  const markup = new WeakMap()
+  for (const row of document.querySelectorAll('.xterm-rows > div')) markup.set(row, row.innerHTML)
+  let rows = new Set()
+  const name = (node) => node.nodeType === 1 ? node.tagName.toLowerCase() + [...node.classList].slice(0, 2).map((one) => '.' + one).join('') : node.nodeName
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      if (record.type === 'childList' && record.target.parentElement?.classList.contains('xterm-rows')) rows.add(record.target)
+      else {
+        const key = record.type === 'attributes' ? name(record.target) + '@' + record.attributeName : record.type + ':' + name(record.target)
+        const table = record.type === 'attributes' ? counts.attributes : counts.other
+        table[key] = (table[key] ?? 0) + 1
+      }
+    }
+  })
+  observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+  const end = performance.now() + seconds * 1000
+  await new Promise((done) => {
+    const frame = () => {
+      counts.frames += 1
+      for (const row of rows) { counts.rebuilt += 1; if (markup.get(row) === row.innerHTML) counts.unchanged += 1; markup.set(row, row.innerHTML) }
+      counts.rowsPerFrame[rows.size] = (counts.rowsPerFrame[rows.size] ?? 0) + 1
+      rows = new Set()
+      if (performance.now() < end) requestAnimationFrame(frame); else done()
+    }
+    requestAnimationFrame(frame)
+  })
+  observer.disconnect()
+  const top = (table) => Object.fromEntries(Object.entries(table).sort((a, b) => b[1] - a[1]).slice(0, 25))
+  return { ...counts, attributes: top(counts.attributes), other: top(counts.other) }
+}`
+
 const GPU_CATEGORIES = ['toplevel', 'gpu', 'viz', 'cc', 'disabled-by-default-gpu.service', 'disabled-by-default-viz.gpu_composite_time']
 /** What DevTools' Performance panel records: the window's style, layout, paint and script work per frame. */
 export const TIMELINE_CATEGORIES = ['toplevel', 'blink', 'cc', 'devtools.timeline', 'disabled-by-default-devtools.timeline', 'v8.execute']
@@ -298,6 +335,14 @@ export async function profileAll({ port, inspectPort, mainPid, seconds = 60, dir
     const summary = summarizeTrace(path, renderer)
     return { cores: summary.busyMs / (seconds * 1000), summary, mainThread: summarizeThreadSlices(path, renderer, 'CrRendererMain'),
       note: 'top-level slices only in cores; mainThread lists every depth by name' }
+  })
+  // Story 91.2: which terminal rows the window rebuilds per frame, and whether the rebuilds change them.
+  await side('rows', 'renderer', async () => {
+    const rpc = await connect(page.webSocketDebuggerUrl)
+    const answer = await rpc.send('Runtime.evaluate', { expression: `(${ROW_RENDERS})(${seconds})`, awaitPromise: true, returnByValue: true })
+    rpc.close()
+    if (answer.exceptionDetails) throw new Error(answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text)
+    return { rows: answer.result.value, note: 'a MutationObserver in the window: its own work adds to the minute' }
   })
   return results
 }
