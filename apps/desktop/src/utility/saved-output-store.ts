@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import {
   SAVED_OUTPUT_FORMAT_VERSION,
@@ -33,6 +33,22 @@ interface ScanResult {
   captures: ScannedCapture[]
   failures: ScannedFailure[]
   unreadable: SavedOutputUnreadableEntry[]
+  pruned: number
+}
+
+/** One file of the folder as the store reads it. */
+type ReadFile =
+  | { kind: 'retention'; pruned: number }
+  | { kind: 'capture'; entry: ScannedCapture }
+  | { kind: 'failure'; entry: ScannedFailure }
+  | { kind: 'unreadable'; entry: SavedOutputUnreadableEntry }
+
+/** What pruning needs of one file: its kind, and a record's time or the retention count. */
+type PruneEntry = { kind: 'retention'; pruned: number } | { kind: 'capture' | 'failure'; at: string } | { kind: 'unreadable' }
+
+interface PruneIndex {
+  captures: { path: string; at: string }[]
+  failures: { path: string; at: string }[]
   pruned: number
 }
 
@@ -217,10 +233,56 @@ function publicFailure(
   }
 }
 
+/** Reads one file of the folder by its name and text (undefined when it could not be read). */
+function readStoredFile(name: string, path: string, text: string | undefined): ReadFile {
+  let value: unknown
+  try {
+    if (text === undefined) throw new Error('unread')
+    value = JSON.parse(text)
+  } catch {
+    return { kind: 'unreadable', entry: unreadableEntry(name, 'invalid') }
+  }
+  if (name === RETENTION_FILE) {
+    return isObjectOrArray(value) && isCount(value.pruned)
+      ? { kind: 'retention', pruned: value.pruned }
+      : { kind: 'unreadable', entry: unreadableEntry(name, 'invalid', value) }
+  }
+  if (isObjectOrArray(value) && value.recordType === 'final-capture-unavailable') {
+    const parsed = parseFailure(value)
+    const namedIdentity = identityFrom(undefined, name)
+    if (
+      parsed.kind === 'failure' &&
+      namedIdentity.sessionId === parsed.record.sessionId &&
+      namedIdentity.incarnationId === parsed.record.incarnationId &&
+      namedIdentity.viewEpoch === parsed.record.viewEpoch
+    ) return { kind: 'failure', entry: { path, record: parsed.record } }
+    if (parsed.kind === 'failure') return { kind: 'unreadable', entry: unreadableEntry(name, 'invalid', value) }
+    return { kind: 'unreadable', entry: unreadableEntry(name, parsed.kind === 'unsupported' ? 'unsupported-format' : 'invalid', value) }
+  }
+  const parsed = parseSnapshot(value)
+  const namedIdentity = identityFrom(undefined, name)
+  const namedViewMatches = parsed.kind === 'capture' && (
+    namedIdentity.viewEpoch === undefined ||
+    namedIdentity.viewEpoch === parsed.snapshot.viewEpoch
+  )
+  if (
+    parsed.kind === 'capture' &&
+    namedIdentity.sessionId === parsed.snapshot.sessionId &&
+    namedIdentity.incarnationId === parsed.snapshot.incarnationId &&
+    namedViewMatches
+  ) return { kind: 'capture', entry: { path, snapshot: parsed.snapshot } }
+  if (parsed.kind === 'capture') return { kind: 'unreadable', entry: unreadableEntry(name, 'invalid', value) }
+  return { kind: 'unreadable', entry: unreadableEntry(name, parsed.kind === 'unsupported' ? 'unsupported-format' : 'invalid', value) }
+}
+
 export class FileSavedOutputStore implements SavedOutputStore {
+  /** Each file's prune entry by name, with the inode, size and modification time it was read at. */
+  private readonly pruneEntries = new Map<string, { stamp: string; entry: PruneEntry }>()
+
   constructor(
     private readonly directory: string,
-    private readonly removeFile: (path: string) => Promise<void> = unlink
+    private readonly removeFile: (path: string) => Promise<void> = unlink,
+    private readonly readText: (path: string) => Promise<string> = (path) => readFile(path, 'utf8')
   ) {}
 
   async save(snapshot: SavedOutputSnapshot): Promise<void> {
@@ -350,55 +412,61 @@ export class FileSavedOutputStore implements SavedOutputStore {
     let pruned = 0
     for (const name of names.sort()) {
       const path = join(this.directory, name)
-      let value: unknown
-      try {
-        value = JSON.parse(await readFile(path, 'utf8'))
-      } catch {
-        unreadable.push(unreadableEntry(name, 'invalid'))
-        continue
-      }
-      if (name === RETENTION_FILE) {
-        if (isObjectOrArray(value) && isCount(value.pruned)) pruned = value.pruned
-        else unreadable.push(unreadableEntry(name, 'invalid', value))
-        continue
-      }
-      if (isObjectOrArray(value) && value.recordType === 'final-capture-unavailable') {
-        const parsed = parseFailure(value)
-        const namedIdentity = identityFrom(undefined, name)
-        if (
-          parsed.kind === 'failure' &&
-          namedIdentity.sessionId === parsed.record.sessionId &&
-          namedIdentity.incarnationId === parsed.record.incarnationId &&
-          namedIdentity.viewEpoch === parsed.record.viewEpoch
-        ) failures.push({ path, record: parsed.record })
-        else if (parsed.kind === 'failure') unreadable.push(unreadableEntry(name, 'invalid', value))
-        else unreadable.push(unreadableEntry(name, parsed.kind === 'unsupported' ? 'unsupported-format' : 'invalid', value))
-        continue
-      }
-      const parsed = parseSnapshot(value)
-      const namedIdentity = identityFrom(undefined, name)
-      const namedViewMatches = parsed.kind === 'capture' && (
-        namedIdentity.viewEpoch === undefined ||
-        namedIdentity.viewEpoch === parsed.snapshot.viewEpoch
-      )
-      if (
-        parsed.kind === 'capture' &&
-        namedIdentity.sessionId === parsed.snapshot.sessionId &&
-        namedIdentity.incarnationId === parsed.snapshot.incarnationId &&
-        namedViewMatches
-      ) captures.push({ path, snapshot: parsed.snapshot })
-      else if (parsed.kind === 'capture') unreadable.push(unreadableEntry(name, 'invalid', value))
-      else unreadable.push(unreadableEntry(name, parsed.kind === 'unsupported' ? 'unsupported-format' : 'invalid', value))
+      const read = readStoredFile(name, path, await this.readText(path).catch(() => undefined))
+      if (read.kind === 'retention') pruned = read.pruned
+      else if (read.kind === 'capture') captures.push(read.entry)
+      else if (read.kind === 'failure') failures.push(read.entry)
+      else unreadable.push(read.entry)
     }
     return { captures, failures, unreadable, pruned }
   }
 
+  /**
+   * The records pruning orders, read as `scan` reads them, but each file is read and parsed only when it is new or its
+   * inode, size or modification time changed. Reading and parsing every file on each save took most of the utility
+   * host's saved-output time with the folder at its 100 records (Story 91.3, profile.md cause 2). A capture's content
+   * is not kept.
+   */
+  private async pruneIndex(): Promise<PruneIndex> {
+    let names: string[]
+    try {
+      names = (await readdir(this.directory)).filter((name) => name.endsWith('.json'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.pruneEntries.clear()
+        return { captures: [], failures: [], pruned: 0 }
+      }
+      throw error
+    }
+    const listed = new Set(names)
+    for (const name of [...this.pruneEntries.keys()]) if (!listed.has(name)) this.pruneEntries.delete(name)
+    const index: PruneIndex = { captures: [], failures: [], pruned: 0 }
+    for (const name of names.sort()) {
+      const path = join(this.directory, name)
+      const stamp = await stat(path).then((info) => `${info.ino}:${info.size}:${info.mtimeMs}`, () => undefined)
+      const known = this.pruneEntries.get(name)
+      let entry = stamp !== undefined && known?.stamp === stamp ? known.entry : undefined
+      if (entry === undefined) {
+        const read = readStoredFile(name, path, await this.readText(path).catch(() => undefined))
+        entry = read.kind === 'capture'
+          ? { kind: 'capture', at: read.entry.snapshot.capturedAt }
+          : read.kind === 'failure'
+            ? { kind: 'failure', at: read.entry.record.unavailableAt }
+            : read.kind === 'retention' ? read : { kind: 'unreadable' }
+        if (stamp === undefined) this.pruneEntries.delete(name)
+        else this.pruneEntries.set(name, { stamp, entry })
+      }
+      if (entry.kind === 'retention') index.pruned = entry.pruned
+      else if (entry.kind === 'capture') index.captures.push({ path, at: entry.at })
+      else if (entry.kind === 'failure') index.failures.push({ path, at: entry.at })
+    }
+    return index
+  }
+
   private async prune(): Promise<void> {
-    const scanned = await this.scan()
-    const records = [
-      ...scanned.captures.map(({ path, snapshot }) => ({ path, at: snapshot.capturedAt })),
-      ...scanned.failures.map(({ path, record }) => ({ path, at: record.unavailableAt }))
-    ].sort((left, right) => Date.parse(left.at) - Date.parse(right.at))
+    const scanned = await this.pruneIndex()
+    const records = [...scanned.captures, ...scanned.failures]
+      .sort((left, right) => Date.parse(left.at) - Date.parse(right.at))
     const excess = records.length - TERMINAL_SAVED_OUTPUT_RETENTION
     if (excess <= 0) return
     await Promise.all(records.slice(0, excess).map(async ({ path }) => {

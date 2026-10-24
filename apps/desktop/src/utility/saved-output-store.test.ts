@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -226,5 +226,51 @@ describe('file saved-output store', () => {
       pruned: 1
     })
     await expect(readdir(directory)).resolves.toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION + 1)
+  }, retentionBoundTimeout)
+
+  it('reads on each save only the files that are new or changed, not every record again (Story 91.3)', async () => {
+    const { directory } = await storeFixture()
+    const reads: string[] = []
+    const store = new FileSavedOutputStore(directory, unlink, async (path) => {
+      reads.push(path.slice(directory.length + 1))
+      return readFile(path, 'utf8')
+    })
+    for (let index = 0; index < 5; index += 1) {
+      await store.save(snapshot({ viewEpoch: `view-${index}`, capturedAt: new Date(Date.UTC(2026, 8, 12, 8, 0, index)).toISOString() }))
+    }
+    reads.length = 0
+    await store.save(snapshot({ viewEpoch: 'view-5', capturedAt: '2026-09-12T08:00:05.000Z' }))
+    expect(reads).toEqual(['session-1--incarnation-1--view-5.snapshot.json'])
+
+    reads.length = 0
+    await store.save(snapshot({ viewEpoch: 'view-5', capturedAt: '2026-09-12T08:00:06.000Z', content: 'saved again' }))
+    expect(reads).toEqual(['session-1--incarnation-1--view-5.snapshot.json'])
+  })
+
+  it('prunes by what each file holds now, when a file changed outside the store (Story 91.3)', async () => {
+    const { directory, store } = await storeFixture()
+    for (let index = 0; index < TERMINAL_SAVED_OUTPUT_RETENTION; index += 1) {
+      await store.save(snapshot({ viewEpoch: `view-${index}`, capturedAt: new Date(Date.UTC(2026, 8, 12, 8, 0, index)).toISOString() }))
+    }
+    // The oldest record becomes unreadable and the newest becomes the oldest: the next prune must see both.
+    await writeFile(join(directory, 'session-1--incarnation-1--view-0.snapshot.json'), '{', 'utf8')
+    const newest = `session-1--incarnation-1--view-${TERMINAL_SAVED_OUTPUT_RETENTION - 1}.snapshot.json`
+    await writeFile(join(directory, newest), JSON.stringify(snapshot({
+      viewEpoch: `view-${TERMINAL_SAVED_OUTPUT_RETENTION - 1}`, capturedAt: '2026-09-12T07:00:00.000Z'
+    })), 'utf8')
+
+    // 99 readable records: the second new one prunes the rewritten newest, the third the next oldest.
+    for (const [index, viewEpoch] of ['view-new', 'view-newer', 'view-newest'].entries()) {
+      await store.save(snapshot({ viewEpoch, capturedAt: `2026-09-12T09:00:0${index}.000Z` }))
+    }
+
+    const names = await readdir(directory)
+    expect(names).not.toContain(newest)
+    expect(names).toContain('session-1--incarnation-1--view-0.snapshot.json')
+    expect(names).not.toContain('session-1--incarnation-1--view-1.snapshot.json')
+    const catalog = await store.loadCatalog()
+    expect(catalog.snapshots).toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION)
+    expect(catalog.unreadable.map(({ source }) => source)).toEqual(['session-1--incarnation-1--view-0.snapshot.json'])
+    expect(catalog.pruned).toBe(2)
   }, retentionBoundTimeout)
 })
