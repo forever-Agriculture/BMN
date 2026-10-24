@@ -135,8 +135,18 @@ Approved by the owner on 2026-10-20, Story 81.2 AC3; Fable design ask
 - Put timing, version qualification and the checked scope behind one What is checked disclosure.
   Its summary is the only added keyboard stop; existing sheets keep their focus-return behavior.
 - Leftovers say Review it yourself; BMN leaves it. There is no cleanup control, Check now or switch.
-- Names are withheld even when ordinary-looking. The location column uses structural coordinates and source
-  revision, with full text in its title. Manual resolution stays behind the existing What is checked disclosure.
+- Leftovers partial results use the owner-approved86.2 counts: “N folders too large to check”,
+  “N databases too large to check”, “N sources changed during the check”, “N items could not be read”,
+  or “N scan steps did not finish”. Details give the applicable limit or coverage gap without names or paths.
+  App-doctor wording stays unchanged.
+- Names are withheld even when ordinary-looking. Acquisition4 locations use structural root, parent/object,
+  numeric route and entry coordinates, plus line/column or rowid where applicable, with full text in the title.
+  They are current only after fresh item-and-reason verification; historical coordinates are marked stale.
+  A fully checked item whose location is inherently ambiguous or unavailable says “location unavailable”;
+  this alone is not incomplete reason coverage (owner card epics-85-87-completion-scope). Ambiguous coordinates
+  stay refused and actual unread, changed or uncertain reason inputs stay partial.
+  Manual resolution stays behind the existing What is checked disclosure. Health refreshes locations automatically
+  when visible and calm; unrelated settings/action snapshots project saved status, followed by that automatic refresh.
 
 ## Reviews
 

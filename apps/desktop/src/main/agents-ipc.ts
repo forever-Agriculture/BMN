@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { buildSetupTeamProposals, validateSetupTeamApproval } from './setup-team-draft'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import {
   ERROR_CODES,
   PUSH_POLICY_POINTER,
@@ -150,6 +150,8 @@ interface AgentsIpcOptions {
   setupTeam?(): Promise<{ profile: import('@bmn/protocol').FirstRunSetupRecord | null; apps: import('@bmn/protocol').SetupAppsSnapshot; defaults: import('@bmn/protocol').SetupDefaultsReport }>
   /** Real app startup runs the doctor; isolated acceptance runs opt in with a synthetic profile. */
   doctorAtStart?: boolean
+  /** The default session TERM, validated against the very same installed terminfo asset. */
+  doctorTerminalEnvironment?(environment: NodeJS.ProcessEnv): Record<string, string>
   /** Agents › Asks (73.1): the folder the owner exports an ask into; null when he cancels. Absent where there is no window. */
   chooseAskExportFolder?(event: IpcMainInvokeEvent): Promise<string | null>
 }
@@ -169,7 +171,7 @@ export interface AgentsIpcHandle {
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
-const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
+const RULES_ENV = ['HOME', 'PATH', 'TERM', 'TERMINFO_DIRS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
   'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const
 /** Variables the rules CLI only needs to know are set; their value may hold a key, so a mark is passed on instead. */
 const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
@@ -729,7 +731,7 @@ async function rulesHealth(context: RulesIpcContext): Promise<RulesSnapshot['hea
   return { state: 'checked', checkedAt, ok: report.ok, targets }
 }
 
-async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnapshot> {
+async function rulesSnapshot(context: RulesIpcContext, freshDoctorLocations = false): Promise<RulesSnapshot> {
   const path = masterPath()
   let text: string | null
   let savedAt: string | null = null
@@ -766,7 +768,8 @@ async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnapshot> {
     tools: toolsView(apps, pages, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     hooks: context.hooks?.() ?? null,
-    doctor: await readDoctorView({ environment: context.env, now: context.now().getTime(), appVersions: Object.fromEntries(apps.map((app) => [app.harness, app.version])) }),
+    doctor: await readDoctorView({ environment: context.env, now: context.now().getTime(), appVersions: Object.fromEntries(apps.map((app) => [app.harness, app.version])),
+      workerPath: join(dirname(context.script), 'doctor-inspection-worker.mjs'), freshLocations: freshDoctorLocations }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
       ...(entry.state ? { state: entry.state } : {}), ...(entry.reason ? { reason: entry.reason } : {}), ...(entry.targets ? { targets: entry.targets } : {}),
@@ -1258,8 +1261,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     })
   })
 
-  handle('aiterm:rules:snapshot', async () => {
-    const snapshot = await rulesSnapshot(context())
+  handle('aiterm:rules:snapshot', async (params) => {
+    if (params.freshDoctorLocations !== undefined && typeof params.freshDoctorLocations !== 'boolean') invalidMainIpc('freshDoctorLocations must be a boolean')
+    const snapshot = await rulesSnapshot(context(), params.freshDoctorLocations === true)
     // Health has read the machine: what a new install, version, rules or sign-in needs is tested from here, with the versions this read found.
     const versions = Object.fromEntries(snapshot.apps.map((app) => [app.harness, app.version]))
     void autoTests.trigger(versions)
@@ -1799,7 +1803,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     doctorAtStart: async () => {
       if (options.doctorAtStart === false) return
       const ctx = context()
-      await runCli(ctx.script, ['doctor', '--startup', doctorStartupId, '--json'], ctx.env, 13 * 60 * 1000)
+      const terminal = options.doctorTerminalEnvironment?.(ctx.env) ?? {}
+      await runCli(ctx.script, ['doctor', '--startup', doctorStartupId, '--json'], { ...ctx.env, ...terminal }, 13 * 60 * 1000)
     },
     installsAtStart: async () => {
       if (options.setupDefaults) {

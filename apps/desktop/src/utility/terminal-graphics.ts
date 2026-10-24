@@ -1,5 +1,6 @@
+// MODULE: terminal-graphics.ts - Shared validated session and startup-doctor terminal identity
 import { spawnSync } from 'node:child_process'
-import { readFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -11,6 +12,13 @@ export const STANDARD_TERM = 'xterm-256color'
 export interface TerminfoAsset {
   directory: string
   source: string
+}
+
+/** Sessions and the startup doctor validate the same stable copy against the same bundle. */
+export function bundledTerminfoAsset(dataRoot: string, resourceRoot: string, outputDirectory: string): TerminfoAsset {
+  const packaged = join(resourceRoot, 'terminfo', 'x', SIXEL_TERM)
+  return { directory: join(dataRoot, 'terminfo'), source: existsSync(packaged) ? packaged :
+    join(outputDirectory, '..', '..', 'resources', 'terminfo', 'x', SIXEL_TERM) }
 }
 
 /** Install into the profile's stable data root, outside an app package replaced by updates. */

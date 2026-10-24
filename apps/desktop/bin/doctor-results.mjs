@@ -6,6 +6,12 @@ export const CHECKS = Object.freeze(['hooks', 'skills', 'tools', 'rules', 'claud
 export const STATES = Object.freeze(['passed', 'problems', 'partial', 'failed', 'timeout', 'unsupported', 'unqualified', 'interrupted'])
 export const PROBLEMS = Object.freeze({
   'additional-details': ['Additional details could not be safely interpreted', 'Inspect the app doctor yourself.'],
+  'leftover-file-bound': ['{count} {noun} too large to check', 'Items that depend on these files were not fully checked. The read limit for these files is 1 MiB each.'],
+  'leftover-folder-bound': ['{count} {noun} too large to check', 'Items inside were not fully checked. BMN reads up to 1,024 entries, 16 MiB and 12 levels per folder.'],
+  'leftover-database-bound': ['{count} {noun} too large to check', 'Dependent memory rows were not fully checked. BMN reads up to 512 MiB per database or WAL.'],
+  'leftover-source-changed': ['{count} {noun} changed during the check', 'Some items or locations could not be verified. Checked again at the next run.'],
+  'leftover-unreadable': ['{count} {noun} could not be read', 'Check read permission. BMN leaves it.'],
+  'leftover-step': ['{count} {noun} did not finish', 'Checked again at the next run.'],
   'missing-program': ['MCP program is missing', 'Install the program or update its MCP configuration.'],
   'endpoint-unreachable': ['MCP endpoint could not be reached', 'Check its address and connection.'],
   'config-invalid': ['Configuration could not be loaded', 'Repair the app configuration.'],
@@ -55,7 +61,7 @@ const CODEX_CHECKS = Object.freeze({
 })
 
 /** Never return text, keys, names, URLs or paths from a child, including a doctor's remediation. */
-export function parseCodexDoctor(text, exitCode) {
+export function parseCodexDoctor(text, exitCode, { readOnlySandbox = false } = {}) {
   let data
   try { data = JSON.parse(text) } catch { return invalid() }
   if (!object(data) || data.schemaVersion !== 1 || !object(data.checks) ||
@@ -71,6 +77,17 @@ export function parseCodexDoctor(text, exitCode) {
     if (row.status === 'skipped') { partial = true; continue }
     if (row.status === 'ok') continue
     failures += 1
+    // SQLite cannot create a missing WAL shared-memory file in this sandbox. Access failure is
+    // incomplete evidence, whereas a real integrity fault retains the app's state warning.
+    if (readOnlySandbox && object(row.details)) {
+      const accessError = (value) => typeof value === 'string' && /^error returned from database: \(code: 14\) unable to open database file$/.test(value)
+      const integrity = Object.entries(row.details).filter(([key]) => key.endsWith(' DB integrity')).map(([, value]) => value)
+      if (id === 'state.paths' && integrity.some(accessError) && integrity.every(value => accessError(value) || value === 'ok' || value === 'skipped (missing)') ||
+        id === 'state.rollout_db_parity' && accessError(row.details['rollout DB read error'])) {
+        partial = true
+        continue
+      }
+    }
     if (id !== 'mcp.config') { problems.push(fact(CODEX_CHECKS[id], problems.length + 1)); continue }
     if (!object(row.details)) { partial = true; continue }
     const before = problems.length
@@ -198,7 +215,9 @@ export function projectedResult(value) {
   for (const row of value.problems) {
     if (!object(row) || !Object.hasOwn(PROBLEMS, row.code) || !Number.isSafeInteger(row.item) || row.item < 1 || row.item > 10000) return null
     if (row.app !== undefined && !['claude', 'codex', 'opencode'].includes(row.app)) return null
-    problems.push(fact(row.code, row.item, row.app))
+    if (row.count !== undefined && (!Number.isSafeInteger(row.count) || row.count < 1 || row.count > 10000 || !row.code.startsWith('leftover-'))) return null
+    if (row.code.startsWith('leftover-') && row.count === undefined) return null
+    problems.push({ ...fact(row.code, row.item, row.app), ...(row.count !== undefined ? { count: row.count } : {}) })
   }
   if (value.state === 'passed' && problems.length !== 0) return null
   if (value.state === 'problems' && problems.length === 0) return null

@@ -831,8 +831,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   openCodeGo(copy?: boolean): Promise<OpenCodeGoView> {
     return invokeBridge('aiterm:agents:opencode-go', copy === true ? { copy: true } : {})
   },
-  rulesSnapshot(): Promise<RulesSnapshot> {
-    return invokeBridge('aiterm:rules:snapshot', {})
+  rulesSnapshot(freshDoctorLocations = false): Promise<RulesSnapshot> {
+    return invokeBridge('aiterm:rules:snapshot', { freshDoctorLocations })
   },
   planRulesMaster(text: string): Promise<RulesMasterPlan> {
     return invokeBridge('aiterm:rules:plan-master', { text })

@@ -107,7 +107,7 @@ describe('no schema-1 roster word is left (60.1 AC5)', () => {
  */
 describe('team and rules state has no path into the database, Backup export, Telegram or logs (R60-NFR3)', () => {
   const HOLDERS = [
-    ...inFolder('apps/desktop/bin', /^(agents-.*|setup-.*|defaults-.*|doctor(?:-(?:adapters|state|results|leftovers|leftover-results|profile|locations))?|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)\.mjs$/),
+    ...inFolder('apps/desktop/bin', /^(agents-.*|setup-.*|defaults-.*|doctor(?:-(?:adapters|state|results|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)\.mjs$/),
     // app-program only finds an agent app's program on PATH for Health; it is held to the same rule because the IPC module imports it.
     ...inFolder('apps/desktop/src/main', /^(agents-(approval|ipc)|auto-tests|visibility-refresh|app-program|first-run-setup|setup-team-draft)\.ts$/)
   ]
@@ -120,14 +120,14 @@ describe('team and rules state has no path into the database, Backup export, Tel
     // 75.8 put context-auto and skills-auto into the one auto-tests; 77.4 added agents-own-skills;
     // 80.16 split agents-check into seven parts behind its facade; 80.15 added the helpers they share (shared-helpers).
     // Epic 81 adds eight doctor modules, including selected profiles and safe coordinates, to this closed graph.
-    expect(HOLDERS).toHaveLength(75)
+    expect(HOLDERS).toHaveLength(78)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree)|doctor(?:-(?:adapters|state|results|leftovers|leftover-results|profile|locations))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree)|doctor(?:-(?:adapters|state|results|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
     // New adapters remain inside this graph; injected store or delivery imports must fail it.
     for (const file of HOLDERS.filter(file => /(?:setup-|defaults-)/.test(file))) {
       for (const forbidden of ['./database-client', './telegram-service', './backup-export', './logger']) {

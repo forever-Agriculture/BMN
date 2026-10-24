@@ -159,6 +159,17 @@ export function approvedIfAny() {
   }
 }
 
+/** Pure verification for bounded readers that already acquired both texts with their own witnesses. */
+export function approvedSnapshot(pointerText, generationText) {
+  try {
+    const pointer = JSON.parse(pointerText), generation = JSON.parse(generationText)
+    if (!isObject(pointer) || !Number.isSafeInteger(pointer.generation) || typeof pointer.hash !== 'string' ||
+      !isObject(generation) || generation.number !== pointer.generation || generation.hash !== pointer.hash ||
+      generationHash(generation) !== generation.hash || !wellFormed(generation.data) || isEarlierSchema(generation)) return null
+    return generation
+  } catch { return null }
+}
+
 /** One generation file of the current schema, verified; null when it is missing, unreadable, malformed, altered or of an earlier schema. */
 export function readGeneration(number) {
   const generation = readVerified(number)

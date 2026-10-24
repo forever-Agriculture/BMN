@@ -33,6 +33,7 @@ export declare function generationNumbers(): number[]
 export declare function readApproved(): Generation
 export declare function everApproved(): boolean
 export declare function approvedIfAny(): Generation | null
+export declare function approvedSnapshot(pointerText: string, generationText: string): Generation | null
 export declare function neverApproved(): Promise<boolean>
 export declare function listGenerations(): Record<string, unknown>[]
 export declare function restoreProblem(number: number): string | null

@@ -60,6 +60,12 @@ extraResources:
     to: bin/doctor-profile.mjs
   - from: bin/doctor-locations.mjs
     to: bin/doctor-locations.mjs
+  - from: bin/doctor-continuity.mjs
+    to: bin/doctor-continuity.mjs
+  - from: bin/doctor-inspection.mjs
+    to: bin/doctor-inspection.mjs
+  - from: bin/doctor-inspection-worker.mjs
+    to: bin/doctor-inspection-worker.mjs
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
   - from: bin/safe-config-write.mjs
     to: bin/safe-config-write.mjs

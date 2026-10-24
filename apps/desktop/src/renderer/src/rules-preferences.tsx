@@ -314,7 +314,11 @@ export interface RulesState {
 }
 
 /** The Rules pages' state, held once by the Preferences dialog so an unsaved draft survives a look at Health. */
-export function useRulesState(): RulesState {
+export function useRulesState(doctorVisible = false): RulesState {
+  const doctorVisibility = useRef(doctorVisible)
+  const doctorRefresh = useRef(false)
+  if (doctorVisible && !doctorVisibility.current) doctorRefresh.current = true
+  doctorVisibility.current = doctorVisible
   const [snapshot, setSnapshot] = useState<RulesSnapshot | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
@@ -339,7 +343,10 @@ export function useRulesState(): RulesState {
   // Reads go one at a time and only the answer of the one begun last is shown (63.4 AC1, AC3).
   const reads = useRef<MachineReads | null>(null)
   reads.current ??= createMachineReads<RulesSnapshot>({
-    fetch: () => window.aiTerminal.rulesSnapshot(),
+    fetch: () => {
+      doctorRefresh.current = false
+      return window.aiTerminal.rulesSnapshot(doctorVisibility.current)
+    },
     adopt: (next, at) => {
       show(next)
       setBegan(at)
@@ -355,6 +362,7 @@ export function useRulesState(): RulesState {
     setSnapshot(next)
     setDraft(next.master.text ?? '')
     setDraftPlan(null)
+    doctorRefresh.current = doctorVisibility.current
   }, [])
 
   const load = useCallback((): Promise<void> => (reads.current as MachineReads).read(), [])
@@ -371,6 +379,12 @@ export function useRulesState(): RulesState {
 
   const saved = snapshot?.master.text ?? ''
   const dirty = snapshot !== null && draft !== saved
+  useEffect(() => {
+    if (doctorVisible && doctorRefresh.current && snapshot !== null && !busy && pending === null) {
+      doctorRefresh.current = false
+      void load()
+    }
+  }, [doctorVisible, snapshot, busy, pending, load])
 
   // A dirty draft is checked as a save would check it, and previewed with its own renderings.
   useEffect(() => {
@@ -451,6 +465,7 @@ export function useRulesState(): RulesState {
       // Like a read by Health's rule: what was read again replaces the page, never an unsaved draft.
       setBegan((reads.current as MachineReads).shownElsewhere())
       show(outcome.snapshot)
+      doctorRefresh.current = doctorVisibility.current
       setNotice({ ok: outcome.ok, text: outcome.ok || outcome.code !== 'REVISION_CONFLICT' ? outcome.message : 'Something changed since this was shown. Reloaded without writing.' })
       return outcome.ok
     } catch (error) {

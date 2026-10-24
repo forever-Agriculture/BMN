@@ -1,10 +1,13 @@
 // MODULE: doctor-state.d.mts - Durable doctor state and cadence types
 import type { DoctorCheck, DoctorView } from '../../../shared/protocol/src/doctor'
 import type { ProjectedDoctorResult } from './doctor-results.mjs'
-export interface SavedDoctorResult extends ProjectedDoctorResult { checkedAt: number; version: string }
+import type { ContinuityEnvelope } from './doctor-continuity.mjs'
+export interface SavedDoctorResult extends ProjectedDoctorResult { checkedAt: number; version: string; acquisitionId?: string }
 export interface DoctorAttempt {
   id: string; startedAt: number; finishedAt: number | null; kind: 'cycle' | 'retry' | 'availability'; startupId: string | null
   checks: DoctorCheck[]; completed: DoctorCheck[]
+  /** Missing on legacy states; only true permits the just-acquired cohort shortcut. */
+  completedNormally?: boolean
 }
 export interface DoctorQualification { identity: string; checkedAt: number; state: 'qualified' | 'unsupported' | 'failed' | 'timeout' }
 export interface SavedDoctorState {
@@ -15,6 +18,7 @@ export interface SavedDoctorState {
   retryUsed: boolean; attempt: DoctorAttempt | null
   qualifications: Partial<Record<'claude' | 'codex', DoctorQualification>>
   results: Partial<Record<DoctorCheck, SavedDoctorResult>>
+  continuity: ContinuityEnvelope | null
 }
 export interface DoctorPlan { kind: 'cycle' | 'retry' | 'availability'; checks: DoctorCheck[] }
 export declare const DAY: number

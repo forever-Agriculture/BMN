@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { doctorEnvironment, doctorVersions, runLeftoversDoctor, sandboxArguments, sandboxProcess } from '../../bin/doctor-adapters.mjs'
 import { doctorPaths, doctorWorker, loadDoctorState, readDoctorView, runDoctorCommand } from '../../bin/doctor.mjs'
-import { locateItem, locationRoots } from '../../bin/doctor-locations.mjs'
+import { observeFile, locationRoots } from '../../bin/doctor-locations.mjs'
 import { selectedProfile } from '../../bin/doctor-profile.mjs'
 
 for (const firstObserver of ['cli', 'startup'] as const) it(`invalidates cached success when ${firstObserver} observes lost access, then gives one later-start retry`, async () => {
@@ -135,10 +135,10 @@ it('prints show-only items in the actual text command as well as JSON without th
   await doctorWorker({ environment, qualify: async () => 'unsupported',
     bmnCheck: async () => ({ state: 'passed', problems: [] }),
     leftoversCheck: async () => ({ state: 'passed', problems: [], leftovers: [{ kind: 'plugins', app: 'claude', reason: 'disabled', item: 1, identity: 'withheld',
-      locator: locateItem(item, locationRoots(selectedProfile(environment))) }] }) })
+      locator: observeFile(item, locationRoots(selectedProfile(environment))).locator }] }) })
   const output: string[] = []
   await runDoctorCommand([], { environment, out: (line) => output.push(line) })
-  expect(output.join('\n')).toContain('Show-only: Identity withheld')
+  expect(output.join('\n')).toContain('Show-only: Stale location')
   expect(output.join('\n')).toContain('The plugin is disabled')
   expect(output.join('\n')).not.toContain('password')
 })
@@ -161,7 +161,7 @@ it('reports a missing explicit profile as unavailable instead of a successful em
   const home = fixture()
   const result = await runLeftoversDoctor(home, { HOME: home, CODEX_HOME: join(home, 'absent'), PATH: '/usr/bin:/bin' }, {})
   expect(result.state).not.toBe('passed')
-  expect(result.problems).toEqual([])
+  expect(result.problems).toEqual([{ code: 'leftover-step', item: 1, count: 1 }])
 })
 
 it('refuses a selected whole private temporary root rather than checking an empty replacement', () => {
@@ -191,7 +191,7 @@ it('keeps a changed show-only item locatable as stale without creating a check p
     versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex', 'opencode'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
     qualify: async () => 'qualified', appCheck: async () => ({ state: 'passed', problems: [] }),
     bmnCheck: async () => ({ state: 'passed', problems: [] }),
-    leftoversCheck: async () => ({ state: 'passed', problems: [], leftovers: [{ kind: 'plugins', app: 'claude', reason: 'disabled', item: 1, identity: 'withheld', locator: locateItem(item, locationRoots(selectedProfile(environment))) }] }) })
+    leftoversCheck: async () => ({ state: 'passed', problems: [], leftovers: [{ kind: 'plugins', app: 'claude', reason: 'disabled', item: 1, identity: 'withheld', locator: observeFile(item, locationRoots(selectedProfile(environment))).locator }] }) })
   expect((await readDoctorView({ environment })).allWell).toBe(true)
   rmSync(item)
   const view = await readDoctorView({ environment })

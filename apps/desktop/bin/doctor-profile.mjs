@@ -1,8 +1,9 @@
 // MODULE: doctor-profile.mjs - One selected profile description and private result fingerprint
 import { createHmac } from 'node:crypto'
-import { accessSync, constants, lstatSync, realpathSync, statSync } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { observeRoute } from './doctor-locations.mjs'
 
 export function selectedProfile(environment = process.env) {
   const home = environment.HOME ?? homedir()
@@ -40,7 +41,15 @@ export function selectedProfile(environment = process.env) {
 /** The key and selector material stay in the local worker/state boundary, never in its view. */
 export function profileFingerprint(profile, key) {
   const sources = Object.entries(profile.paths).map(([name, path]) => {
-    try { const stat = lstatSync(path); return [name, path, realpathSync(path), stat.dev, stat.ino] }
+    try {
+      const route = observeRoute(path)
+      // Access changes cannot create a new profile identity and refund the startup retry.
+      // Each inspection still witnesses permissions separately for the predicates that use them.
+      return [name, path, route.nodes.map((node) => [node.name.toString('base64'),
+        Object.fromEntries((node.object.type === 'link' ? ['device', 'inode', 'type', 'changed', 'modified', 'size', 'links'] :
+          ['device', 'inode', 'type']).map((key) => [key, node.object[key]])), node.link?.toString('base64') ?? null]),
+      route.missing ?? null]
+    }
     catch (error) { return [name, path, ['ENOENT', 'ENOTDIR'].includes(error.code) ? 'missing' : 'unavailable'] }
   })
   return createHmac('sha256', key).update(JSON.stringify([profile.invalid, profile.inline, profile.claudeJson, profile.opencodeFiles, sources])).digest('hex')

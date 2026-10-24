@@ -1,29 +1,33 @@
 // MODULE: doctor-adapters.mjs - Bounded process groups, read-only doctor sandbox and disposable version qualification
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { accessSync, constants, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { parseBmnDoctor, parseClaudeDoctor, parseCodexDoctor } from './doctor-results.mjs'
-import { leftoversModule } from './doctor-leftovers.mjs'
+import { parseBmnDoctor, parseClaudeDoctor, parseCodexDoctor, projectedResult } from './doctor-results.mjs'
+import { validRowReceipts, validWorkerKeys } from './doctor-continuity.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
 
 export const SANDBOX_POLICY = 'bwrap-selected-profile-runtime-scaffold-v4'
-export const PARSER_VERSION = 'doctor-projection-v4-opencode-2'
+export const PARSER_VERSION = 'doctor-projection-v5-item-continuity'
 export const LIMITS = Object.freeze({ timeoutMs: 60000, outputBytes: 1024 * 1024 })
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 const unavailable = (state) => ({ state, problems: [] })
 const appParser = (app) => app === 'claude' ? parseClaudeDoctor : parseCodexDoctor
 
 /** Output is bounded while streaming. Error objects and raw output never leave the execution/parser boundary. */
-export function boundedProcess(command, args, { environment, timeoutMs = LIMITS.timeoutMs, outputBytes = LIMITS.outputBytes, cwd = '/' } = {}) {
+export function boundedProcess(command, args, { environment, timeoutMs = LIMITS.timeoutMs, outputBytes = LIMITS.outputBytes, cwd = '/', privateInput = null } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, env: environment, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+    // Only BMN's trusted inspection worker requests this channel. App doctors retain discarded stderr.
+    // Standard pipes survive the installed bwrap; extra inherited descriptors do not.
+    const privateChannel = typeof privateInput === 'string'
+    const child = spawn(command, args, { cwd, env: environment, stdio: [privateChannel ? 'pipe' : 'ignore', 'pipe', 'pipe'], detached: true })
     let stdout = []
-    let bytes = 0
+    let privateOutput = []
+    let bytes = privateChannel ? Buffer.byteLength(privateInput) : 0
     let failure = null
     let closed = false
     const kill = (reason) => {
@@ -31,19 +35,26 @@ export function boundedProcess(command, args, { environment, timeoutMs = LIMITS.
       try { process.kill(-child.pid, 'SIGKILL') } catch { /* Already gone; close still drains the pipes. */ }
     }
     const timer = setTimeout(() => kill('timeout'), timeoutMs)
-    const collect = (chunk, keep) => {
+    const collect = (chunk, target) => {
       bytes += chunk.length
-      if (bytes > outputBytes) { stdout = []; kill('overflow'); return }
-      if (failure === null && keep) stdout.push(chunk)
+      if (bytes > outputBytes) { stdout = []; privateOutput = []; kill('overflow'); return }
+      if (failure === null && target) target.push(chunk)
     }
-    child.stdout.on('data', (chunk) => collect(chunk, true))
-    child.stderr.on('data', (chunk) => collect(chunk, false))
+    child.stdout.on('data', (chunk) => collect(chunk, stdout))
+    child.stderr.on('data', (chunk) => collect(chunk, privateChannel ? privateOutput : null))
+    if (privateChannel) {
+      child.stdin.on('error', () => kill('unavailable'))
+      if (bytes > outputBytes) kill('overflow')
+      else child.stdin.end(privateInput)
+    }
     const finish = (code) => {
       if (closed) return
       closed = true
       clearTimeout(timer)
-      resolve({ code, failure, stdout: failure === null ? Buffer.concat(stdout).toString('utf8') : '' })
+      resolve({ code, failure, stdout: failure === null ? Buffer.concat(stdout).toString('utf8') : '',
+        ...(privateChannel ? { privateOutput: failure === null ? Buffer.concat(privateOutput).toString('utf8') : '' } : {}) })
       stdout = []
+      privateOutput = []
     }
     child.on('error', () => { failure = 'unavailable'; finish(null) })
     child.on('close', (code) => finish(code))
@@ -54,7 +65,9 @@ export function doctorEnvironment(environment, home = environment.HOME ?? homedi
   return {
     ...Object.fromEntries(Object.entries(selectedProfile({ ...environment, HOME: home }).paths)
       .filter(([name]) => name === 'HOME' || environment[name] !== undefined)),
-    PATH: environment.PATH || '/usr/local/bin:/usr/bin:/bin', TERM: 'dumb', LANG: 'C.UTF-8', NO_COLOR: '1',
+    PATH: environment.PATH || '/usr/local/bin:/usr/bin:/bin',
+    TERM: environment.TERM === 'xterm-sixel-256color' ? environment.TERM : 'xterm-256color',
+    ...(typeof environment.TERMINFO_DIRS === 'string' ? { TERMINFO_DIRS: environment.TERMINFO_DIRS } : {}), LANG: 'C.UTF-8', NO_COLOR: '1',
     DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1', ELECTRON_RUN_AS_NODE: '1'
   }
@@ -150,11 +163,15 @@ export function sandboxArguments(home, command, args, environment = {}, { runtim
 
 export async function sandboxProcess(home, command, args, environment, limits = {}) {
   try {
-    const { inspection = false, runtime = true, ...bounds } = limits
+    const { inspection = false, inspectionLock, runtime = !inspection, ...bounds } = limits
     const fixed = doctorEnvironment(environment, home)
     if (inspection && environment.OPENCODE_CONFIG_CONTENT) fixed.OPENCODE_CONFIG_CONTENT = 'set'
-    return await boundedProcess('/usr/bin/bwrap', sandboxArguments(home, command, args, environment, { runtime }),
-      { environment: fixed, ...bounds })
+    const sandbox = sandboxArguments(home, command, args, environment, { runtime })
+    // Fresh readers share the acquisition lock, outside the read-only namespace.
+    // Acquisition already runs as that lock's child and must not reacquire it.
+    return inspectionLock
+      ? await boundedProcess('/usr/bin/flock', ['-w', String((bounds.timeoutMs ?? LIMITS.timeoutMs) / 1000), inspectionLock, '/usr/bin/bwrap', ...sandbox], { environment: fixed, ...bounds })
+      : await boundedProcess('/usr/bin/bwrap', sandbox, { environment: fixed, ...bounds })
   } catch { return { code: null, failure: 'unavailable', stdout: '' } }
 }
 
@@ -272,7 +289,7 @@ export async function runAppDoctor(app, entry, home, environment, limits) {
   const run = await sandboxProcess(home, entry.executable, app === 'codex' ? ['doctor', '--json'] : ['doctor'], environment, limits)
   if (run.failure !== null) return unavailable(run.failure === 'timeout' ? 'timeout' : 'failed')
   if (!stillSameExecutable(entry)) return unavailable('unqualified')
-  return appParser(app)(run.stdout, run.code)
+  return appParser(app)(run.stdout, run.code, { readOnlySandbox: true })
 }
 
 export async function runBmnDoctor(check, home, environment, limits) {
@@ -283,12 +300,40 @@ export async function runBmnDoctor(check, home, environment, limits) {
   return parseBmnDoctor(check, run.stdout, run.code)
 }
 
+const incompleteInspection = () => ({ state: 'partial', problems: [{ code: 'leftover-step', item: 1, count: 1 }], leftovers: [] })
+
+async function inspectionProcess(home, environment, versions, context, limits) {
+  if (!validWorkerKeys(context.keys)) return null
+  const run = await sandboxProcess(home, process.execPath, ['--no-warnings', limits?.workerPath ?? fileURLToPath(new URL('./doctor-inspection-worker.mjs', import.meta.url)),
+    JSON.stringify(versions), String(Date.now() + Math.min(limits?.timeoutMs ?? LIMITS.timeoutMs, 60000) - 2000)], environment,
+  { ...limits, inspection: true, privateInput: JSON.stringify(context) })
+  if (run.failure !== null || run.code !== 0) return null
+  try {
+    if (context.mode === 'acquire') {
+      const result = projectedResult(JSON.parse(run.stdout)), rows = JSON.parse(run.privateOutput)
+      if (!result || !validRowReceipts(rows, result.leftovers?.length ?? 0) || rows.some((r) => result.leftovers[r.item - 1]?.locator?.status !== 'located')) return null
+      return { result, rows }
+    }
+    if (run.privateOutput !== '') return null
+    const value = JSON.parse(run.stdout), result = projectedResult(value.result)
+    if (!result || !Array.isArray(value.matches) || value.matches.length !== context.rows.length ||
+      value.matches.some((match, i) => match?.item !== context.rows[i].item || match.current !== null &&
+        (!Number.isSafeInteger(match.current) || match.current < 1 || match.current > (result.leftovers?.length ?? 0) ||
+          result.leftovers[match.current - 1]?.locator?.status !== 'located'))) return null
+    return { result, matches: value.matches.map((m) => ({ item: m.item, current: m.current })) }
+  } catch { return null }
+}
+
+export async function acquireLeftoversDoctor(home, environment, versions, keys, limits) {
+  return await inspectionProcess(home, environment, versions, { mode: 'acquire', keys }, limits) ?? { result: incompleteInspection(), rows: [] }
+}
+export async function revalidateLeftoversDoctor(home, environment, versions, keys, rows, limits) {
+  if (!validRowReceipts(rows)) return null
+  return await inspectionProcess(home, environment, versions, { mode: 'resolve', keys, rows }, limits)
+}
+/** Public one-shot check uses the same worker; its ephemeral private receipts never leave this boundary. */
 export async function runLeftoversDoctor(home, environment, versions, limits) {
-  const program = 'import(process.argv[1]).then(m=>m.inspectLeftovers(JSON.parse(process.argv[2]))).then(v=>process.stdout.write(JSON.stringify(v))).catch(()=>{process.exitCode=1})'
-  const run = await sandboxProcess(home, process.execPath, ['--input-type=module', '--eval', program,
-    leftoversModule, JSON.stringify(versions)], environment, { ...limits, inspection: true, runtime: false })
-  if (run.failure !== null) return unavailable(run.failure === 'timeout' ? 'timeout' : 'failed')
-  if (run.code !== 0) return unavailable('failed')
-  try { return JSON.parse(run.stdout) } catch { return unavailable('failed') }
+  const keys = { item: randomBytes(32).toString('hex'), context: randomBytes(32).toString('hex') }
+  return (await acquireLeftoversDoctor(home, environment, versions, keys, limits)).result
 }
 

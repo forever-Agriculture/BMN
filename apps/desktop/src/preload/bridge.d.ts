@@ -407,7 +407,7 @@ export interface AiTerminalBridge {
   /** Luna through OpenCode Go (70.4): whether OpenCode lists her and BMN's folder is signed in; `copy` copies the owner's Go sign-in there. */
   openCodeGo(copy?: boolean): Promise<OpenCodeGoView>
   /** Epic 60.6: the master, each app's rendering, health from `bmn rules check`, loading tests, the agent apps, installs and history. */
-  rulesSnapshot(): Promise<RulesSnapshot>
+  rulesSnapshot(freshDoctorLocations?: boolean): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>
   /** Story 75.9: what saving `text` writes, the master and each app's file, then the save itself, bound to that plan; Undo puts both back. */
   planRulesSave(text: string): Promise<RulesSavePlan>

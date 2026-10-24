@@ -2,6 +2,7 @@
 import { CHECKS, PROBLEMS, projectedResult } from './doctor-results.mjs'
 import { LEFTOVER_REASONS, leftoverLocation } from './doctor-leftover-results.mjs'
 import { LOCATION_HELP } from './doctor-locations.mjs'
+import { deriveContinuityKeys, validateContinuity } from './doctor-continuity.mjs'
 
 export const DAY = 24 * 60 * 60 * 1000
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -13,7 +14,7 @@ const version = (value) => value === null || typeof value === 'string' && /^\d+\
 
 export function emptyDoctorState() {
   return { schemaVersion: 1, profileKey: null, profileIdentity: null, availabilityFailure: null, cycleStartedAt: null, versions: null, cycleStartupId: null,
-    appVersions: { claude: null, codex: null, opencode: null }, retryUsed: false, attempt: null, qualifications: {}, results: {} }
+    appVersions: { claude: null, codex: null, opencode: null }, retryUsed: false, attempt: null, qualifications: {}, results: {}, continuity: null }
 }
 
 /** Only schema values survive disk reads. Arbitrary strings in a tampered state never reach JSON or Health. */
@@ -42,15 +43,20 @@ export function validateDoctorState(value) {
       !Array.isArray(a.checks) || a.checks.length === 0 || new Set(a.checks).size !== a.checks.length ||
       a.checks.some((check) => !CHECKS.includes(check)) || !Array.isArray(a.completed) ||
       new Set(a.completed).size !== a.completed.length || a.completed.some((check) => !a.checks.includes(check))) return null
+    if (a.completedNormally !== undefined && typeof a.completedNormally !== 'boolean' ||
+      a.completedNormally === true && (a.finishedAt === null || a.completed.length !== a.checks.length)) return null
     state.attempt = { id: a.id, startedAt: a.startedAt, finishedAt: a.finishedAt, kind: a.kind,
-      startupId: a.startupId, checks: [...a.checks], completed: [...a.completed] }
+      startupId: a.startupId, checks: [...a.checks], completed: [...a.completed],
+      ...(a.completedNormally !== undefined ? { completedNormally: a.completedNormally } : {}) }
   }
   for (const check of CHECKS) {
     if (!Object.hasOwn(value.results, check)) continue
     const row = value.results[check]
     const projected = projectedResult(row)
     if (projected === null || !time(row.checkedAt) || !digest(row.version)) return null
-    state.results[check] = { ...projected, checkedAt: row.checkedAt, version: row.version }
+    if (row.acquisitionId !== undefined && (check !== 'leftovers' || !id(row.acquisitionId))) return null
+    state.results[check] = { ...projected, checkedAt: row.checkedAt, version: row.version,
+      ...(row.acquisitionId !== undefined ? { acquisitionId: row.acquisitionId } : {}) }
   }
   for (const app of ['claude', 'codex']) {
     if (!Object.hasOwn(value.qualifications, app)) continue
@@ -59,16 +65,26 @@ export function validateDoctorState(value) {
       !['qualified', 'unsupported', 'failed', 'timeout'].includes(q.state)) return null
     state.qualifications[app] = { identity: q.identity, checkedAt: q.checkedAt, state: q.state }
   }
+  if (value.continuity != null) {
+    const result = state.results.leftovers
+    if (!state.profileKey || !state.profileIdentity || !result?.acquisitionId) return null
+    const binding = { profileBinding: state.profileIdentity, attemptId: result.acquisitionId }
+    const keys = deriveContinuityKeys(state.profileKey, binding)
+    state.continuity = validateContinuity(value.continuity, result, binding, keys.envelope)
+    if (state.continuity === null) return null
+  }
   return state
 }
 
 /** Called only after obtaining the released run lock: a journal is not evidence of a live worker. */
 export function recoverDoctorAttempt(state, now) {
   if (!state.attempt || state.attempt.finishedAt !== null) return false
-  for (const check of state.attempt.checks.filter((check) => !state.attempt.completed.includes(check))) state.results[check] = {
-    state: 'interrupted', problems: [], checkedAt: now,
-    version: state.results[check]?.version ?? state.versions
+  for (const check of state.attempt.checks.filter((check) => !state.attempt.completed.includes(check))) {
+    state.results[check] = { state: 'interrupted', problems: [], checkedAt: now,
+      version: state.results[check]?.version ?? state.versions }
+    if (check === 'leftovers') state.continuity = null
   }
+  state.attempt.completedNormally = false
   state.attempt.finishedAt = now
   return true
 }
@@ -87,14 +103,21 @@ export function doctorPlan(state, versions, startupId, now) {
 
 /** Must be persisted before any child starts; a crash cannot refund the retry or reset the cadence. */
 export function beginDoctorAttempt(state, plan, { versions, startupId, now, runId }) {
+  if (plan.checks.includes('leftovers')) state.continuity = null
   if (plan.kind === 'cycle') {
     state.cycleStartedAt = now
     state.versions = versions
     state.cycleStartupId = startupId
     state.retryUsed = false
   } else if (plan.kind === 'retry') state.retryUsed = true
-  state.attempt = { id: runId, startedAt: now, finishedAt: null, kind: plan.kind, startupId, checks: plan.checks, completed: [] }
+  state.attempt = { id: runId, startedAt: now, finishedAt: null, completedNormally: false, kind: plan.kind, startupId, checks: plan.checks, completed: [] }
   return state
+}
+
+function problemWords(problem) {
+  const nouns = { 'leftover-file-bound': 'file', 'leftover-folder-bound': 'folder', 'leftover-database-bound': 'database', 'leftover-source-changed': 'source', 'leftover-unreadable': 'item', 'leftover-step': 'scan step' }
+  const noun = nouns[problem.code]
+  return PROBLEMS[problem.code][0].replace('{count}', String(problem.count)).replace('{noun}', `${noun}${problem.count === 1 ? '' : 's'}`)
 }
 
 export function doctorView(state, { now = Date.now(), running = false, versions = null, appVersions = null, profileMatches = true, error = null } = {}) {
@@ -103,7 +126,7 @@ export function doctorView(state, { now = Date.now(), running = false, versions 
     const row = state.results[check]
     if (!row) return { check, state: 'unqualified', problems: [], leftovers: [], checkedAt: null, stale: false }
     return { check, state: row.state, problems: row.problems.map((problem) => ({ ...problem,
-      reason: PROBLEMS[problem.code][0], fix: PROBLEMS[problem.code][1] })),
+      reason: problemWords(problem), fix: PROBLEMS[problem.code][1] })),
       leftovers: (row.leftovers ?? []).map((item) => ({ ...item, reasonText: LEFTOVER_REASONS[item.reason] + (item.source === 'managed' ? ' OpenCode reads this entry from managed configuration.' : ''), location: leftoverLocation(item) })), checkedAt: row.checkedAt,
       stale: !profileMatches || changed ||
         now - row.checkedAt > DAY || row.version !== state.versions || (versions !== null && state.versions !== versions) }
@@ -111,8 +134,22 @@ export function doctorView(state, { now = Date.now(), running = false, versions 
   const incomplete = rows.some((row) => row.stale || !['passed', 'problems'].includes(row.state))
   const problemCount = rows.reduce((count, row) => count + row.problems.length, 0)
   const exitCode = error !== null || incomplete || running ? 3 : problemCount > 0 ? 1 : 0
-  return { schemaVersion: 1, locationHelp: LOCATION_HELP, running, cycleStartedAt: state.cycleStartedAt,
+  const view = { schemaVersion: 1, locationHelp: LOCATION_HELP, running, cycleStartedAt: state.cycleStartedAt,
     attemptStartedAt: state.attempt?.startedAt ?? null, retryUsed: state.retryUsed,
     retryAtNextStart: !state.retryUsed && rows.some((row) => ['problems', 'partial', 'failed', 'timeout', 'unqualified', 'interrupted'].includes(row.state)),
     error, rows, problemCount, allWell: exitCode === 0, exitCode }
+  // Rendering expands compact saved facts; apply the publication budget after that expansion.
+  if (Buffer.byteLength(JSON.stringify(view)) + 1 > 1024 * 1024) {
+    const row = rows.find((row) => row.check === 'leftovers')
+    row.leftovers = []; row.state = 'partial'
+    const existing = row.problems.find((problem) => problem.code === 'leftover-step')
+    if (existing) { existing.count = Math.min(10000, existing.count + 1); existing.reason = problemWords(existing) }
+    else {
+      const problem = { code: 'leftover-step', item: row.problems.length + 1, count: 1 }
+      row.problems.push({ ...problem, reason: problemWords(problem), fix: PROBLEMS[problem.code][1] })
+    }
+    view.problemCount = rows.reduce((count, row) => count + row.problems.length, 0)
+    view.allWell = false; view.exitCode = 3
+  }
+  return view
 }

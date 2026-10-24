@@ -1,7 +1,7 @@
 // MODULE: doctor-runtime.test.ts - Real sandbox write refusal, process bounds and cross-process local doctor execution
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +25,11 @@ describe('doctor runtime boundaries', () => {
     expect(env.BMN_CONTROL_SOCKET).toBeUndefined()
     expect(env.HOME).toBe('/real')
     expect(env.DISABLE_AUTOUPDATER).toBe('1')
+  })
+
+  it('uses a BMN session terminal, retaining a supplied Sixel terminal, rather than creating a dumb-terminal warning', () => {
+    expect(doctorEnvironment({ HOME: '/real', PATH: '/usr/bin:/bin', TERM: 'dumb' }).TERM).toBe('xterm-256color')
+    expect(doctorEnvironment({ HOME: '/real', PATH: '/usr/bin:/bin', TERM: 'xterm-sixel-256color', TERMINFO_DIRS: '/real/terminfo:' })).toMatchObject({ TERM: 'xterm-sixel-256color', TERMINFO_DIRS: '/real/terminfo:' })
   })
 
   it('refuses home writes and outside-home symlink writes in the actual bwrap route', async () => {
@@ -89,7 +94,7 @@ describe('doctor runtime boundaries', () => {
     writeFileSync(join(home, '.claude/settings.json'), '{ invalid configuration')
     const result = await runLeftoversDoctor(home, { PATH: '/usr/bin:/bin' }, {})
     expect(result.state).toBe('partial')
-    expect(result.problems.some((row) => row.code === 'additional-details')).toBe(true)
+    expect(result.problems).toContainEqual({ code: 'leftover-unreadable', item: 1, count: 1 })
   })
 
   it('keeps an unreadable skills root incomplete instead of silently omitting it', async () => {
@@ -154,6 +159,32 @@ describe('doctor runtime boundaries', () => {
     expect(view.error).toBe('state-unavailable')
     expect(JSON.stringify(view)).not.toContain('SYNTHETIC')
     expect(readFileSync(outside, 'utf8')).toBe('sk-SYNTHETIC-PRIVATE')
+  })
+
+  it('keeps doctor state private and refuses unsafe permissions or hard links', () => {
+    const home = fixture(), environment = { HOME: home }, paths = doctorPaths(environment)
+    saveDoctorState(emptyDoctorState(), environment)
+    expect(statSync(paths.directory).mode & 0o777).toBe(0o700)
+    expect(statSync(paths.state).mode & 0o777).toBe(0o600)
+    chmodSync(paths.state, 0o644)
+    expect(() => loadDoctorState(environment)).toThrow()
+    expect(() => saveDoctorState(emptyDoctorState(), environment)).toThrow()
+    chmodSync(paths.state, 0o600)
+    linkSync(paths.state, join(home, 'alias'))
+    expect(() => loadDoctorState(environment)).toThrow()
+    expect(() => saveDoctorState(emptyDoctorState(), environment)).toThrow()
+  })
+
+  it('refuses an oversized next state before replacing the previous valid state', () => {
+    const home = fixture(), environment = { HOME: home }, paths = doctorPaths(environment)
+    const state = emptyDoctorState()
+    saveDoctorState(state, environment)
+    const before = readFileSync(paths.state, 'utf8')
+    state.results.leftovers = { state: 'partial', checkedAt: 1, version: 'a'.repeat(64), problems: [],
+      leftovers: Array.from({ length: 10000 }, (_, i) => ({ kind: 'memory', app: 'claude', reason: 'missing-project', item: i + 1, identity: 'withheld', locator: { status: 'unresolved' } })) }
+    expect(() => saveDoctorState(state, environment)).toThrow()
+    expect(readFileSync(paths.state, 'utf8') === before).toBe(true)
+    expect(loadDoctorState(environment)).toEqual(emptyDoctorState())
   })
 
   it('runs concurrent local CLI callers against one synthetic profile with no BMN socket', async () => {

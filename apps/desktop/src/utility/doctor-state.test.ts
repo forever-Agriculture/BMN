@@ -53,6 +53,18 @@ describe('shared doctor schedule', () => {
     expect(doctorView(completed(), { now: START + 20 }).allWell).toBe(true)
   })
 
+  it('does not promise a startup retry for a view-only publication omission', () => {
+    const state = completed()
+    state.results.leftovers!.leftovers = Array.from({ length: 1400 }, (_, i) => ({ kind: 'plugins', app: 'codex', reason: 'disabled', item: i + 1,
+      locator: { status: 'located', acquisition: 4, root: 'codex-profile', parent: { device: '1', inode: '1' }, object: { device: '1', inode: '1' },
+        entry: 1, line: 1, column: 1, route: Array.from({ length: 4 }, () => ({ device: '1', inode: '1', entry: 1 })) } }))
+    const before = JSON.stringify(state), view = doctorView(state, { now: START + 20 })
+    expect(view.rows.find(row => row.check === 'leftovers')?.state).toBe('partial')
+    expect(view.retryAtNextStart).toBe(false)
+    expect(doctorPlan(state, V1, randomUUID(), START + 20)).toBeNull()
+    expect(JSON.stringify(state)).toBe(before)
+  })
+
   it('retries problem checks once, leaves permanently unsupported versions alone and preserves other findings', () => {
     const state = completed()
     state.results.claude = { state: 'problems', problems: [{ code: 'installation-check', item: 1 }], version: V1, checkedAt: START }

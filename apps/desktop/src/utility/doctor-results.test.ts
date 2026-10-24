@@ -7,6 +7,21 @@ const codex = (checks: Record<string, unknown>, overallStatus = 'warning'): stri
 const row = (id: string, status: string, details = {}): object => ({ id, status, details, summary: SECRET, remediation: SECRET })
 
 describe('doctor result projection', () => {
+  it('keeps SQLite access failures inconclusive in the read-only sandbox while preserving real corruption and terminal warnings', () => {
+    const access = 'error returned from database: (code: 14) unable to open database file'
+    const text = codex({
+      'state.paths': row('state.paths', 'fail', { 'state DB integrity': access, 'thread history DB integrity': 'ok' }),
+      'state.rollout_db_parity': row('state.rollout_db_parity', 'warning', { 'rollout DB read error': access })
+    }, 'fail')
+    expect(parseCodexDoctor(text, 1, { readOnlySandbox: true }).problems.some(p => p.code === 'state-check')).toBe(false)
+    expect(parseCodexDoctor(text, 1).problems.some(p => p.code === 'state-check')).toBe(true)
+    const corrupt = codex({ 'state.paths': row('state.paths', 'fail', { 'state DB integrity': 'database disk image is malformed (code: 11)' }),
+      'terminal.env': row('terminal.env', 'warning') }, 'fail')
+    const projected = parseCodexDoctor(corrupt, 1, { readOnlySandbox: true })
+    expect(projected.problems.map(p => p.code)).toEqual(expect.arrayContaining(['state-check', 'terminal-check']))
+    expect(JSON.stringify(projected)).not.toContain('database disk image')
+  })
+
   it('keeps separate missing-program and endpoint findings without forwarding any child text', () => {
     const parsed = parseCodexDoctor(codex({ 'mcp.config': row('mcp.config', 'warning', {
       [SECRET]: `stdio command "${SECRET}" is not resolvable (not found on PATH)`,

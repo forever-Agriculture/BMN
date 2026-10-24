@@ -204,7 +204,7 @@ export function PreferencesDialog(props: {
   // An agent and New agent open in place under Agents › Team, never as views of their own.
   const [teamPage, setTeamPage] = useState<TeamPage>({ name: 'agents' })
   const team = useTeamState()
-  const rules = useRulesState()
+  const rules = useRulesState(page === 'integrations' && shown.integrations === 'health')
   const research = useResearchState()
   const main = useRef<HTMLElement | null>(null)
   // What each app may read, and which app versions count as accepted, follow the approved team.

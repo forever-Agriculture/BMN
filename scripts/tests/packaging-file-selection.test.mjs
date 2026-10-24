@@ -43,7 +43,7 @@ it('packages every file the bmn CLI loads beside bmn.mjs', () => {
   const loaded = cliModules(join(appDir, 'bin'))
 
   // The guard, the dispatch check and one command each for context, skills and tools sit behind these.
-  expect(loaded).toEqual(expect.arrayContaining(['agents-check.mjs', 'agents-guard.mjs', 'agents-context.mjs', 'agents-skills.mjs', 'agents-tools.mjs', 'agents-fence.mjs', 'agents-research.mjs', 'opencode-project-reader.mjs', 'opencode-project-git.mjs', 'opencode-reader-child.mjs', 'opencode-reader-plugin.mjs', 'opencode-child-accounting.mjs']))
+  expect(loaded).toEqual(expect.arrayContaining(['agents-check.mjs', 'agents-guard.mjs', 'agents-context.mjs', 'agents-skills.mjs', 'agents-tools.mjs', 'agents-fence.mjs', 'agents-research.mjs', 'opencode-project-reader.mjs', 'opencode-project-git.mjs', 'opencode-reader-child.mjs', 'opencode-reader-plugin.mjs', 'opencode-child-accounting.mjs', 'doctor-continuity.mjs', 'doctor-inspection.mjs', 'doctor-inspection-worker.mjs']))
   expect(loaded.filter(name => !packaged.has(name))).toEqual([])
 })
 

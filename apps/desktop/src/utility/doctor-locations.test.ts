@@ -4,50 +4,59 @@ import { linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, sym
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { qualificationProcess, runLeftoversDoctor, sandboxProcess } from '../../bin/doctor-adapters.mjs'
-import { locateItem, locationRoots, resolveLocation, validateLocation } from '../../bin/doctor-locations.mjs'
+import { acquireLeftoversDoctor, qualificationProcess, revalidateLeftoversDoctor, runLeftoversDoctor, sandboxProcess } from '../../bin/doctor-adapters.mjs'
+import { locationRoots, validateLocation } from '../../bin/doctor-locations.mjs'
 import { selectedProfile } from '../../bin/doctor-profile.mjs'
 import { readJsonItems } from '../../bin/agents-tool-files.mjs'
+import { manualLocation } from './doctor-test-locations'
 
 const roots: string[] = []
 const fixture = (): string => { const path = mkdtempSync(join(tmpdir(), 'bmn-doctor-location-')); roots.push(path); return path }
 const put = (path: string, text: string): void => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, text) }
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }) })
 
-it('resolves distinct hard-linked entries and symlinks, then refuses renamed or replaced sources', () => {
-  const home = fixture()
-  const first = join(home, 'password')
-  put(first, 'same bytes')
-  linkSync(first, join(home, 'ordinary'))
-  symlinkSync('missing', join(home, 'sk-SYNTHETIC-abcdef123456'))
-  const map = locationRoots(selectedProfile({ HOME: home }))
-  const items = ['password', 'ordinary', 'sk-SYNTHETIC-abcdef123456'].map((name) => locateItem(join(home, name), map))
-  expect(items.map((item) => resolveLocation(item, map))).toEqual(['password', 'ordinary', 'sk-SYNTHETIC-abcdef123456'].map((name) => join(home, name)))
-  expect(JSON.stringify(items)).not.toMatch(/password|ordinary|SYNTHETIC|abcdef/)
-  expect(items[0]).not.toEqual(items[1])
-  renameSync(first, join(home, 'replacement'))
-  expect(items.map((item) => resolveLocation(item, map))).toEqual([null, null, null])
-  const replacement = locateItem(join(home, 'replacement'), map)
-  put(join(home, 'new'), 'same bytes')
-  renameSync(join(home, 'new'), join(home, 'replacement'))
-  expect(resolveLocation(replacement, map)).toBeNull()
-  expect(validateLocation({ ...items[0], root: 'password' })).toBeNull()
+const keys = { item: 'a'.repeat(64), context: 'b'.repeat(64) }
+it('refuses ambiguous hard-linked configuration coordinates and changes in entry identity', async () => {
+  const home = fixture(), environment = { HOME: home, PATH: '/usr/bin:/bin' }, path = join(home, '.codex/config.toml')
+  put(path, '[mcp_servers.ordinary]\ncommand="bmn-missing-program"\n')
+  linkSync(path, join(home, 'alias'))
+  const ambiguous = await acquireLeftoversDoctor(home, environment, {}, keys)
+  expect(ambiguous.result.leftovers?.[0]?.locator?.status).toBe('unresolved'); expect(ambiguous.rows).toEqual([])
+  rmSync(join(home, 'alias'))
+  const first = await acquireLeftoversDoctor(home, environment, {}, keys)
+  expect(first.rows).toHaveLength(1)
+  const map = locationRoots(selectedProfile(environment)), row = first.result.leftovers![0]!
+  expect(manualLocation(row.locator, map)).toBe(path)
+  expect(validateLocation({ ...row.locator, root: 'password' })).toBeNull()
+  renameSync(path, join(home, 'renamed'))
+  put(path, '[mcp_servers.ordinary]\ncommand="bmn-missing-program"\n')
+  const changed = await revalidateLeftoversDoctor(home, environment, {}, keys, first.rows)
+  expect(changed?.matches).toEqual([{ item: 1, current: null }])
 })
 
-it('uses parser-derived UTF-16 coordinates for nested objects and arrays, rejecting duplicate keys', () => {
-  const text = '{"😀":"ignored", "projects":{"password":{"mcpServers":{"ordinary":{"command":"missing"}}}}, "plugin":["password","ordinary"]}'
-  const entry = readJsonItems(text, ['projects', 'password', 'mcpServers'])[0]!
-  const home = fixture()
-  const path = join(home, '.claude.json')
+it('uses parser-derived UTF-16 coordinates for nested objects and arrays, rejecting duplicate keys', async () => {
+  const text = '{"😀":"ignored", "projects":{"password":{"mcpServers":{"ordinary":{"command":"bmn-missing-program"}}}}, "plugin":["password","ordinary"]}'
+  const entry = readJsonItems(text, ['projects', 'password', 'mcpServers'])[0]!, home = fixture(), path = join(home, '.claude.json')
   put(path, text)
-  const map = locationRoots(selectedProfile({ HOME: home }))
-  const locator = locateItem(path, map, { text, start: entry.start })
-  expect(locator).toMatchObject({ line: 1, column: text.indexOf('"ordinary"') + 1 })
-  expect(readJsonItems(text, ['plugin']).map((item) => text.slice(item.start, item.start + 1))).toEqual(['"', '"'])
+  const environment = { HOME: home, PATH: '/usr/bin:/bin' }, first = await acquireLeftoversDoctor(home, environment, {}, keys)
+  const row = (first.result.leftovers ?? []).find(row => row.kind === 'mcp')!
+  expect(row.locator).toMatchObject({ line: 1, column: entry.start + 1 })
+  expect(readJsonItems(text, ['plugin']).map(item => text.slice(item.start, item.start + 1))).toEqual(['"', '"'])
   expect(() => readJsonItems('{"mcpServers":{"password":{},"password":{}}}', ['mcpServers'])).toThrow()
-  expect(resolveLocation(locator, map)).toBe(path)
-  put(path, text.replace('"😀":"ignored", ', ''))
-  expect(resolveLocation(locator, map)).toBeNull()
+  const verified = await revalidateLeftoversDoctor(home, environment, {}, keys, first.rows)
+  expect(verified?.matches).toEqual([{ item: 1, current: 1 }])
+  expect(manualLocation(row.locator, locationRoots(selectedProfile(environment)))).toBe(path)
+  const shifted = text.replace('"😀":"ignored", ', '')
+  put(path, shifted)
+  const current = await revalidateLeftoversDoctor(home, environment, {}, keys, first.rows)
+  expect(current?.matches).toEqual([{ item: 1, current: 1 }])
+  const shiftedEntry = readJsonItems(shifted, ['projects', 'password', 'mcpServers'])[0]!
+  expect(shiftedEntry.start).toBe(entry.start - 16)
+  expect(current?.result.leftovers?.find(row => row.kind === 'mcp')?.locator).toMatchObject({
+    status: 'located', line: 1, column: shiftedEntry.start + 1
+  })
+  put(path, shifted.replace('bmn-missing-program', 'bmn-other-missing-program'))
+  expect((await revalidateLeftoversDoctor(home, environment, {}, keys, first.rows))?.matches).toEqual([{ item: 1, current: null }])
 })
 
 it('individually resolves every retained kind, plugin install/cache and numeric memory row without publishing names', async () => {
@@ -77,15 +86,18 @@ it('individually resolves every retained kind, plugin install/cache and numeric 
   state.exec('create table threads(id text,cwd text)')
   for (const name of names) state.prepare('insert into threads values (?,?)').run(name, join(home, 'gone', name))
   state.close()
-  const result = await runLeftoversDoctor(home, { HOME: home, PATH: '/usr/bin:/bin' }, {})
+  const environment = { HOME: home, PATH: '/usr/bin:/bin' }, first = await acquireLeftoversDoctor(home, environment, {}, keys), result = first.result
   expect(result.state).toBe('passed')
   const rows = result.leftovers ?? []
   const map = locationRoots(selectedProfile({ HOME: home }))
   expect(new Set(rows.map((row) => row.kind))).toEqual(new Set(['skills', 'plugins', 'mcp', 'memory']))
+  const fresh = await revalidateLeftoversDoctor(home, environment, {}, keys, first.rows)
+  expect(fresh?.matches.every(match => match.current !== null)).toBe(true)
+  expect(fresh?.matches).toHaveLength(rows.length)
   for (const row of rows) {
     expect(row.identity).toBe('withheld')
     expect(row.locator?.status).toBe('located')
-    expect(resolveLocation(row.locator, map)).not.toBeNull()
+    expect(manualLocation(row.locator, map)).not.toBeNull()
   }
   expect(rows.filter((row) => row.kind === 'memory' && row.app === 'codex')).toHaveLength(4)
   expect(rows.filter((row) => row.kind === 'plugins' && row.app === 'claude' && row.reason === 'disabled')).toHaveLength(8)
@@ -96,13 +108,13 @@ it('individually resolves every retained kind, plugin install/cache and numeric 
   const changed = new DatabaseSync(join(home, '.codex/memories_1.sqlite'))
   changed.exec('delete from stage1_outputs where rowid=1')
   changed.close()
-  expect(resolveLocation(memory.locator, map)).toBeNull()
+  expect((await revalidateLeftoversDoctor(home, environment, {}, keys, first.rows))?.matches.find(row => row.item === memory.item)?.current).toBeNull()
 })
 
 it('lists a plugin cache folder too large to observe without making the check partial', async () => {
   const home = fixture()
   const folder = join(home, '.codex/plugins/cache/market/ordinary/1')
-  for (let index = 0; index < 300; index++) put(join(folder, `file-${index}`), 'bytes')
+  for (let index = 0; index < 1100; index++) put(join(folder, `file-${index}`), 'bytes')
   const result = await runLeftoversDoctor(home, { HOME: home, PATH: '/usr/bin:/bin' }, {})
   expect(result.state).toBe('passed')
   expect(result.leftovers?.map((row) => [row.reason, row.locator?.status])).toEqual([['app-managed', 'unresolved']])

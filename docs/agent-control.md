@@ -2460,33 +2460,74 @@ Conflicting definitions, or an unreadable definition of the same entry, produce 
 the managed label does not claim that BMN established which definition wins. Every observed source is still
 checked for changes, including sources whose duplicate diagnostic was suppressed.
 
+The startup Codex check uses the default session terminal policy: `xterm-sixel-256color` only when
+the same stable terminfo asset used by sessions validates against the bundle; otherwise `xterm-256color`.
+Its terminfo directories pass through the filtered startup environment. It does not manufacture a `TERM=dumb` warning.
+SQLite code 14 (unable to open the database) under this read-only sandbox is incomplete state evidence:
+a WAL database may need a writable shared-memory file. Those access failures remain partial; actual
+integrity failures and terminal warnings retain their problem rows. The app doctor's partial wording is unchanged.
+
 JSON has `schemaVersion: 1`, `running`, `cycleStartedAt`, `attemptStartedAt`, `retryUsed`, `retryAtNextStart`,
 `error`, `rows`, `problemCount`, `allWell`, `exitCode` and fixed `locationHelp`. Times are Unix milliseconds or null. Each row names
 `check`, `state`, `checkedAt`, `stale`, `problems` and `leftovers`. Problem facts carry a fixed `code`, generated
-`item`, optional app, and safe `reason`/`fix`. Leftovers carry kind, app, generated item, fixed reason/location,
+`item`, optional app/count, and safe `reason`/`fix`. Leftovers partial facts aggregate counts for oversized
+folders or databases, changed sources, unreadable inputs and unfinished scan steps, without identities.
+Fully checked reasons with inherently ambiguous or unavailable coordinates show “location unavailable”
+without an artificial coverage gap. Changed, unread or uncertain reason inputs remain partial.
+Recovery rechecks the contributing reasons for those unavailable coordinates too; a reason that changed
+or newly appeared cannot leave the check passed merely because its item has no location receipt.
+Fresh visible Health and explicit CLI readers verify locations automatically. Compatible concurrent readers
+share one inspection; verification takes the acquisition lock and rechecks acquisition/profile/version/environment
+identity before publication. Generic settings/action snapshots show saved status with historical coordinates marked
+stale. A normally completed Leftovers acquisition is returned directly only to a call that observed it unfinished
+or saw a new acquisition ID. Recovery cannot mint normal completion, and legacy attempts have no shortcut.
+The same attempt and authenticated acquisition must still be present when the view is constructed. No completed fresh-reader
+result is cached as current for a later request. There is one shared recovery pass for acquisition races and later
+instability. Recovery adopts fully reconstructed rows from recovered inputs, releases first-pass bytes, and retains
+checked first-pass inventory with uncertified coordinates withheld if the deadline expires. Serialization is reserved
+inside the60-second worker bound.
+Leftovers carry kind, app, generated item, fixed reason/location,
 `identity: "withheld"` and a structural `locator`. Names, paths, plugin IDs, project names and MCP keys are withheld
-even when ordinary-looking. Each filesystem locator has a selected-root enum, parent and object device/inode,
-byte size and nanosecond mtime/ctime, and a one-based directory-entry position sorted by raw UTF-8 bytes.
-Configuration entries add a one-based line and UTF-16 column from the parser. Every plugin install/cache and
-affected Codex memory row is separate; memory locators use verified `stage1_outputs` numeric `rowid`, never a
-thread ID, and include the WAL revision when present. Acquisition version 1 binds the coordinates to bytes
-read through one verified descriptor, with parent enumeration, source type/mode and revision checks before
-and after. Each configuration is acquired once per scan; nested entries and MCP scopes share those bytes.
-Directory and followed-link observations retain bounded flat numeric dependency witnesses for their children
-and targets, without source names or hashes. SQLite copies use one verified database/WAL source vector for
-memories and project coverage; originals are never queried or recovered. Active rollback journals, unsupported
-schemas, unstable copies and exhausted bounds are incomplete coverage. Publication and later resolution
-recheck the original revisions and every witness. Legacy coordinates become unresolved, never trusted as
-acquired observations. A bounded metadata lookup marks changed, reordered, replaced or unverifiable
-coordinates stale. A source that changed during the scan, an exhausted bound on an input a reason depends on, or an
-unreadable item makes the check partial; an item whose location cannot be found again is listed as "location
-unavailable" and does not (owner card 2026-10-22). Before publishing, every file, folder and database the scan read is
-rechecked at the path it was read from. A plugin cache folder too large to observe is listed without a location; one
-BMN cannot read makes the check partial. `locationHelp` explains manual
-resolution and revision verification. A stale item coordinate stays show-only and does not make a fresh,
-successful check stale. Text output also lists each show-only item. Leftovers do not count as
-problems or Needs-you. Saved state is schema-validated and atomic
-at `~/.config/bmn/agents/state/doctor.json`; unexpected state/lock symlinks are refused.
+even when ordinary-looking. Acquisition version 4 locators carry selected-root, parent and object device/inode,
+a numeric folder route and one-based entry hints sorted by raw UTF-8 bytes. Configuration entries add one-based
+line and UTF-16 column; Codex memory uses `stage1_outputs` numeric `rowid`, never a thread ID. Each configuration
+is acquired once per scan, shared by its nested entries and MCP scopes. Public metadata alone cannot certify a
+location. Older saved coordinates need a new acquisition.
+
+The fixed inspector reconstructs each item's identity, full content and contributing reason predicates. Private,
+keyed item/context commitments are stored only in the existing `doctor.json`, inside an authenticated envelope
+bound to the profile, acquisition attempt, scanner version and original saved result. Separate item/context keys
+enter the isolated worker through stdin; receipts return on a private pipe. No keys, commitments, source names,
+plain source hashes or arbitrary text enter the public JSON or renderer. App doctors still have closed stdin and
+discarded stderr. Input and both output pipes share the existing 1 MiB process budget.
+
+Each later view runs a bounded, read-only reconstruction. Only a unique, completely witnessed item-and-reason
+match supplies a view-only `currentLocator`; the original saved acquisition is never overwritten. Unrelated sibling
+insertion/reordering or unrelated database/WAL writes do not invalidate unchanged items. Rename, replacement,
+hard-link ambiguity, changed child content, changed contributing predicates and missing witnesses refuse continuity.
+Configuration replacement remains inode/revision-bound. Full selected SQLite rows retain typed integer/content
+values and their exact project relation and schema. Without an app history marker, deletion/reinsertion of an
+identical row ID, all contents and project relation is accepted as identical observable item/reason (owner decision,
+2026-10-22); detectable row-ID reuse is refused. Source discovery, absent inputs, ownership, capability, duplicate
+groups, link traversal and executable access all contribute private evidence where the reason depends on them.
+
+SQLite copies use one verified database/WAL vector for memories and project coverage; originals are never queried
+or recovered. Copies live only in bwrap's existing private tmpfs scratch. Active rollback journals, unsupported
+schemas, unstable copies and exhausted bounds are incomplete coverage. Every input is checked before publication.
+One bounded second observation can retain an unchanged original item through sibling activity; its original
+commitment never changes. Uncovered inputs remain partial and are counted once by distinct input, independently
+of how many rows they affect. A cache tree too large to observe may lack a location; unreadable cache inputs remain
+partial. Standalone input files have a 1 MiB byte limit; tree and database reads use their own limits.
+Trees have a 1,024-entry, 16 MiB and depth-12 bound; each database or WAL has a 512 MiB copy bound.
+The inspector stays within 60 seconds and 1 MiB of aggregate pipes, with an 896 KiB public-result budget. The entire
+private state, including authenticated receipts, also stays within 1 MiB. Overflow explicitly reports incomplete
+coverage and withholds coordinates, then item facts if needed. No witness is silently dropped.
+
+`locationHelp` explains manual use of current numeric coordinates. Stale coordinates stay show-only and do not
+make an otherwise fresh successful check stale. Text output lists each show-only item. Leftovers do not count as
+problems or Needs-you. Schema-validated state is atomically written and read back at
+`~/.config/bmn/agents/state/doctor.json`, with a 0700 state directory and a 0600, owner-only, single-link state file.
+Unexpected state/lock symlinks, unsafe permissions, altered receipts and cross-profile replay are refused.
 
 Exit precedence: **2** invalid usage; **3** incomplete, failed, unsupported, unqualified, stale or running checks;
 **1** recognized problems; **0** every applicable check passed fresh. Exit 3 retains any recognized problems.

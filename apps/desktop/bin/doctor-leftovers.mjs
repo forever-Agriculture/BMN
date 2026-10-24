@@ -1,553 +1,464 @@
-// MODULE: doctor-leftovers.mjs - Measured read-only leftover predicates, isolated in bwrap and projected before output
-// Adapted from Story 81.1 ac3_scan.mjs; no cleanup, no raw inventory leaves this function.
-import { writeFileSync, existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, accessSync, constants } from 'node:fs'
-import { createHash } from 'node:crypto'
-import { join, resolve, isAbsolute, basename, dirname } from 'node:path'
-
-import { projectLeftovers } from './doctor-leftover-results.mjs'
+// MODULE: doctor-leftovers.mjs - One bounded scanner for acquisition and private item/reason reconstruction
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { readJsonItems, readOpenCodeEntries, readTomlEntries } from './agents-tool-files.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
-import { bindLocation, locationRoots, observeDatabases, observeFile, observeTree, resolveLocation, unchangedSince, unresolvedLocation } from './doctor-locations.mjs'
-import { readJsonEntries, readJsonItems, readOpenCodeEntries, readTomlEntries } from './agents-tool-files.mjs'
+import { createInspectionSession, inspectionResult } from './doctor-inspection.mjs'
+import { matchContinuity, privateTag } from './doctor-continuity.mjs'
+import { projectedResult } from './doctor-results.mjs'
 
 export const leftoversModule = import.meta.url
-
-export async function inspectLeftovers(currentVersions = {}) {
-const { SKILL_APPS, rootPath, skillsTests } = await import('./agents-skills.mjs')
-const { TOOL_APPS, neutralOf } = await import('./agents-tools.mjs')
-const { canonicalJson } = await import('./agents-roster.mjs')
-const env = process.env
-const profile = selectedProfile(env)
-const H = profile.home
-const roots = locationRoots(profile)
-const observed = new Map()
-const databaseAbsences = []
-// Folders and databases read outside `observed`, rechecked before publication.
-const held = []
-const hold = (observation) => { held.push(observation); return observation }
-const locateTree = (path) => { try { return hold(observeTree(path, roots)) } catch { errors.push('unstable-tree'); return null } }
-// Only the location depends on this observation, so a folder too large to observe is listed without one; one BMN cannot read is not.
-const treeLocation = (path) => {
-  try { return hold(observeTree(path, roots)) } catch (error) { if (error.code !== 'BOUND_EXCEEDED') errors.push('unstable-tree'); return null }
-}
-const tilde = (path) => (path.startsWith(`${H}/`) ? `~/${path.slice(H.length + 1)}` : path === H ? '~' : path)
-const sha = (text) => createHash('sha256').update(text).digest('hex')
-const errors = []
-if (profile.invalid || profile.unavailable) return projectLeftovers({ errors: ['unavailable-profile'] })
-if (profile.inline) errors.push('uninspected-inline-scope')
-const absent = (error) => ['ENOENT', 'ENOTDIR'].includes(error.code)
-const readObservation = (path) => {
-  if (!observed.has(path)) {
-    if (observed.size >= 256) { errors.push('observation-bound-exhausted'); return { path, text: null, missing: false, locator: unresolvedLocation() } }
-    try { observed.set(path, observeFile(path, roots)) }
-    catch (error) { if (!absent(error)) errors.push('unreadable-or-unstable-file'); observed.set(path, { path, missing: absent(error), locator: unresolvedLocation(), text: null }) }
-  }
-  return observed.get(path)
-}
-const tryRead = (path) => readObservation(path).text
-const tryJson = (path) => {
-  const text = tryRead(path)
-  if (text === null) return { missing: true }
-  try {
-    const data = JSON.parse(text)
-    if (data === null || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid shape')
-    return { data }
-  } catch { errors.push('malformed-configuration'); return { unreadable: true } }
-}
-const isDir = (path) => {
-  try { return statSync(path).isDirectory() } catch (error) { if (!absent(error)) errors.push('unreadable-directory'); return false }
-}
-const real = (path) => {
-  try { return realpathSync(path) } catch (error) { if (!absent(error)) errors.push('unreadable-path'); return null }
-}
-
-// A text holds a credential shape: a known key prefix, a bearer value, or a key=value form. Only a boolean leaves.
-// (BMN's looksSecret, word by word, flags 187 of 254 memory files on this machine, long hyphenated slugs among them:
-// right for an MCP argument, too broad for prose.)
-const SHAPES = [/\b(?:sk|pk|ghp|gho|ghu|github_pat|xox[abp]|AKIA)[-_A-Za-z0-9]{12,}/, /\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/i,
-  /(?:api[_-]?key|token|secret|passw(?:or)?d|credential)s?["']?\s*[=:]\s*["']?[A-Za-z0-9._~+/=-]{12,}/i]
-const holdsSecret = (text) => SHAPES.some((shape) => shape.test(text))
-
-// ---------------------------------------------------------------------------------------------
-// Programs on PATH, as the owner's shells see them
-
-const PATH_DIRS = (env.PATH ?? '').split(':').filter(Boolean)
-const executable = (path) => { try { accessSync(path, constants.X_OK); return statSync(path).isFile() } catch { return false } }
-const onPath = (command) => PATH_DIRS.some((directory) => executable(join(directory, command)))
+const malformed = Object.freeze({ code: 'MALFORMED' })
 const RUNNERS = new Set(['npx', 'uvx', 'bunx', 'pnpm', 'pnpx', 'yarn', 'docker', 'podman', 'uv', 'pipx', 'deno'])
-function programClass(command, args = []) {
-  if (typeof command !== 'string' || command === '') return 'no-program'
-  const present = isAbsolute(command) ? executable(command) : command.includes('/') ? null : onPath(command)
-  if (present === null) return 'relative-path'
-  if (!present) return 'missing'
-  if (RUNNERS.has(basename(command))) return 'runner-present-package-unresolved'
-  const scripts = args.filter((arg) => typeof arg === 'string' && isAbsolute(arg) && /\.(?:m?js|cjs|ts|py|sh|rb)$/.test(arg))
-  if (scripts.some((arg) => !existsSync(arg))) return 'present-script-missing'
-  return 'present'
-}
+const BMN_SKILLS = new Set(['plan', 'team-ask', 'team-page', 'web-question', 'jev-judge', 'dev-auto', '.system', 'synced'])
 
-// ---------------------------------------------------------------------------------------------
-// Where a Claude Code project folder's name came from: every character but letters and digits became '-'
+async function scanOnce(versions, keys, deadline) {
+  const { SKILL_APPS, rootPath } = await import('./agents-skills.mjs')
+  const { TOOL_APPS, neutralOf } = await import('./agents-tools.mjs')
+  const env = process.env, profile = selectedProfile(env), H = profile.home
+  const s = createInspectionSession(profile, keys, deadline)
+  if (profile.invalid || profile.unavailable) { s.gap('profile', 'step', { code: 'UNSUPPORTED' }); return s.finish() }
+  if (profile.inline) s.gap('inline-config', 'step', { code: 'UNSUPPORTED' })
+  const file = (path) => s.file(path)
+  const json = (path) => { const source = file(path); return { source, data: s.json(source) } }
+  const entries = (source, at = [], toml = false, strict = false) => {
+    if (!source.known || s.text(source) === null) return []
+    try { return toml ? [...readTomlEntries(s.text(source), at, { strict })].map(([key, entry]) => ({ ...entry, key })) :
+      at === null ? [...readOpenCodeEntries(s.text(source), { strict })].map(([key, entry]) => ({ ...entry, key })) : readJsonItems(s.text(source), at, { strict }) }
+    catch { s.gap(source.key, 'file', malformed); source.known = false; return [] }
+  }
+  const exists = (path) => { const source = s.meta(path); return { source, value: s.exists(source) } }
+  const dir = (path) => { const source = s.meta(path); return { source, value: s.dir(source) } }
+  const use = (result, projection = result.value) => s.dep(result.source, projection)
+  const canonical = (path) => { const source = s.meta(path); return { source, value: source.known && s.exists(source) ? source.value.route.nodes.at(-1).path : null } }
+  const writtenSkills = json(join(profile.bmn, 'state/rules/skills-written.json'))
+  const ownSkills = json(join(profile.bmn, 'state/own-skills.json'))
+  const writtenTools = json(join(profile.bmn, 'state/rules/tools-written.json'))
 
-function resolveSlug(slug) {
-  if (slug.startsWith('-tmp-') || slug.startsWith('-var-tmp-')) return { state: 'ambiguous' }
-  let uncertain = false
-  const found = []
-  const walk = (directory, rest, depth) => {
-    if (found.length > 3 || depth > 14) { uncertain = true; return }
-    let names
-    try { names = readdirSync(directory, { withFileTypes: true }) } catch { uncertain = true; return }
-    for (const entry of names) {
-      const full = join(directory, entry.name)
-      if (!entry.isDirectory() && !(entry.isSymbolicLink() && isDir(full))) continue
-      const encoded = `/${entry.name}`.replace(/[^a-zA-Z0-9]/g, '-')
-      if (rest === encoded) found.push(full)
-      else if (rest.startsWith(encoded) && rest[encoded.length] === '-') walk(full, rest.slice(encoded.length), depth + 1)
+  function slugProject(slug) {
+    if (slug.startsWith('-tmp-') || slug.startsWith('-var-tmp-')) return { state: 'ambiguous', deps: [] }
+    const deps = [], found = []; let uncertain = false, visited = 0
+    const walk = (path, rest, depth) => {
+      if (++visited > 512 || depth > 14 || found.length > 3) { uncertain = true; s.gap('slug-frontier', 'step', { code: 'BOUND_EXCEEDED' }); return }
+      const source = s.directory(path), relevant = []
+      if (!source.known) { uncertain = true; deps.push(s.dep(source, null)); return }
+      for (const name of s.names(source)) {
+        const encoded = `/${name}`.replace(/[^a-zA-Z0-9]/g, '-')
+        if (rest !== encoded && !(rest.startsWith(encoded) && rest[encoded.length] === '-')) continue
+        const target = dir(join(path, name)); relevant.push([name, target.value, s.tuple(target.source)])
+        deps.push(use(target))
+        if (!target.source.known) uncertain = true
+        if (!target.value) continue
+        if (rest === encoded) found.push(join(path, name))
+        else walk(join(path, name), rest.slice(encoded.length), depth + 1)
+      }
+      deps.push(s.dep(source, relevant))
+    }
+    walk('/', slug, 0)
+    return { state: uncertain || found.length > 1 ? 'ambiguous' : found.length ? 'exists' : 'missing', deps }
+  }
+
+  function claudeMemory() {
+    const projects = join(profile.claude, 'projects'), discovery = s.directory(projects)
+    for (const slug of s.names(discovery)) {
+      const folder = join(projects, slug), memory = join(folder, 'memory'), present = dir(memory)
+      if (!present.source.known || !present.value) continue
+      if (/--claude-worktrees-|--codex-worktrees-|-worktrees-/.test(slug)) continue
+      const tree = s.tree(memory), project = slugProject(slug)
+      if (project.state === 'exists') continue
+      s.row('memory', 'claude', project.state === 'missing' ? 'missing-project' : 'ambiguous-project', tree, [slug],
+        [s.dep(discovery, slug), use(present), ...project.deps])
     }
   }
-  walk('/', slug, 0)
-  return uncertain ? { state: 'ambiguous' } : found.length === 0 ? { state: 'missing' } : found.length === 1 ? { state: 'exists', path: found[0] } : { state: 'ambiguous', paths: found }
-}
 
-// ---------------------------------------------------------------------------------------------
-// Rules files and BMN's own records: what depends on a skill, what BMN made
-
-const RULE_FILES = [`${profile.claude}/CLAUDE.md`, `${profile.codex}/AGENTS.md`, `${profile.opencode}/AGENTS.md`, `${H}/.config/bmn/agents/global-rules.md`]
-const ruleTexts = RULE_FILES.map(tryRead).filter((text) => text !== null)
-const skillsWritten = tryJson(`${H}/.config/bmn/agents/state/rules/skills-written.json`).data ?? {}
-const toolsWritten = tryJson(`${H}/.config/bmn/agents/state/rules/tools-written.json`).data ?? {}
-const ownRecord = tryJson(`${H}/.config/bmn/agents/state/own-skills.json`).data ?? {}
-const BMN_SHIPPED = ['plan', 'team-ask', 'team-page', 'web-question', 'jev-judge']
-const PROTECTED_SKILLS = new Set([...BMN_SHIPPED, 'dev-auto', ...Object.keys(ownRecord.skills ?? {})])
-const APP_MANAGED_SKILL_NAMES = new Set(['.system', 'synced'])
-let approvedTeam = null
-try {
-  const { approvedIfAny } = await import('./agents-state.mjs')
-  approvedTeam = approvedIfAny()?.data ?? null
-} catch (error) {
-  errors.push(`approved team unreadable (${error.code ?? error.name})`)
-}
-const teamToolIds = new Set((approvedTeam?.tools ?? []).map((tool) => tool.id))
-const versions = {}
-for (const line of [...skillsTests()].reverse()) if (line.kind === 'capability' && versions[line.harness] === undefined) versions[line.harness] = { version: line.version, outcome: line.outcome, roots: (line.roots ?? []).filter((r) => r.folder || r.link).map((r) => r.root) }
-
-// =============================================================================================
-// 1. Memory
-
-function claudeMemory() {
-  const projects = `${profile.claude}/projects`
-  const rows = []
-  let folders = 0
-  for (const slug of (isDir(projects) ? readdirSync(projects).sort() : [])) {
-    const folder = join(projects, slug)
-    if (!isDir(folder)) continue
-    folders += 1
-    const memory = join(folder, 'memory')
-    if (!isDir(memory)) continue
-    const snapshot = locateTree(memory)
-    if (snapshot === null) { rows.push({ locator: unresolvedLocation(), project: 'ambiguous' }); continue }
-    const names = snapshot.directories.get('') ?? []
-    const files = names.filter((name) => name.endsWith('.md'))
-    const others = names.length - files.length
-    const index = snapshot.files.get('MEMORY.md')?.toString('utf8') ?? null
-    const links = index === null ? [] : [...index.matchAll(/\]\(([^)#\s]+\.md)\)/g)].map((match) => match[1])
-    const linked = new Set(links.map((link) => basename(link)))
-    const orphans = files.filter((name) => name !== 'MEMORY.md' && !linked.has(name)).length
-    const dangling = links.filter((link) => !existsSync(resolve(memory, link))).length
-    const secretFiles = files.filter((name) => { const text = snapshot.files.get(name)?.toString('utf8'); return text === undefined ? true : holdsSecret(text) }).length
-    const transcripts = readdirSync(folder).filter((name) => name.endsWith('.jsonl')).length
-    const project = resolveSlug(slug)
-    const hash = snapshot.hash
-    rows.push({ locator: bindLocation(snapshot, roots), folder: tilde(memory), project: project.state, project_path: project.path ? tilde(project.path) : project.paths?.map(tilde),
-      worktree: /--claude-worktrees-|--codex-worktrees-|-worktrees-/.test(slug), files: files.length, other_entries: others,
-      index: index !== null, orphans, dangling_links: dangling, files_with_secret_shape: secretFiles, transcripts_beside: transcripts, tree_hash: hash })
+  async function codexMemory() {
+    const paths = ['memories_1.sqlite', 'state_5.sqlite'].map((name) => join(profile.codex, name))
+    const present = paths.map(exists)
+    if (!present[0].source.known || !present[0].value) return
+    const mounts = readFileSync('/proc/self/mountinfo', 'utf8').split('\n').map((line) => line.split(' - '))
+    if (process.cwd() !== '/tmp/bmn-doctor-work' || !mounts.some(([left, right]) => left.split(' ')[4] === '/tmp' && right?.startsWith('tmpfs ')) ||
+      !mounts.some(([left]) => left.split(' ')[4] === '/' && left.split(' ')[5].split(',').includes('ro'))) throw Object.assign(new Error(), { code: 'UNSUPPORTED' })
+    const source = s.databases(paths)
+    if (!source.known) return
+    const { DatabaseSync } = await import('node:sqlite')
+    // No host destination: these copies exist only in bwrap's already-private /tmp mount.
+    const scratch = mkdtempSync('/tmp/bmn-doctor-work/read-'), opened = []
+    const copy = (observed, name) => {
+      if (observed === null) return null
+      writeFileSync(join(scratch, name), observed.bytes, { mode: 0o600 })
+      if (observed.walBytes !== null) writeFileSync(join(scratch, `${name}-wal`), observed.walBytes, { mode: 0o600 })
+      const db = new DatabaseSync(join(scratch, name), { readOnly: true }); opened.push(db)
+      if (db.prepare('pragma integrity_check').all().some((row) => Object.values(row)[0] !== 'ok')) throw malformed
+      return db
+    }
+    try {
+      const memory = copy(source.value[0], 'memories_1.sqlite'), state = copy(source.value[1], 'state_5.sqlite')
+      const schema = memory.prepare("select sql from sqlite_master where type='table' and name='stage1_outputs'").get()?.sql
+      const columns = memory.prepare('pragma table_xinfo(stage1_outputs)').all()
+      if (typeof schema !== 'string' || /WITHOUT\s+ROWID/i.test(schema) || columns.some((v) => ['rowid', '_rowid_', 'oid', 'bmn_rowid'].includes(v.name.toLowerCase()))) throw malformed
+      const query = memory.prepare('select rowid as bmn_rowid, * from stage1_outputs limit 10001'); query.setReadBigInts(true)
+      const rows = query.all()
+      if (rows.length > 10000) throw Object.assign(new Error(), { code: 'BOUND_EXCEEDED' })
+      const stateSchema = state?.prepare("select sql from sqlite_master where type='table' and name='threads'").get()?.sql ?? null
+      const stateColumns = state?.prepare('pragma table_info(threads)').all() ?? []
+      for (const row of rows) {
+        s.guard()
+        if (row.bmn_rowid < 1n || row.bmn_rowid > 1000000000n || typeof row.thread_id !== 'string') { s.gap(source.key, 'database', malformed); continue }
+        const relations = state ? state.prepare('select id, cwd from threads where id = ? limit 3').all(row.thread_id) : []
+        if (relations.length > 1) { s.gap(source.key, 'database', malformed); continue }
+        const cwd = relations[0]?.cwd, project = typeof cwd === 'string' && isAbsolute(cwd) ? dir(cwd) : null
+        if (project?.value) continue
+        if (relations.length && typeof cwd !== 'string') { s.gap(source.key, 'database', malformed); continue }
+        const deps = [s.dep(source, [schema, columns, stateSchema, stateColumns, relations]), ...present.map((p) => use(p))]
+        if (project) deps.push(use(project))
+        s.row('memory', 'codex', 'unused-memory', source, [Number(row.bmn_rowid), row], deps, { rowid: Number(row.bmn_rowid) })
+      }
+    } catch (error) { s.gap(source.key, 'database', error); source.known = false }
+    finally { for (const db of opened) db.close(); rmSync(scratch, { recursive: true, force: true }) }
   }
-  const by = (predicate) => rows.filter(predicate)
-  return {
-    project_folders: folders, memory_folders: rows.length, memory_files: rows.reduce((sum, row) => sum + row.files, 0),
-    by_project: { exists: by((r) => r.project === 'exists').length, missing: by((r) => r.project === 'missing').length, ambiguous: by((r) => r.project === 'ambiguous').length },
-    files_in_missing_projects: by((r) => r.project === 'missing').reduce((sum, row) => sum + row.files, 0),
-    missing_and_secret_free: by((r) => r.project === 'missing' && r.files_with_secret_shape === 0).length,
-    orphan_files: rows.reduce((sum, row) => sum + row.orphans, 0), dangling_index_links: rows.reduce((sum, row) => sum + row.dangling_links, 0),
-    files_with_secret_shape: rows.reduce((sum, row) => sum + row.files_with_secret_shape, 0),
-    rows
-  }
-}
 
-async function codexMemory() {
-  const path = join(profile.codex, 'memories_1.sqlite')
-  if (!existsSync(path)) { databaseAbsences.push(path); return { items: [] } }
-  const { DatabaseSync } = await import('node:sqlite')
-  const [memorySource, stateSource] = observeDatabases([path, join(profile.codex, 'state_5.sqlite')], roots)
-  if (memorySource === null) throw new Error('memory observation unavailable')
-  hold(memorySource)
-  if (stateSource === null) errors.push('unknown-memory-project-coverage')
-  const scratch = mkdtempSync('/tmp/bmn-doctor-memory-')
-  const opened = []
-  const copy = (source, name) => {
-    if (source === null) return null
-    writeFileSync(join(scratch, name), source.bytes)
-    if (source.walBytes !== null) writeFileSync(join(scratch, `${name}-wal`), source.walBytes)
-    const db = new DatabaseSync(join(scratch, name), { readOnly: true })
-    opened.push(db)
-    if (db.prepare('pragma integrity_check').all().some((row) => Object.values(row)[0] !== 'ok')) throw new Error('unverified database copy')
-    return db
-  }
-  try {
-    const memories = copy(memorySource, 'memories_1.sqlite')
-    const schema = memories.prepare("select sql from sqlite_master where type='table' and name='stage1_outputs'").get()?.sql
-    const columns = memories.prepare('pragma table_info(stage1_outputs)').all().map((row) => row.name.toLowerCase())
-    if (typeof schema !== 'string' || /WITHOUT\s+ROWID/i.test(schema) || columns.some((name) => ['rowid', '_rowid_', 'oid'].includes(name))) throw new Error('unsupported memory schema')
-    const ids = memories.prepare('select rowid as bmn_rowid, thread_id, usage_count, selected_for_phase2 from stage1_outputs limit 10001').all()
-    if (ids.length > 10000) throw new Error('memory observation too large')
-    const state = copy(stateSource, 'state_5.sqlite')
-    const projects = new Map(state ? state.prepare('select id, cwd from threads').all().map((row) => [row.id, row.cwd]) : [])
+  function skills() {
+    const capability = file(join(profile.bmn, 'state/skills-tests.jsonl')), latest = {}
+    for (const line of (s.text(capability) ?? '').split('\n').filter(Boolean)) {
+      try {
+        const value = JSON.parse(line)
+        if (!value || typeof value !== 'object' || typeof value.harness !== 'string') throw malformed
+        if (value.kind === 'capability') latest[value.harness] = value
+      } catch { s.gap(capability.key, 'file', malformed); capability.known = false }
+    }
+    const roots = new Map(), rootEvidence = []
+    for (const [app, spec] of Object.entries(SKILL_APPS)) for (const root of spec.roots) {
+      const path = root.startsWith('.config/opencode/') ? join(profile.opencode, root.slice('.config/opencode/'.length)) : rootPath(root, env)
+      const probe = dir(path); rootEvidence.push(use(probe))
+      const target = probe.source.value?.route.nodes.at(-1)?.object
+      const key = probe.value ? `${target.device}:${target.inode}` : path
+      const entry = roots.get(key) ?? { root, path, apps: [], verified: [], discovery: s.directory(path) }
+      if (!entry.apps.includes(app)) entry.apps.push(app)
+      const test = latest[app]
+      if (test && test.version === versions[app] && test.outcome === 'pass' && (test.roots ?? []).some((r) => r.root === root && (r.folder || r.link))) entry.verified.push(app)
+      roots.set(key, entry)
+    }
     const items = []
-    for (const row of ids) {
-      const project = projects.get(row.thread_id)
-      if (typeof project === 'string' && isDir(project)) continue
-      items.push({ locator: bindLocation(memorySource, roots, { rowid: row.bmn_rowid }) })
+    for (const root of roots.values()) for (const name of s.names(root.discovery)) {
+      const path = join(root.path, name), source = s.tree(path), value = source.value
+      const protectedItem = BMN_SKILLS.has(name) || Object.hasOwn(ownSkills.data?.skills ?? {}, name) || Object.hasOwn(writtenSkills.data ?? {}, path) || (value?.body ?? '').includes('/.config/bmn/')
+      const body = value?.files.get('SKILL.md')
+      if (!body && value?.directories.get('')?.includes('SKILL.md')) s.gap(join(path, 'SKILL.md'), 'file', malformed)
+      items.push({ name, root, source, protectedItem, body, hash: body ? value.hash : null, broken: Boolean(value?.missingTarget), verdict: null })
     }
-    return { items }
-  } finally {
-    for (const db of opened) db.close()
-    rmSync(scratch, { recursive: true, force: true })
-  }
-}
-
-// =============================================================================================
-// 2. Skills
-
-const ROOTS = new Map()
-for (const [app, spec] of Object.entries(SKILL_APPS)) for (const root of spec.roots) {
-  const path = root.startsWith('.config/opencode/') ? join(profile.opencode, root.slice('.config/opencode/'.length)) : rootPath(root, env)
-  let canonical = path
-  try { const info = statSync(path); canonical = `${info.dev}:${info.ino}` } catch { /* Missing roots remain distinct. */ }
-  const entry = ROOTS.get(canonical) ?? { root, path, apps: [], verified: [] }
-  if (!entry.apps.includes(app)) entry.apps.push(app)
-  if (versions[app]?.version === currentVersions[app] && versions[app]?.outcome === 'pass' && versions[app]?.roots.includes(root)) entry.verified.push(app)
-  ROOTS.set(canonical, entry)
-}
-
-function skillsInventory() {
-  const items = []
-  for (const root of ROOTS.values()) {
-    let names
-    try { names = readdirSync(root.path).sort() } catch (error) {
-      if (!absent(error)) errors.push('unreadable-skill-root')
-      items.push({ root: tilde(root.path), state: absent(error) ? 'root-missing' : 'root-unreadable' })
-      continue
-    }
-    for (const name of names) {
-      const path = join(root.path, name)
-      const snapshot = locateTree(path)
-      if (snapshot === null) { items.push({ name, root: tilde(root.path), seen_by: root.apps, locator: unresolvedLocation(), verdict: 'show-only: content unreadable' }); continue }
-      const link = snapshot.link
-      const body = snapshot.missingTarget ? null : snapshot.body
-      const item = { observation: snapshot, locator: bindLocation(snapshot, roots), name, root: tilde(root.path), seen_by: root.apps, verified_by: root.verified, kind: snapshot.kind }
-      if (link !== null) item.link_target = tilde(link)
-      if (body === null) { item.state = 'broken-link'; items.push(item); continue }
-      item.body = tilde(body)
-      item.has_skill_md = snapshot.files.has('SKILL.md')
-      if (item.has_skill_md) {
-        item.tree_hash = snapshot.hash
-        item.skill_text = snapshot.files.get('SKILL.md').toString('utf8')
-        item.skill_md_sha256 = sha(item.skill_text)
-      } else if (snapshot.directories.get('')?.includes('SKILL.md')) errors.push('unverifiable-skill-body')
-      items.push(item)
+    for (const item of items) {
+      const { name, root, source } = item
+      const group = items.filter((other) => other.name === name), deps = [
+        ...rootEvidence, s.dep(capability, root.apps.map((app) => [app, versions[app] ?? null, latest[app] ?
+          [latest[app].version ?? null, latest[app].outcome ?? null, latest[app].roots ?? []] : null])), s.dep(ownSkills.source, ownSkills.data ? Object.hasOwn(ownSkills.data.skills ?? {}, name) : undefined),
+        s.dep(writtenSkills.source, writtenSkills.data ? Object.hasOwn(writtenSkills.data, join(root.path, name)) : undefined),
+        ...[...roots.values()].map((r) => s.dep(r.discovery, [r.root, r.apps, r.verified, s.names(r.discovery).includes(name)])),
+        ...group.map((g) => s.dep(g.source, [g.name, g.root.root, g.root.apps, g.root.verified, g.hash, g.broken, g.protectedItem, g.verdict]))]
+      if (item.protectedItem) { item.verdict = 'protected'; continue }
+      let reason = null
+      if (!source.known) reason = 'unreadable'
+      else if (item.broken) reason = 'broken-link'
+      else if (!item.body) continue
+      else {
+        const duplicate = Object.fromEntries(root.apps.map((app) => {
+          const verified = latest[app]?.version === versions[app] && latest[app]?.outcome === 'pass'
+          const members = group.filter((g) => (verified ? g.root.verified : g.root.apps).includes(app) && !g.broken && g.body)
+          return [app, members.length < 2 ? null : new Set(members.map((g) => g.hash)).size === 1 ? 'same' : 'different']
+        }))
+        if (root.apps.length && root.apps.every((app) => duplicate[app] === 'same')) {
+          const others = group.filter((g) => g !== item && g.hash === item.hash && !g.broken && g.verdict !== 'candidate')
+          const covered = others.some((g) => root.apps.every((app) => g.root.apps.includes(app)))
+          const verified = others.some((g) => root.apps.every((app) => g.root.verified.includes(app)))
+          if (covered) { reason = verified ? 'duplicate' : 'unverified'; item.verdict = verified ? 'candidate' : 'unverified' }
+        } else if (Object.values(duplicate).includes('different')) reason = 'conflict'
+      }
+      if (reason) s.row('skills', null, reason, source, [name, root.root], deps)
     }
   }
-  const skills = items.filter((item) => item.name !== undefined)
-  // What depends on a skill: rules files and other skills that name it (a short name may over-count; that only keeps more).
-  const skillTexts = skills.filter((item) => item.has_skill_md).map((item) => ({ key: `${item.root}/${item.name}`, text: item.skill_text }))
-  for (const item of skills) {
-    const word = new RegExp(`(^|[^A-Za-z0-9_-])${item.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_-]|$)`)
-    item.named_in_rules = ruleTexts.filter((text) => word.test(text)).length
-    item.named_in_other_skills = skillTexts.filter((entry) => entry.key !== `${item.root}/${item.name}` && word.test(entry.text)).length
-    item.bmn_written = Object.keys(skillsWritten).some((path) => tilde(path) === `${item.root}/${item.name}`)
-    item.protected = PROTECTED_SKILLS.has(item.name) || item.bmn_written || (item.body ?? '').includes('/.config/bmn/') || APP_MANAGED_SKILL_NAMES.has(item.name)
-  }
-  // Per app: which items it discovers, by name; the same body (one realpath, or one tree hash) is one skill seen twice.
-  const perApp = {}
-  for (const app of Object.keys(SKILL_APPS)) {
-    const byName = new Map()
-    const basis = versions[app]?.version === currentVersions[app] && versions[app]?.outcome === 'pass' ? 'verified' : 'declared'
-    const sees = (item) => (basis === 'verified' ? item.verified_by : item.seen_by).includes(app)
-    for (const item of skills) if (sees(item) && item.state !== 'broken-link' && item.has_skill_md) {
-      byName.set(item.name, [...(byName.get(item.name) ?? []), item])
-    }
-    let same = 0
-    let conflicts = 0
-    for (const group of byName.values()) {
-      if (group.length < 2) continue
-      const bodies = new Set(group.map((item) => item.tree_hash ?? item.body))
-      if (bodies.size === 1) same += 1
-      else conflicts += 1
-      for (const item of group) {
-        item.duplicates = item.duplicates ?? {}
-        item.duplicates[app] = bodies.size === 1 ? 'same-body-elsewhere' : 'different-body-same-name'
+
+  function caches(app, root, referenced, dependencies) {
+    const markets = s.directory(root)
+    for (const market of s.names(markets)) {
+      if (!dir(join(root, market)).value) continue
+      const plugins = s.directory(join(root, market))
+      for (const plugin of s.names(plugins)) {
+        if (!dir(join(root, market, plugin)).value) continue
+        const versions = s.directory(join(root, market, plugin))
+        for (const version of s.names(versions)) {
+          const path = join(root, market, plugin, version), target = dir(path)
+          if (!target.value) continue
+          const reference = referenced(path, plugin, market)
+          if (reference.value) continue
+          const source = s.tree(path, { locationOnly: true })
+          s.row('plugins', app, 'app-managed', source, [market, plugin, version], [...dependencies,
+            s.dep(markets, market), s.dep(plugins, plugin), s.dep(versions, version), use(target), ...reference.deps])
+        }
       }
     }
-    perApp[app] = { basis, discovered: byName.size, entries: [...byName.values()].reduce((sum, group) => sum + group.length, 0), names_seen_twice_same_body: same, name_conflicts: conflicts }
   }
-  // The predicate (predicates.md, skills): a candidate is a broken link, or an entry every app that sees it also sees
-  // with the same body under the same name elsewhere; never protected, BMN-made, a link into BMN or an app's own.
-  for (const item of skills) {
-    if (item.protected) { item.verdict = 'protected'; continue }
-    if (!item.observation) { item.verdict = 'show-only: content unreadable'; continue }
-    if (item.state === 'broken-link') { item.verdict = 'candidate: broken link'; continue }
-    if (!item.has_skill_md) { item.verdict = 'show-only: not a skill (no SKILL.md)'; continue }
-    if (item.tree_hash === null || item.tree_hash === undefined) { item.verdict = 'show-only: content unreadable'; continue }
-    const dup = item.duplicates ?? {}
-    const apps = item.seen_by
-    if (apps.length > 0 && apps.every((app) => dup[app] === 'same-body-elsewhere')) {
-      // Keep one: the entry in the root more apps read stays; this one goes only if another same-body entry is seen by a superset.
-      const others = skills.filter((other) => other !== item && other.name === item.name && other.tree_hash === item.tree_hash && other.state !== 'broken-link' && !(other.verdict ?? '').startsWith('candidate'))
-      const covered = others.some((other) => apps.every((app) => other.seen_by.includes(app)))
-      const verified = others.some((other) => apps.every((app) => other.verified_by.includes(app)))
-      item.verdict = !covered ? 'keep: the copy other apps rely on' : verified ? 'candidate: same body seen elsewhere by every app that sees it' : 'show-only: twin seen elsewhere, discovery unverified for this version'
-      continue
+
+  function pluginsClaude() {
+    const settings = file(join(profile.claude, 'settings.json')), registry = file(join(profile.claude, 'plugins/installed_plugins.json'))
+    const enabled = new Map(entries(settings, ['enabledPlugins']).map((entry) => [entry.key, entry]))
+    const plugins = entries(registry, ['plugins']), referenced = new Set(), referenceDeps = []
+    for (const plugin of plugins) {
+      const installs = Array.isArray(plugin.value) ? entries(registry, ['plugins', plugin.key]) : []
+      if (!Array.isArray(plugin.value)) { s.gap(registry.key, 'file', malformed); registry.known = false }
+      if (!installs.length) s.row('plugins', 'claude', 'plugin-missing', registry, [plugin.key, plugin.value], [s.dep(settings, enabled.get(plugin.key)?.value ?? null)], { start: plugin.start })
+      for (const entry of installs) {
+        const install = entry.value, path = typeof install?.installPath === 'string' ? install.installPath : null
+        if (path) { const target = canonical(path); referenceDeps.push(s.dep(target.source, null, { witnessOnly: true })); if (target.value) referenced.add(target.value); else if (target.source.known) referenced.add(path) }
+        const deps = [s.dep(settings, enabled.get(plugin.key)?.value ?? null)]
+        let reason = enabled.get(plugin.key)?.value === false ? 'disabled' : null
+        if (!reason) {
+          const installed = path && isAbsolute(path) ? dir(path) : null
+          if (installed) deps.push(use(installed))
+          if (installed && !installed.source.known) reason = 'unreadable'
+          else if (!installed?.value) reason = 'plugin-missing'
+          else if (typeof install.projectPath === 'string') {
+            const project = dir(install.projectPath); deps.push(use(project)); if (!project.value) reason = project.source.known ? 'plugin-missing' : 'unreadable'
+          }
+        }
+        if (reason) s.row('plugins', 'claude', reason, registry, [plugin.key, entry.key, install], deps, { start: entry.start })
+      }
     }
-    if (Object.values(dup).includes('different-body-same-name')) { item.verdict = 'show-only: same name, different content (precedence unverified)'; continue }
-    item.verdict = 'keep: unique'
+    for (const [id, entry] of enabled) if (!plugins.some((p) => p.key === id)) s.row('plugins', 'claude', entry.value === false ? 'disabled' : 'plugin-missing',
+      settings, [id, entry.value], [s.dep(registry, ['membership', id, false])], { start: entry.start })
+    caches('claude', join(profile.claude, 'plugins/cache'), (path) => {
+      const target = canonical(path)
+      const present = referenced.has(target.value ?? path)
+      return { value: present, deps: [use(target), ...referenceDeps, s.dep(registry, ['membership', target.value ?? path, present])] }
+    }, [])
   }
-  for (const item of skills) if (item.observation) {
-    item.locator = bindLocation(item.observation, roots, { dependencies: skills.filter((other) => other !== item && other.name === item.name).map((other) => other.observation) })
-  }
-  const count = (prefix) => skills.filter((item) => (item.verdict ?? '').startsWith(prefix)).length
-  return {
-    roots: [...ROOTS.values()].map((root) => ({ root: tilde(root.path), read_by: root.apps, verified_by: root.verified, entries: skills.filter((item) => item.root === tilde(root.path)).length })),
-    entries: skills.length, broken_links: skills.filter((item) => item.state === 'broken-link').length,
-    links: skills.filter((item) => item.kind === 'link').length, not_a_skill: skills.filter((item) => item.state !== 'broken-link' && !item.has_skill_md).length,
-    protected: count('protected'), candidates: count('candidate'), show_only: count('show-only'), keep: count('keep'),
-    per_app: perApp, versions,
-    items: skills.map(({ body, ...rest }) => ({ ...rest, body }))
-  }
-}
 
-// =============================================================================================
-// 3. Plugins (from configuration; none is started)
-
-function jsonItems(path, at = []) {
-  const source = readObservation(path)
-  if (source.text === null) return []
-  try { return readJsonItems(source.text, at).map((entry) => ({ ...entry, locator: bindLocation(source, roots, { start: entry.start }) })) }
-  catch { errors.push('unreadable-configuration-positions'); return [] }
-}
-
-function cacheItems(cache, referenced) {
-  const rows = []
-  for (const market of isDir(cache) ? readdirSync(cache) : []) for (const plugin of isDir(join(cache, market)) ? readdirSync(join(cache, market)) : []) {
-    for (const version of isDir(join(cache, market, plugin)) ? readdirSync(join(cache, market, plugin)) : []) {
-      const path = join(cache, market, plugin, version)
-      if (isDir(path) && !referenced(path, plugin, market)) rows.push({ class: 'app-managed', locator: bindLocation(treeLocation(path), roots) })
+  function pluginsCodex() {
+    const source = file(join(profile.codex, 'config.toml')), plugins = entries(source, 'plugins', true), listed = new Set(plugins.map((p) => p.key))
+    for (const entry of plugins) {
+      if (entry.unreadable) { s.gap(source.key, 'file', malformed); s.row('plugins', 'codex', 'unreadable', source, [entry.key], [s.dep(null, undefined)]); continue }
+      const deps = []
+      let reason = entry.value?.enabled === false ? 'disabled' : null
+      if (!reason) {
+        const index = entry.key.lastIndexOf('@')
+        const target = index < 0 ? null : dir(join(profile.codex, 'plugins/cache', entry.key.slice(index + 1), entry.key.slice(0, index)))
+        if (target) deps.push(use(target))
+        if (!target?.value) reason = target && !target.source.known ? 'unreadable' : 'plugin-missing'
+      }
+      if (reason) s.row('plugins', 'codex', reason, source, [entry.key, entry.value], deps, { start: entry.start })
     }
+    caches('codex', join(profile.codex, 'plugins/cache'), (_path, plugin, market) =>
+      ({ value: listed.has(`${plugin}@${market}`), deps: [s.dep(source, ['membership', `${plugin}@${market}`, listed.has(`${plugin}@${market}`)])] }), [])
   }
-  return rows
-}
 
-function claudePlugins() {
-  const settings = join(profile.claude, 'settings.json')
-  const registry = join(profile.claude, 'plugins/installed_plugins.json')
-  const enabled = new Map(jsonItems(settings, ['enabledPlugins']).map((entry) => [entry.key, entry]))
-  const plugins = jsonItems(registry, ['plugins'])
-  const referenced = new Set()
-  const rows = []
-  for (const plugin of plugins) {
-    const installs = Array.isArray(plugin.value) ? jsonItems(registry, ['plugins', plugin.key]) : []
-    if (!Array.isArray(plugin.value)) errors.push('unreadable-plugin-installs')
-    if (installs.length === 0) rows.push({ class: 'listed, not installed', locator: plugin.locator })
-    for (const entry of installs) {
-      const install = entry.value
-      const path = typeof install?.installPath === 'string' ? install.installPath : null
-      if (path) referenced.add(real(path) ?? path)
-      rows.push({ locator: entry.locator, class: enabled.get(plugin.key)?.value === false ? 'disabled'
-        : !path || !isDir(path) ? 'install folder missing' : typeof install.projectPath === 'string' && !isDir(install.projectPath)
-          ? 'install folder missing' : 'enabled' })
+  function pluginsOpenCode() {
+    const seen = new Set()
+    // Managed sources come first so a shared reference is listed once with its managed origin.
+    const files = [...profile.opencodeFiles.flatMap((path) => [['plugin'], ['plugins']].map((at) => [path, at])),
+      [join(profile.opencode, 'cli.json'), ['plugins']]]
+    for (const [path, at] of files) {
+      const source = file(path)
+      for (const entry of entries(source, at)) {
+        const reference = typeof entry.value === 'string' ? entry.value : at[0] === 'plugins' ? entry.value?.package : null
+        if (typeof reference !== 'string' || reference.length === 0) { s.gap(source.key, 'file', malformed); s.row('plugins', 'opencode', 'unreadable', source, [at, entry.key], [s.dep(null, undefined)]); continue }
+        const raw = reference.startsWith('file:') ? reference.slice(5) : reference
+        const local = raw.startsWith('.') || raw.startsWith('/') || raw.startsWith('~')
+        const resolved = local ? resolve(dirname(path), raw.replace(/^~/, H)) : null
+        const key = local ? `local:${resolved}` : `package:${reference}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const target = local ? exists(resolved) : null
+        if (!local || !target.value) s.row('plugins', 'opencode', local ? target.source.known ? 'plugin-missing' : 'unreadable' : 'app-managed', source,
+          [at, entry.key, entry.value], target ? [use(target)] : [], { start: entry.start })
+      }
     }
-  }
-  for (const [id, entry] of enabled) if (!plugins.some((plugin) => plugin.key === id)) rows.push({ locator: entry.locator,
-    class: entry.value === false ? 'disabled' : 'listed, not installed' })
-  rows.push(...cacheItems(join(profile.claude, 'plugins/cache'), (path) => referenced.has(real(path) ?? path)))
-  return { rows }
-}
-
-function codexPlugins() {
-  const path = join(profile.codex, 'config.toml')
-  const source = readObservation(path)
-  const text = source.text ?? ''
-  const rows = []
-  const listed = new Set()
-  for (const [id, entry] of readTomlEntries(text, 'plugins')) {
-    if (entry.unreadable) errors.push('unreadable-plugin-entry')
-    listed.add(id)
-    const cached = id.includes('@') && isDir(join(profile.codex, 'plugins/cache', id.slice(id.lastIndexOf('@') + 1), id.slice(0, id.lastIndexOf('@'))))
-    rows.push({ locator: bindLocation(source, roots, { start: entry.start }), class: entry.value?.enabled === false ? 'disabled' : cached ? 'enabled' : 'failing: enabled, not in cache' })
-  }
-  rows.push(...cacheItems(join(profile.codex, 'plugins/cache'), (_path, plugin, market) => listed.has(`${plugin}@${market}`)))
-  return { rows }
-}
-
-function openCodePlugins() {
-  const rows = [], seen = new Set()
-  // Managed sources come first so a shared reference retains its managed origin.
-  const files = [...profile.opencodeFiles.flatMap((path) => [['plugin'], ['plugins']].map((at) => [path, at])),
-    [join(profile.opencode, 'cli.json'), ['plugins']]]
-  for (const [path, at] of files) for (const entry of jsonItems(path, at)) {
-    const source = profile.opencodeManagedFiles.includes(path) ? { source: 'managed' } : {}
-    const reference = typeof entry.value === 'string' ? entry.value : at[0] === 'plugins' ? entry.value?.package : null
-    if (typeof reference !== 'string' || reference.length === 0) {
-      errors.push('unreadable-plugin-entry'); rows.push({ locator: entry.locator, class: 'unreadable', ...source }); continue
-    }
-    const raw = reference.startsWith('file:') ? reference.slice(5) : reference
-    const local = raw.startsWith('.') || raw.startsWith('/') || raw.startsWith('~')
-    const full = local ? resolve(dirname(path), raw.replace(/^~/, H)) : null
-    const key = local ? `local:${full}` : `package:${reference}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    if (local && !existsSync(full)) rows.push({ locator: entry.locator, class: 'failing: file missing', ...source })
-    else if (!local) rows.push({ locator: entry.locator, class: 'app-managed', ...source })
-  }
-  for (const folder of ['plugin', 'plugins']) {
-    const dir = join(profile.opencode, folder)
-    for (const name of isDir(dir) ? readdirSync(dir) : []) {
-      const path = join(dir, name)
-      const snapshot = locateTree(path)
-      if (!snapshot || snapshot.missingTarget) rows.push({ locator: bindLocation(snapshot, roots), class: 'install folder missing' })
+    for (const folder of ['plugin', 'plugins']) {
+      const discovery = s.directory(join(profile.opencode, folder))
+      for (const name of s.names(discovery)) {
+        const source = s.tree(join(profile.opencode, folder, name))
+        if (source.known && source.value.missingTarget) s.row('plugins', 'opencode', 'plugin-missing', source, [folder, name], [s.dep(discovery, name)])
+      }
     }
   }
-  return { rows }
-}
 
-// =============================================================================================
-// 4. MCP entries (BMN's own readers; values never leave neutralOf)
-
-function readTools(harness, { path = TOOL_APPS[harness].file(env), at = TOOL_APPS[harness].path } = {}) {
-  const observation = readObservation(path)
-  if (observation.text === null) return { path, readable: false, missing: observation.missing, entries: new Map() }
-  try {
-    const raw = harness === 'codex' ? readTomlEntries(observation.text) : harness === 'opencode' ? readOpenCodeEntries(observation.text, { strict: true }) : readJsonEntries(observation.text, at)
-    const entries = new Map()
-    for (const [id, entry] of raw) {
-      const neutral = entry.unreadable === undefined ? neutralOf(entry.value, harness) : null
-      entries.set(id, neutral === null ? { unreadable: true, start: entry.start } : { value: entry.value, start: entry.start, ...neutral })
+  async function approvedTools() {
+    const pointer = file(join(profile.bmn, 'state/current')), deps = [s.dep(pointer, null)]
+    if (!pointer.known) return { known: false, ids: new Set(), deps }
+    if (s.text(pointer) === null) {
+      const generations = s.directory(join(profile.bmn, 'state/generations')), history = exists(join(profile.bmn, 'state/history.jsonl'))
+      deps.push(s.dep(generations, s.names(generations).filter((name) => /^\d{6}\.json$/.test(name))), use(history))
+      const known = generations.known && history.source.known && !history.value && !s.names(generations).some((name) => /^\d{6}\.json$/.test(name))
+      if (!known) s.gap(pointer.key, 'file', malformed)
+      return { known, ids: new Set(), deps }
     }
-    return { path, observation, readable: true, entries, text: observation.text }
-  } catch { errors.push('unreadable-mcp-configuration'); return { path, readable: false, missing: false, entries: new Map() } }
-}
-
-function mcpRows(harness, file, scope, projectPath = null, at = TOOL_APPS[harness].path) {
-  const rows = []
-  if (!file.readable) {
-    const missing = file.missing === true
-    if (!missing) errors.push('unreadable-mcp-configuration')
-    return [{ app: harness, scope, file: tilde(file.path), state: missing ? 'file-missing' : 'file-unreadable' }]
+    const value = s.json(pointer)
+    if (!Number.isSafeInteger(value?.generation) || value.generation < 0 || value.generation > 999999) { s.gap(pointer.key, 'file', malformed); return { known: false, ids: new Set(), deps } }
+    const generation = file(join(profile.bmn, 'state/generations', `${String(value.generation).padStart(6, '0')}.json`))
+    deps.push(s.dep(generation, null))
+    const { approvedSnapshot } = await import('./agents-state.mjs')
+    const verified = generation.known && s.text(generation) !== null ? approvedSnapshot(s.text(pointer), s.text(generation)) : null
+    if (!verified) s.gap(generation.key, 'file', malformed)
+    return { known: Boolean(verified), ids: new Set((verified?.data.tools ?? []).map((t) => t.id)), deps }
   }
-  const positions = harness === 'codex' ? readTomlEntries(file.text) : harness === 'opencode' ? file.entries : new Map(readJsonItems(file.text, at).map((entry) => [entry.key, entry]))
-  for (const [id, entry] of file.entries) {
-    const row = { locator: bindLocation(file.observation, roots, { start: positions.get(id)?.start }), app: harness, id, scope, file: tilde(file.path), ...(projectPath ? { project: tilde(projectPath), project_exists: isDir(projectPath) } : {}) }
-    if (entry.unreadable !== undefined) { errors.push('unreadable-mcp-entry'); rows.push({ ...row, state: 'unreadable' }); continue }
-    const value = entry.value ?? {}
-    if (harness === 'opencode') row.valueHash = sha(canonicalJson(value))
-    const definition = entry.definition ?? {}
-    row.transport = definition.url !== undefined ? 'remote' : 'stdio'
-    row.program = definition.url !== undefined ? 'remote (no program)' : programClass(definition.command, (definition.args ?? []).filter((arg) => typeof arg === 'string'))
-    row.secret_inline = (entry.secrets ?? []).length > 0
-    row.disabled = value.enabled === false || value.disabled === true
-    row.bmn_written = toolsWritten[`${harness}|${id}`] !== undefined
-    row.in_team = teamToolIds.has(id)
-    rows.push(row)
-  }
-  return rows
-}
 
-function mcpInventory() {
-  const rows = []
-  for (const harness of ['claude', 'codex']) rows.push(...mcpRows(harness, readTools(harness), 'user'))
-  const openCode = new Map()
-  for (const path of profile.opencodeFiles) for (const item of mcpRows('opencode', readTools('opencode', { path }), 'user')) {
-    const row = profile.opencodeManagedFiles.includes(path) ? { ...item, source: 'managed' } : item
-    if (row.id === undefined) { rows.push(row); continue }
-    const prior = openCode.get(row.id)
-    if (prior === undefined) { openCode.set(row.id, row); rows.push(row); continue }
-    if (prior.state !== undefined || row.state !== undefined || prior.valueHash !== row.valueHash) {
-      prior.state = 'unreadable'
-      for (const field of ['program', 'transport', 'disabled', 'secret_inline', 'bmn_written', 'in_team', 'valueHash']) delete prior[field]
-      errors.push('conflicting-mcp-definitions')
+  function program(command, args) {
+    const deps = [], paths = (env.PATH ?? '').split(':').filter(Boolean)
+    if (typeof command !== 'string' || !command) return { value: 'missing', deps }
+    if (!isAbsolute(command) && command.includes('/')) return { value: 'unverified', deps }
+    const candidates = isAbsolute(command) ? [command] : paths.map((path) => join(path, command))
+    let found = false, known = true
+    for (const path of candidates) {
+      const source = s.access(path); deps.push(s.dep(source, [paths, source.value?.outcome ?? null]))
+      if (!source.known) known = false
+      if (source.value?.outcome) { found = true; break }
+    }
+    if (!known) return { value: 'unknown', deps }
+    if (!found) return { value: 'missing', deps }
+    if (RUNNERS.has(basename(command))) return { value: 'unverified', deps }
+    for (const arg of args) if (typeof arg === 'string' && isAbsolute(arg) && /\.(?:m?js|cjs|ts|py|sh|rb)$/.test(arg)) {
+      const target = exists(arg); deps.push(use(target)); if (!target.source.known) return { value: 'unknown', deps }; if (!target.value) return { value: 'missing', deps }
+    }
+    return { value: 'present', deps }
+  }
+
+  async function mcp() {
+    const team = await approvedTools()
+    const toolRows = (app, path, at, scope = [], inherited = [], supplied = null) => {
+      const source = file(path)
+      if (!source.known) { s.row('mcp', app, 'unreadable', source, [at, scope], []); return 0 }
+      const list = supplied ?? entries(source, at, app === 'codex', true)
+      for (const entry of list) {
+        const value = entry.value, neutral = entry.unreadable ? null : neutralOf(value, app), deps = [...inherited]
+        let reason = null
+        if (!neutral) { reason = 'unreadable'; s.gap(source.key, 'file', malformed); deps.push(s.dep(null, undefined)) }
+        else if ((neutral.secrets ?? []).length) reason = 'secret-inline'
+        else {
+          const written = writtenTools.data ? Object.hasOwn(writtenTools.data, `${app}|${entry.key}`) : undefined
+          deps.push(s.dep(writtenTools.source, written), ...team.deps.map((d) => s.dep(d.source, [entry.key, team.known ? team.ids.has(entry.key) : undefined])))
+          if (written || team.known && team.ids.has(entry.key)) continue
+          if (!team.known) deps.push(s.dep(null, undefined))
+          if (scope[0] === 'plugin') reason = 'plugin-owned'
+          else {
+            const run = neutral.definition?.url !== undefined ? { value: 'present', deps: [] } : program(neutral.definition?.command, neutral.definition?.args ?? [])
+            deps.push(...run.deps)
+            if (run.value === 'missing') reason = 'missing-program'
+            else if (scope[0] === 'project') { const project = dir(scope[1]); deps.push(use(project)); if (!project.value) reason = project.source.known ? 'missing-project' : 'unverified' }
+            if (!reason && ['unverified', 'unknown'].includes(run.value)) reason = 'unverified'
+          }
+        }
+        if (reason) s.row('mcp', app, reason, source, [entry.at ?? at, scope, entry.key, value ?? null], deps,
+          { start: entry.start, ...(neutral ? { identity: 'mcp-entry' } : {}) })
+      }
+      return list.length
+    }
+    toolRows('claude', TOOL_APPS.claude.file(env), TOOL_APPS.claude.path)
+    toolRows('codex', TOOL_APPS.codex.file(env), 'mcp_servers')
+    const openCode = new Map()
+    for (const path of profile.opencodeFiles) {
+      const source = file(path)
+      if (!source.known) { toolRows('opencode', path, null); continue }
+      for (const entry of entries(source, null, false, true)) {
+        const group = openCode.get(entry.key) ?? []
+        group.push({ path, source, entry }); openCode.set(entry.key, group)
+      }
+    }
+    for (const group of openCode.values()) {
+      const first = group[0]
+      const tag = (entry) => privateTag(keys.context, 'mcp-definition', entry.value ?? null)
+      const conflict = group.some(({ entry }) => entry.unreadable || !neutralOf(entry.value, 'opencode') || tag(entry) !== tag(first.entry))
+      const dependencies = group.slice(1).map(({ source, entry }) => s.dep(source, [entry.at, entry.key, entry.value ?? null]))
+      toolRows('opencode', first.path, null, [], dependencies, [{ ...first.entry, ...(conflict ? { unreadable: true } : {}) }])
+    }
+    const config = file(profile.claudeJson)
+    for (const project of entries(config, ['projects'])) toolRows('claude', profile.claudeJson, ['projects', project.key, 'mcpServers'], ['project', project.key])
+    const registry = file(join(profile.claude, 'plugins/installed_plugins.json')), seen = new Set()
+    for (const plugin of entries(registry, ['plugins'])) for (const install of Array.isArray(plugin.value) ? entries(registry, ['plugins', plugin.key]) : []) {
+      if (typeof install.value?.installPath !== 'string') continue
+      const path = join(install.value.installPath, '.mcp.json'), target = exists(path)
+      if (!target.value || seen.has(path)) continue
+      seen.add(path)
+      const source = file(path), nested = entries(source, ['mcpServers'])
+      toolRows('claude', path, nested.length ? ['mcpServers'] : [], ['plugin', plugin.key, install.key],
+        [s.dep(registry, [plugin.key, install.key, install.value]), use(target), s.dep(source, ['fallback', nested.length === 0])])
     }
   }
-  // Claude Code's local scope: entries kept per project inside ~/.claude.json.
-  const claudeJson = tryJson(`${profile.claudeJson}`).data ?? {}
-  const projects = Object.keys(claudeJson.projects ?? {})
-  let projectEntries = 0
-  let projectsMissing = 0
-  for (const path of projects) {
-    if (!isDir(path)) projectsMissing += 1
-    const servers = claudeJson.projects[path]?.mcpServers
-    if (servers && typeof servers === 'object' && Object.keys(servers).length > 0) {
-      projectEntries += Object.keys(servers).length
-      rows.push(...mcpRows('claude', readTools('claude', { at: ['projects', path, 'mcpServers'] }), 'project (local)', path, ['projects', path, 'mcpServers']))
-    }
+
+  for (const [name, run] of [['memory-claude', claudeMemory], ['memory-codex', codexMemory], ['skills', skills],
+    ['plugins-claude', pluginsClaude], ['plugins-codex', pluginsCodex], ['plugins-opencode', pluginsOpenCode], ['mcp', mcp]]) {
+    try { await run() } catch (error) { s.gap(name, 'step', error, 'scan') }
   }
-  // Plugin-provided entries (Claude): counted, with their program class, never started.
-  const installed = tryJson(`${profile.claude}/plugins/installed_plugins.json`).data?.plugins ?? {}
-  const pluginFiles = new Set()
-  for (const [id, installs] of Object.entries(installed)) for (const install of Array.isArray(installs) ? installs : []) {
-    const file = typeof install.installPath === 'string' ? join(install.installPath, '.mcp.json') : null
-    if (file && existsSync(file) && !pluginFiles.has(file)) {
-      pluginFiles.add(file)
-      const read = readTools('claude', { path: file, at: ['mcpServers'] })
-      const fallback = read.entries.size === 0 ? readTools('claude', { path: file, at: [] }) : read
-      rows.push(...mcpRows('claude', fallback, `plugin ${id}`, null, fallback === read ? ['mcpServers'] : []).map((row) => ({ ...row, plugin: id })))
-    }
-  }
-  for (const row of rows) {
-    if (row.state) { row.verdict = 'show-only: unreadable'; continue }
-    if (row.secret_inline) { row.verdict = 'show-only: secret inline'; continue }
-    if (row.bmn_written || row.in_team) { row.verdict = 'protected: BMN tool'; continue }
-    if (row.scope.startsWith('plugin')) { row.verdict = 'show-only: belongs to a plugin'; continue }
-    if (row.program === 'missing' || row.program === 'no-program') { row.verdict = 'candidate: program missing'; continue }
-    if (row.program === 'present-script-missing') { row.verdict = 'candidate: script missing'; continue }
-    if (row.project_exists === false) { row.verdict = 'candidate: project gone'; continue }
-    if (row.program === 'relative-path' || row.program.startsWith('runner')) { row.verdict = 'show-only: program resolved at start'; continue }
-    row.verdict = 'keep'
-  }
-  const tally = (key) => Object.fromEntries([...new Set(rows.map((row) => row[key]).filter((v) => v !== undefined))].map((name) => [String(name), rows.filter((row) => row[key] === name).length]))
-  return { entries: rows.filter((row) => row.id !== undefined).length, by_app: tally('app'), by_program: tally('program'), by_verdict: tally('verdict'),
-    secret_inline: rows.filter((row) => row.secret_inline).length, disabled: rows.filter((row) => row.disabled).length,
-    claude_projects_in_config: projects.length, claude_projects_missing: projectsMissing, claude_project_scope_entries: projectEntries, rows }
+  return s.finish()
 }
 
-// =============================================================================================
-
-const report = { generated_at: new Date().toISOString(), home: '~', path_dirs: PATH_DIRS.length, versions_from_bmn_tests: versions, errors }
-// A failed step reports its error's code or name, never its message: a parser's message can quote the text.
-const step = async (name, run) => { try { report[name] = await run() } catch (error) { report[name] = { error: `${error.code ?? error.name}` } } }
-await step('memory_claude', claudeMemory)
-await step('memory_codex', codexMemory)
-report.memory_opencode = { store: 'none', note: 'OpenCode 2.0.29 keeps no memory: no memory table in opencode.db, no memory folder' }
-await step('skills', skillsInventory)
-await step('plugins_claude', claudePlugins)
-await step('plugins_codex', codexPlugins)
-await step('plugins_opencode', openCodePlugins)
-await step('mcp', mcpInventory)
-// Publication uses only the original observations; a later read can never repair their provenance.
-const dependencies = [...observed.values()].filter((item) => item.text !== null)
-// A changed source makes the scan incomplete; one that is unchanged but cannot be found again only withholds the coordinates.
-let coverageStable = true
-let locatable = true
-for (const source of observed.values()) {
-  if (source.missing ? existsSync(source.path) : source.text !== null && !unchangedSince(source)) coverageStable = false
-  else if (source.text !== null && resolveLocation(source.locator, roots) === null) locatable = false
-}
-if (held.some((observation) => !unchangedSince(observation))) coverageStable = false
-if (databaseAbsences.some((path) => existsSync(path))) coverageStable = false
-if (!coverageStable) errors.push('observation-changed-before-publication')
-for (const section of Object.values(report)) {
-  if (!section || typeof section !== 'object' || Array.isArray(section)) continue
-  for (const row of [...(section.rows ?? []), ...(section.items ?? [])]) {
-    if (!row.locator) continue
-    row.locator = coverageStable && locatable ? bindLocation({ locator: row.locator }, roots, { dependencies }) : unresolvedLocation()
+// scan is an internal deterministic test seam, never an environment or worker-context switch.
+export async function inspectLeftovers(versions = {}, { keys = null, privateReceipts = false, deadline = Date.now() + 58000, scan = scanOnce } = {}) {
+  keys ??= { item: randomBytes(32).toString('hex'), context: randomBytes(32).toString('hex') }
+  const first = await scan(versions, keys, deadline)
+  const acquisitionChanged = first.acquisitionChanged ?? new Set()
+  const changing = new Set([...first.unstable, ...acquisitionChanged])
+  const changed = (source, second = null, itemPath = null) => {
+    const paths = [...new Set([...(first.inputs.get(source.key)?.changedPaths ?? []), ...(source.changedPaths ?? []), ...(second?.inputs.get(source.key)?.changedPaths ?? [])])]
+    first.gap(source.key, source.kind, { code: 'SOURCE_CHANGED', ...(source.kind === 'database' ? {
+      observationPaths: paths.length ? paths : itemPath ? [itemPath] : source.physicalPaths ?? [source.path]
+    } : {}) }, 'revalidate')
   }
-}
-return projectLeftovers(report)
+  if (changing.size && !first.timedOut && Date.now() + 1000 < deadline) {
+    // Retain compact commitments and attribution, not a second database-sized byte graph.
+    for (const source of first.inputs.values()) { source.value = null; source.stable = null }
+    const second = await scan(versions, keys, deadline).catch((error) => {
+      if (error?.code !== 'TIME_BOUND') throw error
+      first.gap('inspection-deadline', 'step', error, 'revalidate')
+      return { rows: [], inputs: new Map(), unstable: new Set(), unverified: new Set(), gaps: new Map(), timedOut: true }
+    })
+    const fresh = second.rows.filter((r) => r.receipt && r.sources.every((s) => s.known && !second.unstable.has(s.key)))
+    const matches = new Map(matchContinuity(first.rows.filter((r) => r.receipt).map((r) => r.receipt), fresh.map((r) => r.receipt)).map((m) => [m.item, m.current]))
+    const byItem = new Map(fresh.map((r) => [r.value.item, r]))
+    // Every coordinate published after recovery needs that recovery's own certification.
+    for (const row of first.rows) row.value.locator = byItem.get(matches.get(row.value.item))?.value.locator ?? { status: 'unresolved' }
+    const recovered = new Set([...acquisitionChanged].filter((key) => second.inputs.get(key)?.known && !second.unstable.has(key) && !second.timedOut))
+    // A recovered acquisition still changed during this check. Retain that truthful
+    // partial count while publishing the subsequently verified rows and coordinates.
+    for (const [key, gap] of second.gaps) first.gaps.set(key, gap)
+    // A second observation with incomplete coverage cannot certify the first inventory.
+    for (const input of second.unstable) if (!second.unverified?.has(input)) changed(second.inputs.get(input), second)
+    if (second.timedOut) for (const input of first.unstable) if (!first.unverified?.has(input)) changed(first.inputs.get(input), second)
+    const added = fresh.filter((r) => !first.rows.some((old) => old.receipt?.itemTag === r.receipt.itemTag && old.receipt.contextTag === r.receipt.contextTag))
+    const adopted = added.filter((r) => r.sources.some((s) => recovered.has(s.key)))
+    const unmatched = [...first.rows.filter((r) => r.receipt && !matches.get(r.value.item)), ...added.filter((r) => !adopted.includes(r))]
+    if (!second.timedOut) {
+      const oldReasons = first.rows.filter((row) => !row.receipt && row.reasonTag)
+      const newReasons = second.rows.filter((row) => !row.receipt && row.reasonTag &&
+        row.sources.every((source) => source.bound || source.known && !second.unstable.has(source.key)))
+      const counts = (rows) => {
+        const values = new Map()
+        for (const row of rows) values.set(row.reasonTag, (values.get(row.reasonTag) ?? 0) + 1)
+        return values
+      }
+      const oldCounts = counts(oldReasons), newCounts = counts(newReasons)
+      const unique = (row) => oldCounts.get(row.reasonTag) === 1 && newCounts.get(row.reasonTag) === 1
+      unmatched.push(...oldReasons.filter((row) => !unique(row)))
+      for (const row of newReasons.filter((row) => !unique(row))) {
+        if (row.sources.some((source) => recovered.has(source.key))) adopted.push(row)
+        else unmatched.push(row)
+      }
+    }
+    for (const row of unmatched) {
+      const affected = row.sources.filter((source) => first.unstable.has(source.key) || second.unstable.has(source.key))
+      if (!second.timedOut) for (const source of affected.length ? affected : row.sources.slice(0, 1)) changed(source, second, row.itemPath)
+    }
+    // An acquisition failure did not establish those provisional reasons. Replace only
+    // that recovered portion with the fully reconstructed inventory, including new rows.
+    const settled = (key) => second.inputs.get(key)?.known && !second.unstable.has(key)
+    const pending = new Set(second.rows.filter((row) => !adopted.includes(row)).flatMap((row) => row.sources.map((source) => source.key)))
+    first.rows = first.rows.filter((r) => r.receipt || !r.sources.some((s) => recovered.has(s.key)) ||
+      r.sources.some((s) => !recovered.has(s.key) && !settled(s.key) && !(s.kind === 'cache-tree' && !pending.has(s.key))))
+    first.rows.push(...adopted)
+  } else for (const input of first.unstable) if (!first.unverified?.has(input)) changed(first.inputs.get(input))
+  for (const [i, row] of first.rows.entries()) {
+    row.value.item = i + 1
+    if (row.receipt) row.receipt = { ...row.receipt, item: i + 1 }
+  }
+  const result = projectedResult(inspectionResult(first.rows, first.gaps))
+  if (!result) throw new Error('inspection unavailable')
+  const receipts = first.rows.filter((r) => r.receipt && r.value.locator.status === 'located' && result.leftovers?.some((item) => item.item === r.value.item)).map((r) => r.receipt)
+  return privateReceipts ? { result, rows: receipts } : result
 }

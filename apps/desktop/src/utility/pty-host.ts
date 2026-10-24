@@ -57,7 +57,7 @@ import {
 const MESSAGE_TEAM_ANSWER_MS = 200
 import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
-import { installBundledTerminfo } from './terminal-graphics'
+import { bundledTerminfoAsset, installBundledTerminfo } from './terminal-graphics'
 import { FileSavedOutputStore } from './saved-output-store'
 import { removeOriginals } from './artifact-files'
 import { removePurgedFiles } from './archive-purge-files'
@@ -280,12 +280,9 @@ function historyAdapters(): AgentHistoryAdapter[] {
 async function start(): Promise<void> {
   const roots = resolveApplicationRoots()
   await ensureApplicationRoots(roots)
-  const packagedTerminfo = join(process.resourcesPath, 'terminfo', 'x', 'xterm-sixel-256color')
-  const developmentTerminfo = join(__dirname, '..', '..', 'resources', 'terminfo', 'x', 'xterm-sixel-256color')
   let terminfoAsset
   try {
-    terminfoAsset = installBundledTerminfo(roots.data,
-      existsSync(packagedTerminfo) ? packagedTerminfo : developmentTerminfo)
+    terminfoAsset = installBundledTerminfo(roots.data, bundledTerminfoAsset(roots.data, process.resourcesPath, __dirname).source)
   } catch {
     // A missing asset leaves every new process on the standard TERM.
   }

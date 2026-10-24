@@ -98,7 +98,7 @@ for (const kind of ['unreadable-first', 'disabled-conflict', 'environment-confli
   })
 }
 
-it('Epic 85 full review: rechecks a suppressed equivalent MCP source', () => {
+it.each([false, true])('Epic 85 full review: rechecks a suppressed equivalent MCP source (changed definition: %s)', changedDefinition => {
   const home = fixture(), managed = join(home, 'empty-managed'); mkdirSync(managed)
   const code = `
     import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module'; import {join} from 'node:path';
@@ -107,7 +107,9 @@ it('Epic 85 full review: rechecks a suppressed equivalent MCP source', () => {
     fs.writeFileSync(join(config,'opencode.json'),JSON.stringify({mcp:{shared:value}}));
     const suppressed=join(config,'opencode.jsonc');fs.writeFileSync(suppressed,JSON.stringify({mcp:{servers:{shared:value}}}));
     const original=fs.lstatSync;let fired=false;
-    fs.lstatSync=function(path,...args){if(!fired&&String(path)===suppressed&&new Error().stack.includes('unchangedSince')){fired=true;fs.appendFileSync(suppressed,'\\n// synthetic outside edit');}return original.call(this,path,...args)};
+    fs.lstatSync=function(path,...args){if(!fired&&String(path)===suppressed&&new Error().stack.includes('unchangedSince')){fired=true;
+      ${changedDefinition ? "fs.writeFileSync(suppressed,JSON.stringify({mcp:{servers:{shared:{...value,command:['synthetic-changed-program']}}}}));" : "fs.appendFileSync(suppressed,'\\n// synthetic outside edit');"}
+    }return original.call(this,path,...args)};
     syncBuiltinESMExports();
     const {inspectLeftovers}=await import(moduleUrl);const result=await inspectLeftovers({opencode:'2.0.32'});
     console.log(JSON.stringify({fired,state:result.state}));
@@ -118,5 +120,5 @@ it('Epic 85 full review: rechecks a suppressed equivalent MCP source', () => {
     '--proc', '/proc', '--dev', '/dev', '--', process.execPath, '--input-type=module', '-e', code,
     new URL('../../bin/doctor-leftovers.mjs', import.meta.url).href, home
   ], { env: { HOME: home, PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 5000 }))
-  expect(result).toEqual({ fired: true, state: 'partial' })
+  expect(result).toEqual({ fired: true, state: changedDefinition ? 'partial' : 'passed' })
 })

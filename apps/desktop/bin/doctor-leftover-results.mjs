@@ -20,7 +20,7 @@ const KINDS = ['memory', 'skills', 'plugins', 'mcp']
 const APPS = ['claude', 'codex', 'opencode']
 
 export function leftoverLocation(item) {
-  return locationText(item.locator)
+  return locationText(item.currentLocator ?? item.locator)
 }
 
 export function validateLeftovers(value) {
@@ -36,54 +36,4 @@ export function validateLeftovers(value) {
     out.push({ kind: row.kind, app: row.app, reason: row.reason, item: row.item, identity: 'withheld', ...(row.source === 'managed' ? { source: 'managed' } : {}), locator })
   }
   return out
-}
-
-/** All paths, names, hashes, parser errors and arbitrary text end inside the worker. */
-export function projectLeftovers(report) {
-  const leftovers = []
-  let partial = !report || !Array.isArray(report.errors) || report.errors.length > 0
-  // A location that cannot be found again is not a gap (owner card 2026-10-22); an item BMN could not read is.
-  const add = (kind, app, reason, row = {}) => {
-    const locator = validateLocation(row.locator) ?? unresolvedLocation()
-    if (reason === 'unreadable') partial = true
-    leftovers.push({ kind, app, reason, item: leftovers.length + 1, identity: 'withheld', ...(row.source === 'managed' && app === 'opencode' && ['plugins', 'mcp'].includes(kind) ? { source: 'managed' } : {}), locator })
-  }
-  const section = (key) => {
-    const value = report?.[key]
-    if (!value || value.error) { partial = true; return {} }
-    return value
-  }
-  for (const row of section('memory_claude').rows ?? []) {
-    if (row.worktree) continue
-    if (row.project === 'missing') add('memory', 'claude', 'missing-project', row)
-    else if (row.project !== 'exists') add('memory', 'claude', 'ambiguous-project', row)
-  }
-  const codex = section('memory_codex')
-  for (const row of codex.items ?? []) add('memory', 'codex', 'unused-memory', row)
-  for (const row of section('skills').items ?? []) {
-    if (row.protected || row.verdict === 'protected' || row.verdict?.startsWith('keep:')) continue
-    const verdict = row.verdict ?? ''
-    const reason = row.state === 'broken-link' ? 'broken-link' : verdict.includes('unreadable') ? 'unreadable'
-      : verdict.includes('different content') ? 'conflict' : verdict.includes('unverified') ? 'unverified'
-        : verdict.includes('same body') ? 'duplicate' : null
-    if (reason) add('skills', null, reason, row)
-  }
-  for (const app of APPS) {
-    const plugins = section(`plugins_${app}`)
-    for (const row of plugins.rows ?? []) {
-      if (row.class === 'disabled') add('plugins', app, 'disabled', row)
-      else if (row.class === 'app-managed') add('plugins', app, 'app-managed', row)
-      else if (row.class === 'unreadable') add('plugins', app, 'unreadable', row)
-      else if (row.class?.startsWith('failing:') || row.class === 'install folder missing' || row.class === 'listed, not installed') add('plugins', app, 'plugin-missing', row)
-    }
-  }
-  for (const row of section('mcp').rows ?? []) {
-    if (!APPS.includes(row.app) || row.state === 'file-missing' || row.verdict === 'keep' || row.verdict?.startsWith('protected:')) continue
-    const verdict = row.verdict ?? ''
-    const reason = verdict.includes('secret inline') ? 'secret-inline' : verdict.includes('unreadable') ? 'unreadable'
-      : verdict.includes('belongs to a plugin') ? 'plugin-owned' : verdict.includes('program resolved at start') ? 'unverified'
-        : verdict.includes('project gone') ? 'missing-project' : verdict.includes('missing') ? 'missing-program' : null
-    if (reason) add('mcp', row.app, reason, row)
-  }
-  return { state: partial ? 'partial' : 'passed', problems: partial ? [{ code: 'additional-details', item: 1 }] : [], leftovers }
 }

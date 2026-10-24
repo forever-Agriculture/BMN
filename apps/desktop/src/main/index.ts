@@ -56,6 +56,7 @@ import {
   watchHostLoss
 } from './host-loss'
 import { resolveApplicationRoots } from '../utility/roots'
+import { bundledTerminfoAsset, terminalGraphicsEnvironment } from '../utility/terminal-graphics'
 import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-instance'
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
@@ -619,6 +620,8 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   })
   const agentsIpc = installAgentsIpcHandlers(bridgeIpc, {
     senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), openExternal: (address) => shell.openExternal(address), notifyApp: showAppNotice,
+    doctorTerminalEnvironment: environment => terminalGraphicsEnvironment(null, environment,
+      bundledTerminfoAsset(resolveApplicationRoots().data, process.resourcesPath, __dirname)),
     setupTeam: async () => {
       await setupProfileReadiness.ready
       const profile = await requireHostClient().request<FirstRunSetupRecord | null>(METHOD_REGISTRY.setupGet, {})
