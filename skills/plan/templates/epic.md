@@ -14,6 +14,14 @@ The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it
 
 <Story order; what is out of scope. Independent: it depends on no unfinished epic and runs on its own branch, in parallel; name what it shares with unfinished epics (files, migrations, generated text) and how it stays mergeable.>
 
+## Run needs
+
+What his go on this epic approves for its runs, as his instruction (read from the plan commit that recorded the go):
+- **Extra repair rounds:** <0–4> per boundary, beyond dev-auto's own allowance.
+- **Deferrable:** <a criterion or story, with the condition under which it may be deferred>, or `none`.
+- **Money cap:** <amount and what it covers>, or `none` (no paid launches).
+- **Named actions for an Away card:** <action and target>, or `none`.
+
 ## Truth impact
 
 <The truth documents and contracts it adds, changes or removes; or `none` with a reason.>
@@ -44,7 +52,7 @@ The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it
 
 As <the owner / a user>, I want <capability>, so that <benefit>.
 
-**Coverage:** <requirements>. **Starting points:** <file:line of code that exists today, opened by you; then any file an earlier story creates, with that story>.
+**Owner:** none (or `before the go` / `at the end`: his steps sit only there). **Coverage:** <requirements>. **Starting points:** <file:line of code that exists today, opened by you; then any file an earlier story creates, with that story>.
 
 **Acceptance criteria:**
 1. **Given** <state>, **when** <action>, **then** <observable result>.

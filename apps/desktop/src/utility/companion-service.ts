@@ -144,6 +144,7 @@ import { TELEGRAM_HELP_TEXT, awayReplyText, backReplyText, telegramAwayCommand, 
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
+import { AwayWake } from './away-wake'
 import { GrantDepartureNotices } from './agent-grant-notices'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
@@ -238,6 +239,8 @@ interface CompanionServiceOptions {
   policyPointer?: () => Promise<boolean | null>
   /** Story 83.3: the git and gh reads Health's policy listing needs; tests give their own. */
   policyReader?: PolicyReader
+  /** Story 90.6: a test-mode host shortens the Away wake-up's 2 hours and 15 minutes. */
+  awayWake?: { everyMs?: number; quietMs?: number }
 }
 
 function text(params: Record<string, unknown>, key: string, max = 4096): string {
@@ -377,6 +380,8 @@ export class CompanionService {
   private readonly telegramHost = randomUUID()
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
+  /** Story 90.6: while he is Away, the fixed wake line every 2 hours into sessions idle at an empty prompt. */
+  private readonly awayWake: AwayWake
   /** Local ports each session's programs listen on, read from /proc on its own cadence (Story 41.1). */
   private readonly ports: PortWatch
   private readonly now: () => Date
@@ -514,6 +519,7 @@ export class CompanionService {
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
   private refusalWrites: Promise<void> = Promise.resolve()
+  private awayWakeWrites: Promise<void> = Promise.resolve()
   private telegramDeliveryWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
@@ -521,6 +527,31 @@ export class CompanionService {
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
+    this.awayWake = new AwayWake({
+      ...options.awayWake,
+      now: () => this.now(),
+      away: () => this.awayRecord,
+      observations: () => this.hookObservations.values(),
+      observation: (sessionId) => this.hookObservations.get(sessionId),
+      openAttention: async () => (await options.database.companion('listAttention')).filter((row) => row.state === 'open'),
+      liveIncarnation: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
+      generation: (sessionId) => this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 },
+      screen: async (sessionId, incarnationId) => {
+        const mirror = options.manager.screenMirror(sessionId, incarnationId)
+        if (!mirror) return null
+        await mirror.settled()
+        return mirror.undimmedLines()
+      },
+      write: (sessionId, text) => options.manager.writeToSession(sessionId, bracketedPaste(text, true)),
+      log: (line) => {
+        const entry = `${this.iso()} ${line}\n`
+        process.stderr.write(`[BMN] ${entry}`)
+        this.awayWakeWrites = this.awayWakeWrites
+          .then(() => this.appendBoundedLog(join(options.roots.state, 'away-wake.log'), entry))
+          .catch(() => undefined)
+      }
+    })
     this.quietDelivery = new QuietHoursDelivery({
       read: () => options.database.companion('getRawSetting', QUIET_LEDGER_KEY),
       write: (value, changes) => options.database.companion('commitQuietDelivery', value, changes ?? {}, this.iso()),
@@ -2681,6 +2712,8 @@ export class CompanionService {
     await this.morningDigest.sweep().catch(() => undefined)
     // Not awaited: a slow sensor or a slow send must not hold the sweep, and an overlapping check skips.
     void this.healthAlerts.sweep().catch(() => undefined)
+    // Not awaited either: each tick is claimed before its first await, so an overlapping sweep types nothing twice.
+    void this.awayWake.sweep().catch(() => undefined)
     // Epic 66.3: old messages go by the owner's confirmed Keep agent history days; once an hour is often enough.
     if (this.now().getTime() - this.lastMessageSweepAt >= MESSAGE_SWEEP_EVERY_MS) {
       this.lastMessageSweepAt = this.now().getTime()

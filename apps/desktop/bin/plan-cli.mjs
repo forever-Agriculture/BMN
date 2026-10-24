@@ -22,7 +22,8 @@ check   structural validation, one finding per line: duplicate keys, malformed r
         notes over ${NOTE_LIMIT} characters, stories without rows and rows without stories, duplicate
         identifiers, missing sections, stories without criteria or Verification, queue problems, a done
         epic with unfinished stories, blocked/paused/dropped rows without a reason, files over their
-        ceiling. A BMAD board is checked for duplicate keys and row grammar only. Whether the plan says
+        ceiling, and from Epic 90 on a missing Run needs section or Owner line, or an owner step
+        between unattended stories. A BMAD board is checked for duplicate keys and row grammar only. Whether the plan says
         the right thing is the readiness method's and review's, not this command's.
 set     changes one row's status (and note with --note; without it the note is kept) after checking that
         the row still matches TOKEN, the row token status --json printed. It locks the board, rereads it,

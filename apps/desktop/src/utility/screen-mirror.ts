@@ -87,6 +87,28 @@ export class ScreenMirror {
     return lines.map((line) => line.trimEnd())
   }
 
+  /**
+   * Each visible row with its dim cells blanked (Story 90.6): an agent draws its prompt's placeholder dim, so an
+   * empty prompt reads as empty here while typed text stays. Rows are not joined across soft wraps.
+   */
+  undimmedLines(): string[] {
+    const buffer = this.terminal.buffer.active
+    const cell = buffer.getNullCell()
+    const rows: string[] = []
+    for (let row = 0; row < this.terminal.rows; row += 1) {
+      const line = buffer.getLine(buffer.viewportY + row)
+      if (!line) continue
+      let text = ''
+      for (let column = 0; column < this.terminal.cols; column += 1) {
+        line.getCell(column, cell)
+        if (cell.getWidth() === 0) continue
+        text += cell.isDim() ? ' '.repeat(cell.getWidth()) : cell.getChars() || ' '
+      }
+      rows.push(text.trimEnd())
+    }
+    return rows
+  }
+
   onChange(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

@@ -323,8 +323,11 @@ reaches it (a unit test reads the sources to keep it that way).
   typed text last), Codex `["None of the above", "user_note: <text>"]`, OpenCode's label arrays. Claude permissions for other tools (`Edit`, `Write`, …) were not driven
   and are not recognised.
 - **Screen mirror.** Each live session keeps its last 64 KB of output. A headless terminal copy
-  (`screen-mirror.ts`) starts only once a Claude or Codex hook reports from that session, seeded from
-  that tail, and stops on the agent's `SessionEnd` or the session's exit. Measured 2026-09-27: one
+  (`screen-mirror.ts`) starts once a Claude or Codex hook reports from that session, seeded from
+  that tail, or earlier, when the app reports its own state on screen (`OSC 7501;…:app=codex`): Codex
+  does that at start, before its first hook, and its start-up animation can pass 64 KB, which would
+  leave a later mirror without the prompt it drew once (Story 90.6). It stops on the agent's
+  `SessionEnd` or the session's exit. Measured 2026-09-27: one
   50 MB flood through the session manager cost a median 1,963 ms CPU without a mirror and 2,932 ms
   with one (1.49×), above the 1.10× budget, so plain shells never pay for it.
 - **Recognition.** A dialog is on screen only when its option list appears in order at one column,

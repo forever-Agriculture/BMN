@@ -241,6 +241,53 @@ development_status:
   })
 })
 
+describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', () => {
+  const owned = (number: number, owners: string[], runNeeds = true): string => {
+    let index = 0
+    const text = epicText(number, owners.map((_, at) => at + 1), runNeeds ? '' : '').replace(/As the owner, I want it\./gu, () => `**Owner:** ${owners[index++]}. **Coverage:** Outcome.\n\nAs the owner, I want it.`)
+    return runNeeds ? text.replace('## Truth impact', '## Run needs\n\n- Extra repair rounds: 0.\n\n## Truth impact') : text
+  }
+  const project = (number: number, text: string): string => {
+    const main = ownProject(fixture())
+    const stories = [...text.matchAll(/^### Story \d+\.(\d+)/gmu)].map((match) => `  ${number}-${match[1]}-part: backlog\n`).join('')
+    file(main, 'plan/status.yaml', `${BOARD}\n  epic-${number}: backlog # planned\n${stories}`)
+    file(main, `plan/epics/${String(number).padStart(3, '0')}-owned.md`, text)
+    return main
+  }
+  const reasons = async (main: string): Promise<string[]> => (await checkPlan(await resolvePlan(main))).findings.map((finding) => `${finding.where.replace(/^.*\/|:\d+$/gu, '')}: ${finding.reason}`)
+
+  it('passes an epic with Run needs and owner steps only before the go or at the end', async () => {
+    expect(await reasons(project(90, owned(90, ['before the go', 'none', 'none', 'at the end', 'at the end'])))).toEqual([])
+  })
+
+  it('finds a missing Run needs, a story without an Owner line, an unknown owner and each step out of order, naming file and line', async () => {
+    expect(await reasons(project(90, owned(90, ['none'], false)))).toEqual(['090-owned.md: missing section ## Run needs (epics from 90 on)'])
+    const missing = project(91, owned(91, ['none', 'none']).replace('**Owner:** none. **Coverage:** Outcome.\n\n', ''))
+    const found = (await checkPlan(await resolvePlan(missing))).findings
+    expect(found.map((finding) => finding.where)).toEqual([expect.stringMatching(/plan\/epics\/091-owned\.md:\d+$/u)])
+    expect(found[0]?.reason).toBe('Story 91.1 has no **Owner:** line (none, before the go or at the end)')
+    expect(await reasons(project(92, owned(92, ['sometimes'])))).toEqual(["092-owned.md: Story 92.1's **Owner:** is not none, before the go or at the end"])
+    // A valid value must end there: a longer word that starts like one is not it.
+    expect(await reasons(project(92, owned(92, ['noneTypo'])))).toEqual(["092-owned.md: Story 92.1's **Owner:** is not none, before the go or at the end"])
+    expect(await reasons(project(93, owned(93, ['none', 'before the go'])))).toEqual(['093-owned.md: Story 93.2 is "before the go" after Story 93.1\'s "none": his steps go before the go or at the end'])
+    expect(await reasons(project(94, owned(94, ['at the end', 'none'])))).toEqual(['094-owned.md: Story 94.2 is "none" after Story 94.1\'s "at the end": his steps go before the go or at the end'])
+  })
+
+  it('leaves epics below 90 and legacy epics as they were', async () => {
+    expect(await reasons(project(89, owned(89, ['at the end', 'none'], false).replace(/\*\*Owner:\*\* [^.]*\. /gu, '')))).toEqual([])
+    const legacy = `<!-- bmn-plan: bmad-legacy -->\n## Epic 95: Old\n\n### Story 95.1: Old\n\nNo owner line.\n`
+    expect(await reasons(project(95, legacy))).toEqual([])
+  })
+
+  it('passes the epic template filled in as epic 90', async () => {
+    const main = ownProject(fixture())
+    const fill = (text: string): string => text.replaceAll('<N+1>', '91').replaceAll('<N>', '90').replaceAll('<slug>', 'first')
+    file(main, 'plan/status.yaml', `${BOARD}\n  epic-90: backlog # planned\n  90-1-first: backlog\n`)
+    file(main, 'plan/epics/090-first.md', fill(readFileSync(join(TEMPLATES, 'epic.md'), 'utf8')))
+    expect(await reasons(main)).toEqual([])
+  })
+})
+
 describe('agents change one row of the board (Story 77.2)', () => {
   const token = (text: string, key: string): string => replaceRow(text, key, 'x', undefined)!.token
 

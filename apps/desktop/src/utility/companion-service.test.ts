@@ -4483,3 +4483,37 @@ describe('the deadline line on a Claude permission card (Story 78.5)', () => {
     expect(deadlineLine({ state: 'unknown' })).toBe('Auto-deny deadline unknown')
   })
 })
+
+describe('the Away wake-up through the service (Story 90.6, epic review)', () => {
+  const HOUR = 60 * 60 * 1000
+  const T = Date.parse(now)
+  const idle = ['• ok', '', '›', '', '  GPT-6.1-Sol low · /work/two', '  ? for shortcuts']
+  const observe = (event: string, at: number): void => {
+    service['hookObservations'].set('s2', { sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event,
+      observedAt: new Date(at).toISOString(), foreground: 'synthetic-foreground:s2' })
+  }
+  const night = async (whileReading?: () => void): Promise<void> => {
+    clock = new Date(T).toISOString()
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    clock = new Date(T + HOUR).toISOString()
+    observe('Stop', T + HOUR)
+    await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'codex:turn', kind: 'notice',
+      title: 'Codex finished its turn', origin: 'hook:codex:Stop' })
+    screens.set('s2', { settled: async () => { whileReading?.() }, undimmedLines: () => idle } as unknown as ScreenLike)
+    await service['awayWake'].sweep()
+    clock = new Date(T + 2 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+  }
+
+  it('types the line once into an idle Codex session', async () => {
+    await night()
+    expect(writes.map((write) => write.sessionId)).toEqual(['s2'])
+  })
+
+  it('types nothing when a hook arrives while the screen is read', async () => {
+    await night(() => observe('PreToolUse', T + 2 * HOUR))
+    expect(writes).toEqual([])
+    await service['awayWakeWrites']
+    expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain('its agent reported again')
+  })
+})

@@ -11,7 +11,7 @@ Use when an epic adds or changes something a person sees or operates (screens, d
 
 ## Steps
 
-1. A design story first, by the designer, with the flows and states above as its criteria; the owner approves the result (one card).
+1. During planning, before the go: the designer designs the flows and states above and the owner approves the result (one card). No design story runs inside the epic.
 2. Screen stories cite the approved design and carry its states as criteria; Verification names the viewport sizes and the real content sizes it checks.
 3. The design truth document (or `PLAN.md`'s Decisions for a small project) gains the new rules; the epic's Truth impact names it.
 

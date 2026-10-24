@@ -1,5 +1,6 @@
 // MODULE: doctor-inspection-worker.mjs - Trusted inspection entry; public stdout and separately bounded private receipt pipe
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { inspectLeftovers } from './doctor-leftovers.mjs'
 import { matchContinuity, validRowReceipts, validWorkerKeys } from './doctor-continuity.mjs'
 
@@ -18,4 +19,7 @@ async function main() {
     process.stdout.write(JSON.stringify(result))
   } else process.stdout.write(JSON.stringify({ result, matches: matchContinuity(context.rows, rows) }))
 }
-main().catch(() => { process.exitCode = 1 })
+// Packaging imports CLI modules; only an actual worker invocation may read its private input.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(() => { process.exitCode = 1 })
+}

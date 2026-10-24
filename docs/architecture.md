@@ -59,7 +59,7 @@ test that first fails on the demonstrated interleaving. An async gap that no tes
 as UNVERIFIED in the State column above, never as protected.
 
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
-arguments and working directory. The app adds no bypass flags and never copies CLI credentials.
+arguments and working directory. The app adds no bypass flags and never copies CLI credentials. BMN types into a session only what you or a phone answer sent, with one exception: while you are Away, the fixed wake line of [The Away wake-up](agent-control.md#the-away-wake-up), and only into an agent's empty, idle prompt.
 Terminal variables that identify another terminal (tmux, Zellij, other emulators) are removed;
 sessions get `COLORTERM=truecolor`. Every session defaults to Sixel graphics, whatever command or
 agent it runs; the owner can set **Terminal images (Sixel)** to Off per session.
