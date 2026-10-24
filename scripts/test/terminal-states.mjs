@@ -16,7 +16,8 @@ Starts the built app in --app (default this checkout's apps/desktop; pnpm run bu
 folders, on Chromium's headless platform at a device scale of 1 as test:visual does, opens one session whose program
 prints each state when asked, and saves each settled terminal as DIR/<state>.png with its buffer text in DIR/states.json.
 The states are Story 91.2 AC3's: plain, 256-colour and true-colour text; bold, italic and underline; wide characters and
-emoji; a selection; the cursor; a Sixel image; scrollback after a resize. --compare prints PASS when every capture of A is
+emoji; a selection; the cursor; rows rewritten inside a synchronized update; a Sixel image; scrollback after a
+resize. --compare prints PASS when every capture of A is
 identical to B's to the pixel, else each state's count of differing pixels, and exits 1.`
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -44,6 +45,8 @@ export function stateBytes() {
     wide: `漢字かなカナ 한국어 中文字符 | 😀🚀👍🏽❤️🎉 | ┌─┬─┐ │a│b│ └─┴─┘ | → ← ↑ ↓ ✓ ✗ … —\r\nSTATE wide`,
     selection: `${text}\r\nSTATE selection`,
     cursor: `${text}\r\nSTATE cursor\u001b[12;30H`,
+    // Story 91.2's fix: rows rewritten inside a synchronized update, the rest of the screen left as it was drawn.
+    synced: `${text}\r\nSTATE synced\u001b[?2026h\u001b[2;1H\u001b[2K${sgr('1;35', 'rewritten inside a synchronized update')}\u001b[8;5H${sgr('7', 'also here')}\u001b[?2026l`,
     sixel: `Image below:\r\n${SIXEL}\r\nSTATE sixel`,
     scrollback: `${Array.from({ length: 300 }, (_, index) => `line ${String(index + 1).padStart(3, '0')} ${'·'.repeat(index % 40)}`).join('\r\n')}\r\nSTATE scrollback`
   }
