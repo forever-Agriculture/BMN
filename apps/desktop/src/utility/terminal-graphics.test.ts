@@ -44,6 +44,10 @@ describe('graphics terminal identity', () => {
       const asset = installBundledTerminfo(root, bundled)
       const graphics = terminalGraphicsEnvironment(null, { HOME: join(root, 'home') }, asset)
       expect(graphics.TERMINFO_DIRS).toBe(`${asset.directory}::`)
+      // A file of that name is no folder of entries either.
+      mkdirSync(join(root, 'home'), { recursive: true })
+      writeFileSync(join(root, 'home', '.terminfo'), '')
+      expect(terminalGraphicsEnvironment(null, { HOME: join(root, 'home') }, asset).TERMINFO_DIRS).toBe(`${asset.directory}::`)
       expect(spawnSync('infocmp', [STANDARD_TERM], { env: { ...process.env, ...graphics }, encoding: 'utf8' }).status).toBe(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
