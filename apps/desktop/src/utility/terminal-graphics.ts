@@ -44,10 +44,12 @@ function terminfoDirectories(
   directory: string,
   environment: Readonly<Record<string, string | undefined>>
 ): string {
-  // Empty components retain the ncurses system defaults; an explicit HOME path preserves that lookup too, only when it
-  // is a folder: Codex's doctor fails its terminal check on a listed path it cannot read (Story 90.9).
+  // Empty components retain the ncurses system defaults; an explicit HOME path preserves that lookup too. Every other
+  // entry is listed only when it is a folder: Codex's doctor fails its terminal check on a listed path it cannot read
+  // (Story 90.9).
+  const inherited = (environment.TERMINFO_DIRS ?? '').split(':').filter((entry) => entry === '' || isFolder(entry))
   const home = join(environment.HOME ?? homedir(), '.terminfo')
-  return [directory, environment.TERMINFO_DIRS ?? '', ...(isFolder(home) ? [home] : []), ''].join(':')
+  return [directory, ...inherited, ...(isFolder(home) ? [home] : []), ''].join(':')
 }
 
 /** A missing, altered or unresolvable entry never permits a Sixel TERM claim. */

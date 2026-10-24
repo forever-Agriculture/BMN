@@ -17,11 +17,12 @@ describe('graphics terminal identity', () => {
     try {
       const asset = installBundledTerminfo(root, bundled)
       expect(sixelTerminfoReady(asset)).toBe(true)
-      const environment = { HOME: join(root, 'home'), TERMINFO_DIRS: '/owner/extra' }
+      const environment = { HOME: join(root, 'home'), TERMINFO_DIRS: join(root, 'owner-extra') }
       mkdirSync(join(root, 'home', '.terminfo'), { recursive: true })
+      mkdirSync(join(root, 'owner-extra'))
       const graphics = terminalGraphicsEnvironment(null, environment, asset)
       expect(graphics.TERM).toBe(SIXEL_TERM)
-      expect(graphics.TERMINFO_DIRS).toContain('/owner/extra')
+      expect(graphics.TERMINFO_DIRS).toContain(join(root, 'owner-extra'))
       expect(graphics.TERMINFO_DIRS).toContain(join(root, 'home', '.terminfo'))
       expect(spawnSync('infocmp', [SIXEL_TERM], { env: { ...process.env, ...graphics }, encoding: 'utf8' }).status).toBe(0)
       expect(spawnSync('infocmp', [STANDARD_TERM], { env: { ...process.env, ...graphics }, encoding: 'utf8' }).status).toBe(0)
@@ -48,6 +49,10 @@ describe('graphics terminal identity', () => {
       mkdirSync(join(root, 'home'), { recursive: true })
       writeFileSync(join(root, 'home', '.terminfo'), '')
       expect(terminalGraphicsEnvironment(null, { HOME: join(root, 'home') }, asset).TERMINFO_DIRS).toBe(`${asset.directory}::`)
+      // An inherited list keeps its folders and empty entries and loses what is not a folder, as a BMN session started inside another passes on.
+      const inherited = `${asset.directory}::${join(root, 'home', '.terminfo')}:/nonexistent-terminfo:`
+      expect(terminalGraphicsEnvironment(null, { HOME: join(root, 'home'), TERMINFO_DIRS: inherited }, asset).TERMINFO_DIRS)
+        .toBe(`${asset.directory}:${asset.directory}:::`)
       expect(spawnSync('infocmp', [STANDARD_TERM], { env: { ...process.env, ...graphics }, encoding: 'utf8' }).status).toBe(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
