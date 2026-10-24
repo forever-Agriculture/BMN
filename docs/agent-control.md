@@ -977,6 +977,8 @@ another program) in the foreground, its requests have not changed and none is be
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim
 placeholder text after the marker, as recorded from real sessions). Any state BMN cannot read skips the session for that
 time. OpenCode sessions are not woken: BMN keeps no screen mirror for them, so their prompt cannot be read.
+Epic 92 measured pinned OpenCode 2.0.32's screens (root, Home, child, drafts) but did not qualify every state a wake
+must refuse, such as an open dialog, so the wake waits for its own epic (2026-10-25).
 
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never
