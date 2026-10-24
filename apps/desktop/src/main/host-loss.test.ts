@@ -20,7 +20,6 @@ import {
 import {
   createApplicationLifecycle,
   runningTargetForRuntime,
-  stopAndDisposeCurrentTarget,
   type BackgroundChoiceDecision,
   type CloseChoicePrompt,
   type CloseDecision,
@@ -858,48 +857,6 @@ describe('Story 1.4 application lifecycle', () => {
     await stopping
 
     expect(stopTargets).toHaveBeenCalledWith([first], 'explicit')
-  })
-  it('disposes and unlatches after both missing-target and genuine stop failures', async () => {
-    const stopHarness = (code: string) => {
-      let stopInProgress = false
-      const events: string[] = []
-      const error = {
-        protocolError: { data: { code } }
-      }
-      const result = stopAndDisposeCurrentTarget({
-        setStopInProgress: (inProgress) => {
-          stopInProgress = inProgress
-          events.push(`stop-in-progress:${inProgress}`)
-        },
-        requestStop: async () => {
-          events.push(`request:${stopInProgress}`)
-          throw error
-        },
-        dispose: async () => {
-          events.push(`dispose:${stopInProgress}`)
-        },
-        clearCurrent: () => {
-          events.push(`clear:${stopInProgress}`)
-        }
-      })
-      return { error, events, result, stopInProgress: () => stopInProgress }
-    }
-
-    const alreadyStopped = stopHarness(ERROR_CODES.notFound)
-    await expect(alreadyStopped.result).resolves.toBeUndefined()
-    expect(alreadyStopped.events).toEqual([
-      'stop-in-progress:true',
-      'request:true',
-      'dispose:true',
-      'clear:true',
-      'stop-in-progress:false'
-    ])
-    expect(alreadyStopped.stopInProgress()).toBe(false)
-
-    const unknownOutcome = stopHarness(ERROR_CODES.ioError)
-    await expect(unknownOutcome.result).rejects.toBe(unknownOutcome.error)
-    expect(unknownOutcome.events).toEqual(alreadyStopped.events)
-    expect(unknownOutcome.stopInProgress()).toBe(false)
   })
 
   it('routes the real window-close seam through the Story 1.4 lifecycle coordinator', async () => {

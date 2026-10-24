@@ -84,13 +84,6 @@ export interface ApplicationLifecycle {
   stopCurrentTarget(target?: RunningSessionTarget): Promise<SavedOutputCaptureOutcome>
 }
 
-interface StopCurrentTargetActions {
-  requestStop(): Promise<unknown>
-  dispose(): Promise<unknown>
-  clearCurrent(): void
-  setStopInProgress(inProgress: boolean): void
-}
-
 export function isMissingStopTargetError(error: unknown): boolean {
   return (
     !!error &&
@@ -98,29 +91,6 @@ export function isMissingStopTargetError(error: unknown): boolean {
     (error as { protocolError?: { data?: { code?: unknown } } }).protocolError?.data?.code ===
       ERROR_CODES.notFound
   )
-}
-
-export async function stopAndDisposeCurrentTarget(
-  actions: StopCurrentTargetActions
-): Promise<void> {
-  actions.setStopInProgress(true)
-  try {
-    try {
-      await actions.requestStop()
-    } catch (error) {
-      if (!isMissingStopTargetError(error)) throw error
-    }
-  } finally {
-    try {
-      await actions.dispose()
-    } finally {
-      try {
-        actions.clearCurrent()
-      } finally {
-        actions.setStopInProgress(false)
-      }
-    }
-  }
 }
 
 function runningTargetDetails(targets: readonly RunningSessionTarget[]): string {
