@@ -858,6 +858,9 @@ describe('shell session lifecycle', () => {
     try {
       const bundled = fileURLToPath(new URL('../../resources/terminfo/x/xterm-sixel-256color', import.meta.url))
       const asset = installBundledTerminfo(root, bundled)
+      // The owner's inherited entries are a folder: an entry that is not one is dropped (Story 90.9).
+      const ownerEntries = join(root, 'owner-entries')
+      await mkdir(ownerEntries)
       const environments: Array<Readonly<Record<string, string | undefined>>> = []
       const manager = new SessionManager({
         store: new FakeStore(),
@@ -866,7 +869,7 @@ describe('shell session lifecycle', () => {
           return new FakePty()
         },
         sendTerminalMessage: () => undefined,
-        environment: { HOME: join(root, 'home'), TERMINFO_DIRS: '/owner/entries', ZELLIJ_VERSION: '0.40' },
+        environment: { HOME: join(root, 'home'), TERMINFO_DIRS: ownerEntries, ZELLIJ_VERSION: '0.40' },
         terminfoAsset: asset
       })
       const launch = (executable: string, terminalGraphics: 'sixel' | 'standard' | null): void => {
@@ -876,11 +879,11 @@ describe('shell session lifecycle', () => {
       launch('/usr/bin/codex', null)
       expect(environments.at(-1)).toMatchObject({ TERM: 'xterm-sixel-256color', COLORTERM: 'truecolor' })
       expect(environments.at(-1)).not.toHaveProperty('ZELLIJ_VERSION')
-      expect(environments.at(-1)?.TERMINFO_DIRS).toContain('/owner/entries')
+      expect(environments.at(-1)?.TERMINFO_DIRS).toContain(ownerEntries)
       // A shell the owner starts Codex, Claude Code or OpenCode inside gets graphics too.
       launch('/bin/bash', null)
       expect(environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
-      expect(environments.at(-1)?.TERMINFO_DIRS).toContain('/owner/entries')
+      expect(environments.at(-1)?.TERMINFO_DIRS).toContain(ownerEntries)
       launch('/bin/bash', 'sixel')
       expect(environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
       launch('/bin/bash', 'standard')
