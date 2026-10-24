@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { random, sixel, statusFrame, styledLine } from '../measure/agent-replay.mjs'
+import { random, sixel, statusFrame, statusTick, styledLine } from '../measure/agent-replay.mjs'
 import { FileSavedOutputStore } from '../../apps/desktop/src/utility/saved-output-store.ts'
 import { seedSavedOutput, sessionPlan } from '../measure/calibration-load.mjs'
 
@@ -31,6 +31,11 @@ describe('calibration load (Story 91.1 AC3)', () => {
     // The working word carries one true colour per character, and the highlight moves with the frame.
     expect(statusFrame('claude', 0, 4, 90).split('\u001b[38;2;')).toHaveLength('Thinking…'.length + 1)
     expect(statusFrame('claude', 1, 4, 90)).not.toBe(statusFrame('claude', 2, 4, 90))
+    // Between full redraws, a small write in place: about Claude Code's own 65 bytes, the cursor put back after it.
+    const tick = statusTick('claude', 2)
+    expect(Buffer.byteLength(tick)).toBeLessThan(130)
+    expect(tick.startsWith('\u001b7')).toBe(true)
+    expect(tick.endsWith('\u001b8')).toBe(true)
     const image = sixel(48)
     expect(image.startsWith('\u001bPq')).toBe(true)
     expect(image.endsWith('\u001b\\')).toBe(true)

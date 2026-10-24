@@ -15,7 +15,8 @@ import { connect, profileAll, targets } from './cpu-profiles.mjs'
 
 const USAGE = `Usage: node scripts/measure/calibration-load.mjs [--sessions claude=3,codex=1,shell=1] [--scale N[,N...]]
   [--warmup S] [--minutes N] [--width W --height H] [--pane COLSxROWS] [--appearance MODE,FONT,IDENTITY]
-  [--sidebar 9,5,2] [--idle | --working N] [--steady] [--tick MS] [--history N] [--saved-output COUNT,KB]
+  [--sidebar 9,5,2] [--idle | --working N] [--steady] [--status-ms MS[,MS...]] [--tick MS] [--history N]
+  [--saved-output COUNT,KB]
   [--profile DIR] --out FILE
 Starts this checkout's built BMN (pnpm run build first) with temporary data, config, state, cache and runtime folders,
 opens the sessions (each claude or codex one replays agent-like output with scripts/measure/agent-replay.mjs and reports
@@ -24,7 +25,9 @@ resizes the window, then lets go of the window's debugging connection. --scale g
 last one repeats). --pane resizes the window until the shown pane has that many columns and rows; --appearance sets the
 colour mode, terminal font size and identity; --sidebar gives each workspace that many sessions, the extra ones stopped
 (the first workspace holds the running ones). --idle leaves every session's app waiting at its prompt, --working N lets
-only the first N sessions work, --steady leaves no long wait between a session's turns, and --tick redraws each waiting
+only the first N sessions work, --steady leaves no long wait between a session's turns, --status-ms gives working sessions (one value
+each, in order, the last repeating; 0 for none) Claude Code's small status writes every MS milliseconds between full
+redraws, and --tick redraws each waiting
 session's status every MS milliseconds. --history fills each session's scrollback with N lines first, and --saved-output
 starts BMN with COUNT saved terminal outputs of about KB kilobytes each, as a BMN used for weeks keeps (at most 100,
 TERMINAL_SAVED_OUTPUT_RETENTION). After --warmup seconds (60)
@@ -99,10 +102,11 @@ async function main(argv) {
   const sidebar = option(argv, '--sidebar', null)?.split(',').map(Number) ?? null
   const working = argv.includes('--idle') ? 0 : Number(option(argv, '--working', 'Infinity'))
   const tick = option(argv, '--tick', null)
+  const statusMs = option(argv, '--status-ms', null)?.split(',') ?? null
   const history = option(argv, '--history', null)
   const savedOutput = option(argv, '--saved-output', null)?.split(',').map(Number) ?? null
   const electronPath = createRequire(join(app, 'package.json'))('electron')
-  const report = { settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', tick, history, savedOutput, profile: profileDir !== null }, steps: [] }
+  const report = { settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', statusMs, tick, history, savedOutput, profile: profileDir !== null }, steps: [] }
   const step = (name, detail = {}) => { report.steps.push({ at: new Date().toISOString(), name, ...detail }); console.error(`calibration: ${name}${detail.pid ? ` pid ${detail.pid} start ticks ${detail.startTicks}` : ''}`) }
   await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
     const bin = join(root, 'agents')
@@ -150,7 +154,7 @@ async function main(argv) {
         argv: [join(bin, agent), '--scale', String(scale(index)), '--seed', String(index + 1), '--size-file', join(root, `size-${index + 1}`),
           ...(history ? ['--history', history] : []), ...flags], cols: 120, rows: 40
       })
-      for (const [index, agent] of plan.entries()) ids.push((await open(workspace.workspaceId, agent, index, index < working ? (steady ? ['--steady'] : []) : ['--idle', ...(tick ? ['--tick', tick] : [])])).session.sessionId)
+      for (const [index, agent] of plan.entries()) ids.push((await open(workspace.workspaceId, agent, index, index < working ? [...(steady ? ['--steady'] : []), ...(statusMs ? ['--status-ms', statusMs[Math.min(index, statusMs.length - 1)]] : [])] : ['--idle', ...(tick ? ['--tick', tick] : [])])).session.sessionId)
       // Only the planned sessions run, as in his BMN: any other a profile opened with is stopped.
       const extra = (await page.evaluate((id) => window.aiTerminal.listSessions(id), workspace.workspaceId)).map((one) => one.sessionId).filter((id) => !ids.includes(id))
       for (const id of extra) await page.evaluate((one) => window.aiTerminal.stopSession(one), id).catch(() => undefined)

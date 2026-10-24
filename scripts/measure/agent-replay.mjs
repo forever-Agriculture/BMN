@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 
 const USAGE = `Usage: node scripts/measure/agent-replay.mjs [--agent claude|codex|shell] [--scale N] [--seed N] [--idle [--tick MS] | --steady] [--history N]
-  [--size-file FILE]
+  [--status-ms MS] [--size-file FILE]
 Writes what an agent's terminal shows while it works and while it waits: a status line redrawn in synchronized updates,
 streamed styled text in bursts, tool blocks, a Sixel image once, scrolling, a full redraw on resize, and idle stretches.
 For claude and codex it reports hook events through BMN's \`bmn hook <agent>\`, as the real apps do, so BMN opens the
@@ -14,7 +14,8 @@ session's screen mirror. --scale multiplies how often things happen (1 by defaul
 (a link with that name), the agent is taken from the name. --idle starts the app and waits at its prompt, as a session
 nobody is using does; --steady starts the next turn a second after one ends, as an agent left to work does. --tick redraws an idle session's
 status every MS milliseconds, as an app's clock does. --history prints N lines first, as a session open for hours has
-in its scrollback. --size-file keeps the terminal's size there as COLSxROWS. Runs until stopped.`
+in its scrollback. --status-ms redraws only the working glyph and word every MS milliseconds, a write of about 65 bytes
+as Claude Code's own (measured 2026-10-24: 53 writes a second, 65 bytes each), instead of the whole status. --size-file keeps the terminal's size there as COLSxROWS. Runs until stopped.`
 
 const ESC = '\u001b'
 const CSI = `${ESC}[`
@@ -70,6 +71,12 @@ export function shimmer(word, frame) {
   }).join('') + `${CSI}39m`
 }
 
+/** Only the working glyph and word, rewritten in place two rows up: the small write an app makes between full redraws. */
+export function statusTick(agent, frame) {
+  const glyph = SPINNER[agent === 'codex' ? 'codex' : 'claude'][frame % (agent === 'codex' ? 10 : 6)]
+  return `${ESC}7${CSI}2A\r${glyph} ${shimmer(agent === 'codex' ? 'Work' : 'Thin', frame)}${ESC}8`
+}
+
 /** The status line and the prompt box an agent redraws while it works, at the bottom of its screen. */
 export function statusFrame(agent, frame, seconds, tokens) {
   const glyph = SPINNER[agent === 'codex' ? 'codex' : 'claude'][frame % (agent === 'codex' ? 10 : 6)]
@@ -95,7 +102,7 @@ const CONVERSATION = randomUUID()
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function run({ agent, scale, seed, idle, tick, steady, history, sizeFile }) {
+async function run({ agent, scale, seed, idle, tick, steady, history, statusMs, sizeFile }) {
   const next = random(seed)
   const write = (text) => process.stdout.write(text)
   const columns = () => process.stdout.columns || 80
@@ -123,7 +130,15 @@ async function run({ agent, scale, seed, idle, tick, steady, history, sizeFile }
     let tokens = 0
     let nextBurst = started + 400
     let nextTool = started + 3_000 + next() * 6_000
+    let nextFull = started
     while (Date.now() - started < workMs) {
+      if (statusMs > 0 && Date.now() < nextFull && !resized) {
+        write(statusTick(agent, frame))
+        frame += 1
+        await sleep(statusMs)
+        continue
+      }
+      nextFull = Date.now() + (agent === 'codex' ? 80 : 100) / Math.max(scale, 0.1)
       // The status line: about every 100 ms in Claude Code and 80 ms in Codex at scale 1, more often at a larger scale.
       write(statusFrame(agent, frame, Math.floor((Date.now() - started) / 1000), tokens))
       frame += 1
@@ -151,7 +166,7 @@ async function run({ agent, scale, seed, idle, tick, steady, history, sizeFile }
         }
         nextTool = Date.now() + (4_000 + next() * 10_000) / Math.max(scale, 0.1)
       }
-      await sleep((agent === 'codex' ? 80 : 100) / Math.max(scale, 0.1))
+      if (statusMs === 0) await sleep((agent === 'codex' ? 80 : 100) / Math.max(scale, 0.1))
     }
     // The turn ends: the status line gives way to a quiet prompt, and the app waits.
     write(`\r${CSI}2A${CSI}2K${CSI}32m✓ Done${CSI}39m\r\n${CSI}2K> \r\n`)
@@ -172,6 +187,6 @@ if (isMain) {
   else {
     const named = basename(process.argv[1])
     const agent = option(argv, '--agent', named === 'agent-replay.mjs' ? 'claude' : named)
-    await run({ agent, scale: Number(option(argv, '--scale', '1')), seed: Number(option(argv, '--seed', '1')), idle: argv.includes('--idle'), tick: Number(option(argv, '--tick', '0')), steady: argv.includes('--steady'), history: Number(option(argv, '--history', '0')), sizeFile: option(argv, '--size-file', null) })
+    await run({ agent, scale: Number(option(argv, '--scale', '1')), seed: Number(option(argv, '--seed', '1')), idle: argv.includes('--idle'), tick: Number(option(argv, '--tick', '0')), steady: argv.includes('--steady'), history: Number(option(argv, '--history', '0')), statusMs: Number(option(argv, '--status-ms', '0')), sizeFile: option(argv, '--size-file', null) })
   }
 }
