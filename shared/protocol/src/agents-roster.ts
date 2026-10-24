@@ -337,8 +337,11 @@ export const AUTO_TEST_TRIES = 3
 /** The tests BMN runs by itself: the one running now, and the ones it stopped trying on an installed version. */
 export interface AutoTestsView {
   running: { kind: AutoTestKind; harness: RosterHarness } | null
-  /** Tried AUTO_TEST_TRIES times without a pass or a failure on that version; each waits for the owner's Test again. `at` is when the last try began. */
-  stopped: { kind: AutoTestKind; harness: RosterHarness; version: string; tries: number; at: string }[]
+  /**
+   * Tried AUTO_TEST_TRIES times without a pass or a failure on that version; each waits for the owner's Test again. `at`
+   * is when the last try began; `detail` what the last try that answered said.
+   */
+  stopped: { kind: AutoTestKind; harness: RosterHarness; version: string; tries: number; at: string; detail?: string }[]
 }
 
 /** The apps BMN has a context-limit setting for. */

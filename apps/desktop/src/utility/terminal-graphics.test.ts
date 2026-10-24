@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,6 +18,7 @@ describe('graphics terminal identity', () => {
       const asset = installBundledTerminfo(root, bundled)
       expect(sixelTerminfoReady(asset)).toBe(true)
       const environment = { HOME: join(root, 'home'), TERMINFO_DIRS: '/owner/extra' }
+      mkdirSync(join(root, 'home', '.terminfo'), { recursive: true })
       const graphics = terminalGraphicsEnvironment(null, environment, asset)
       expect(graphics.TERM).toBe(SIXEL_TERM)
       expect(graphics.TERMINFO_DIRS).toContain('/owner/extra')
@@ -32,6 +33,18 @@ describe('graphics terminal identity', () => {
       installBundledTerminfo(root, bundled)
       expect(readFileSync(target).equals(readFileSync(bundled))).toBe(true)
       expect(sixelTerminfoReady(asset)).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('lists no ~/.terminfo that does not exist, which Codex\'s doctor reads as an unreadable terminfo (Story 90.9)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-sixel-terminfo-'))
+    try {
+      const asset = installBundledTerminfo(root, bundled)
+      const graphics = terminalGraphicsEnvironment(null, { HOME: join(root, 'home') }, asset)
+      expect(graphics.TERMINFO_DIRS).toBe(`${asset.directory}::`)
+      expect(spawnSync('infocmp', [STANDARD_TERM], { env: { ...process.env, ...graphics }, encoding: 'utf8' }).status).toBe(0)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -27,8 +27,11 @@ export interface AutoTestEntry {
 
 export interface AutoTestResult { outcome: AutoTestOutcome; version: string | null; detail: string }
 
-/** One test's tries as kept on disk: how many were started, when the last began, what it found, and whether the owner heard. */
-export interface AutoTestTry { count: number; at: string; outcome: AutoTestOutcome | null; told?: boolean }
+/**
+ * One test's tries as kept on disk: how many were started, when the last began, what it found, and whether the owner
+ * heard. `detail` is what the last try that answered said, so a test BMN stopped trying names why (Story 90.9).
+ */
+export interface AutoTestTry { count: number; at: string; outcome: AutoTestOutcome | null; told?: boolean; detail?: string }
 
 export interface AutoTestsSeams {
   /** Every test needed now, in the order to run them; `versions` are ones the caller has just read. */
@@ -143,7 +146,7 @@ export function createAutoTests(seams: AutoTestsSeams): AutoTests {
           }
         }
         const count = (tries?.count ?? 0) + 1
-        keep(id, { count, at: new Date(now()).toISOString(), outcome: null })
+        keep(id, { count, at: new Date(now()).toISOString(), outcome: null, ...(tries?.detail === undefined ? {} : { detail: tries.detail }) })
         active = entry
         let result: AutoTestResult | null
         try {
@@ -155,7 +158,7 @@ export function createAutoTests(seams: AutoTestsSeams): AutoTests {
         const settled = result !== null && (result.outcome === 'pass' || result.outcome === 'fail')
         const stopped = !settled && count >= AUTO_TEST_TRIES
         const told = result?.outcome === 'fail' || stopped
-        keep(id, { ...(seams.read()[id] ?? { count, at: new Date(now()).toISOString() }), outcome: result?.outcome ?? null, ...(told ? { told: true } : {}) })
+        keep(id, { ...(seams.read()[id] ?? { count, at: new Date(now()).toISOString() }), outcome: result?.outcome ?? null, ...(result?.detail ? { detail: result.detail } : {}), ...(told ? { told: true } : {}) })
         if (told) seams.tell(autoTestNotice(entry, result, stopped))
         else if (!settled) armRetry(AUTO_TEST_RETRY_MS)
       }
@@ -187,7 +190,7 @@ export function createAutoTests(seams: AutoTestsSeams): AutoTests {
         if (tries.count < AUTO_TEST_TRIES || tries.outcome === 'pass' || tries.outcome === 'fail' || (needed !== null && !needed.has(id))) continue
         const [kind, harness, version] = id.slice(0, id.indexOf('\n')).split(' ') as [AutoTestKind, RosterHarness, string]
         if (versions[harness] !== version || stopped.some((entry) => entry.kind === kind && entry.harness === harness)) continue
-        stopped.push({ kind, harness, version, tries: tries.count, at: tries.at })
+        stopped.push({ kind, harness, version, tries: tries.count, at: tries.at, ...(tries.detail === undefined ? {} : { detail: tries.detail }) })
       }
       return { running: active === null ? null : { kind: active.kind, harness: active.harness }, stopped }
     }

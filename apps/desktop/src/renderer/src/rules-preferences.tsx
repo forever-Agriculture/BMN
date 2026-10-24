@@ -1028,11 +1028,13 @@ export function contextStateWords(row: Pick<ContextLimitView, 'harness' | 'limit
   const last = row.test !== null && row.test.version === row.version ? row.test : null
   // Codex's test sends one short request to its provider; Claude Code's asks for its own report (Story 75.8 AC2).
   const spent = last !== null && row.harness === 'codex' ? ' · one prompt sent' : ''
+  // A failure says why in the test's own words, such as a setting of the owner's that outranks the agent's limit (Story 90.9).
+  const why = last?.outcome === 'fail' && last.detail !== '' ? `: ${last.detail}` : ''
   if (last?.by === 'bmn') {
-    return `BMN tested ${row.version} by itself ${shortDate(last.at)} · ${last.outcome === 'pass' ? 'it takes the setting' : last.outcome === 'fail' ? 'the test failed' : 'the test showed nothing'}${spent}`
+    return `BMN tested ${row.version} by itself ${shortDate(last.at)} · ${last.outcome === 'pass' ? 'it takes the setting' : last.outcome === 'fail' ? `the test failed${why}` : 'the test showed nothing'}${spent}`
   }
   if (row.limitProven) return `Setting tested on ${row.version}${spent}`
-  return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `BMN tests ${row.version} by itself`}${spent}`
+  return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}${why}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `BMN tests ${row.version} by itself`}${spent}`
 }
 
 /**

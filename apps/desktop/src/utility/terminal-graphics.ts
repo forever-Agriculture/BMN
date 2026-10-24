@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -36,8 +36,10 @@ function terminfoDirectories(
   directory: string,
   environment: Readonly<Record<string, string | undefined>>
 ): string {
-  // Empty components retain the ncurses system defaults; an explicit HOME path preserves that lookup too.
-  return [directory, environment.TERMINFO_DIRS ?? '', join(environment.HOME ?? homedir(), '.terminfo'), ''].join(':')
+  // Empty components retain the ncurses system defaults; an explicit HOME path preserves that lookup too, only when it
+  // exists: Codex's doctor fails its terminal check on a listed path it cannot read (Story 90.9).
+  const home = join(environment.HOME ?? homedir(), '.terminfo')
+  return [directory, environment.TERMINFO_DIRS ?? '', ...(existsSync(home) ? [home] : []), ''].join(':')
 }
 
 /** A missing, altered or unresolvable entry never permits a Sixel TERM claim. */
