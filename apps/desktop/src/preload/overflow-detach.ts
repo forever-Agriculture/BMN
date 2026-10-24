@@ -7,5 +7,3 @@ export async function recoverAfterTransportFailure(
     // The renderer already receives the failure notice; fresh-view recovery is best-effort here.
   }
 }
-
-export const detachAfterTransportOverflow = recoverAfterTransportFailure
