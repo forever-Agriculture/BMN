@@ -21,17 +21,3 @@ export function maskSecrets(text: string): string {
   }
   return `${masked}${text.slice(at)}`
 }
-
-/**
- * `text` cut to at most `max` characters, moved back to the start of any secret the cut would split (Story 34.2).
- * A preview stored whole on the laptop is masked only later on its way to Telegram, and half a key no longer
- * has a key's shape. The prefix itself is never masked.
- */
-export function clipOutsideSecrets(text: string, max: number): string {
-  let cut = Math.min(max, text.length)
-  // Merged stretches never touch, so moving to the start of one cannot land inside an earlier one.
-  for (const [start, end] of secretShapeRanges(text)) {
-    if (start < cut && end > cut) cut = start
-  }
-  return text.slice(0, cut)
-}

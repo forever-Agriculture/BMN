@@ -1,6 +1,6 @@
 // MODULE: secret-mask.test.ts - the secret shapes hidden on text sent to Telegram, and what stays readable (Story 34.2)
 import { describe, expect, it } from 'vitest'
-import { SECRET_MASK, clipOutsideSecrets, maskSecrets } from './secret-mask'
+import { SECRET_MASK, maskSecrets } from './secret-mask'
 
 // Synthetic values in each shape; none is a real credential.
 const PEM = [
@@ -63,30 +63,5 @@ describe('maskSecrets', () => {
     ['an emoji and right-to-left text', 'שלום \u{1F468}‍\u{1F469} مرحبا']
   ])('keeps %s', (_label, text) => {
     expect(maskSecrets(text)).toBe(text)
-  })
-})
-
-describe('clipOutsideSecrets', () => {
-  const AWS = 'AKIAABCDEFGHIJKLMNOP'
-
-  it('cuts where asked when no secret crosses the cut', () => {
-    expect(clipOutsideSecrets(`${'a'.repeat(10)} ${AWS}`, 5)).toBe('aaaaa')
-    expect(clipOutsideSecrets(`${'a'.repeat(10)} ${AWS}`, 200)).toBe(`${'a'.repeat(10)} ${AWS}`)
-  })
-
-  it('moves the cut back to the start of a secret it would split, so no fragment is left to escape masking', () => {
-    const text = `${'a'.repeat(185)} ${AWS} tail`
-    const clipped = clipOutsideSecrets(text, 200)
-    expect(clipped).toBe(`${'a'.repeat(185)} `)
-    expect(clipped).not.toContain('AKIA')
-    // The name of an assignment is not secret; its value is never split.
-    expect(clipOutsideSecrets(`${'b'.repeat(190)} password=hunter2hunter2`, 200)).toBe(`${'b'.repeat(190)} password=`)
-    expect(clipOutsideSecrets(`${'b'.repeat(185)} password=hunter2hunter2`, 200)).toBe(`${'b'.repeat(185)} password=`)
-  })
-
-  it('moves the cut back past overlapping secrets, not only the first (Astra recheck)', () => {
-    const overlapping = `${'x'.repeat(149)} AIza${'_'.repeat(10)}AIza${'B'.repeat(35)}`
-    expect(clipOutsideSecrets(overlapping, 200)).toBe(`${'x'.repeat(149)} `)
-    expect(maskSecrets(overlapping)).toBe(`${'x'.repeat(149)} ${SECRET_MASK}`)
   })
 })
