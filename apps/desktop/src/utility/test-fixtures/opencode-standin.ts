@@ -79,6 +79,8 @@ export async function startStandin(script: StandinStep[]): Promise<Standin> {
   })
   server.on('connect', (request: IncomingMessage, socket) => {
     tunnels.push(request.url ?? '')
+    // A refused CONNECT can be reset by the native client before our response is flushed.
+    socket.on('error', () => undefined)
     socket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))

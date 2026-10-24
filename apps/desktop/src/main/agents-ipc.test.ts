@@ -1098,7 +1098,7 @@ describe('tools on Integrations › Tools and Health (60.12 AC1-AC6)', () => {
     expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.reason, app.path.replace(home, '~'), app.kind])).toEqual([
       ['claude', false, 'Not supported yet', 'no test has run on Claude Code 2.1.295', '~/.claude.json', 'full'],
       ['codex', false, 'Not supported yet', 'no test has run on Codex 0.161.0', '~/.codex/config.toml', 'full'],
-      ['opencode', false, 'Not supported yet', 'OpenCode is not installed, or its version cannot be read', '~/.config/opencode/opencode.jsonc', 'public']
+      ['opencode', false, 'Not supported yet', 'OpenCode is not installed, or its version cannot be read', '~/.config/opencode/opencode.json', 'public']
     ])
 
     // What Codex already holds is proposed as a tool kept to Codex, without the value its entry held.
@@ -1847,8 +1847,11 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
     })
     await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
     judgeTestPort = String((server.address() as AddressInfo).port)
-    mkdirSync(join(home, '.local/share/opencode'), { recursive: true })
-    writeFileSync(join(home, '.local/share/opencode/auth.json'), JSON.stringify({ 'opencode-go': { type: 'api', key: PLANTED_KEY } }))
+    // OpenCode 2 exports its selected sign-ins; no test reads the retired auth.json layout.
+    stub('opencode', 'if [ "$1" = "--version" ]; then echo "2.0.32"; exit 0; fi\n[ "$1 $2 $3" = "auth export --standalone" ] || exit 64\ncat "$HOME/opencode-export.json"')
+    writeFileSync(join(home, 'opencode-export.json'), JSON.stringify([
+      { integrationID: 'opencode-go', active: true, value: { type: 'key', key: PLANTED_KEY } }
+    ]), { mode: 0o600 })
   })
 
   afterEach(async () => {
