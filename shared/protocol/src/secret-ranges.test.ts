@@ -575,15 +575,18 @@ describe('bounded work', () => {
     ]
     for (const path of ['notes.txt', 'a.json', 'a.yaml', 'a.toml', '.env', 'yarn.lock']) {
       for (const text of texts) {
-        let last = performance.now()
+        // Each stretch is timed in this thread's CPU time, the search's own work: on a busy machine the wall clock
+        // also counts the time other processes had the CPU, which no call to the caller shortens (Story 91.6).
+        const work = (): number => { const used = process.threadCpuUsage(); return (used.user + used.system) / 1000 }
+        let last = work()
         let longest = 0
-        const began = last
+        const began = performance.now()
         secretRanges(path, text, { shown: 2_000, check: () => {
-          const now = performance.now()
+          const now = work()
           longest = Math.max(longest, now - last)
           last = now
         } })
-        longest = Math.max(longest, performance.now() - last)
+        longest = Math.max(longest, work() - last)
         // A cancel is heard within 100 ms: no stretch between two calls comes near it, and the whole search is short.
         expect(longest).toBeLessThan(90)
         expect(performance.now() - began).toBeLessThan(1_500)
