@@ -38,6 +38,7 @@ import {
   type AwaySummaryPayload
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AWAY_WAKE_LINE } from './away-wake'
 import { deadlineLine, CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
 import { scrubBackupProducerBindings, COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
@@ -578,7 +579,7 @@ describe('handoffs that deliver themselves (Story 75.5)', () => {
     service = new CompanionService({ ...service['options'], messageSourceRoot: async (folder: string) => folder })
     // Codex's own hook reported from the process that holds s2's terminal: it takes messages (Story 75.4).
     service['hookObservations'].set('s2', {
-      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'PostToolUse', observedAt: now,
+      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'PostToolUse', source: null, observedAt: now,
       foreground: 'synthetic-foreground:s2'
     })
   })
@@ -3255,7 +3256,7 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('withdrawn')
   })
 
-  it('starts a screen mirror only for an agent it can answer by keys, and stops it when the agent ends', async () => {
+  it('starts a screen mirror only for an agent it can answer by keys or wake, and stops it when the agent ends', async () => {
     const started: string[] = []
     const stopped: string[] = []
     const manager = service['options'].manager
@@ -3270,12 +3271,18 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
       (service as unknown as { observeHookEvent(p: unknown): Promise<unknown> }).observeHookEvent({
         sessionId, incarnationId, agent, event, source: null, toolName: null, effects: []
       })
+    await observe('s1', 'incarnation-1', 'terminal', 'osc:9')
+    expect(started).toEqual([])
     await observe('s1', 'incarnation-1', 'claude', 'SessionStart')
     await observe('s2', 'incarnation-2', 'opencode', 'session.created')
     await observe('s2', 'incarnation-old', 'codex', 'SessionStart')
     await observe('s1', 'incarnation-1', 'claude', 'SessionEnd')
-    expect(started).toEqual(['s1'])
+    expect(started).toEqual(['s1', 's2'])
     expect(stopped).toEqual(['s1'])
+    // BMN's OpenCode plugin reports OpenCode quitting as tui.exit (Story 93.3): the mirror stops and no agent holds the foreground.
+    await observe('s2', 'incarnation-2', 'opencode', 'tui.exit')
+    expect(stopped).toEqual(['s1', 's2'])
+    expect(service['hookObservations'].get('s2')).toMatchObject({ agent: 'opencode', event: 'tui.exit', foreground: null })
   })
 
   it('has no owner route, socket method or CLI command that reaches the answer function', () => {
@@ -4502,8 +4509,8 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
   const HOUR = 60 * 60 * 1000
   const T = Date.parse(now)
   const idle = ['• ok', '', '›', '', '  GPT-6.1-Sol low · /work/two', '  ? for shortcuts']
-  const observe = (event: string, at: number): void => {
-    service['hookObservations'].set('s2', { sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event,
+  const observe = (event: string, at: number, agent: 'codex' | 'opencode' = 'codex', source: string | null = null): void => {
+    service['hookObservations'].set('s2', { sessionId: 's2', incarnationId: 'incarnation-2', agent, event, source,
       observedAt: new Date(at).toISOString(), foreground: 'synthetic-foreground:s2' })
   }
   const night = async (whileReading?: () => void): Promise<void> => {
@@ -4513,7 +4520,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
     observe('Stop', T + HOUR)
     await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'codex:turn', kind: 'notice',
       title: 'Codex finished its turn', origin: 'hook:codex:Stop' })
-    screens.set('s2', { settled: async () => { whileReading?.() }, undimmedLines: () => idle } as unknown as ScreenLike)
+    screens.set('s2', { settled: async () => { whileReading?.() }, undimmedLines: () => idle, cursor: () => ({ x: 1, y: 2 }) } as unknown as ScreenLike)
     await service['awayWake'].sweep()
     clock = new Date(T + 2 * HOUR + 1000).toISOString()
     await service['awayWake'].sweep()
@@ -4529,5 +4536,42 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
     expect(writes).toEqual([])
     await service['awayWakeWrites']
     expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain('its agent reported again')
+  })
+  it('types the same one paste and one Enter into an idle OpenCode root, and nothing while a dialog holds the cursor (Story 93.3)', async () => {
+    const composer = ['   Synthetic root', '', '  ┃', '  ┃', '  ┃', '  ┃  Build · Synthetic loopback', `  ╹${'▀'.repeat(40)}`, '  ctrl+p commands']
+    let cursor = { x: 34, y: 3 }
+    clock = new Date(T).toISOString()
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    clock = new Date(T + HOUR).toISOString()
+    observe('session.idle', T + HOUR, 'opencode')
+    await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'opencode:turn', kind: 'notice',
+      title: 'OpenCode finished a turn', origin: 'hook:opencode:session.idle' })
+    screens.set('s2', { settled: async () => undefined, undimmedLines: () => composer, cursor: () => cursor } as unknown as ScreenLike)
+    await service['awayWake'].sweep()
+    clock = new Date(T + 2 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+    expect(writes).toEqual([])
+    cursor = { x: 5, y: 3 }
+    clock = new Date(T + 4 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+    expect(writes.map((write) => [write.sessionId, new TextDecoder().decode(write.bytes)]))
+      .toEqual([['s2', `\x1b[200~${AWAY_WAKE_LINE}\x1b[201~\r`]])
+    await service['awayWakeWrites']
+    expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain('its prompt is not empty and idle')
+  })
+
+  it.each(['subagent', 'interrupted'])('types nothing into an OpenCode root whose latest idle came from %s', async (source) => {
+    clock = new Date(T).toISOString()
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    clock = new Date(T + HOUR).toISOString()
+    observe('session.idle', T + HOUR, 'opencode', source)
+    await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'opencode:turn', kind: 'notice',
+      title: 'OpenCode finished a turn', origin: 'hook:opencode:session.idle' })
+    await service['awayWake'].sweep()
+    clock = new Date(T + 2 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+    expect(writes).toEqual([])
+    await service['awayWakeWrites']
+    expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain(`its latest event is session.idle from ${source}, not its own finished turn`)
   })
 })

@@ -1,0 +1,791 @@
+{
+ "about": "Story 93.1 recordings of pinned OpenCode 2.0.29 and 2.0.32 (fresh profiles, synthetic loopback model, 120x40): the composer capture, replayed by away-wake.test.ts, and the provenance capture's events and hook bodies. The home folder's name is replaced by the same-length \"synthetic\" in every byte. \"idle\" is the expected verdict of the product prompt rule (any agent label).",
+ "versions": {
+  "2.0.29": {
+   "chunks": [
+    280,
+    37,
+    32,
+    176,
+    4095,
+    2402,
+    13,
+    35,
+    3035,
+    157,
+    126,
+    509,
+    340,
+    340,
+    340,
+    31,
+    31,
+    3605,
+    31,
+    305,
+    13,
+    4095,
+    626,
+    532,
+    261,
+    258,
+    259,
+    106,
+    208,
+    106,
+    106,
+    31,
+    3578,
+    477,
+    211,
+    211,
+    109,
+    211,
+    109,
+    109,
+    31,
+    3164,
+    31,
+    31,
+    31,
+    2961,
+    305,
+    86,
+    87,
+    89,
+    92,
+    94,
+    89,
+    105,
+    248,
+    248,
+    87,
+    89,
+    91,
+    91,
+    90,
+    90,
+    428,
+    86,
+    86,
+    89,
+    91,
+    91,
+    91,
+    102,
+    4095,
+    4095,
+    4095,
+    3,
+    191,
+    54,
+    4095,
+    3841,
+    462,
+    377,
+    4095,
+    4095,
+    2,
+    2333,
+    54,
+    4095,
+    4095,
+    208,
+    154,
+    103,
+    700,
+    742,
+    655,
+    505,
+    377,
+    5,
+    32,
+    123,
+    6,
+    32,
+    1456
+   ],
+   "states": [
+    {
+     "name": "root-initial",
+     "bytes": 15920,
+     "idle": true
+    },
+    {
+     "name": "home",
+     "bytes": 22490,
+     "idle": false
+    },
+    {
+     "name": "root-return",
+     "bytes": 27536,
+     "idle": true
+    },
+    {
+     "name": "same-title-child",
+     "bytes": 30793,
+     "idle": false
+    },
+    {
+     "name": "root-after-child",
+     "bytes": 34090,
+     "idle": true
+    },
+    {
+     "name": "typed-draft",
+     "bytes": 34627,
+     "idle": false
+    },
+    {
+     "name": "draft-cleared",
+     "bytes": 34732,
+     "idle": true
+    },
+    {
+     "name": "blank-first-multiline",
+     "bytes": 35766,
+     "idle": false
+    },
+    {
+     "name": "multiline-cleared",
+     "bytes": 36194,
+     "idle": true
+    },
+    {
+     "name": "leading-spaces",
+     "bytes": 36728,
+     "idle": false
+    },
+    {
+     "name": "spaces-cleared",
+     "bytes": 36830,
+     "idle": true
+    },
+    {
+     "name": "command-palette",
+     "bytes": 49363,
+     "idle": false
+    },
+    {
+     "name": "palette-cleared",
+     "bytes": 57761,
+     "idle": true
+    },
+    {
+     "name": "agent-dialog",
+     "bytes": 68717,
+     "idle": false
+    },
+    {
+     "name": "dialog-cleared",
+     "bytes": 77115,
+     "idle": true
+    },
+    {
+     "name": "bracketed-paste",
+     "bytes": 77269,
+     "idle": false
+    },
+    {
+     "name": "paste-cleared",
+     "bytes": 77372,
+     "idle": true
+    },
+    {
+     "name": "agent-cycle",
+     "bytes": 78072,
+     "idle": true
+    },
+    {
+     "name": "agent-restored",
+     "bytes": 79974,
+     "idle": true
+    }
+   ]
+  },
+  "2.0.32": {
+   "chunks": [
+    280,
+    32,
+    5,
+    4095,
+    2402,
+    16,
+    4095,
+    2594,
+    13,
+    35,
+    3035,
+    157,
+    126,
+    509,
+    340,
+    340,
+    31,
+    31,
+    3605,
+    31,
+    305,
+    13,
+    4095,
+    626,
+    533,
+    260,
+    259,
+    258,
+    106,
+    208,
+    106,
+    106,
+    31,
+    3578,
+    477,
+    211,
+    211,
+    109,
+    211,
+    109,
+    109,
+    31,
+    3164,
+    31,
+    31,
+    31,
+    2961,
+    305,
+    86,
+    89,
+    92,
+    96,
+    89,
+    105,
+    248,
+    295,
+    90,
+    92,
+    94,
+    89,
+    428,
+    86,
+    87,
+    90,
+    93,
+    91,
+    102,
+    4095,
+    4095,
+    3842,
+    541,
+    54,
+    4095,
+    4095,
+    208,
+    377,
+    4095,
+    4095,
+    2335,
+    54,
+    4095,
+    4095,
+    208,
+    154,
+    103,
+    700,
+    742,
+    655,
+    505,
+    377,
+    37,
+    123,
+    6,
+    32,
+    1456
+   ],
+   "states": [
+    {
+     "name": "root-initial",
+     "bytes": 22077,
+     "idle": true
+    },
+    {
+     "name": "home",
+     "bytes": 28647,
+     "idle": false
+    },
+    {
+     "name": "root-return",
+     "bytes": 33693,
+     "idle": true
+    },
+    {
+     "name": "same-title-child",
+     "bytes": 36950,
+     "idle": false
+    },
+    {
+     "name": "root-after-child",
+     "bytes": 40247,
+     "idle": true
+    },
+    {
+     "name": "typed-draft",
+     "bytes": 40699,
+     "idle": false
+    },
+    {
+     "name": "draft-cleared",
+     "bytes": 40804,
+     "idle": true
+    },
+    {
+     "name": "blank-first-multiline",
+     "bytes": 41712,
+     "idle": false
+    },
+    {
+     "name": "multiline-cleared",
+     "bytes": 42140,
+     "idle": true
+    },
+    {
+     "name": "leading-spaces",
+     "bytes": 42587,
+     "idle": false
+    },
+    {
+     "name": "spaces-cleared",
+     "bytes": 42689,
+     "idle": true
+    },
+    {
+     "name": "command-palette",
+     "bytes": 55316,
+     "idle": false
+    },
+    {
+     "name": "palette-cleared",
+     "bytes": 63714,
+     "idle": true
+    },
+    {
+     "name": "agent-dialog",
+     "bytes": 74670,
+     "idle": false
+    },
+    {
+     "name": "dialog-cleared",
+     "bytes": 83068,
+     "idle": true
+    },
+    {
+     "name": "bracketed-paste",
+     "bytes": 83222,
+     "idle": false
+    },
+    {
+     "name": "paste-cleared",
+     "bytes": 83325,
+     "idle": true
+    },
+    {
+     "name": "agent-cycle",
+     "bytes": 84025,
+     "idle": true
+    },
+    {
+     "name": "agent-restored",
+     "bytes": 85927,
+     "idle": true
+    }
+   ]
+  }
+ },
+ "provenance": {
+  "2.0.29": {
+   "events": [
+    {
+     "type": "session.created",
+     "data": {
+      "sessionID": "ses_root",
+      "slug": "quiet-cabin",
+      "version": "2.0.29",
+      "projectID": "global",
+      "location": {
+       "directory": "/home/synthetic/code/BMN/.claude/worktrees/epic-93/.dev-auto/evidence/93.1/provenance-2.0.29/work"
+      },
+      "subpath": "",
+      "title": "Synthetic parity root",
+      "agent": "bmn-probe",
+      "model": {
+       "id": "synthetic",
+       "providerID": "fixture"
+      }
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.succeeded",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.succeeded",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.created",
+     "data": {
+      "sessionID": "ses_child",
+      "slug": "jolly-panda",
+      "version": "2.0.29",
+      "projectID": "global",
+      "parentID": "ses_root",
+      "location": {
+       "directory": "/home/synthetic/code/BMN/.claude/worktrees/epic-93/.dev-auto/evidence/93.1/provenance-2.0.29/work"
+      },
+      "subpath": "",
+      "title": "Synthetic child turn"
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_child"
+     }
+    },
+    {
+     "type": "session.execution.succeeded",
+     "data": {
+      "sessionID": "ses_child"
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.interrupted",
+     "data": {
+      "sessionID": "ses_root",
+      "reason": "user"
+     }
+    }
+   ],
+   "hooks": [
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.created",
+      "sessionID": "ses_root",
+      "info": {
+       "id": "ses_root"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_root",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "message.updated",
+      "sessionID": "ses_root",
+      "info": {
+       "sessionID": "ses_root",
+       "role": "assistant",
+       "modelID": "synthetic",
+       "providerID": "fixture"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_root",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_child",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "message.updated",
+      "sessionID": "ses_child",
+      "info": {
+       "sessionID": "ses_child",
+       "role": "assistant",
+       "modelID": "synthetic",
+       "providerID": "fixture"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_child"
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_root",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_root"
+     }
+    }
+   ]
+  },
+  "2.0.32": {
+   "events": [
+    {
+     "type": "session.created",
+     "data": {
+      "sessionID": "ses_root",
+      "slug": "neon-otter",
+      "version": "2.0.32",
+      "projectID": "global",
+      "location": {
+       "directory": "/home/synthetic/code/BMN/.claude/worktrees/epic-93/.dev-auto/evidence/93.1/provenance-2.0.32/work"
+      },
+      "subpath": "",
+      "title": "Synthetic parity root",
+      "agent": "bmn-probe",
+      "model": {
+       "id": "synthetic",
+       "providerID": "fixture"
+      }
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.succeeded",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.succeeded",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.created",
+     "data": {
+      "sessionID": "ses_child",
+      "slug": "nimble-otter",
+      "version": "2.0.32",
+      "projectID": "global",
+      "parentID": "ses_root",
+      "location": {
+       "directory": "/home/synthetic/code/BMN/.claude/worktrees/epic-93/.dev-auto/evidence/93.1/provenance-2.0.32/work"
+      },
+      "subpath": "",
+      "title": "Synthetic child turn"
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_child"
+     }
+    },
+    {
+     "type": "session.execution.succeeded",
+     "data": {
+      "sessionID": "ses_child"
+     }
+    },
+    {
+     "type": "session.execution.started",
+     "data": {
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "type": "session.execution.interrupted",
+     "data": {
+      "sessionID": "ses_root",
+      "reason": "user"
+     }
+    }
+   ],
+   "hooks": [
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.created",
+      "sessionID": "ses_root",
+      "info": {
+       "id": "ses_root"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_root",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "message.updated",
+      "sessionID": "ses_root",
+      "info": {
+       "sessionID": "ses_root",
+       "role": "assistant",
+       "modelID": "synthetic",
+       "providerID": "fixture"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_root",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_root"
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_child",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "message.updated",
+      "sessionID": "ses_child",
+      "info": {
+       "sessionID": "ses_child",
+       "role": "assistant",
+       "modelID": "synthetic",
+       "providerID": "fixture"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_child"
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.status",
+      "sessionID": "ses_root",
+      "status": {
+       "type": "busy"
+      }
+     }
+    },
+    {
+     "pinned": "ses_root",
+     "body": {
+      "hook_event_name": "session.idle",
+      "sessionID": "ses_root"
+     }
+    }
+   ]
+  }
+ }
+}

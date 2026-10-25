@@ -976,15 +976,24 @@ per session before anything is read, so overlapping sweeps type nothing twice. A
 the next one after now; missed times are not made up. Back, or only leaving, types nothing, and a new period starts its
 own times.
 
-A session is woken only when all of these hold: it runs Claude Code or Codex; its latest hook event is a finished turn
-reported after he left, with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
+A session is woken only when all of these hold: it runs Claude Code, Codex or OpenCode; its latest hook event is a
+finished turn reported after he left (for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
+plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim
-placeholder text after the marker, as recorded from real sessions). Any state BMN cannot read skips the session for that
-time. OpenCode sessions are not woken: BMN keeps no screen mirror for them, so their prompt cannot be read.
-Epic 92 measured pinned OpenCode 2.0.32's screens (root, Home, child, typed drafts) but did not qualify every state a wake
-must refuse, such as an open dialog, so the wake waits for its own epic (2026-10-25).
+placeholder text after the marker; OpenCode's composer, one block of exactly one empty content row above its agent and
+model line, with the cursor on that row's first cell, under any agent; as recorded from real sessions, OpenCode's on
+pinned 2.0.29 and 2.0.32 in Epic 93). Any state BMN cannot read skips the session for that time. OpenCode's command
+palette and agent picker leave the empty composer drawn but hold the cursor in their own field, so the cursor refuses
+them; a draft, a paste's `[Pasted ~N lines]`, a second line, Home and a child's view are refused by their screens, a
+permission or question by its open request. Every app gets the same write: the line as one bracketed paste, then Enter.
+
+The guarantee holds when BMN writes, not inside the app (Epic 93, D3; the same for every app): BMN reads the screen,
+then checks everything above and writes in one synchronous step, so what the app draws after that read (a draft it
+restores, a dialog it opens) is not seen. BMN's OpenCode plugin follows the session the terminal shows once a second, so
+for up to a second after a switch at the keyboard the latest event may still be the previous session's. A draft of only
+spaces with the cursor moved back to its start reads as empty.
 
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never

@@ -109,6 +109,12 @@ export class ScreenMirror {
     return rows
   }
 
+  /** The cursor's cell on the visible screen, zero-based: an OpenCode dialog leaves the empty composer drawn but holds the cursor (Story 93.3). */
+  cursor(): { x: number; y: number } {
+    const buffer = this.terminal.buffer.active
+    return { x: buffer.cursorX, y: buffer.cursorY }
+  }
+
   onChange(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

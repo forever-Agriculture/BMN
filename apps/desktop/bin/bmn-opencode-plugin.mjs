@@ -45,6 +45,9 @@ export default {
   id: "bmn",
   setup(context: any) {
     if (!(process.env.BMN_CONTROL_SOCKET || process.env.AITERM_CONTROL_SOCKET)) return
+    // BMN mirrors this terminal's screen once OpenCode runs in it (the Away wake reads its prompt). Saying so before
+    // OpenCode draws starts the mirror with the whole screen, not from a tail its redraws may have outgrown.
+    process.stdout.write("\\x1b]7501;state=starting:app=opencode\\x07")
     // The root session this terminal shows; BMN treats every other session of its family as a subagent's.
     let pinned: string | undefined
     const parents = new Map<string, string>()
@@ -283,8 +286,11 @@ export default {
           return
         case "session.execution.interrupted":
           // Only the owner's own stop ends a turn; a superseded, idle or shut-down run is not a finished turn.
+          // It stays his stop: BMN's Away wake never takes it for a turn that finished by itself.
           if (data.reason !== "user") return
-        // falls through
+          hook("session.idle", { sessionID: id, source: "interrupted" })
+          if (id === pinned) forget()
+          return
         case "session.execution.succeeded":
           hook("session.idle", { sessionID: id })
           if (id === pinned) forget()
@@ -345,10 +351,14 @@ export default {
       }
     }, 1000)
     timer.unref?.()
+    // OpenCode waits for this as it quits: BMN hears the agent left this terminal (its screen mirror stops), after
+    // every event already on its way.
     return () => {
       stopped = true
       clearInterval(timer)
       stop?.()
+      hook("tui.exit", { sessionID: pinned })
+      return queue
     }
   },
 }

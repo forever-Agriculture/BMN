@@ -522,7 +522,10 @@ function hookRequests(agent, event, permissionRef = null) {
       case 'session.error':
         return open('error', 'notice', 'OpenCode reported an error',
           bodyText(typeof event.error === 'string' ? event.error : event.error?.data?.message ?? event.error?.message ?? JSON.stringify(event.error)))
-      case 'session.deleted': return withdraw('permission', 'question', 'turn', 'error', 'subagent-permission', 'subagent-question')
+      // The session was deleted, or OpenCode quit and BMN's plugin left with it (tui.exit, Story 93.3): nothing it asked
+      // can be answered from the phone any more.
+      case 'session.deleted':
+      case 'tui.exit': return withdraw('permission', 'question', 'turn', 'error', 'subagent-permission', 'subagent-question')
       case 'session.created':
       case 'tui.session.select': {
         const observation = conversationObservation(agent, {

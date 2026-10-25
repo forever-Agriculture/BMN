@@ -3912,16 +3912,17 @@ function fakeOpenCodeTerminal() {
   return { terminal, context, emit, listeners }
 }
 
-/** The printed OpenCode plugin, run in a fresh context with this process environment and spawn. */
-async function loadOpenCodePlugin(env: Record<string, string | undefined>, spawn: unknown) {
+/** The printed OpenCode plugin, run in a fresh context with this process environment and spawn; what it writes to its terminal goes to `written`. */
+async function loadOpenCodePlugin(env: Record<string, string | undefined>, spawn: unknown, written: string[] = []) {
   const printed = await runHooks(['print', 'opencode'])
   expect(printed, printed.stderr).toMatchObject({ code: 0 })
   const imports = 'import { spawn } from "node:child_process"'
   expect(printed.stdout).toContain(imports)
   const javascript = stripTypeScriptTypes(printed.stdout).replace(imports, '').replace('export default', 'const plugin =')
-  return runInNewContext(`${javascript}; plugin`, { process: { env }, spawn, setInterval, clearInterval, setTimeout }) as {
+  const stdout = { write: (text: string) => { written.push(text); return true } }
+  return runInNewContext(`${javascript}; plugin`, { process: { env, stdout }, spawn, setInterval, clearInterval, setTimeout }) as {
     id: string
-    setup: (context: unknown) => (() => void) | undefined
+    setup: (context: unknown) => (() => unknown) | undefined
   }
 }
 
@@ -3932,13 +3933,17 @@ describe('OpenCode hooks', () => {
     const OLDER = 'ses_0123456789abSyntheticOldr'
     const { spawn, calls } = fakePluginSpawn((call) => call.args.includes('take') ? new Promise(() => undefined) : { code: 0 })
     const outside = fakeOpenCodeTerminal()
-    const plugin = await loadOpenCodePlugin({}, spawn)
+    const written: string[] = []
+    const plugin = await loadOpenCodePlugin({}, spawn, written)
     expect(plugin.id).toBe('bmn')
     expect(plugin.setup(outside.context)).toBeUndefined()
     expect(outside.listeners).toHaveLength(0)
+    expect(written).toEqual([])
 
     const { terminal, context, emit, listeners } = fakeOpenCodeTerminal()
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
+    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn, written)).setup(context)
+    // Before OpenCode draws, the plugin tells BMN's terminal that OpenCode runs in it, so its screen mirror starts (Story 93.3).
+    expect(written).toEqual(['\x1b]7501;state=starting:app=opencode\x07'])
     const hooks = () => calls.filter((call) => call.args.includes('hook'))
       .map((call) => ({ ...JSON.parse(call.input ?? 'null'), pin: call.env.BMN_OPENCODE_SESSION_ID }))
     // On the home screen nothing is this terminal's yet.
@@ -3994,7 +3999,7 @@ describe('OpenCode hooks', () => {
       { hook_event_name: 'question.replied', sessionID: OPENCODE_SESSION, requestID: 'frm_1', answers: [['Alpha'], ['Why', 'typed']], ...pinned },
       { hook_event_name: 'message.updated', sessionID: OPENCODE_SESSION, info: { sessionID: OPENCODE_SESSION, role: 'assistant', modelID: 'made-up-model', providerID: 'made-up' }, ...pinned },
       { hook_event_name: 'session.error', sessionID: OPENCODE_SESSION, error: { type: 'provider', message: 'Provider unavailable' }, ...pinned },
-      { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION, ...pinned },
+      { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION, source: 'interrupted', ...pinned },
       { hook_event_name: 'session.idle', sessionID: CHILD, ...pinned },
       { hook_event_name: 'session.compacted', sessionID: CHILD, ...pinned },
       { hook_event_name: 'tui.session.select', sessionID: OLDER, pin: OLDER },
@@ -4004,8 +4009,43 @@ describe('OpenCode hooks', () => {
     ])
     const first = calls.find((call) => call.args.includes('hook'))
     expect([first?.command, ...first?.args ?? []]).toEqual(['timeout', '-s', 'KILL', '3s', 'bmn', 'hook', 'opencode'])
-    stop?.()
+    // OpenCode waits for the plugin as it quits: BMN hears the agent left, after every event already on its way.
+    await stop?.()
     expect(listeners).toHaveLength(0)
+    expect(hooks().slice(16)).toEqual([{ hook_event_name: 'tui.exit', sessionID: OPENCODE_SESSION, ...pinned }])
+  })
+
+  it.each(['2.0.29', '2.0.32'])('replays the events recorded on OpenCode %s into BMN: the owner\'s interrupt stays his, a child\'s events are the subagent\'s (Story 93.3)', async (version) => {
+    // Story 93.1's provenance capture: a root turn, a pasted one, a child run while the root stays on screen, the owner's interrupt.
+    const recorded = (JSON.parse(readFileSync(join(dirname(CLI), '..', 'src', 'utility', 'test-fixtures', 'away-wake', 'opencode-states.json'), 'utf8')) as {
+      provenance: Record<string, { events: Array<{ type: string; data: Record<string, unknown> }>; hooks: Array<{ pinned: string; body: Record<string, unknown> }> }>
+    }).provenance[version]!
+    const { spawn, calls } = fakePluginSpawn((call) => call.args.includes('take') ? new Promise(() => undefined) : { code: 0 })
+    const { terminal, context, emit } = fakeOpenCodeTerminal()
+    terminal.sessions.set('ses_child', { parentID: 'ses_root' })
+    terminal.route = { type: 'session', sessionID: 'ses_root' }
+    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
+    for (const event of recorded.events) emit(event.type, event.data)
+    await stop?.()
+    const told = calls.filter((call) => call.args.includes('hook')).map((call) => ({ pin: call.env.BMN_OPENCODE_SESSION_ID!, body: JSON.parse(call.input ?? 'null') as Record<string, unknown> }))
+    // What the recorded plugin told BMN, but for the interrupt it now marks and the quit it now reports (93.1 recorded model
+    // steps as message.updated; these events leave them out).
+    const expected = recorded.hooks.filter((hook) => hook.body.hook_event_name !== 'message.updated').map((hook) => ({ pin: hook.pinned, body: hook.body }))
+    expect(expected.at(-1)).toEqual({ pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root' } })
+    expected[expected.length - 1] = { pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root', source: 'interrupted' } }
+    expect(told).toEqual([...expected, { pin: 'ses_root', body: { hook_event_name: 'tui.exit', sessionID: 'ses_root' } }])
+
+    // Each body through bmn hook opencode, as the plugin runs it: what the service is told each event speaks for.
+    const fixture = await cliFixture()
+    for (const { pin, body } of told) {
+      expect((await runHook(fixture, 'opencode', body, OPENCODE_FOREGROUND, { BMN_OPENCODE_SESSION_ID: pin })).code).toBe(0)
+    }
+    const observed = fixture.handlers.observeHookEvent.mock.calls.map(([params]) => params as { event: string; source: string | null })
+    expect(observed.map(({ event, source }) => [event, source])).toEqual([
+      ['session.created', null], ['session.status', null], ['session.idle', null], ['session.status', null], ['session.idle', null],
+      ['session.status', 'subagent'], ['session.idle', 'subagent'], ['session.status', null], ['session.idle', 'interrupted'], ['tui.exit', null]])
+    // A child's finished run opens no finished-turn notice of the root; the root's own turns and the owner's stop do.
+    expect(fixture.handlers.openAttention.mock.calls.filter(([params]) => (params as { requestKey: string }).requestKey === 'opencode:turn')).toHaveLength(3)
   })
 
   it('tells BMN each finished tool call of its session and subagents, with the name and input OpenCode gave earlier (Story 92.2)', async () => {
@@ -4166,6 +4206,7 @@ describe('OpenCode hooks', () => {
     ['session.idle', {}, 'openAttention', { requestKey: 'opencode:turn', title: 'OpenCode finished a turn', kind: 'notice' }],
     ['session.error', { error: { data: { message: 'Provider unavailable' } } }, 'openAttention', { requestKey: 'opencode:error', body: 'Provider unavailable' }],
     ['session.deleted', {}, 'withdrawAttention', { requestKey: 'opencode:error' }],
+    ['tui.exit', {}, 'withdrawAttention', { requestKey: 'opencode:turn' }],
     ['question.asked', { questions: [{ question: 'Which one?', options: [{ label: 'First' }, { label: 'Second' }] }] }, 'openAttention', { requestKey: 'opencode:question', kind: 'question', body: '1. Which one?\n   First | Second' }],
     ['question.replied', {}, 'resolveAttention', { requestKey: 'opencode:question' }],
     ['question.rejected', {}, 'withdrawAttention', { requestKey: 'opencode:question' }]
