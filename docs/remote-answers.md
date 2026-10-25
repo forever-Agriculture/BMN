@@ -263,7 +263,8 @@ shapes above:
 - `session.execution.started` becomes `session.status` busy. `session.execution.succeeded` becomes
   `session.idle`; `session.execution.interrupted` with `reason: "user"` becomes `session.idle` with
   `source: "interrupted"`, which still opens the finished-turn notice but stays the owner's stop: the
-  Away wake never takes it for a turn that finished by itself (Story 93.3). A run interrupted as
+  Away wake never takes it for a turn that finished by itself (Story 93.3; the interrupt's reason and
+  the child's events were recorded on 2.0.29 and 2.0.32). A run interrupted as
   `superseded`, `inactivity` or `shutdown` is not a finished turn and is not sent.
   `session.execution.failed { error: { type, message } }` becomes `session.error`.
 - `session.step.started { model: { id, providerID } }` becomes `message.updated` with `info.modelID`, once
@@ -271,9 +272,11 @@ shapes above:
   `session.compacted`) becomes `session.compacted`. `session.deleted` keeps its name.
 - Every event of a subagent's session (any of the family other than the root the plugin pinned) is
   observed with `source: "subagent"`: its compaction is logged as the subagent's, its run starting does
-  not reset the repeat watch, and its run finishing is never the root's turn (Story 93.3).
+  not reset the repeat watch, and its run finishing is never the root's turn (Story 93.3, recorded on
+  2.0.29 and 2.0.32: a child's run reaches the plugin while the terminal shows its root).
 - As it loads, before OpenCode draws, the plugin writes `OSC 7501;state=starting:app=opencode` to its
-  terminal, which starts BMN's screen mirror. When OpenCode quits it waits for the plugin, which tells
+  terminal, which starts BMN's screen mirror (Story 93.3; 93.1 checked that mirror cell for cell against
+  the real terminal on 2.0.29 and 2.0.32). When OpenCode quits it waits for the plugin, which tells
   BMN `tui.exit` for the pinned session after every event already on its way. BMN treats it as Claude's
   or Codex's `SessionEnd`: it withdraws that session's requests as for `session.deleted`, the mirror
   stops and the session's agent flag clears.

@@ -3279,10 +3279,13 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     await observe('s1', 'incarnation-1', 'claude', 'SessionEnd')
     expect(started).toEqual(['s1', 's2'])
     expect(stopped).toEqual(['s1'])
+    expect(service['hookOrigins'].get('s2')).toMatchObject({ agent: 'opencode' })
     // BMN's OpenCode plugin reports OpenCode quitting as tui.exit (Story 93.3): the mirror stops and no agent holds the foreground.
     await observe('s2', 'incarnation-2', 'opencode', 'tui.exit')
     expect(stopped).toEqual(['s1', 's2'])
     expect(service['hookObservations'].get('s2')).toMatchObject({ agent: 'opencode', event: 'tui.exit', foreground: null })
+    // Like SessionEnd, it leaves a plain shell behind: the session's agent flag clears.
+    expect(service['hookOrigins'].has('s2')).toBe(false)
   })
 
   it('has no owner route, socket method or CLI command that reaches the answer function', () => {
