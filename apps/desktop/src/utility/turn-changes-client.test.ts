@@ -157,7 +157,8 @@ describe('the turn changes worker thread', () => {
       for (const wait of [0, Math.min(20, Math.floor(took / 5))]) {
         const controller = new AbortController()
         const answer = client.difference({ ...pair, path }, controller.signal)
-        await sleep(wait)
+        // At once is in the same turn: waiting for a timer let a busy machine's worker finish first (Story 91.6).
+        if (wait > 0) await sleep(wait)
         const stoppedAt = performance.now()
         controller.abort()
         expect(await answer, `${path} after ${wait} ms`).toEqual({ state: 'cancelled', reason: 'cancelled' })
