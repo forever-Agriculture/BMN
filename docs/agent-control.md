@@ -1327,10 +1327,12 @@ edit.
   its own link, copy and record of that name, leaves an entry you made, and the skills install then removes the old
   name from the other apps as a skill that left.
 
-`report-artifact` is the page for finished work (dev-auto ends every completed epic with one): the agent fills its
-`template.html` in the owner's sections (why we built it, what changes, then whatever else matters, the honest opinion
-last), checks it with `check.py` (PASS/FAIL per rule) and publishes it privately, Claude Code as an Artifact and any
-other app with `bmn publish`, a new key per revision. `bmn skills own
+`report-artifact` is the page for finished work (dev-auto ends every completed epic with one), written for a reader
+who knows nothing about it: the agent fills its `template.html` (a header with one status line, In short, What changed
+as one Problem | Fix | What happens now table with a proof line per row and full-size screenshots, Still open, Next
+steps with the choices the owner can reverse, then two opinions: the lead's and the independent reviewer's), checks it
+with `check.py` (PASS/FAIL per rule, at most 900 words) and publishes it privately, Claude Code as an Artifact and any
+other app with `bmn publish`, a new key per revision, then opens it in the owner's default browser. `bmn skills own
 --plan --json` says what it would do without writing; `bmn skills check --json` lists the same rows under `own`.
 
 ### Tools (MCP)
