@@ -153,13 +153,15 @@ def check(source):
     table = tables[0] if tables else None
     in_changes = table is not None and table.within(lambda p: p.attrs.get("data-part") == "changes") is not None
     rule("the table sits in What changed (changes)", in_changes)
+    rule("the table keeps class=\"changes\" (its phone layout)", table is not None and "changes" in table.classes())
     heads = [h.all_text().strip().lower() for h in table.find(lambda n: n.tag == "th")] if table else []
     rule("the table is headed Problem | Fix | What happens now", heads == COLUMNS, " | ".join(heads))
     rows = [r for r in table.find(lambda n: n.tag == "tr") if not r.within(lambda p: p.tag == "thead")] if table else []
     rule(f"the table has 1-{MAX_ROWS} rows", 1 <= len(rows) <= MAX_ROWS, f"{len(rows)} rows")
     cells = [[c for c in r.children if c.tag in ("td", "th")] for r in rows]
     rule("every row has three filled cells", rows and all(len(c) == 3 and all(x.all_text().strip() for x in c) for c in cells))
-    rule("every cell carries its data-label", rows and all(x.attrs.get("data-label", "").strip() for c in cells for x in c))
+    rule("every cell carries its column's data-label", rows and all(
+        [x.attrs.get("data-label", "").strip().lower() for x in c] == COLUMNS for c in cells))
     proofless = [i + 1 for i, c in enumerate(cells) if len(c) < 3 or not (
         (p := c[2].find(has_class("proof"))) and p[-1].all_text().strip())]
     rule("every row ends with a proof line (.proof)", rows and not proofless, "rows " + ", ".join(map(str, proofless)) if proofless else "")
@@ -181,7 +183,8 @@ def check(source):
     viewless = []
     for i in shots:
         link = i.within(lambda p: p.tag == "a")
-        target = (link.attrs.get("href", "") if link else "").removeprefix("#")
+        href = link.attrs.get("href", "") if link else ""
+        target = href[1:] if href.startswith("#") else ""
         view = views.get(target) if target else None
         home = i.within(lambda p: p.tag == "section")
         close = f"#{home.attrs.get('id')}" if home is not None and home.attrs.get("id") else None
@@ -230,8 +233,9 @@ def check(source):
     text = root.all_text(skip=lambda n: n.tag == "title" or "shot" in n.classes())
     count = words(text)
     rule(f"at most {MAX_WORDS} words of report text", count <= MAX_WORDS, f"{count} words")
-    footer_text = footers[0].all_text() if footers else ""
-    rule("no run ids outside the footer", not RUN_ID.search(text.replace(footer_text, "")))
+    # Hygiene reads every readable word, the full-size views included
+    readable = root.all_text(skip=lambda n: n.tag == "footer")
+    rule("no run ids outside the footer", not RUN_ID.search(readable))
     raw = html.unescape(DATA_URI.sub("data:", source))
     rule("no credential-shaped strings", not SECRET.search(raw))
     rule("no home-folder or session paths", not HOME_PATH.search(raw), (HOME_PATH.search(raw) or [""])[0])

@@ -63,6 +63,8 @@ describe('the report-artifact skill check', () => {
     fails(page.replace('<td data-label="Fix">The client\'s own company is removed from target lists.</td>', '<td data-label="Fix"> </td>'), 'every row has three filled cells')
     fails(page.replace('<p class="proof"><span class="ok">✓ backend tests</span></p>', ''), 'every row ends with a proof line (.proof)')
     fails(page.replace('<p class="checks">', '<p>'), 'exactly one checks line (.checks) in What changed')
+    fails(page.replace('<table class="changes">', '<table>'), 'the table keeps class="changes"')
+    fails(page.replace('<td data-label="Fix">One shared price table', '<td data-label="Change">One shared price table'), "every cell carries its column's data-label")
   })
 
   it('counts the report text once and fails 901 words while 900 pass with the screenshot present', () => {
@@ -108,6 +110,7 @@ describe('the report-artifact skill check', () => {
     fails(page.replace(/<div class="shot" id="shot-1">[\s\S]*?<\/div>/u, ''), 'every screenshot opens its full-size view')
     fails(page.replace('<a href="#what-changed">Close</a>', '<a href="#top">Close</a>'), 'every screenshot opens its full-size view')
     fails(page.replace('<a href="#shot-1">', '<a href="#shot-2">'), 'every screenshot opens its full-size view')
+    fails(page.replace('<a href="#shot-1">', '<a href="shot-1">'), 'every screenshot opens its full-size view')
     fails(page.replace(`src="${PIXEL}" width="1440" height="1636" alt="The Report evidence admin page:`, 'src="evidence.png" width="1440" height="1636" alt="The Report evidence admin page:'), 'every screenshot is embedded as data')
   })
 
@@ -121,6 +124,7 @@ describe('the report-artifact skill check', () => {
     fails(page.replace('<h2>Still open</h2>', '<h2>Still open</h2><p>/home/someone/x</p>'), 'no home-folder or session paths')
     fails(page.replace('<h3>Also fixed</h3>', '<h3>Person\'s name</h3>'), 'no template placeholders left')
     fails(page.replace('<h2>Still open</h2>', '<h2>Still open</h2><p>run 20261025T142226-84d73b70</p>'), 'no run ids outside the footer')
+    fails(page.replace('Scroll to see all of it.', 'Run 20261025T142226-84d73b70.'), 'no run ids outside the footer')
     expect(check(page.replace('</footer>', '<p>run 20261025T142226-84d73b70</p></footer>'))).toMatchObject({ code: 0 })
     const quiet = page.replace(/(<h2>Still open<\/h2>)\s*<ul>[\s\S]*?<\/ul>/u, '$1<p>None known.</p>')
       .replace(/(<h2>Next steps<\/h2>)[\s\S]*?(<\/section>)/u, '$1<p>Nothing.</p>$2')
