@@ -18,15 +18,6 @@ function filled(): string {
   return head + body.replaceAll('SCREENSHOT_DATA', PIXEL)
 }
 
-/** `page` with the text from `from` up to (not including) `to` replaced. */
-function splice(page: string, from: string, to: string, by: string): string {
-  const start = page.indexOf(from)
-  const end = page.indexOf(to, start)
-  expect(start).toBeGreaterThan(-1)
-  expect(end).toBeGreaterThan(start)
-  return page.slice(0, start) + by + page.slice(end)
-}
-
 const ROW = /<tr>\s*<td data-label="Problem">[\s\S]*?<\/tr>/u
 const OPINION = /<div class="opinion">[\s\S]*?<\/div>\s*(?=<div class="opinion">|<\/div>)/u
 
