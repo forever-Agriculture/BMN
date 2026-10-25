@@ -1,0 +1,121 @@
+<!-- MODULE: epic-101-body.html - the approved Epic 101 sample report (design revision 2) as the body of a filled report-artifact template; SCREENSHOT_DATA stands for the embedded image -->
+<div class="band">
+  <header class="band-in">
+    <p class="eyebrow">B2Buster · Epic 101 · 24 October 2026</p>
+    <h1>Reports with today's date and one price</h1>
+    <p class="status"><span class="ok">✓ Done</span> · checked on a local copy · <span class="open">○ not yet in production</span> · 2 steps wait on Artem</p>
+  </header>
+</div>
+
+<div class="page">
+<main>
+  <section data-part="in-short">
+    <h2>In short</h2>
+    <p>B2Buster writes AI research reports for business clients: which companies to sell to, at what price, and on what sources. On 22 October Oleksandr found reports that read as if written on an old date, quoted stale sources, gave one offer two different prices, and once listed B2Buster as its own target client.</p>
+    <p>This work fixes those mistakes, adds a last check that catches sections contradicting each other, and adds an admin page that shows what each report was built from.</p>
+  </section>
+
+  <section data-part="changes" id="what-changed">
+    <h2>What changed</h2>
+    <table class="changes">
+      <thead>
+        <tr><th scope="col">Problem</th><th scope="col">Fix</th><th scope="col">What happens now</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td data-label="Problem"><strong>Stale dates.</strong> The AI had no idea of today's date, so reports could read as written in the past.</td>
+          <td data-label="Fix">Every AI call gets one sentence with the date: day only, fixed for the whole run.</td>
+          <td data-label="What happens now"><p>Every call says today's date; a recovered report keeps the date it was created. <code>B2B_PROMPT_DATE_ENABLED</code> turns this off.</p><p class="proof"><span class="ok">✓ backend tests, including a recovered report</span></p></td>
+        </tr>
+        <tr>
+          <td data-label="Problem"><strong>Old sources ranked like new ones.</strong></td>
+          <td data-label="Fix">Library results with a known date sort newest first inside their trust group. Nothing is removed and scores don't change.</td>
+          <td data-label="What happens now"><p>Sources show their real publish day. Fresh items come first; undated items keep their place.</p><p class="proof"><span class="ok">✓ backend tests</span></p></td>
+        </tr>
+        <tr>
+          <td data-label="Problem"><strong>One offer, two prices</strong> in different sections.</td>
+          <td data-label="Fix">One shared price table that every section uses; the checker now also reads prices inside table cells.</td>
+          <td data-label="What happens now"><p>A price that disagrees across sections is labelled where it appears and listed under "Pricing scenarios".</p><p class="proof">saved and synthetic reports only · <span class="open">○ not yet on a new real report</span></p></td>
+        </tr>
+        <tr>
+          <td data-label="Problem"><strong>B2Buster listed as its own target account</strong> (seen in a real report).</td>
+          <td data-label="Fix">The client's own company is removed from target lists.</td>
+          <td data-label="What happens now"><p>The client no longer appears as its own target in the saved report that showed it.</p><p class="proof">saved report · <span class="open">○ not yet on a new real report</span></p></td>
+        </tr>
+        <tr>
+          <td data-label="Problem"><strong>No final cross-check.</strong></td>
+          <td data-label="Fix">One review pass after delivery looks for sections that contradict each other.</td>
+          <td data-label="What happens now"><p>Capped at $0.40 per report; <code>B2B_FINAL_REVIEW=off</code> turns it off. Minis are not reviewed.</p><p class="proof"><span class="ok">✓ caught 8 of 11 planted defects, 0 of 6 false alarms</span> ($0.57 test)</p></td>
+        </tr>
+        <tr>
+          <td data-label="Problem"><strong>No way to see what a report used.</strong></td>
+          <td data-label="Fix">A new admin page: Admin → user → report → Report evidence.</td>
+          <td data-label="What happens now"><p>It shows counts only: searches, items admitted, items cited, and the split between library, web and client.</p><p class="proof"><span class="ok">✓ end-to-end run on the database emulator</span></p></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <figure>
+      <a href="#shot-1"><img src="SCREENSHOT_DATA" width="1440" height="1636" alt="The Report evidence admin page: a report's evidence counts, where each item came from, the searches it used, and the cited items by section"></a>
+      <figcaption>The Report evidence page on a local test bed with synthetic data (23 October build). Click or tap to see it at full size; Close brings you back here.</figcaption>
+    </figure>
+    <div class="shot" id="shot-1">
+      <p class="shot-bar"><span>Report evidence page, full size (1440 × 1636). Scroll to see all of it.</span><a href="#what-changed">Close</a></p>
+      <img src="SCREENSHOT_DATA" width="1440" height="1636" alt="The Report evidence admin page at full size">
+    </div>
+
+    <h3>Also fixed</h3>
+    <ul>
+      <li>A client price counts as the client's own only when offer, region, unit and period all match their answers.</li>
+      <li>Where we can't tell what came from the client, the report says "not measured" instead of guessing.</li>
+      <li>A stale background worker can no longer overwrite a delivered section unnoticed: the admin page shows "changed".</li>
+    </ul>
+    <p class="checks">Whole suite: 28,084 of 28,085 backend tests, 1,038 of 1,039 database tests and 6,769 frontend tests pass (both misses also fail without this work) · two independent reviews, 15 findings, all closed · CI 5 of 5 green.</p>
+  </section>
+
+  <section data-part="still-open">
+    <h2>Still open</h2>
+    <ul>
+      <li><span class="open">○ Not run in production yet.</span> The price and target fixes are proven only on saved and synthetic reports.</li>
+      <li>Minis get no final review, and their client attribution always reads "not measured".</li>
+    </ul>
+  </section>
+
+  <section data-part="next">
+    <h2>Next steps</h2>
+    <h3>Artem</h3>
+    <ol>
+      <li>Review and merge PR #144 (no settings or Terraform changes).</li>
+      <li>After the first full report, find <code>final_review_done</code> in the logs and open its Report evidence page.</li>
+    </ol>
+    <h3>Oleksandr and Anton</h3>
+    <p>Open one new full report after deploy and check that the prices agree.</p>
+    <h3>Choices you can reverse (Oleksandr)</h3>
+    <ul>
+      <li>The final review is capped at $0.40 a report; <code>B2B_FINAL_REVIEW_CEILING_USD</code> changes it.</li>
+      <li>Minis skip the final review to keep their cost down.</li>
+    </ul>
+  </section>
+
+  <section data-part="opinions">
+    <h2>Two opinions</h2>
+    <div class="opinions">
+      <div class="opinion">
+        <p class="who">Opus 5.5 · led the work</p>
+        <p class="verdict"><strong>Worth shipping.</strong></p>
+        <p>It fixes the mistakes that made our reports look careless and shows what they rest on. Dates and sources are low risk; judge the price and target fixes on the first real report. The stale-worker protection is subtle: if the admin page shows "changed" on a report nobody touched, look there first.</p>
+      </div>
+      <div class="opinion">
+        <p class="who">Astra · independent review</p>
+        <p class="verdict"><strong>Ship, then watch prices.</strong></p>
+        <span class="marker">[SAMPLE WORDING for the design, not Astra's words]</span>
+        <p>The fixes are narrow and each closed finding has a test that failed before it. The strict price matching will miss some real client prices; that is the safe direction. The concurrency fix is the part to watch.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Written by Claude Code (Opus 5.5) as Epic 101 lead · <a href="https://github.com/example/b2buster/pull/144">PR #144</a> · evidence under <code>.dev-auto/evidence/101/</code></p>
+  </footer>
+</main>
+</div>

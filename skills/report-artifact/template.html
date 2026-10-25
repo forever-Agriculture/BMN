@@ -1,244 +1,251 @@
-<!-- MODULE: template.html - the report artifact: header with hero and tiles, why, what changes, safety, money, checks, limits, decided, next, opinion, footer; Denys-style cards and colours -->
+<!-- MODULE: template.html - the report page: a header band (eyebrow, title, status line), In short, What changed (Problem | Fix | What happens now table, screenshots with a script-free full-size view, Also fixed, one checks line), Still open, Next steps, Two opinions, footer -->
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
 <title>Two To Four Words</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* Denys's report look: dark GitHub-like ground, bordered rounded cards, colour by meaning (red problem, orange attention, yellow partial, green good, blue info, violet label). One dark theme by choice. */
+/* Layout: one centred axis. A full-width header band, then a 1040px column; prose (66ch) is centred inside it on purpose,
+   the table, the screenshot and the two opinion plates take the full column. Colour carries three meanings only
+   (done, open, failed), always with a shape and a word; setting names are mono and blue. */
 :root {
-  --bg: #0f1115; --card: #171a21; --card-2: #1d212b; --line: #262b36; --ink: #e7e9ee; --muted: #9aa3b2; --h3: #cfd5e1;
-  --red: #ef5d5d; --ora: #f0a43a; --yel: #e8d44d; --grn: #4cc38a; --blu: #5b9cff; --vio: #a67cff;
-  --red-bg: #3a1c1f; --ora-bg: #3a2a14; --yel-bg: #37331a; --grn-bg: #15342a; --blu-bg: #16263f; --vio-bg: #2a1f44;
-  --ora-tint: #1e1a12; --red-tint: #1f1314; --grn-tint: #11201a; --grey-tint: #161920;
-  --code-bg: #202532; --code-ink: #c9d3e6; --track: #222733;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
-  --mono: ui-monospace, Menlo, Consolas, monospace;
+  --bg: #f8f8f7;
+  --ink: #1c1e21;
+  --muted: #5b6370;
+  --rule: #d5d8dc;
+  --rule-strong: #343a42;
+  --fill: #e6e9ec;
+  --tint: #f0f2f4;
+  --plate: #eceef1;
+  --band: #1f2933;
+  --band-ink: #f3f5f7;
+  --band-muted: #aab4bf;
+  --band-ok: #6fd39a;
+  --band-open: #e8b35c;
+  --ok: #1a7a45;
+  --open: #9a5b00;
+  --bad: #b3261e;
+  --code-ink: #1d5ea6;
+  --code-bg: #e4e9ef;
+  --link: #1d5ea6;
+  --sans: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #16181c; --ink: #e5e7ea; --muted: #9aa2ad; --rule: #2f343a; --rule-strong: #8b939d;
+    --fill: #272c33; --tint: #1c2025; --plate: #20252b; --band: #0f1114; --band-ink: #f3f5f7; --band-muted: #9aa2ad;
+    --band-ok: #5fcf8c; --band-open: #e3a84c; --ok: #5fcf8c; --open: #e3a84c; --bad: #f08079;
+    --code-ink: #82b6f0; --code-bg: #262b32; --link: #82b6f0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #16181c; --ink: #e5e7ea; --muted: #9aa2ad; --rule: #2f343a; --rule-strong: #8b939d;
+  --fill: #272c33; --tint: #1c2025; --plate: #20252b; --band: #0f1114; --band-ink: #f3f5f7; --band-muted: #9aa2ad;
+  --band-ok: #5fcf8c; --band-open: #e3a84c; --ok: #5fcf8c; --open: #e3a84c; --bad: #f08079;
+  --code-ink: #82b6f0; --code-bg: #262b32; --link: #82b6f0;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body {
-  margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font);
-  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-  padding-block: 32px 72px; overflow-wrap: break-word; -webkit-font-smoothing: antialiased;
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 17px/1.6 var(--sans); -webkit-font-smoothing: antialiased; overflow-wrap: break-word;
 }
-main { max-width: 1120px; margin: 0 auto; min-width: 0; }
-h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; }
-h2 { font-size: 22px; margin: 44px 0 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-h3 { font-size: 16px; margin: 18px 0 8px; color: var(--h3); }
-p { margin: 6px 0; }
-ul, ol { margin: 6px 0; padding-left: 20px; } li { margin: 3px 0; }
-a { color: var(--blu); text-decoration: none; }
-a:hover { text-decoration: underline; }
-a:focus-visible { outline: 2px solid var(--blu); outline-offset: 2px; }
-code { font: 12px var(--mono); background: var(--code-bg); color: var(--code-ink); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
-.mut { color: var(--muted); } .small { font-size: 13px; }
-.eyebrow { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
-/* pills and status chips, coloured by meaning */
-.pill, .chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--card-2); color: var(--muted); }
-.r { background: var(--red-bg); color: var(--red); } .o { background: var(--ora-bg); color: var(--ora); } .y { background: var(--yel-bg); color: var(--yel); }
-.g { background: var(--grn-bg); color: var(--grn); } .b { background: var(--blu-bg); color: var(--blu); } .v { background: var(--vio-bg); color: var(--vio); }
-/* big figures take the colour of their meaning */
-.t-red { color: var(--red); } .t-ora { color: var(--ora); } .t-yel { color: var(--yel); } .t-grn { color: var(--grn); } .t-blu { color: var(--blu); }
-/* cards and grids */
-.grid { display: grid; gap: 14px; }
-.g2 { grid-template-columns: 1fr 1fr; } .g4 { grid-template-columns: repeat(4, 1fr); }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
-.card > .pill { margin-bottom: 10px; }
-.card h3 { margin: 0 0 6px; }
-.card p { margin: 0 0 6px; } .card p:last-child { margin-bottom: 0; }
-/* hero: one big figure left, the lede right */
-.hero { display: grid; grid-template-columns: 200px 1fr; gap: 22px; align-items: center; margin-top: 16px; }
-.big { font-size: 64px; font-weight: 800; line-height: 1; }
-.big small { font-size: 22px; font-weight: 700; color: var(--muted); }
-.lede { font-size: 16px; }
-/* number tiles */
-.tile .label { font-size: 13px; color: var(--muted); margin: 0 0 4px; }
-.kpi { font-size: 28px; font-weight: 700; line-height: 1.2; margin: 0; }
-.tile .note { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
-/* the one example */
-.exhibit { max-width: 760px; margin: 14px auto 0; }
-.exhibit img { display: block; width: 100%; max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); }
-.exhibit figcaption { font-size: 13px; color: var(--muted); margin-top: 10px; }
-/* score bars */
-.bars .row { display: grid; grid-template-columns: 300px 1fr 64px; gap: 10px; align-items: center; margin: 8px 0; font-size: 14px; }
-.bars .row .n { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
-.bar { height: 12px; background: var(--track); border-radius: 6px; overflow: hidden; }
-.bar > i { display: block; height: 100%; background: var(--grn); }
-.bar > i.red { background: var(--red); } .bar > i.ora { background: var(--ora); } .bar > i.yel { background: var(--yel); }
-/* tables */
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-th, td { border-bottom: 1px solid var(--line); padding: 8px 8px; text-align: left; vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-td:first-child { width: 44%; }
-/* callouts: orange = attention, red = problem, green = good, grey = neutral */
-.callout { border-left: 4px solid var(--ora); background: var(--ora-tint); padding: 12px 14px; border-radius: 6px; margin: 12px 0; }
-.callout.red { border-color: var(--red); background: var(--red-tint); }
-.callout.grn { border-color: var(--grn); background: var(--grn-tint); }
-.callout.grey { border-color: var(--line); background: var(--grey-tint); }
-.callout p { margin: 6px 0; } .callout > :first-child { margin-top: 0; } .callout > :last-child { margin-bottom: 0; }
-.callout ul { margin: 4px 0 0; }
-/* flow steps with arrows */
-.flow { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; margin: 10px 0; }
-.step { flex: 1; min-width: 150px; background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 13px; }
-.step b { display: block; margin-bottom: 4px; font-size: 13.5px; }
-.step .k { color: var(--ora); font-weight: 700; margin-right: 4px; }
-.arrow { align-self: center; color: var(--muted); font-size: 20px; }
-.arrow::before { content: "\2192"; }
-.opinion.callout p { margin: 8px 0; }
-footer { margin-top: 44px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
-@media (max-width: 900px) {
-  .g2 { grid-template-columns: 1fr; } .g4 { grid-template-columns: 1fr 1fr; }
-  .hero { grid-template-columns: 1fr; gap: 10px; }
-  .bars .row { grid-template-columns: 1fr 48px; }
-  .bars .row .bar { grid-column: 1 / -1; order: 3; }
-  .flow { flex-direction: column; } .arrow { align-self: flex-start; padding-left: 10px; } .arrow::before { content: "\2193"; }
+/* The header band spans the viewport; its inner wrapper carries the side gutter */
+.band { background: var(--band); color: var(--band-ink); }
+.band-in {
+  max-width: 1040px; margin: 0 auto; text-align: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 44px 40px;
 }
-@media (max-width: 600px) {
-  body { padding-block: 24px 56px; }
-  h2 { margin-top: 36px; }
-  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: auto; }
-  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  table.stack td { border-bottom: 0; padding: 0; }
-  table.stack td + td { padding-top: 2px; color: var(--muted); }
-  table.stack tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.band-in > * { max-width: 30em; margin-inline: auto; }
+.eyebrow { font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--band-muted); margin: 0 auto 14px; }
+h1 { font-size: 38px; line-height: 1.15; font-weight: 600; letter-spacing: -0.012em; margin: 0 auto 16px; text-wrap: balance; }
+.status { font-size: 16px; line-height: 1.5; margin: 0 auto; max-width: none; color: var(--band-ink); }
+.band .ok { color: var(--band-ok); }
+.band .open { color: var(--band-open); }
+/* The page column */
+.page {
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 8px 64px;
+}
+main { max-width: 1040px; margin: 0 auto; min-width: 0; }
+/* Prose keeps a reading measure, centred on the column's axis; the table, the screenshot and the opinions take the full column */
+section > p, section > ul, section > ol, section > h3 { max-width: 66ch; margin-left: auto; margin-right: auto; }
+h2 { font-size: 14px; line-height: 1.4; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; text-align: center; margin: 52px 0 20px; padding-top: 16px; border-top: 2px solid var(--rule-strong); }
+h3 { font-size: 17px; line-height: 1.4; font-weight: 600; margin: 22px auto 6px; }
+p { margin: 0 0 12px; }
+ul, ol { margin: 0 0 12px; padding-left: 24px; }
+li { margin: 4px 0; }
+li::marker { color: var(--muted); }
+a { color: var(--link); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; border-radius: 2px; }
+code { font: 0.88em var(--mono); color: var(--code-ink); background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+.checks { font-size: 14px; line-height: 1.5; }
+/* Status words: a shape and a word, coloured by meaning */
+.ok { color: var(--ok); }
+.open { color: var(--open); }
+.bad { color: var(--bad); }
+/* The table: ruled on every cell, a filled header row, a tinted Problem column */
+table.changes { width: 100%; border-collapse: collapse; font-size: 15px; line-height: 1.55; margin: 0 0 24px; font-variant-numeric: tabular-nums; border: 1px solid var(--rule-strong); }
+table.changes th, table.changes td { border: 1px solid var(--rule); padding: 13px 16px; text-align: left; vertical-align: top; }
+table.changes th { background: var(--fill); color: var(--ink); font-weight: 600; font-size: 12.5px; letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--rule-strong); }
+table.changes td:first-child { background: var(--tint); }
+table.changes tr > :nth-child(1) { width: 26%; }
+table.changes tr > :nth-child(2) { width: 33%; }
+table.changes tr > :nth-child(3) { width: 41%; }
+table.changes td p { margin: 0 0 6px; }
+table.changes td p:last-child { margin-bottom: 0; }
+table.changes .proof { font-size: 13.5px; line-height: 1.45; color: var(--muted); margin-top: 10px; }
+/* The screenshot: the table's width, natural aspect ratio; a click opens the full-size view below */
+figure { margin: 0 0 28px; }
+figure > a { display: block; }
+figure img { display: block; width: 100%; max-width: 100%; height: auto; border: 1px solid var(--rule-strong); }
+figcaption { font-size: 14px; line-height: 1.5; color: var(--muted); margin-top: 10px; text-align: center; }
+/* The full-size view: hidden until its anchor is the target, then a fixed layer that scrolls the image at its natural width */
+.shot { display: none; }
+.shot:target { display: block; position: fixed; inset: 0; z-index: 10; overflow: auto; background: var(--bg); }
+.shot-bar {
+  position: sticky; top: 0; left: 0; z-index: 1; background: var(--band); color: var(--band-ink); font-size: 14px; line-height: 1.5;
+  display: flex; justify-content: space-between; gap: 16px; align-items: baseline; width: 100%; max-width: 100vw;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px;
+}
+.shot-bar a { color: var(--band-ink); white-space: nowrap; }
+.shot-bar a:focus-visible { outline-color: var(--band-ink); }
+.shot-bar span { min-width: 0; }
+.shot img { display: block; width: auto; max-width: none; height: auto; margin: 0 auto; }
+/* Two opinions: two filled plates of equal width and height, stacked on a phone */
+.opinions { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 0; }
+.opinion { min-width: 0; background: var(--plate); padding: 24px 28px 26px; border-radius: 4px; }
+.opinion .who { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.opinion p { margin: 0 0 10px; }
+.opinion p:last-child { margin-bottom: 0; }
+.opinion .verdict { font-size: 21px; line-height: 1.3; }
+.marker { font-size: 12px; line-height: 1.4; color: var(--muted); font-family: var(--mono); display: block; margin: 0 0 8px; }
+footer { margin-top: 52px; padding-top: 16px; border-top: 2px solid var(--rule-strong); font-size: 14px; line-height: 1.5; color: var(--muted); text-align: center; }
+@media (max-width: 720px) {
+  .band-in { padding-block: 32px 28px; }
+  .page { padding-block: 4px 48px; }
+  body { font-size: 16px; }
+  h1 { font-size: 28px; }
+  h2 { margin-top: 40px; }
+  .opinions { grid-template-columns: 1fr; gap: 14px; }
+  .opinion { padding: 20px 18px 22px; }
+  /* Each row becomes a stacked block; the column names become small labels; the Problem keeps its tint as the block's head */
+  table.changes, table.changes tbody, table.changes tr, table.changes td { display: block; width: auto; }
+  table.changes { border: 0; }
+  table.changes thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table.changes tr { border: 1px solid var(--rule-strong); padding: 0 16px 14px; margin: 0 0 14px; }
+  table.changes td { border: 0; padding: 12px 0 0; }
+  table.changes td:first-child { margin: 0 -16px; padding: 12px 16px 12px; border-bottom: 1px solid var(--rule); }
+  table.changes td::before { content: attr(data-label); display: block; font-size: 12px; line-height: 1.4; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+  table.changes tr > :nth-child(n) { width: auto; }
 }
 </style>
 
-<!-- Order, in the owner's words: "why we built it, what changes, any other important thing to mention, honest opinion in the end".
-     Keep why and changes first, then only the parts that matter for this work (safety, money, checks, limits, decided, next), opinion always last before the footer.
-     Every part stays visible: no <details> folds. Leave an optional part out entirely rather than writing "not applicable".
-     Colour by meaning, never for decoration: green (.g, .t-grn, .callout.grn) done or good; orange (.o, .t-ora, .callout) needs attention;
-     red (.r, .t-red, .callout.red) a problem; yellow (.y) partial; blue (.b) information; violet (.v) a plain label. -->
-<main>
-  <!-- header: eyebrow "Project · work identifier · date", a heading of 2-8 words, 2-5 status chips coloured by meaning and worded honestly
-       (green done, orange still open, red failed), a hero card (ONE big figure or status word on the left, the lede of 2-3 sentences on the right),
-       then 2-4 number tiles: small label, big figure, small note. A figure takes the colour of its meaning; a plain one is neutral. -->
-  <header>
-    <p class="eyebrow">Project · Epic N · 17 October 2026</p>
-    <h1>What is different now</h1>
-    <div class="chips">
-      <span class="chip g">Reviews closed</span>
-      <span class="chip g">Installed</span>
-      <span class="chip o">Phone not yet verified</span>
-    </div>
-    <div class="card hero">
-      <div><div class="big t-grn">12</div><p class="mut small">what the figure counts, in a few words</p></div>
-      <div class="lede">
-        <p><strong>The one-line result in bold:</strong> what the reader can do or will see now, compared with before.</p>
-        <p>One more sentence if it changes what the reader trusts.</p>
-      </div>
-    </div>
-    <div class="grid g4" style="margin-top: 14px">
-      <div class="card tile"><p class="label">What it counts</p><p class="kpi">1,234</p><p class="note">its basis, in a few words</p></div>
-      <div class="card tile"><p class="label">What it counts</p><p class="kpi">0 <span class="mut" style="font-size:16px">of 50</span></p><p class="note">its basis</p></div>
-      <div class="card tile"><p class="label">What it counts</p><p class="kpi">3</p><p class="note">its basis</p></div>
-      <div class="card tile"><p class="label">Waits on someone</p><p class="kpi t-ora">5</p><p class="note">orange: it needs attention</p></div>
-    </div>
+<div class="band">
+  <!-- header: eyebrow "Project · work · date", a title of 2-8 words saying what changed, ONE status line (status words: ✓ Done, ○ not yet …, ✕ failed) -->
+  <header class="band-in">
+    <p class="eyebrow">Project · Work · Date</p>
+    <h1>What Changed In Two To Eight Words</h1>
+    <p class="status"><span class="ok">✓ Done</span> · checked where (build, test bed) · <span class="open">○ what is not done yet</span> · who has steps waiting</p>
   </header>
+</div>
 
-  <!-- why (required): ONE section for why we need it and why we built it: what hurt and for whom, who asked, with its source (a date, a feedback point); one short paragraph -->
-  <section data-part="why">
-    <h2>Why we built it</h2>
-    <p>Who asked, what hurt, and the source.</p>
+<div class="page">
+<main>
+  <!-- in-short: 3-4 sentences for a stranger: what the product is, what was wrong, what changed, how it helps -->
+  <section data-part="in-short">
+    <h2>In short</h2>
+    <p>What the product is, for someone who has never heard of it. What was wrong, who found it and when.</p>
+    <p>What this work changed, and how it helps.</p>
   </section>
 
-  <!-- changes (required): 2-6 cards in a 2-up grid, each a pill label, a bold title, one or two sentences and a muted note; then ONE example (.exhibit): a screen, a message, a command and its output -->
-  <section data-part="changes">
-    <h2>What changes</h2>
-    <div class="grid g2">
-      <div class="card"><span class="pill b">Label</span><h3>A bold opening phrase</h3><p>The detail a reader needs, in one or two sentences.</p><p class="mut small">A note: the limit, the source, or what it replaces.</p></div>
-      <div class="card"><span class="pill b">Label</span><h3>Another change</h3><p>Its detail.</p></div>
-    </div>
-    <figure class="exhibit" aria-label="Example">
-      <img src="example.webp" width="1000" height="600" alt="What the picture shows, for a reader who cannot see it.">
-      <figcaption>Where it comes from (a test bed with synthetic data, the installed build).</figcaption>
+  <!-- changes: ONE table, 1-6 rows, one issue per row, each complete on its own; every td keeps its data-label (the phone layout shows it);
+       the last line of the third cell is the row's proof, scoped to what was checked. Then screenshots, Also fixed (never a risk), ONE checks line. -->
+  <section data-part="changes" id="what-changed">
+    <h2>What changed</h2>
+    <table class="changes">
+      <thead>
+        <tr><th scope="col">Problem</th><th scope="col">Fix</th><th scope="col">What happens now</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td data-label="Problem"><strong>Short name of what hurt.</strong> One sentence on what went wrong, for whom.</td>
+          <td data-label="Fix">What we changed, in one or two sentences.</td>
+          <td data-label="What happens now"><p>What happens now, with its limit, figure or off switch (<code>SETTING_NAME</code>).</p><p class="proof"><span class="ok">✓ what checked it, and its scope</span></p></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- a screenshot (delete the figure and its .shot when there is none): embedded as data, width and height declared, alt text, a caption naming its build or test bed;
+         the link opens .shot#shot-1, whose Close link points at this section's id. Number further ones shot-2, shot-3 … -->
+    <figure>
+      <a href="#shot-1"><img src="data:image/png;base64,PASTE_SCREENSHOT" width="1440" height="900" alt="What the picture shows, for a reader who cannot see it"></a>
+      <figcaption>What it shows and where it comes from (build, test bed). Click or tap to see it at full size; Close brings you back here.</figcaption>
     </figure>
+    <div class="shot" id="shot-1">
+      <p class="shot-bar"><span>What it shows, full size. Scroll to see all of it.</span><a href="#what-changed">Close</a></p>
+      <img src="data:image/png;base64,PASTE_SCREENSHOT" width="1440" height="900" alt="The same picture at full size">
+    </div>
+
+    <h3>Also fixed</h3>
+    <ul>
+      <li>One line per smaller fix.</li>
+    </ul>
+    <p class="checks">N of N tests pass (scope) · reviews and what became of their findings · CI result.</p>
   </section>
 
-  <!-- safety (optional): one card per guard with a "Rule n" pill: short name, what it stops; then a muted line on what it cannot stop -->
-  <section data-part="safety">
-    <h2>What keeps it safe</h2>
-    <div class="grid g2">
-      <div class="card"><span class="pill g">Rule 1</span><h3>Short name</h3><p>What it stops.</p></div>
-      <div class="card"><span class="pill g">Rule 2</span><h3>Short name</h3><p>What it stops.</p></div>
-    </div>
-    <p class="mut small">What it cannot stop.</p>
+  <!-- still-open: 1-3 plain lines: what was not checked, known risks; "None known." is valid -->
+  <section data-part="still-open">
+    <h2>Still open</h2>
+    <ul>
+      <li><span class="open">○ What is not done or not checked yet.</span> What it means.</li>
+    </ul>
   </section>
 
-  <!-- money (optional): limits as tiles or a table; what was measured, the worst case, the switch that turns it off -->
-  <section data-part="money">
-    <h2>Money</h2>
-    <div class="grid g4">
-      <div class="card tile"><p class="label">Spent so far</p><p class="kpi">$0.62</p><p class="note">of a $10 cap</p></div>
-    </div>
-    <p class="mut small">The worst case and the switch that turns it off.</p>
-  </section>
-
-  <!-- checks (required): counted checks as score bars in a card (label, bar, figure), the rest in a Check | Result table; nothing claimed without a run -->
-  <section data-part="checks">
-    <h2>How we checked it</h2>
-    <div class="card bars">
-      <div class="row"><span>What ran, and its scope</span><div class="bar"><i style="width:100%"></i></div><span class="n">120 / 120</span></div>
-      <p class="mut small" style="margin:10px 0 0">What the bars leave out (a known differing snapshot, a rerun in progress).</p>
-    </div>
-    <div class="table-wrap" style="margin-top:14px">
-      <table class="stack">
-        <thead><tr><th>Check</th><th>Result</th></tr></thead>
-        <tbody>
-          <tr><td>What ran, and its scope</td><td>What it showed, with the number</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <!-- limits (required): an orange callout for the limit that needs attention (red if it is a problem), a grey callout for the rest; plainly, and who accepted it -->
-  <section data-part="limits">
-    <h2>Known limits</h2>
-    <div class="callout"><p><strong>The limit that matters most.</strong> What it means and when it closes.</p></div>
-    <div class="callout grey">
-      <ul>
-        <li>What was not checked or does not work, and who accepted it.</li>
-      </ul>
-    </div>
-  </section>
-
-  <!-- decided (owner page only): one card per choice made under delegation, with its reason, so he can reverse it -->
-  <section data-part="decided">
-    <h2>Decided for you</h2>
-    <div class="grid g2">
-      <div class="card"><span class="pill v">Decision 1</span><h3>The choice</h3><p>Why, in one sentence.</p></div>
-      <div class="card"><span class="pill v">Decision 2</span><h3>The choice</h3><p>Why.</p></div>
-    </div>
-  </section>
-
-  <!-- next (required): numbered steps per reader, the first the most urgent; "Nothing" is a valid step list of one.
-       A sequence someone executes (a release) goes in .flow steps with arrows; a quoted text to approve goes in a grey callout -->
+  <!-- next: an h3 per person who belongs to this project, numbered when two or more steps; "Nothing." is valid.
+       Choices you made under the owner's delegation go here, one line each, so the owner can reverse them. -->
   <section data-part="next">
-    <h2>What happens next</h2>
-    <h3>For Oleksandr</h3>
+    <h2>Next steps</h2>
+    <h3>Person's name</h3>
     <ol>
       <li>The most urgent step first.</li>
     </ol>
-    <h3>For Dana</h3>
-    <div class="flow">
-      <div class="step"><b><span class="k">1</span>Short name</b>What to do and its pass condition.</div>
-      <div class="arrow"></div>
-      <div class="step"><b><span class="k">2</span>Short name</b>What to do and its stop condition.</div>
-    </div>
-    <p class="mut small">Where the exact commands and expected output live.</p>
+    <h3>Choices you can reverse (Owner's name)</h3>
+    <ul>
+      <li>The choice, and what changes it.</li>
+    </ul>
   </section>
 
-  <!-- opinion (required, always last): 2-4 short paragraphs in the first person: worth, risk, what to watch; the first sentence in bold.
-       The callout's colour is the verdict: grn worth it, plain (orange) mixed, red not worth it. -->
-  <section data-part="opinion">
-    <h2>My honest opinion</h2>
-    <div class="opinion callout grn">
-      <p><strong>Is it worth it, in one bold sentence.</strong> The reason.</p>
-      <p>The real risk and what to watch.</p>
+  <!-- opinions: always last. Two blocks: the lead's, and the independent reviewer's (or the "report and evidence review", or "No independent opinion" with the refusal's reason).
+       Each: "Model · role", a bold verdict of 1-4 words, then 2-3 sentences: worth, risk, what to watch. Disagreement stays as written. -->
+  <section data-part="opinions">
+    <h2>Two opinions</h2>
+    <div class="opinions">
+      <div class="opinion">
+        <p class="who">Model · led the work</p>
+        <p class="verdict"><strong>Verdict in 1-4 words.</strong></p>
+        <p>Two or three sentences on worth, risk and what to watch.</p>
+      </div>
+      <div class="opinion">
+        <p class="who">Reviewer model · independent review</p>
+        <p class="verdict"><strong>Verdict in 1-4 words.</strong></p>
+        <p>Two or three sentences, as the reviewer wrote them.</p>
+      </div>
     </div>
   </section>
 
   <!-- footer: who wrote it (app, model) and where the evidence is: a link to the PR or commit, or records named in <code> -->
-  <footer>Written by … (app, model). Details: <a href="https://example.com/pr">the PR</a>, records in <code>evidence/</code>.</footer>
+  <footer>
+    <p>Written by App (Model) as the work's lead · <a href="https://example.com/pr">the PR</a> · evidence under <code>evidence/</code></p>
+  </footer>
 </main>
+</div>
