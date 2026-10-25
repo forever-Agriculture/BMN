@@ -147,9 +147,12 @@ true or useful: reread it once as a stranger would.
 
 ## Publish it, then open it
 
-- **Claude Code**: publish the file as a private Artifact (the Artifact tool; icon `report`). An
-  update republishes the same file to the same URL. Then open the Artifact link in the owner's
-  default browser.
+- **Claude Code**: publish the page as a private Artifact (the Artifact tool; icon `report`). The
+  Artifact wraps the page in its own doctype and charset, so publish a copy without the page's
+  first three tags (`<!doctype html>`, `<html lang="en">`, `<meta charset="utf-8">`):
+  `sed '1,6{/^<!doctype html>$/d;/^<html lang="en">$/d;/^<meta charset="utf-8">$/d}' page.html > page.artifact.html`.
+  An update republishes that copy's path to the same URL. Then open the Artifact link in the
+  owner's default browser.
 - **Codex, OpenCode or anything else in a BMN session**: `bmn publish page.html --key
   <work>-<first12 of the page's sha256>` and give the reader the id it prints; changed bytes need a
   new key, a retry of the same bytes keeps its key. Then open the **checked local page** in the
