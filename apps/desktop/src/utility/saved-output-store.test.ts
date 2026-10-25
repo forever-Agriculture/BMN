@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   SAVED_OUTPUT_FORMAT_VERSION,
   TERMINAL_SAVED_OUTPUT_BYTES,
@@ -271,6 +271,36 @@ describe('file saved-output store', () => {
     const catalog = await store.loadCatalog()
     expect(catalog.snapshots).toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION)
     expect(catalog.unreadable.map(({ source }) => source)).toEqual(['session-1--incarnation-1--view-0.snapshot.json'])
+    expect(catalog.pruned).toBe(2)
+  }, retentionBoundTimeout)
+
+  it('reads a file again at the next prune when reading it failed once, as the full scan did (Story 91.3 review)', async () => {
+    const { directory, store } = await storeFixture()
+    for (let index = 0; index < TERMINAL_SAVED_OUTPUT_RETENTION; index += 1) {
+      await store.save(snapshot({ viewEpoch: `view-${index}`, capturedAt: new Date(Date.UTC(2026, 8, 12, 8, 0, index)).toISOString() }))
+    }
+    const oldest = 'session-1--incarnation-1--view-0.snapshot.json'
+    let failOnce: string | undefined = oldest
+    const restarted = new FileSavedOutputStore(directory, unlink, async (path) => {
+      if (basename(path) === failOnce) {
+        failOnce = undefined
+        throw Object.assign(new Error('too many open files'), { code: 'EMFILE' })
+      }
+      return readFile(path, 'utf8')
+    })
+
+    // The first save cannot read the oldest record and keeps the 100 it read; the second reads it again and prunes the
+    // two oldest of 102.
+    await restarted.save(snapshot({ viewEpoch: 'view-new', capturedAt: '2026-09-12T09:00:00.000Z' }))
+    await restarted.save(snapshot({ viewEpoch: 'view-newer', capturedAt: '2026-09-12T09:00:01.000Z' }))
+
+    const names = await readdir(directory)
+    expect(names).not.toContain(oldest)
+    expect(names).not.toContain('session-1--incarnation-1--view-1.snapshot.json')
+    expect(names).toContain('session-1--incarnation-1--view-2.snapshot.json')
+    const catalog = await restarted.loadCatalog()
+    expect(catalog.snapshots).toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION)
+    expect(catalog.unreadable).toEqual([])
     expect(catalog.pruned).toBe(2)
   }, retentionBoundTimeout)
 })

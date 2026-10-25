@@ -425,7 +425,7 @@ export class FileSavedOutputStore implements SavedOutputStore {
    * The records pruning orders, read as `scan` reads them, but each file is read and parsed only when it is new or its
    * inode, size or modification time changed. Reading and parsing every file on each save took most of the utility
    * host's saved-output time with the folder at its 100 records (Story 91.3, profile.md cause 2). A capture's content
-   * is not kept.
+   * is not kept, and a file whose read failed is read again next time, as a full scan would.
    */
   private async pruneIndex(): Promise<PruneIndex> {
     let names: string[]
@@ -447,13 +447,14 @@ export class FileSavedOutputStore implements SavedOutputStore {
       const known = this.pruneEntries.get(name)
       let entry = stamp !== undefined && known?.stamp === stamp ? known.entry : undefined
       if (entry === undefined) {
-        const read = readStoredFile(name, path, await this.readText(path).catch(() => undefined))
+        const text = await this.readText(path).catch(() => undefined)
+        const read = readStoredFile(name, path, text)
         entry = read.kind === 'capture'
           ? { kind: 'capture', at: read.entry.snapshot.capturedAt }
           : read.kind === 'failure'
             ? { kind: 'failure', at: read.entry.record.unavailableAt }
             : read.kind === 'retention' ? read : { kind: 'unreadable' }
-        if (stamp === undefined) this.pruneEntries.delete(name)
+        if (stamp === undefined || text === undefined) this.pruneEntries.delete(name)
         else this.pruneEntries.set(name, { stamp, entry })
       }
       if (entry.kind === 'retention') index.pruned = entry.pruned
