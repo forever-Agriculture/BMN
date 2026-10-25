@@ -31,6 +31,13 @@ flowchart LR
 Messages between processes are defined once in `shared/protocol` (`@bmn/protocol`) and
 validated on arrival.
 
+BMN's own CPU budget is under a third of one core, averaged over 30 minutes with the owner's usual
+sessions (one working agent shown, a few waiting). The programs in its sessions are left out; the
+BMN CLI and hooks they run are measured as a line of their own.
+`scripts/measure/bmn-cpu.mjs` measures it per process type, read-only from `/proc` and BMN's
+database, and `scripts/measure/calibration-load.mjs` replays such a load against a checkout's build
+([commands](development.md#commands)). A build meets the budget only when that measurement says so.
+
 ## Rules the code follows
 
 **One owner of state.** The utility process alone creates workspace, session, file and request IDs
