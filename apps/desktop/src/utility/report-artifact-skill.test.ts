@@ -58,6 +58,7 @@ describe('the report-artifact skill check', () => {
     fails(page.replace(/<tbody>[\s\S]*<\/tbody>/u, '<tbody></tbody>'), 'the table has 1-6 rows')
     fails(page.replace('</tbody>', `${row}</tbody>`), 'the table has 1-6 rows')
     fails(page.replace('<th scope="col">Fix</th>', '<th scope="col">Change</th>'), 'the table is headed Problem | Fix | What happens now')
+    fails(page.replace('<section data-part="in-short">', '<header><p>Another header</p></header><section data-part="in-short">'), 'one header')
     fails(page.replace('<h3>Also fixed</h3>', '<table><tr><td>x</td></tr></table><h3>Also fixed</h3>'), 'exactly one table on the page')
     fails(page.replace('<td data-label="Fix">The client\'s own company is removed from target lists.</td>', '<td data-label="Fix"> </td>'), 'every row has three filled cells')
     fails(page.replace('<p class="proof"><span class="ok">✓ backend tests</span></p>', ''), 'every row ends with a proof line (.proof)')
@@ -91,12 +92,17 @@ describe('the report-artifact skill check', () => {
     fails(page.replace(opinions, '').replace('<section data-part="next">', `${opinions.trim()}\n  <section data-part="next">`), 'opinions are the last part before the footer')
   })
 
-  it('fails the old dashboard parts and a screenshot without alt text, caption or full-size view', () => {
+  it('fails the old dashboard parts and a screenshot without alt text, caption or full-size view, and passes two screenshots', () => {
     const page = filled()
     for (const kind of ['card hero', 'card tile', 'chip g', 'card', 'bar']) {
       fails(page.replace('<h3>Also fixed</h3>', `<div class="${kind}">x</div><h3>Also fixed</h3>`), 'only the page\'s element kinds')
     }
     fails(page.replace('<h3>Also fixed</h3>', '<details><summary>More</summary>x</details><h3>Also fixed</h3>'), 'only the page\'s element kinds')
+    const second = `<figure><a href="#shot-2"><img src="${PIXEL}" width="800" height="600" alt="A second screen"></a><figcaption>A second screen on the test bed.</figcaption></figure>
+    <div class="shot" id="shot-2"><p class="shot-bar"><span>Full size.</span><a href="#what-changed">Close</a></p><img src="${PIXEL}" width="800" height="600" alt="A second screen at full size"></div>
+    <h3>Also fixed</h3>`
+    expect(check(page.replace('<h3>Also fixed</h3>', second))).toMatchObject({ code: 0 })
+    fails(page.replace('<h3>Also fixed</h3>', second.replace('href="#shot-2"', 'href="#shot-3"')), 'every screenshot opens its full-size view')
     fails(page.replace(/alt="The Report evidence admin page: [^"]*"/u, 'alt=""'), 'every screenshot has alt text')
     fails(page.replace(/<figcaption>[\s\S]*?<\/figcaption>/u, ''), 'every screenshot has a caption')
     fails(page.replace(/<div class="shot" id="shot-1">[\s\S]*?<\/div>/u, ''), 'every screenshot opens its full-size view')

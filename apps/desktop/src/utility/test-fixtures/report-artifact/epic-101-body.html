@@ -3,7 +3,7 @@
   <header class="band-in">
     <p class="eyebrow">B2Buster · Epic 101 · 24 October 2026</p>
     <h1>Reports with today's date and one price</h1>
-    <p class="status"><span class="ok">✓ Done</span> · checked on a local copy · <span class="open">○ not yet in production</span> · 2 steps wait on Artem</p>
+    <p class="status"><span class="ok">✓ Done</span> · checked on a local copy · <span class="open">○ not yet in production</span> · 2 steps wait on Artem, who deploys B2Buster</p>
   </header>
 </div>
 
@@ -29,13 +29,13 @@
         </tr>
         <tr>
           <td data-label="Problem"><strong>Old sources ranked like new ones.</strong></td>
-          <td data-label="Fix">Library results with a known date sort newest first inside their trust group. Nothing is removed and scores don't change.</td>
+          <td data-label="Fix">Library results with a known date sort newest first among sources trusted equally. Nothing is removed and scores don't change.</td>
           <td data-label="What happens now"><p>Sources show their real publish day. Fresh items come first; undated items keep their place.</p><p class="proof"><span class="ok">✓ backend tests</span></p></td>
         </tr>
         <tr>
           <td data-label="Problem"><strong>One offer, two prices</strong> in different sections.</td>
           <td data-label="Fix">One shared price table that every section uses; the checker now also reads prices inside table cells.</td>
-          <td data-label="What happens now"><p>A price that disagrees across sections is labelled where it appears and listed under "Pricing scenarios".</p><p class="proof">saved and synthetic reports only · <span class="open">○ not yet on a new real report</span></p></td>
+          <td data-label="What happens now"><p>A price that disagrees across sections is labelled where it appears and listed under "Pricing scenarios".</p><p class="proof">saved and made-up test reports only · <span class="open">○ not yet on a new real report</span></p></td>
         </tr>
         <tr>
           <td data-label="Problem"><strong>B2Buster listed as its own target account</strong> (seen in a real report).</td>
@@ -45,7 +45,7 @@
         <tr>
           <td data-label="Problem"><strong>No final cross-check.</strong></td>
           <td data-label="Fix">One review pass after delivery looks for sections that contradict each other.</td>
-          <td data-label="What happens now"><p>Capped at $0.40 per report; <code>B2B_FINAL_REVIEW=off</code> turns it off. Minis are not reviewed.</p><p class="proof"><span class="ok">✓ caught 8 of 11 planted defects, 0 of 6 false alarms</span> ($0.57 test)</p></td>
+          <td data-label="What happens now"><p>Capped at $0.40 per report; <code>B2B_FINAL_REVIEW=off</code> turns it off. Minis (short reports) are not reviewed.</p><p class="proof"><span class="ok">✓ caught 8 of 11 planted defects, 0 of 6 false alarms</span> ($0.57 test)</p></td>
         </tr>
         <tr>
           <td data-label="Problem"><strong>No way to see what a report used.</strong></td>
@@ -70,7 +70,7 @@
       <li>Where we can't tell what came from the client, the report says "not measured" instead of guessing.</li>
       <li>A stale background worker can no longer overwrite a delivered section unnoticed: the admin page shows "changed".</li>
     </ul>
-    <p class="checks">Whole suite: 28,084 of 28,085 backend tests, 1,038 of 1,039 database tests and 6,769 frontend tests pass (both misses also fail without this work) · two independent reviews, 15 findings, all closed · CI 5 of 5 green.</p>
+    <p class="checks">Whole suite: 28,084 of 28,085 backend tests, 1,038 of 1,039 database tests and 6,769 frontend tests pass (both misses also fail without this work) · two independent reviews, 15 findings, all closed · automated checks on GitHub (CI) 5 of 5 green.</p>
   </section>
 
   <section data-part="still-open">
