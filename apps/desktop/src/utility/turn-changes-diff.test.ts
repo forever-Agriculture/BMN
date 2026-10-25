@@ -1,6 +1,38 @@
 // MODULE: turn-changes-diff.test.ts - the line comparison against a brute-force longest common subsequence, against known texts and a plain layout of every row, and its stop in every long step
+import { PerformanceObserver } from 'node:perf_hooks'
 import { describe, expect, it } from 'vitest'
 import { DiffStopped, countLines, decodeText, diffLines, splitLines, unified, type Hunk, type HunkLine, type SplitText } from './turn-changes-diff'
+
+/**
+ * The longest stretch of this thread's own work between two calls of `ask` in `run`, in ms: its CPU time over each
+ * stretch less the collector's pauses inside it. Wall time also counted other processes on a busy machine and the
+ * collector freeing the test's millions of strings, pauses of 40 to 105 ms that no stop question shortens (Story 91.6).
+ */
+async function longestWork<T>(run: (ask: () => void) => T): Promise<{ result: T; longest: number }> {
+  const pauses: { start: number; end: number }[] = []
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) pauses.push({ start: entry.startTime, end: entry.startTime + entry.duration })
+  })
+  observer.observe({ entryTypes: ['gc'] })
+  const stretches: { start: number; end: number; cpu: number }[] = []
+  let start = performance.now()
+  let cpu = process.threadCpuUsage()
+  const ask = (): void => {
+    const used = process.threadCpuUsage(cpu)
+    const end = performance.now()
+    stretches.push({ start, end, cpu: (used.user + used.system) / 1000 })
+    cpu = process.threadCpuUsage()
+    start = performance.now()
+  }
+  const result = run(ask)
+  ask()
+  // The collector's entries arrive after the work that caused them.
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  observer.disconnect()
+  const paused = (from: number, to: number): number =>
+    pauses.filter((pause) => pause.start >= from && pause.start < to).reduce((sum, pause) => sum + pause.end - pause.start, 0)
+  return { result, longest: Math.max(...stretches.map((stretch) => stretch.cpu - paused(stretch.start, stretch.end))) }
+}
 
 /** Length of the longest common subsequence, the slow and obvious way. */
 function lcs(a: string[], b: string[]): number {
@@ -205,28 +237,23 @@ describe('the lines of two texts', () => {
     expect(() => splitLines(many, () => true)).toThrow(DiffStopped)
   })
 
-  it('asks its stop often on millions of short lines, and holds no row for a line outside a hunk', () => {
+  it('asks its stop often on millions of short lines, and holds no row for a line outside a hunk', async () => {
     const count = 2_000_000
     const rows = Array.from({ length: count }, (_value, n) => `r${n % 977}`)
     const before = rows.join('\n')
     const after = `${[...rows.slice(0, count / 2), 'changed', ...rows.slice(count / 2)].join('\n')}\n`
-    let last = performance.now()
-    let longest = 0
-    const patch = unified(`${before}\n`, after, { stop: () => {
-      const now = performance.now()
-      longest = Math.max(longest, now - last)
-      last = now
-      return false
-    } })
-    longest = Math.max(longest, performance.now() - last)
+    const { result: patch, longest } = await longestWork((ask) => unified(`${before}\n`, after, { stop: () => { ask(); return false } }))
     expect([patch.added, patch.removed, patch.hunks.length]).toEqual([1, 0, 1])
     expect(patch.hunks[0]?.lines).toHaveLength(7)
-    // A cancel is heard within 100 ms: no stretch between two questions comes near it.
+    // A cancel is heard within 100 ms: no stretch of the comparison's own work between two questions comes near it.
     expect(longest).toBeLessThan(90)
+    // And a real stop, on the wall clock, collector and all.
     const began = performance.now()
     expect(() => unified(`${before}\n`, after, { stop: () => performance.now() - began > 100 })).toThrow(DiffStopped)
     expect(performance.now() - began).toBeLessThan(190)
-  })
+    // Waiting for the collector's entries made the test asynchronous, so the runner's 5 s for a test now applies to
+    // building and comparing these texts twice, seconds on a busy machine; the limits that matter are the ones above.
+  }, 60_000)
 
   it('holds only as many lines as its caller keeps, and counts the rest', () => {
     const after = `${Array.from({ length: 50 }, (_value, n) => `n${n}`).join('\n')}\n`
