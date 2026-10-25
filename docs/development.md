@@ -77,6 +77,13 @@ All commands run from the repository root.
   BMN data is not touched.
 - Close a running BMN before `pnpm run package`, since packaging replaces the binary it
   runs from. `update:desktop` packages beside it instead and swaps only after BMN has exited.
+- "Every test passes" means on a quiet machine: no load loops and no other test run (another
+  checkout's vitest or pytest). Timing runs use a stated load instead: one Node busy loop per two
+  logical cores (`node -e 'for (;;) {}'`) while `vitest run --maxWorkers=50% --sequence.shuffle`
+  runs the tests. A test with a wall-clock limit says beside the limit what real-time property it
+  guards. A timing test kept on purpose that fails only under that load is listed in
+  `plan/references/091/kept-on-purpose.md` (planning, not committed here) with its pass counts; it
+  is not a gate failure.
 - `BMN_SMOKE_FORCE_FAILURE=1` makes `smoke:packaged` fail at once, for proving what a failed update
   leaves behind; nothing else reads it.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox
