@@ -1880,6 +1880,15 @@ export class SessionManager {
     return live.mirror
   }
 
+  /**
+   * The mirror already running for this run, never a new one: the Away wake reads only a mirror an agent's own report
+   * started, so a sweep that was already under way when the agent left cannot start one for the shell (Story 93.3).
+   */
+  runningScreenMirror(sessionId: string, incarnationId: string): ScreenMirror | undefined {
+    const live = this.sessions.get(sessionId)
+    return live && !live.exited && live.incarnationId === incarnationId ? live.mirror : undefined
+  }
+
   /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */
   stopScreenMirror(sessionId: string): void {
     const live = this.sessions.get(sessionId)

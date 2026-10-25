@@ -5755,6 +5755,19 @@ describe('screen mirror for sessions running an agent (Epic 30.2)', () => {
     expect(mirror.lines()[23]).toBe('› Ask Codex to do anything')
   })
 
+  it('gives the Away wake only a mirror that already runs for that run, and never starts one (Story 93.3, epic review)', async () => {
+    const { manager, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    expect(manager.runningScreenMirror(created.sessionId, created.incarnationId)).toBeUndefined()
+    // Asking started nothing.
+    expect(manager.runningScreenMirror(created.sessionId, created.incarnationId)).toBeUndefined()
+    const mirror = manager.screenMirror(created.sessionId, created.incarnationId)!
+    expect(manager.runningScreenMirror(created.sessionId, created.incarnationId)).toBe(mirror)
+    expect(manager.runningScreenMirror(created.sessionId, 'another-incarnation')).toBeUndefined()
+    manager.stopScreenMirror(created.sessionId)
+    expect(manager.runningScreenMirror(created.sessionId, created.incarnationId)).toBeUndefined()
+  })
+
   it('starts on the start report BMN\'s OpenCode plugin writes before OpenCode draws its screen (Story 93.3)', async () => {
     const { manager, pty, cwd } = await fixture()
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })

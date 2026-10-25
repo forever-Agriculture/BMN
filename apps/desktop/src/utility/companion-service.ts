@@ -540,7 +540,7 @@ export class CompanionService {
       foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
       generation: (sessionId) => this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 },
       screen: async (sessionId, incarnationId) => {
-        const mirror = options.manager.screenMirror(sessionId, incarnationId)
+        const mirror = options.manager.runningScreenMirror(sessionId, incarnationId)
         if (!mirror) return null
         await mirror.settled()
         return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }

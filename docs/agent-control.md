@@ -992,9 +992,10 @@ OpenCode submits it whole, once, with the one space it adds after any summarized
 
 The guarantee holds when BMN writes, not inside the app (Epic 93, D3; the same for every app): BMN reads the screen,
 then checks everything above and writes in one synchronous step, so what the app draws after that read (a draft it
-restores, a dialog it opens) is not seen. BMN's OpenCode plugin follows the session the terminal shows once a second, so
-for up to a second after a switch at the keyboard the latest event may still be the previous session's. A draft of only
-spaces with the cursor moved back to its start reads as empty.
+restores, a dialog it opens) is not seen. BMN's OpenCode plugin looks once a second at which session the terminal shows,
+and tells BMN of a switch only after every report already on its way (each is given up to 3 s, and several may be
+waiting), so after a switch at the keyboard the latest event BMN holds can still be the previous session's for a
+second or more; no fixed bound is promised. A draft of only spaces with the cursor moved back to its start reads as empty.
 
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never

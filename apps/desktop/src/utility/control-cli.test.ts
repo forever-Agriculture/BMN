@@ -4015,6 +4015,36 @@ describe('OpenCode hooks', () => {
     expect(hooks().slice(16)).toEqual([{ hook_event_name: 'tui.exit', sessionID: OPENCODE_SESSION, ...pinned }])
   })
 
+  it('tells BMN of a switch to another root only after the reports already on their way, so BMN may lag the screen by more than its 1 s look (Story 93.3, epic review)', async () => {
+    const OTHER = 'ses_0123456789abSyntheticOthr'
+    let release = (): void => undefined
+    const slow = new Promise<{ code: number }>((resolve) => { release = () => resolve({ code: 0 }) })
+    let first = true
+    const { spawn, calls } = fakePluginSpawn((call) => {
+      if (call.args.includes('take')) return new Promise(() => undefined)
+      if (!first) return { code: 0 }
+      first = false
+      return slow
+    })
+    const { terminal, context, emit } = fakeOpenCodeTerminal()
+    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
+    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
+    const told = () => calls.filter((call) => call.args.includes('hook')).map((call) => JSON.parse(call.input ?? 'null') as { hook_event_name: string; sessionID: string })
+    // The root's turn finishes while the first report (the root's selection) is still being delivered.
+    emit('session.execution.succeeded', { sessionID: OPENCODE_SESSION })
+    await vi.waitFor(() => expect(told()).toHaveLength(1))
+    // The owner switches to another root at the keyboard: the plugin sees it at its next look, within 1 s ...
+    terminal.route = { type: 'session', sessionID: OTHER }
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    // ... but BMN has heard nothing new: its latest event for this terminal is still the first root's.
+    expect(told().map((body) => [body.hook_event_name, body.sessionID])).toEqual([['tui.session.select', OPENCODE_SESSION]])
+    release()
+    await vi.waitFor(() => expect(told()).toHaveLength(3))
+    expect(told().map((body) => [body.hook_event_name, body.sessionID])).toEqual([
+      ['tui.session.select', OPENCODE_SESSION], ['session.idle', OPENCODE_SESSION], ['tui.session.select', OTHER]])
+    await stop?.()
+  })
+
   it.each(['2.0.29', '2.0.32'])('replays the events recorded on OpenCode %s into BMN: the owner\'s interrupt stays his, a child\'s events are the subagent\'s (Story 93.3)', async (version) => {
     // Story 93.1's provenance capture: a root turn, a pasted one, a child run while the root stays on screen, the owner's interrupt.
     const recorded = (JSON.parse(readFileSync(join(dirname(CLI), '..', 'src', 'utility', 'test-fixtures', 'away-wake', 'opencode-states.json'), 'utf8')) as {

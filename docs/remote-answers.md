@@ -340,7 +340,8 @@ reaches it (a unit test reads the sources to keep it that way).
   `app=opencode` from BMN's OpenCode plugin): Codex does that at start, before its first hook, and its
   start-up animation can pass 64 KB, which would leave a later mirror without the prompt it drew once
   (Story 90.6). It stops on the agent's `SessionEnd`, OpenCode's `tui.exit` or the session's exit.
-  The Away wake reads its rows and its cursor (Story 93.3). Measured 2026-09-27: one
+  The Away wake reads its rows and its cursor, and only from a mirror already running: a sweep under way
+  when the agent left never starts one for the shell (Story 93.3). Measured 2026-09-27: one
   50 MB flood through the session manager cost a median 1,963 ms CPU without a mirror and 2,932 ms
   with one (1.49×), above the 1.10× budget, so plain shells never pay for it.
 - **Recognition.** A dialog is on screen only when its option list appears in order at one column,

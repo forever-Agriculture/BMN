@@ -142,6 +142,7 @@ beforeEach(() => {
     liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
     screenMirror: (sessionId: string) => screens.get(sessionId),
+    runningScreenMirror: (sessionId: string) => screens.get(sessionId),
     stopScreenMirror: (sessionId: string) => screens.delete(sessionId),
     sessionWithCurrentProcessState: (session: SessionRecord) => {
       const incarnationId = reportedProcesses.get(session.sessionId)
@@ -4561,6 +4562,42 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
       .toEqual([['s2', `\x1b[200~${AWAY_WAKE_LINE}\x1b[201~\r`]])
     await service['awayWakeWrites']
     expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain('its prompt is not empty and idle')
+  })
+
+  it('never starts a mirror for a session whose OpenCode quit while the sweep was under way (Story 93.3, epic review)', async () => {
+    const composer = ['   Synthetic root', '', '  ┃', '  ┃', '  ┃', '  ┃  Build · Synthetic loopback', `  ╹${'▀'.repeat(40)}`, '  ctrl+p commands']
+    const mirror = (whileReading?: () => Promise<void>): ScreenLike =>
+      ({ settled: async () => { await whileReading?.() }, undimmedLines: () => composer, cursor: () => ({ x: 5, y: 3 }) }) as unknown as ScreenLike
+    // A mirror that is asked for and missing is started, as SessionManager.screenMirror does.
+    const startedAfterExit: string[] = []
+    let exited = false
+    service['options'].manager.screenMirror = (sessionId: string) => {
+      if (exited && sessionId === 's2') startedAfterExit.push(sessionId)
+      if (!screens.has(sessionId)) screens.set(sessionId, mirror())
+      return screens.get(sessionId) as never
+    }
+    clock = new Date(T).toISOString()
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    clock = new Date(T + HOUR).toISOString()
+    for (const [sessionId, incarnationId] of [['s1', 'incarnation-1'], ['s2', 'incarnation-2']] as const) {
+      service['hookObservations'].set(sessionId, { sessionId, incarnationId, agent: 'opencode', event: 'session.idle', source: null,
+        observedAt: new Date(T + HOUR).toISOString(), foreground: `synthetic-foreground:${sessionId}` })
+      await service['openAttention']({ sessionId, incarnationId, requestKey: 'opencode:turn', kind: 'notice',
+        title: 'OpenCode finished a turn', origin: 'hook:opencode:session.idle' })
+    }
+    // While s1's screen is read, s2's OpenCode quits: its plugin's tui.exit stops s2's mirror.
+    screens.set('s1', mirror(async () => {
+      await (service as unknown as { observeHookEvent(p: unknown): Promise<unknown> }).observeHookEvent({
+        sessionId: 's2', incarnationId: 'incarnation-2', agent: 'opencode', event: 'tui.exit', source: null, toolName: null, effects: [] })
+      exited = true
+    }))
+    screens.set('s2', mirror())
+    await service['awayWake'].sweep()
+    clock = new Date(T + 2 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+    expect(writes.map((write) => write.sessionId)).toEqual(['s1'])
+    expect(screens.has('s2')).toBe(false)
+    expect(startedAfterExit).toEqual([])
   })
 
   it.each(['subagent', 'interrupted'])('types nothing into an OpenCode root whose latest idle came from %s', async (source) => {
