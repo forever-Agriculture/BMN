@@ -1233,8 +1233,9 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     chmodSync(join(stubs, 'claude'), 0o755)
   }
   const plan = (entries: Record<string, { text: string; delay?: number }>): void => writeFileSync(join(home, 'plan.json'), JSON.stringify(entries))
+  // Whole lines only: a test polls while a stand-in may still be appending its line (Story 91.6).
   const calls = (): { argv: string[]; env: string[]; path: string; cwd: string; prompt: string }[] =>
-    (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+    (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line)) : [])
   const load = (fresh = false): Promise<ResearchSnapshot> => call('research:load', { fresh })
   const pause = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
   const ended = async (): Promise<ResearchSnapshot> => {

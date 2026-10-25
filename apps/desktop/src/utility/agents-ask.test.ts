@@ -79,8 +79,9 @@ setTimeout(answer, plan.delay ?? 0)
 
 interface Plan { text?: string; delay?: number; exit?: number; waitFor?: string }
 const plan = (entry: Plan): void => writeFileSync(join(home, 'plan.json'), JSON.stringify(entry))
+// Whole lines only: a test polls while a stand-in may still be appending its line (Story 91.6).
 const calls = (): { app: string; pid: number; argv: string[]; env: Record<string, string>; cwd: string; files: string[]; prompt: string }[] =>
-  (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+  (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line)) : [])
 
 const USES = 'https://docs.example.org/jev/uses'
 const BLOG = 'https://blog.example.org/jev'
