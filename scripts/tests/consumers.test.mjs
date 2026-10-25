@@ -1,10 +1,10 @@
-// MODULE: consumers.test.mjs - Story 91.5 AC2: the consumer inventory finds a planted IPC name, a name built from strings and a mention only in a doc
+// MODULE: consumers.test.mjs - Story 91.5 AC2: the consumer inventory finds a planted IPC name, a name built from strings, a mention only in a doc, computed imports and each hit's blame
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { builtFrom, historyOf, hitsOf, spellings } from '../audit/consumers.mjs'
+import { builtFrom, historyOf, hitsOf, scan, spellings } from '../audit/consumers.mjs'
 
 let roots = []
 afterEach(() => {
@@ -63,5 +63,38 @@ describe('consumer inventory (Story 91.5 AC2)', () => {
     git('commit', '-q', '-am', 'change the harness')
     expect(historyOf('scripts/test/demo-visual.mjs', root)).toMatchObject({ commits: 2 })
     expect(historyOf('shot', root)).toMatchObject({ commits: 1 })
+  })
+
+  it('lists the imports of a variable or a template a file could be loaded through, with the variable\'s defining line', () => {
+    const root = tree({
+      'src/loader.mjs': [
+        "const RUN_MODULE = new URL('./run.mjs', import.meta.url).href",
+        'const run = await import(RUN_MODULE)',
+        "const fixed = await import('./fixed.mjs')",
+        'const plugin = await import(`./plugins/${name}.mjs`)',
+        "const plain = require(`./plain.mjs`)",
+        'const typed = null as unknown as typeof import(\'./types.js\')'
+      ].join('\n'),
+      'docs/loading.md': 'Call `await import(name)` to load one.\n'
+    })
+    const { dynamic } = scan(['scripts/demo.mjs'], { roots: [root] })
+    expect(dynamic.map((site) => [site.file, site.line, site.specifier, site.defined?.line ?? null])).toEqual([
+      ['src/loader.mjs', 2, 'RUN_MODULE', 1],
+      ['src/loader.mjs', 4, '`./plugins/${name}.mjs`', null]
+    ])
+  })
+
+  it('gives each hit the commit that last changed its line, and none outside a checkout', () => {
+    const root = tree({ 'src/user.ts': "import { shot } from './shot'\n" })
+    const git = (...args) => execFileSync('git', ['-C', root, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', ...args], { encoding: 'utf8' })
+    expect(hitsOf('shot', { roots: [root] }).map((hit) => hit.blame)).toEqual([null])
+    git('init', '-q')
+    git('add', '.')
+    git('commit', '-q', '-m', 'use the shot')
+    const commit = git('rev-parse', 'HEAD').trim().slice(0, 8)
+    expect(hitsOf('shot', { roots: [root] }).map((hit) => hit.blame)).toEqual([expect.stringMatching(new RegExp(`^${commit} \\d{4}-\\d{2}-\\d{2}$`, 'u'))])
+    writeFileSync(join(root, 'src/later.ts'), 'shot()\n')
+    git('add', '.')
+    expect(hitsOf('shot', { roots: [root] }).map((hit) => [hit.file, hit.blame])).toContainEqual(['src/later.ts', 'uncommitted'])
   })
 })

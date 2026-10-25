@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MODULE: consumers.mjs - Story 91.5: every place that may still use a name or a file, before anything is called dead
+// MODULE: consumers.mjs - Story 91.5: every place that may still use a name or a file, before anything is called dead, with each one's blame
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -8,8 +8,9 @@ import { fileURLToPath } from 'node:url'
 
 const USAGE = `Usage: node scripts/audit/consumers.mjs [--json] [--root DIR]... [--exclude PATH]... TERM...
 Prints every hit of each TERM (a name, or a file's path) in BMN's code, docs and skills, dev-auto and the installed
-skills, with names built from strings, what electron-builder.yml packages, and the Git history of the term. A hit in
-an --exclude path (the candidate's own files) is left out. Exit 0 when no TERM has a hit, 1 when one does.`
+skills, with names built from strings, what electron-builder.yml packages, each hit's blame and the Git history of the
+term; for a file, also the computed imports it could be loaded through, to be read. A hit in an --exclude path (the
+candidate's own files) is left out. Exit 0 when no TERM has a hit, 1 when one does.`
 
 /**
  * The places BMN's code, docs and skills are read from by default: this checkout with its plan, dev-auto, the installed
@@ -92,11 +93,43 @@ export function builtFrom(term, line) {
   return line.includes(last) && /\$\{|['"`]\s*\+|\+\s*['"`]|\.join\(/u.test(line) && parts.slice(0, -1).some((part) => line.includes(part))
 }
 
-/** Every hit of each term in the roots, outside the excluded paths, reading each file once: a map from term to hits. */
+/**
+ * An import or require of a variable or a template with a substitution: what file it loads is decided when it runs,
+ * so no spelling of a file finds it. A variable defined in the same file comes with its defining line.
+ */
+export function computedImport(line, lines) {
+  const call = /(?:^|[^\w$.])(?:import|require)\(\s*(?!['"]|`[^`$]*`|\))([^)]*)/u.exec(line)
+  if (call === null) return null
+  const name = /^[A-Za-z_$][\w$]*/u.exec(call[1])?.[0]
+  const at = name === undefined ? -1 : lines.findIndex((one) => new RegExp(`(?:const|let|var)\\s+${name.replace(/\$/gu, '\\$')}\\s*=`, 'u').test(one))
+  return { specifier: call[1].trim().slice(0, 120), defined: at === -1 ? null : { line: at + 1, text: lines[at].trim().slice(0, 200) } }
+}
+
+/** The commit that last changed a line, and its date, from the Git checkout holding the file; null outside one. */
+export function blameOf(path, line) {
+  try {
+    const out = execFileSync('git', ['-C', dirname(path), 'blame', '--porcelain', '-L', `${line},${line}`, '--', basename(path)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const commit = out.slice(0, 40)
+    const time = /^author-time (\d+)$/mu.exec(out)?.[1]
+    // The date in the author's own zone, as `git log --date=short` gives it.
+    const zone = /^author-tz ([+-])(\d\d)(\d\d)$/mu.exec(out)
+    const offset = zone === null ? 0 : (zone[1] === '-' ? -1 : 1) * (Number(zone[2]) * 3600 + Number(zone[3]) * 60)
+    if (/^0+$/u.test(commit)) return 'uncommitted'
+    return `${commit.slice(0, 8)} ${time === undefined ? '?' : new Date((Number(time) + offset) * 1000).toISOString().slice(0, 10)}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Every hit of each term in the roots, outside the excluded paths, reading each file once: a map from term to hits,
+ * and the computed imports in code (`dynamic`).
+ */
 export function scan(terms, { roots, exclude = [] }) {
   const escape = (word) => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
   const matchers = terms.map((term) => ({ term, words: spellings(term).map((one) => new RegExp(`(^|[^\\w-])${escape(one)}($|[^\\w-])`, 'u')) }))
   const found = new Map(terms.map((term) => [term, []]))
+  const dynamic = []
   for (const root of roots) {
     const real = realpathSync(root)
     for (const file of filesOf(root)) {
@@ -111,19 +144,25 @@ export function scan(terms, { roots, exclude = [] }) {
       }
       if (text.includes('\0')) continue
       const lines = text.split('\n')
+      if (['code', 'test', 'registry'].includes(kindOf(file, root))) {
+        lines.forEach((line, index) => {
+          const site = computedImport(line, lines)
+          if (site !== null) dynamic.push({ root: real, file, line: index + 1, text: line.trim().slice(0, 200), ...site })
+        })
+      }
       for (const { term, words } of matchers) {
         lines.forEach((line, index) => {
           const how = words.some((word) => word.test(line)) ? kindOf(file, root) : builtFrom(term, line) ? 'built' : null
-          if (how !== null) found.get(term).push({ root: real, file, line: index + 1, kind: how, text: line.trim().slice(0, 200) })
+          if (how !== null) found.get(term).push({ root: real, file, line: index + 1, kind: how, text: line.trim().slice(0, 200), blame: blameOf(absolute, index + 1) })
         })
       }
     }
   }
-  return found
+  return { hits: found, dynamic }
 }
 
 /** Every hit of the term in the roots, outside the excluded paths. */
-export const hitsOf = (term, options) => scan([term], options).get(term)
+export const hitsOf = (term, options) => scan([term], options).hits.get(term)
 
 /** The term's Git history in a checkout: the commits that changed the file (a path) or added or removed the name, the newest and the first. */
 export function historyOf(term, repo) {
@@ -144,13 +183,16 @@ function main(argv) {
   const roots = take('--root').length > 0 ? take('--root').map((root) => resolve(root)) : defaultRoots(repo)
   const exclude = take('--exclude').map((path) => resolve(path))
   const terms = argv.filter((part, index) => !part.startsWith('--') && !['--root', '--exclude'].includes(argv[index - 1]))
-  const found = scan(terms, { roots, exclude })
-  const report = terms.map((term) => ({ term, hits: found.get(term), history: historyOf(term, repo) }))
+  const { hits: found, dynamic } = scan(terms, { roots, exclude })
+  const report = terms.map((term) => ({ term, hits: found.get(term), history: historyOf(term, repo), ...(isPath(term) ? { dynamic } : {}) }))
   if (argv.includes('--json')) console.log(JSON.stringify(report, null, 2))
   else {
-    for (const { term, hits, history } of report) {
+    for (const { term, hits, history, dynamic } of report) {
       console.log(`${term}: ${hits.length} hit${hits.length === 1 ? '' : 's'}; history ${history.commits ?? '?'} commits${history.newest ? `, newest ${history.newest}` : ''}`)
-      for (const hit of hits) console.log(`  ${hit.kind.padEnd(8)} ${relative(repo, join(hit.root, hit.file)) || hit.file}:${hit.line}  ${hit.text}`)
+      for (const hit of hits) console.log(`  ${hit.kind.padEnd(8)} ${relative(repo, join(hit.root, hit.file)) || hit.file}:${hit.line}  ${hit.text}${hit.blame ? `  (${hit.blame})` : ''}`)
+      for (const site of dynamic ?? []) {
+        console.log(`  ${'dynamic'.padEnd(8)} ${relative(repo, join(site.root, site.file)) || site.file}:${site.line}  ${site.text}${site.defined ? `  (defined :${site.defined.line} ${site.defined.text})` : ''}`)
+      }
     }
   }
   return report.some(({ hits }) => hits.length > 0) ? 1 : 0
