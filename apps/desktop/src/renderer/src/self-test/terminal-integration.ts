@@ -1,5 +1,5 @@
 // MODULE: terminal-integration.ts - the renderer's behavioural self-test, run from the selected pane of a test-mode window
-import type { Terminal } from '@xterm/xterm'
+import { Terminal } from '@xterm/xterm'
 import { isBridgeError } from '../bridge-error'
 import { splitArgv } from '../launch-template'
 import type { TerminalIntegrationProbe, TerminalTestHandle } from '../test-hook'
@@ -7,10 +7,17 @@ import { openReferenceFromPane, runEpic27FileReferenceIntegration, runFileRefere
 import { runQuickLookIntegration } from './quick-look-self-test'
 import { runProgressEvidenceIntegration } from './progress-evidence-self-test'
 import { runVoiceIntegration } from './voice-self-test'
+import { redrawOnlyWrittenRows } from '../terminal-sync-update'
+import { runSynchronizedRenderingProbe } from './terminal-sync-update'
 
 /** Loaded by dynamic import only when the self-test asks the selected pane for its integration probe. */
 export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal>): Promise<TerminalIntegrationProbe> {
   console.warn('[BMN] renderer behavioural integration: started')
+  const synchronizedRendering = await runSynchronizedRenderingProbe(
+    () => new Terminal({ cols: 40, rows: 10, allowProposedApi: true }),
+    redrawOnlyWrittenRows
+  )
+  console.warn('[BMN] synchronized DOM rendering: ' + synchronizedRendering.join(', '))
   const workspaces = await window.aiTerminal.listWorkspaces(true)
   const sessionsBeforeForm = await window.aiTerminal.listSessions(handle.startup.workspaceId)
   await window.aiTerminal.resizeTerminal(

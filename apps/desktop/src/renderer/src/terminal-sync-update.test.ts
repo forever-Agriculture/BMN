@@ -48,3 +48,63 @@ describe('the end of a synchronized update (Story 91.2)', () => {
     expect(refresh).not.toHaveBeenCalled()
   })
 })
+
+describe('direct browser redraws during a synchronized update (Story 87.2)', () => {
+  function browserHarness() {
+    const { terminal, refresh, write } = harness(false)
+    const renderer = { renderRows: vi.fn() }
+    const service = {
+      _renderer: { value: renderer },
+      setRenderer(next: typeof renderer): void { this._renderer.value = next }
+    }
+    Object.assign((terminal as unknown as { _core: object })._core, { _renderService: service })
+    return { terminal, refresh, write, renderer, service }
+  }
+
+  it('queues a direct redraw for the commit and preserves the original renderer receiver', async () => {
+    const { terminal, refresh, write, renderer } = browserHarness()
+    const original = renderer.renderRows
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    await write('\x1b[?2026h')
+    renderer.renderRows(2, 5)
+    expect(original).not.toHaveBeenCalled()
+    expect(refresh).toHaveBeenCalledWith(2, 5)
+    await write('\x1b[?2026l')
+    renderer.renderRows(2, 5)
+    expect(original).toHaveBeenCalledExactlyOnceWith(2, 5)
+    expect(original.mock.contexts[0]).toBe(renderer)
+    synchronization.dispose()
+    terminal.dispose()
+  })
+
+  it('protects a replacement renderer and restores the wrappers it owns on teardown', async () => {
+    const { terminal, write, renderer, service } = browserHarness()
+    const original = renderer.renderRows
+    const originalSetRenderer = service.setRenderer
+    const replacement = { renderRows: vi.fn() }
+    const replacementOriginal = replacement.renderRows
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    service.setRenderer(replacement)
+    expect(renderer.renderRows).toBe(original)
+    await write('\x1b[?2026h')
+    replacement.renderRows(1, 3)
+    expect(replacementOriginal).not.toHaveBeenCalled()
+    synchronization.dispose()
+    expect(replacement.renderRows).toBe(replacementOriginal)
+    expect(service.setRenderer).toBe(originalSetRenderer)
+    terminal.dispose()
+  })
+
+  it('does not overwrite a later renderer owner during teardown', () => {
+    const { terminal, renderer, service } = browserHarness()
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    const otherRender = vi.fn()
+    const otherSetRenderer = vi.fn()
+    renderer.renderRows = otherRender
+    service.setRenderer = otherSetRenderer
+    synchronization.dispose()
+    expect(renderer.renderRows).toBe(otherRender)
+    expect(service.setRenderer).toBe(otherSetRenderer)
+    terminal.dispose()
+  })
+})

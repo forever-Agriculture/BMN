@@ -1,9 +1,21 @@
 // MODULE: terminal-sync-update.ts - Story 91.2: the end of a synchronized update redraws only the rows written during it
 import type { IDisposable, Terminal } from '@xterm/xterm'
 
-/** The one xterm 6.0.0 internal this needs: the private mode flag its renderer reads before drawing. */
+interface SyncRenderer {
+  renderRows(start: number, end: number): void
+}
+
+interface SyncRenderService {
+  _renderer: { value?: SyncRenderer }
+  setRenderer(renderer: SyncRenderer): void
+}
+
+/** Version-pinned xterm 6.0.0 internals: its mode flag and the active browser renderer. */
 interface SyncModeInternals {
-  _core?: { coreService?: { decPrivateModes?: { synchronizedOutput?: boolean } } }
+  _core?: {
+    coreService?: { decPrivateModes?: { synchronizedOutput?: boolean } }
+    _renderService?: SyncRenderService
+  }
 }
 
 type SyncTerminal = Pick<Terminal, 'parser' | 'buffer' | 'refresh'>
@@ -17,7 +29,8 @@ type SyncTerminal = Pick<Terminal, 'parser' | 'buffer' | 'refresh'>
  * that resets other modes too, or an xterm without the flag, is left to xterm.
  */
 export function redrawOnlyWrittenRows(terminal: SyncTerminal): IDisposable {
-  return terminal.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
+  const guardedRendering = guardDirectRedraws(terminal)
+  const endUpdate = terminal.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
     const modes = (terminal as SyncModeInternals)._core?.coreService?.decPrivateModes
     if (params.length !== 1 || params[0] !== 2026 || typeof modes?.synchronizedOutput !== 'boolean') return false
     modes.synchronizedOutput = false
@@ -25,4 +38,52 @@ export function redrawOnlyWrittenRows(terminal: SyncTerminal): IDisposable {
     terminal.refresh(row, row)
     return true
   })
+  return {
+    dispose(): void {
+      endUpdate.dispose()
+      guardedRendering.dispose()
+    }
+  }
+}
+
+/**
+ * Selection, focus and blur call DomRenderer.renderRows directly, bypassing RenderService's 2026
+ * check. Buffer their requested rows too: a selection redraw must not expose a half-written frame,
+ * and the next commit must include rows requested here as well as rows written by the parser.
+ */
+function guardDirectRedraws(terminal: SyncTerminal): IDisposable {
+  const core = (terminal as SyncModeInternals)._core
+  const service = core?._renderService
+  if (!service) return { dispose(): void {} }
+  let restoreRenderer = (): void => undefined
+  const attach = (): void => {
+    restoreRenderer()
+    const renderer = service._renderer.value
+    if (!renderer) return
+    const original = renderer.renderRows
+    const guarded = (start: number, end: number): void => {
+      if (core?.coreService?.decPrivateModes?.synchronizedOutput) {
+        terminal.refresh(start, end)
+        return
+      }
+      original.call(renderer, start, end)
+    }
+    renderer.renderRows = guarded
+    restoreRenderer = (): void => {
+      if (renderer.renderRows === guarded) renderer.renderRows = original
+    }
+  }
+  const originalSetRenderer = service.setRenderer
+  function setRenderer(this: SyncRenderService, renderer: SyncRenderer): void {
+    originalSetRenderer.call(this, renderer)
+    attach()
+  }
+  attach()
+  service.setRenderer = setRenderer
+  return {
+    dispose(): void {
+      restoreRenderer()
+      if (service.setRenderer === setRenderer) service.setRenderer = originalSetRenderer
+    }
+  }
 }
