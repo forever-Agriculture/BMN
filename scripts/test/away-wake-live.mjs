@@ -228,7 +228,9 @@ async function run(app, binary) {
       }
       const skipped = (lines) => lines.length === 1 && lines[0].includes('skipped')
       if (standIn) {
-        const wakes = () => standIn.requests.filter((request) => request.agent && request.user === WAKE_LINE).length
+        // OpenCode submits a summarized paste (the line passes 150 characters) whole, with one space after it, as Story 93.1
+        // recorded for every paste on both pins; anything else (cut, doubled, not submitted) does not count.
+        const wakes = () => standIn.requests.filter((request) => request.agent && request.user === `${WAKE_LINE} `).length
         const because = (lines, reason) => skipped(lines) && lines[0].endsWith(`: ${reason}`)
         const one = await tick(1)
         check(`${name}: tick 1 types the line once into the idle root`, one.filter((line) => line.includes('typed')).length === 1, { logs: one })

@@ -988,6 +988,7 @@ pinned 2.0.29 and 2.0.32 in Epic 93). Any state BMN cannot read skips the sessio
 palette and agent picker leave the empty composer drawn but hold the cursor in their own field, so the cursor refuses
 them; a draft, a paste's `[Pasted ~N lines]`, a second line, Home and a child's view are refused by their screens, a
 permission or question by its open request. Every app gets the same write: the line as one bracketed paste, then Enter.
+OpenCode submits it whole, once, with the one space it adds after any summarized paste (measured on both pins, Epic 93).
 
 The guarantee holds when BMN writes, not inside the app (Epic 93, D3; the same for every app): BMN reads the screen,
 then checks everything above and writes in one synchronous step, so what the app draws after that read (a draft it
