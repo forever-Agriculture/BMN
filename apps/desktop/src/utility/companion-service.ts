@@ -460,6 +460,8 @@ export class CompanionService {
     event: string
     /** `subagent` for an OpenCode child's event, `interrupted` for the owner's stop of an OpenCode run (Story 93.3). */
     source: string | null
+    /** What the OpenCode plugin that sent the event promises (Story 96.3); null from earlier plugins and other agents. */
+    plugin: number | null
     observedAt: string
     /** The terminal's foreground process when the report came, which is the agent's own (Story 75.4); null once it ended. */
     foreground: string | null
@@ -2344,6 +2346,7 @@ export class CompanionService {
     event: string
     source: string | null
     toolName: string | null
+    plugin?: number | undefined
     fingerprint?: string | undefined
     apiHost?: string | undefined
     model?: string | undefined
@@ -2413,6 +2416,7 @@ export class CompanionService {
     agent: HookEventAgent
     apiHost?: string | undefined
     model?: string | undefined
+    plugin?: number | undefined
   }): { recorded: true } {
     const observedAt = this.iso()
     // Which incarnation has a harness reporting for it, kept whatever the log later drops.
@@ -2434,6 +2438,7 @@ export class CompanionService {
           agent: p.agent,
           event: p.event,
           source: p.source,
+          plugin: p.agent === 'opencode' ? p.plugin ?? null : null,
           observedAt,
           foreground: ended ? null : this.options.manager.foregroundProcessIdentity(p.sessionId)
         })

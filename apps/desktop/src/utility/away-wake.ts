@@ -1,4 +1,4 @@
-// MODULE: away-wake.ts - Stories 90.6 and 93.3: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
+// MODULE: away-wake.ts - Stories 90.6, 93.3 and 96.3: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
 import type { AwayRecord } from '@bmn/protocol'
 
 export const AWAY_WAKE_EVERY_MS = 2 * 60 * 60 * 1000
@@ -17,6 +17,8 @@ export interface WakeObservation {
   event: string
   /** Who the event speaks for when not the session itself: an OpenCode child's `subagent`, the owner's `interrupted` stop (Story 93.3). */
   source: string | null
+  /** What the OpenCode plugin that sent the event promises (Story 96.3); null from BMN's earlier plugins and other agents. */
+  plugin: number | null
   observedAt: string
   foreground: string | null
 }
@@ -59,6 +61,13 @@ export interface AwayWakeOptions {
  * BMN's OpenCode plugin reports a root run that succeeded, or that the owner stopped, as `session.idle`).
  */
 const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'Notification'], codex: ['Stop'], opencode: ['session.idle'] }
+/**
+ * The promise an OpenCode session's loaded plugin must make (Story 96.3): its events carry `bmn_plugin` 1 or later once
+ * it reports the owner's stop as `interrupted` and quitting as `tui.exit`. BMN's earlier plugins reported a stop as a
+ * finished turn and carried no mark; a session started before its plugin file was upgraded still runs one, so the file
+ * on disk says nothing about it, and only the mark on the session's own event lets BMN wake it.
+ */
+export const OPENCODE_WAKE_PLUGIN = 1
 const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || agent === 'codex' || agent === 'opencode'
 
 /**
@@ -149,6 +158,7 @@ export class AwayWake {
     if (!FINISHED[app].includes(seen.event)) return `its latest event is ${seen.event}, not a finished turn`
     // A child's turn is not the session's, and a stop the owner made stays a stop (R93-FR2).
     if (seen.source === 'subagent' || seen.source === 'interrupted') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
+    if (app === 'opencode' && (seen.plugin ?? 0) < OPENCODE_WAKE_PLUGIN) return 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
     if (Date.parse(seen.observedAt) <= since) return 'no hook event since the owner left'
     const mine = open.filter((row) => row.sessionId === seen.sessionId && row.state === 'open')
     const turn = mine.find((row) => row.kind === 'notice' && row.requestKey === `${app}:turn`)
@@ -162,7 +172,7 @@ export class AwayWake {
     if (this.options.liveIncarnation(seen.sessionId) !== seen.incarnationId) return 'its run changed'
     const latest = this.options.observation(seen.sessionId)
     if (!latest || latest.agent !== seen.agent || latest.event !== seen.event || latest.source !== seen.source ||
-      latest.observedAt !== seen.observedAt) return 'its agent reported again'
+      latest.plugin !== seen.plugin || latest.observedAt !== seen.observedAt) return 'its agent reported again'
     const front = this.options.foreground(seen.sessionId)
     if (front === null || seen.foreground === null || front !== seen.foreground) return 'its agent is not in the foreground'
     const changes = this.options.generation(seen.sessionId)

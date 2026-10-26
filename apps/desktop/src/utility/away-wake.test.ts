@@ -1,8 +1,8 @@
-// MODULE: away-wake.test.ts - Stories 90.6 and 93.3 with a fake clock: ticks, claims, every eligibility and pre-write check, restarts, the recorded idle prompts
+// MODULE: away-wake.test.ts - Stories 90.6, 93.3 and 96.3 with a fake clock: ticks, claims, every eligibility and pre-write check, restarts, the recorded idle prompts
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { EMPTY_AWAY_RECORD, type AwayRecord } from '@bmn/protocol'
-import { AWAY_WAKE_LINE, AwayWake, idlePrompt, testAwayWakeTimes, type WakeAttention, type WakeObservation, type WakeScreen } from './away-wake'
+import { AWAY_WAKE_LINE, AwayWake, OPENCODE_WAKE_PLUGIN, idlePrompt, testAwayWakeTimes, type WakeAttention, type WakeObservation, type WakeScreen } from './away-wake'
 import { ScreenMirror } from './screen-mirror'
 
 const T = Date.parse('2026-10-23T22:00:00.000Z')
@@ -26,11 +26,12 @@ function world(now0 = T + 2 * HOUR) {
   const written: Array<{ sessionId: string; text: string }> = []
   const logs: string[] = []
   let beforeScreen: (() => void) | undefined
-  const add = (sessionId: string, agent: string, extra: Partial<Session> & { event?: string; observedAt?: string; source?: string | null } = {}): void => {
-    const { event, observedAt, source, ...rest } = extra
+  // An OpenCode session runs the current plugin unless the case says otherwise (Story 96.3).
+  const add = (sessionId: string, agent: string, extra: Partial<Session> & { event?: string; observedAt?: string; source?: string | null; plugin?: number | null } = {}): void => {
+    const { event, observedAt, source, plugin, ...rest } = extra
     sessions.set(sessionId, {
       seen: { sessionId, incarnationId: `inc-${sessionId}`, agent, event: event ?? (agent === 'opencode' ? 'session.idle' : 'Stop'), source: source ?? null,
-        observedAt: observedAt ?? at(T + HOUR), foreground: `fg-${sessionId}` },
+        plugin: plugin !== undefined ? plugin : agent === 'opencode' ? OPENCODE_WAKE_PLUGIN : null, observedAt: observedAt ?? at(T + HOUR), foreground: `fg-${sessionId}` },
       screen: agent === 'codex' ? CODEX_IDLE : agent === 'opencode' ? OPENCODE_IDLE : CLAUDE_IDLE,
       cursor: agent === 'opencode' ? OPENCODE_CURSOR : { x: 0, y: 0 }, front: `fg-${sessionId}`, live: `inc-${sessionId}`, generation: 1, pending: 0, ...rest
     })
@@ -382,5 +383,71 @@ describe('the Away wake-up for OpenCode (Story 93.3)', () => {
     expect(lastRootIdle).toBe(rootTurns[2]!.index)
     expect(await sweepAfter({ event: 'session.idle', source: 'interrupted' })).toBe(0)
     expect(await sweepAfter({ event: 'session.status', source: 'subagent' })).toBe(0)
+  })
+})
+
+describe('the Away wake-up for an OpenCode whose loaded plugin may be an earlier one (Story 96.3)', () => {
+  it('wakes only a root whose own event carries the current plugin\'s mark; an earlier plugin\'s finish or stop is left alone', async () => {
+    const w = world(T)
+    w.add('current', 'opencode')
+    // BMN's October 14 plugin reported the owner's stop as a plain session.idle and carried no mark: from the event
+    // alone, a stop and a finished turn look the same, so neither is woken.
+    w.add('earlier-finished', 'opencode', { plugin: null })
+    w.add('earlier-stopped', 'opencode', { plugin: null })
+    w.add('current-stopped', 'opencode', { source: 'interrupted' })
+    w.add('current-quit', 'opencode', { event: 'tui.exit', front: null })
+    w.add('current-child', 'opencode', { source: 'subagent' })
+    w.add('current-draft', 'opencode', { screen: OPENCODE_IDLE.map((row, index) => index === 3 ? '  ┃  half a sentence' : row) })
+    w.add('current-dialog', 'opencode', { cursor: { x: 34, y: 13 } })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 'current', text: AWAY_WAKE_LINE }])
+    const reasons = Object.fromEntries(w.logs.map((line) => [line.match(/skipped (\S+)/u)?.[1], line.split('): ')[1]]))
+    const earlier = 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
+    expect(reasons).toEqual({
+      'earlier-finished': earlier, 'earlier-stopped': earlier,
+      'current-stopped': 'its latest event is session.idle from interrupted, not its own finished turn',
+      'current-quit': 'its latest event is tui.exit, not a finished turn',
+      'current-child': 'its latest event is session.idle from subagent, not its own finished turn',
+      'current-draft': 'its prompt is not empty and idle', 'current-dialog': 'its prompt is not empty and idle'
+    })
+  })
+
+  it('a matching plugin on disk changes nothing for a session that loaded an earlier one: only the session\'s own next event does', async () => {
+    const w = world(T)
+    w.add('s', 'opencode', { plugin: null })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([])
+    // OpenCode restarted in the same terminal loads the upgraded plugin; its next finished turn carries the mark.
+    const session = w.sessions.get('s')!
+    session.seen = { ...session.seen, plugin: OPENCODE_WAKE_PLUGIN, observedAt: at(T + 2 * HOUR + 1) }
+    w.now = T + 4 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 's', text: AWAY_WAKE_LINE }])
+  })
+
+  it('types nothing when the session\'s latest event turns out to come from another plugin while the screen is read', async () => {
+    const w = world(T)
+    w.add('s', 'opencode')
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR
+    // A rollback to an earlier plugin and a restart in between: same event, no mark.
+    w.beforeScreen = () => { const session = w.sessions.get('s')!; session.seen = { ...session.seen, plugin: null } }
+    await wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs.at(-1)).toContain('its agent reported again')
+  })
+
+  it('asks no mark of Claude Code or Codex', async () => {
+    const w = world(T)
+    w.add('c', 'claude')
+    w.add('x', 'codex')
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written.map((row) => row.sessionId).sort()).toEqual(['c', 'x'])
   })
 })

@@ -217,12 +217,16 @@ install previews the exact target and diff on stderr and asks Yes (default No) b
         matcher, is BMN's wording with a field the app will not run (changed), or
         names bmn hook <agent> in a wording BMN did not write (not BMN's) is left
         as it is and listed; so is an OpenCode plugin file BMN did not write, and a
-        file BMN cannot add to. A second run writes nothing. Exit 0 when every
-        set-up app has every entry, 1 when one was left or could not be written.
+        file BMN cannot add to. An OpenCode plugin that is byte for byte one BMN
+        shipped earlier is upgraded, after a copy, and read back; one edited since
+        is left and listed as changed. A second run writes nothing. Exit 0 when
+        every set-up app has every entry, 1 when one was left or could not be
+        written.
 
 OpenCode (2.0.28 and later) loads BMN's terminal plugin, bmn/tui.ts in its config
 folder, only when cli.json there names the bmn folder in "plugins". check compares
-tui.ts with the shipped plugin byte for byte and reads that entry. install writes both,
+tui.ts with the shipped plugin byte for byte (an earlier one BMN shipped reads wired
+(older wording); one edited since, missing) and reads that entry. install writes both,
 each after a backup, and removes OpenCode 1's BMN plugin from plugin/ or plugins/
 (OpenCode 2 refuses to load it), with the copy kept in the bmn folder; print emits the
 exact TypeScript install writes.

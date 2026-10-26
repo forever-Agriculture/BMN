@@ -707,7 +707,12 @@ keep their current startup behavior and personal configuration.
 folder exists (it creates no folder). It adds an entry only where an event has none of BMN's in any shape. It leaves as
 it is, and adds nothing beside: an entry inside a matcher, BMN's wording with a field the app will not run, a
 `bmn hook <agent>` call in a wording BMN did not write, an OpenCode plugin file BMN did not write (with its `cli.json`),
-and a file BMN cannot add to. An older wording runs and counts as in place. Every file is copied before it changes,
+and a file BMN cannot add to. An older wording runs and counts as in place. An OpenCode plugin that is byte for byte one
+BMN shipped earlier (a fixed list of SHA-256 hashes read from main's history, `EARLIER_OPENCODE_PLUGINS` in
+`bin/bmn-opencode-plugin.mjs`; BMN's comments alone never make a file BMN's) is upgraded to the current one: a copy is
+made and read back, the new text replaces the file only while the path still leads to the file BMN read with the bytes
+it read, and is read back after (Story 96.3); one edited since is left and listed as `changed`, with its `cli.json`
+entry. An OpenCode that is already running keeps the plugin it loaded until it restarts. Every file is copied before it changes,
 written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
@@ -759,7 +764,8 @@ keep it from rewriting its settings, while `install` runs.
 as `bmn/tui.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn`
 folder to `plugins` in `cli.json` there: OpenCode 2 loads a local terminal plugin only as a folder named in that list,
 and skips an entry naming a file without a word. `check` reports `plugin` (`tui.ts` byte for byte: `wired`, `wired
-(older wording)` or `missing`) and `cli.json` (whether the list names the folder); a `cli.json` that is not a JSON
+(older wording)` for one BMN shipped earlier, which BMN's next start upgrades, or `missing`, also for a copy edited since
+BMN wrote it) and `cli.json` (whether the list names the folder); a `cli.json` that is not a JSON
 object with a `plugins` list is reported and left untouched. `install` backs up every file it changes, shows the whole
 plugin file in its prompt, and moves OpenCode 1's BMN plugin, which OpenCode 2 refuses to load, out of `plugin/` or
 `plugins/` to `bmn/plugin-bmn.ts.bmn-backup-<time>`; a file there that is not BMN's stays. Restart OpenCode after
@@ -979,7 +985,10 @@ own times.
 
 A session is woken only when all of these hold: it runs Claude Code, Codex or OpenCode; its latest hook event is a
 finished turn reported after he left (for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
-plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
+plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`, and only from a plugin whose events carry
+`bmn_plugin` 1, its promise that it marks the interrupt and reports quitting: BMN's earlier plugins reported the owner's
+stop as a finished turn, and an OpenCode started before its plugin file was upgraded still runs one, so the file on disk
+says nothing about it; Story 96.3), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim

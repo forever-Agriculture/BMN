@@ -580,7 +580,7 @@ describe('handoffs that deliver themselves (Story 75.5)', () => {
     service = new CompanionService({ ...service['options'], messageSourceRoot: async (folder: string) => folder })
     // Codex's own hook reported from the process that holds s2's terminal: it takes messages (Story 75.4).
     service['hookObservations'].set('s2', {
-      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'PostToolUse', source: null, observedAt: now,
+      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'PostToolUse', source: null, plugin: null, observedAt: now,
       foreground: 'synthetic-foreground:s2'
     })
   })
@@ -4513,8 +4513,10 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
   const HOUR = 60 * 60 * 1000
   const T = Date.parse(now)
   const idle = ['• ok', '', '›', '', '  GPT-6.1-Sol low · /work/two', '  ? for shortcuts']
-  const observe = (event: string, at: number, agent: 'codex' | 'opencode' = 'codex', source: string | null = null): void => {
-    service['hookObservations'].set('s2', { sessionId: 's2', incarnationId: 'incarnation-2', agent, event, source,
+  // An OpenCode observation comes from the current plugin unless the case says otherwise (Story 96.3).
+  const observe = (event: string, at: number, agent: 'codex' | 'opencode' = 'codex', source: string | null = null,
+    plugin: number | null = agent === 'opencode' ? 1 : null): void => {
+    service['hookObservations'].set('s2', { sessionId: 's2', incarnationId: 'incarnation-2', agent, event, source, plugin,
       observedAt: new Date(at).toISOString(), foreground: 'synthetic-foreground:s2' })
   }
   const night = async (whileReading?: () => void): Promise<void> => {
@@ -4580,7 +4582,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
     await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
     clock = new Date(T + HOUR).toISOString()
     for (const [sessionId, incarnationId] of [['s1', 'incarnation-1'], ['s2', 'incarnation-2']] as const) {
-      service['hookObservations'].set(sessionId, { sessionId, incarnationId, agent: 'opencode', event: 'session.idle', source: null,
+      service['hookObservations'].set(sessionId, { sessionId, incarnationId, agent: 'opencode', event: 'session.idle', source: null, plugin: 1,
         observedAt: new Date(T + HOUR).toISOString(), foreground: `synthetic-foreground:${sessionId}` })
       await service['openAttention']({ sessionId, incarnationId, requestKey: 'opencode:turn', kind: 'notice',
         title: 'OpenCode finished a turn', origin: 'hook:opencode:session.idle' })
@@ -4613,5 +4615,34 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
     expect(writes).toEqual([])
     await service['awayWakeWrites']
     expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain(`its latest event is session.idle from ${source}, not its own finished turn`)
+  })
+
+  it('keeps the plugin\'s mark from the hook and wakes only the OpenCode root whose own event carried it (Story 96.3)', async () => {
+    const composer = ['   Synthetic root', '', '  ┃', '  ┃', '  ┃', '  ┃  Build · Synthetic loopback', `  ╹${'▀'.repeat(40)}`, '  ctrl+p commands']
+    screens.set('s2', { settled: async () => undefined, undimmedLines: () => composer, cursor: () => ({ x: 5, y: 3 }) } as unknown as ScreenLike)
+    const hook = (plugin?: number) => (service as unknown as { observeHookEvent(p: unknown): Promise<unknown> }).observeHookEvent({
+      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'opencode', event: 'session.idle', source: null, toolName: null, effects: [],
+      ...(plugin === undefined ? {} : { plugin }) })
+    clock = new Date(T).toISOString()
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    clock = new Date(T + HOUR).toISOString()
+    // An OpenCode started before its plugin file was upgraded: its events carry no mark.
+    await hook()
+    expect(service['hookObservations'].get('s2')).toMatchObject({ agent: 'opencode', event: 'session.idle', plugin: null })
+    await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'opencode:turn', kind: 'notice',
+      title: 'OpenCode finished a turn', origin: 'hook:opencode:session.idle' })
+    await service['awayWake'].sweep()
+    clock = new Date(T + 2 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+    expect(writes).toEqual([])
+    await service['awayWakeWrites']
+    expect(readFileSync(join(root, 'state', 'away-wake.log'), 'utf8')).toContain('its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn')
+    // Restarted on the upgraded plugin, its next finished turn carries the mark and is woken at the next tick.
+    clock = new Date(T + 2 * HOUR + 2000).toISOString()
+    await hook(1)
+    expect(service['hookObservations'].get('s2')).toMatchObject({ plugin: 1 })
+    clock = new Date(T + 4 * HOUR + 1000).toISOString()
+    await service['awayWake'].sweep()
+    expect(writes.map((write) => write.sessionId)).toEqual(['s2'])
   })
 })

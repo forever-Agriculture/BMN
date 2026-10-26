@@ -1,6 +1,7 @@
 // MODULE: bmn-hooks.mjs - the bmn command line behind bin/bmn: hook events as attention calls, the agents' hook files and `bmn hooks` check, install and install --absent
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
-import { copyFileSync, existsSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { closeSync, constants, copyFileSync, existsSync, fstatSync, openSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -9,7 +10,7 @@ import { unifiedDiff } from './text-diff.mjs'
 import { isObject } from './shared-helpers.mjs'
 import { CONVERSATION_REFERENCE, CONVERSATION_SOURCES, HOOKS_USAGE, OPENCODE_REFERENCE } from './bmn-words.mjs'
 import { CliError, UsageError, parseArguments } from './bmn-commands.mjs'
-import { HOOK_AGENTS, OPENCODE_PLUGIN } from './bmn-opencode-plugin.mjs'
+import { EARLIER_OPENCODE_PLUGINS, HOOK_AGENTS, OPENCODE_PLUGIN } from './bmn-opencode-plugin.mjs'
 import { usageFailure } from './bmn-results.mjs'
 
 export { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, holdAtTestGate, hookEventName, hookRequests, openCodeSubagent, phoneAnswerable, retiredOr, runHooks, userInputTool }
@@ -1160,9 +1161,32 @@ function openCodeFiles(path) {
   return { entry, cli: `${config}/cli.json`, older: ['plugin', 'plugins'].map((folder) => `${config}/${folder}/bmn.ts`) }
 }
 
-/** BMN's own plugin text, from any release. */
+/** BMN's own plugin text, from any release, as its comments say: true of a copy someone edited too. */
 function openCodeBMNText(text) {
   return text !== null && text.includes('// Shipped by BMN') && text.includes('bmn hook opencode')
+}
+
+/**
+ * The terminal plugin file's bytes and the file they were read from, through one descriptor, or null when it is
+ * absent. What it holds for BMN (Story 96.3): `current`, `earlier` (byte for byte a plugin BMN shipped before, which
+ * only BMN wrote), `edited` (BMN's comments, other bytes) or `foreign`; only an earlier one is BMN's to upgrade.
+ */
+function readOpenCodePlugin(path) {
+  let fd
+  try { fd = openSync(path, constants.O_RDONLY) } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+  try {
+    const stat = fstatSync(fd)
+    const bytes = readFileSync(fd)
+    const text = bytes.toString('utf8')
+    const earlier = EARLIER_OPENCODE_PLUGINS[createHash('sha256').update(bytes).digest('hex')]
+    const state = text === OPENCODE_PLUGIN ? 'current' : earlier?.kind === 'terminal' ? 'earlier' : openCodeBMNText(text) ? 'edited' : 'foreign'
+    return { bytes, text, identity: `${stat.dev}:${stat.ino}`, state }
+  } finally {
+    closeSync(fd)
+  }
 }
 
 /** cli.json as BMN can add to it: its text, its data and the plugins it names, or why it cannot. */
@@ -1201,14 +1225,21 @@ function checkOpenCodePlugin(path) {
     return { agent: 'opencode', file: path, state: 'unreadable', detail: error.code, events: [], missing: ['plugin', 'cli.json'] }
   }
   const older = olderOpenCodePlugins(path)
+  // Story 96.3: only BMN's current plugin or one it shipped earlier, byte for byte, is BMN's; an edited copy is not.
+  let found
+  try { found = readOpenCodePlugin(path)?.state ?? 'missing' } catch { found = 'missing' }
   // OpenCode 2 refuses OpenCode 1's plugin at every start, so while it stays the plugin needs a reinstall.
-  const plugin = !openCodeBMNText(text) ? 'missing' : text === OPENCODE_PLUGIN && older.length === 0 ? 'wired' : 'wired (older wording)'
+  const plugin = found === 'current' && older.length === 0 ? 'wired' : ['current', 'earlier'].includes(found) ? 'wired (older wording)' : 'missing'
+  const reasons = [
+    ...(found === 'earlier' ? ['an earlier release of BMN\'s plugin; BMN upgrades it at its next start'] : []),
+    ...(found === 'edited' ? ['a copy of BMN\'s plugin edited since BMN wrote it; BMN leaves it as it is, and install replaces it'] : []),
+    ...(older.length === 0 ? [] : [`OpenCode 1's plugin is still at ${older.map((entry) => entry.file).join(', ')}; install removes it`])
+  ]
   const { entry, cli: cliPath } = openCodeFiles(path)
   const cli = readOpenCodeCli(cliPath)
   const listed = cli.state === 'read' && cli.plugins.includes(entry)
   const events = [
-    { event: 'plugin', optional: false, state: plugin,
-      ...(older.length === 0 ? {} : { reason: `OpenCode 1's plugin is still at ${older.map((entry) => entry.file).join(', ')}; install removes it` }) },
+    { event: 'plugin', optional: false, state: plugin, ...(reasons.length === 0 ? {} : { reason: reasons.join('; ') }) },
     { event: 'cli.json', optional: false, state: listed ? 'wired' : 'missing',
       ...(cli.reason === undefined ? {} : { reason: cli.reason }) }
   ]
@@ -1513,44 +1544,74 @@ function absentClaudeOrCodex(agent, path) {
 }
 
 /**
+ * Story 96.3: BMN's earlier plugin, read as `read`, replaced by the current one. A copy is made and read back first;
+ * the new text is published by rename only while the path still leads to the same file with the same bytes, and is
+ * read back after. Returns the copy's path.
+ */
+function upgradeOpenCodePlugin(path, read) {
+  assertDefaultsAdmission()
+  const target = linkTarget(path)
+  const unchanged = () => {
+    holdAtTestGate()
+    assertDefaultsAdmission()
+    if (linkTarget(path) !== target) throw new CliError('REVISION_CONFLICT', `${path} changed target while bmn was reading it; nothing was written`)
+    const now = readOpenCodePlugin(path)
+    if (now === null || now.identity !== read.identity || !now.bytes.equals(read.bytes)) {
+      throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
+    }
+  }
+  unchanged()
+  const backup = `${path}.bmn-backup-${new Date().toISOString()}`
+  copyFileSync(path, backup, constants.COPYFILE_EXCL)
+  if (!readFileSync(backup).equals(read.bytes)) throw new CliError('IO_ERROR', `the copy ${backup} does not read back as ${path}; the plugin was not upgraded`)
+  writeAtomically(path, OPENCODE_PLUGIN, unchanged)
+  if (currentText(path) !== OPENCODE_PLUGIN) throw new CliError('IO_ERROR', `${path} does not read back as BMN's plugin after the upgrade; its copy is ${backup}`)
+  return backup
+}
+
+/**
  * OpenCode's two entries: the plugin file and its folder named in cli.json. A plugin file there that is not
- * BMN's is left, and so is cli.json then, which would otherwise make OpenCode load it; BMN's own plugin in an
- * older wording, or OpenCode 1's plugin still beside it, counts as in place and is left for `hooks install`.
- * A cli.json BMN cannot add to leaves both files as they are, as `hooks install` does.
+ * BMN's is left, and so is cli.json then, which would otherwise make OpenCode load it. BMN's own plugin from an
+ * earlier release, byte for byte, is upgraded (Story 96.3); a copy of it someone edited is left and reported as
+ * changed. OpenCode 1's plugin still beside it counts as in place and is left for `hooks install`. A cli.json BMN
+ * cannot add to leaves both files as they are, as `hooks install` does.
  */
 function absentOpenCode(path) {
   const { entry, cli: cliPath } = openCodeFiles(path)
-  const before = currentText(path)
+  const before = readOpenCodePlugin(path)
   const cli = readOpenCodeCli(cliPath)
   const older = olderOpenCodePlugins(path)
   const placed = []
   const olderEvents = []
   const absent = []
   const left = []
+  const upgrade = before?.state === 'earlier'
   if (before === null) absent.push('plugin')
-  else if (openCodeBMNText(before)) {
+  else if (before.state === 'current' || upgrade) {
     placed.push('plugin')
-    if (before !== OPENCODE_PLUGIN || older.length > 0) olderEvents.push('plugin')
-  } else left.push({ event: 'plugin', why: 'foreign' })
+    if (older.length > 0) olderEvents.push('plugin')
+  } else left.push({ event: 'plugin', why: before.state === 'edited' ? 'changed' : 'foreign' })
   if (cli.state !== 'read' && cli.state !== 'missing') {
-    return { state: 'left', placed, older: olderEvents, installed: [], left, why: cli.state, detail: cli.reason.replace(/; BMN leaves it untouched$/, '') }
+    return { state: 'left', placed, older: upgrade ? ['plugin'] : olderEvents, installed: [], left, why: cli.state, detail: cli.reason.replace(/; BMN leaves it untouched$/, '') }
   }
   if (cli.plugins.includes(entry)) placed.push('cli.json')
   else if (left.length === 0) absent.push('cli.json')
   const done = { placed, older: olderEvents, left }
-  if (absent.length === 0) return { state: 'checked', ...done, installed: [] }
+  if (absent.length === 0 && !upgrade) return { state: 'checked', ...done, installed: [] }
   if (absent.includes('cli.json') && rewrittenNumbers(cli.text ?? '').length > 0) {
-    return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${cliPath} holds a number BMN cannot write back unchanged` }
+    return { state: 'left', ...done, older: upgrade ? ['plugin'] : olderEvents, installed: [], why: 'numbers', detail: `${cliPath} holds a number BMN cannot write back unchanged` }
   }
   const backups = []
   // The plugin first and cli.json second, as `hooks install` writes them: a stop between leaves a plugin OpenCode does not load yet.
   if (absent.includes('plugin')) writeHookFile(path, null, linkTarget(path), OPENCODE_PLUGIN)
+  if (upgrade) backups.push(upgradeOpenCodePlugin(path, before))
   if (absent.includes('cli.json')) {
     const nextText = `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
     const backup = writeHookFile(cliPath, cli.text, linkTarget(cliPath), nextText)
     if (backup !== null) backups.push(backup)
   }
-  return { state: 'installed', ...done, placed: [...placed, ...absent], installed: absent, ...(backups.length === 0 ? {} : { backups }) }
+  return { state: 'installed', ...done, placed: [...placed, ...absent], installed: absent,
+    ...(upgrade ? { upgraded: ['plugin'] } : {}), ...(backups.length === 0 ? {} : { backups }) }
 }
 
 /**
@@ -1585,6 +1646,7 @@ async function installAbsentCommand(agents, pathFor, asJson) {
       const head = `${name}  ${result.file}`
       const body = [
         ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
+        ...((result.upgraded ?? []).length > 0 ? [`  upgraded from an earlier BMN release: ${result.upgraded.join(', ')}`] : []),
         ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
         ...((result.widened ?? []).length > 0 ? [`  matcher widened: ${result.widened.join(', ')}`] : []),
         `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,

@@ -3,7 +3,7 @@ import { execFile, spawn as spawnChild } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:net'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { homedir, tmpdir } from 'node:os'
@@ -16,6 +16,7 @@ import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE, pushPolicyStatus, readPu
 import { PUSH_POLICY_STILL_ASKS, type PushLevel, type PushPolicyStatus } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 import { readValidRoster } from '../../bin/agents-state.mjs'
+import { shippedPluginText } from './test-fixtures/earlier-opencode-plugins'
 import { approveRoster } from '../main/agents-approval'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -3984,7 +3985,8 @@ describe('OpenCode hooks', () => {
     // The home screen keeps the last session: its turn still reaches BMN.
     terminal.route = { type: 'home' }
     emit('session.execution.started', { sessionID: OPENCODE_SESSION })
-    const pinned = { pin: OPENCODE_SESSION }
+    // Every event carries the plugin's promise (Story 96.3).
+    const pinned = { pin: OPENCODE_SESSION, bmn_plugin: 1 }
     await vi.waitFor(() => expect(hooks()).toHaveLength(16))
     expect(hooks()).toEqual([
       { hook_event_name: 'session.created', sessionID: OPENCODE_SESSION, info: { id: OPENCODE_SESSION }, ...pinned },
@@ -4002,8 +4004,8 @@ describe('OpenCode hooks', () => {
       { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION, source: 'interrupted', ...pinned },
       { hook_event_name: 'session.idle', sessionID: CHILD, ...pinned },
       { hook_event_name: 'session.compacted', sessionID: CHILD, ...pinned },
-      { hook_event_name: 'tui.session.select', sessionID: OLDER, pin: OLDER },
-      { hook_event_name: 'session.deleted', sessionID: OLDER, pin: OLDER },
+      { hook_event_name: 'tui.session.select', sessionID: OLDER, pin: OLDER, bmn_plugin: 1 },
+      { hook_event_name: 'session.deleted', sessionID: OLDER, pin: OLDER, bmn_plugin: 1 },
       { hook_event_name: 'tui.session.select', sessionID: OPENCODE_SESSION, ...pinned },
       { hook_event_name: 'session.status', sessionID: OPENCODE_SESSION, status: { type: 'busy' }, ...pinned }
     ])
@@ -4058,22 +4060,24 @@ describe('OpenCode hooks', () => {
     for (const event of recorded.events) emit(event.type, event.data)
     await stop?.()
     const told = calls.filter((call) => call.args.includes('hook')).map((call) => ({ pin: call.env.BMN_OPENCODE_SESSION_ID!, body: JSON.parse(call.input ?? 'null') as Record<string, unknown> }))
-    // What the recorded plugin told BMN, but for the interrupt it now marks and the quit it now reports (93.1 recorded model
-    // steps as message.updated; these events leave them out).
-    const expected = recorded.hooks.filter((hook) => hook.body.hook_event_name !== 'message.updated').map((hook) => ({ pin: hook.pinned, body: hook.body }))
-    expect(expected.at(-1)).toEqual({ pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root' } })
-    expected[expected.length - 1] = { pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root', source: 'interrupted' } }
-    expect(told).toEqual([...expected, { pin: 'ses_root', body: { hook_event_name: 'tui.exit', sessionID: 'ses_root' } }])
+    // What the recorded plugin told BMN, but for the interrupt it now marks, the quit it now reports and the promise every
+    // event now carries (Story 96.3; 93.1 recorded model steps as message.updated; these events leave them out).
+    const expected = recorded.hooks.filter((hook) => hook.body.hook_event_name !== 'message.updated').map((hook) => ({ pin: hook.pinned, body: { ...hook.body, bmn_plugin: 1 } as Record<string, unknown> }))
+    expect(expected.at(-1)).toEqual({ pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root', bmn_plugin: 1 } })
+    expected[expected.length - 1] = { pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root', source: 'interrupted', bmn_plugin: 1 } }
+    expect(told).toEqual([...expected, { pin: 'ses_root', body: { hook_event_name: 'tui.exit', sessionID: 'ses_root', bmn_plugin: 1 } }])
 
     // Each body through bmn hook opencode, as the plugin runs it: what the service is told each event speaks for.
     const fixture = await cliFixture()
     for (const { pin, body } of told) {
       expect((await runHook(fixture, 'opencode', body, OPENCODE_FOREGROUND, { BMN_OPENCODE_SESSION_ID: pin })).code).toBe(0)
     }
-    const observed = fixture.handlers.observeHookEvent.mock.calls.map(([params]) => params as { event: string; source: string | null })
+    const observed = fixture.handlers.observeHookEvent.mock.calls.map(([params]) => params as { event: string; source: string | null; plugin?: number })
     expect(observed.map(({ event, source }) => [event, source])).toEqual([
       ['session.created', null], ['session.status', null], ['session.idle', null], ['session.status', null], ['session.idle', null],
       ['session.status', 'subagent'], ['session.idle', 'subagent'], ['session.status', null], ['session.idle', 'interrupted'], ['tui.exit', null]])
+    // The service hears the promise with each event, so the Away wake can tell this plugin from an earlier one (Story 96.3).
+    expect(observed.every((params) => params.plugin === 1)).toBe(true)
     // A child's finished run opens no finished-turn notice of the root; the root's own turns and the owner's stop do.
     expect(fixture.handlers.openAttention.mock.calls.filter(([params]) => (params as { requestKey: string }).requestKey === 'opencode:turn')).toHaveLength(3)
   })
@@ -4103,8 +4107,8 @@ describe('OpenCode hooks', () => {
     await vi.waitFor(() => expect(hooks()).toHaveLength(2))
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(hooks()).toEqual([
-      { hook_event_name: 'tool.execute.after', sessionID: OPENCODE_SESSION, tool_name: 'read', tool_input: { filePath: 'src/a.ts' }, tool_response: [{ type: 'text', text: 'made-up' }] },
-      { hook_event_name: 'tool.execute.after', sessionID: CHILD, tool_name: 'bash', tool_input: { command: 'false' }, error: { type: 'tool', message: 'exit 1' } }
+      { hook_event_name: 'tool.execute.after', sessionID: OPENCODE_SESSION, tool_name: 'read', tool_input: { filePath: 'src/a.ts' }, tool_response: [{ type: 'text', text: 'made-up' }], bmn_plugin: 1 },
+      { hook_event_name: 'tool.execute.after', sessionID: CHILD, tool_name: 'bash', tool_input: { command: 'false' }, error: { type: 'tool', message: 'exit 1' }, bmn_plugin: 1 }
     ])
     stop?.()
   })
@@ -4413,8 +4417,13 @@ describe('OpenCode hooks', () => {
     expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
     await writeFile(path, '// unrelated plugin\n')
     expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toMatch(/plugin\s+missing/)
+    // Story 96.3: BMN's comments are not BMN's bytes. A copy edited since is not counted as BMN's; one BMN shipped earlier is.
+    await writeFile(path, shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn'))
+    expect((await runHooks(['check', 'opencode', '--file', path])).stdout)
+      .toMatch(/plugin\s+wired \(older wording\)\s+an earlier release of BMN's plugin; BMN upgrades it at its next start/)
     await writeFile(path, '// Shipped by BMN\n// bmn hook opencode\n')
-    expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toContain('wired (older wording)')
+    expect((await runHooks(['check', 'opencode', '--file', path])).stdout)
+      .toMatch(/plugin\s+missing\s+a copy of BMN's plugin edited since BMN wrote it; BMN leaves it as it is, and install replaces it/)
     const repair = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
     expect(repair.installed).toEqual(['plugin'])
     expect(await readFile(repair.backups[0], 'utf8')).toBe('// Shipped by BMN\n// bmn hook opencode\n')
@@ -4460,7 +4469,7 @@ describe('OpenCode hooks', () => {
 /** One app's row of `hooks install --absent --json`. */
 interface AbsentReport {
   agent: string; file: string; state: string; placed: string[]; older: string[]; installed: string[]
-  left: { event: string; why: string }[]; why?: string; detail?: string; backups?: string[]
+  left: { event: string; why: string }[]; why?: string; detail?: string; backups?: string[]; upgraded?: string[]
 }
 
 /** `hooks install --absent --json` for one app's file, parsed: what BMN runs by itself at every start (Story 75.9). */
@@ -4640,7 +4649,7 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(after.PostCompact).toBeUndefined()
   })
 
-  it('adds OpenCode\'s plugin and its cli.json entry, keeps BMN\'s older plugin, and leaves another plugin and its cli.json alone', async () => {
+  it('adds OpenCode\'s plugin and its cli.json entry, leaves an edited copy of BMN\'s plugin, another plugin and its cli.json alone', async () => {
     const path = await openCodeFixture()
     const entry = dirname(path)
     const cli = join(dirname(entry), 'cli.json')
@@ -4652,10 +4661,12 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ plugins: [entry] })
     expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
 
-    const older = '// Shipped by BMN\n// bmn hook opencode\n'
-    await writeFile(path, older)
-    expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', older: ['plugin'], installed: [] } })
-    expect(await readFile(path, 'utf8')).toBe(older)
+    // BMN's comments with bytes BMN never shipped: someone's edit, kept and named (Story 96.3).
+    const edited = '// Shipped by BMN\n// bmn hook opencode\n'
+    await writeFile(path, edited)
+    expect(await installAbsent('opencode', path)).toMatchObject({ code: 1, report: { state: 'checked', left: [{ event: 'plugin', why: 'changed' }], installed: [] } })
+    expect(await readFile(path, 'utf8')).toBe(edited)
+    expect(await backupsOf(path)).toEqual([])
 
     const foreign = await openCodeFixture('// the owner\'s own plugin\n')
     const foreignCli = join(dirname(dirname(foreign)), 'cli.json')
@@ -4664,6 +4675,77 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(left.report).toMatchObject({ state: 'checked', installed: [], left: [{ event: 'plugin', why: 'foreign' }] })
     expect(await readFile(foreign, 'utf8')).toBe('// the owner\'s own plugin\n')
     expect(existsSync(foreignCli)).toBe(false)
+  })
+
+  it('upgrades BMN\'s October 14 plugin byte for byte at start, with a copy, and keeps every other cli.json entry (Story 96.3)', async () => {
+    const path = await openCodeFixture()
+    const entry = dirname(path)
+    const cli = join(dirname(entry), 'cli.json')
+    const printed = (await runHooks(['print', 'opencode'])).stdout
+    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
+    await writeFile(path, october)
+    await writeFile(cli, `${JSON.stringify({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', entry, './another'] }, null, 4)}\n`)
+    const cliBefore = await readFile(cli, 'utf8')
+    const upgraded = await installAbsent('opencode', path)
+    expect(upgraded.code).toBe(0)
+    expect(upgraded.report).toMatchObject({ state: 'installed', installed: [], upgraded: ['plugin'], placed: ['plugin', 'cli.json'], left: [] })
+    expect(await readFile(path, 'utf8')).toBe(printed)
+    const [copy, ...more] = await backupsOf(path)
+    expect(more).toEqual([])
+    expect(upgraded.report.backups).toEqual([join(entry, copy!)])
+    expect(await readFile(join(entry, copy!), 'utf8')).toBe(october)
+    // The registration was already BMN's: cli.json is not rewritten, and the owner's entries stay where they were.
+    expect(await readFile(cli, 'utf8')).toBe(cliBefore)
+    expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
+    expect(await backupsOf(path)).toEqual([copy])
+    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
+
+    // Without BMN's entry: the plugin is upgraded first and the entry added after the owner's.
+    await writeFile(path, october)
+    await writeFile(cli, `${JSON.stringify({ plugins: ['owner-plugin'] })}\n`)
+    const both = await installAbsent('opencode', path)
+    expect(both.report).toMatchObject({ state: 'installed', installed: ['cli.json'], upgraded: ['plugin'] })
+    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ plugins: ['owner-plugin', entry] })
+    expect(await readFile(path, 'utf8')).toBe(printed)
+
+    // One byte more is an edit: left as it is, nothing copied.
+    const copies = (await backupsOf(path)).length
+    await writeFile(path, `${october}// mine\n`)
+    expect(await installAbsent('opencode', path)).toMatchObject({ code: 1, report: { left: [{ event: 'plugin', why: 'changed' }] } })
+    expect(await readFile(path, 'utf8')).toBe(`${october}// mine\n`)
+    expect(await backupsOf(path)).toHaveLength(copies)
+  })
+
+  it.each([
+    ['other bytes', async (path: string, october: string) => writeFile(path, `${october}// written meanwhile\n`)],
+    // The same bytes in another file put in its place: what was read is not the file that would be replaced.
+    ['the same bytes in another file', async (path: string, october: string) => {
+      await writeFile(`${path}.other`, october)
+      await rename(`${path}.other`, path)
+    }]
+  ] as const)('upgrades nothing when the plugin file becomes %s between BMN\'s read and its write (Story 96.3)', async (_name, change) => {
+    const path = await openCodeFixture()
+    const cli = join(dirname(dirname(path)), 'cli.json')
+    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
+    await writeFile(path, october)
+    await writeFile(cli, `${JSON.stringify({ plugins: [dirname(path)] })}\n`)
+    const gate = join(dirname(path), 'gate')
+    const installing = runHooks(['install', 'opencode', '--absent', '--yes', '--file', path, '--json'], { BMN_HOOKS_TEST_GATE: gate })
+    const deadline = Date.now() + 10_000
+    while (!existsSync(`${gate}.waiting`)) {
+      if (Date.now() > deadline) throw new Error('the start-up install never reached its check')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const identity = (await stat(path)).ino
+    await change(path, october)
+    await writeFile(gate, '')
+    const result = await installing
+    expect(result.code).toBe(1)
+    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', detail: expect.stringContaining('changed while bmn was reading it') })
+    expect(await readFile(path, 'utf8')).not.toBe((await runHooks(['print', 'opencode'])).stdout)
+    if (_name === 'the same bytes in another file') expect((await stat(path)).ino).not.toBe(identity)
+    expect(await backupsOf(path)).toEqual([])
+    expect((await readdir(dirname(path))).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
   it.each([

@@ -457,6 +457,8 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
   const source = agent === 'opencode' && openCodeSubagent(event) ? 'subagent' : hookEventName(event.source) ??
     (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger) : undefined)
   const toolName = hookEventName(event.tool_name)
+  // What BMN's OpenCode plugin promises with every event it sends (Story 96.3); earlier plugins send none.
+  const plugin = agent === 'opencode' && Number.isSafeInteger(event.bmn_plugin) && event.bmn_plugin >= 1 && event.bmn_plugin <= 999 ? event.bmn_plugin : undefined
   const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
     (agent === 'codex' && eventName === 'PostToolUse') || (agent === 'opencode' && eventName === 'tool.execute.after')
     ? toolFingerprint(event, agent) : undefined
@@ -468,6 +470,7 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
       effects,
       ...(source === undefined ? {} : { source }),
       ...(toolName === undefined ? {} : { toolName }),
+      ...(plugin === undefined ? {} : { plugin }),
       ...(fingerprint === undefined ? {} : { fingerprint }),
       ...(apiHost === null ? {} : { apiHost }),
       ...(model === undefined ? {} : { model }),

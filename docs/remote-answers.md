@@ -274,6 +274,10 @@ shapes above:
   observed with `source: "subagent"`: its compaction is logged as the subagent's, its run starting does
   not reset the repeat watch, and its run finishing is never the root's turn (Story 93.3, recorded on
   2.0.29 and 2.0.32: a child's run reaches the plugin while the terminal shows its root).
+- Every event the plugin sends carries `bmn_plugin: 1`, its promise that the owner's stop arrives as
+  `source: "interrupted"` and quitting as `tui.exit` (Story 96.3). `bmn hook opencode` passes it on as the
+  observation's `plugin`; BMN's earlier plugins sent none, and BMN's October 14 plugin, replayed, reports the
+  owner's stop as a plain `session.idle`, so the Away wake leaves alone a session whose events lack the mark.
 - As it loads, before OpenCode draws, the plugin writes `OSC 7501;state=starting:app=opencode` to its
   terminal, which starts BMN's screen mirror (Story 93.3; 93.1 checked that mirror cell for cell against
   the real terminal on 2.0.29 and 2.0.32). When OpenCode quits it waits for the plugin, which tells
