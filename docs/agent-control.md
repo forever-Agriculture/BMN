@@ -713,7 +713,11 @@ BMN shipped earlier (a fixed list of SHA-256 hashes read from main's history, `E
 made and read back, the new text replaces the file only while the path still leads to the file BMN read with the bytes
 it read, and is read back after (Story 96.3); one edited since is left and listed as `changed`, with its `cli.json`
 entry. OpenCode 2.0.29 loads a changed plugin file again while it runs (its log says `plugin reconciliation`), and the Away
-wake-up goes by the mark on each event, so a stop the earlier plugin reported stays a stop. Every file is copied before it changes,
+wake-up goes by the mark on each event, so a stop the earlier plugin reported stays a stop. Known limit: the current plugin
+reports its own unloading as `tui.exit`, so a later rewrite of it while OpenCode runs in a BMN session (by hand, or a rollback
+to a copy) reaches BMN as a quit followed by the next plugin's events, which withdraws that session's open requests; the
+October 14 plugin says nothing as it unloads, and BMN's own sessions have ended before its next start runs this install
+(Story 96.3 live check). Every file is copied before it changes,
 written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,

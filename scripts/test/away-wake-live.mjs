@@ -284,12 +284,22 @@ async function run(scenario, binary) {
           await input.focus(); await page.keyboard.press('Escape'); await sleep(300); await page.keyboard.press('Escape')
         }
         const quit = async () => { await input.focus(); await page.keyboard.press('Control+X'); await sleep(300); await page.keyboard.press('q') }
+        // The fixture's agent, which the stand-in answers as one: run 2 (evidence 96.3) once found OpenCode's own Build agent
+        // selected after a restart that followed two reloads. Tab moves to the next primary agent; the report says if it was needed.
+        const fixtureAgent = async () => {
+          const shown = async () => (await screen().catch(() => '')).split('\n').find((line) => /^ {2}┃ {2}\S.* · /u.test(line)) ?? ''
+          const first = await shown()
+          for (let turn = 0; turn < 4 && !/┃ {2}Bmn-Probe · /u.test(await shown()); turn += 1) { await input.focus(); await page.keyboard.press('Tab'); await sleep(700) }
+          return { first: first.trim(), now: (await shown()).trim() }
+        }
+        const exits = async () => (await hookEvents()).filter((event) => event.event === 'tui.exit').length
         // The owner's stop, reported by the October 14 plugin as a plain finished turn.
         const one = await tick(1, stop)
         const oldIdle = (await hookEvents()).filter((event) => event.event === 'session.idle').at(-1)
         check(`${name}: the October 14 plugin reports the owner's stop as a plain session.idle`, oldIdle !== undefined && oldIdle.source === null, { latest: oldIdle })
         check(`${name}: tick 1 leaves the stop of a session running the earlier plugin alone`, because(one, earlier), { logs: one })
         // BMN's start-up install, while that OpenCode still runs with the old plugin loaded.
+        const exitsBefore = await exits()
         const print = execFileSync(process.execPath, [cli, 'hooks', 'print', 'opencode'], { encoding: 'utf8', env: environment })
         let upgraded
         try {
@@ -305,18 +315,26 @@ async function run(scenario, binary) {
         // 2.0.29 reloads a changed plugin file by itself, but neither speaks for the turn the earlier plugin reported.
         const two = await tick(2, async () => undefined)
         check(`${name}: tick 2 leaves the owner's earlier stop alone after the upgrade`, skipped(two), { logs: two })
+        // The October 14 plugin says nothing as it unloads, so OpenCode's reload of the upgraded file withdraws nothing of BMN's.
+        check(`${name}: OpenCode's reload of the upgraded file reached BMN as no quit`, await exits() === exitsBefore, { exits: await exits() })
         // A turn after OpenCode's own reload carries the current plugin's mark: the line is typed once, without a restart.
         const three = await tick(3, () => type('Reply with the single word ok.'))
         check(`${name}: tick 3 types the line once into the root whose OpenCode reloaded the upgraded plugin by itself`, three.filter((line) => line.includes('typed')).length === 1, { logs: three })
         check(`${name}: OpenCode submitted the whole line once, as its own prompt`, wakes() === 1, { wakes: wakes() })
         // A rollback: the owner puts the copy of the October 14 file back; OpenCode reloads it and its turns are unmarked again.
+        let exitsAtRollback = null
         const four = await tick(4, async () => {
+          exitsAtRollback = await exits()
           if (copy) copyFileSync(copy, openCode.plugin)
           await sleep(3_000)
           await type('Reply with the single word ok.')
         })
         check(`${name}: tick 4 leaves alone a finished turn once the October 14 copy is put back`,
           createHash('sha256').update(readFileSync(openCode.plugin)).digest('hex') === OCTOBER_14.sha256 && because(four, earlier), { logs: four })
+        // Known limit (docs/agent-control.md): the current plugin reports its own unloading as tui.exit, so a reload that replaces
+        // it reaches BMN as a quit followed by the next plugin's events. It withdraws that session's open requests; the wake stays safe.
+        check(`${name}: replacing the current plugin while OpenCode runs reaches BMN as one tui.exit, then the next plugin's events`,
+          await exits() === (exitsAtRollback ?? 0) + 1 && (await hookEvents()).at(-1)?.event !== 'tui.exit', { exits: await exits() })
         // BMN's next start upgrades the rolled-back file again; quit and start OpenCode again in the same terminal.
         let again
         const five = await tick(5, async () => {
@@ -324,9 +342,12 @@ async function run(scenario, binary) {
             again = JSON.parse(execFileSync(process.execPath, [cli, 'hooks', 'install', 'opencode', '--absent', '--yes', '--file', openCode.plugin, '--json'],
               { encoding: 'utf8', env: { ...environment, ...openCode.exports } })).agents[0]
           } catch (error) { again = { error: String(error).slice(0, 400) } }
+          // OpenCode reloads the rewritten file by itself; quitting waits until that has settled.
+          await sleep(5_000)
           await quit(); await sleep(5_000)
           await type(`bash '${join(openCode.profile, 'start.sh')}'`)
           for (let waited = 0; waited < 60_000 && !/Ask anything/u.test(await screen().catch(() => '')); waited += 2_000) await sleep(2_000)
+          report[`${name}AgentAfterRestart`] = await fixtureAgent()
           await type('Read the README three times. SYNTHETIC-TOOL')
         }, 100_000)
         const secondCopy = (again?.backups ?? [])[0]
