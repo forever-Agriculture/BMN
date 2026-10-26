@@ -1,4 +1,4 @@
-// MODULE: away-wake-live.mjs - Stories 90.6 and 93.4 on the running build: real Claude Code, Codex and pinned OpenCode sessions in a test-mode BMN, Away with the wake-up's 2 hours shortened; the line is typed once into each idle session and never into one with a draft, an open dialog, the owner's interrupt or a shell in front
+// MODULE: away-wake-live.mjs - Stories 90.6, 93.4 and 96.3 on the running build: real Claude Code, Codex and pinned OpenCode sessions in a test-mode BMN, Away with the wake-up's 2 hours shortened; the line is typed once into each idle session and never into one with a draft, an open dialog, the owner's interrupt or a shell in front
 // Each app gets its own BMN in test mode with temporary BMN data, config, state and runtime folders (removed at the end); the agents
 // keep their own sign-ins where they are (nothing is copied; a test-mode BMN installs no hooks, index.ts:641) and are typed into a
 // shell in a scratch folder. Away and Back are said with the owner's CLI token over that BMN's socket. Evidence: BMN's app log
@@ -6,7 +6,11 @@
 // OpenCode (Epic 93) runs once per `--opencode PATH`, a pinned 2.0.29 or 2.0.32 binary, in a disposable profile under the scratch
 // folder whose plugin the tested BMN's own `bmn hooks install` writes, against a loopback stand-in model with synthetic replies:
 // no account and no external or paid call. Its evidence is what the stand-in was asked.
-// Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,codex,opencode] [--opencode PATH]... [--binary PATH]
+// `opencode-upgrade` (Story 96.3) starts the same OpenCode on BMN's October 14 plugin, read from this repository's history:
+// its stop is left alone, BMN's start-up install upgrades the file while that OpenCode still runs, a finished turn of the
+// still-loaded old plugin is left alone, and after a restart on the upgraded plugin one finished turn (with three tool
+// calls) is woken once while the owner's stop and quitting are not.
+// Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,codex,opencode,opencode-upgrade] [--opencode PATH]... [--binary PATH]
 //   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -88,12 +92,29 @@ function wakesInTranscript(app, since) {
   return count
 }
 
+/** BMN's OpenCode plugin text as a commit of this repository shipped it, its template literal evaluated (Story 96.3). */
+function shippedPlugin(commit, file) {
+  const source = execFileSync('git', ['-C', repoRoot, 'show', `${commit}:${file}`], { encoding: 'utf8', maxBuffer: 1 << 26 })
+  const declaration = 'const OPENCODE_PLUGIN = `'
+  let body = ''
+  for (let at = source.indexOf(declaration) + declaration.length; at < source.length; at += 1) {
+    if (source[at] === '\\') { body += source[at] + source[at + 1]; at += 1; continue }
+    if (source[at] === '`') return new Function(`return \`${body}\``)()
+    body += source[at]
+  }
+  throw new Error(`no OPENCODE_PLUGIN at ${commit}`)
+}
+/** The plugin OpenCode still loaded on the owner's computer on 2026-10-26, and its SHA-256 (EARLIER_OPENCODE_PLUGINS). */
+const OCTOBER_14 = { commit: '033eb7d88f', file: 'apps/desktop/bin/bmn', sha256: '4cebff68da6edb803b706447ca3ce2de3f5976f6c0db466d1b6cee8db0d99fde' }
+
 /**
  * OpenCode's model for the run: a loopback Chat Completions stand-in that records each prompt and answers "ok". A prompt
  * with SYNTHETIC-HOLD is held until OpenCode drops it (the owner's interrupt), one with SYNTHETIC-SLOW is answered after
- * 4 s (time to leave a draft or a dialog behind while it works). Any other route or a tunnel is recorded and fails the run.
+ * 4 s (time to leave a draft or a dialog behind while it works), one with SYNTHETIC-TOOL calls the read tool on the
+ * profile's README three times before it answers (Story 96.3: tool events and the repeat watch). Any other route or a
+ * tunnel is recorded and fails the run.
  */
-async function startStandIn() {
+async function startStandIn(readme = () => '') {
   const requests = []
   const refused = []
   const text = (content) => typeof content === 'string' ? content : Array.isArray(content) ? content.map((part) => part?.text ?? '').join('\n') : ''
@@ -108,7 +129,9 @@ async function startStandIn() {
       // The fixture agent's own turns; OpenCode's title requests carry another system prompt.
       const agent = messages[0]?.role === 'system' && text(messages[0].content).startsWith('Synthetic fixture')
       const user = text(messages.filter((message) => message.role === 'user').at(-1)?.content)
-      requests.push({ at: Date.now(), agent, user: user.slice(0, 400) })
+      const lastUser = messages.findLastIndex((message) => message.role === 'user')
+      const toolResults = messages.slice(lastUser + 1).filter((message) => message.role === 'tool').length
+      requests.push({ at: Date.now(), agent, user: user.slice(0, 400), ...(toolResults > 0 ? { toolResults } : {}) })
       const base = { id: `chatcmpl-${requests.length}`, object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: data.model }
       const send = (delta, finish = null) => response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`)
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
@@ -121,6 +144,12 @@ async function startStandIn() {
         response.end('data: [DONE]\n\n')
       }
       if (agent && user.includes('SYNTHETIC-HOLD')) return
+      if (agent && user.includes('SYNTHETIC-TOOL') && toolResults < 3) {
+        send({ tool_calls: [{ index: 0, id: `call_synthetic_${requests.length}`, type: 'function', function: { name: 'read', arguments: JSON.stringify({ filePath: readme() }) } }] })
+        send({}, 'tool_calls')
+        response.end('data: [DONE]\n\n')
+        return
+      }
       setTimeout(finish, agent && user.includes('SYNTHETIC-SLOW') ? 4_000 : 0)
     })
   })
@@ -129,8 +158,11 @@ async function startStandIn() {
   return { port: server.address().port, requests, refused, close: () => { server.closeAllConnections(); return new Promise((done) => server.close(done)) } }
 }
 
-/** A fresh OpenCode profile under the scratch folder for one pinned binary, and the script the session's shell runs to start it. */
-function openCodeProfile(binary, port) {
+/**
+ * A fresh OpenCode profile under the scratch folder for one pinned binary, and the script the session's shell runs to start
+ * it. With `earlier`, the profile holds BMN's October 14 plugin and its cli.json entry, and the script installs nothing.
+ */
+function openCodeProfile(binary, port, earlier = false) {
   const version = OPENCODE_PINS[createHash('sha256').update(readFileSync(binary)).digest('hex')]
   if (!version) throw new Error(`${binary} is not a pinned OpenCode build`)
   const profile = join(scratch, `opencode-${version}-${Date.now()}`)
@@ -143,7 +175,8 @@ function openCodeProfile(binary, port) {
     update: 'disable', model: 'fixture/synthetic',
     providers: { fixture: { name: 'Synthetic loopback', package: '@opencode/ai/providers/openai-compatible', env: ['SYNTHETIC_API_KEY'],
       settings: { baseURL: `http://127.0.0.1:${port}/v1` }, models: { synthetic: model } } },
-    agents: { 'bmn-probe': { mode: 'primary', system: 'Synthetic fixture', permissions: [{ action: '*', resource: '*', effect: 'deny' }], model: 'fixture/synthetic' } },
+    agents: { 'bmn-probe': { mode: 'primary', system: 'Synthetic fixture', model: 'fixture/synthetic',
+      permissions: [{ action: '*', resource: '*', effect: 'deny' }, ...(earlier ? [{ action: 'read', resource: '*', effect: 'allow' }] : [])] } },
     default_agent: 'bmn-probe'
   }, null, 2)}\n`)
   const proxy = `http://127.0.0.1:${port}`
@@ -153,22 +186,34 @@ function openCodeProfile(binary, port) {
     OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_PROJECT_CONFIG: '1', SYNTHETIC_API_KEY: 'synthetic-only', HTTP_PROXY: proxy, HTTPS_PROXY: proxy,
     NO_PROXY: '127.0.0.1,localhost', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'
   }
+  const plugin = join(profile, 'config/opencode/bmn/tui.ts')
+  if (earlier) {
+    const text = shippedPlugin(OCTOBER_14.commit, OCTOBER_14.file)
+    if (createHash('sha256').update(text).digest('hex') !== OCTOBER_14.sha256) throw new Error('the October 14 plugin read back with other bytes')
+    mkdirSync(dirname(plugin), { mode: 0o700 })
+    writeFileSync(plugin, text, { mode: 0o600 })
+    writeFileSync(join(profile, 'config/opencode/cli.json'), `${JSON.stringify({ plugins: [dirname(plugin)] }, null, 2)}\n`, { mode: 0o600 })
+  }
   // The session's own `bmn` is the tested build's, so the plugin OpenCode loads is the one that build installs.
   writeFileSync(join(profile, 'start.sh'), [
-    '# MODULE: start.sh - starts one pinned OpenCode in its disposable profile, with the tested BMN\'s plugin installed',
+    `# MODULE: start.sh - starts one pinned OpenCode in its disposable profile, ${earlier ? 'on the plugin already there' : 'with the tested BMN\'s plugin installed'}`,
     `cd '${join(profile, 'work')}' || exit 1`,
     ...Object.entries(exports).map(([name, value]) => `export ${name}='${value}'`),
-    `bmn hooks install --yes opencode > '${join(profile, 'install.txt')}' 2>&1 || exit 1`,
+    ...(earlier ? [] : [`bmn hooks install --yes opencode > '${join(profile, 'install.txt')}' 2>&1 || exit 1`]),
     `exec '${binary}' --standalone`, ''
   ].join('\n'))
-  return { version, profile }
+  return { version, profile, plugin, exports, readme: join(profile, 'work/README.md') }
 }
 
-async function run(app, binary) {
-  const standIn = app === 'opencode' ? await startStandIn() : null
-  const openCode = standIn ? openCodeProfile(binary, standIn.port) : null
-  const name = openCode ? `opencode ${openCode.version}` : app
-  if (openCode) report[`${app}-${openCode.version}`] = { binary, profile: openCode.profile }
+async function run(scenario, binary) {
+  const upgrade = scenario === 'opencode-upgrade'
+  const app = upgrade ? 'opencode' : scenario
+  let readme = ''
+  const standIn = app === 'opencode' ? await startStandIn(() => readme) : null
+  const openCode = standIn ? openCodeProfile(binary, standIn.port, upgrade) : null
+  if (openCode) readme = openCode.readme
+  const name = openCode ? `opencode${upgrade ? '-upgrade' : ''} ${openCode.version}` : app
+  if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
   const command = app === 'claude' ? 'claude' : app === 'codex' ? `codex -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
@@ -227,7 +272,61 @@ async function run(app, binary) {
         return ticks(n)
       }
       const skipped = (lines) => lines.length === 1 && lines[0].includes('skipped')
-      if (standIn) {
+      const sessionId = await page.locator('.session-terminal.selected').getAttribute('data-session-id')
+      const hookEvents = () => page.evaluate((id) => globalThis.aiTerminal.listHookEvents(id), sessionId)
+      if (upgrade) {
+        const wakes = () => standIn.requests.filter((request) => request.agent && request.user === `${WAKE_LINE} `).length
+        const because = (lines, reason) => skipped(lines) && lines[0].endsWith(`: ${reason}`)
+        const earlier = 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
+        const stop = async () => {
+          await type('Wait for me. SYNTHETIC-HOLD'); await sleep(3_000)
+          await input.focus(); await page.keyboard.press('Escape'); await sleep(300); await page.keyboard.press('Escape')
+        }
+        const quit = async () => { await input.focus(); await page.keyboard.press('Control+X'); await sleep(300); await page.keyboard.press('q') }
+        // The owner's stop, reported by the October 14 plugin as a plain finished turn.
+        const one = await tick(1, stop)
+        const oldIdle = (await hookEvents()).filter((event) => event.event === 'session.idle').at(-1)
+        check(`${name}: the October 14 plugin reports the owner's stop as a plain session.idle`, oldIdle !== undefined && oldIdle.source === null, { latest: oldIdle })
+        check(`${name}: tick 1 leaves the stop of a session running the earlier plugin alone`, because(one, earlier), { logs: one })
+        // BMN's start-up install, while that OpenCode still runs with the old plugin loaded.
+        const print = execFileSync(process.execPath, [cli, 'hooks', 'print', 'opencode'], { encoding: 'utf8', env: environment })
+        let upgraded
+        try {
+          upgraded = JSON.parse(execFileSync(process.execPath, [cli, 'hooks', 'install', 'opencode', '--absent', '--yes', '--file', openCode.plugin, '--json'],
+            { encoding: 'utf8', env: { ...environment, ...openCode.exports } })).agents[0]
+        } catch (error) { upgraded = { error: String(error).slice(0, 400) } }
+        const copy = (upgraded.backups ?? [])[0]
+        const copied = copy ? createHash('sha256').update(readFileSync(copy)).digest('hex') : null
+        check(`${name}: the start-up install upgrades the October 14 plugin byte for byte, with a copy, while OpenCode runs`,
+          upgraded.state === 'installed' && (upgraded.upgraded ?? []).join() === 'plugin' && copied === OCTOBER_14.sha256 && readFileSync(openCode.plugin, 'utf8') === print,
+          { report: upgraded, copied })
+        // A turn the still-loaded old plugin reports: the upgraded file on disk says nothing about this session.
+        const two = await tick(2, () => type('Reply with the single word ok.'))
+        check(`${name}: tick 2 leaves alone a finished turn of the session that still runs the earlier plugin`, because(two, earlier), { logs: two })
+        // Reload: quit and start OpenCode again in the same terminal; it loads the upgraded plugin.
+        const three = await tick(3, async () => {
+          await quit(); await sleep(5_000)
+          await type(`bash '${join(openCode.profile, 'start.sh')}'`)
+          for (let waited = 0; waited < 60_000 && !/Ask anything/u.test(await screen().catch(() => '')); waited += 2_000) await sleep(2_000)
+          await type('Read the README three times. SYNTHETIC-TOOL')
+        }, 100_000)
+        check(`${name}: tick 3 types the line once into the root restarted on the upgraded plugin`, three.filter((line) => line.includes('typed')).length === 1, { logs: three })
+        check(`${name}: OpenCode submitted the whole line once, as its own prompt`, wakes() === 1, { wakes: wakes() })
+        const tools = (await hookEvents()).filter((event) => event.event === 'tool.execute.after')
+        check(`${name}: the upgraded plugin's three identical tool calls reach the repeat watch`, tools.length >= 3 && tools.slice(-3).map((event) => event.repeat).join() === '1,2,3',
+          { tools: tools.map((event) => ({ toolName: event.toolName, repeat: event.repeat })) })
+        const four = await tick(4, stop)
+        check(`${name}: tick 4 leaves the owner's stop alone on the upgraded plugin`,
+          because(four, 'its latest event is session.idle from interrupted, not its own finished turn'), { logs: four })
+        const five = await tick(5, quit, 60_000)
+        check(`${name}: tick 5 skips the session once OpenCode quit and a shell is in front`, because(five, 'its latest event is tui.exit, not a finished turn'), { logs: five })
+        const last = (await hookEvents()).at(-1)
+        check(`${name}: quitting reached BMN as tui.exit`, last?.event === 'tui.exit', { last })
+        check(`${name}: OpenCode received the wake line only once overall`, wakes() === 1, { wakes: wakes() })
+        check(`${name}: OpenCode reached nothing but the stand-in model`, standIn.refused.length === 0, { refused: standIn.refused })
+        report[`${name}Asked`] = standIn.requests
+        report[`${name}HookEvents`] = await hookEvents()
+      } else if (standIn) {
         // OpenCode submits a summarized paste (the line passes 150 characters) whole, with one space after it, as Story 93.1
         // recorded for every paste on both pins; anything else (cut, doubled, not submitted) does not count.
         const wakes = () => standIn.requests.filter((request) => request.agent && request.user === `${WAKE_LINE} `).length
@@ -287,8 +386,8 @@ async function run(app, binary) {
 }
 
 for (const app of (args[2] ?? 'claude,codex').split(',')) {
-  if (app === 'opencode' && openCodeBinaries.length === 0) check('opencode: run completed', false, { error: 'no --opencode binary given' })
-  for (const binary of app === 'opencode' ? openCodeBinaries : [undefined]) {
+  if (app.startsWith('opencode') && openCodeBinaries.length === 0) check(`${app}: run completed`, false, { error: 'no --opencode binary given' })
+  for (const binary of app.startsWith('opencode') ? openCodeBinaries : [undefined]) {
     try { await run(app, binary) } catch (error) { check(`${app}${binary ? ` ${binary}` : ''}: run completed`, false, { error: String(error).slice(0, 400) }) }
   }
 }
