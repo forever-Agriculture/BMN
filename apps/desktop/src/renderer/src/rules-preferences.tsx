@@ -1,5 +1,5 @@
 // MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Integrations: the master editor with what each app reads, install and earlier versions; Skills and Tools with each one's apps and state; Health with each rules file and agent app
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { takesPress, type CommandPress, type CommandStart, type RunInSession } from './session-command'
 import {
   RETIRED_APP_LINE,
@@ -125,9 +125,9 @@ const PROMPT_SENT = ' · one prompt sent'
 
 /** The last loading test in words: its result, date and version, whether BMN ran it by itself, whether the rules or the app changed since, and the prompt it sent. */
 export function testLine(test: RulesProbeView | undefined): string {
-  if (!test || test.outcome === null) return 'Not tested yet'
+  if (!test || test.outcome === null) return 'Rules test not run yet'
   const spent = test.outcome === 'unavailable' ? '' : PROMPT_SENT
-  return `Test ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.version ? ` on ${test.version}` : ''}${test.by === 'bmn' ? ' · by BMN' : ''}${test.stale ? ' · stale' : ''}${spent}`
+  return `Rules test ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.version ? ` on ${test.version}` : ''}${test.by === 'bmn' ? ' · by BMN' : ''}${test.stale ? ' · stale' : ''}${spent}`
 }
 
 /** What an install does to one file, in words: what it replaces, then the size of the change. */
@@ -147,7 +147,8 @@ export function destinationWords(app: Pick<AgentAppView, 'basis' | 'provider' | 
   return 'Where it sends data is unknown'
 }
 
-const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', newer: 'newer than tested', other: 'not tested', unknown: 'not checked' }
+// The version test BMN has for an app is of where it sends data (its routing), never of the rules or context it loads (Story 96.6).
+const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'routing-tested', newer: 'newer than routing-tested', other: 'not routing-tested', unknown: 'not checked' }
 
 /** The reason a skills install records, which tells it from a rules install. */
 const SKILLS_INSTALL = 'skills install'
@@ -211,19 +212,27 @@ export function hookRowWords(app: HookAppAtStart): { needs: boolean; head: strin
   const count = app.placed.length
   const inPlace = `${count} entr${count === 1 ? 'y' : 'ies'} in place`
   const added = app.installed.length > 0 ? [`Added at start: ${app.installed.join(', ')}${app.harness === 'codex' ? ' · Codex asks you once, in /hooks, before it runs them' : ''}`] : []
-  const older = app.older.length > 0 ? [`${app.older.join(', ')} · in an older wording, which still runs`] : []
-  if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: [] }
-  if (app.left.length === 0) return { needs: false, head: inPlace, lines: [...added, ...older] }
+  // A file upgraded on disk says nothing of what a running OpenCode loaded (Story 96.3): it is woken once its own events carry the new plugin's mark.
+  const upgraded = (app.upgraded ?? []).length > 0 ? [`Upgraded at start: ${app.upgraded!.join(', ')} · a running OpenCode is woken only once it reports the new plugin`] : []
+  // OpenCode's plugin left in an earlier release (BMN could not write beside it) cannot tell the owner's stop from a finished turn (Story 96.6).
+  const obsolete = app.harness === 'opencode' && app.older.includes('plugin') && app.state === 'left'
+  const olderNames = obsolete ? app.older.filter((name) => name !== 'plugin') : app.older
+  const older = [
+    ...(obsolete ? ['Older plugin · stopped turns cannot be distinguished. Automatic wake is unavailable for this session until a qualified plugin is loaded.'] : []),
+    ...(olderNames.length === 0 ? [] : app.harness === 'opencode'
+      ? [`OpenCode 1's plugin file is still there too · \`bmn hooks install opencode\` removes it`]
+      : [`${olderNames.join(', ')} · in an older wording, which does the same and still runs`])
+  ]
+  const leftWords = (entry: HookAppAtStart['left'][number]): string => app.harness === 'opencode' && entry.event === 'plugin' && (entry.why === 'changed' || entry.why === 'foreign')
+    ? `plugin · ${HOOK_LEFT_WORDS[entry.why]} · Not BMN's · BMN leaves it` : `${entry.event} · ${HOOK_LEFT_WORDS[entry.why]}`
+  if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: older }
+  if (app.left.length === 0) return { needs: obsolete, head: inPlace, lines: [...added, ...upgraded, ...older] }
   return {
     needs: true, head: `${inPlace} · ${app.left.length === 1 ? 'one left as it is' : `${app.left.length} left as they are`}`,
-    lines: [...app.left.map((entry) => `${entry.event} · ${HOOK_LEFT_WORDS[entry.why]}`), ...added, ...older]
+    lines: [...app.left.map(leftWords), ...added, ...upgraded, ...older]
   }
 }
 
-/** Health › Hooks rows, failure first. */
-export function hookRows(hooks: Extract<HooksAtStart, { state: 'checked' }>): HookAppAtStart[] {
-  return needsFirst(hooks.apps, (app) => hookRowWords(app).needs)
-}
 
 // Which Health rows carry the Needs-you dot, one test per section: the rows and the page status count alike (Story 75.10).
 /** A rules file: not current, or its loading test offers Test again. */
@@ -257,15 +266,51 @@ export function needsFirst<Row>(rows: readonly Row[], needs: (row: Row) => boole
   return [...rows].sort((a, b) => Number(needs(b)) - Number(needs(a)))
 }
 
-/** How many Health rows need the owner, for its status: "Checked 13:39 · 2 need you". */
+type SteadyOrder = <Row extends { harness: string }>(section: string, rows: readonly Row[], needs: (row: Row) => boolean) => Row[]
+const SteadyOrderContext = createContext<SteadyOrder>((_section, rows, needs) => needsFirst(rows, needs))
+
+/**
+ * Story 96.6 AC2: while the pointer is over Health, a refresh keeps each section's rows where they were (a row new to it
+ * goes last), so nothing moves under it; with the pointer elsewhere the rows that need the owner come first.
+ */
+function useSteadyOrder(top: RefObject<HTMLElement | null>): SteadyOrder {
+  const orders = useRef(new Map<string, string[]>())
+  return useCallback(<Row extends { harness: string },>(section: string, rows: readonly Row[], needs: (row: Row) => boolean): Row[] => {
+    const before = orders.current.get(section)
+    const hovered = top.current?.closest('.preferences-main')?.matches(':hover') ?? false
+    const rank = (row: Row): number => { const at = before?.indexOf(row.harness) ?? -1; return at < 0 ? Number.MAX_SAFE_INTEGER : at }
+    const sorted = hovered && before !== undefined ? [...rows].sort((a, b) => rank(a) - rank(b)) : needsFirst(rows, needs)
+    orders.current.set(section, sorted.map((row) => row.harness))
+    return sorted
+  }, [top])
+}
+
+/**
+ * What in Health needs the owner (Story 96.6): one issue per section row (one app, one area), and each Doctor finding
+ * that is not the same app and area as such a row. `keys` are those rows as `area:app`, for Doctor to merge into;
+ * `sections` names the sections with an issue, in page order, for the head: "Read 13:39 · 2 need you: Hooks, Tools".
+ */
+export function healthNeeds(snapshot: RulesSnapshot): { count: number; sections: string[]; keys: Set<string> } {
+  const keys = new Set<string>()
+  const found: Array<[string, number]> = []
+  const rows = <Row,>(section: string, area: string | null, list: readonly Row[], needs: (row: Row) => boolean, app: (row: Row) => string): void => {
+    const needing = list.filter(needs)
+    if (area !== null) for (const row of needing) keys.add(`${area}:${app(row)}`)
+    if (needing.length > 0) found.push([section, needing.length])
+  }
+  if (snapshot.health.state === 'checked') rows('Rules files', 'rules', snapshot.health.targets, (target) => rulesRowState(snapshot, target).needs, (target) => target.harness)
+  rows('Skills', 'skills', snapshot.skills.apps, (app) => skillsRowState(snapshot, app).needs, (app) => app.harness)
+  rows('Tools', 'tools', snapshot.tools.apps, (app) => toolsRowState(snapshot, app).needs, (app) => app.harness)
+  rows('Context limits', null, snapshot.context, contextRowNeeds, (row) => row.harness)
+  if (snapshot.hooks?.state === 'checked') rows('Hooks', 'hooks', snapshot.hooks.apps, (app) => hookRowWords(app).needs, (app) => app.harness)
+  const doctor = doctorNeedsCount(snapshot.doctor, keys)
+  if (doctor > 0) found.push(['Doctor', doctor])
+  return { count: found.reduce((total, [, count]) => total + count, 0), sections: found.map(([section]) => section), keys }
+}
+
+/** How many Health issues need the owner, each counted once. */
 export function healthNeedsCount(snapshot: RulesSnapshot): number {
-  const count = <Row,>(rows: readonly Row[], needs: (row: Row) => boolean): number => rows.filter(needs).length
-  return (snapshot.health.state === 'checked' ? count(snapshot.health.targets, (target) => rulesRowState(snapshot, target).needs) : 0)
-    + count(snapshot.skills.apps, (app) => skillsRowState(snapshot, app).needs)
-    + count(snapshot.tools.apps, (app) => toolsRowState(snapshot, app).needs)
-    + count(snapshot.context, contextRowNeeds)
-    + (snapshot.hooks?.state === 'checked' ? count(snapshot.hooks.apps, (app) => hookRowWords(app).needs) : 0)
-    + doctorNeedsCount(snapshot.doctor)
+  return healthNeeds(snapshot).count
 }
 
 type Pending =
@@ -289,6 +334,9 @@ export interface RulesState {
   /** The unsaved draft as a save would check it; null while clean or being computed. */
   draftPlan: RulesMasterPlan | null
   busy: boolean
+  /** A read of the machine is under way (Health's head says Refreshing…); `acting`, an action the owner started. */
+  reading: boolean
+  acting: boolean
   notice: RulesNotice | null
   pending: Pending | null
   setDraft(text: string): void
@@ -487,7 +535,7 @@ export function useRulesState(doctorVisible = false): RulesState {
   }, [testing, confirming, load])
 
   return {
-    snapshot, began, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load, run,
+    snapshot, began, loadError, draft, dirty, draftPlan, busy, reading, acting, notice, pending, setDraft, setNotice, ensure, refresh, load, run,
     beginSave: () => {
       // A clean draft saves the rules as they are: only the apps' files that differ are written.
       const text = draft
@@ -1046,10 +1094,10 @@ const CONTEXT_PROOF: Record<ContextLimitView['harness'], string> = {
  * owner's Test again…, or no one because nothing calls for a test. The saved value is contextValueWords.
  */
 export function contextStateWords(row: Pick<ContextLimitView, 'harness' | 'version' | 'test' | 'autoTest'>): string {
-  if (row.version === null) return 'Not supported yet · the app is not found'
+  if (row.version === null) return 'Not found · no limit can be proven without the app'
   const last = row.test !== null && row.test.version === row.version ? row.test : null
   if (last === null) {
-    return `Not tested on ${row.version} · ${row.autoTest === 'scheduled' ? 'BMN tests it by itself'
+    return `Not yet proven on ${row.version} · ${row.autoTest === 'scheduled' ? 'BMN tests it by itself'
       : row.autoTest === 'not-needed' ? 'no automatic test: no agent has a limit here and the file holds no default' : 'no automatic test is scheduled'}`
   }
   // Codex's test sends one short request to its provider; Claude Code's asks for its own report (Story 75.8 AC2).
@@ -1148,14 +1196,15 @@ function ContextSheet(props: { row: ContextLimitView; home: string | null; busy:
 
 /** Integrations › Health › Context limits: one row per app BMN has a setting for (60.9 AC3). */
 function ContextLimits(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
+  const steady = useContext(SteadyOrderContext)
   const { rules, action } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const auto = snapshot.autoTests
-  const idle = !rules.busy && action === null && rules.pending === null
+  const idle = !rules.acting && action === null && rules.pending === null
   return (
     <>
       <h4 className="group-head">Context limits<span className="caption">how large a conversation may grow in sessions you start yourself</span></h4>
-      {needsFirst(snapshot.context, contextRowNeeds).map((row) => {
+      {steady('context', snapshot.context, contextRowNeeds).map((row) => {
         const name = ROSTER_APP_NAMES[row.harness]
         const stopped = stoppedTest(auto, 'context', row.harness)
         const failed = row.test !== null && row.test.version === row.version && row.test.outcome === 'fail'
@@ -1176,11 +1225,11 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
                   <button type="button" className="small" disabled={!idle || row.version === null} aria-label={`Test the context limit of ${name} again`} onClick={() => props.setAction({ kind: 'context-test', harness: row.harness })}>Test again…</button>
                 ) : null}
                 <button type="button" className="small" disabled={!idle || !row.limitProven || row.unreadable !== undefined} aria-label={`Change the default context limit of ${name}`}
-                  title={row.limitProven ? undefined : `Not supported yet: it waits for a test that passes on this ${name} version`} onClick={() => props.setAction({ kind: 'context-change', harness: row.harness })}>Change…</button>
+                  title={row.limitProven ? undefined : `Not yet proven: it waits for a test that passes on this ${name} version`} onClick={() => props.setAction({ kind: 'context-change', harness: row.harness })}>Change…</button>
               </span>
             </div>
             {row.limits.map((entry) => (
-              <p key={entry.agent} className="limit-note" title={entry.reason} role={entry.state === 'applied' ? undefined : 'status'}>
+              <p key={entry.agent} className="limit-note" title={entry.reason}>
                 {entry.state === 'applied' ? null : <Dot label="Needs you" />}{agentLimitWords(entry)}
               </p>
             ))}
@@ -1349,6 +1398,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
 
 /** Integrations › Health › Skills: one row per app (60.11 AC5). */
 function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
+  const steady = useContext(SteadyOrderContext)
   const { rules, action } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const view = snapshot.skills
@@ -1356,9 +1406,9 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
     <>
       <h4 className="group-head">Skills<span className="caption">where each app reads skills, and whether it has the ones it may have</span></h4>
       {view.source.readable ? null : <p className="preferences-error" role="alert">{view.source.detail ?? 'The skills folder cannot be read'}</p>}
-      {needsFirst(view.apps, (app) => skillsRowState(snapshot, app).needs).map((app) => {
+      {steady('skills', view.apps, (app) => skillsRowState(snapshot, app).needs).map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
-        const idle = !rules.busy && action === null && rules.pending === null
+        const idle = !rules.acting && action === null && rules.pending === null
         const stopped = stoppedTest(snapshot.autoTests, 'skills', app.harness) ?? stoppedTest(snapshot.autoTests, 'skills-loading', app.harness)
         const { again, loadAgain, needs } = skillsRowState(snapshot, app)
         return (
@@ -1673,7 +1723,14 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
 }
 
 /** Integrations › Health › Tools: one row per app (60.12 AC6). */
+/** An app holding tools it may not have, as what is available to it (Story 96.6): BMN saw entries, never a transfer. */
+export function exposedWords(view: Pick<RulesSnapshot['tools'], 'tools'>, app: Pick<ToolsAppView, 'harness' | 'unlisted'>): string {
+  const count = view.tools.filter((tool) => tool.states[app.harness] === 'exposed').length + app.unlisted.filter((entry) => entry.state === 'exposed').length
+  return `${count === 1 ? 'One tool connection' : `${count} tool connections`} available · no approved destination recorded`
+}
+
 function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
+  const steady = useContext(SteadyOrderContext)
   const { rules, action } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const view = snapshot.tools
@@ -1681,9 +1738,9 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
     <>
       <h4 className="group-head">Tools<span className="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>
       {view.error ? <p className="preferences-error" role="alert">{view.error}</p> : null}
-      {needsFirst(view.apps, (app) => toolsRowState(snapshot, app).needs).map((app) => {
+      {steady('tools', view.apps, (app) => toolsRowState(snapshot, app).needs).map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
-        const idle = !rules.busy && action === null && rules.pending === null
+        const idle = !rules.acting && action === null && rules.pending === null
         const stopped = stoppedTest(snapshot.autoTests, 'tools', app.harness)
         const { again, needs } = toolsRowState(snapshot, app)
         return (
@@ -1696,7 +1753,8 @@ function ToolsHealth(props: { rules: RulesState; action: AppAction | null; setAc
                   : app.readable ? null : <span className="faint" title={app.detail}>BMN cannot read it</span>}
               </span>
               <span className="health-state">
-                <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public tools only'}</span> : null}</span>
+                <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state === 'Exposed' ? exposedWords(view, app) : app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public tools only'}</span> : null}</span>
+                {app.state === 'Exposed' ? <span className="faint">{`Names and Remove…: Tools tab › ${name}`}</span> : null}
                 <span className="faint" title={app.test?.detail}>{testRunning(snapshot.autoTests, 'tools', app.harness) ? runningWords(app.harness) : stopped !== undefined ? stoppedWords(stopped) : toolsTestLine(app, shortDate)}</span>
               </span>
               <span className="app-actions">
@@ -1768,6 +1826,30 @@ function useHealthRule<T extends HTMLElement>(rules: RulesState): React.RefObjec
   return top
 }
 
+/**
+ * Health's head (Story 96.6): "Refreshing…" only while BMN re-reads the machine, otherwise when it last read and, past
+ * the Health rule's limit, that this is stale; then how many issues need the owner and in which sections. Tests and
+ * Doctor runs say their state on their own rows and never change it.
+ */
+export function healthHeadWords(reading: boolean, checkedAt: string, stale: boolean, needs: { count: number; sections: string[] }): string {
+  if (reading) return 'Refreshing…'
+  const issues = needs.count === 0 ? '' : ` · ${needs.count} need${needs.count === 1 ? 's' : ''} you: ${needs.sections.join(', ')}`
+  return `Read ${shortDate(checkedAt)}${stale ? ' · stale' : ''}${issues}`
+}
+
+/** Whether `iso` is older than `ms` now, turning true by itself once it is. */
+function useAged(iso: string, ms: number): boolean {
+  const at = Date.parse(iso)
+  const [, tick] = useState(0)
+  const aged = Number.isFinite(at) && Date.now() - at > ms
+  useEffect(() => {
+    if (aged || !Number.isFinite(at)) return
+    const timer = window.setTimeout(() => tick((value) => value + 1), Math.max(1, at + ms + 1 - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [aged, at, ms])
+  return aged
+}
+
 function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onRun?: RunInSession | undefined } & SetupNavigation): React.JSX.Element {
   const { rules, team, onRun: runInSession } = props
   const snapshot = rules.snapshot as RulesSnapshot
@@ -1780,6 +1862,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
     return () => forgetUpdateWatches(shown)
   }, [])
   const top = useHealthRule<HTMLHeadingElement>(rules)
+  const steady = useSteadyOrder(top)
   const shownDoctor = useRef(snapshot.doctor)
   if (action === null && rules.pending === null && !rules.dirty) shownDoctor.current = snapshot.doctor
   const doctorView = shownDoctor.current
@@ -1805,20 +1888,16 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
   const pending = rules.pending
   const providerName = (id: string): string => data?.providers.find((provider) => provider.id === id)?.name ?? id
   const withheld = health.state === 'checked' ? health.targets.filter((target) => target.kind === 'public').map((target) => ROSTER_APP_NAMES[target.harness]) : []
-  const skillsCount = [
-    ...(snapshot.skills.pending > 0 ? [`${snapshot.skills.pending} skill entr${snapshot.skills.pending === 1 ? 'y' : 'ies'} not installed yet`] : []),
-    ...(snapshot.skills.exposed > 0 ? [`${snapshot.skills.exposed} skill${snapshot.skills.exposed === 1 ? '' : 's'} exposed`] : []),
-    ...(snapshot.tools.pending > 0 ? [`${snapshot.tools.pending} tool entr${snapshot.tools.pending === 1 ? 'y' : 'ies'} not installed yet`] : []),
-    ...(snapshot.tools.exposed > 0 ? [`${snapshot.tools.exposed} tool${snapshot.tools.exposed === 1 ? '' : 's'} exposed`] : [])
-  ].join(' · ')
-  const needYou = healthNeedsCount({ ...snapshot, doctor: doctorView })
+  const needs = healthNeeds({ ...snapshot, doctor: doctorView })
+  const stale = useAged(health.checkedAt, HEALTH_STALE_MS)
   return (
-    <>
-      <PageHead title="Health" status={rules.busy && pending === null ? 'Checking…' : `Checked ${shortDate(health.checkedAt)}${needYou > 0 ? ` · ${needYou} need${needYou === 1 ? 's' : ''} you` : ''}${skillsCount === '' ? '' : ` · ${skillsCount}`}`} />
+    <SteadyOrderContext.Provider value={steady}>
+      <PageHead title="Health" status={<span role="status">{healthHeadWords(rules.reading, health.checkedAt, stale, needs)}</span>} />
       <Notice rules={rules} />
-      {notHeldWords(snapshot.readOnlyRoles) === null ? null : <p className="page-note" role="status"><Dot label="Needs you" />{notHeldWords(snapshot.readOnlyRoles)}</p>}
+      {/* Only the head is a live status (Story 96.6): what a read finds is said where it is, without announcing itself. */}
+      {notHeldWords(snapshot.readOnlyRoles) === null ? null : <p className="page-note"><Dot label="Needs you" />{notHeldWords(snapshot.readOnlyRoles)}</p>}
       <h4 className="group-head" ref={top}>Rules files</h4>
-      {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : needsFirst(health.targets, (target) => rulesRowState(snapshot, target).needs).map((target) => {
+      {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : steady('rules', health.targets, (target) => rulesRowState(snapshot, target).needs).map((target) => {
         const test = snapshot.probes.find((entry) => entry.harness === target.harness)
         const stopped = stoppedTest(snapshot.autoTests, 'rules', target.harness)
         const { again, needs } = rulesRowState(snapshot, target)
@@ -1831,7 +1910,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
               <span className="faint" title={test?.detail}>{target.kind !== 'full' ? 'No loading test' : testRunning(snapshot.autoTests, 'rules', target.harness) ? runningWords(target.harness) : stopped !== undefined ? stoppedWords(stopped) : testLine(test)}</span>
             </span>
             {again
-              ? <button type="button" className="small" disabled={rules.busy || pending !== null} aria-label={`Test ${ROSTER_APP_NAMES[target.harness]} again`} onClick={() => rules.beginTest(target.harness)}>Test again…</button>
+              ? <button type="button" className="small" disabled={rules.acting || pending !== null} aria-label={`Test ${ROSTER_APP_NAMES[target.harness]} again`} onClick={() => rules.beginTest(target.harness)}>Test again…</button>
               : <span />}
           </div>
         )
@@ -1842,7 +1921,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
 
       <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>
       {snapshot.ownEnvironment ? (
-        <p className="page-note" role="status"><Dot label="Needs you" />BMN could not read your shell's settings ({snapshot.ownEnvironment}), so it looked for the apps with its own; a session may find more.</p>
+        <p className="page-note"><Dot label="Needs you" />BMN could not read your shell's settings ({snapshot.ownEnvironment}), so it looked for the apps with its own; a session may find more.</p>
       ) : null}
       {snapshot.apps.map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
@@ -1905,7 +1984,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
           </div>
         )
       })}
-      <p className="preferences-help">Tested versions are the ones BMN was checked against. Every installed version is supported.</p>
+      <p className="preferences-help">Routing-tested versions are the ones BMN checked for where they send data. Every installed version is supported.</p>
       <p className="preferences-help">BMN works out where an app sends data the same way on each version, and notes the version with every check.</p>
 
       <SkillsHealth rules={rules} action={action} setAction={setAction} />
@@ -1917,10 +1996,10 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <PushPolicyHealth />
 
       <HooksHealth hooks={snapshot.hooks} home={snapshot.home} />
-      <DoctorHealth view={doctorView} now={doctorNow} />
+      <DoctorHealth view={doctorView} now={doctorNow} sections={needs.keys} />
       {setup.error ? <p className="preferences-error" role="alert">{setup.error}</p> : null}
       {setup.modal}
-    </>
+    </SteadyOrderContext.Provider>
   )
 }
 
@@ -1931,13 +2010,14 @@ function clockTime(iso: string): string {
 
 /** Health › Hooks (Story 75.9): what BMN's install at start found in each app's hook file, failure first; there is no button. */
 function HooksHealth(props: { hooks: HooksAtStart | null; home: string | null }): React.JSX.Element {
+  const steady = useContext(SteadyOrderContext)
   const { hooks } = props
   return (
     <>
       <h4 className="group-head" id="health-hooks">Hooks<span className="caption">BMN's entries in each app's hook file, installed at start</span></h4>
       {hooks === null ? <p className="preferences-help">Not checked yet: BMN checks them each time it starts.</p>
         : hooks.state === 'failed' ? <p className="preferences-error" role="alert">{hooks.reason}</p>
-          : hookRows(hooks).map((app) => {
+          : steady('hooks', hooks.apps, (app) => hookRowWords(app).needs).map((app) => {
             const words = hookRowWords(app)
             return (
               <div key={app.harness} className="health-row" data-hooks={words.needs ? 'left' : 'in-place'}>

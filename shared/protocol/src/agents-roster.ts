@@ -817,6 +817,8 @@ export interface HookAppAtStart {
   placed: string[]
   older: string[]
   installed: string[]
+  /** Entries BMN's own earlier release wrote, upgraded byte for byte at this start (Story 96.3); absent when none was. */
+  upgraded?: string[]
   /** Events BMN left as they are, each with why; a whole file it could not add to has `why` on the app instead. */
   left: { event: string; why: HookLeftWhy }[]
   why?: HookLeftWhy

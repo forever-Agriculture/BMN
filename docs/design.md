@@ -133,8 +133,11 @@ Approved by the owner on 2026-10-20, Story 81.2 AC3; Fable design ask
 - Rows name the app/check, path or command, state, safe reason/fix and checked/tried time. Withhold
   secret-bearing contents. Checks leave the owner's files unchanged.
 - Put timing, version qualification and the checked scope behind one What is checked disclosure.
-  Its summary is the only added keyboard stop; existing sheets keep their focus-return behavior.
+  Existing sheets keep their focus-return behavior. Story 96.6 (owner approval 2026-10-26, see below) adds the
+  Leftovers disclosure and its groups' disclosures as the only other keyboard stops.
 - Leftovers say Review it yourself; BMN leaves it. There is no cleanup control, Check now or switch.
+  Since Story 96.6 they are grouped, not one row each: one Leftovers disclosure (“Leftovers · 335 in 9 groups ·
+  show-only”) holds one group per app × kind × reason, largest first, as label | count, its numeric locations inside.
 - Leftovers partial results use the owner-approved86.2 counts: “N folders too large to check”,
   “N databases too large to check”, “N sources changed during the check”, “N items could not be read”,
   or “N scan steps did not finish”. Details give the applicable limit or coverage gap without names or paths.
@@ -147,6 +150,28 @@ Approved by the owner on 2026-10-20, Story 81.2 AC3; Fable design ask
   stay refused and actual unread, changed or uncertain reason inputs stay partial.
   Manual resolution stays behind the existing What is checked disclosure. Health refreshes locations automatically
   when visible and calm; unrelated settings/action snapshots project saved status, followed by that automatic refresh.
+
+## Health clarification (Story 96.6)
+
+Approved by the owner on 2026-10-26 (card in run `dev-auto/epic-96-20261026`: “Approve as proposed”), design
+`plan/references/096/health-design.md` with its planner corrections.
+
+- **One issue, one count.** An issue is one app × one area × one cause with one fix. Doctor's hook, tool, skill and
+  rules findings of an app whose Health row already needs the owner are that issue: shown faint in Doctor, counted
+  on the row. Others, and findings naming no app, count in Doctor. Matching words alone never merge two issues.
+- **Head.** “Refreshing…” only while BMN re-reads the machine, otherwise “Read 13:39”, “· stale” past the Health
+  rule's limit, then “· N need you: Hooks, Tools”. Tests and Doctor runs say their state on their own rows; Doctor's
+  line says “Doctor ran 13:31” or “Doctor running · results below are from 13:31”. Only the head is a live status.
+- **Exact scope.** Rules files say “Rules test …”; Agent apps say “routing-tested”; context says “Not yet proven on X”
+  with the scheduler's actual state; tools say “N tool connections available · no approved destination recorded”;
+  OpenCode's earlier plugin says “Older plugin · stopped turns cannot be distinguished…” and needs the owner. Older
+  wording stays faint only where it does the same.
+- **Coverage.** How fully leftovers were read is shown on the Leftovers line, never counted, and blocks All well;
+  an item that could not be read counts. All well needs every check passed and current and no section needing him.
+- **Calm refresh.** A background read keeps known failures and leaves unrelated buttons usable; disclosures keep
+  their open state; a focused group a refresh removed hands the focus to the Leftovers summary.
+- **Sizes.** 889×768 keeps the four-column grid; at ≤680 px rows take two columns (name | state, the path across,
+  time and actions left on a third line). Locations wrap; nothing scrolls sideways.
 
 ## Reviews
 
