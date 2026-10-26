@@ -691,7 +691,9 @@ function completeRecordedGo(plan, { repo, boardRel, key, epic, expect, before, n
     }
   }
   const row = rowIn(readFileSync(plan.boardPath, 'utf8'), key)
-  return { outcome: 'recorded-before', commit: before.commit, date: before.trailers.date, source: before.trailers.source, approvedSha: before.trailers.approved.slice(7), file: `epics/${name}`, repo, epicIncluded: false, row, pending: row?.token === expect && recordedRow !== null && headRow?.token === recordedRow.token }
+  // Pending only while the working row is still the one before the go: a retry holding the token after it is complete.
+  const pending = row !== null && row.token === expect && recordedRow !== null && headRow?.token === recordedRow.token && row.token !== recordedRow.token
+  return { outcome: 'recorded-before', commit: before.commit, date: before.trailers.date, source: before.trailers.source, approvedSha: before.trailers.approved.slice(7), file: `epics/${name}`, repo, epicIncluded: false, row, pending }
 }
 
 /** One row of a board's text with its token, or null. */

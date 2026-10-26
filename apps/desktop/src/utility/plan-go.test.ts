@@ -259,6 +259,9 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     const again = bmn(main, home, args)
     expect([again.code, again.json.outcome, again.json.commit]).toEqual([0, 'recorded-before', first.json.commit])
     expect(git(plan, 'log', '--format=%s').split('\n')).toEqual(['plan: go for Epic 7 (go 2026-10-26)', 'docs: plan epic 7'])
+    // A retry that read the board again holds the row's token after the go: the go is complete, nothing is pending (96.7 journey).
+    const fresh = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home), '--json'])
+    expect([fresh.code, fresh.json.outcome, fresh.json.commit, fresh.json.row.status, fresh.json.board_pending]).toEqual([0, 'recorded-before', first.json.commit, 'ready', false])
   })
 
   it('a crash after the branch moved is completed by the retry: the working row and index follow, one go', async () => {
