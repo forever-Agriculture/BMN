@@ -3,7 +3,7 @@ name: plan
 description: >-
   Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml, or a BMAD project's own files). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
 ---
-# MODULE: SKILL.md - Story 77.3 (revision 6: owner steps only before the go or at the end, Run needs, design during planning, Epic 90; revision 5: a BMAD project read through one table, Sol review F8; revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
+# MODULE: SKILL.md - Story 77.3 (revision 7: his go recorded and read back with bmn plan go, Epic 96.1; revision 6: owner steps only before the go or at the end, Run needs, design during planning, Epic 90; revision 5: a BMAD project read through one table, Sol review F8; revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
 
 # Plan
 
@@ -30,7 +30,7 @@ This skill and its methods name BMN's files and statuses. In a `bmad` project re
 | `PLAN.md`, its Architecture | the existing PRD, architecture and UX documents and the epics file's front matter |
 | `plan/epics/NNN-slug.md` | the project's epics file (or its epic files), in its existing heading shape |
 | `plan/references/<x>/` | the folder beside its planning files (`_bmad-output/planning-artifacts/<x>/` unless its config names another) |
-| status `ready` and the `queue` | a story `ready-for-dev`; an epic's go is a dated `go YYYY-MM-DD` comment on its row; the order is the epics file's |
+| status `ready` and the `queue` | a story `ready-for-dev`; an epic's go is a dated `go YYYY-MM-DD` comment on its row, committed with the product repository (`bmn plan go` is for BMN's format); the order is the epics file's |
 | `blocked`, `paused`, `dropped` | the row keeps its BMAD status, with a dated comment naming the state and its reason |
 | `bmn plan set` | the same command; it takes BMAD's statuses (`backlog`, `ready-for-dev`, `in-progress`, `review`, `done`) |
 
@@ -49,7 +49,7 @@ Every other rule holds as written.
 8. **Design during planning.** For an epic that adds or changes screens, the team's designer designs ([methods/design.md](methods/design.md): flows, states, sizes, interaction) and the owner approves it before the go; the epic cites the approved design, no design story runs inside it, and the design becomes a truth document.
 9. **Consult when it pays.** When the owner asks, or a named risk calls for it (security, privacy, data loss, a migration, a contract other teams depend on), ask a teammate with `bmn team ask --role consultant|epic-reviewer` (read-only, a stable `--key`), apply what holds, and record each finding's disposition in the epic's Reviews or a `references/` file. Advice is not a decision.
 10. **Truth impact.** Every epic names the truth documents and contracts it adds, changes or removes (or `none` with a reason). Truth lives in the project's docs; the epic proposes the change.
-11. **Readiness before the go.** Run [methods/readiness.md](methods/readiness.md) before asking for his go. His steps sit only before the go or at the end (each story's **Owner:** line), and `## Run needs` lists what the run may need from him: extra repair rounds, deferrable criteria, a money cap, named actions for an Away card. His go is recorded as the epic row's status `ready` with `go YYYY-MM-DD` in its note, and the epic joins `queue` (a BMAD project: the table above); it approves the Run needs as his instruction for the epic's runs, read from the plan commit that recorded it. The go never covers push, merge or deploy; implementing stays with the invocation that selects the work.
+11. **Readiness before the go.** Run [methods/readiness.md](methods/readiness.md) before asking for his go. His steps sit only before the go or at the end (each story's **Owner:** line), and `## Run needs` lists what the run may need from him: extra repair rounds, deferrable criteria, a money cap, named actions for an Away card. His go is recorded at once, before any run, with `bmn plan go N --source "<his quoted words with their time, or bmn:SESSION/KEY>" --approved sha256:<approval text> --expect <row token>` (both from `bmn plan status --epic N --json`, read when you asked; docs/planning.md, Recording his go): the row becomes `ready` with `go YYYY-MM-DD` in its note and the epic joins `queue` in one commit naming his act and what he approved, leaving other work uncommitted (a BMAD project: the table above). Read it back with `python3 ~/.claude/skills/dev-auto/scripts/run_needs.py N --project P`: GO with that approved text, or fix what it names. It approves the Run needs as his instruction for the epic's runs, read from that commit. A refusal names the missing fact; changed terms need a new card on the current text, never a go recorded on text he did not see. The go never covers push, merge or deploy; implementing stays with the invocation that selects the work.
 12. **Check before handing back.** `bmn plan check` passes (it is structural only; your readiness pass is the content check).
 
 ## Writing an epic
@@ -86,7 +86,7 @@ Each method runs with BMAD absent and needs nothing but the project, `bmn` and t
 
 ## History and commits
 
-Where the plan has its own repository (`history: plan-repository`), commit at each planning checkpoint (a drafted epic, a revision, a recorded go):
+Where the plan has its own repository (`history: plan-repository`), commit at each planning checkpoint (a drafted epic, a revision); a go is committed by `bmn plan go` alone, which touches nothing else:
 
 1. If `git -C plan status --porcelain` shows changes you did not make (the owner's or dev-auto's board edits), commit those first, alone: `git -C plan add -A && git -C plan commit -m "owner and run edits before <your change>"`.
 2. Then commit only the plan files you changed, naming them: `git -C plan add status.yaml epics/078-x.md && git -C plan commit -m "plan: <what changed>"`.

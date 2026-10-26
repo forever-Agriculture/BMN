@@ -157,9 +157,10 @@ Commands:
                                             with numbers, and BMN reads them (bmn judge --help)
   doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
                                             one shared run, also with BMN closed (bmn doctor --help)
-  plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
-                                            rows, check the plan's structure, change one row safely; not the
-                                            subscription's Plan use (bmn plan --help)
+  plan status|check|set|go                  The project's planning board, in BMN's format or BMAD's: print
+                                            rows, check the plan's structure, change one row safely, record
+                                            the owner's go in the plan's history; not the subscription's Plan
+                                            use (bmn plan --help)
   policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
                                             the repository's level and what still asks (bmn policy --help)
   grant [--run ID] | grant ask | grant use  The Away grant: a run's one card before the owner leaves, what he

@@ -71,7 +71,7 @@ development_status:
 | Status | Meaning |
 | --- | --- |
 | `backlog` | Planned; no go yet. |
-| `ready` | His go recorded at planning (`go YYYY-MM-DD` in the note). It approves the epic's Run needs as his instruction for its runs, read from the plan commit that recorded the go. The authority to implement stays the invocation that selects the work (a `/dev-auto` run); it never covers push, merge or deploy. |
+| `ready` | His go recorded at planning (`go YYYY-MM-DD` in the note) with `bmn plan go`, which commits it with his act and the approved text. It approves the epic's Run needs as his instruction for its runs, read from the plan commit that recorded the go. The authority to implement stays the invocation that selects the work (a `/dev-auto` run); it never covers push, merge or deploy. |
 | `in-progress` | Being built. |
 | `review` | Implemented and being checked. |
 | `blocked` | Waiting on a named gate; the note names it. |
@@ -105,7 +105,20 @@ Works with BMN closed, on either format. Exit 0 done or clean, 1 findings or a r
 
 - `bmn plan status [--json] [--project P] [--epic N]...` prints the resolved paths and the rows, read as a stream with no size limit. A note too long for the terminal is clipped for display and marked with `…`; no row is ever left out, and `--json` gives every selected row whole with its line and row token. A board in BMN's format that cannot be read unambiguously (a repeated key, header or logical identifier such as `1-1-a` beside `1-1-b`, a malformed line, an unknown format or schema version) is refused with exit 2 (`MALFORMED`), so dev-auto stops on it.
 - `bmn plan check [--json] [--project P]` is structural validation, one finding per line: duplicate keys, malformed rows, unknown statuses, notes over 160 characters, story headings without rows and rows without headings, duplicate epic, story or criterion identifiers (two board keys for one epic or story among them), repeated header lines, a story row whose epic has neither a row nor a file, missing required sections of the frame or an epic, stories without criteria or Verification, a queue naming an unknown, duplicate or finished epic or missing a `ready` one, a `done` epic with a story neither `done` nor `dropped`, a `blocked`, `paused` or `dropped` row without a reason, a non-legacy file over its ceiling, and from Epic 90 on a missing `## Run needs`, a story without an Owner line, a `before the go` story after a `none` story or an `at the end` story before one. On a BMAD board it checks duplicate keys and row grammar only. Whether the plan says the right thing is for the readiness method and review.
-- `bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P]` changes one row (below).
+- `bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P]` changes one row (below). It does not set an epic row `ready` in a plan with history: that is his go, recorded with `go`.
+- `bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]` records his go (below).
+
+### Recording his go
+
+The planner asks for the go on one card after readiness, holding the epic row's token and its approval text from `bmn plan status --epic N --json` (`approval_texts`: the SHA-256 of the epic's `## Run needs` and `## Decisions` bodies, each to the next heading of levels 1-4, outer blank space removed; `run_needs.py` hashes them the same way). On his go, `bmn plan go N --source "…" --approved sha256:… --expect TOKEN` records it before any run starts:
+
+- `--source` names his act: his quoted words with their time (`card 2026-10-26T09:30Z: 'Go'`), or a BMN decision reference `bmn:SESSION/KEY`. A string is what the planner states, not proof of the act; only a real answer of his is recorded. The go date is the source's date unless `--date` gives one.
+- `--approved` is the approval text he was shown, or the plan commit he approved. Run needs or Decisions that differ from it, committed or not, are refused (`CHANGED_TERMS`): ask again on the current text.
+- It writes one commit of the plan's history holding only the row's change to `ready # go DATE · <note>` and the epic's place last in `queue`, plus the epic file when its approved text is not yet committed (a later edit of it stays uncommitted). Its message carries `Go-Epic`, `Go-Date`, `Approval-Source`, `Approved-Text` and `Approved-File`. Other changed or staged files stay as they were and out of the commit; the board's other uncommitted rows stay uncommitted. The branch moves only if it did not move meanwhile; then the index entry (if it was not staged) and the working board follow, and the commit is read back.
+- Refused, writing nothing (exit 1, the code names the missing fact): `NO_OWNER_GO`, `NO_APPROVED_TEXT`, `CHANGED_TERMS`, `CONFLICT` (a stale token), `FINISHED`, `NO_EPIC`, `NOT_COMMITTED` (the epic's rows are not in the history yet), `UNREADABLE_HISTORY`, `COMMIT_FAILED`, `DETACHED`, `NO_HISTORY`, `NOT_DEFAULT_CHECKOUT` (a tracked plan, from a linked worktree), `BMAD` (a BMAD board keeps its dated go comment).
+- The same request again finds its commit (`already recorded`) and only completes what a crash left undone, so one act never records two gos; after the go was withdrawn it is refused (`WITHDRAWN`).
+
+dev-auto reads the go back with `run_needs.py N`: GO, its commit, the recorded source and the approved text. A go committed by hand before this command stands, its source unrecorded; one whose commit names an approved text it does not hold grants nothing; a row put back to `backlog` or `dropped` withdraws it.
 
 ### Changing one row safely
 

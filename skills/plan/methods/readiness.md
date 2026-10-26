@@ -21,7 +21,7 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 
 ## Verdict
 
-- **PASS**: one line, then ask for the go (one card).
+- **PASS**: one line, then ask for the go (one card), holding the row token and approval text from `bmn plan status --epic N --json`; on his go, record it at once with `bmn plan go` and read it back with `run_needs.py` (SKILL.md, rule 11).
 - **CONCERNS**: list each with its location and your proposed fix; fix what is yours, card what is his, then rerun.
 - **FAIL**: the plan cannot be built as written; findings by severity, each with the fix; do not ask for the go.
 

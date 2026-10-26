@@ -1,8 +1,9 @@
-// MODULE: plan-cli.mjs - Epic 77: `bmn plan status|check|set`, the project's planning board from the shell; works with BMN closed
+// MODULE: plan-cli.mjs - Epic 77: `bmn plan status|check|set`, the project's planning board from the shell; works with BMN closed; Epic 96.1: `bmn plan go`, the owner's go as one commit of the plan's history
+import { spawnSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { chmodSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, relative } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import {
   BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, readBoard, resolvePlan, rowToken
 } from './plan-board.mjs'
@@ -10,6 +11,7 @@ import {
 const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan check [--json] [--project P]
        bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P] [--json]
+       bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]
 
 The project's planning: its plan and its board, in BMN's own format (plan/PLAN.md, plan/status.yaml,
 plan/epics/NNN-slug.md; docs/planning.md) or in BMAD's (_bmad-output/.../sprint-status.yaml). This is
@@ -17,7 +19,8 @@ not the subscription's Plan use. It needs no BMN running.
 
 status  prints the board's rows, every one of them, with the resolved paths: product root, default and
         run checkout, plan root, board, format and history. --epic narrows to those epics (repeatable).
-        --json gives every selected row with its line and row token, and errors as codes.
+        --json gives every selected row with its line and row token, and errors as codes; with --epic,
+        also each selected epic's approval text: the SHA-256 of its Run needs and Decisions, as a go names it.
 check   structural validation, one finding per line: duplicate keys, malformed rows, unknown statuses,
         notes over ${NOTE_LIMIT} characters, stories without rows and rows without stories, duplicate
         identifiers, missing sections, stories without criteria or Verification, queue problems, a done
@@ -30,10 +33,20 @@ set     changes one row's status (and note with --note; without it the note is k
         changes that one line, keeps every other byte and the file's mode, and writes atomically; the
         version before is kept in ~/.local/state/bmn/plan-versions (the last 20). A board tracked by the
         product repository and read from a linked worktree is changed in both copies, the default
-        checkout's too; when that copy's row differs, --expect-default gives its token.
+        checkout's too; when that copy's row differs, --expect-default gives its token. An epic row of a
+        plan with Git history is not set to ready this way: its go is recorded with go.
+go      records the owner's go on one epic of a BMN-format plan with Git history, before its run starts: the
+        row becomes ready with go DATE in its note and joins the queue, in one commit of the plan's history
+        that holds only that change (and the approved epic file, when its approved text is not yet
+        committed) and names in its message the owner's act (--source: his quoted words with their time,
+        or a BMN decision reference bmn:SESSION/KEY) and what he approved (--approved: the approval text's
+        sha256:HEX from status --json, or the plan commit he approved). It refuses changed terms, a stale
+        TOKEN, a finished epic, an unreadable history and a failed commit, writing nothing; other changed
+        or staged files stay as they were and out of the commit. The same request again finds its commit
+        and only completes what a crash left undone; dev-auto reads the go back with run_needs.py.
 
 Statuses (BMN's format): ${STATUSES.join(', ')}. BMAD boards take BMAD's: ${BMAD_STATUSES.join(', ')}.
-Exit status: 0 done or no findings, 1 findings (check) or a refused or conflicting change (set),
+Exit status: 0 done or no findings, 1 findings (check) or a refused or conflicting change (set, go),
              2 usage error, unknown row or status, or a plan that cannot be resolved or read`
 
 /** Written synchronously and whole: a full board as JSON is more than a pipe takes in one write. */
@@ -144,10 +157,14 @@ async function status(argv) {
   }
   const missing = epics.filter((epic) => !board.rows.some((row) => row.epic === epic))
   if (json) {
+    const approvals = plan.format === FORMAT && epics.length > 0 ? { approval_texts: epics.flatMap((epic) => {
+      const name = epicFileName(plan.planRoot, epic)
+      return name === null ? [] : [{ epic, file: `epics/${name}`, sha256: approvalText(readFileSync(join(plan.planRoot, 'epics', name), 'utf8')) }]
+    }) } : {}
     out(JSON.stringify({
       ok: true, ...resolvedFields(plan), schema_version: board.schemaVersion, queue: board.queue,
       epics, rows: board.rows.map(({ key, status, note, line, epic, story, token }) => ({ key, status, note, line, epic, story, token })),
-      total_rows: board.totalRows, errors: missing.map((epic) => ({ code: 'NO_ROWS', epic, message: `no rows for epic ${epic}` }))
+      ...approvals, total_rows: board.totalRows, errors: missing.map((epic) => ({ code: 'NO_ROWS', epic, message: `no rows for epic ${epic}` }))
     }, null, 2))
     return EXIT.ok
   }
@@ -333,6 +350,10 @@ async function set(argv) {
   try { plan = await resolvePlan(options.project ?? process.cwd()) } catch (error) { return failure(error, json) }
   const own = plan.format === FORMAT
   if (!(own ? STATUSES : BMAD_STATUSES).includes(status)) throw new PlanUsageError(`unknown status ${status}; one of ${(own ? STATUSES : BMAD_STATUSES).join(', ')}`)
+  // An epic's ready is his go (96.1): set it here and nothing commits it, so the run finds no go.
+  if (own && status === 'ready' && /^epic-\d+$/u.test(key) && plan.history !== 'none') {
+    return refuse(json, 'GO_NEEDS_RECORD', `${key} becomes ready only with the owner's go recorded in the plan's history: bmn plan go ${key.slice(5)} --source TEXT --approved sha256:HEX --expect TOKEN`)
+  }
   const noteLimit = own ? NOTE_LIMIT : 1000
   if (options.note !== undefined && [...options.note].length > noteLimit) throw new PlanUsageError(`--note is ${[...options.note].length} characters, over ${noteLimit}`)
   const copies = [{ path: plan.boardPath, expect: options.expect, name: plan.boardCheckout === plan.runCheckout ? 'run checkout' : 'default checkout' }]
@@ -378,6 +399,344 @@ async function set(argv) {
   } finally { releases.forEach((release) => release()) }
 }
 
+// ---------------------------------------------------------------------------------------------
+// His go, recorded once (96.1)
+
+/** A go that was not recorded: its code names the missing fact, and nothing was written. */
+class GoRefusal extends PlanError {}
+
+function refuse(json, code, message, extra = {}) {
+  if (json) out(JSON.stringify({ ok: false, error: { code, message }, ...extra }, null, 2))
+  else err(`bmn: ${code}: ${message}`)
+  return EXIT.findings
+}
+
+const GO_DATE = /\bgo (\d{4}-\d{2}-\d{2})\b/u
+const SOURCE_TIME = /\b(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/u
+const SOURCE_QUOTE = /["'“‘«][^"'”’»]+["'”’»]/u
+const DECISION_REFERENCE = /\bbmn: ?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/\S+/u
+const FINISHED_STATUSES = ['done', 'dropped']
+
+/**
+ * The text a go approves: the epic's Run needs and Decisions, each section's body (to the next heading of
+ * levels 1-4) without surrounding blank space, hashed with SHA-256. run_needs.py reads the same sections the
+ * same way, so one text gives one identity in both.
+ */
+export function approvalText(text) {
+  const normal = (text ?? '').replace(/\r\n?/gu, '\n')
+  const body = (name) => new RegExp(`(?:^|(?<=\\n))#{2,4} ${name}[ \\t]*\\n([\\s\\S]*?)(?=(?:^|(?<=\\n))#{1,4} |$)`, 'u')
+    .exec(normal)?.[1].replace(/^[ \t\n]+|[ \t\n]+$/gu, '') ?? ''
+  return createHash('sha256').update(`Run needs\n${body('Run needs')}\nDecisions\n${body('Decisions')}\n`).digest('hex')
+}
+
+function epicFileName(planRoot, epic) {
+  let names
+  try { names = readdirSync(join(planRoot, 'epics')) } catch { return null }
+  const matching = names.filter((name) => new RegExp(`^0*${epic}-[\\w.-]+\\.md$`, 'u').test(name))
+  return matching.length === 1 ? matching[0] : null
+}
+
+/** The board with `epic` last in its `queue:` (unchanged when already there); null for a queue written in another form. */
+export function addToQueue(text, epic) {
+  const lines = text.split('\n')
+  const at = lines.findIndex((line) => /^queue:/u.test(line))
+  if (at === -1) return null
+  const ending = lines[at].endsWith('\r') ? '\r' : ''
+  const head = lines[at].slice(0, lines[at].length - ending.length)
+  let last = null
+  const items = []
+  for (let index = at + 1; index < lines.length; index++) {
+    const line = lines[index].replace(/\r$/u, '')
+    if (/^[ \t]*(?:#.*)?$/u.test(line)) continue
+    const item = /^[ \t]+-[ \t]+['"]?(?:epic-)?(\d+)['"]?[ \t]*(?:#.*)?$/u.exec(line)
+    if (!item) break
+    items.push(Number(item[1]))
+    last = index
+  }
+  if (items.includes(epic)) return text
+  if (last !== null) {
+    if (!/^queue:[ \t]*(?:#.*)?$/u.test(head)) return null
+    lines.splice(last + 1, 0, `${/^([ \t]+)-/u.exec(lines[last])[1]}- ${epic}${ending}`)
+    return lines.join('\n')
+  }
+  const empty = /^queue:[ \t]*(?:\[[ \t]*\])?[ \t]*(#.*)?$/u.exec(head)
+  if (!empty) return null
+  lines.splice(at, 1, `queue:${empty[1] ? ` ${empty[1]}` : ''}${ending}`, `  - ${epic}${ending}`)
+  return lines.join('\n')
+}
+
+function goNote(date, note) {
+  const head = `go ${date}`
+  if (note === '') return head
+  const room = NOTE_LIMIT - head.length - 3
+  const kept = [...note]
+  return `${head} · ${kept.length > room ? `${kept.slice(0, room - 1).join('')}…` : note}`
+}
+
+function localDate(now = new Date()) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+/** Git in the plan's history, never in a repository or index an outer process pointed the environment at. */
+function gitSync(repo, args, { input, env = {} } = {}) {
+  const inherited = { ...process.env }
+  for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY']) delete inherited[name]
+  const done = spawnSync('git', ['-C', repo, ...args], {
+    input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30_000, env: { ...inherited, LC_ALL: 'C', ...env }
+  })
+  if (done.error || done.status !== 0) {
+    const reason = (done.stderr || done.error?.message || '').trim().split('\n')[0].slice(0, 200)
+    throw Object.assign(new Error(`git ${args[0]} failed${reason ? `: ${reason}` : ''}`), { git: true })
+  }
+  return done.stdout
+}
+
+function treeEntry(repo, commit, path) {
+  const match = /^(\d+) blob ([0-9a-f]+)\t/u.exec(gitSync(repo, ['ls-tree', '-z', commit, '--', path]))
+  return match ? { mode: match[1], blob: match[2] } : null
+}
+
+function indexEntry(repo, path) {
+  const match = /^(\d+) ([0-9a-f]+) (\d)\t/u.exec(gitSync(repo, ['ls-files', '-s', '-z', '--', path]))
+  return match ? { mode: match[1], blob: match[2], stage: match[3] } : null
+}
+
+function showAt(repo, commit, path) {
+  try { return gitSync(repo, ['show', `${commit}:${path}`]) } catch { return null }
+}
+
+/** Trailers of a go commit's message, as run_needs.py reads them. */
+function goTrailers(message) {
+  const field = (name) => new RegExp(`^${name}: (.+)$`, 'mu').exec(message)?.[1].trim() ?? null
+  return { epic: field('Go-Epic'), date: field('Go-Date'), source: field('Approval-Source'), approved: field('Approved-Text'), file: field('Approved-File') }
+}
+
+/** The newest commit of the board's history recording this same go: the same epic, owner's act and approved text. */
+function recordedGo(repo, boardRel, epic, source, approvedSha) {
+  const log = gitSync(repo, ['log', '--all-match', '-F', `--grep=Go-Epic: ${epic}`, `--grep=Approved-Text: sha256:${approvedSha}`, '--format=%H%x1f%B%x1e', '--', boardRel])
+  for (const record of log.split('\x1e')) {
+    const [commit, message = ''] = record.replace(/^\n/u, '').split('\x1f')
+    const trailers = goTrailers(message)
+    if (/^[0-9a-f]{40,64}$/u.test(commit) && trailers.epic === String(epic) && trailers.source === source && trailers.approved === `sha256:${approvedSha}`) return { commit, trailers }
+  }
+  return null
+}
+
+/**
+ * Point the index's entry for `path` at its blob in `commit` when it held the parent's (it was not staged), so the
+ * commit leaves the owner's staging as it was; a staged board gets the same row change; any other staged entry is his.
+ */
+function followIndex(repo, path, parentEntry, entry, transform) {
+  const current = indexEntry(repo, path)
+  if (current !== null && current.stage !== '0') return
+  if ((current?.blob ?? null) === (parentEntry?.blob ?? null)) {
+    gitSync(repo, ['update-index', '--add', '--cacheinfo', `${entry.mode},${entry.blob},${path}`])
+    return
+  }
+  if (current === null || current.blob === entry.blob || transform === undefined) return
+  const staged = transform(gitSync(repo, ['cat-file', 'blob', current.blob]))
+  if (staged === null) return
+  const blob = gitSync(repo, ['hash-object', '-w', '--stdin'], { input: staged }).trim()
+  gitSync(repo, ['update-index', '--cacheinfo', `${current.mode},${blob},${path}`])
+}
+
+/**
+ * Record the owner's go on one epic (96.1): check the source, the approved text, the row token and the history;
+ * write one commit holding only the row's change to ready (with the queue) and, when the approved text is not yet
+ * committed, the epic file; move the branch only if it did not move meanwhile; then the index entries that were
+ * not staged and the working board. The same request again finds its commit and only completes what a crash left
+ * undone, so one act never records two gos.
+ */
+export async function recordGo(plan, { epic, source: given, approved, expect, date, note, now = new Date(), seam = () => {} }) {
+  if (plan.format !== FORMAT) throw new GoRefusal('BMAD', 'a BMAD board records its go as the dated go comment the product repository commits; bmn plan go records a BMN-format plan\'s go')
+  if (plan.history === 'none') throw new GoRefusal('NO_HISTORY', `${plan.planRoot} keeps no Git history, so no go can be recorded there; give it one (git -C plan init) and commit the plan`)
+  if (plan.history === 'product-repository' && plan.runCheckout !== plan.defaultCheckout) throw new GoRefusal('NOT_DEFAULT_CHECKOUT', `the plan is tracked by the product repository; record the go from its default checkout ${plan.defaultCheckout}`)
+  const source = typeof given === 'string' ? given.trim() : ''
+  if (source === '') throw new GoRefusal('NO_OWNER_GO', 'no owner go named: --source gives his act, his quoted words with their time or a BMN decision reference (bmn:SESSION/KEY)')
+  if (/[\r\n]/u.test(source) || [...source].length > 500) throw new GoRefusal('NO_OWNER_GO', '--source is one line of at most 500 characters')
+  if (!DECISION_REFERENCE.test(source) && !(SOURCE_QUOTE.test(source) && SOURCE_TIME.test(source))) {
+    throw new GoRefusal('NO_OWNER_GO', `--source does not name an owner's act: give his quoted words with their time (YYYY-MM-DDTHH:MM) or a BMN decision reference (bmn:SESSION/KEY); "${source.slice(0, 80)}" is neither`)
+  }
+  const goDate = date ?? SOURCE_TIME.exec(source)?.[1] ?? localDate(now)
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(goDate) || Number.isNaN(Date.parse(`${goDate}T00:00:00Z`))) throw new PlanUsageError(`--date takes YYYY-MM-DD, not ${goDate}`)
+  if (note !== undefined && GO_DATE.exec(note)?.[1] !== goDate) throw new GoRefusal('NOTE_WITHOUT_GO', `--note must carry the go as "go ${goDate}"`)
+  if (note !== undefined && [...note].length > NOTE_LIMIT) throw new PlanUsageError(`--note is ${[...note].length} characters, over ${NOTE_LIMIT}`)
+  const name = epicFileName(plan.planRoot, epic)
+  if (name === null) throw new GoRefusal('NO_EPIC', `no single epic file for epic ${epic} in ${join(plan.planRoot, 'epics')}`)
+  const repo = plan.history === 'plan-repository' ? plan.planRoot : plan.boardCheckout
+  const prefix = relative(repo, plan.planRoot).split(sep).filter(Boolean).join('/')
+  const boardRel = relative(repo, plan.boardPath).split(sep).join('/')
+  const epicRel = `${prefix === '' ? '' : `${prefix}/`}epics/${name}`
+  const key = `epic-${epic}`
+  // Every Git failure before the branch moves is a refusal: nothing was recorded.
+  const readHistory = (read) => {
+    try { return read() } catch (error) {
+      if (error?.git) throw new GoRefusal('UNREADABLE_HISTORY', `the plan's history at ${repo} cannot be read (${error.message}); nothing was recorded`)
+      throw error
+    }
+  }
+
+  let approvedSha
+  let approvedFrom = null
+  if (typeof approved === 'string' && /^sha256:[0-9a-f]{64}$/u.test(approved)) approvedSha = approved.slice(7)
+  else if (typeof approved === 'string' && /^[0-9a-f]{7,64}$/u.test(approved)) {
+    try { approvedFrom = gitSync(repo, ['rev-parse', '--verify', '--quiet', `${approved}^{commit}`]).trim() } catch { throw new GoRefusal('NO_APPROVED_TEXT', `--approved ${approved} is no commit of the plan's history at ${repo}`) }
+    const then = showAt(repo, approvedFrom, epicRel)
+    if (then === null) throw new GoRefusal('NO_APPROVED_TEXT', `commit ${approved} holds no ${epicRel}, so it names no approved text for epic ${epic}`)
+    approvedSha = approvalText(then)
+  } else throw new GoRefusal('NO_APPROVED_TEXT', 'no approved text named: --approved gives what he approved, sha256:HEX from bmn plan status --epic N --json or the plan commit he approved')
+
+  const release = await lockBoard(plan.boardPath)
+  try {
+    const before = readHistory(() => recordedGo(repo, boardRel, epic, source, approvedSha))
+    if (before !== null) return completeRecordedGo(plan, { repo, boardRel, key, epic, expect, before, name })
+
+    const working = readFileSync(plan.boardPath, 'utf8')
+    const current = rowIn(working, key)
+    if (current === null) throw new PlanError('UNKNOWN_ROW', `no row ${key} in ${plan.boardPath}`)
+    if (current.token !== expect) throw new GoRefusal('CONFLICT', `${key} is now "${current.status}${current.note ? ` # ${current.note}` : ''}" (token ${current.token}), not the row the go was asked on; read it again and ask again if it changed`)
+    if (FINISHED_STATUSES.includes(current.status)) throw new GoRefusal('FINISHED', `${key} is ${current.status}; a go approves work still to do`)
+    const nextNote = note ?? goNote(goDate, current.note)
+
+    const head = readHistory(() => gitSync(repo, ['rev-parse', '--verify', 'HEAD^{commit}']).trim())
+    let branch
+    try { branch = gitSync(repo, ['symbolic-ref', '-q', 'HEAD']).trim() } catch { throw new GoRefusal('DETACHED', `the plan's history at ${repo} is not on a branch; check out its branch first`) }
+    const committedBoard = readHistory(() => showAt(repo, head, boardRel))
+    const committedRow = committedBoard === null ? null : replaceRow(committedBoard, key, 'ready', nextNote)
+    if (committedRow === null) throw new GoRefusal('NOT_COMMITTED', `${key} is not in the board ${boardRel} of commit ${head.slice(0, 12)}; commit the planned epic (the planning checkpoint) before its go`)
+    const boardText = addToQueue(committedRow.text, epic)
+    const workingText = addToQueue(replaceRow(working, key, 'ready', nextNote).text, epic)
+    if (boardText === null || workingText === null) throw new GoRefusal('QUEUE_FORM', 'the board\'s queue: is not a block list (queue: [] or "  - N" lines); write it as one first')
+
+    // What he approved must be what the go commit holds: the committed text, or the working copy committed with it.
+    const workingEpic = readFileSync(join(plan.planRoot, 'epics', name))
+    const committedEpic = readHistory(() => showAt(repo, head, epicRel))
+    const committedSha = committedEpic === null ? null : approvalText(committedEpic)
+    const workingSha = approvalText(workingEpic.toString('utf8'))
+    const epicIncluded = committedSha !== approvedSha
+    if (epicIncluded && workingSha !== approvedSha) {
+      throw new GoRefusal('CHANGED_TERMS', `epic ${epic}'s Run needs and Decisions are not the approved text sha256:${approvedSha.slice(0, 12)}… (working copy ${workingSha.slice(0, 12)}…, committed ${committedSha === null ? 'none' : `${committedSha.slice(0, 12)}…`}); ask for the go on the current text`)
+    }
+
+    const message = [
+      `plan: go for Epic ${epic} (go ${goDate})`, '',
+      `Recorded by bmn plan go: the owner's go on ${key} and the Run needs and Decisions it approved.`, '',
+      `Go-Epic: ${epic}`, `Go-Date: ${goDate}`, `Approval-Source: ${source}`, `Approved-Text: sha256:${approvedSha}`, `Approved-File: ${epicRel}`,
+      ...(approvedFrom ? [`Approved-From: ${approvedFrom}`] : []), ''
+    ].join('\n')
+    const parentBoard = readHistory(() => treeEntry(repo, head, boardRel))
+    const parentEpic = readHistory(() => treeEntry(repo, head, epicRel))
+    const temporaryIndex = join(readHistory(() => gitSync(repo, ['rev-parse', '--absolute-git-dir']).trim()), `bmn-plan-go-${process.pid}-${randomBytes(3).toString('hex')}.index`)
+    let created
+    try {
+      const own = { env: { GIT_INDEX_FILE: temporaryIndex } }
+      gitSync(repo, ['read-tree', head], own)
+      const boardBlob = gitSync(repo, ['hash-object', '-w', '--stdin'], { input: boardText }).trim()
+      gitSync(repo, ['update-index', '--add', '--cacheinfo', `${parentBoard?.mode ?? '100644'},${boardBlob},${boardRel}`], own)
+      if (epicIncluded) {
+        const epicBlob = gitSync(repo, ['hash-object', '-w', '--stdin'], { input: workingEpic }).trim()
+        gitSync(repo, ['update-index', '--add', '--cacheinfo', `${parentEpic?.mode ?? '100644'},${epicBlob},${epicRel}`], own)
+      }
+      const tree = gitSync(repo, ['write-tree'], own).trim()
+      created = gitSync(repo, ['commit-tree', tree, '-p', head, '-F', '-'], { input: message }).trim()
+      seam('created', created)
+      gitSync(repo, ['update-ref', '-m', `bmn plan go: epic ${epic}`, branch, created, head])
+    } catch (error) {
+      if (error?.git) throw new GoRefusal('COMMIT_FAILED', `the go could not be committed in ${repo} (${error.message}); nothing was recorded and the board is unchanged`)
+      throw error
+    } finally { rmSync(temporaryIndex, { force: true }) }
+    seam('committed', created)
+
+    // The commit holds the go; the index entries that were not staged and the working board follow it.
+    const transform = (text) => { const row = replaceRow(text, key, 'ready', nextNote); return row === null ? null : addToQueue(row.text, epic) }
+    try {
+      followIndex(repo, boardRel, parentBoard, treeEntry(repo, created, boardRel), transform)
+      if (epicIncluded) followIndex(repo, epicRel, parentEpic, treeEntry(repo, created, epicRel), undefined)
+    } catch { /* the go stands; an index entry left behind only shows as a staged change */ }
+    keepVersion(plan.boardPath, working)
+    commit(plan.boardPath, working, workingText)
+
+    // Read back what the commit holds: the row, the approved text and the trailers.
+    const recordedRow = rowIn(showAt(repo, created, boardRel) ?? '', key)
+    const trailers = goTrailers(gitSync(repo, ['log', '-1', '--format=%B', created]))
+    if (recordedRow?.status !== 'ready' || GO_DATE.exec(recordedRow.note)?.[1] !== goDate || approvalText(showAt(repo, created, epicRel) ?? '') !== approvedSha || trailers.source !== source) {
+      throw new PlanError('READBACK', `commit ${created} does not read back as the go it was written to be; see git -C ${repo} show ${created.slice(0, 12)}`)
+    }
+    const row = rowIn(readFileSync(plan.boardPath, 'utf8'), key)
+    return { outcome: 'recorded', commit: created, date: goDate, source, approvedSha, file: `epics/${name}`, repo, epicIncluded, row, pending: row?.token === expect }
+  } finally { release() }
+}
+
+/**
+ * The go this request asked for is already a commit (a retry, a duplicate call, or a crash after the branch moved):
+ * bring the unstaged index entry and the working row up to it while the committed board still holds that row, and
+ * never write a second go. A row the history has changed since (a later go, a withdrawal) is left as it is.
+ */
+function completeRecordedGo(plan, { repo, boardRel, key, epic, expect, before, name }) {
+  const recordedBoard = showAt(repo, before.commit, boardRel) ?? ''
+  const recordedRow = rowIn(recordedBoard, key)
+  const headRow = rowIn(showAt(repo, 'HEAD', boardRel) ?? '', key)
+  if (headRow !== null && ['backlog', 'dropped'].includes(headRow.status)) {
+    throw new GoRefusal('WITHDRAWN', `this go was recorded at ${before.commit.slice(0, 12)} and later withdrawn: ${key} is ${headRow.status} in the plan's history; a new go needs a new act of his`)
+  }
+  if (recordedRow !== null && headRow?.token === recordedRow.token) {
+    try { followIndex(repo, boardRel, treeEntry(repo, `${before.commit}^`, boardRel), treeEntry(repo, before.commit, boardRel), undefined) } catch { /* the go stands */ }
+    const working = readFileSync(plan.boardPath, 'utf8')
+    const changed = replaceRow(working, key, 'ready', recordedRow.note)
+    if (changed !== null && changed.token === expect) {
+      keepVersion(plan.boardPath, working)
+      commit(plan.boardPath, working, addToQueue(changed.text, epic) ?? changed.text)
+    }
+  }
+  const row = rowIn(readFileSync(plan.boardPath, 'utf8'), key)
+  return { outcome: 'recorded-before', commit: before.commit, date: before.trailers.date, source: before.trailers.source, approvedSha: before.trailers.approved.slice(7), file: `epics/${name}`, repo, epicIncluded: false, row, pending: row?.token === expect && recordedRow !== null && headRow?.token === recordedRow.token }
+}
+
+/** One row of a board's text with its token, or null. */
+function rowIn(text, key) {
+  for (const raw of text.split('\n')) {
+    const row = ROW.exec(raw.replace(/\r$/u, ''))
+    if (row && row[1] === key) return { status: row[2], note: row[3] ?? '', token: rowToken(key, row[2], row[3] ?? '') }
+  }
+  return null
+}
+
+async function go(argv) {
+  const { positionals, options } = parse(argv, { flags: ['json'], values: ['project', 'expect', 'source', 'approved', 'date', 'note'] })
+  const json = options.json === true
+  if (positionals.length !== 1 || !/^\d{1,6}$/u.test(positionals[0])) throw new PlanUsageError('plan go takes one epic number: bmn plan go <epic> --source TEXT --approved sha256:HEX --expect TOKEN')
+  if (options.expect === undefined) throw new PlanUsageError('plan go needs --expect TOKEN, the epic row\'s token bmn plan status --json printed')
+  if (options.note !== undefined && /[\r\n]/u.test(options.note)) throw new PlanUsageError('--note is one line')
+  const epic = Number(positionals[0])
+  let plan
+  try { plan = await resolvePlan(options.project ?? process.cwd()) } catch (error) { return failure(error, json) }
+  let result
+  try {
+    result = await recordGo(plan, { epic, source: options.source, approved: options.approved, expect: options.expect, date: options.date, note: options.note })
+  } catch (error) {
+    if (error instanceof GoRefusal) return refuse(json, error.code, error.message)
+    if (error instanceof PlanUsageError) throw error
+    return failure(error, json)
+  }
+  const { row } = result
+  if (json) {
+    out(JSON.stringify({
+      ok: true, epic, outcome: result.outcome, go_date: result.date, commit: result.commit, history_repo: result.repo, approval_source: result.source,
+      approved_text: `sha256:${result.approvedSha}`, approved_file: result.file, epic_file_committed: result.epicIncluded, row, board: plan.boardPath,
+      board_pending: result.pending
+    }, null, 2))
+  } else {
+    out([
+      `${result.outcome === 'recorded' ? 'recorded' : 'already recorded'}: the go on epic ${epic}, go ${result.date}, commit ${result.commit.slice(0, 12)} in ${result.repo}`,
+      `approved text sha256:${result.approvedSha} (Run needs and Decisions of ${result.file}); source: ${result.source}`,
+      `board: epic-${epic}: ${row?.status ?? 'missing'}${row?.note ? ` # ${row.note}` : ''}${row ? ` (token ${row.token})` : ''}`,
+      ...(result.pending ? ['the working board changed while it was written and still shows the row before the go; run the same command again'] : []),
+      `dev-auto reads it with run_needs.py ${epic} --project ${plan.productRoot}`
+    ].join('\n'))
+  }
+  return result.pending ? EXIT.findings : EXIT.ok
+}
+
 function writtenNote(results) {
   return results.length ? ` (already written: ${results.map((one) => `${one.board}, token ${one.token}`).join('; ')})` : ''
 }
@@ -400,7 +759,8 @@ export async function runPlanCommand(argv) {
     if (action === 'status') return await status(rest)
     if (action === 'check') return await check(rest)
     if (action === 'set') return await set(rest)
-    throw new PlanUsageError(`plan expects status, check or set, not ${action}`)
+    if (action === 'go') return await go(rest)
+    throw new PlanUsageError(`plan expects status, check, set or go, not ${action}`)
   } catch (error) {
     if (error instanceof PlanUsageError) { err(`bmn: ${error.message}\nRun "bmn plan --help" for usage.`); return EXIT.unable }
     throw error
