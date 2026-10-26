@@ -64,8 +64,8 @@ const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'Notific
 /**
  * The promise an OpenCode session's loaded plugin must make (Story 96.3): its events carry `bmn_plugin` 1 or later once
  * it reports the owner's stop as `interrupted` and quitting as `tui.exit`. BMN's earlier plugins reported a stop as a
- * finished turn and carried no mark; a session started before its plugin file was upgraded still runs one, so the file
- * on disk says nothing about it, and only the mark on the session's own event lets BMN wake it.
+ * finished turn and carried no mark. The file on disk says nothing about what a running OpenCode loaded or about a stop
+ * reported before (2.0.29 reloads a changed file by itself), so only the mark on the session's own event lets BMN wake it.
  */
 export const OPENCODE_WAKE_PLUGIN = 1
 const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || agent === 'codex' || agent === 'opencode'

@@ -712,7 +712,8 @@ BMN shipped earlier (a fixed list of SHA-256 hashes read from main's history, `E
 `bin/bmn-opencode-plugin.mjs`; BMN's comments alone never make a file BMN's) is upgraded to the current one: a copy is
 made and read back, the new text replaces the file only while the path still leads to the file BMN read with the bytes
 it read, and is read back after (Story 96.3); one edited since is left and listed as `changed`, with its `cli.json`
-entry. An OpenCode that is already running keeps the plugin it loaded until it restarts. Every file is copied before it changes,
+entry. OpenCode 2.0.29 loads a changed plugin file again while it runs (its log says `plugin reconciliation`), and the Away
+wake-up goes by the mark on each event, so a stop the earlier plugin reported stays a stop. Every file is copied before it changes,
 written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
@@ -987,8 +988,8 @@ A session is woken only when all of these hold: it runs Claude Code, Codex or Op
 finished turn reported after he left (for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
 plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`, and only from a plugin whose events carry
 `bmn_plugin` 1, its promise that it marks the interrupt and reports quitting: BMN's earlier plugins reported the owner's
-stop as a finished turn, and an OpenCode started before its plugin file was upgraded still runs one, so the file on disk
-says nothing about it; Story 96.3), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
+stop as a finished turn, and the plugin file on disk says nothing about what a running OpenCode loaded or about a stop
+reported before (2.0.29 reloads a changed file by itself); Story 96.3), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim

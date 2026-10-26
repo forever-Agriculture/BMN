@@ -7,14 +7,15 @@
 // folder whose plugin the tested BMN's own `bmn hooks install` writes, against a loopback stand-in model with synthetic replies:
 // no account and no external or paid call. Its evidence is what the stand-in was asked.
 // `opencode-upgrade` (Story 96.3) starts the same OpenCode on BMN's October 14 plugin, read from this repository's history:
-// its stop is left alone, BMN's start-up install upgrades the file while that OpenCode still runs, a finished turn of the
-// still-loaded old plugin is left alone, and after a restart on the upgraded plugin one finished turn (with three tool
-// calls) is woken once while the owner's stop and quitting are not.
+// its stop is left alone, BMN's start-up install upgrades the file while that OpenCode still runs and the earlier stop
+// stays alone, the finished turn of the plugin OpenCode 2.0.29 reloads by itself is woken once, a turn after the copy of
+// the October 14 file is put back (a rollback) is left alone, and after the next start-up install and a restart one
+// finished turn (with three tool calls) is woken once while the owner's stop and quitting are not.
 // Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,codex,opencode,opencode-upgrade] [--opencode PATH]... [--binary PATH]
 //   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
@@ -300,29 +301,52 @@ async function run(scenario, binary) {
         check(`${name}: the start-up install upgrades the October 14 plugin byte for byte, with a copy, while OpenCode runs`,
           upgraded.state === 'installed' && (upgraded.upgraded ?? []).join() === 'plugin' && copied === OCTOBER_14.sha256 && readFileSync(openCode.plugin, 'utf8') === print,
           { report: upgraded, copied })
-        // A turn the still-loaded old plugin reports: the upgraded file on disk says nothing about this session.
-        const two = await tick(2, () => type('Reply with the single word ok.'))
-        check(`${name}: tick 2 leaves alone a finished turn of the session that still runs the earlier plugin`, because(two, earlier), { logs: two })
-        // Reload: quit and start OpenCode again in the same terminal; it loads the upgraded plugin.
-        const three = await tick(3, async () => {
+        // The owner's stop from before the upgrade stays a stop: the file on disk is now BMN's current plugin, and OpenCode
+        // 2.0.29 reloads a changed plugin file by itself, but neither speaks for the turn the earlier plugin reported.
+        const two = await tick(2, async () => undefined)
+        check(`${name}: tick 2 leaves the owner's earlier stop alone after the upgrade`, skipped(two), { logs: two })
+        // A turn after OpenCode's own reload carries the current plugin's mark: the line is typed once, without a restart.
+        const three = await tick(3, () => type('Reply with the single word ok.'))
+        check(`${name}: tick 3 types the line once into the root whose OpenCode reloaded the upgraded plugin by itself`, three.filter((line) => line.includes('typed')).length === 1, { logs: three })
+        check(`${name}: OpenCode submitted the whole line once, as its own prompt`, wakes() === 1, { wakes: wakes() })
+        // A rollback: the owner puts the copy of the October 14 file back; OpenCode reloads it and its turns are unmarked again.
+        const four = await tick(4, async () => {
+          if (copy) copyFileSync(copy, openCode.plugin)
+          await sleep(3_000)
+          await type('Reply with the single word ok.')
+        })
+        check(`${name}: tick 4 leaves alone a finished turn once the October 14 copy is put back`,
+          createHash('sha256').update(readFileSync(openCode.plugin)).digest('hex') === OCTOBER_14.sha256 && because(four, earlier), { logs: four })
+        // BMN's next start upgrades the rolled-back file again; quit and start OpenCode again in the same terminal.
+        let again
+        const five = await tick(5, async () => {
+          try {
+            again = JSON.parse(execFileSync(process.execPath, [cli, 'hooks', 'install', 'opencode', '--absent', '--yes', '--file', openCode.plugin, '--json'],
+              { encoding: 'utf8', env: { ...environment, ...openCode.exports } })).agents[0]
+          } catch (error) { again = { error: String(error).slice(0, 400) } }
           await quit(); await sleep(5_000)
           await type(`bash '${join(openCode.profile, 'start.sh')}'`)
           for (let waited = 0; waited < 60_000 && !/Ask anything/u.test(await screen().catch(() => '')); waited += 2_000) await sleep(2_000)
           await type('Read the README three times. SYNTHETIC-TOOL')
         }, 100_000)
-        check(`${name}: tick 3 types the line once into the root restarted on the upgraded plugin`, three.filter((line) => line.includes('typed')).length === 1, { logs: three })
-        check(`${name}: OpenCode submitted the whole line once, as its own prompt`, wakes() === 1, { wakes: wakes() })
+        const secondCopy = (again?.backups ?? [])[0]
+        check(`${name}: the next start-up install upgrades the rolled-back file again, with a new copy`,
+          again?.state === 'installed' && (again.upgraded ?? []).join() === 'plugin' && secondCopy !== copy &&
+          (secondCopy ? createHash('sha256').update(readFileSync(secondCopy)).digest('hex') : null) === OCTOBER_14.sha256 && readFileSync(openCode.plugin, 'utf8') === print,
+          { report: again })
+        check(`${name}: tick 5 types the line once into the root restarted on the upgraded plugin`, five.filter((line) => line.includes('typed')).length === 1, { logs: five })
+        check(`${name}: OpenCode submitted the second line whole too`, wakes() === 2, { wakes: wakes() })
         const tools = (await hookEvents()).filter((event) => event.event === 'tool.execute.after')
         check(`${name}: the upgraded plugin's three identical tool calls reach the repeat watch`, tools.length >= 3 && tools.slice(-3).map((event) => event.repeat).join() === '1,2,3',
           { tools: tools.map((event) => ({ toolName: event.toolName, repeat: event.repeat })) })
-        const four = await tick(4, stop)
-        check(`${name}: tick 4 leaves the owner's stop alone on the upgraded plugin`,
-          because(four, 'its latest event is session.idle from interrupted, not its own finished turn'), { logs: four })
-        const five = await tick(5, quit, 60_000)
-        check(`${name}: tick 5 skips the session once OpenCode quit and a shell is in front`, because(five, 'its latest event is tui.exit, not a finished turn'), { logs: five })
+        const six = await tick(6, stop)
+        check(`${name}: tick 6 leaves the owner's stop alone on the upgraded plugin`,
+          because(six, 'its latest event is session.idle from interrupted, not its own finished turn'), { logs: six })
+        const seven = await tick(7, quit, 60_000)
+        check(`${name}: tick 7 skips the session once OpenCode quit and a shell is in front`, because(seven, 'its latest event is tui.exit, not a finished turn'), { logs: seven })
         const last = (await hookEvents()).at(-1)
         check(`${name}: quitting reached BMN as tui.exit`, last?.event === 'tui.exit', { last })
-        check(`${name}: OpenCode received the wake line only once overall`, wakes() === 1, { wakes: wakes() })
+        check(`${name}: OpenCode received the wake line only at ticks 3 and 5`, wakes() === 2, { wakes: wakes() })
         check(`${name}: OpenCode reached nothing but the stand-in model`, standIn.refused.length === 0, { refused: standIn.refused })
         report[`${name}Asked`] = standIn.requests
         report[`${name}HookEvents`] = await hookEvents()
