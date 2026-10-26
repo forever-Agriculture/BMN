@@ -83,6 +83,7 @@ describe('renderer acceptance hook', () => {
   it('drives an optional real-preload integration probe from test mode', async () => {
     const target: Record<string, unknown> = {}
     const probe = {
+      synchronizedRendering: [],
       workspaceCount: 2,
       sessionMethodSessionId: 'session-a',
       bridgeErrorCodes: { staleLayoutPut: 'REVISION_CONFLICT', unknownSessionSavedOutput: 'NOT_FOUND' },

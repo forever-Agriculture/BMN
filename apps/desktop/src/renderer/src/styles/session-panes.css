@@ -549,6 +549,16 @@
 }
 
 /*
+ * Epic 87: xterm 6 scrolls with its own scrollable element. Its legacy viewport layer behind the screen paints #000 and
+ * a native scrollbar wherever the screen does not reach: the rows' remainder, and the band a held image scene leaves
+ * while a resize grows the terminal. The surface's ground, the theme's background, shows there instead.
+ */
+.terminal-surface .xterm .xterm-viewport {
+  background-color: transparent;
+  overflow-y: hidden;
+}
+
+/*
  * Story 91.2: each row of xterm's DOM renderer is a paint layer of its own, so a frame repaints only the rows it
  * changed, not the whole terminal (one row changing every 33 ms: paint about 6 s a minute without it, 0.3 s with it).
  * Positioned with no z-index, a row makes no stacking context: the selection layer still sits between the text and the

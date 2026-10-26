@@ -1068,6 +1068,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     })
     const animatedId = JSON.stringify(secondSession.sessionId)
     const quietId = JSON.stringify(session.sessionId)
+    type QuietSelectionState = {
+      cols: number; rows: number; refits: number; inputEvents: number; mouseTrackingMode: string
+    }
     const waitForAnimatedLine = (marker: string, timeoutMs: number) => host.applicationWindow!.webContents.executeJavaScript(`(async () => {
       const end = Date.now() + ${timeoutMs};
       while (Date.now() < end) {
@@ -1076,12 +1079,58 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       }
       throw new Error(${JSON.stringify(`the animation pane never printed ${marker}`)});
     })()`) as Promise<void>
-    const quietBefore = await host.applicationWindow.webContents.executeJavaScript(`(() => {
+    const quietBefore = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
       const hook = window.__aitermTest;
-      const selection = hook.view(${quietId}).select(0, 0, 12);
+      const quietView = hook.view(${quietId});
+      // An earlier layout change can still owe the quiet pane a refit: ResizeObserver delivery waits for a rendering
+      // frame, late when the window is off screen, and that refit clears a selection. Select only once its rows fit
+      // the surface as FitAddon measures it and no refit is running.
+      const surface = document.querySelector('.session-terminal[data-session-id="' + ${quietId} + '"] .terminal-surface');
+      const fitRows = () => {
+        const screen = surface && surface.querySelector('.xterm'), row = surface && surface.querySelector('.xterm-rows > div');
+        if (!screen || !row || !(row.getBoundingClientRect().height > 0)) return null;
+        const style = getComputedStyle(screen), height = parseInt(getComputedStyle(surface).height) - parseInt(style.paddingTop) - parseInt(style.paddingBottom);
+        return Math.max(1, Math.floor(height / row.getBoundingClientRect().height));
+      };
+      const frame = () => new Promise((resolve) => { requestAnimationFrame(resolve); setTimeout(resolve, 1000) });
+      const refitsAtEntry = hook.snapshot(${quietId}).refits;
+      await frame(); await frame();
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        const settled = hook.snapshot(${quietId});
+        await frame(); await frame();
+        const now = hook.snapshot(${quietId});
+        if (now.refits === settled.refits && now.rows === fitRows()) break;
+        if (Date.now() >= deadline) throw new Error('quiet pane fit not settled before selection: ' + JSON.stringify({ rows: now.rows, fitRows: fitRows(), refitsAtEntry, refits: now.refits }));
+      }
+      const settle = { refitsAtEntry, refitsSettled: hook.snapshot(${quietId}).refits, fitRows: fitRows() };
+      window.__bmnQuietSelectionView = quietView;
+      const selection = quietView.selectKnownText('EXISTING-HANDOFF-PREFIX', 12);
+      if (selection !== 'EXISTING-HAN') throw new Error('the quiet-pane selection was not established before animation');
       const snapshot = hook.snapshot(${quietId});
-      return { lines: snapshot.bufferLines, storageMB: snapshot.imageStorageMB, layer: snapshot.imageLayerPresent, selection };
-    })()`) as { lines: string[]; storageMB: number; layer: boolean; selection: string }
+      // Diagnostic for an intermittent quiet-pane resize: which box changed size first, on every quiet resize.
+      const rect = (node) => { if (!node) return null; const r = node.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
+      const pane = (id) => {
+        const root = document.querySelector('.session-terminal[data-session-id="' + id + '"]');
+        return { pane: rect(root), heading: rect(root && root.querySelector('.pane-heading')), progress: rect(root && root.querySelector('.progress-strip')),
+          frame: rect(root && root.querySelector('.terminal-frame')), surface: rect(root && root.querySelector('.terminal-surface')) };
+      };
+      const layout = (why) => {
+        const area = document.querySelector('.session-area');
+        return { why, t: Date.now(), innerWidth: window.innerWidth, innerHeight: window.innerHeight, area: rect(area), areaClass: area ? area.className : null,
+          notices: Array.from(document.querySelectorAll('.feedback-notice')).map((n) => ({ className: n.className, text: (n.textContent || '').slice(0, 160), rect: rect(n) })),
+          quiet: pane(${quietId}), animated: pane(${animatedId}) };
+      };
+      const timeline = [layout('before')];
+      const observer = new ResizeObserver(() => { if (timeline.length < 48) timeline.push(layout('quiet-resize')) });
+      if (surface) observer.observe(surface);
+      window.__bmnQuietLayout = { layout, timeline, observer };
+      return { lines: snapshot.bufferLines, storageMB: snapshot.imageStorageMB, layer: snapshot.imageLayerPresent, selection, settle,
+        state: { cols: snapshot.cols, rows: snapshot.rows, refits: snapshot.refits,
+          inputEvents: snapshot.inputEvents, mouseTrackingMode: snapshot.modes.mouseTrackingMode } };
+    })()`) as { lines: string[]; storageMB: number; layer: boolean; selection: string;
+      settle: { refitsAtEntry: number; refitsSettled: number; fitRows: number | null }; state: QuietSelectionState }
+    const windowBefore = host.applicationWindow.getContentBounds()
     await typeIntoAnimatedPane(`clear; '${animationScript}' 64 0.12 CODEX-RATE; '${animationScript}' 120 0.016 MAX-RATE\r`)
     await waitForAnimatedLine('CODEX-RATE-DONE', 30_000)
     await waitForAnimatedLine('MAX-RATE-DONE', 30_000)
@@ -1092,26 +1141,43 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const hook = window.__aitermTest;
       const own = hook.snapshot(${animatedId});
       const quiet = hook.snapshot(${quietId});
+      const quietView = hook.view(${quietId});
+      const sameView = quietView === window.__bmnQuietSelectionView;
+      delete window.__bmnQuietSelectionView;
+      const probe = window.__bmnQuietLayout;
+      delete window.__bmnQuietLayout;
+      if (probe) probe.observer.disconnect();
       return { storageMB: own.imageStorageMB, imageLines: hook.view(${animatedId}).imageCells().lines,
         quiet: { lines: quiet.bufferLines, storageMB: quiet.imageStorageMB, layer: quiet.imageLayerPresent,
+          layout: probe ? { timeline: probe.timeline, after: probe.layout('after') } : null,
+          state: { cols: quiet.cols, rows: quiet.rows, refits: quiet.refits,
+            inputEvents: quiet.inputEvents, mouseTrackingMode: quiet.modes.mouseTrackingMode, sameView },
           selection: (() => {
-            const selection = hook.view(${quietId}).selection();
-            hook.view(${quietId}).clearSelection();
+            const selection = quietView.selection();
+            quietView.clearSelection();
             return selection;
           })() } };
     })()`) as { storageMB: number; imageLines: number[];
-      quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }
+      quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string; layout: unknown;
+        state: QuietSelectionState & { sameView: boolean } } }
+    const windowAfter = host.applicationWindow.getContentBounds()
     const sixelAnimation = {
       noViewRebuild: host.runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachment,
       storageMB: animation.storageMB,
       imageLinesAfterScroll: animation.imageLines.length,
       quietPaneUnchanged: JSON.stringify(animation.quiet.lines) === JSON.stringify(quietBefore.lines) &&
         animation.quiet.storageMB === quietBefore.storageMB && animation.quiet.layer === quietBefore.layer,
-      quietSelectionKept: quietBefore.selection.length > 0 && animation.quiet.selection === quietBefore.selection
+      quietSelectionKept: quietBefore.selection.length > 0 && animation.quiet.selection === quietBefore.selection,
+      // Any refit of the quiet pane during the animation fails, whatever caused it.
+      quietFitKept: quietBefore.state.rows === quietBefore.settle.fitRows && animation.quiet.state.rows === quietBefore.state.rows &&
+        animation.quiet.state.cols === quietBefore.state.cols && animation.quiet.state.refits === quietBefore.state.refits,
+      quietDiagnostics: { before: quietBefore.state, after: animation.quiet.state, settle: quietBefore.settle,
+        selectionBefore: quietBefore.selection, selectionAfter: animation.quiet.selection,
+        window: { before: windowBefore, after: windowAfter }, layout: animation.quiet.layout }
     }
     // One 75 px frame covers at most 7 rows at the smallest font; more means stale frames stayed.
     if (!sixelAnimation.noViewRebuild || !(sixelAnimation.storageMB > 0) || sixelAnimation.imageLinesAfterScroll > 7 ||
-      !sixelAnimation.quietPaneUnchanged || !sixelAnimation.quietSelectionKept) {
+      !sixelAnimation.quietPaneUnchanged || !sixelAnimation.quietSelectionKept || !sixelAnimation.quietFitKept) {
       throw new Error(`the two-pane Sixel animation failed: ${JSON.stringify(sixelAnimation)}`)
     }
 
@@ -5291,6 +5357,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     receipt = {
       selfTest: 'session-roundtrip',
+      synchronizedRendering: preloadProbe.synchronizedRendering,
       electronVersion: ready.electronVersion,
       nativeModules: ready.nativeModules,
       streamMessages: observed.sequences.length,

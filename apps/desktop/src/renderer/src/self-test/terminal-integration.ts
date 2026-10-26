@@ -8,16 +8,51 @@ import { runQuickLookIntegration } from './quick-look-self-test'
 import { runProgressEvidenceIntegration } from './progress-evidence-self-test'
 import { runVoiceIntegration } from './voice-self-test'
 import { redrawOnlyWrittenRows } from '../terminal-sync-update'
+import { createTerminalImageAddon, SIXEL_SMOKE_FRAME } from '../terminal-images'
 import { runSynchronizedRenderingProbe } from './terminal-sync-update'
 
 /** Loaded by dynamic import only when the self-test asks the selected pane for its integration probe. */
 export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal>): Promise<TerminalIntegrationProbe> {
   console.warn('[BMN] renderer behavioural integration: started')
+  // Exercise the installed addon: Sixel and text must share synchronized presentation.
+  const imageHost = document.createElement('div')
+  imageHost.style.cssText = 'position:fixed;left:10px;top:10px;width:300px;height:200px;pointer-events:none;z-index:9999'
+  document.body.appendChild(imageHost)
+  const imageTerminal = new Terminal({ cols: 20, rows: 10 })
+  try {
+    imageTerminal.loadAddon(createTerminalImageAddon())
+    imageTerminal.open(imageHost)
+    await new Promise<void>((resolve) => imageTerminal.write(SIXEL_SMOKE_FRAME, resolve))
+    const deadline = performance.now() + 3_000
+    let context: CanvasRenderingContext2D | null | undefined
+    while (!context && performance.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25))
+      context = imageHost.querySelector<HTMLCanvasElement>('.xterm-image-layer')?.getContext('2d')
+    }
+    if (!context || context.getContextAttributes().desynchronized !== false) {
+      throw new Error('Sixel output canvas is not synchronized with terminal text')
+    }
+    if (!context.getImageData(0, 0, context.canvas.width, context.canvas.height).data.some(
+      (value, index) => index % 4 === 3 && value > 0
+    )) throw new Error('synchronized Sixel probe did not paint an image')
+    console.warn('[BMN] image canvas synchronized: passed')
+  } finally {
+    imageTerminal.dispose()
+    imageHost.remove()
+  }
+
   const synchronizedRendering = await runSynchronizedRenderingProbe(
     () => new Terminal({ cols: 40, rows: 10, allowProposedApi: true }),
     redrawOnlyWrittenRows
   )
   console.warn('[BMN] synchronized DOM rendering: ' + synchronizedRendering.join(', '))
+  // Where the screen does not reach (a held image scene after a grow), the pane shows its ground, not xterm's black.
+  const viewport = handle.terminal.element?.querySelector('.xterm-viewport')
+  const viewportStyle = viewport && getComputedStyle(viewport)
+  if (viewportStyle?.backgroundColor !== 'rgba(0, 0, 0, 0)' || viewportStyle.overflowY !== 'hidden') {
+    throw new Error(`terminal viewport paints over the pane ground: ${viewportStyle?.backgroundColor} ${viewportStyle?.overflowY}`)
+  }
+  console.warn('[BMN] uncovered terminal area shows the ground: passed')
   const workspaces = await window.aiTerminal.listWorkspaces(true)
   const sessionsBeforeForm = await window.aiTerminal.listSessions(handle.startup.workspaceId)
   await window.aiTerminal.resizeTerminal(
@@ -445,6 +480,7 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   console.warn('[BMN] renderer behavioural integration: voice complete')
   console.warn('[BMN] renderer behavioural integration: complete')
   return {
+    synchronizedRendering,
     workspaceCount: workspaces.length,
     sessionMethodSessionId: handle.startup.sessionId,
     bridgeErrorCodes: { staleLayoutPut, unknownSessionSavedOutput },

@@ -22,3 +22,6 @@ onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
   - electron-builder
+# Keep Sixel on the same presentation path as terminal text (Epic 87).
+patchedDependencies:
+  '@xterm/addon-image@0.9.0': patches/@xterm__addon-image@0.9.0.patch

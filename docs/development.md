@@ -101,6 +101,31 @@ All commands run from the repository root.
   `pnpm run test:visual -- --out DIR` there, never restyling the current build. In a worktree, add
   `--electron` with the main checkout's Electron, the one the AppArmor profile above allows.
 
+## Terminal image resizing
+
+The renderer pins xterm.js 6.0.0 and image addon 0.9.0. The maintained addon patch
+uses a synchronized canvas context and admits stored images, font rescaling and pending
+image allocations before creating their surfaces. Each view has at most 16 MB of image
+payload; active views share 128 MB, including the renderer's image smoke check.
+
+`terminal-image-resize.ts` preserves the displayed text and image together before
+FitAddon clears the old grid. Repeated resizes keep the first scene, scaling it into the
+new bounds until a complete update arrives. Its one-second hold extends only while a
+synchronized update is open, ending on completion or xterm's watchdog. New-grid image
+tiles can extend past the right edge only while their last visible cell still identifies
+that image and the resize deadline has not expired. During the hold, mouse reports and
+selection use the current VT grid and live buffer; copied text can differ from the held
+scene. Current-scene overflow compensates for display scaling. Teardown retires the image
+layer before releasing its allocation.
+
+Additional output payload is measured against the unmodified addon's canvas at matching
+dimensions and resize stages. Reservations cover both dimension setters and their old/new
+overlap; a failed setter retains its reservation until the layer is retired. The budget
+covers application-controlled payloads. Chromium's private GPU allocations and literal
+every-display-frame timing remain **UNVERIFIED**. Resize acceptance compares complete
+images and displayed text on every recorded native frame; Electron's subscriber is capped
+at 30 fps.
+
 ## Data folders
 
 The app resolves its folders from the XDG variables, and each can be overridden directly:

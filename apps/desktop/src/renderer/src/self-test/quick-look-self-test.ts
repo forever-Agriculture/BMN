@@ -26,10 +26,9 @@ export async function runQuickLookIntegration(options: { refitCount(): number })
   const focusAt = (): 'tree' | 'file' | 'elsewhere' => document.activeElement?.classList.contains('ql-tree')
     ? 'tree' : document.activeElement?.closest('.ql-code') ? 'file' : 'elsewhere'
   // A remembered file opens a moment after the tree's first rows and then takes focus.
-  await waitFor('focus in the tree or the recalled file', () => {
-    const drawn = dialog.querySelector('.ql-code .cm-content')
-    return focusAt() === 'file' || (focusAt() === 'tree' && !drawn) ? true : undefined
-  }).catch(() => undefined)
+  await waitFor('the recalled file and its focus', () =>
+    dialog.querySelector('.ql-code .cm-content') && focusAt() === 'file' ? true : undefined
+  )
   const focusAtOpen = focusAt()
   const recalledAtOpen = dialog.querySelector('.ql-code .cm-content') ? dialog.querySelector<HTMLElement>('.ql-path .ql-pth')?.title ?? null : null
   const rows = [...dialog.querySelectorAll('.ql-tr .ql-nm')].map((item) => item.textContent ?? '')
@@ -39,6 +38,7 @@ export async function runQuickLookIntegration(options: { refitCount(): number })
   if (folder.getAttribute('aria-expanded') !== 'true') folder.click()
   await waitFor('refs/src open', () => (row('refs/src')?.getAttribute('aria-expanded') === 'true' ? true : undefined))
   ;(await waitFor('quick-look.ts', () => row('quick-look.ts'))).click()
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
   await waitFor('the coloured file', () => dialog.querySelector('.ql-code .ql-syn-keyword'))
   const highlighted = {
     keyword: dialog.querySelectorAll('.ql-syn-keyword').length,

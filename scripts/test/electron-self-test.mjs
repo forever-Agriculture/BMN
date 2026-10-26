@@ -20,6 +20,7 @@ const waylandDisplay =
  * throws there (Story 39.3); a key missing here means a phase was skipped, which still fails the run.
  */
 const requiredPhases = [
+  'synchronizedRendering',
   'sixelPty', 'sixelRender', 'sixelAnimation', 'sixelTwoPaneAnimation', 'sixelAlternateScreen',
   'sixelPlacement', 'sixelResize', 'sixelCapPressure', 'sixelColdView', 'shellRegression', 'sixelViewSwap',
   'modelOrigin', 'remoteAnswers', 'telegramCards', 'quietHours', 'morningDigest', 'healthAlerts', 'away', 'awayGrant', 'fullerAnswers', 'telegramCue', 'resetModes', 'cspProbe',
@@ -98,6 +99,11 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
         })
         .find((value) => value?.selfTest === 'session-roundtrip')
       if (!receipt || receiptSeen || receiptError) return
+      const synchronizedCases = ['selection', 'focus', 'blur', 'scroll', 'rows resize', 'columns resize',
+        'back-to-back updates', 'combined modes', 'watchdog']
+      if (JSON.stringify(receipt.synchronizedRendering) !== JSON.stringify(synchronizedCases)) {
+        receiptError = new Error('Electron self-test did not complete all synchronized-rendering cases')
+      }
       const missing = requiredPhases.filter((phase) => receipt[phase] === undefined)
       if (missing.length > 0) {
         receiptError = new Error(`Electron self-test receipt is missing phases: ${missing.join(', ')}`)

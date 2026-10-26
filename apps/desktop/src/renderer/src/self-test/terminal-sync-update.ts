@@ -17,6 +17,13 @@ export async function runSynchronizedRenderingProbe(
   const frames = async (): Promise<void> => {
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
   }
+  // Hidden Electron windows can take over a second for two animation frames. Check the
+  // unfinished buffer before xterm's one-second watchdog, independently of frame cadence.
+  const held = async (): Promise<void> => {
+    const began = performance.now()
+    await new Promise<void>((resolve) => setTimeout(resolve, 25))
+    check(performance.now() - began < 500 && terminal.modes.synchronizedOutputMode, 'hold check missed the synchronized-output watchdog deadline')
+  }
   const rows = (): string[] => [...host.querySelectorAll('.xterm-rows > div')].map(row => row.textContent?.trimEnd() ?? '')
   const check = (condition: boolean, detail: string): void => {
     if (!condition) throw new Error(`synchronized DOM rendering: ${detail}`)
@@ -46,7 +53,7 @@ export async function runSynchronizedRenderingProbe(
       check(rows()[0] === 'anchor one' && rows()[1] === 'anchor two', `${name}: populated baseline`)
       await write('\x1b[?2026h\x1b[2J\x1b[H')
       action()
-      await frames()
+      await held()
       check(rows()[0] === 'anchor one' && rows()[1] === 'anchor two', `${name}: exposed an unfinished synchronized buffer`)
       await write('\x1b[Hupdated one\r\nupdated two\x1b[?2026l')
       await frames()
@@ -63,7 +70,7 @@ export async function runSynchronizedRenderingProbe(
     await frames()
     await write('\x1b[?2026h\x1b[2J\x1b[Hstage one\x1b[?2026l\x1b[?2026h\x1b[2J')
     terminal.clearSelection()
-    await frames()
+    await held()
     check(rows()[0] === 'anchor one', 'back-to-back updates exposed an unfinished frame')
     await write('\x1b[Hcommitted\x1b[?2026l')
     await frames()
@@ -73,7 +80,7 @@ export async function runSynchronizedRenderingProbe(
     terminal.select(0, 0, 6)
     await write('\x1b[?2004h\x1b[?2026h\x1b[2J')
     terminal.clearSelection()
-    await frames()
+    await held()
     check(rows()[0] === 'committed', 'combined-mode update exposed an unfinished frame')
     await write('\x1b[Hcombined\x1b[?2004;2026l')
     await frames()
@@ -83,7 +90,7 @@ export async function runSynchronizedRenderingProbe(
     terminal.select(0, 0, 6)
     await write('\x1b[?2026h\x1b[2J')
     terminal.clearSelection()
-    await frames()
+    await held()
     check(rows()[0] === 'combined', 'watchdog flushed before the unfinished update could be buffered')
     const deadline = performance.now() + 3000
     while (terminal.modes.synchronizedOutputMode && performance.now() < deadline) await frames()

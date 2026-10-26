@@ -31,12 +31,14 @@ import { agentTag, modelOriginFlag, modelOriginLabel, observedAgentName } from '
 import { PanePorts } from './session-ports'
 import { parseTerminalNotice } from './terminal-notice'
 import { installTerminalTestHook, type TerminalTestHandle } from './test-hook'
+import { selectKnownTerminalText } from './self-test/known-terminal-selection'
 import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history'
 import { copyableText, createMouseClipboard } from './terminal-clipboard'
 import { TerminalOutputFlow } from './terminal-output-flow'
 import { applyTerminalExit } from './terminal-exit'
 import { createFocusReports } from './terminal-focus-reports'
 import { redrawOnlyWrittenRows } from './terminal-sync-update'
+import { preserveTerminalImages, terminalPointerCell } from './terminal-image-resize'
 import { trackTerminalView } from './terminal-view-tracking'
 import { SIXEL_SMOKE_FRAME, checkSixelRenderer, createTerminalImageAddon, registerTerminalImages } from './terminal-images'
 import { folderName } from './quick-look-open'
@@ -221,13 +223,17 @@ export function SessionTerminal(props: {
     terminal.loadAddon(fit)
     terminal.loadAddon(search)
     let unregisterImages = (): void => undefined
+    let imagesReady = false
     try {
       terminal.loadAddon(images)
       unregisterImages = registerTerminalImages(images)
+      imagesReady = true
     } catch {
+      images.dispose()
       setImageWarning(true)
     }
     terminal.open(container)
+    const imageResize = imagesReady ? preserveTerminalImages(terminal, images) : undefined
     let mounted = true
     void checkSixelRenderer().then((ready) => {
       if (mounted && !ready) setImageWarning(true)
@@ -263,7 +269,11 @@ export function SessionTerminal(props: {
       // redraws into that width and the wrapped lines stay in history. A hidden pane keeps its size until shown.
       if (!visible.current || !container.offsetParent) return
       refitCount += 1
-      tracking.quietly(() => fit.fit())
+      tracking.quietly(() => {
+        const dimensions = fit.proposeDimensions()
+        if (imageResize && dimensions) imageResize.fit(dimensions.cols, dimensions.rows, () => fit.fit())
+        else fit.fit()
+      })
       if (processEnded.current) return
       void window.aiTerminal
         .resizeTerminal(props.startup.sessionId, terminal.cols, terminal.rows)
@@ -344,16 +354,8 @@ export function SessionTerminal(props: {
       hasSelection: () => terminal.hasSelection(),
       open: (reference) => onOpenFileReference.current(reference)
     })
-    const cellAt = (event: MouseEvent): { col: number; row: number } | null => {
-      const screen = terminal.element?.querySelector<HTMLElement>('.xterm-screen')
-      const bounds = screen?.getBoundingClientRect()
-      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null
-      const col = Math.max(0, Math.min(terminal.cols - 1,
-        Math.floor((event.clientX - bounds.left) / (bounds.width / terminal.cols))))
-      const viewportRow = Math.max(0, Math.min(terminal.rows - 1,
-        Math.floor((event.clientY - bounds.top) / (bounds.height / terminal.rows))))
-      return { col, row: terminal.buffer.active.viewportY + viewportRow }
-    }
+    const cellAt = (event: MouseEvent): { col: number; row: number } | null =>
+      terminalPointerCell(terminal, event)
     let trackedDragStart: { col: number; row: number } | null = null
     const mouseDown = (event: MouseEvent): void => {
       const screen = terminal.element?.querySelector('.xterm-screen')
@@ -478,6 +480,7 @@ export function SessionTerminal(props: {
           terminal.select(column, row, length)
           return terminal.getSelection()
         },
+        selectKnownText: (text, length) => selectKnownTerminalText(terminal, text, length),
         selection: () => terminal.getSelection(),
         clearSelection: () => terminal.clearSelection()
       },
@@ -510,7 +513,6 @@ export function SessionTerminal(props: {
     })
     return () => {
       mounted = false
-      unregisterImages()
       removeTestHook()
       props.register(props.startup.sessionId, undefined)
       stopPresence()
@@ -533,7 +535,9 @@ export function SessionTerminal(props: {
       tracking.dispose()
       observer.disconnect()
       capture.dispose()
+      imageResize?.dispose()
       terminal.dispose()
+      unregisterImages()
       terminalRef.current = null
       searchAddon.current = null
     }

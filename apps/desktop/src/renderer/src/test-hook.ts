@@ -44,12 +44,15 @@ interface TerminalViewProbe {
   imageCells(): TerminalImageCells
   /** Selects a buffer range as a user drag would and returns the selected text. */
   select(column: number, row: number, length: number): string
+  /** Selects known fixture text with actual cell/wrap coordinates, and verifies its value. */
+  selectKnownText(text: string, length: number): string
   selection(): string
   clearSelection(): void
 }
 
 /** Result of the self-test probe that drives real preload methods through the contextBridge. */
 export interface TerminalIntegrationProbe {
+  synchronizedRendering: string[]
   workspaceCount: number
   sessionMethodSessionId: string
   /** The typed `BridgeError.code` each deliberate failure carried across the bridge, or `untyped`. */

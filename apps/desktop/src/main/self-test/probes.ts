@@ -8,6 +8,7 @@ import type { VoiceFlowProbe } from '../../renderer/src/voice-probe'
 import { terminalModeProgramInput } from './harnesses'
 
 export interface RendererIntegrationProbe {
+  synchronizedRendering: string[]
   workspaceCount: number
   sessionMethodSessionId: string
   bridgeErrorCodes: { staleLayoutPut: string; unknownSessionSavedOutput: string }
