@@ -850,7 +850,8 @@ function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
     apps.push({
       harness: row.agent as RosterHarness, file: String(row.file ?? ''), state: row.state as HookAppAtStart['state'],
       placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason }),
-      ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) })
+      ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) }),
+      ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) })
     })
   }
   return { state: 'checked', checkedAt, apps }

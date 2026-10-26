@@ -716,8 +716,9 @@ entry. OpenCode 2.0.29 loads a changed plugin file again while it runs (its log 
 wake-up goes by the mark on each event, so a stop the earlier plugin reported stays a stop. Known limit: the current plugin
 reports its own unloading as `tui.exit`, so a later rewrite of it while OpenCode runs in a BMN session (by hand, or a rollback
 to a copy) reaches BMN as a quit followed by the next plugin's events, which withdraws that session's open requests; the
-October 14 plugin says nothing as it unloads, and BMN's own sessions have ended before its next start runs this install
-(Story 96.3 live check). Every file is copied before it changes,
+October 14 plugin says nothing as it unloads (Story 96.3 live check). The start-up install runs in the background and
+does not wait for sessions, so a session already running OpenCode then sees that rewrite: harmless for the October 14
+plugin, but the next change of the current plugin text will withdraw the open requests of such a session. Every file is copied before it changes,
 written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
@@ -1239,9 +1240,9 @@ For Claude Code a passed version is tested once more when your files changed so 
 (which, and on which side of the asked size) no recorded test of that version met; each set is tested once, also when
 you change back to it, and two looks at once start one test. Health's row keeps the saved value apart from what the
 test observed, what that proves and who acts next: "BMN tested 2.1.296 by itself Oct 11 · asked for 137 000, it reported
-137 000 · proves the limit for runs BMN starts, as --settings; where it summarises is not tested", "Tested on 0.164.0 · the
-test failed: … · not used; Test again… is yours", "the test showed nothing · BMN tries again by itself", "Not tested on
-2.1.310 · BMN tests it by itself", or "no automatic test: no agent has a limit here and the file holds no default"
+137 000 · proves the limit for runs BMN starts with --settings, also with --restricted, not in --safe-mode; where it summarises is not tested", "Tested on 0.164.0 · the
+test failed: … · not used; Test again… is yours", "the test showed nothing · queued: BMN tries again by itself", "Not yet proven on
+2.1.310 · queued: BMN tests it by itself", or "no automatic test: no agent has a limit here and the file holds no default"
 (Codex adds "one prompt sent"); a failure, or three tries that showed nothing, is told once, naming the agents whose
 limit does not hold. Under each app's row Health
 names every agent with a limit and whether a run started now applies it, not, or is refused, with the reason (judged

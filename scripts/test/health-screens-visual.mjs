@@ -36,7 +36,7 @@ const callerEnvironment = Object.fromEntries(Object.entries(process.env).filter(
 const MASTER = '# Global rules\n\nPlain rule for everyone.\n\n<!-- bmn:public -->\n## How to talk\nAnswer first, plainly.\n<!-- /bmn:public -->\n'
 
 /** Doctor's view of the audit, through BMN's own state validation and projection (names planted in it are dropped there). */
-function auditDoctor(now) {
+function auditDoctor(now, { passed = false } = {}) {
   const digest = 'a'.repeat(64)
   const at = now - 5 * 60_000
   const kinds = (index) => index < 250 ? ['plugins', 'claude', 'plugin-missing'] : index < 288 ? ['plugins', 'claude', 'app-managed'] : index < 320 ? ['mcp', 'codex', 'missing-program'] : ['skills', null, 'duplicate']
@@ -51,7 +51,7 @@ function auditDoctor(now) {
   const state = validateDoctorState({
     schemaVersion: 1, profileKey: null, profileIdentity: null, availabilityFailure: null, cycleStartedAt: at, versions: digest, cycleStartupId: null,
     appVersions: { claude: null, codex: null, opencode: null }, retryUsed: false, attempt: null, qualifications: {}, continuity: null,
-    results: {
+    results: passed ? Object.fromEntries(['hooks', 'skills', 'tools', 'rules', 'claude', 'codex', 'leftovers'].map((check) => [check, result('passed', [])])) : {
       hooks: result('problems', [{ code: 'hook-check', item: 1, app: 'opencode' }]),
       skills: result('passed', []),
       tools: result('problems', [1, 2, 3].map((item) => ({ code: 'tool-check', item, app: 'opencode' }))),
@@ -66,20 +66,22 @@ function auditDoctor(now) {
 }
 
 /** The audit, laid over what Health read from the temporary home: the parts 96.6 is about, everything else as read. */
-function auditSnapshot(real, now, { dropGroup = null, codexHooksLeft = false } = {}) {
+function auditSnapshot(real, now, { dropGroup = null, codexHooksLeft = false, doctorRunning = false } = {}) {
   const long = `/synthetic/${'a-rather-long-folder-name-for-the-wrapping-check/'.repeat(6)}opencode.jsonc`
-  const doctor = auditDoctor(now)
+  const doctor = { ...auditDoctor(now), running: doctorRunning }
   if (dropGroup !== null) doctor.rows = doctor.rows.map((row) => ({ ...row, leftovers: row.leftovers.filter((item) => `${item.app ?? 'shared'}:${item.kind}:${item.reason}` !== dropGroup) }))
   const detail = `The synthetic context test failed: ${'the setting the owner keeps outranks the agent limit, '.repeat(80)}`.slice(0, 4000)
   return {
     ...real,
+    // The temporary home has no rules files: as written, so only what the audit is about needs the owner (96 review).
+    health: real.health.state === 'checked' ? { ...real.health, targets: real.health.targets.map((target) => ({ ...target, state: 'current' })) } : real.health,
     probes: [{ harness: 'claude', outcome: 'fail', at: new Date(now - 3_600_000).toISOString(), version: '2.1.296' }],
     hooks: { state: 'checked', checkedAt: new Date(now - 60_000).toISOString(), apps: [
       { harness: 'claude', file: join(real.home ?? '/home/synthetic', '.claude/settings.json'), state: 'checked', placed: ['Notification', 'PreToolUse', 'Stop'], older: [], installed: [], left: [] },
       { harness: 'codex', file: join(real.home ?? '/home/synthetic', '.codex/hooks.json'), state: 'checked', placed: ['PreToolUse', 'Stop'], older: [], installed: [],
         left: codexHooksLeft ? [{ event: 'SessionEnd', why: 'changed' }] : [] },
       codexHooksLeft ? { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'checked', placed: ['plugin', 'cli.json'], older: [], installed: [], left: [] }
-        : { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'left', placed: ['plugin'], older: ['plugin'], installed: [], left: [], why: 'numbers' }
+        : { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
     ] },
     tools: { ...real.tools, exposed: 3, apps: real.tools.apps.map((app) => app.harness === 'opencode'
       ? { ...app, version: app.version ?? '2.0.29', supported: true, readable: true, kind: 'public', state: 'Exposed', path: long,
@@ -150,7 +152,13 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       globalThis.bmnHealthFixture = value
       ipcMain.removeHandler('aiterm:rules:snapshot')
       // In the envelope BMN's bridge registrar gives every answer (src/main/bridge-ipc.ts).
-      ipcMain.handle('aiterm:rules:snapshot', async () => { await new Promise((done) => setTimeout(done, wait)); return { ok: true, result: globalThis.bmnHealthFixture } })
+      // Each read is a fresh check, as BMN's own is: its time is the answer's, so a long run never ages the fixture into stale.
+      ipcMain.handle('aiterm:rules:snapshot', async () => {
+        globalThis.bmnHealthReads = (globalThis.bmnHealthReads ?? 0) + 1
+        await new Promise((done) => setTimeout(done, wait))
+        const fixture = globalThis.bmnHealthFixture
+        return { ok: true, result: fixture.health?.checkedAt ? { ...fixture, health: { ...fixture.health, checkedAt: new Date().toISOString() } } : fixture }
+      })
     }, [snapshot, delay])
     const reload = async () => {
       await page.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -230,7 +238,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await main.evaluate((element) => { for (const details of element.querySelectorAll('.leftovers, .leftover-group')) details.open = false })
     }
 
-    // A refresh in the background keeps the known failures and leaves Test again… usable; the head says Refreshing….
+    // A refresh in the background keeps the known failures and leaves Test again… usable; the head says Refreshing… and keeps the count.
     await resize(SIZES[0])
     await serve(auditSnapshot(real, Date.now()), 2500)
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
@@ -239,7 +247,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       needs: element.querySelectorAll('.health-row .needs-dot').length,
       again: [...element.querySelectorAll('button')].filter((button) => /again/u.test(button.getAttribute('aria-label') ?? '')).map((button) => button.disabled) }))
     await page.waitForFunction(() => !document.querySelector('.preferences-page:not([hidden]) .page-head [role="status"]')?.textContent?.startsWith('Refreshing'))
-    check('a background read says Refreshing…, keeps every known failure and leaves Test again… usable', during.head === 'Refreshing…' && during.needs > 0 && during.again.length > 0 && during.again.every((disabled) => !disabled), during)
+    check('a background read says Refreshing… with the known count, keeps every known failure and leaves Test again… usable', /^Refreshing… · \d+ needs? you: /u.test(during.head ?? '') && during.needs > 0 && during.again.length > 0 && during.again.every((disabled) => !disabled), during)
 
     // Disclosures keep their state across a refresh; a focused group the refresh removed hands the focus to Leftovers.
     await serve(auditSnapshot(real, Date.now()))
@@ -282,6 +290,55 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     check('a refresh moves no row under the pointer, and orders needs first once it has left', JSON.stringify(under) === JSON.stringify(before) && away[0] === 'Codex' && before[0] === 'OpenCode', { before, under, away })
     await serve(auditSnapshot(real, Date.now()))
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.waitForFunction(() => document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Older plugin · stopped turns cannot be distinguished'))
+
+    // While Doctor runs, Health reads every 5 s: those reads never flip the head, the page's only live status (96 review).
+    await serve(auditSnapshot(real, Date.now(), { doctorRunning: true }), 1200)
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    // The focus read is a refresh of the owner's and may say so; the reads Doctor's run starts after it are sampled.
+    await page.waitForFunction(() => document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Doctor running') &&
+      !document.querySelector('.preferences-page:not([hidden]) .page-head [role="status"]')?.textContent?.startsWith('Refreshing'))
+    const reads = () => application.evaluate(() => globalThis.bmnHealthReads ?? 0)
+    const readsBefore = await reads()
+    const heads = new Set()
+    for (let sample = 0; sample < 24; sample += 1) {
+      heads.add(await main.evaluate((element) => element.querySelector('.page-head [role="status"]')?.textContent ?? null))
+      await sleep(300)
+    }
+    const polled = (await reads()) - readsBefore
+    check('while Doctor runs, its 5-second reads leave the head as it is', polled >= 1 && [...heads].every((head) => head !== null && head.startsWith('Read ')), { heads: [...heads], polled })
+    await serve(auditSnapshot(real, Date.now()))
+    await reload()
+
+    // A refresh while a sheet is open leaves the sheet, and the focus in it (96 review).
+    const update = main.locator('button', { hasText: /^Update…$/u }).first()
+    if (await update.count()) {
+      await update.scrollIntoViewIfNeeded()
+      await update.click()
+      await sleep(400)
+      const sheetBefore = await main.evaluate((element) => ({ open: element.querySelector('.sheet') !== null, focusIn: element.querySelector('.sheet')?.contains(document.activeElement) ?? false }))
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+      await sleep(1500)
+      const sheetAfter = await main.evaluate((element) => ({ open: element.querySelector('.sheet') !== null, focusIn: element.querySelector('.sheet')?.contains(document.activeElement) ?? false,
+        text: element.querySelector('.sheet')?.innerText.slice(0, 60) ?? null }))
+      check('a refresh with the Update sheet open keeps it open and the focus in it', sheetBefore.open && sheetAfter.open && sheetAfter.focusIn === sheetBefore.focusIn, { sheetBefore, sheetAfter })
+      await page.keyboard.press('Escape')
+      await sleep(300)
+    } else check('a refresh with the Update sheet open keeps it open and the focus in it', false, { reason: 'no Update… button on the page' })
+
+    // A failed context limit alone: Doctor passed everything, and still no All well while Health counts an issue (96 review).
+    const contextOnly = { ...auditSnapshot(real, Date.now(), { codexHooksLeft: true }), probes: [], doctor: auditDoctor(Date.now(), { passed: true }) }
+    contextOnly.hooks = { ...contextOnly.hooks, apps: contextOnly.hooks.apps.map((app) => ({ ...app, left: [] })) }
+    contextOnly.tools = { ...contextOnly.tools, exposed: 0, apps: real.tools.apps.map((app) => ({ ...app, unlisted: [] })) }
+    await serve(contextOnly)
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.waitForFunction(() => !document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Older plugin'))
+    await sleep(600)
+    const only = await main.evaluate((element) => ({ head: element.querySelector('.page-head [role="status"]')?.textContent ?? null, allWell: element.innerText.includes('All well') }))
+    check('a failed context limit with Doctor all passed: the head counts it and Doctor says no All well', /Context limits/u.test(only.head ?? '') && !only.allWell, only)
+    await shot('health-889x768-context-only.png')
+    await serve(auditSnapshot(real, Date.now()))
+    await reload()
     await page.waitForFunction(() => document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Older plugin · stopped turns cannot be distinguished'))
 
     // Redaction: the names planted in the synthetic doctor state reach neither the text nor any title.

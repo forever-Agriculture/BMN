@@ -885,7 +885,7 @@ describe('BMN\'s own context testing on Integrations › Health (63.1)', () => {
     const after = await call<RulesSnapshot>('rules:snapshot')
     expect(after.context[1]).toMatchObject({ limit: 450000, limitProven: true, autoTest: 'none',
       test: { outcome: 'pass', version: '2.1.295', by: 'bmn', asked: 137000, observed: 137000 } })
-    expect(contextTests().filter((entry) => entry.harness === 'claude').map((entry) => [entry.control, entry.limit])).toEqual([['settings', 'pass']])
+    expect(contextTests().filter((entry) => entry.harness === 'claude').map((entry) => [entry.control, entry.limit])).toEqual([['settings+restricted', 'pass']])
     // The test read the owner's file and left it as it was.
     expect(file('.claude/settings.json')).toBe(settings)
   })

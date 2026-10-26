@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseRoster, sha256 } from '../../apps/desktop/bin/agents-roster.mjs'
@@ -85,13 +85,27 @@ export function fingerprint(folder) {
   return rows
 }
 
-/** The lines of an strace -f file trace that name a path inside one of `folders` (its own process ids kept). */
-export function tracedAccess(traceText, folders) {
+/**
+ * The lines of an strace -f file trace that name a path inside one of `folders` and not inside one of `except` (its own
+ * process ids kept).
+ */
+export function tracedAccess(traceText, folders, except = []) {
+  const within = (path, root) => path === root || path.startsWith(`${root}/`)
   const roots = folders.map((folder) => resolve(folder))
+  const kept = except.map((folder) => resolve(folder))
   return traceText.split('\n').filter((line) => {
     const quoted = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/gu)].map((match) => match[1])
-    return quoted.some((path) => roots.some((root) => path === root || path.startsWith(`${root}/`)))
+    return quoted.some((path) => roots.some((root) => within(path, root)) && !kept.some((root) => within(path, root)))
   })
+}
+
+/**
+ * The homes the probe watches beside its synthetic one (96 review): the caller's `$HOME` and the account's own home from
+ * the password file, which a library may read past `$HOME`. Inside them BMN may read only this checkout, whose code and
+ * dependencies it runs from, and the probe's own disposable folders.
+ */
+export function watchedHomes(caller = process.env, account = userInfo().homedir) {
+  return [...new Set([caller.HOME, account].filter((home) => typeof home === 'string' && home !== '').map((home) => resolve(home)))]
 }
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
@@ -118,8 +132,8 @@ export function isolationIdentity() {
   }
 }
 
-/** Stops the process group the probe started, then any process still holding its disposable root, and nothing else. */
-async function stopTree(child, root) {
+/** Stops the process group a calibration or the probe started, then any process still holding its disposable root, and nothing else. */
+export async function stopTree(child, root) {
   const alive = () => child.exitCode === null && child.signalCode === null
   try { process.kill(-child.pid, 'SIGTERM') } catch { /* already gone */ }
   for (let waited = 0; alive() && waited < 15_000; waited += 250) await sleep(250)
@@ -135,6 +149,22 @@ async function stopTree(child, root) {
   }
   for (const pid of leftovers) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
   return leftovers
+}
+
+/**
+ * While a launched tree runs, Ctrl-C (or a SIGTERM or SIGHUP) first runs `stop` (the tree stopped, its folders removed)
+ * and only then ends this process, with the signal's usual code: the detached child would outlive it otherwise (96 review).
+ * Returns the function that removes the handlers again.
+ */
+export function stopOnInterrupt(stop) {
+  const codes = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }
+  let stopping = null
+  const handler = (signal) => {
+    stopping ??= Promise.resolve().then(stop).catch((error) => { console.error(`calibration: stopping after ${signal} failed: ${error.message}`) })
+      .finally(() => process.exit(codes[signal]))
+  }
+  for (const signal of Object.keys(codes)) process.on(signal, handler)
+  return () => { for (const signal of Object.keys(codes)) process.off(signal, handler) }
 }
 
 /**
@@ -159,8 +189,10 @@ export async function proveIsolation({ build = calibrationEnvironment, waitMs = 
     writeFileSync(join(fakeBin, 'codex'), '#!/bin/sh\n# MODULE: codex - the probe\'s stand-in: a version for BMN\'s own tests to plan one, nothing else\n[ "$1" = --version ] && { echo "codex-cli 0.161.0"; exit 0; }\nexit 1\n')
     chmodSync(join(fakeBin, 'codex'), 0o755)
     const before = fingerprint(outside)
+    // Not the caller's PATH, as a real calibration has: only the system's programs and the stand-in, so no agent app of
+    // the owner's (nor a paid run of one) starts. A program found only through his PATH is not exercised here.
     const caller = { ...process.env, HOME: outside, PATH: `${fakeBin}:/usr/local/bin:/usr/bin:/bin` }
-    return await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
+    return await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots, cleanup }) => {
       const env = build(caller, { root, roots })
       let refused = null
       try { assertDisposable(env, caller, root) } catch (error) { refused = error.message }
@@ -170,6 +202,7 @@ export async function proveIsolation({ build = calibrationEnvironment, waitMs = 
       const trace = join(work, 'trace.txt')
       const flags = ['--ozone-platform=headless', '--ozone-override-screen-size=1600,1000', '--force-device-scale-factor=1']
       const child = launchCalibration({ electronPath, flags, cwd: root, env, trace })
+      const release = stopOnInterrupt(async () => { await stopTree(child, root); cleanup(); rmSync(work, { recursive: true, force: true }) })
       let log = ''
       child.stderr.on('data', (chunk) => { log = `${log}${chunk}`.slice(-8_000) })
       const tries = join(env.HOME, '.config/bmn/agents/state/auto-tests.json')
@@ -180,15 +213,19 @@ export async function proveIsolation({ build = calibrationEnvironment, waitMs = 
       const triesWritten = env.HOME !== caller.HOME && existsSync(tries)
       await sleep(3_000)
       const leftovers = await stopTree(child, root)
+      release()
       const after = fingerprint(outside)
       const traceText = existsSync(trace) ? readFileSync(trace, 'utf8') : null
-      const traced = traceText === null ? null : tracedAccess(traceText, [outside])
+      // The synthetic outside home, and the real ones (96 review) but for this checkout and the probe's own folders.
+      const homes = watchedHomes()
+      const touched = traceText === null ? null : new Set([...tracedAccess(traceText, [outside]), ...tracedAccess(traceText, homes, [repo, work, root])])
+      const traced = touched === null ? null : traceText.split('\n').filter((line) => touched.has(line))
       // What BMN wrote in the disposable team folder: the exact paths the receipt records beside the outside ones.
       const disposableTeam = env.HOME !== caller.HOME && existsSync(team) ? fingerprint(team).map((row) => `${row.kind} ${row.path}`) : []
       const changed = after.length !== before.length || after.some((row, index) => JSON.stringify(row) !== JSON.stringify(before[index]))
       const result = traced === null ? 'UNABLE' : refused === null && triesWritten && traced.length === 0 && !changed ? 'PASS' : 'FAIL'
       return {
-        result, refused, triesWritten, sentinelChanged: changed, tracedOutside: traced === null ? null : traced.length,
+        result, refused, triesWritten, sentinelChanged: changed, tracedOutside: traced === null ? null : traced.length, watchedHomes: homes.length,
         tracedSample: (traced ?? []).slice(0, 12), traceLines: traceText === null ? null : traceText.split('\n').length, disposableTeam,
         before, after, leftovers, waitedMs: Date.now() - started,
         ...isolationIdentity(),

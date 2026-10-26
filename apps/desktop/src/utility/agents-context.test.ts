@@ -59,7 +59,7 @@ function stub(name: string, body: string): void {
 
 /** A recorded test; Claude Code's tried the `--settings` form BMN applies now (Story 96.5), Codex's records from before name none and tried `-c`. */
 function tested(harness: string, version: string, limit: ContextTestEntry['limit'] = 'pass', compact: ContextTestEntry['compact'] = 'untested'): ContextTestEntry {
-  return { harness, at: NOW.toISOString(), version, ...(harness === 'claude' ? { control: 'settings' as const } : {}), limit, compact, asked: 1, observed: 1, detail: 'synthetic' }
+  return { harness, at: NOW.toISOString(), version, ...(harness === 'claude' ? { control: 'settings+restricted' as const } : {}), limit, compact, asked: 1, observed: 1, detail: 'synthetic' }
 }
 
 const CODEX = '0.161.0'
@@ -597,17 +597,24 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
   })
 
   it('reads Claude Code\'s own context report for the size', async () => {
-    const claudeStub = (line: string) => `if [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ncat > "$HOME/claude-stdin"\necho "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" > "$HOME/claude-env"\nprintf '%s\\n' "$@" > "$HOME/claude-args"\nprintf '%s\\n' '## Context Usage' '' '${line}'`
+    const claudeStub = (line: string) => `if [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ncat > "$HOME/claude-stdin"\necho "$CLAUDE_CODE_AUTO_COMPACT_WINDOW" > "$HOME/claude-env"\nprintf '%s\\n' "$@" '--' >> "$HOME/claude-args"\nprintf '%s\\n' '## Context Usage' '' '${line}'`
     stub('claude', claudeStub('**Tokens:** 12.4k / 137k (9%)'))
-    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ harness: 'claude', version: CLAUDE, control: 'settings', limit: 'pass', asked: 137_000, observed: 137_000 })
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ harness: 'claude', version: CLAUDE, control: 'settings+restricted', limit: 'pass', asked: 137_000, observed: 137_000 })
     expect(readFileSync(join(home, 'claude-stdin'), 'utf8')).toBe('/context')
     // The size goes in the form a dispatch carries it (Story 96.5): one --settings text, not the run's environment, which the owner's settings.json outranks.
-    expect(readFileSync(join(home, 'claude-args'), 'utf8').split('\n').slice(0, 6)).toEqual(['-p', '--no-session-persistence', '--output-format', 'text', '--settings', claudeContextSettings(137_000)])
+    // Then once more as a team ask starts it, with --restricted (96 review): both must take the size.
+    const calls = readFileSync(join(home, 'claude-args'), 'utf8').split('--\n').filter(Boolean).map((call) => call.split('\n').filter(Boolean))
+    expect(calls).toEqual([['-p', '--no-session-persistence', '--output-format', 'text', '--settings', claudeContextSettings(137_000)],
+      ['-p', '--restricted', '--no-session-persistence', '--output-format', 'text', '--settings', claudeContextSettings(137_000)]])
     expect(readFileSync(join(home, 'claude-env'), 'utf8').trim()).toBe('')
     stub('claude', claudeStub('**Tokens:** 12.4k / 200k (6%)'))
     expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 200_000 })
     stub('claude', claudeStub('nothing to see'))
     expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'inconclusive' })
+    expect(provenControls('claude', CLAUDE).limit).toBe(false)
+    // A run that takes the size plainly but not with --restricted proves nothing.
+    stub('claude', `if [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ncat > /dev/null\ncase " $* " in *' --restricted '*) printf '%s\\n' '**Tokens:** 1k / 200k (1%)';; *) printf '%s\\n' '**Tokens:** 1k / 137k (1%)';; esac`)
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'fail', observed: 200_000, detail: expect.stringContaining('but 200000 with --restricted') })
     expect(provenControls('claude', CLAUDE).limit).toBe(false)
   })
 
@@ -615,14 +622,14 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
     const claudeStub = (line: string) => `if [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ncat > /dev/null\nprintf '%s\\n' '${line}'`
     stub('claude', claudeStub('**Tokens:** 12.4k / 137k (9%)'))
     // No file names a size: nothing to win over.
-    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [], detail: 'asked for 137000; Claude Code reports a window of 137000' })
+    expect(await testContext('claude', { environment: env, now: NOW })).toMatchObject({ limit: 'pass', rivals: [], detail: 'asked for 137000; Claude Code reports a window of 137000 with and without --restricted' })
     expect(provenPrecedence('claude', CLAUDE)).toEqual([])
     mkdirSync(join(home, '.claude'))
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000, env: { OTHER: 'kept' } }))
     const seen = await testContext('claude', { environment: env, now: NOW })
     const id = `user settings at ${join(home, '.claude/settings.json')}: autoCompactWindow`
     expect(seen).toMatchObject({ limit: 'pass', observed: 137_000, rivals: [{ source: 'user settings autoCompactWindow', id, value: 450_000 }],
-      detail: 'asked for 137000 while user settings autoCompactWindow says 450000; Claude Code reports a window of 137000, so the run\'s own value wins' })
+      detail: 'asked for 137000 while user settings autoCompactWindow says 450000; Claude Code reports a window of 137000 with and without --restricted, so the run\'s own value wins' })
     expect(provenPrecedence('claude', CLAUDE)).toEqual([{ id, side: 'above' }])
     expect(provenControls('claude', CLAUDE)).toEqual({ limit: true, compact: false, standing: 'pass' })
     // The app took the file's size instead: a fail, and no proof.
@@ -662,9 +669,11 @@ describe('the owner-run test, against stub apps (60.9 AC1)', () => {
 describe('BMN tests a new app version by itself (63.1)', () => {
   /** A team in which only Opus (Claude Code) may have a limit of its own: the Haiku-like agent of these tests. */
   const team = (opus?: number): string => edit(roster(opus === undefined ? {} : { opus }), 'context_limit: 272000\n', '')
-  /** A stand-in Claude Code of one version whose context report names `window`; each start but `--version` leaves a line. */
+  /** A stand-in Claude Code of one version whose context report names `window`; each test's plain start leaves a line
+   * (its `--restricted` start, which follows only a plain run that took the size, leaves none). */
   const claude = (version: string, window: string | null): void => stub('claude', [
-    `if [ "$1" = "--version" ]; then echo "${version} (Claude Code)"; exit 0; fi`, 'echo started >> "$HOME/claude-starts"', 'cat > /dev/null',
+    `if [ "$1" = "--version" ]; then echo "${version} (Claude Code)"; exit 0; fi`,
+    'case " $* " in *" --restricted "*) ;; *) echo started >> "$HOME/claude-starts";; esac', 'cat > /dev/null',
     ...(window === null ? [] : [`printf '%s\\n' '**Tokens:** 12.4k / ${window} (9%)'`])
   ].join('\n'))
   const starts = (): number => (existsSync(join(home, 'claude-starts')) ? readFileSync(join(home, 'claude-starts'), 'utf8').trim().split('\n').length : 0)
@@ -707,13 +716,13 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     expect(limitedAgents(none, 'claude')).toEqual([])
     expect(contextAutoPlan({ data: none, versions, tests: [] })).toEqual([])
     expect(contextAutoPlan({ data: null, versions, tests: [] })).toEqual([])
-    expect(contextAutoPlan({ data: one, versions, tests: [] })).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'untested', control: 'settings', agents: ['Opus'] }])
+    expect(contextAutoPlan({ data: one, versions, tests: [] })).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'untested', control: 'settings+restricted', agents: ['Opus'] }])
     // A test of another version, or of another app, says nothing about this one.
     expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', '2.1.200'), tested('codex', CLAUDE)] })).toHaveLength(1)
     expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE)] })).toEqual([])
     expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, 'fail')] })).toEqual([])
     for (const nothing of ['inconclusive', 'unavailable'] as const) {
-      expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, nothing)] })).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'retry', control: 'settings', agents: ['Opus'] }])
+      expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, nothing)] })).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'retry', control: 'settings+restricted', agents: ['Opus'] }])
     }
     // The latest test of the version decides, as it does for the check.
     expect(contextAutoPlan({ data: one, versions, tests: [tested('claude', CLAUDE, 'inconclusive'), tested('claude', CLAUDE, 'fail')] })).toEqual([])
@@ -755,7 +764,7 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     expect(plan(tested('claude', CLAUDE), file(450_000))).toEqual(['sources'])
     // The entry names the set it is for, so that the caller starts one test per set and no second one for the same.
     const entries = (tests: ContextTestEntry[], today: ContextSource[]) => contextAutoPlan({ data, versions, tests, sources: { claude: today } })
-    expect(entries([passed([])], file(450_000))).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'sources', control: 'settings', agents: ['Opus'], set: `${id} above` }])
+    expect(entries([passed([])], file(450_000))).toEqual([{ harness: 'claude', version: CLAUDE, reason: 'sources', control: 'settings+restricted', agents: ['Opus'], set: `${id} above` }])
     expect(entries([passed([])], file(110_000))[0]?.set).toBe(`${id} below`)
     // Each set once for a version, whatever was tested in between: back at the first set there is nothing to test, and the check holds without one.
     const there = [passed(file(450_000)), passed(file(110_000))]
@@ -794,9 +803,13 @@ describe('BMN tests a new app version by itself (63.1)', () => {
     await Promise.all(both)
     expect(starts()).toBe(1)
     expect(first.runner.view({ claude: CLAUDE }).running).toBeNull()
-    expect(contextTests()).toEqual([{ harness: 'claude', at: NOW.toISOString(), version: CLAUDE, control: 'settings', limit: 'pass', compact: 'untested', asked: 137_000, observed: 137_000,
-      detail: 'asked for 137000; Claude Code reports a window of 137000', rivals: [], by: 'bmn' }])
+    expect(contextTests()).toEqual([{ harness: 'claude', at: NOW.toISOString(), version: CLAUDE, control: 'settings+restricted', limit: 'pass', compact: 'untested', asked: 137_000, observed: 137_000,
+      detail: 'asked for 137000; Claude Code reports a window of 137000 with and without --restricted', rivals: [], by: 'bmn' }])
     expect([verdict(limit(100_000)), verdict(), verdict(limit(137_000))]).toEqual(['PASS 100000', 'CONTEXT_MISMATCH missing', 'CONTEXT_MISMATCH differs'])
+    // A run in --safe-mode is a form the test does not try (96 review): the pass says nothing there.
+    const safe = check('opus', [...OPUS(), '--safe-mode', ...limit(100_000)], contextTests())
+    expect([safe.verdict, safe.receipt?.context_limit_applied, safe.receipt?.context_limit_note]).toEqual(['PASS', null,
+      'context limit 100000: not applied, the run starts Claude Code in --safe-mode, a form no context test tries, so it gets the app\'s own size'])
     // A pass is not tested again, by this start or the next.
     await first.runner.trigger()
     await bmn().runner.trigger()
@@ -937,8 +950,11 @@ describe('the limit a run carries is the one it gets (Story 96.5)', () => {
     const data = readApproved().data
     expect(provenControls('claude', '2.1.310', [earlier('pass')])).toEqual({ limit: false, compact: false, standing: 'untested' })
     // The environment form failed on 2.1.310 (the owner's settings.json outranked it); that failure waits for no one now.
-    expect(contextAutoPlan({ data, versions: { claude: '2.1.310' }, tests: [earlier('fail')] })).toEqual([{ harness: 'claude', version: '2.1.310', reason: 'untested', control: 'settings', agents: ['Opus'] }])
-    expect(contextAutoPlan({ data, versions: { claude: '2.1.310' }, tests: [earlier('fail'), { ...earlier('pass'), control: 'settings' }] })).toEqual([])
+    expect(contextAutoPlan({ data, versions: { claude: '2.1.310' }, tests: [earlier('fail')] })).toEqual([{ harness: 'claude', version: '2.1.310', reason: 'untested', control: 'settings+restricted', agents: ['Opus'] }])
+    // A plain --settings run (96.5's test) never tried the --restricted form a team ask starts: it proves nothing now and BMN tests again (96 review).
+    expect(provenControls('claude', '2.1.310', [{ ...earlier('pass'), control: 'settings' }])).toEqual({ limit: false, compact: false, standing: 'untested' })
+    expect(contextAutoPlan({ data, versions: { claude: '2.1.310' }, tests: [earlier('fail'), { ...earlier('pass'), control: 'settings' }] })).toEqual([{ harness: 'claude', version: '2.1.310', reason: 'untested', control: 'settings+restricted', agents: ['Opus'] }])
+    expect(contextAutoPlan({ data, versions: { claude: '2.1.310' }, tests: [earlier('fail'), { ...earlier('pass'), control: 'settings+restricted' }] })).toEqual([])
     // Codex's records from before name no form and tried the `-c` items it still carries: they keep counting.
     expect(provenControls('codex', CODEX, [tested('codex', CODEX)])).toMatchObject({ limit: true })
     expect(provenControls('codex', CODEX, [{ ...tested('codex', CODEX), control: 'settings' }])).toMatchObject({ limit: false, standing: 'untested' })
@@ -950,7 +966,7 @@ describe('the limit a run carries is the one it gets (Story 96.5)', () => {
     claude('137k')
     const result = await testContext('claude', { environment: env, now: NOW })
     const file = join(home, '.claude/settings.json')
-    expect(result).toMatchObject({ control: 'settings', limit: 'pass', asked: 137_000, observed: 137_000, rivals: [
+    expect(result).toMatchObject({ control: 'settings+restricted', limit: 'pass', asked: 137_000, observed: 137_000, rivals: [
       { source: 'user settings env CLAUDE_CODE_AUTO_COMPACT_WINDOW', id: `user settings at ${file}: env`, value: 450_000 },
       { source: 'user settings autoCompactWindow', id: `user settings at ${file}: autoCompactWindow`, value: 450_000 }] })
     expect(readFileSync(join(home, 'claude-args'), 'utf8')).toContain(claudeContextSettings(137_000))

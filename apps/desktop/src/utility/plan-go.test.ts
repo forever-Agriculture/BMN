@@ -131,13 +131,18 @@ describe('the owner\'s go becomes one commit of the plan\'s history (Story 96.1 
     expect(porcelain(second.plan)).toBe(' M epics/007-fixture.md')
   })
 
-  it('takes the approved text from the plan commit he approved, and a BMN decision reference as his act', () => {
+  it('takes the approved text from the plan commit he approved, and never a BMN decision record as his act', () => {
     const { main, plan, home } = project()
     const approvedCommit = git(plan, 'rev-parse', 'HEAD')
-    const decision = 'bmn:2733d5fe-b81c-478a-95de-e99416aed1eb/plan:epic-7:go'
-    const result = bmn(main, home, ['go', '7', '--source', decision, '--approved', approvedCommit.slice(0, 12), '--date', '2026-10-27', '--expect', token(main, home), '--json'])
+    // A decision record is the lead's own choice (docs/dev-auto.md), alone or beside words that are not his quoted go.
+    for (const decision of ['bmn:2733d5fe-b81c-478a-95de-e99416aed1eb/plan:epic-7:go', "card 2026-10-26T09:30Z: 'Go' bmn:2733d5fe-b81c-478a-95de-e99416aed1eb/dev-auto:run:d1"]) {
+      const refused = bmn(main, home, ['go', '7', '--source', decision, '--approved', approvedCommit.slice(0, 12), '--expect', token(main, home), '--json'])
+      expect([refused.code, refused.json?.error?.code]).toEqual([1, 'NO_OWNER_GO'])
+    }
+    expect(porcelain(plan)).toBe('')
+    const result = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', approvedCommit.slice(0, 12), '--date', '2026-10-27', '--expect', token(main, home), '--json'])
     expect(result.code, result.err).toBe(0)
-    expect(result.json).toMatchObject({ go_date: '2026-10-27', approval_source: decision, approved_text: `sha256:${approvalText(epicText())}` })
+    expect(result.json).toMatchObject({ go_date: '2026-10-27', approval_source: SOURCE, approved_text: `sha256:${approvalText(epicText())}` })
     expect(git(plan, 'log', '-1', '--format=%B')).toContain(`Approved-From: ${approvedCommit}`)
   })
 

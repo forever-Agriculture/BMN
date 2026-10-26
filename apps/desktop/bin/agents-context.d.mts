@@ -29,7 +29,7 @@ export interface ContextProven {
   reason?: string
 }
 /** How a setting reaches one run: `-c` items, an `env -i` entry, or a `--settings` text of its own. */
-export type ContextControlForm = 'argv' | 'env' | 'settings'
+export type ContextControlForm = 'argv' | 'env' | 'settings' | 'settings+restricted'
 /** One app BMN should test by itself now, why, and the agents whose limit waits for it. */
 /** `set` names the sources a `sources` test would meet, so that each set is tested once. */
 export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; control: ContextControlForm; agents: string[]; default?: number; set?: string }

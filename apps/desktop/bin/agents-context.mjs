@@ -20,8 +20,9 @@ import { thousands } from './shared-helpers.mjs'
  * conversation within, as an `env` entry of settings.json for the owner's own sessions and, for a
  * dispatch, in a `--settings` text of its own that also names it as `autoCompactWindow` (Story 96.5):
  * the dispatch environment loses to the owner's settings.json (2.1.310 reported its 450 000 when
- * asked for 137 000 that way), while `--settings` outranks his files and is still read under
- * `--restricted`. Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it
+ * asked for 137 000 that way), while `--settings` outranks his files. A test proves it in a plain run
+ * and in a `--restricted` one, the form a team ask starts Claude Code in (`proof`); a `--safe-mode`
+ * run (a packet, research) is a form no test tries, so the limit is not applied there. Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it
  * does not know or with compaction off, so BMN does not use it. It has no separate setting for where
  * summarising starts.
  */
@@ -33,7 +34,7 @@ export const CONTEXT_CONTROLS = {
   },
   claude: {
     command: 'claude',
-    limit: { form: 'settings', key: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', min: 100_000, max: 1_000_000 },
+    limit: { form: 'settings', proof: 'settings+restricted', key: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', min: 100_000, max: 1_000_000 },
     compact: null
   }
 }
@@ -54,8 +55,10 @@ const EARLIER_CONTROL = { codex: 'argv', claude: 'env' }
 export function contextTestControl(entry) {
   return typeof entry?.control === 'string' ? entry.control : EARLIER_CONTROL[entry?.harness] ?? null
 }
+/** The form a test must have tried for its result to count now: the setting's own form, and for Claude Code both run forms. */
+const proofOf = (harness) => CONTEXT_CONTROLS[harness]?.limit.proof ?? CONTEXT_CONTROLS[harness]?.limit.form
 /** Whether a recorded test is one of this app's, of the form BMN applies the setting in now. */
-const appliesTo = (entry, harness) => entry.harness === harness && contextTestControl(entry) === CONTEXT_CONTROLS[harness]?.limit.form
+const appliesTo = (entry, harness) => entry.harness === harness && contextTestControl(entry) === proofOf(harness)
 
 /** The `--settings` text that gives one Claude Code run its context size, and nothing else. */
 export function claudeContextSettings(size) {
@@ -750,7 +753,7 @@ export async function testContext(harness, { environment = process.env, now = ne
   const asked = CONTEXT_TEST_SIZE[harness]
   const record = (limit, detail, version = null, observed = null, rivals = undefined) => {
     // `by` is set where BMN started the test by itself (63.1); the owner's own test carries none.
-    const entry = { harness, at: now.toISOString(), version, control: controls.limit.form, limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }), ...(by === undefined ? {} : { by }) }
+    const entry = { harness, at: now.toISOString(), version, control: proofOf(harness), limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }), ...(by === undefined ? {} : { by }) }
     mkdirSync(dirname(contextTestsPath()), { recursive: true, mode: 0o700 })
     appendFileSync(contextTestsPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     return entry
@@ -787,13 +790,20 @@ export async function testContext(harness, { environment = process.env, now = ne
       return record('inconclusive', `${unclear.map((rival) => `${rival.source} says ${rival.value}`).join(' and ')}, which the app's report could not tell from the ${asked} this test asks for; the test can show nothing while that is so`, version)
     }
     const others = rivals.length === 0 ? '' : ` while ${rivals.map((rival) => `${rival.source} says ${rival.value}`).join(' and ')}`
-    const run = spawnSync(controls.command, command, { cwd: folder, env: environment, input: '/context', encoding: 'utf8', timeout: timeoutMs })
-    if (run.error || run.status !== 0) return record('inconclusive', 'Claude Code did not answer (timeout or error)', version)
-    const observed = claudeReportedWindow(run.stdout)
+    // The plain run, then the `--restricted` one a team ask starts (96 review): the setting counts only where both take it.
+    const report = (argv) => {
+      const run = spawnSync(controls.command, argv, { cwd: folder, env: environment, input: '/context', encoding: 'utf8', timeout: timeoutMs })
+      return run.error || run.status !== 0 ? undefined : claudeReportedWindow(run.stdout)
+    }
+    const observed = report(command)
+    if (observed === undefined) return record('inconclusive', 'Claude Code did not answer (timeout or error)', version)
     if (observed === null) return record('inconclusive', 'Claude Code\'s context report names no window', version)
-    return reportedAs(asked, observed)
-      ? record('pass', `asked for ${asked}${others}; Claude Code reports a window of ${observed}${rivals.length === 0 ? '' : ', so the run\'s own value wins'}`, version, observed, rivals)
-      : record('fail', `asked for ${asked}${others}, but Claude Code reports a window of ${observed}`, version, observed, rivals)
+    if (!reportedAs(asked, observed)) return record('fail', `asked for ${asked}${others}, but Claude Code reports a window of ${observed}`, version, observed, rivals)
+    const restricted = report([command[0], '--restricted', ...command.slice(1)])
+    if (restricted === undefined || restricted === null) return record('inconclusive', `asked for ${asked}${others}; Claude Code reports a window of ${observed}, but gave no report with --restricted`, version, observed)
+    return reportedAs(asked, restricted)
+      ? record('pass', `asked for ${asked}${others}; Claude Code reports a window of ${observed} with and without --restricted${rivals.length === 0 ? '' : ', so the run\'s own value wins'}`, version, observed, rivals)
+      : record('fail', `asked for ${asked}${others}; Claude Code reports a window of ${observed}, but ${restricted} with --restricted`, version, restricted, rivals)
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
@@ -860,7 +870,7 @@ export function contextAutoPlan({ data, versions, tests = contextTests(), source
       : last.limit === 'inconclusive' || last.limit === 'unavailable' ? 'retry'
         : set !== null ? 'sources' : null
     if (reason !== null) {
-      plan.push({ harness, version, reason, control: CONTEXT_CONTROLS[harness].limit.form, agents: agents.map((agent) => agent.name),
+      plan.push({ harness, version, reason, control: proofOf(harness), agents: agents.map((agent) => agent.name),
         ...(fileDefault === null ? {} : { default: fileDefault }), ...(reason === 'sources' ? { set } : {}) })
     }
   }

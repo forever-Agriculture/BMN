@@ -46,6 +46,7 @@ import {
   type RulesState
 } from './rules-preferences'
 import { needsFirst } from './health-order'
+import { DoctorHealth, doctorPlace } from './doctor-health'
 import { hookRowWords } from './hooks-health'
 import {
   Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords,
@@ -879,9 +880,15 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin', 'cli.json'], older: ['plugin'], installed: [], left: [] }))
       .toEqual({ needs: false, head: '2 entries in place', lines: ['OpenCode 1\'s plugin file is still there too · `bmn hooks install opencode` removes it'] })
     // Story 96.6: an earlier plugin BMN could not replace cannot tell the owner's stop from a finished turn; never harmless older wording.
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: ['plugin'], installed: [], left: [], why: 'numbers' }))
-      .toEqual({ needs: true, head: 'The file · holds a number BMN cannot write back unchanged · left as it is',
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }))
+      .toEqual({ needs: true, head: 'The file · could not be written · left as it is',
         lines: ['Older plugin · stopped turns cannot be distinguished. Automatic wake is unavailable for this session until a qualified plugin is loaded.'] })
+    // OpenCode 1's file beside BMN's current plugin, with a cli.json BMN cannot add to, is no plugin without stop protection (96 review).
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: ['plugin'], installed: [], left: [], why: 'unparsable' }).lines)
+      .toEqual(['OpenCode 1\'s plugin file is still there too · `bmn hooks install opencode` removes it'])
+    // An unusable cli.json no longer keeps the earlier plugin: it is upgraded, and the row says so.
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: [], installed: [], upgraded: ['plugin'], left: [], why: 'numbers' }).lines)
+      .toEqual(['Upgraded at start: plugin · a running OpenCode is woken only once it reports the new plugin'])
     expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin'], older: [], installed: [], left: [{ event: 'plugin', why: 'changed' }] }).lines)
       .toEqual(['plugin · changed · Not BMN\'s · BMN leaves it'])
     // An upgrade on disk is said as one, never as a loaded plugin.
@@ -1048,7 +1055,7 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     expect(missing).toContain('<button type="button" class="primary" disabled="">Copy command</button>')
     expect(missing).not.toContain('Checking…')
     // Story 96.6: Refreshing… only while BMN re-reads the machine; an action the owner started leaves the head as it was.
-    expect(rulesMarkup('health', rules({ busy: true, reading: true }))).toContain('<span class="faint"><span role="status">Refreshing…</span></span>')
+    expect(rulesMarkup('health', rules({ busy: true, reading: true }))).toMatch(/<span class="faint"><span role="status">Refreshing… · \d+ needs? you: [^<]+<\/span><\/span>/u)
     expect(rulesMarkup('health', rules({ busy: true, acting: true }))).not.toContain('Refreshing…')
   })
 
@@ -1091,7 +1098,8 @@ describe('Integrations › Health: what an app reports after its update command 
     expect(watchedWords(codex, RULES.health.checkedAt)).toBe('The program now reports 0.171.0; before it reported 0.161.0.')
     expect(watchedWords(RULES.apps[0]!, RULES.health.checkedAt)).toBeNull()
     const page = rulesMarkup('health')
-    expect(page).toContain('<p class="app-note" role="status">The program now reports 0.171.0; before it reported 0.161.0.</p>')
+    // Only the head is a live status on Health (health-design.md); the report is a plain line.
+    expect(page).toContain('<p class="app-note">The program now reports 0.171.0; before it reported 0.161.0.</p>')
     expect(count(page, 'class="app-note"')).toBe(1)
     forgetUpdateWatches(['codex'])
     expect(rulesMarkup('health')).not.toContain('app-note')
@@ -1194,7 +1202,7 @@ describe('Health counts each issue once (Story 96.6)', () => {
     hooks: { state: 'checked', checkedAt: '2026-10-09T21:31:00.000Z', apps: [
       RULES.hooks!.state === 'checked' ? RULES.hooks!.apps[0]! : (undefined as never),
       { harness: 'codex', file: '/home/synthetic/.codex/hooks.json', state: 'checked', placed: ['PreToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: [], left: [] },
-      { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'left', placed: ['plugin'], older: ['plugin'], installed: [], left: [], why: 'numbers' }
+      { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
     ] },
     doctor: doctor([
       doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'opencode')] }),
@@ -1251,10 +1259,43 @@ describe('Health counts each issue once (Story 96.6)', () => {
 
   it('says Refreshing… only while it reads, and the read, its staleness and the issues otherwise', () => {
     const needs = { count: 2, sections: ['Hooks', 'Tools'] }
-    expect(healthHeadWords(true, '2026-10-09T22:13:00.000Z', true, needs)).toBe('Refreshing…')
+    // The known issues stay in the head while it reads (96 review): the count never drops out for a refresh.
+    expect(healthHeadWords(true, '2026-10-09T22:13:00.000Z', true, needs)).toBe('Refreshing… · 2 need you: Hooks, Tools')
+    expect(healthHeadWords(true, '2026-10-09T22:13:00.000Z', true, { count: 0, sections: [] })).toBe('Refreshing…')
     expect(healthHeadWords(false, '2026-10-09T22:13:00.000Z', false, needs)).toBe(`Read ${shortDate('2026-10-09T22:13:00.000Z')} · 2 need you: Hooks, Tools`)
     expect(healthHeadWords(false, '2026-10-09T22:13:00.000Z', true, { count: 1, sections: ['Hooks'] })).toBe(`Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 1 needs you: Hooks`)
     expect(healthHeadWords(false, '2026-10-09T22:13:00.000Z', false, { count: 0, sections: [] })).toBe(`Read ${shortDate('2026-10-09T22:13:00.000Z')}`)
+  })
+
+  it('reads quietly while Doctor runs: its 5-second reads never flip the head to Refreshing… (96 review)', () => {
+    const running = { ...doctor([doctorRow('hooks')]), running: true }
+    const html = rulesMarkup('health', rules({ snapshot: { ...RULES, doctor: running }, busy: true, reading: true }))
+    expect(html).not.toContain('Refreshing…')
+    expect(html).toMatch(/<span role="status">Read [^<]+ · \d+ needs? you: /u)
+  })
+
+  it('never says All well while Health has an issue of its own Doctor cannot see, a failed context limit only (96 review)', () => {
+    const passed = { ...doctor((['hooks', 'skills', 'tools', 'rules', 'claude', 'codex', 'leftovers'] as const).map((check) => doctorRow(check))), allWell: true, exitCode: 0 as const }
+    const onlyContext = healthNeeds({ ...AUDIT, doctor: passed })
+    expect(onlyContext.sections).toContain('Context limits')
+    expect([...onlyContext.keys].some((key) => key.startsWith('context'))).toBe(false)
+    const html = renderToStaticMarkup(createElement(DoctorHealth, { view: passed, now: AT + 60000, sections: new Set<string>(), issues: 1 }))
+    expect(html).not.toContain('All well')
+    expect(renderToStaticMarkup(createElement(DoctorHealth, { view: passed, now: AT + 60000, sections: new Set<string>(), issues: 0 }))).toContain('All well')
+  })
+
+  it('merges a Doctor finding only with a Health row needing the owner for the same cause, never a failed test or an app doctor\'s own check (96 review)', () => {
+    // OpenCode's Tools row needs him only because its tools test failed: its state is set up, so Doctor's tool-check stays its own.
+    const tested: RulesSnapshot = { ...AUDIT, tools: { ...AUDIT.tools, apps: AUDIT.tools.apps.map((app) => app.harness === 'opencode'
+      ? { ...app, state: 'Set up', unlisted: [], test: { at: '2026-10-09T20:00:00.000Z', version: app.version ?? '2.0.29', outcome: 'fail', detail: 'synthetic' } } : app) } }
+    const needs = healthNeeds(tested)
+    expect(needs.sections).toContain('Tools')
+    expect(needs.keys.has('tools:opencode')).toBe(false)
+    // Codex's own doctor reports mcp.config as a tool-check: not BMN's Tools check, so never the Tools row's issue.
+    const codexOwn = doctorRow('codex', { state: 'problems', problems: [problem('tool-check', 1, 'codex')] })
+    expect(doctorPlace(codexOwn, codexOwn.problems[0]!, new Set(['tools:codex']))).toBe('doctor')
+    const bmnOwn = doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'codex')] })
+    expect(doctorPlace(bmnOwn, bmnOwn.problems[0]!, new Set(['tools:codex']))).toBe('tools')
   })
 
   it('leaves Test again… usable while BMN only reads in the background', () => {
@@ -1273,8 +1314,8 @@ describe('context limits (60.9 AC3, AC4)', () => {
 
   it('shows one row per app: its file, who shares it, the default it holds and whether the setting is tested', () => {
     expect(markup).toContain('<h4 class="group-head">Context limits<span class="caption">how large a conversation may grow in sessions you start yourself</span></h4>')
-    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not yet proven on 0.171.0 · BMN tests it by itself<\/span>/)
-    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Tested on 2.1.295 · asked for 137 000, it reported 137 000 · proves the limit for runs BMN starts, as --settings; where it summarises is not tested<\/span>/)
+    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not yet proven on 0.171.0 · queued: BMN tests it by itself<\/span>/)
+    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Tested on 2.1.295 · asked for 137 000, it reported 137 000 · proves the limit for runs BMN starts with --settings, also with --restricted, not in --safe-mode; where it summarises is not tested<\/span>/)
   })
 
   it('offers Change… only where the test passed on the installed version', () => {
@@ -1291,8 +1332,8 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextStateWords({ harness: 'codex', version: null, test: null, autoTest: 'scheduled' })).toBe('Not found · no limit can be proven without the app')
     // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report. A failure waits for the owner.
     expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.162.0', 'fail', 380000), autoTest: 'none' })).toBe('Tested on 0.162.0 · the test failed: d · not used; Test again… is yours · one prompt sent')
-    expect(contextStateWords({ harness: 'claude', version: '0.162.0', test: test('0.162.0', 'inconclusive'), autoTest: 'scheduled' })).toBe('Tested on 0.162.0 · the test showed nothing · BMN tries again by itself')
-    expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.161.0', 'pass', 116850), autoTest: 'scheduled' })).toBe('Not yet proven on 0.162.0 · BMN tests it by itself')
+    expect(contextStateWords({ harness: 'claude', version: '0.162.0', test: test('0.162.0', 'inconclusive'), autoTest: 'scheduled' })).toBe('Tested on 0.162.0 · the test showed nothing · queued: BMN tries again by itself')
+    expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.161.0', 'pass', 116850), autoTest: 'scheduled' })).toBe('Not yet proven on 0.162.0 · queued: BMN tests it by itself')
   })
 
   it('keeps the saved value, what the test observed, what it proves and who acts next apart, and promises no test that is not coming (Story 96.5 AC2, AC3)', () => {
@@ -1301,7 +1342,7 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: pass, autoTest: 'none' }))
       .toBe('Tested on 0.164.0 · asked for 123 000, it reported 116 850 · proves model_context_window; where it summarises is not tested · one prompt sent')
     // A default in the app's file alone is a reason to test; with neither a default nor an agent's limit nothing is promised.
-    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'scheduled' })).toBe('Not yet proven on 0.164.0 · BMN tests it by itself')
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'scheduled' })).toBe('Not yet proven on 0.164.0 · queued: BMN tests it by itself')
     expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'not-needed' })).toBe('Not yet proven on 0.164.0 · no automatic test: no agent has a limit here and the file holds no default')
     expect(contextStateWords({ harness: 'claude', version: '2.1.310', test: { ...pass, version: '2.1.310', outcome: 'inconclusive', observed: null }, autoTest: 'none' }))
       .toBe('Tested on 2.1.310 · the test showed nothing · no automatic test is scheduled')
@@ -1328,13 +1369,13 @@ describe('context limits (60.9 AC3, AC4)', () => {
     const at = '2026-10-09T20:00:00.000Z'
     const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', version: '2.1.296',
       test: { at, version: '2.1.296', outcome, detail: 'd', asked: 137000, observed: outcome === 'pass' ? 137000 : null, by: 'bmn' }, autoTest: outcome === 'inconclusive' ? 'scheduled' : 'none' })
-    const proves = 'proves the limit for runs BMN starts, as --settings; where it summarises is not tested'
+    const proves = 'proves the limit for runs BMN starts with --settings, also with --restricted, not in --safe-mode; where it summarises is not tested'
     expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · asked for 137 000, it reported 137 000 · ${proves}`)
     expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed: d · not used; Test again… is yours`)
-    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing · BMN tries again by itself`)
+    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing · queued: BMN tries again by itself`)
     // A test of another version is not this version's, whoever ran it; the owner's own test says no one.
     expect(contextStateWords({ harness: 'claude', version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', asked: 137000, observed: 137000, by: 'bmn' }, autoTest: 'scheduled' }))
-      .toBe('Not yet proven on 2.1.297 · BMN tests it by itself')
+      .toBe('Not yet proven on 2.1.297 · queued: BMN tests it by itself')
     expect(contextStateWords({ harness: 'claude', version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', asked: 137000, observed: 137000 }, autoTest: 'none' }))
       .toBe(`Tested on 2.1.296 · asked for 137 000, it reported 137 000 · ${proves}`)
     expect(contextStateWords({ harness: 'codex', version: '0.171.0', test: { at, version: '0.171.0', outcome: 'pass', detail: 'd', asked: 123000, observed: 116850, by: 'bmn' }, autoTest: 'none' }))

@@ -38,8 +38,8 @@ set     changes one row's status (and note with --note; without it the note is k
 go      records the owner's go on one epic of a BMN-format plan with Git history, before its run starts: the
         row becomes ready with go DATE in its note and joins the queue, in one commit of the plan's history
         that holds only that change (and the approved epic file, when its approved text is not yet
-        committed) and names in its message the owner's act (--source: his quoted words with their time,
-        or a BMN decision reference bmn:SESSION/KEY) and what he approved (--approved: the approval text's
+        committed) and names in its message the owner's act (--source: his quoted words with their time;
+        a BMN decision record is an agent's own choice, never his act) and what he approved (--approved: the approval text's
         sha256:HEX from status --json, or the plan commit he approved). It refuses changed terms, a stale
         TOKEN, a finished epic, an unreadable history and a failed commit, writing nothing; other changed
         or staged files stay as they were and out of the commit. The same request again finds its commit
@@ -552,10 +552,12 @@ export async function recordGo(plan, { epic, source: given, approved, expect, da
   if (plan.history === 'none') throw new GoRefusal('NO_HISTORY', `${plan.planRoot} keeps no Git history, so no go can be recorded there; give it one (git -C plan init) and commit the plan`)
   if (plan.history === 'product-repository' && plan.runCheckout !== plan.defaultCheckout) throw new GoRefusal('NOT_DEFAULT_CHECKOUT', `the plan is tracked by the product repository; record the go from its default checkout ${plan.defaultCheckout}`)
   const source = typeof given === 'string' ? given.trim() : ''
-  if (source === '') throw new GoRefusal('NO_OWNER_GO', 'no owner go named: --source gives his act, his quoted words with their time or a BMN decision reference (bmn:SESSION/KEY)')
+  if (source === '') throw new GoRefusal('NO_OWNER_GO', 'no owner go named: --source gives his act, his quoted words with their time')
   if (/[\r\n]/u.test(source) || [...source].length > 500) throw new GoRefusal('NO_OWNER_GO', '--source is one line of at most 500 characters')
-  if (!DECISION_REFERENCE.test(source) && !(SOURCE_QUOTE.test(source) && SOURCE_TIME.test(source))) {
-    throw new GoRefusal('NO_OWNER_GO', `--source does not name an owner's act: give his quoted words with their time (YYYY-MM-DDTHH:MM) or a BMN decision reference (bmn:SESSION/KEY); "${source.slice(0, 80)}" is neither`)
+  // A bmn:SESSION/KEY reference names a decision record an agent made for itself (docs/dev-auto.md), never his act (96 review).
+  if (DECISION_REFERENCE.test(source)) throw new GoRefusal('NO_OWNER_GO', '--source names a BMN decision record, an agent\'s own choice; give his quoted words with their time')
+  if (!(SOURCE_QUOTE.test(source) && SOURCE_TIME.test(source))) {
+    throw new GoRefusal('NO_OWNER_GO', `--source does not name an owner's act: give his quoted words with their time (YYYY-MM-DDTHH:MM); "${source.slice(0, 80)}" is not that`)
   }
   const goDate = date ?? SOURCE_TIME.exec(source)?.[1] ?? localDate(now)
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(goDate) || Number.isNaN(Date.parse(`${goDate}T00:00:00Z`))) throw new PlanUsageError(`--date takes YYYY-MM-DD, not ${goDate}`)

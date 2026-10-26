@@ -36,14 +36,15 @@ const COVERAGE = new Set(['leftover-source-changed', 'leftover-step', 'leftover-
 
 type Problem = DoctorRow['problems'][number]
 /**
- * Where one Doctor finding is counted: `area` when Health's own section row for the same app and area already needs the
- * owner (one issue, counted there), `coverage` when it only says how fully the leftovers were read, `doctor` otherwise.
- * A finding that names no app matches nothing and is counted by itself.
+ * Where one Doctor finding is counted: `area` when it comes from BMN's own check of that area and Health's section row for
+ * the same app already needs the owner for that cause, its state (one issue, counted there); `coverage` when it only says
+ * how fully the leftovers were read; `doctor` otherwise. A finding that names no app, or an app doctor's own finding of the
+ * same code (Codex's `mcp.config` is a `tool-check` too), matches nothing and is counted by itself.
  */
 export function doctorPlace(row: DoctorRow, problem: Problem, sections: ReadonlySet<string>): 'doctor' | 'coverage' | HealthArea {
   if (COVERAGE.has(problem.code)) return 'coverage'
   const area = AREAS[problem.code]
-  return area !== undefined && problem.app !== undefined && sections.has(`${area}:${problem.app}`) ? area : 'doctor'
+  return area !== undefined && row.check === area && problem.app !== undefined && sections.has(`${area}:${problem.app}`) ? area : 'doctor'
 }
 
 /** Doctor's own issues: the whole-run error and each finding no Health section already counts (`sections` holds `area:app`). */
@@ -97,8 +98,8 @@ export function leftoverGroups(leftovers: readonly Leftover[]): LeftoverGroup[] 
   return [...groups.values()].sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label))
 }
 
-/** "13:31": when a doctor result was read. */
-function clock(at: number): string {
+/** "13:31": when a doctor result was read, or when BMN checked something at start (hooks-health). */
+export function clock(at: number): string {
   return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
@@ -159,12 +160,14 @@ function doctorLines(row: DoctorRow, sections: ReadonlySet<string>): Array<{ pro
 }
 
 /**
- * Health › Doctor. `sections` holds each Health section row (`area:app`) that already needs the owner: a Doctor finding of
- * the same app and area is that issue, shown here faint and counted there. Only the page's head is a live status.
+ * Health › Doctor. `sections` holds each Health section row (`area:app`) that already needs the owner for its state: a
+ * Doctor finding of the same app, area and cause is that issue, shown here faint and counted there. `issues` is how many
+ * Health's own sections count: All well only at none. Only the page's head is a live status.
  */
-export function DoctorHealth(props: { view: DoctorView | undefined; now?: number; sections?: ReadonlySet<string> }): React.JSX.Element {
+export function DoctorHealth(props: { view: DoctorView | undefined; now?: number; sections?: ReadonlySet<string>; issues?: number }): React.JSX.Element {
   const now = props.now ?? Date.now()
   const sections = props.sections ?? new Set<string>()
+  const issues = props.issues ?? sections.size
   const view = props.view ? { ...props.view, rows: props.view.rows.map((row) => ({ ...row, stale: staleAt(row, now) })) } : undefined
   const coverage = view?.rows.flatMap((row) => row.problems.filter((problem) => doctorPlace(row, problem, sections) === 'coverage').map((problem) => problem.reason)) ?? []
   // A leftovers check whose only findings are about coverage says so on the Leftovers line, not as a row of its own.
@@ -182,7 +185,7 @@ export function DoctorHealth(props: { view: DoctorView | undefined; now?: number
       </h4>
       {!view ? <p className="preferences-help">Not checked yet: BMN runs the doctor when it starts.</p> : null}
       {view?.error ? <p className="preferences-error" role="alert">{view.error === 'profile-unavailable' ? 'The selected agent profile is unavailable. Check its location and read access. Earlier results stay below.' : 'Doctor could not complete. Earlier results stay below; inspect the app doctor yourself.'}</p> : null}
-      {view?.allWell && !view.running && view.error === null && rows.length === 0 && coverage.length === 0 && sections.size === 0
+      {view?.allWell && !view.running && view.error === null && rows.length === 0 && coverage.length === 0 && issues === 0
         ? <p className="preferences-help">All well · {view.rows.length} checks passed · checked {doctorAge(oldest, now)}</p> : null}
       {rows.flatMap((row) => doctorLines(row, sections).map((line) => {
         const { problem, place, count } = line

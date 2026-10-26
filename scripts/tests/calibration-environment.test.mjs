@@ -1,11 +1,12 @@
 // MODULE: calibration-environment.test.mjs - Story 96.4 (paused 94.1 AC2): the calibration child's home and roots are disposable, the caller's environment is unchanged, agentsDirectory() resolves as before, and the trace and fingerprints the probe reads
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { agentsDirectory } from '../../apps/desktop/bin/agents-roster.mjs'
 import { approvedIfAny } from '../../apps/desktop/bin/agents-state.mjs'
-import { CALIBRATION_FLAGS, approvedTeam, assertDisposable, calibrationEnvironment, fingerprint, launchCalibration, tracedAccess } from '../measure/calibration-environment.mjs'
+import { CALIBRATION_FLAGS, approvedTeam, assertDisposable, calibrationEnvironment, fingerprint, launchCalibration, tracedAccess, watchedHomes } from '../measure/calibration-environment.mjs'
 
 const ROOT = '/synthetic/bmn-development-x'
 const roots = Object.fromEntries(['config', 'data', 'state', 'runtime', 'cache'].map((name) => [name, `${ROOT}/${name}`]))
@@ -56,6 +57,37 @@ describe('the calibration child\'s environment (Story 96.4)', () => {
     // No live calibration starts unless the probe passed for this builder and build.
     expect(source.indexOf('await proveIsolation()')).toBeLessThan(source.indexOf('launchCalibration({'))
     expect(source).not.toMatch(/spawn\(electronPath/u)
+    // It stops the whole tree it started, on Ctrl-C too (96 review).
+    expect(source).toContain('const release = stopOnInterrupt(async () => { await stopTree(child, root); cleanup() })')
+    expect(source).toContain('const leftovers = await stopTree(child, root)')
+  })
+
+  it('on Ctrl-C stops the detached tree it launched and removes its folder before it ends (96 review)', async () => {
+    const folder = mkdtempSync(join(tmpdir(), 'bmn-calibration-interrupt-'))
+    made.push(folder)
+    const root = join(folder, 'root')
+    mkdirSync(root)
+    const electron = join(folder, 'electron')
+    writeFileSync(electron, `#!/bin/sh\nsleep 300 &\necho $! > '${folder}/grandchild'\nwait\n`)
+    chmodSync(electron, 0o755)
+    const module = new URL('../measure/calibration-environment.mjs', import.meta.url).href
+    const runner = spawn(process.execPath, ['--input-type=module', '-e', [
+      `import { rmSync } from 'node:fs'`,
+      `import { launchCalibration, stopOnInterrupt, stopTree } from ${JSON.stringify(module)}`,
+      `const child = launchCalibration({ electronPath: ${JSON.stringify(electron)}, cwd: ${JSON.stringify(root)}, env: { PATH: '/usr/bin:/bin', HOME: ${JSON.stringify(join(root, 'home'))} }, appPath: '/synthetic/app' })`,
+      `stopOnInterrupt(async () => { await stopTree(child, ${JSON.stringify(root)}); rmSync(${JSON.stringify(root)}, { recursive: true, force: true }) })`,
+      `console.log(child.pid)`,
+      `setInterval(() => {}, 1000)`
+    ].join('\n')], { stdio: ['ignore', 'pipe', 'inherit'] })
+    const leader = Number(await new Promise((done) => runner.stdout.once('data', (chunk) => done(String(chunk).trim()))))
+    for (let waited = 0; !existsSync(join(folder, 'grandchild')) && waited < 5_000; waited += 50) await new Promise((done) => setTimeout(done, 50))
+    const grandchild = Number(readFileSync(join(folder, 'grandchild'), 'utf8').trim())
+    expect(existsSync(`/proc/${grandchild}`)).toBe(true)
+    runner.kill('SIGINT')
+    const code = await new Promise((done) => runner.once('exit', (exit) => done(exit)))
+    const gone = (pid) => !existsSync(`/proc/${pid}`) || readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]?.startsWith('Z')
+    for (let waited = 0; !(gone(leader) && gone(grandchild)) && waited < 5_000; waited += 50) await new Promise((done) => setTimeout(done, 50))
+    expect([code, gone(leader), gone(grandchild), existsSync(root)]).toEqual([130, true, true, false])
   })
 
   it('starts the child in its own process group with the environment it was given, the keyring left alone, and the app last', async () => {
@@ -85,6 +117,20 @@ describe('what the probe reads (Story 96.4)', () => {
       '106 +++ exited with 0 +++'
     ].join('\n')
     expect(tracedAccess(trace, ['/synthetic/work/outside-home']).map((line) => line.split(' ')[0])).toEqual(['101', '102', '105'])
+    // A real home is watched but for the folders the probe names as its own: this checkout, its disposable roots.
+    const real = [
+      '201 openat(AT_FDCWD, "/synthetic/real-home/.config/bmn/agents/roster.md", O_RDONLY) = 3',
+      '202 openat(AT_FDCWD, "/synthetic/real-home/code/BMN/apps/desktop/out/main/index.js", O_RDONLY) = 3',
+      '203 statx(AT_FDCWD, "/synthetic/real-home/.claude", AT_STATX_SYNC_AS_STAT, STATX_ALL, 0x7ffd) = -1 ENOENT (No such file or directory)',
+      '204 openat(AT_FDCWD, "/synthetic/real-home/code/BMN-other/x", O_RDONLY) = 3'
+    ].join('\n')
+    expect(tracedAccess(real, ['/synthetic/real-home'], ['/synthetic/real-home/code/BMN']).map((line) => line.split(' ')[0])).toEqual(['201', '203', '204'])
+  })
+
+  it('watches the caller\'s home and the account\'s own home from the password file, each once (96 review)', () => {
+    expect(watchedHomes({ HOME: '/synthetic/owner-home' }, '/synthetic/account-home')).toEqual(['/synthetic/owner-home', '/synthetic/account-home'])
+    expect(watchedHomes({ HOME: '/synthetic/owner-home/' }, '/synthetic/owner-home')).toEqual(['/synthetic/owner-home'])
+    expect(watchedHomes({})).toEqual([userInfo().homedir])
   })
 
   it('seeds a synthetic team BMN\'s own reader takes as approved, so BMN plans its tests and writes their tries', () => {

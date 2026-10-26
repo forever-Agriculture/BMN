@@ -4384,12 +4384,13 @@ describe('OpenCode hooks', () => {
     expect(printed.stdout).toContain('export default {')
     expect(printed.stdout).toContain('"bmn", "hook", "opencode"')
     await writeFile(cli, '{\n    "$schema": "https://opencode.ai/v2/cli.json",\n    "plugins": ["owner-plugin"]\n}\n')
-    // OpenCode 1's plugin of BMN's goes, with a copy kept where OpenCode does not load it; the owner's own stays.
-    const olderText = '// Shipped by BMN. Reinstall with bmn hooks install opencode.\n// bmn hook opencode\n'
+    // OpenCode 1's plugin of BMN's, byte for byte as a release shipped it, goes, with a copy kept where OpenCode does not
+    // load it; the owner's own stays, and so does a copy of BMN's someone edited (96 review: comments make no file BMN's).
+    const olderText = shippedPluginText('932625075f', 'apps/desktop/bin/bmn')
     await mkdir(join(config, 'plugin'))
     await mkdir(join(config, 'plugins'))
     await writeFile(join(config, 'plugin', 'bmn.ts'), olderText)
-    await writeFile(join(config, 'plugins', 'bmn.ts'), '// the owner\'s own plugin\n')
+    await writeFile(join(config, 'plugins', 'bmn.ts'), `${olderText}// the owner's own line\n`)
     const before = await runHooks(['check', 'opencode', '--file', path])
     expect(before.code).toBe(1)
     expect(before.stdout).toMatch(/plugin\s+missing\s+OpenCode 1's plugin is still at .*plugin\/bmn\.ts; install removes it/)
@@ -4400,7 +4401,7 @@ describe('OpenCode hooks', () => {
     expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', entry] })
     expect((await readFile(cli, 'utf8')).split('\n')[1]).toBe('    "$schema": "https://opencode.ai/v2/cli.json",')
     expect(existsSync(join(config, 'plugin', 'bmn.ts'))).toBe(false)
-    expect(await readFile(join(config, 'plugins', 'bmn.ts'), 'utf8')).toBe('// the owner\'s own plugin\n')
+    expect(await readFile(join(config, 'plugins', 'bmn.ts'), 'utf8')).toBe(`${olderText}// the owner's own line\n`)
     const olderCopy = install.backups.find((file: string) => basename(file).startsWith('plugin-bmn.ts.bmn-backup-'))
     expect(dirname(olderCopy)).toBe(entry)
     expect(await readFile(olderCopy, 'utf8')).toBe(olderText)
@@ -4741,9 +4742,42 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     await writeFile(gate, '')
     const result = await installing
     expect(result.code).toBe(1)
-    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', detail: expect.stringContaining('changed while bmn was reading it') })
+    // The earlier plugin stays, and Health is told it cannot tell a stop from a finished turn (Story 96.6).
+    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', earlier: ['plugin'], detail: expect.stringContaining('changed while bmn was reading it') })
     expect(await readFile(path, 'utf8')).not.toBe((await runHooks(['print', 'opencode'])).stdout)
     if (_name === 'the same bytes in another file') expect((await stat(path)).ino).not.toBe(identity)
+    expect(await backupsOf(path)).toEqual([])
+    expect((await readdir(dirname(path))).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('removes its copy when the plugin changes at the last check, after the copy was made (96 review)', async () => {
+    const path = await openCodeFixture()
+    const cli = join(dirname(dirname(path)), 'cli.json')
+    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
+    await writeFile(path, october)
+    await writeFile(cli, `${JSON.stringify({ plugins: [dirname(path)] })}\n`)
+    const gate = join(dirname(path), 'gate')
+    const waiting = async (what: string) => {
+      const deadline = Date.now() + 10_000
+      while (!existsSync(`${gate}.waiting`)) {
+        if (Date.now() > deadline) throw new Error(`the start-up install never reached ${what}`)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+      await rm(`${gate}.waiting`)
+    }
+    const installing = runHooks(['install', 'opencode', '--absent', '--yes', '--file', path, '--json'], { BMN_HOOKS_TEST_GATE: gate })
+    // The first check passes and the copy is made; the second, just before the rename, sees the change.
+    await waiting('its first check')
+    await writeFile(`${gate}.again`, '')
+    await writeFile(gate, '')
+    await waiting('its last check')
+    expect(await backupsOf(path)).toHaveLength(1)
+    await writeFile(path, `${october}// written meanwhile\n`)
+    await writeFile(gate, '')
+    const result = await installing
+    expect(result.code).toBe(1)
+    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', earlier: ['plugin'], detail: expect.stringContaining('changed while bmn was reading it') })
+    expect(await readFile(path, 'utf8')).toBe(`${october}// written meanwhile\n`)
     expect(await backupsOf(path)).toEqual([])
     expect((await readdir(dirname(path))).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
@@ -4760,6 +4794,15 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(result.report).toMatchObject({ state: 'left', why, installed: [] })
     expect(result.report.detail).not.toContain('BMN leaves it untouched')
     expect(existsSync(path)).toBe(false)
+    expect(await readFile(cli, 'utf8')).toBe(text)
+    // BMN's October 14 plugin is upgraded all the same: cli.json decides only whether OpenCode loads it (96 review).
+    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
+    await writeFile(path, october)
+    const upgraded = await installAbsent('opencode', path)
+    expect(upgraded.code).toBe(1)
+    expect(upgraded.report).toMatchObject({ state: 'left', why, installed: [], older: [], upgraded: ['plugin'] })
+    expect(await readFile(path, 'utf8')).toBe((await runHooks(['print', 'opencode'])).stdout)
+    expect(await readFile(join(dirname(path), (await backupsOf(path))[0]!), 'utf8')).toBe(october)
     expect(await readFile(cli, 'utf8')).toBe(text)
   })
 

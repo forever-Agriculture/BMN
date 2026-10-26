@@ -819,6 +819,8 @@ export interface HookAppAtStart {
   installed: string[]
   /** Entries BMN's own earlier release wrote, upgraded byte for byte at this start (Story 96.3); absent when none was. */
   upgraded?: string[]
+  /** BMN's own earlier OpenCode plugin left in place because its upgrade failed: it cannot tell a stop from a finished turn (Story 96.6). */
+  earlier?: string[]
   /** Events BMN left as they are, each with why; a whole file it could not add to has `why` on the app instead. */
   left: { event: string; why: HookLeftWhy }[]
   why?: HookLeftWhy

@@ -225,7 +225,10 @@ export function evaluate(inputs, {
     const readOnly = role.read_only === true ? checkReadOnly(role, parsed, resolution, version, note) : null
     // Required only where the owner's test proved the setting on this version (60.9 AC1, AC2).
     // The test log is read only for an agent that has a limit.
-    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
+    // A Claude Code run in --safe-mode (a packet) is a form no context test tries: its limit is not applied there (96 review).
+    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false }
+      : parsed.harness === 'claude' && parsed.safeMode ? { limit: false, compact: false, standing: 'untested', reason: 'the run starts Claude Code in --safe-mode, a form no context test tries, so it gets the app\'s own size' }
+        : provenControls(parsed.harness, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
     note(context.note)

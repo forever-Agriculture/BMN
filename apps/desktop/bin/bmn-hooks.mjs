@@ -1207,12 +1207,15 @@ function readOpenCodeCli(path) {
   return { state: 'read', text, data, plugins: data.plugins ?? [] }
 }
 
-/** The older plugin files that are BMN's own; anything else in their place is the owner's and stays. */
+/**
+ * OpenCode 1's plugin files that are BMN's own: byte for byte one BMN shipped, as for the terminal plugin (Story 96.3;
+ * BMN's comments alone never make a file BMN's). Anything else in their place is the owner's and stays.
+ */
 function olderOpenCodePlugins(path) {
   return openCodeFiles(path).older.flatMap((file) => {
     try {
-      const text = currentText(file)
-      return openCodeBMNText(text) ? [{ file, text }] : []
+      const bytes = readFileSync(file)
+      return EARLIER_OPENCODE_PLUGINS[createHash('sha256').update(bytes).digest('hex')]?.kind === 'server' ? [{ file, text: bytes.toString('utf8') }] : []
     } catch {
       return []
     }
@@ -1564,7 +1567,13 @@ function upgradeOpenCodePlugin(path, read) {
   const backup = `${path}.bmn-backup-${new Date().toISOString()}`
   copyFileSync(path, backup, constants.COPYFILE_EXCL)
   if (!readFileSync(backup).equals(read.bytes)) throw new CliError('IO_ERROR', `the copy ${backup} does not read back as ${path}; the plugin was not upgraded`)
-  writeAtomically(path, OPENCODE_PLUGIN, unchanged)
+  try {
+    writeAtomically(path, OPENCODE_PLUGIN, unchanged)
+  } catch (error) {
+    // Nothing replaced the file, so the copy of it is no backup of anything (96 review).
+    try { unlinkSync(backup) } catch { /* already gone */ }
+    throw error
+  }
   if (currentText(path) !== OPENCODE_PLUGIN) throw new CliError('IO_ERROR', `${path} does not read back as BMN's plugin after the upgrade; its copy is ${backup}`)
   return backup
 }
@@ -1574,7 +1583,8 @@ function upgradeOpenCodePlugin(path, read) {
  * BMN's is left, and so is cli.json then, which would otherwise make OpenCode load it. BMN's own plugin from an
  * earlier release, byte for byte, is upgraded (Story 96.3); a copy of it someone edited is left and reported as
  * changed. OpenCode 1's plugin still beside it counts as in place and is left for `hooks install`. A cli.json BMN
- * cannot add to leaves both files as they are, as `hooks install` does.
+ * cannot add to stays as it is, as `hooks install` leaves it; BMN's own earlier plugin is upgraded all the same, since
+ * cli.json decides only whether OpenCode loads the folder (Epic 96 review).
  */
 function absentOpenCode(path) {
   const { entry, cli: cliPath } = openCodeFiles(path)
@@ -1591,20 +1601,28 @@ function absentOpenCode(path) {
     placed.push('plugin')
     if (older.length > 0) olderEvents.push('plugin')
   } else left.push({ event: 'plugin', why: before.state === 'edited' ? 'changed' : 'foreign' })
+  const backups = []
+  if (upgrade) {
+    try { backups.push(upgradeOpenCodePlugin(path, before)) }
+    catch (error) {
+      // The plugin stays the earlier one, which cannot tell a stop from a finished turn: Health says so (Story 96.6).
+      if (error instanceof CliError) error.earlier = ['plugin']
+      throw error
+    }
+  }
+  const upgraded = upgrade ? { upgraded: ['plugin'], backups } : {}
   if (cli.state !== 'read' && cli.state !== 'missing') {
-    return { state: 'left', placed, older: upgrade ? ['plugin'] : olderEvents, installed: [], left, why: cli.state, detail: cli.reason.replace(/; BMN leaves it untouched$/, '') }
+    return { state: 'left', placed, older: olderEvents, installed: [], left, why: cli.state, detail: cli.reason.replace(/; BMN leaves it untouched$/, ''), ...upgraded }
   }
   if (cli.plugins.includes(entry)) placed.push('cli.json')
   else if (left.length === 0) absent.push('cli.json')
   const done = { placed, older: olderEvents, left }
   if (absent.length === 0 && !upgrade) return { state: 'checked', ...done, installed: [] }
   if (absent.includes('cli.json') && rewrittenNumbers(cli.text ?? '').length > 0) {
-    return { state: 'left', ...done, older: upgrade ? ['plugin'] : olderEvents, installed: [], why: 'numbers', detail: `${cliPath} holds a number BMN cannot write back unchanged` }
+    return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${cliPath} holds a number BMN cannot write back unchanged`, ...upgraded }
   }
-  const backups = []
   // The plugin first and cli.json second, as `hooks install` writes them: a stop between leaves a plugin OpenCode does not load yet.
   if (absent.includes('plugin')) writeHookFile(path, null, linkTarget(path), OPENCODE_PLUGIN)
-  if (upgrade) backups.push(upgradeOpenCodePlugin(path, before))
   if (absent.includes('cli.json')) {
     const nextText = `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
     const backup = writeHookFile(cliPath, cli.text, linkTarget(cliPath), nextText)
@@ -1632,7 +1650,7 @@ async function installAbsentCommand(agents, pathFor, asJson) {
         results.push({ agent, file: path, ...(agent === 'opencode' ? absentOpenCode(path) : absentClaudeOrCodex(agent, path)) })
       } catch (error) {
         const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
-        results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail })
+        results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail, ...(error.earlier ? { earlier: error.earlier } : {}) })
       }
     }
     const ok = results.every((result) => result.state !== 'failed' && result.state !== 'left' && result.left.length === 0)
@@ -1664,7 +1682,8 @@ async function installAbsentCommand(agents, pathFor, asJson) {
 /**
  * A test seam, like BMN_PROC_ROOT: it holds an installer open so another writer can get in between the
  * read and the rename, which is the only way to exercise the conflict refusal. The hold is a handshake,
- * not a timer: it says it is waiting, then waits to be let go.
+ * not a timer: it says it is waiting, then waits to be let go. A test that wants the next check held too
+ * leaves `GATE.again` beside the gate: this check takes both away, so the next one waits again.
  */
 function holdAtTestGate() {
   const gate = process.env.BMN_HOOKS_TEST_GATE
@@ -1673,6 +1692,9 @@ function holdAtTestGate() {
   const deadline = Date.now() + 10_000
   while (!existsSync(gate) && Date.now() < deadline) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+  }
+  if (existsSync(`${gate}.again`)) {
+    for (const file of [gate, `${gate}.again`]) { try { unlinkSync(file) } catch { /* already gone */ } }
   }
 }
 

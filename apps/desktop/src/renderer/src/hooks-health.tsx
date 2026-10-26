@@ -1,6 +1,7 @@
 // MODULE: hooks-health.tsx - Health › Hooks: what BMN's install at start found in each app's hook file, in words (Stories 75.9, 96.3, 96.6)
 import { useContext } from 'react'
 import { ROSTER_APP_NAMES, type HookAppAtStart, type HookLeftWhy, type HooksAtStart } from '@bmn/protocol'
+import { clock } from './doctor-health'
 import { SteadyOrderContext } from './health-order'
 import { Dot } from './roster-marks'
 import { displayPath } from './session-presentation'
@@ -19,28 +20,22 @@ export function hookRowWords(app: HookAppAtStart): { needs: boolean; head: strin
   const added = app.installed.length > 0 ? [`Added at start: ${app.installed.join(', ')}${app.harness === 'codex' ? ' · Codex asks you once, in /hooks, before it runs them' : ''}`] : []
   // A file upgraded on disk says nothing of what a running OpenCode loaded (Story 96.3): it is woken once its own events carry the new plugin's mark.
   const upgraded = (app.upgraded ?? []).length > 0 ? [`Upgraded at start: ${app.upgraded!.join(', ')} · a running OpenCode is woken only once it reports the new plugin`] : []
-  // OpenCode's plugin left in an earlier release (BMN could not write beside it) cannot tell the owner's stop from a finished turn (Story 96.6).
-  const obsolete = app.harness === 'opencode' && app.older.includes('plugin') && app.state === 'left'
-  const olderNames = obsolete ? app.older.filter((name) => name !== 'plugin') : app.older
+  // OpenCode's plugin left in an earlier release (its upgrade failed) cannot tell the owner's stop from a finished turn (Story 96.6).
+  const obsolete = app.harness === 'opencode' && (app.earlier ?? []).includes('plugin')
   const older = [
     ...(obsolete ? ['Older plugin · stopped turns cannot be distinguished. Automatic wake is unavailable for this session until a qualified plugin is loaded.'] : []),
-    ...(olderNames.length === 0 ? [] : app.harness === 'opencode'
+    ...(app.older.length === 0 ? [] : app.harness === 'opencode'
       ? [`OpenCode 1's plugin file is still there too · \`bmn hooks install opencode\` removes it`]
-      : [`${olderNames.join(', ')} · in an older wording, which does the same and still runs`])
+      : [`${app.older.join(', ')} · in an older wording, which does the same and still runs`])
   ]
   const leftWords = (entry: HookAppAtStart['left'][number]): string => app.harness === 'opencode' && entry.event === 'plugin' && (entry.why === 'changed' || entry.why === 'foreign')
     ? `plugin · ${HOOK_LEFT_WORDS[entry.why]} · Not BMN's · BMN leaves it` : `${entry.event} · ${HOOK_LEFT_WORDS[entry.why]}`
-  if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: older }
+  if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: [...upgraded, ...older] }
   if (app.left.length === 0) return { needs: obsolete, head: inPlace, lines: [...added, ...upgraded, ...older] }
   return {
     needs: true, head: `${inPlace} · ${app.left.length === 1 ? 'one left as it is' : `${app.left.length} left as they are`}`,
     lines: [...app.left.map(leftWords), ...added, ...upgraded, ...older]
   }
-}
-
-/** "13:31": the time of day BMN checked something at start. */
-function clockTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 /** Health › Hooks (Story 75.9): what BMN's install at start found in each app's hook file, failure first; there is no button. */
@@ -68,7 +63,7 @@ export function HooksHealth(props: { hooks: HooksAtStart | null; home: string | 
           })}
       {hooks === null ? null : (
         <>
-          <p className="preferences-help">Checked at start, {clockTime(hooks.checkedAt)}. BMN adds an entry only where an event has none of its own.</p>
+          <p className="preferences-help">Checked at start, {clock(Date.parse(hooks.checkedAt))}. BMN adds an entry only where an event has none of its own.</p>
           <p className="preferences-help">An entry it did not write, a changed one, or one inside a matcher is left as it is.</p>
         </>
       )}

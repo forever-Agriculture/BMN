@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 import { random, styledLine } from './agent-replay.mjs'
-import { assertDisposable, calibrationEnvironment, isolationIdentity, launchCalibration, prepareCalibrationHome, proveIsolation } from './calibration-environment.mjs'
+import { assertDisposable, calibrationEnvironment, isolationIdentity, launchCalibration, prepareCalibrationHome, proveIsolation, stopOnInterrupt, stopTree } from './calibration-environment.mjs'
 import { connect, profileAll, targets } from './cpu-profiles.mjs'
 
 const USAGE = `Usage: node scripts/measure/calibration-load.mjs [--sessions claude=3,codex=1,shell=1] [--scale N[,N...]]
@@ -153,7 +153,7 @@ async function main(argv) {
   }
   const report = { isolation: { result: receipt.result, builder: receipt.builder, build: receipt.build, from: receiptPath ?? 'probe' }, settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', statusMs, tick, history, savedOutput, headless, profile: profileDir !== null }, steps: [] }
   const step = (name, detail = {}) => { report.steps.push({ at: new Date().toISOString(), name, ...detail }); console.error(`calibration: ${name}${detail.pid ? ` pid ${detail.pid} start ticks ${detail.startTicks}` : ''}`) }
-  await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
+  await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots, cleanup }) => {
     const bin = join(root, 'agents')
     mkdirSync(bin)
     for (const name of ['claude', 'codex', 'shell']) symlinkSync(join(repo, 'scripts/measure/agent-replay.mjs'), join(bin, name))
@@ -169,6 +169,8 @@ async function main(argv) {
       // Off the desktop: Chromium's headless display, at a device scale of 1 as test:visual uses, large enough for the window.
       ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=2560,1600', '--force-device-scale-factor=1'] : [])]
     const child = launchCalibration({ electronPath, flags, cwd: root, env: environment })
+    // Ctrl-C stops the whole tree it started and removes the disposable folder before this process ends (96 review).
+    const release = stopOnInterrupt(async () => { await stopTree(child, root); cleanup() })
     let log = ''
     child.stderr.on('data', (chunk) => { log = `${log}${chunk}`.slice(-20_000) })
     report.launch = { pid: child.pid, startTicks: startTicks(child.pid), executable: electronPath, root }
@@ -279,14 +281,12 @@ async function main(argv) {
       step('window', report.window)
       if (!report.window.shown) console.error('calibration: the window was minimized or hidden during the run, so it measured an idle window; run it again')
     } finally {
-      child.kill('SIGTERM')
-      for (let waited = 0; child.exitCode === null && child.signalCode === null && waited < 15_000; waited += 500) await sleep(500)
-      // BMN asks before it closes with sessions running, so a SIGTERM may leave it up; then it is killed.
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL')
-        await new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done() : child.once('exit', done)))
-      }
-      step('stopped', { exit: child.exitCode, signal: child.signalCode })
+      // The whole group it started, then any session leader still holding the root: BMN asks before it closes with
+      // sessions running, so a SIGTERM may leave it up; then it is killed.
+      const leftovers = await stopTree(child, root)
+      if (child.exitCode === null && child.signalCode === null) await new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done() : child.once('exit', done)))
+      release()
+      step('stopped', { exit: child.exitCode, signal: child.signalCode, leftovers })
       report.log = log.slice(-4_000)
       writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`)
     }
