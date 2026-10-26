@@ -24,8 +24,6 @@ import {
   healthNeeds,
   healthNeedsCount,
   exposedWords,
-  needsFirst,
-  hookRowWords,
   rulesStatus,
   targetStateWords,
   endedSince,
@@ -47,6 +45,8 @@ import {
   watchedWords,
   type RulesState
 } from './rules-preferences'
+import { needsFirst } from './health-order'
+import { hookRowWords } from './hooks-health'
 import {
   Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords,
   retiredAppClause, shortDate, teamProposals, type TeamPage
