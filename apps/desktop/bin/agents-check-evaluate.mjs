@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, relative, sep } from 'node:path'
 import { APP_NAMES, agentState, canonicalJson, classRefusal, isCalled, namedResearchers, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
-import { CLAUDE_CONTEXT_KEY, checkContext, provenControls, provenPrecedence } from './agents-context.mjs'
+import { CLAUDE_CONTEXT_KEY, checkContext, claudeContextSettingsSize, provenControls, provenPrecedence, researchContextProven } from './agents-context.mjs'
 import { appTools, checkRunTools } from './agents-tools.mjs'
 import { OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, installOpenCodeFolder, openCodeEnvironment, openCodeFolderSha256 } from './agents-opencode.mjs'
 import { NEXT_STEP, OPENCODE_NEXT_STEP, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, Refusal, TESTED_HARNESS_VERSIONS, WEB_NEXT_STEP, WEB_TOOLS_NOTE, listDirectory, namesWebTool, reachedForWeb, readText, refuse } from './agents-check-base.mjs'
@@ -335,7 +335,8 @@ export function evaluate(inputs, {
       if (!parsed.safeMode) refuse('PACKET_INVALID', 'packet mode needs --safe-mode')
       if (parsed.tools !== '') refuse('PACKET_INVALID', "packet mode needs --tools ''")
       if (parsed.addDir.length > 0) refuse('PACKET_INVALID', 'packet mode allows no --add-dir')
-      if (parsed.settings !== undefined) refuse('PACKET_INVALID', 'packet mode allows no --settings')
+      // BMN's own --settings text names one context size and nothing else (Story 96.5); any other could move the run.
+      if (parsed.settings !== undefined && claudeContextSettingsSize(parsed.settings) === null) refuse('PACKET_INVALID', 'packet mode allows no --settings but the one that gives the agent its context limit')
       if (parsed.mcpConfig !== undefined && !emptyMcpConfig(parsed.mcpConfig)) refuse('PACKET_INVALID', 'packet mode allows only an empty --mcp-config')
       if (!inside(cwd, packet)) refuse('PACKET_INVALID', 'packet mode runs from inside the packet')
       if (stdinProblem !== null) refuse('PACKET_INVALID', stdinProblem)
@@ -712,7 +713,7 @@ export function evaluateResearch(inputs, {
       : parsed.harness === 'opencode' ? 'dispatch form: env -i opencode run from BMN\'s OpenCode folder, its research agent, web search only' : 'dispatch form: env -i claude -p, web tools only')
     // An OpenCode agent's model is named with its provider, as `-m` names it.
     const { model, effort } = checkModelAndEffort(parsed.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
-    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog),
+    const context = checkContext(agent, resolution.context, researchContextProven(agent, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
     note(context.note)

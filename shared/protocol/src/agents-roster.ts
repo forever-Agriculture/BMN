@@ -375,8 +375,16 @@ export interface ContextLimitView {
   /** The sizes the app takes, where it says. */
   min?: number
   max?: number
-  /** The last test of this app, whatever version it ran against; `by` is set where BMN ran it by itself (63.1). */
-  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; by?: 'bmn' } | null
+  /**
+   * The last test of this app in the form BMN applies the setting in now, whatever version it ran against; `asked` the size it
+   * asked for, `observed` the size the app reported (null where it reported none); `by` is set where BMN ran it by itself (63.1).
+   */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; asked: number; observed: number | null; by?: 'bmn' } | null
+  /**
+   * Who acts next on the installed version (Story 96.5): `scheduled` BMN's own test is due; `none` no test is coming (it passed,
+   * or failed and waits for the owner's Test again); `not-needed` no agent has a limit on this app and its file holds no default.
+   */
+  autoTest: 'scheduled' | 'none' | 'not-needed'
   /** Each approved, enabled agent on this app that has a limit of its own, and how that limit fares for a run started now (63.1 AC4). */
   limits: ContextAgentLimit[]
   /** The approved, enabled agents that run on this app: they share this one file. */

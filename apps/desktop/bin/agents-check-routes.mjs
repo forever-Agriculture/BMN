@@ -3,7 +3,7 @@ import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { parseYaml } from './agents-roster.mjs'
-import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, CONTEXT_TEST_SIZE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
+import { CLAUDE_CONTEXT_KEY, CLAUDE_TEST_ARGUMENTS, CODEX_CONTEXT_KEYS, OWN_CONTEXT_SOURCE, checkContext, contextItems, contextTestFolder, provenControls, provenPrecedence, wholeNumber } from './agents-context.mjs'
 import { OPENCODE_ASK_AGENTS, OPENCODE_HELPER_AGENT, openCodeEnvironment, openCodeFolder, openCodeFolderProblem, openCodeFolders, openCodeManagedProblem } from './agents-opencode.mjs'
 import { Refusal, optionalNames, optionalText, traceRead } from './agents-check-base.mjs'
 import { CODEX_ACCESS_KEYS, CODEX_NEUTRAL_KEYS, CODEX_ROUTE_KEYS, dispatchEnvironment, parseDispatch, readCodexConfig, tomlKeyPath, unquoteToml } from './agents-check-argv.mjs'
@@ -404,9 +404,8 @@ export function resolveOpenCodeRoute(parsed, { agent: wantedAgent = OPENCODE_HEL
  */
 export function contextTestSources(harness, environment, folder) {
   if (harness !== 'claude') return []
-  const tested = { ...environment, [CLAUDE_CONTEXT_KEY]: String(CONTEXT_TEST_SIZE.claude) }
-  const sizes = resolveClaudeRoute(parseDispatch(['claude', ...CLAUDE_TEST_ARGUMENTS]), tested, folder).context?.sizes ?? []
-  return sizes.filter((entry) => entry.id !== 'environment').map((entry) => ({ source: entry.source, id: entry.id, value: entry.value }))
+  const sizes = resolveClaudeRoute(parseDispatch(['claude', ...CLAUDE_TEST_ARGUMENTS]), environment, folder).context?.sizes ?? []
+  return sizes.filter((entry) => !entry.id.startsWith(OWN_CONTEXT_SOURCE)).map((entry) => ({ source: entry.source, id: entry.id, value: entry.value }))
 }
 
 /**
@@ -422,7 +421,7 @@ export function limitStanding(agent, version, { environment = process.env, cwd =
   const items = contextItems(agent, proven)
   if (items.state === 'app-default') return null
   if (items.state !== 'applied') return { state: items.state === 'out-of-range' ? 'refused' : 'not-applied', reason: items.reason }
-  const argv = agent.harness === 'codex' ? ['codex', 'exec', ...items.argv, '-'] : ['env', '-i', `HOME=${environment.HOME ?? homedir()}`, ...items.env, 'claude', '-p']
+  const argv = agent.harness === 'codex' ? ['codex', 'exec', ...items.argv, '-'] : ['env', '-i', `HOME=${environment.HOME ?? homedir()}`, ...items.env, 'claude', '-p', ...items.argv]
   const parsed = parseDispatch(argv)
   const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, environment, cwd) : resolveClaudeRoute(parsed, environment, cwd)
   const result = checkContext(agent, resolution.context, proven, provenPrecedence(agent.harness, version, tests))

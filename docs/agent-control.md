@@ -1201,25 +1201,32 @@ is where the app starts summarising. BMN uses an app's setting only on a version
 | App | Limit | Where summarising starts | Tested on a live app |
 | --- | --- | --- | --- |
 | Codex | `model_context_window`: a `-c` item on a run, a top-level key of `config.toml` for your sessions | `model_auto_compact_token_limit`, the same way | not yet |
-| Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): an `env -i` entry on a run, an `env` entry of `settings.json` for your sessions | no setting | not yet |
+| Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): on a run, one `--settings` text that names it in `env` and as `autoCompactWindow`; an `env` entry of `settings.json` for your sessions | no setting | 2.1.310 (2026-10-26): `--settings` with 137 000 reported 137 000 over `settings.json`'s 450 000; the run's environment had lost to that file |
 | OpenCode | no setting | no setting | does not apply |
 
 Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or with compaction off, so
-BMN does not use it.
+BMN does not use it. Its run's environment loses to an `env` entry in your `settings.json`, while `--settings` outranks
+your files and is still read under `--restricted`, the form of a team ask (Story 96.5). A test proves only the form it
+tried: its record names it as `control`, and one from before names none and tried the run's environment for Claude Code
+and `-c` for Codex. A research run starts Claude Code in `--safe-mode` and takes no `--settings`, a form no test tried,
+so a researcher's own limit is not applied there and its step says so; packet mode takes BMN's own `--settings` text
+and no other.
 
 **The test.** `bmn context test <app>` starts the app once in an empty folder under your home folder with a short
-synthetic prompt and asks for a size no default equals (Codex 123 000, Claude Code 137 000). It passes when the app's
+synthetic prompt and asks for a size no default equals (Codex 123 000, Claude Code 137 000), in the form a run carries
+it; these sizes are the test's own and never offered as a setting. It passes when the app's
 own report shows that size: Codex's session record (a little less, as Codex keeps part back) or the Tokens line of
 Claude Code's `/context` (Codex sends one short request to its provider; Claude Code is only asked for that report).
 The result is kept per app version in `state/context-tests.jsonl`; the latest test of a version decides, and a new
 version starts untested. Until a test passed the limit is **not supported yet** on that version: BMN writes, passes and
-requires nothing. Where summarising starts has no test yet on any app. The Claude Code test also keeps which of your
+requires nothing. Where summarising starts has no test yet on any app: BMN does not fill a conversation to find out, and
+reading a file back proves neither size. The Claude Code test also keeps which of your
 files named another size for that run (`rivals`: part, file, key and size), so a pass shows the run's own value winning
 over each on its side; a file naming a size within one percent of the asked one makes the test inconclusive, naming
 the file, without starting a run.
 
-**BMN tests by itself**, only where an approved, enabled agent on that app has a limit, by the latest test of exactly
-the installed version:
+**BMN tests by itself**, only where an approved, enabled agent on that app has a limit or the app's own file holds a
+default (Story 96.5), by the latest test of exactly the installed version in the form BMN applies now:
 
 | Latest test of the installed version | What BMN does |
 | --- | --- |
@@ -1230,23 +1237,27 @@ the installed version:
 
 For Claude Code a passed version is tested once more when your files changed so that a run would meet a set of sources
 (which, and on which side of the asked size) no recorded test of that version met; each set is tested once, also when
-you change back to it, and two looks at once start one test. Health's row reads "BMN tested 2.1.296 by itself Oct 11 ·
-it takes the setting" (or "the test failed", "the test showed nothing"; Codex adds "one prompt sent"); a failure, or
-three tries that showed nothing, is told once, naming the agents whose limit does not hold. Under each app's row Health
+you change back to it, and two looks at once start one test. Health's row keeps the saved value apart from what the
+test observed, what that proves and who acts next: "BMN tested 2.1.296 by itself Oct 11 · asked for 137 000, it reported
+137 000 · proves the limit for runs BMN starts, as --settings; where it summarises is not tested", "Tested on 0.164.0 · the
+test failed: … · not used; Test again… is yours", "the test showed nothing · BMN tries again by itself", "Not tested on
+2.1.310 · BMN tests it by itself", or "no automatic test: no agent has a limit here and the file holds no default"
+(Codex adds "one prompt sent"); a failure, or three tries that showed nothing, is told once, naming the agents whose
+limit does not hold. Under each app's row Health
 names every agent with a limit and whether a run started now applies it, not, or is refused, with the reason (judged
 from the test's own folder). `bmn roster check` never starts an app and writes nothing; for an untested version its step
 says "BMN tests it by itself when it starts, when Integrations > Health is read and after an update there".
 
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry: `applied` with the exact
-`argv` items (Codex) or `env` entries (Claude Code), `app-default`, `not-supported-yet` or `out-of-range`. `bmn roster
+`argv` items (Codex's `-c`, Claude Code's `--settings` text), `app-default`, `not-supported-yet` or `out-of-range`. `bmn roster
 check` resolves what the run would use and refuses with `CONTEXT_MISMATCH` (after the effort, before the destination)
 when that differs from the agent's limit or cannot be resolved, with `detail` `conflict`, `unresolved`, `missing`,
 `differs` or `out-of-range`. A PASS records `context_limit_applied`, or `context_limit_note` says why the agent's limit is
 not applied. For Codex a `-c` item wins, then the selected profile, then `config.toml`; a `.codex/config.toml` in or
 above the working folder, or `/etc/codex`, that sets a size leaves it unresolved unless the run carries its own item. For
-Claude Code every source naming a size (the run's environment, `env` in each settings file it loads, a settings file's
-`autoCompactWindow`) must name the same one, unless the installed version's test saw the run's environment win over each
-other source on the same side: then the run's size holds and the step names both, so an agent may keep its own limit
+Claude Code every source naming a size (the run's own `--settings`, its environment, `env` in each settings file it
+loads, a settings file's `autoCompactWindow`) must name the same one, unless the installed version's test saw the run's
+`--settings` win over each other source on the same side: then the run's size holds and the step names both, so an agent may keep its own limit
 while your sessions' default is larger. Any other disagreement is unresolved, the same file in another part included (a
 run started in your home folder reads your user settings a second time, as that folder's own). An agent without a limit
 is never asked for one.
@@ -1257,7 +1268,8 @@ lands and the exact diff, and writes after you confirm: only the named key chang
 `<file>.bmn-backup-<time>`, a file changed since the diff was shown is left alone, and a link is replaced by a regular
 file, its target never written. `bmn context set <app> --limit N|default` does the same in a terminal, with Yes/No.
 Claude Code's file is shared by every Claude Code agent, so one whose own limit differs from a default set there is
-refused until they agree.
+refused until they agree. A Claude Code change is refused while the same file names another size as `autoCompactWindow`,
+which BMN does not change, since which of the two the app follows was never tested.
 
 ### Skills
 

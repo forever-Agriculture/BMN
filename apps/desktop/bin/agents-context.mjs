@@ -17,9 +17,13 @@ import { thousands } from './shared-helpers.mjs'
  * Codex: `model_context_window` and `model_auto_compact_token_limit`, as `-c` items on a dispatch
  * and as top-level keys of config.toml for the owner's own sessions.
  * Claude Code: `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000), the size it keeps a
- * conversation within, in the dispatch environment and as an `env` entry of settings.json. Claude
- * Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or with
- * compaction off, so BMN does not use it. It has no separate setting for where summarising starts.
+ * conversation within, as an `env` entry of settings.json for the owner's own sessions and, for a
+ * dispatch, in a `--settings` text of its own that also names it as `autoCompactWindow` (Story 96.5):
+ * the dispatch environment loses to the owner's settings.json (2.1.310 reported its 450 000 when
+ * asked for 137 000 that way), while `--settings` outranks his files and is still read under
+ * `--restricted`. Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it
+ * does not know or with compaction off, so BMN does not use it. It has no separate setting for where
+ * summarising starts.
  */
 export const CONTEXT_CONTROLS = {
   codex: {
@@ -29,7 +33,7 @@ export const CONTEXT_CONTROLS = {
   },
   claude: {
     command: 'claude',
-    limit: { form: 'env', key: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', min: 100_000, max: 1_000_000 },
+    limit: { form: 'settings', key: 'CLAUDE_CODE_AUTO_COMPACT_WINDOW', min: 100_000, max: 1_000_000 },
     compact: null
   }
 }
@@ -41,6 +45,34 @@ export const CLAUDE_CONTEXT_KEY = CONTEXT_CONTROLS.claude.limit.key
 export const CONTEXT_TEST_SIZE = { codex: 123_000, claude: 137_000 }
 /** Claude Code's report rounds its window, so the test takes a size within one percent of the one asked for as that size. */
 const reportedAs = (asked, size) => Math.abs(size - asked) <= asked * 0.01
+
+/**
+ * The form a recorded test tried the setting in (Story 96.5): a record names it as `control`; one
+ * from before that names none tried the form each app had then. A test proves only the form it tried.
+ */
+const EARLIER_CONTROL = { codex: 'argv', claude: 'env' }
+export function contextTestControl(entry) {
+  return typeof entry?.control === 'string' ? entry.control : EARLIER_CONTROL[entry?.harness] ?? null
+}
+/** Whether a recorded test is one of this app's, of the form BMN applies the setting in now. */
+const appliesTo = (entry, harness) => entry.harness === harness && contextTestControl(entry) === CONTEXT_CONTROLS[harness]?.limit.form
+
+/** The `--settings` text that gives one Claude Code run its context size, and nothing else. */
+export function claudeContextSettings(size) {
+  return JSON.stringify({ env: { [CONTEXT_CONTROLS.claude.limit.key]: String(size) }, autoCompactWindow: size })
+}
+
+/** The size a `--settings` text names when it is exactly BMN's own (claudeContextSettings), or null. */
+export function claudeContextSettingsSize(text) {
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const size = data?.autoCompactWindow
+  return Number.isSafeInteger(size) && size > 0 && claudeContextSettings(size) === text ? size : null
+}
 
 export class ContextError extends Error {
   constructor(code, message) {
@@ -86,24 +118,24 @@ export function contextTests() {
   return entries
 }
 
-/** The last test of one app, whatever version it ran against, or null. */
+/** The last test of one app in the form BMN applies its setting in now, whatever version it ran against, or null. */
 function lastContextTest(harness, tests = contextTests()) {
   let last = null
-  for (const entry of tests) if (entry.harness === harness) last = entry
+  for (const entry of tests) if (appliesTo(entry, harness)) last = entry
   return last
 }
 
-/** The latest test of exactly this version of an app, or null. */
+/** The latest test of exactly this version of an app, in the form BMN applies its setting in now, or null. */
 function latestOf(harness, version, tests) {
   if (typeof version !== 'string') return null
   let last = null
-  for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
+  for (const entry of tests) if (appliesTo(entry, harness) && entry.version === version) last = entry
   return last
 }
 
 /**
- * Which of an app's settings a test proved on exactly this version. The latest test of that version
- * decides, so a later failure takes an earlier pass away. `standing` says how that version stands:
+ * Which of an app's settings a test proved on exactly this version, in the form BMN applies them in
+ * now. The latest such test of that version decides, so a later failure takes an earlier pass away. `standing` says how that version stands:
  * the latest test's outcome, `untested` with none, or `unknown` where the version could not be read.
  */
 export function provenControls(harness, version, tests = contextTests()) {
@@ -128,7 +160,7 @@ export function provenControls(harness, version, tests = contextTests()) {
 export function provenPrecedence(harness, version, tests = contextTests()) {
   if (typeof version !== 'string') return []
   const proofs = []
-  const all = tests.filter((entry) => entry.harness === harness && entry.version === version)
+  const all = tests.filter((entry) => appliesTo(entry, harness) && entry.version === version)
   for (let index = all.length - 1; index >= 0; index -= 1) {
     const shown = shownBy(all[index])
     if (shown === null) break
@@ -164,10 +196,11 @@ function untestedReason(app, harness, standing) {
 }
 
 /**
- * The items that apply an agent's context limit to one run: `-c key=value` pairs for Codex, or
- * `NAME=value` entries for the `env -i` in front of Claude Code. `state` says why there are none:
- * `app-default` (the agent has no limit), `not-supported-yet` (no proven setting on this version)
- * or `out-of-range` (the app does not take that size).
+ * The items that apply an agent's context limit to one run: `-c key=value` pairs for Codex, or one
+ * `--settings` text for Claude Code (claudeContextSettings), both in `argv`; `env` stays for a form
+ * that puts `NAME=value` in the `env -i` in front. `state` says why there are none: `app-default`
+ * (the agent has no limit), `not-supported-yet` (no proven setting on this version, or `proven.reason`
+ * where the caller's form is one no test covers) or `out-of-range` (the app does not take that size).
  */
 export function contextItems(agent, proven) {
   if (agent.context_limit === undefined) return { state: 'app-default' }
@@ -175,7 +208,7 @@ export function contextItems(agent, proven) {
   const app = appName(agent.harness)
   const base = { limit: agent.context_limit, ...(agent.compact_at === undefined ? {} : { compact_at: agent.compact_at }) }
   if (controls === undefined) return { state: 'not-supported-yet', ...base, reason: `BMN has no context setting for ${app}` }
-  if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: untestedReason(app, agent.harness, proven.standing) }
+  if (!proven.limit) return { state: 'not-supported-yet', ...base, reason: proven.reason ?? untestedReason(app, agent.harness, proven.standing) }
   const { min, max } = controls.limit
   if ((min !== undefined && agent.context_limit < min) || (max !== undefined && agent.context_limit > max)) {
     return { state: 'out-of-range', ...base, reason: `${app} takes ${thousands(min)} to ${thousands(max)} tokens` }
@@ -188,21 +221,39 @@ export function contextItems(agent, proven) {
   }
   return {
     state: 'applied', ...base, ...(compact === undefined ? {} : { compact }),
-    argv: controls.limit.form === 'argv' ? pairs.flatMap(([key, value]) => ['-c', `${key}=${value}`]) : [],
+    argv: controls.limit.form === 'argv' ? pairs.flatMap(([key, value]) => ['-c', `${key}=${value}`])
+      : controls.limit.form === 'settings' ? ['--settings', claudeContextSettings(agent.context_limit)] : [],
     env: controls.limit.form === 'env' ? pairs.map(([key, value]) => `${key}=${value}`) : []
   }
 }
 
 /**
- * The size a run gets when its own environment names one and other sources name another: the
- * environment's, but only where the owner's test of this version saw it win over each of those very
- * sources, on the same side. Otherwise null: two sizes stay no answer.
+ * What a research run of an agent may count as proven (Story 96.5). Claude Code's research form starts
+ * it with --safe-mode and takes no --settings, a form no test has tried, so the limit is not applied
+ * there and the run says why; a Codex research run carries the `-c` items its test tried.
+ */
+export function researchContextProven(agent, version, tests) {
+  if (agent.context_limit === undefined) return { limit: false, compact: false }
+  if (agent.harness === 'claude') {
+    return { limit: false, compact: false, standing: 'untested', reason: 'a research run starts Claude Code in --safe-mode without --settings, a form BMN has not tested, so the run gets the app\'s own size' }
+  }
+  return provenControls(agent.harness, version, tests)
+}
+
+/** The sources a run's own `--settings` text names a size in, by their identity (agents-check-routes). */
+export const OWN_CONTEXT_SOURCE = '--settings at the command line: '
+const ownSize = (entry) => entry.id.startsWith(OWN_CONTEXT_SOURCE)
+
+/**
+ * The size a run gets when its own `--settings` text names one and other sources name another: that
+ * text's, but only where the owner's test of this version saw it win over each of those very sources,
+ * on the same side. Otherwise null: two sizes stay no answer.
  */
 function settledByTest(resolved, precedence) {
   if (resolved?.limit?.conflict !== true || !Array.isArray(resolved.sizes)) return null
-  const own = resolved.sizes.filter((entry) => entry.id === 'environment')
-  if (own.length !== 1) return null
-  const rivals = resolved.sizes.filter((entry) => entry.id !== 'environment' && entry.value !== own[0].value)
+  const own = resolved.sizes.filter(ownSize)
+  if (own.length === 0 || own.some((entry) => entry.value !== own[0].value)) return null
+  const rivals = resolved.sizes.filter((entry) => !ownSize(entry) && entry.value !== own[0].value)
   const seen = (rival) => precedence.some((proof) => proof.id === rival.id && proof.side === (rival.value > own[0].value ? 'above' : 'below'))
   if (rivals.length === 0 || !rivals.every(seen)) return null
   return { value: own[0].value, source: `${own[0].source}, which the test of this version showed wins over ${rivals.map((rival) => `${rival.source} (${rival.value})`).join(' and ')}` }
@@ -608,6 +659,12 @@ export function planContextDefault(harness, { limit, compact = null }, { environ
     // an unverified control is never written). Until then a compaction point in the file stays exactly as it is.
     if (proven.compact) next = setTomlTopLevelKey(next, CODEX_CONTEXT_KEYS[1], limit === null ? null : compact)
   } else {
+    // settings.json may also name the size as autoCompactWindow, which BMN does not write: with another size there the
+    // change would be no answer, since which of the two Claude Code follows was never tested (Story 96.5).
+    const window = before === null ? undefined : parsedSettings(before).autoCompactWindow
+    if (window !== undefined && window !== 'auto' && window !== limit) {
+      throw new ContextError('INVALID_VALUE', `settings.json also sets autoCompactWindow to ${typeof window === 'number' ? thousands(window) : JSON.stringify(window)}, which BMN does not change; change it by hand first`)
+    }
     next = setJsonEnvEntry(next, CLAUDE_CONTEXT_KEY, limit)
   }
   const resolved = resolvedPath(path, state)
@@ -677,14 +734,15 @@ export function contextTestFolder(environment = process.env) {
   return `${environment.HOME || homedir()}/.bmn-context-test-`
 }
 
-/** What the test passes Claude Code: one answer to `/context`, kept nowhere. */
-export const CLAUDE_TEST_ARGUMENTS = ['-p', '--no-session-persistence', '--output-format', 'text']
+/** What the test passes Claude Code: one answer to `/context`, kept nowhere, and the size it asks for as a dispatch carries it. */
+export const CLAUDE_TEST_ARGUMENTS = ['-p', '--no-session-persistence', '--output-format', 'text', '--settings', claudeContextSettings(CONTEXT_TEST_SIZE.claude)]
 
 /**
  * Starts the app once in an empty throwaway folder under the home folder, asks it for a context
- * size no default equals, and records whether the app's own report shows that size: `pass`,
- * `fail`, `inconclusive` or `unavailable`, against the app's version. The prompt is synthetic and
- * names nothing of the owner's. Where summarising starts is not tested yet, so it stays unproven.
+ * size no default equals, in the form a dispatch carries it (`control`), and records whether the
+ * app's own report shows that size: `pass`, `fail`, `inconclusive` or `unavailable`, against the app's
+ * version. The prompt is synthetic and names nothing of the owner's. Where summarising starts is not
+ * tested (that would take filling a conversation), so it stays unproven.
  */
 export async function testContext(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000, by = undefined } = {}) {
   const controls = CONTEXT_CONTROLS[harness]
@@ -692,7 +750,7 @@ export async function testContext(harness, { environment = process.env, now = ne
   const asked = CONTEXT_TEST_SIZE[harness]
   const record = (limit, detail, version = null, observed = null, rivals = undefined) => {
     // `by` is set where BMN started the test by itself (63.1); the owner's own test carries none.
-    const entry = { harness, at: now.toISOString(), version, limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }), ...(by === undefined ? {} : { by }) }
+    const entry = { harness, at: now.toISOString(), version, control: controls.limit.form, limit, compact: 'untested', asked, observed, detail, ...(rivals === undefined ? {} : { rivals }), ...(by === undefined ? {} : { by }) }
     mkdirSync(dirname(contextTestsPath()), { recursive: true, mode: 0o700 })
     appendFileSync(contextTestsPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     return entry
@@ -719,7 +777,6 @@ export async function testContext(harness, { environment = process.env, now = ne
         : record('fail', `asked for ${asked}, but the session record shows ${observed}`, version, observed)
     }
     const command = CLAUDE_TEST_ARGUMENTS
-    const tested = { ...environment, [controls.limit.key]: String(asked) }
     // The owner's own files may name another size for this very run. Which ones do is kept with the
     // result: a pass then also shows that the run's own value wins over each of them on this version.
     const rivals = contextTestSources(harness, environment, folder)
@@ -730,7 +787,7 @@ export async function testContext(harness, { environment = process.env, now = ne
       return record('inconclusive', `${unclear.map((rival) => `${rival.source} says ${rival.value}`).join(' and ')}, which the app's report could not tell from the ${asked} this test asks for; the test can show nothing while that is so`, version)
     }
     const others = rivals.length === 0 ? '' : ` while ${rivals.map((rival) => `${rival.source} says ${rival.value}`).join(' and ')}`
-    const run = spawnSync(controls.command, command, { cwd: folder, env: tested, input: '/context', encoding: 'utf8', timeout: timeoutMs })
+    const run = spawnSync(controls.command, command, { cwd: folder, env: environment, input: '/context', encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', 'Claude Code did not answer (timeout or error)', version)
     const observed = claudeReportedWindow(run.stdout)
     if (observed === null) return record('inconclusive', 'Claude Code\'s context report names no window', version)
@@ -745,7 +802,7 @@ export async function testContext(harness, { environment = process.env, now = ne
 // ---------------------------------------------------------------------------------------------
 // BMN tests a new app version by itself (63.1)
 
-/** The approved, enabled agents on an app that have a context limit of their own: the ones a test of that app is for. */
+/** The approved, enabled agents on an app that have a context limit of their own: a test of that app is for them. */
 export function limitedAgents(data, harness) {
   return (data?.agents ?? []).filter((agent) => agent.harness === harness && agentState(agent) === 'active' && agent.context_limit !== undefined)
 }
@@ -782,24 +839,30 @@ function newSourceSet(harness, agents, last, tests, today) {
 /**
  * Which apps BMN should test by itself now, and why: `untested` (no test of the installed version on
  * record), `retry` (the latest one showed nothing) or `sources` (see newSourceSet; the entry then
- * names that set, so the caller starts one test for each set and no second one for the same). An app no
- * agent has a limit for is never named, nor is one whose version cannot be read, nor a version whose
- * latest test failed: that one waits for the owner. `versions` holds each app's installed version and
- * `sources` what a test started now would meet besides its own size (contextTestSources). The caller
- * bounds the tries, across restarts of BMN (Story 75.8).
+ * names that set, so the caller starts one test for each set and no second one for the same). A test
+ * is for the agents with a limit of their own on that app and for a default the owner's file holds
+ * (`defaults`, each app's size or null; Story 96.5), which is the app's own setting too. An app with
+ * neither is never named, nor is one whose version cannot be read, nor a version whose latest test
+ * failed: that one waits for the owner. `versions` holds each app's installed version and `sources`
+ * what a test started now would meet besides its own size (contextTestSources). The caller bounds the
+ * tries, across restarts of BMN (Story 75.8). Each entry names the form it tests (`control`).
  */
-export function contextAutoPlan({ data, versions, tests = contextTests(), sources = {} }) {
+export function contextAutoPlan({ data, versions, tests = contextTests(), sources = {}, defaults = {} }) {
   const plan = []
   for (const harness of CONTEXT_APPS) {
     const agents = limitedAgents(data, harness)
     const version = versions?.[harness]
-    if (agents.length === 0 || typeof version !== 'string') continue
+    const fileDefault = Number.isSafeInteger(defaults?.[harness]) ? defaults[harness] : null
+    if ((agents.length === 0 && fileDefault === null) || typeof version !== 'string') continue
     const last = latestOf(harness, version, tests)
     const set = last?.limit === 'pass' ? newSourceSet(harness, agents, last, tests, sources[harness]) : null
     const reason = last === null ? 'untested'
       : last.limit === 'inconclusive' || last.limit === 'unavailable' ? 'retry'
         : set !== null ? 'sources' : null
-    if (reason !== null) plan.push({ harness, version, reason, agents: agents.map((agent) => agent.name), ...(reason === 'sources' ? { set } : {}) })
+    if (reason !== null) {
+      plan.push({ harness, version, reason, control: CONTEXT_CONTROLS[harness].limit.form, agents: agents.map((agent) => agent.name),
+        ...(fileDefault === null ? {} : { default: fileDefault }), ...(reason === 'sources' ? { set } : {}) })
+    }
   }
   return plan
 }
@@ -819,7 +882,8 @@ const CONTEXT_USAGE = `Usage: bmn context check [--json]            Each app's d
 
 Apps: codex (config.toml: model_context_window, model_auto_compact_token_limit) and claude
 (settings.json env: CLAUDE_CODE_AUTO_COMPACT_WINDOW). An agent's own limit is applied to a dispatch by the
-items \`bmn roster role --json\` lists and checked by \`bmn roster check\`.`
+items \`bmn roster role --json\` lists (Codex -c items, Claude Code one --settings text) and checked by
+\`bmn roster check\`.`
 
 function sizeOption(value, name) {
   if (value === undefined) return undefined

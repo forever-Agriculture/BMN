@@ -8,7 +8,7 @@ import { isIP } from 'node:net'
 import { EFFORTS, RESEARCH_APPS, agentState, appName, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, bindSession, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
-import { contextItems, provenControls } from './agents-context.mjs'
+import { contextItems, researchContextProven } from './agents-context.mjs'
 import { openCodeAnswer, openCodeResearchArgv, openCodeSession } from './agents-opencode.mjs'
 import { writePrivate } from './agents-rules.mjs'
 import { NOTHING_STARTED, processLives, processStart, startSupervised } from './agents-supervised.mjs'
@@ -135,8 +135,7 @@ export function researchEffort(agent) {
  */
 export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined, codexHome = undefined, openCodeBase = undefined } = {}) {
   const effort = researchEffort(agent)
-  const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTests)
-  const context = contextItems(agent, proven)
+  const context = contextItems(agent, researchContextProven(agent, version, contextTests))
   // An OpenCode run starts from BMN's own OpenCode folder, never the owner's home; OpenCode has no context control BMN applies.
   if (agent.harness === 'opencode') return openCodeResearchArgv(agent, effort, { path: environment.PATH ?? '', ...(openCodeBase === undefined ? {} : { base: openCodeBase }) })
   const head = ['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`]

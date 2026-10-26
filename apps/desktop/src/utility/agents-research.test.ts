@@ -203,46 +203,27 @@ describe('who may research (60.10 AC1)', () => {
       reason: 'research runs in OpenCode only on a version whose fence test passed, and none is on record for opencode 2.0.29 with opencode-go/kimi-k3: the owner runs `bmn roster fence`, or picks a researcher on Claude Code' })
   })
 
-  it('offers an agent with its own context limit once the owner\'s test showed that limit wins over his default', () => {
-    // The owner's case: an agent capped at 100 000 while his own sessions' default says 450 000.
+  it('offers an agent with its own context limit, whose research runs say the limit is not applied there (Story 96.5)', () => {
+    // The owner's case: an agent capped at 100 000 while his own sessions' default says 450 000, and a test of this version
+    // that showed BMN's --settings text wins over it. A research run starts Claude Code in --safe-mode and carries no
+    // --settings, a form that test did not try, so its limit is not claimed there, whatever the owner's files say.
     const capped = EXAMPLE.replace('model: claude-opus-5-5', 'model: claude-opus-5-5\ncontext_limit: 100000')
     expect(capped).not.toBe(EXAMPLE)
     approve(capped)
     mkdirSync(join(home, '.claude'), { recursive: true })
     writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000 }))
     const log = join(home, '.config/bmn/agents/state/context-tests.jsonl')
-    const tested = { harness: 'claude', version: '2.1.295', limit: 'pass', compact: 'untested', asked: 137_000, observed: 137_000 }
-    writeFileSync(log, `${JSON.stringify(tested)}\n`)
-    expect(researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')).toMatchObject({ ok: false, why: 'two settings name different context sizes for it',
-      reason: expect.stringContaining('env -i CLAUDE_CODE_AUTO_COMPACT_WINDOW says 100000 and user settings autoCompactWindow says 450000') })
-    const opus = () => researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')
-    const proof = (...ids: string[]) => writeFileSync(log, `${JSON.stringify({ ...tested, rivals: ids.map((id) => ({ source: 'a settings file', id, value: 450_000 })) })}\n`)
     const user = `user settings at ${join(home, '.claude/settings.json')}: autoCompactWindow`
-    // The first form of the record named only a kind of source: it proves nothing.
-    writeFileSync(log, `${JSON.stringify({ ...tested, rivals: [{ kind: 'user settings autoCompactWindow', value: 450_000 }] })}\n`)
-    expect(opus()).toMatchObject({ ok: false, why: 'two settings name different context sizes for it' })
-    proof(user)
+    const tested = { harness: 'claude', version: '2.1.295', control: 'settings', limit: 'pass', compact: 'untested', asked: 137_000, observed: 137_000, rivals: [{ source: 'user settings autoCompactWindow', id: user, value: 450_000 }] }
+    writeFileSync(log, `${JSON.stringify(tested)}\n`)
+    const opus = () => researchers({ environment: env, now: NOW }).find((entry) => entry.id === 'opus')
     expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
-    // The offer reads the files a run would, in the parts they play for a run: a settings file in BMN's runs folder lies
-    // above a run's folder, so the proof that counts is the one for a file above, not for a folder's own.
-    const runs = join(home, '.config/bmn/agents/state/research/runs')
-    mkdirSync(join(runs, '.claude'), { recursive: true })
-    writeFileSync(join(runs, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 450000 }))
-    expect(opus()).toMatchObject({ ok: false, why: 'two settings name different context sizes for it' })
-    proof(user, `project settings at ${join(runs, '.claude/settings.json')}: autoCompactWindow`)
-    expect(opus()).toMatchObject({ ok: false })
-    proof(user, `settings above at ${join(runs, '.claude/settings.json')}: autoCompactWindow`)
+    const agent = readApproved().data.agents.find((entry) => entry.id === 'opus')!
+    const argv = researchArgv(agent, { environment: env, version: '2.1.295', contextTests: [tested as never] })
+    expect(argv.some((item) => item === '--settings' || item.startsWith('CLAUDE_CODE_AUTO_COMPACT_WINDOW='))).toBe(false)
+    // A size BMN cannot read changes nothing about a limit the run does not claim.
+    writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 'lots' }))
     expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
-    // Nothing counts that no run would read: a settings file in a folder beside the runs' own, under a name no run gets,
-    // or in a folder inside it, changes nothing about the offer.
-    for (const beside of ['offer', 'offer/cwd']) {
-      mkdirSync(join(runs, beside, '.claude'), { recursive: true })
-      writeFileSync(join(runs, beside, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 300000 }))
-    }
-    expect(opus()).toEqual({ id: 'opus', name: 'Opus', harness: 'claude', ok: true })
-    // A size BMN cannot read is said as that, not as two sizes.
-    writeFileSync(join(runs, '.claude/settings.json'), JSON.stringify({ autoCompactWindow: 'lots' }))
-    expect(opus()).toMatchObject({ ok: false, why: 'BMN cannot read which context size Claude Code would use', reason: expect.stringContaining('is not a whole number') })
   })
 
   it('remembers the researcher the owner picked', () => {

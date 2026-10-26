@@ -1034,22 +1034,34 @@ export function contextValueWords(row: Pick<ContextLimitView, 'limit' | 'compact
   return `${thousands(row.limit)} tokens${row.compact === null ? '' : ` · summarises at ${thousands(row.compact)}`}`
 }
 
+/** What a passed test of an app proves, beside what it does not: where the app starts summarising is never tested (that would take filling a conversation). */
+const CONTEXT_PROOF: Record<ContextLimitView['harness'], string> = {
+  claude: 'proves the limit for runs BMN starts, as --settings; where it summarises is not tested',
+  codex: 'proves model_context_window; where it summarises is not tested'
+}
+
 /**
- * Whether BMN may use the app's setting on the installed version, and why not when it may not (60.9 AC1).
- * A test BMN ran by itself says so, with its day, the version and what came of it (63.1 AC5).
+ * How the app's setting stands on the installed version (60.9 AC1), in parts that stay apart (Story 96.5): what the latest
+ * test of this version observed and who ran it (63.1 AC5), what a pass proves, and who acts next: BMN's own test, the
+ * owner's Test again…, or no one because nothing calls for a test. The saved value is contextValueWords.
  */
-export function contextStateWords(row: Pick<ContextLimitView, 'harness' | 'limitProven' | 'version' | 'test'>): string {
+export function contextStateWords(row: Pick<ContextLimitView, 'harness' | 'version' | 'test' | 'autoTest'>): string {
   if (row.version === null) return 'Not supported yet · the app is not found'
   const last = row.test !== null && row.test.version === row.version ? row.test : null
-  // Codex's test sends one short request to its provider; Claude Code's asks for its own report (Story 75.8 AC2).
-  const spent = last !== null && row.harness === 'codex' ? ' · one prompt sent' : ''
-  // A failure says why in the test's own words, such as a setting of the owner's that outranks the agent's limit (Story 90.9).
-  const why = last?.outcome === 'fail' && last.detail !== '' ? `: ${last.detail}` : ''
-  if (last?.by === 'bmn') {
-    return `BMN tested ${row.version} by itself ${shortDate(last.at)} · ${last.outcome === 'pass' ? 'it takes the setting' : last.outcome === 'fail' ? `the test failed${why}` : 'the test showed nothing'}${spent}`
+  if (last === null) {
+    return `Not tested on ${row.version} · ${row.autoTest === 'scheduled' ? 'BMN tests it by itself'
+      : row.autoTest === 'not-needed' ? 'no automatic test: no agent has a limit here and the file holds no default' : 'no automatic test is scheduled'}`
   }
-  if (row.limitProven) return `Setting tested on ${row.version}${spent}`
-  return `Not supported yet · ${last?.outcome === 'fail' ? `the test failed on ${row.version}${why}` : last?.outcome === 'inconclusive' ? `the test was inconclusive on ${row.version}` : `BMN tests ${row.version} by itself`}${spent}`
+  // Codex's test sends one short request to its provider; Claude Code's asks for its own report (Story 75.8 AC2).
+  const spent = row.harness === 'codex' ? ' · one prompt sent' : ''
+  const who = last.by === 'bmn' ? `BMN tested ${row.version} by itself ${shortDate(last.at)}` : `Tested on ${row.version}`
+  if (last.outcome === 'pass') {
+    const seen = last.observed === null ? '' : ` · asked for ${thousands(last.asked)}, it reported ${thousands(last.observed)}`
+    return `${who}${seen} · ${CONTEXT_PROOF[row.harness]}${spent}`
+  }
+  // A failure says why in the test's own words, such as a setting of the owner's that outranks the agent's limit (Story 90.9).
+  if (last.outcome === 'fail') return `${who} · the test failed${last.detail === '' ? '' : `: ${last.detail}`} · not used; Test again… is yours${spent}`
+  return `${who} · the test showed nothing · ${row.autoTest === 'scheduled' ? 'BMN tries again by itself' : 'no automatic test is scheduled'}${spent}`
 }
 
 /**
@@ -1184,7 +1196,7 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
           </div>
         )
       })}
-      <p className="preferences-help">When an agent has a limit of its own, BMN tests each new version of its app by itself, once, in an empty folder.</p>
+      <p className="preferences-help">When an agent has a limit of its own or the app&apos;s file holds a default, BMN tests each new version of the app by itself, once, in an empty folder.</p>
       <p className="preferences-help">Claude Code is asked for its context report; Codex sends one short request to its provider. Nothing of yours is in it.</p>
       <p className="preferences-help">A limit changes only on a version whose test passed; an agent&apos;s own limit waits for the next automatic test.</p>
       <p className="preferences-help">An agent&apos;s own limit, set on its page, is added to each run BMN or dev-auto starts with it on a tested version.</p>

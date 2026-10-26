@@ -597,10 +597,10 @@ const RULES: RulesSnapshot = {
   ],
   context: [
     { harness: 'codex', path: '/home/synthetic/.codex/config.toml', exists: true, limit: 380000, compact: 342000, version: '0.171.0', limitProven: false, compactProven: false,
-      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850' }, agents: ['Sol', 'Astra', 'Luna'],
+      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850', asked: 123000, observed: 116850 }, autoTest: 'scheduled', agents: ['Sol', 'Astra', 'Luna'],
       limits: [{ agent: 'Sol', limit: 272000, state: 'not-applied', reason: 'the context setting is not tested on this Codex version yet; BMN tests it by itself when it starts' }] },
     { harness: 'claude', path: '/home/synthetic/.claude/settings.json', exists: true, limit: null, compact: null, version: '2.1.295', limitProven: true, compactProven: false, min: 100000, max: 1000000,
-      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'], limits: [] }
+      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000', asked: 137000, observed: 137000 }, autoTest: 'none', agents: ['Opus', 'Fable'], limits: [] }
   ],
   autoTests: { running: null, stopped: [] },
   readOnlyRoles: { held: ['epic-reviewer'], proposed: [] },
@@ -1162,8 +1162,8 @@ describe('context limits (60.9 AC3, AC4)', () => {
 
   it('shows one row per app: its file, who shares it, the default it holds and whether the setting is tested', () => {
     expect(markup).toContain('<h4 class="group-head">Context limits<span class="caption">how large a conversation may grow in sessions you start yourself</span></h4>')
-    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not supported yet · BMN tests 0.171.0 by itself<\/span>/)
-    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Setting tested on 2.1.295<\/span>/)
+    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not tested on 0.171.0 · BMN tests it by itself<\/span>/)
+    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Tested on 2.1.295 · asked for 137 000, it reported 137 000 · proves the limit for runs BMN starts, as --settings; where it summarises is not tested<\/span>/)
   })
 
   it('offers Change… only where the test passed on the installed version', () => {
@@ -1176,11 +1176,26 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextValueWords({ limit: null, compact: null })).toBe('App default')
     expect(contextValueWords({ limit: 272000, compact: null })).toBe('272 000 tokens')
     expect(contextValueWords({ limit: 272000, compact: null, unreadable: 'config.toml model_context_window is not a whole number' })).toBe("Can't be read")
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: null, test: null })).toBe('Not supported yet · the app is not found')
-    // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report.
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0: d · one prompt sent')
-    expect(contextStateWords({ harness: 'claude', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · BMN tests 0.162.0 by itself')
+    const test = (version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable', observed: number | null = null) => ({ at: 'x', version, outcome, detail: 'd', asked: 123000, observed })
+    expect(contextStateWords({ harness: 'codex', version: null, test: null, autoTest: 'scheduled' })).toBe('Not supported yet · the app is not found')
+    // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report. A failure waits for the owner.
+    expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.162.0', 'fail', 380000), autoTest: 'none' })).toBe('Tested on 0.162.0 · the test failed: d · not used; Test again… is yours · one prompt sent')
+    expect(contextStateWords({ harness: 'claude', version: '0.162.0', test: test('0.162.0', 'inconclusive'), autoTest: 'scheduled' })).toBe('Tested on 0.162.0 · the test showed nothing · BMN tries again by itself')
+    expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.161.0', 'pass', 116850), autoTest: 'scheduled' })).toBe('Not tested on 0.162.0 · BMN tests it by itself')
+  })
+
+  it('keeps the saved value, what the test observed, what it proves and who acts next apart, and promises no test that is not coming (Story 96.5 AC2, AC3)', () => {
+    const pass = { at: 'x', version: '0.164.0', outcome: 'pass' as const, detail: 'asked for 123000; the session record shows 116850', asked: 123000, observed: 116850 }
+    // What a pass proves is named, and what it does not: summarising is never tested.
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: pass, autoTest: 'none' }))
+      .toBe('Tested on 0.164.0 · asked for 123 000, it reported 116 850 · proves model_context_window; where it summarises is not tested · one prompt sent')
+    // A default in the app's file alone is a reason to test; with neither a default nor an agent's limit nothing is promised.
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'scheduled' })).toBe('Not tested on 0.164.0 · BMN tests it by itself')
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'not-needed' })).toBe('Not tested on 0.164.0 · no automatic test: no agent has a limit here and the file holds no default')
+    expect(contextStateWords({ harness: 'claude', version: '2.1.310', test: { ...pass, version: '2.1.310', outcome: 'inconclusive', observed: null }, autoTest: 'none' }))
+      .toBe('Tested on 2.1.310 · the test showed nothing · no automatic test is scheduled')
+    // The synthetic size a test asks for is said only as what was asked, never as a value to choose.
+    expect(markup).not.toMatch(/<option[^>]*>137/)
   })
 
   it('has no switch: BMN tests by itself, and the help says what a test starts and costs (63.1 AC4; Story 75.8 AC3)', () => {
@@ -1200,14 +1215,19 @@ describe('context limits (60.9 AC3, AC4)', () => {
 
   it('says of a test BMN ran by itself that it did, with its day, the version and what came of it, and while one runs (63.1 AC5)', () => {
     const at = '2026-10-09T20:00:00.000Z'
-    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', limitProven: outcome === 'pass', version: '2.1.296', test: { at, version: '2.1.296', outcome, detail: 'd', by: 'bmn' } })
-    expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · it takes the setting`)
-    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed: d`)
-    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing`)
-    // A test of another version is not this version's, whoever ran it; the owner's own test reads as before.
-    expect(contextStateWords({ harness: 'claude', limitProven: false, version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('Not supported yet · BMN tests 2.1.297 by itself')
-    expect(contextStateWords({ harness: 'claude', limitProven: true, version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd' } })).toBe('Setting tested on 2.1.296')
-    expect(contextStateWords({ harness: 'codex', limitProven: true, version: '0.171.0', test: { at, version: '0.171.0', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe(`BMN tested 0.171.0 by itself ${shortDate(at)} · it takes the setting · one prompt sent`)
+    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', version: '2.1.296',
+      test: { at, version: '2.1.296', outcome, detail: 'd', asked: 137000, observed: outcome === 'pass' ? 137000 : null, by: 'bmn' }, autoTest: outcome === 'inconclusive' ? 'scheduled' : 'none' })
+    const proves = 'proves the limit for runs BMN starts, as --settings; where it summarises is not tested'
+    expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · asked for 137 000, it reported 137 000 · ${proves}`)
+    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed: d · not used; Test again… is yours`)
+    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing · BMN tries again by itself`)
+    // A test of another version is not this version's, whoever ran it; the owner's own test says no one.
+    expect(contextStateWords({ harness: 'claude', version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', asked: 137000, observed: 137000, by: 'bmn' }, autoTest: 'scheduled' }))
+      .toBe('Not tested on 2.1.297 · BMN tests it by itself')
+    expect(contextStateWords({ harness: 'claude', version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', asked: 137000, observed: 137000 }, autoTest: 'none' }))
+      .toBe(`Tested on 2.1.296 · asked for 137 000, it reported 137 000 · ${proves}`)
+    expect(contextStateWords({ harness: 'codex', version: '0.171.0', test: { at, version: '0.171.0', outcome: 'pass', detail: 'd', asked: 123000, observed: 116850, by: 'bmn' }, autoTest: 'none' }))
+      .toBe(`BMN tested 0.171.0 by itself ${shortDate(at)} · asked for 123 000, it reported 116 850 · proves model_context_window; where it summarises is not tested · one prompt sent`)
     const running = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'context', harness: 'claude' }, stopped: [] } } }))
     expect(running).toMatch(/<span class="faint" title="[^"]*">BMN is testing Claude Code now…<\/span>/)
     expect(running).not.toContain('BMN is testing Codex')
