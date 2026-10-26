@@ -6,13 +6,14 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { agentsDirectory } from '../../apps/desktop/bin/agents-roster.mjs'
 import { approvedIfAny } from '../../apps/desktop/bin/agents-state.mjs'
-import { CALIBRATION_FLAGS, approvedTeam, assertDisposable, calibrationEnvironment, fingerprint, launchCalibration, tracedAccess, watchedHomes } from '../measure/calibration-environment.mjs'
+import { CALIBRATION_FLAGS, approvedTeam, assertDisposable, calibrationEnvironment, fingerprint, launchCalibration, tracedAccess, tracedSummary, watchedHomes } from '../measure/calibration-environment.mjs'
 
 const ROOT = '/synthetic/bmn-development-x'
 const roots = Object.fromEntries(['config', 'data', 'state', 'runtime', 'cache'].map((name) => [name, `${ROOT}/${name}`]))
 const CALLER = Object.freeze({
   HOME: '/synthetic/owner-home', PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: '/run/user/1000', WAYLAND_DISPLAY: 'wayland-0',
-  BMN_CONTROL_SOCKET: '/synthetic/socket', AITERM_SESSION_ID: 'synthetic', PROMPT_COMMAND: 'history -a', LANG: 'C.UTF-8'
+  BMN_CONTROL_SOCKET: '/synthetic/socket', AITERM_SESSION_ID: 'synthetic', PROMPT_COMMAND: 'history -a', LANG: 'C.UTF-8',
+  TERMINFO_DIRS: '/synthetic/owner-home/.local/share/ai-terminal/terminfo:', TERMINFO: '/synthetic/owner-home/.terminfo'
 })
 let made = []
 afterEach(() => { for (const folder of made) rmSync(folder, { recursive: true, force: true }); made = [] })
@@ -28,6 +29,8 @@ describe('the calibration child\'s environment (Story 96.4)', () => {
       BMN_CONFIG_HOME: `${roots.config}/bmn`, BMN_LAUNCH_CWD: ROOT, WAYLAND_DISPLAY: '/run/user/1000/wayland-0', PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', SHELL: '/bin/bash' })
     // Nothing of the caller's BMN session rides along.
     expect(Object.keys(env).filter((name) => name.startsWith('AITERM_') || name === 'PROMPT_COMMAND' || name === 'BMN_CONTROL_SOCKET')).toEqual([])
+    // Nor the terminfo folders a BMN session names: the owner's BMN data folder, which the probe saw BMN look up (96 review).
+    expect(Object.keys(env).filter((name) => name.startsWith('TERMINFO'))).toEqual([])
     expect(() => assertDisposable(env, caller, ROOT)).not.toThrow()
   })
 
@@ -124,7 +127,17 @@ describe('what the probe reads (Story 96.4)', () => {
       '203 statx(AT_FDCWD, "/synthetic/real-home/.claude", AT_STATX_SYNC_AS_STAT, STATX_ALL, 0x7ffd) = -1 ENOENT (No such file or directory)',
       '204 openat(AT_FDCWD, "/synthetic/real-home/code/BMN-other/x", O_RDONLY) = 3'
     ].join('\n')
-    expect(tracedAccess(real, ['/synthetic/real-home'], ['/synthetic/real-home/code/BMN']).map((line) => line.split(' ')[0])).toEqual(['201', '203', '204'])
+    expect(tracedAccess(real, ['/synthetic/real-home'], { except: ['/synthetic/real-home/code/BMN'] }).map((line) => line.split(' ')[0])).toEqual(['201', '203', '204'])
+    // Resolving this checkout looks its parents up, by exactly those paths; opening one, or a sibling, still counts.
+    const parents = [
+      '301 readlink("/synthetic/real-home", 0x7ffd8f1b44a0, 1023) = -1 EINVAL (Invalid argument)',
+      '302 newfstatat(AT_FDCWD, "/synthetic/real-home/code", {st_mode=S_IFDIR|0775, st_size=4096, ...}, 0) = 0',
+      '303 openat(AT_FDCWD, "/synthetic/real-home", O_RDONLY|O_DIRECTORY) = 3',
+      '304 readlink("/synthetic/real-home/code/other", 0x7ffd8f1b44a0, 1023) = -1 EINVAL (Invalid argument)'
+    ].join('\n')
+    const seen = tracedAccess(parents, ['/synthetic/real-home'], { except: ['/synthetic/real-home/code/BMN'], ancestorsOf: ['/synthetic/real-home/code/BMN'] })
+    expect(seen.map((line) => line.split(' ')[0])).toEqual(['303', '304'])
+    expect(tracedSummary([...seen, seen[0]])).toEqual(['2 openat /synthetic/real-home', '1 readlink /synthetic/real-home/code/other'])
   })
 
   it('watches the caller\'s home and the account\'s own home from the password file, each once (96 review)', () => {

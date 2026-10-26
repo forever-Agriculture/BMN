@@ -15,8 +15,8 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const app = join(repo, 'apps/desktop')
 
 /**
- * The calibration child's environment, built from the caller's without changing it: BMN's and AITERM_ variables and
- * PROMPT_COMMAND dropped; every XDG and BMN root and each agent's config folder inside the disposable `roots`; and the
+ * The calibration child's environment, built from the caller's without changing it: BMN's and AITERM_ variables,
+ * PROMPT_COMMAND and the terminfo folders a BMN session names (its own data folder, which BMN looks up) dropped; every XDG and BMN root and each agent's config folder inside the disposable `roots`; and the
  * child's HOME a folder inside `root` too, so what BMN or an app finds through the home (BMN's agents folder through
  * agentsDirectory(), its tries file, ~/.claude, ~/.codex, a shell's rc files) is the fixture's, never the owner's.
  * agentsDirectory() itself is unchanged: it resolves from this home as it always does.
@@ -24,7 +24,8 @@ const app = join(repo, 'apps/desktop')
 export function calibrationEnvironment(caller, { root, roots }) {
   const runtime = caller.XDG_RUNTIME_DIR
   const wayland = runtime && caller.WAYLAND_DISPLAY && !isAbsolute(caller.WAYLAND_DISPLAY) ? join(runtime, caller.WAYLAND_DISPLAY) : caller.WAYLAND_DISPLAY
-  const kept = Object.fromEntries(Object.entries(caller).filter(([name]) => name !== 'PROMPT_COMMAND' && !name.startsWith('BMN_') && !name.startsWith('AITERM_')))
+  const dropped = new Set(['PROMPT_COMMAND', 'TERMINFO', 'TERMINFO_DIRS'])
+  const kept = Object.fromEntries(Object.entries(caller).filter(([name]) => !dropped.has(name) && !name.startsWith('BMN_') && !name.startsWith('AITERM_')))
   return {
     ...kept, SHELL: '/bin/bash', HOME: join(root, 'home'),
     XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
@@ -64,7 +65,8 @@ export const CALIBRATION_FLAGS = ['--password-store=basic']
  */
 export function launchCalibration({ electronPath, flags = [], cwd, env, trace = null, stdio = ['ignore', 'ignore', 'pipe'], appPath = app }) {
   const argv = [...CALIBRATION_FLAGS, ...flags, appPath]
-  const command = trace === null ? [electronPath, argv] : ['strace', ['-f', '-qq', '-e', 'trace=%file', '-o', trace, '--', electronPath, ...argv]]
+  // -s 4096: whole paths, never the 32 characters strace prints by default.
+  const command = trace === null ? [electronPath, argv] : ['strace', ['-f', '-qq', '-s', '4096', '-e', 'trace=%file', '-o', trace, '--', electronPath, ...argv]]
   return spawn(command[0], command[1], { cwd, env, stdio, detached: true })
 }
 
@@ -85,18 +87,34 @@ export function fingerprint(folder) {
   return rows
 }
 
+/** The calls that only look a path up: resolving a folder BMN runs from passes its parents this way, reading nothing in them. */
+const LOOKUPS = new Set(['readlink', 'readlinkat', 'stat', 'lstat', 'newfstatat', 'statx', 'access', 'faccessat', 'faccessat2'])
+
 /**
  * The lines of an strace -f file trace that name a path inside one of `folders` and not inside one of `except` (its own
- * process ids kept).
+ * process ids kept). A folder in `ancestorsOf` may have each of its parents looked up, by exactly that path, and no more.
  */
-export function tracedAccess(traceText, folders, except = []) {
+export function tracedAccess(traceText, folders, { except = [], ancestorsOf = [] } = {}) {
   const within = (path, root) => path === root || path.startsWith(`${root}/`)
   const roots = folders.map((folder) => resolve(folder))
   const kept = except.map((folder) => resolve(folder))
+  const parents = ancestorsOf.map((folder) => resolve(folder))
   return traceText.split('\n').filter((line) => {
+    const call = /^\d+\s+([a-z0-9_]+)\(/u.exec(line)?.[1]
     const quoted = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/gu)].map((match) => match[1])
-    return quoted.some((path) => roots.some((root) => within(path, root)) && !kept.some((root) => within(path, root)))
+    return quoted.some((path) => roots.some((root) => within(path, root)) && !kept.some((root) => within(path, root)) &&
+      !(LOOKUPS.has(call) && parents.some((folder) => folder.startsWith(`${path}/`))))
   })
+}
+
+/** What a list of traced lines touched, for a receipt: each call and path once, with how often, the most first. */
+export function tracedSummary(lines, limit = 40) {
+  const counts = new Map()
+  for (const line of lines) {
+    const key = `${/^\d+\s+([a-z0-9_]+)\(/u.exec(line)?.[1] ?? '?'} ${/"((?:[^"\\]|\\.)*)"/u.exec(line)?.[1] ?? ''}`
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([key, count]) => `${count} ${key}`)
 }
 
 /**
@@ -218,7 +236,7 @@ export async function proveIsolation({ build = calibrationEnvironment, waitMs = 
       const traceText = existsSync(trace) ? readFileSync(trace, 'utf8') : null
       // The synthetic outside home, and the real ones (96 review) but for this checkout and the probe's own folders.
       const homes = watchedHomes()
-      const touched = traceText === null ? null : new Set([...tracedAccess(traceText, [outside]), ...tracedAccess(traceText, homes, [repo, work, root])])
+      const touched = traceText === null ? null : new Set([...tracedAccess(traceText, [outside]), ...tracedAccess(traceText, homes, { except: [repo, work, root], ancestorsOf: [repo] })])
       const traced = touched === null ? null : traceText.split('\n').filter((line) => touched.has(line))
       // What BMN wrote in the disposable team folder: the exact paths the receipt records beside the outside ones.
       const disposableTeam = env.HOME !== caller.HOME && existsSync(team) ? fingerprint(team).map((row) => `${row.kind} ${row.path}`) : []
@@ -226,7 +244,7 @@ export async function proveIsolation({ build = calibrationEnvironment, waitMs = 
       const result = traced === null ? 'UNABLE' : refused === null && triesWritten && traced.length === 0 && !changed ? 'PASS' : 'FAIL'
       return {
         result, refused, triesWritten, sentinelChanged: changed, tracedOutside: traced === null ? null : traced.length, watchedHomes: homes.length,
-        tracedSample: (traced ?? []).slice(0, 12), traceLines: traceText === null ? null : traceText.split('\n').length, disposableTeam,
+        tracedSample: (traced ?? []).slice(0, 12), tracedSummary: tracedSummary(traced ?? []), traceLines: traceText === null ? null : traceText.split('\n').length, disposableTeam,
         before, after, leftovers, waitedMs: Date.now() - started,
         ...isolationIdentity(),
         ...(result === 'PASS' ? {} : { log: log.slice(-2_000) })
