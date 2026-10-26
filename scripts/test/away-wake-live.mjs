@@ -286,8 +286,9 @@ async function run(scenario, binary) {
         const quit = async () => { await input.focus(); await page.keyboard.press('Control+X'); await sleep(300); await page.keyboard.press('q') }
         // The fixture's agent, which the stand-in answers as one: run 2 (evidence 96.3) once found OpenCode's own Build agent
         // selected after a restart that followed two reloads. Tab moves to the next primary agent; the report says if it was needed.
+        // xterm's DOM rows draw a blank cell as a no-break space, so the composer's name row is read with plain spaces.
         const fixtureAgent = async () => {
-          const shown = async () => (await screen().catch(() => '')).split('\n').find((line) => /^ {2}┃ {2}\S.* · /u.test(line)) ?? ''
+          const shown = async () => (await screen().catch(() => '')).replace(/\u00a0/gu, ' ').split('\n').find((line) => /^ {2}┃ {2}\S.* · /u.test(line)) ?? ''
           const first = await shown()
           for (let turn = 0; turn < 4 && !/┃ {2}Bmn-Probe · /u.test(await shown()); turn += 1) { await input.focus(); await page.keyboard.press('Tab'); await sleep(700) }
           return { first: first.trim(), now: (await shown()).trim() }
