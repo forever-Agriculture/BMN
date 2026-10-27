@@ -151,14 +151,15 @@ true or useful: reread it once as a stranger would.
   Artifact wraps the page in its own doctype and charset, so publish a copy without the page's
   first three tags (`<!doctype html>`, `<html lang="en">`, `<meta charset="utf-8">`):
   `sed '1,6{/^<!doctype html>$/d;/^<html lang="en">$/d;/^<meta charset="utf-8">$/d}' page.html > page.artifact.html`.
-  An update republishes that copy's path to the same URL. Then open the Artifact link in the
-  owner's default browser.
+  An update republishes that copy's path to the same URL. The publish opens the new page for the
+  owner by itself; do not open its link again, which only adds a second tab of the same page.
 - **Codex, OpenCode or anything else in a BMN session**: `bmn publish page.html --key
   <work>-<first12 of the page's sha256>` and give the reader the id it prints; changed bytes need a
   new key, a retry of the same bytes keeps its key. Then open the **checked local page** in the
   owner's default browser: BMN's stored copy has no web link and its Open action refuses HTML.
-- **Open without asking**: `xdg-open "<link or absolute path>"` on Linux, `open "<…>"` on macOS,
-  right after publishing. Record its exit code. A failed or unavailable open never blocks: report
-  it with the page's link or path and go on.
+- **Open without asking**, once: a Claude Code publish has done it (record `opened by publish`);
+  otherwise `xdg-open "<absolute path>"` on Linux, `open "<…>"` on macOS, right after publishing,
+  and record its exit code. A failed or unavailable open never blocks: report it with the page's
+  link or path and go on.
 - Keep the source file next to the work's evidence (dev-auto: `.dev-auto/evidence/<epic>/report-artifact/`).
 - A page goes to anyone beyond the owner only when he says so.
