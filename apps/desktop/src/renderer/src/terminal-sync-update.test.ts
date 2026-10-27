@@ -52,7 +52,7 @@ describe('the end of a synchronized update (Story 91.2)', () => {
 describe('direct browser redraws during a synchronized update (Story 87.2)', () => {
   function browserHarness() {
     const { terminal, refresh, write } = harness(false)
-    const renderer = { renderRows: vi.fn() }
+    const renderer = { renderRows: vi.fn(), clear: vi.fn() }
     const service = {
       _renderer: { value: renderer },
       setRenderer(next: typeof renderer): void { this._renderer.value = next }
@@ -81,7 +81,7 @@ describe('direct browser redraws during a synchronized update (Story 87.2)', () 
     const { terminal, write, renderer, service } = browserHarness()
     const original = renderer.renderRows
     const originalSetRenderer = service.setRenderer
-    const replacement = { renderRows: vi.fn() }
+    const replacement = { renderRows: vi.fn(), clear: vi.fn() }
     const replacementOriginal = replacement.renderRows
     const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
     service.setRenderer(replacement)
@@ -105,6 +105,73 @@ describe('direct browser redraws during a synchronized update (Story 87.2)', () 
     synchronization.dispose()
     expect(renderer.renderRows).toBe(otherRender)
     expect(service.setRenderer).toBe(otherSetRenderer)
+    terminal.dispose()
+  })
+
+  it('queues a destructive clear as a full refresh and forwards ordinary clears unchanged', async () => {
+    const { terminal, refresh, write, renderer } = browserHarness()
+    const original = renderer.clear
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    await write('\x1b[?2026h')
+    renderer.clear()
+    expect(original).not.toHaveBeenCalled()
+    expect(refresh).toHaveBeenCalledWith(0, terminal.rows - 1)
+    await write('\x1b[?2026l')
+    renderer.clear()
+    expect(original).toHaveBeenCalledExactlyOnceWith()
+    expect(original.mock.contexts[0]).toBe(renderer)
+    synchronization.dispose()
+    expect(renderer.clear).toBe(original)
+    terminal.dispose()
+  })
+
+  it('restores both methods when a renderer is replaced', () => {
+    const { terminal, renderer, service } = browserHarness()
+    const original = { clear: renderer.clear, renderRows: renderer.renderRows }
+    const replacement = { renderRows: vi.fn(), clear: vi.fn() }
+    const replacementClear = replacement.clear
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    service.setRenderer(replacement)
+    expect(renderer.clear).toBe(original.clear)
+    expect(renderer.renderRows).toBe(original.renderRows)
+    synchronization.dispose()
+    expect(replacement.clear).toBe(replacementClear)
+    terminal.dispose()
+  })
+
+  it('leaves restored guards passive when a later owner unwraps after synchronization disposal', async () => {
+    const { terminal, refresh, write, renderer } = browserHarness()
+    const original = { clear: renderer.clear, renderRows: renderer.renderRows }
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    const captured = { clear: renderer.clear, renderRows: renderer.renderRows }
+    renderer.clear = vi.fn(() => captured.clear.call(renderer))
+    renderer.renderRows = vi.fn((start, end) => captured.renderRows.call(renderer, start, end))
+    await write('\x1b[?2026h')
+    synchronization.dispose()
+    renderer.clear = captured.clear
+    renderer.renderRows = captured.renderRows
+    refresh.mockClear()
+    renderer.clear()
+    renderer.renderRows(1, 3)
+    expect(original.clear).toHaveBeenCalledExactlyOnceWith()
+    expect(original.renderRows).toHaveBeenCalledExactlyOnceWith(1, 3)
+    expect(refresh).not.toHaveBeenCalled()
+    terminal.dispose()
+  })
+
+  it('restores an earlier renderer owner without bypassing it', async () => {
+    const { terminal, write, renderer } = browserHarness()
+    const original = renderer.clear
+    const earlier = vi.fn(() => original.call(renderer))
+    renderer.clear = earlier
+    const synchronization = redrawOnlyWrittenRows(terminal as unknown as Terminal)
+    await write('\x1b[?2026h')
+    renderer.clear()
+    expect(earlier).not.toHaveBeenCalled()
+    synchronization.dispose()
+    expect(renderer.clear).toBe(earlier)
+    renderer.clear()
+    expect(original).toHaveBeenCalledExactlyOnceWith()
     terminal.dispose()
   })
 })

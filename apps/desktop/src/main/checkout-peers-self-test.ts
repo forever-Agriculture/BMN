@@ -1,3 +1,4 @@
+// MODULE: checkout-peers-self-test.ts - Real checkout warning actions preserve settled terminal views
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -52,6 +53,43 @@ export async function runCheckoutPeersSelfTest(window: BrowserWindow, params: {
     await wait(() => form.querySelector('.repository-identity')?.textContent.includes('Branch main') &&
       !form.querySelector('button[type="submit"]').disabled, 'initial checkout preview');
     if (form.textContent.includes('share this checkout')) throw new Error('clear checkout was reported as shared');
+    // The preceding fixture selects Ordinary Git probe. Its hidden-window resize callbacks can still
+    // be queued after that selection has rendered; finish setup before measuring these actions.
+    const setupSessions = await window.aiTerminal.listSessions(workspaceId);
+    const expected = setupSessions.filter(session => session.name === 'Ordinary Git probe');
+    if (expected.length !== 1) throw new Error('checkout peers: expected setup session unavailable');
+    const expectedId = expected[0].sessionId;
+    const visibleIds = () => [...document.querySelectorAll('.session-terminal:not(.session-terminal-hidden)')]
+      .map(element => element.dataset.sessionId).sort();
+    const counters = () => Object.fromEntries(Object.entries(window.__aitermTest?.snapshots() ?? {})
+      .map(([id, state]) => [id, { refits: state.refits, inputEvents: state.inputEvents,
+        cols: state.cols, rows: state.rows }]));
+    const frame = () => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('checkout peers: setup frame stalled')), 3000);
+      requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
+    });
+    const settledIds = JSON.stringify([expectedId]);
+    const sameVisibleLayout = async () => {
+      const host = await window.aiTerminal.getLayout(workspaceId);
+      return JSON.stringify(host.layout.split.panes.map(pane => pane.sessionId).sort()) === settledIds &&
+        JSON.stringify(visibleIds()) === settledIds &&
+        document.querySelector('.session-row > button[data-session-id="' + expectedId + '"]')
+          ?.getAttribute('aria-current') === 'true';
+    };
+    await wait(sameVisibleLayout, 'setup selection confirmation');
+    await wait(() => document.fonts.status === 'loaded', 'setup fonts');
+    await frame();
+    await frame();
+    const stable = counters();
+    if (!Object.hasOwn(stable, expectedId)) throw new Error('checkout peers: setup terminal unavailable');
+    await frame();
+    const next = counters();
+    await frame();
+    const last = counters();
+    if (!await sameVisibleLayout() || JSON.stringify(stable) !== JSON.stringify(next) ||
+      JSON.stringify(next) !== JSON.stringify(last)) {
+      throw new Error('checkout peers: setup layout or terminal callbacks did not settle');
+    }
     const before = (await window.aiTerminal.listSessions(workspaceId)).length;
     const terminalsBefore = window.__aitermTest?.snapshots() ?? {};
     const terminalsBeforeAt = performance.now();

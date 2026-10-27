@@ -2,6 +2,7 @@
 import type { ImageAddon } from '@xterm/addon-image'
 import type { Terminal } from '@xterm/xterm'
 import { reserveTerminalImageBytes } from './terminal-images'
+import { IMAGE_PRESENTATION_BYTES, trackImagePresentation } from './terminal-image-presentation'
 
 interface Size { width: number; height: number }
 interface Dimensions {
@@ -20,6 +21,7 @@ interface ImageRenderer {
   dimensions: Dimensions
   rescaleCanvas(): void
   clearLines(start: number, end: number): void
+  clearAll(): void
   draw(image: ImageSpec, tile: number, column: number, row: number, count: number): void
   insertLayerToDom(): void
   removeLayerFromDom(): void
@@ -44,7 +46,7 @@ interface DomRenderer {
 }
 interface ImageCore {
   buffer: { ydisp: number; lines: { get(row: number): ImageLine | undefined } }
-  _renderService: { _renderer: { value: DomRenderer } }
+  _renderService: { _renderer: { value: DomRenderer }; _syncOutputHandler: { _onTimeout(): void } }
   _mouseService: Record<'getCoords' | 'getMouseReportCoords', (event: { clientX: number; clientY: number }, ...args: unknown[]) => unknown>
 }
 interface Overflow {
@@ -90,11 +92,15 @@ export function preserveTerminalImages(terminal: Terminal, addon: ImageAddon): {
   const originalAdd = storage.addImage
   let bridge: ReturnType<typeof installTerminalImageResize> | undefined
   let disposed = false
-  storage.addImage = function (image, reservation): void {
+  function activate(this: ImageStorage, image: HTMLCanvasElement | ImageBitmap, reservation?: () => void): void {
     storage.addImage = originalAdd
-    bridge = installTerminalImageResize(terminal, addon, context)
+    try { bridge = installTerminalImageResize(terminal, addon, context) } catch (error) {
+      storage.addImage = activate
+      throw error
+    }
     storage.addImage.call(this, image, reservation)
   }
+  storage.addImage = activate
   return {
     fit(cols, rows, apply): void {
       if (bridge) bridge.fit(cols, rows, apply)
@@ -120,11 +126,13 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
   let deadline = 0
   let extent = terminal.cols
   let holding = false
+  let fitting = false
   let expired = false
   let heldWidth = 0
   let heldHeight = 0
   let addingColumns: number | undefined
   let chargedBytes = 0
+  let presentationBytes = 0
   let baselineCanvas: Size | undefined = renderer.canvas && { width: renderer.canvas.width, height: renderer.canvas.height }
   let allocationFailed = false
   let selection: unknown[] | undefined
@@ -141,6 +149,7 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
     render: storage.render,
     rescaleCanvas: renderer.rescaleCanvas,
     clearLines: renderer.clearLines,
+    clearAll: renderer.clearAll,
     insertLayer: renderer.insertLayerToDom,
     removeLayer: renderer.removeLayerFromDom,
     updateDimensions: dom._updateDimensions,
@@ -153,8 +162,19 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
   }
 
   const reserve = (bytes: number): void => {
-    if (!reserveTerminalImageBytes(addon, bytes)) throw new Error('Image resize exceeds the image memory budget')
+    if (!reserveTerminalImageBytes(addon, bytes + presentationBytes)) throw new Error('Image resize exceeds the image memory budget')
     chargedBytes = bytes
+  }
+  // Admit semantic scratch before constructing it, including the first lazy image insertion.
+  presentationBytes = IMAGE_PRESENTATION_BYTES
+  reserve(0)
+  let presentation: ReturnType<typeof trackImagePresentation>
+  try {
+    presentation = trackImagePresentation(terminal, storage)
+  } catch (error) {
+    presentationBytes = 0
+    reserve(0)
+    throw error
   }
   const delta = (width: number, height: number, baseline = dom.dimensions.css.canvas): number =>
     Math.max(0, width * height - baseline.width * baseline.height) * 4
@@ -223,6 +243,7 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
   storage.addImage = function (image, reservation): void {
     addingColumns = Math.ceil(image.width / renderer.cellSize.width)
     try { original.addImage.call(this, image, reservation) } finally { addingColumns = undefined }
+    completeImageChange()
   }
   storage._writeToCell = function (line, column, imageId, tile): void {
     original.writeToCell.call(this, line, column, imageId, tile)
@@ -256,6 +277,11 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
   renderer.clearLines = (start, end): void => {
     if (!holding) renderer._ctx?.clearRect(0, start * renderer.cellSize.height, renderer.canvas?.width ?? 0,
       (end + 1 - start) * renderer.cellSize.height)
+  }
+  renderer.clearAll = function (): void {
+    // Reset deletes semantic image ownership immediately; preserve the displayed canvas
+    // until that completed update can retire held text and image together.
+    if (!holding) original.clearAll.call(this)
   }
   storage.render = function (range): void {
     if (holding) { renderer.rescaleCanvas(); return }
@@ -300,11 +326,18 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
     else original.handleResize.call(this, cols, rows)
   }
   dom.renderRows = function (start, end): void {
-    if (!holding) original.renderRows.call(this, start, end)
+    if (holding) queueLocalChange()
+    else {
+      original.renderRows.call(this, start, end)
+      if (!presentation.inParse() && !terminal.modes.synchronizedOutputMode) presentation.committed()
+    }
   }
-  dom.clear = function (): void { if (!holding) original.clear.call(this) }
+  dom.clear = function (): void {
+    if (holding) queueLocalChange()
+    else original.clear.call(this)
+  }
   dom.handleSelectionChanged = function (...args): void {
-    if (holding) selection = args
+    if (holding) { selection = args; queueLocalChange() }
     else original.selection.apply(this, args)
   }
   for (const name of ['getCoords', 'getMouseReportCoords'] as const) {
@@ -331,14 +364,46 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
     terminal.refresh(0, terminal.rows - 1)
   }
   const paint = (): void => storage.render({ start: 0, end: terminal.rows - 1 })
+  const queueLocalChange = (): void => {
+    // Selection/focus requests are deliberately deferred with the held scene (F2).
+    // They are not completed local paints and must not make a later query qualify.
+    if (!fitting && !presentation.inParse()) presentation.rebaseline()
+  }
+  const completeImageChange = (): void => {
+    if (!holding || fitting || presentation.inParse()) return
+    const changed = presentation.changed()
+    if (changed && !terminal.modes.synchronizedOutputMode) {
+      release()
+      paint()
+      presentation.committed()
+    }
+  }
   const parsed = terminal.onWriteParsed(() => {
-    if (!terminal.modes.synchronizedOutputMode) { release(); paint() }
+    if (terminal.modes.synchronizedOutputMode) { presentation.changed(); return }
+    if (!holding || presentation.changed()) {
+      release()
+      paint()
+      presentation.committed()
+    }
   })
   // The parser may stop mid-update. xterm's watchdog commits that buffer without
   // another write, so its first render must release the held text and image together.
   const rendered = terminal.onRender(() => {
-    if (expired && !terminal.modes.synchronizedOutputMode) { release(); paint() }
+    if (expired && !terminal.modes.synchronizedOutputMode) { release(); paint(); presentation.committed() }
   })
+  const sync = core._renderService._syncOutputHandler
+  const originalWatchdog = sync._onTimeout
+  function watchdog(this: typeof sync): void {
+    originalWatchdog.call(this)
+    // xterm closes 2026 before this callback. Its timer may have been armed before
+    // the resize, so B's own one-second timer need not have expired yet.
+    if (holding && !terminal.modes.synchronizedOutputMode) {
+      release()
+      paint()
+      presentation.committed()
+    }
+  }
+  sync._onTimeout = watchdog
 
   return {
     fit(cols, rows, apply): void {
@@ -359,6 +424,7 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
         if (holding && terminal.modes.synchronizedOutputMode) { expired = true; return }
         release()
         paint()
+        presentation.committed()
       }, Math.max(0, nextDeadline - performance.now()))
       clearTimeout(timer)
       timer = nextTimer
@@ -371,7 +437,11 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
         holding = nextHolding
       }
       // A fit may throw after touching xterm; its bounded release is already armed.
-      apply()
+      presentation.changed()
+      fitting = true
+      try { apply() } finally {
+        try { presentation.rebaseline() } finally { fitting = false }
+      }
       if (holding) transform()
       else paint()
     },
@@ -379,14 +449,18 @@ function installTerminalImageResize(terminal: Terminal, addon: ImageAddon, conte
       clearTimeout(timer)
       parsed.dispose()
       rendered.dispose()
+      presentation.dispose()
+      if (sync._onTimeout === watchdog) sync._onTimeout = originalWatchdog
       // This hook belongs to the view lifecycle. Retire its output before returning its quota.
       renderer.removeLayerFromDom()
+      presentationBytes = 0
       reserve(0)
       storage.addImage = original.addImage
       storage._writeToCell = original.writeToCell
       storage.render = original.render
       renderer.rescaleCanvas = original.rescaleCanvas
       renderer.clearLines = original.clearLines
+      renderer.clearAll = original.clearAll
       renderer.insertLayerToDom = original.insertLayer
       renderer.removeLayerFromDom = original.removeLayer
       dom._updateDimensions = original.updateDimensions

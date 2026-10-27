@@ -4,6 +4,7 @@ import testSource from './terminal-image-resize.test.ts?raw'
 import type { Terminal } from '@xterm/xterm'
 import type { ImageAddon } from '@xterm/addon-image'
 import { preserveTerminalImages } from './terminal-image-resize'
+import { IMAGE_PRESENTATION_BYTES } from './terminal-image-presentation'
 
 const budget = vi.hoisted(() => ({ charge: 0, limit: 16_000_000, trace: [] as number[] }))
 vi.mock('./terminal-images', () => ({
@@ -32,7 +33,12 @@ function fixture(images = true, output = true) {
   const dimensions = { device: { char: { width: 10, height: 20, left: 0, top: 0 }, cell: { width: 10, height: 20 }, canvas: { width, height } }, css: { cell: { width: 10, height: 20 }, canvas: { width, height } } }
   let parsed = (): void => undefined
   let rendered = (): void => undefined
+  let parseWork = (): void => undefined
+  const input = { parse: (): void => parseWork(), _parseStack: { paused: false } }
+  const blank = { _data: new Uint32Array(4096 * 3), _combined: {}, _extendedAttrs: {}, getBg: () => 0 }
   const line = {
+    _data: new Uint32Array(4096 * 3),
+    _combined: {},
     _extendedAttrs: {} as Record<number, { imageId: number; tileId: number }>,
     getBg(column: number): number { return line._extendedAttrs[column] ? 268435456 : 0 }
   }
@@ -50,36 +56,57 @@ function fixture(images = true, output = true) {
     canvas: output ? canvas : undefined, cellSize: dimensions.css.cell, dimensions,
     _ctx: { clearRect: vi.fn() },
     rescaleCanvas() { canvas.width = terminal.cols * 10; canvas.height = terminal.rows * 20 },
-    clearLines: vi.fn(), draw: vi.fn(), insertLayerToDom: vi.fn(), removeLayerFromDom: vi.fn(() => { width = height = 0 })
+    clearLines: vi.fn(), clearAll: vi.fn(), draw: vi.fn(), insertLayerToDom: vi.fn(), removeLayerFromDom: vi.fn(() => { width = height = 0 })
   }
+  let nextImageId = 1
   const storage = {
     _renderer: renderer, _images: new Map(images ? [[1, {}]] : []),
     // Pinned ImageStorage.addImage writes consecutive tiles through the last visible cell.
     addImage: vi.fn<(image: HTMLCanvasElement, reservation?: () => void) => void>((image) => {
-      storage._images.set(1, {})
+      const id = ++nextImageId
+      storage._images.set(id, {})
       for (let column = 0; column < Math.min(terminal.cols, Math.ceil(image.width / renderer.cellSize.width)); column++) {
-        storage._writeToCell(line, column, 1, column)
+        storage._writeToCell(line, column, id, column)
       }
     }),
     _writeToCell: vi.fn((target: typeof line, column: number, imageId: number, tileId: number): void => {
       target._extendedAttrs[column] = { imageId, tileId }
+      target._data[column * 3 + 2] = 268435456
     }),
     render: vi.fn<(range?: { start: number; end: number }) => void>(() => { if (storage._images.size) renderer.canvas = canvas; renderer.rescaleCanvas() })
   }
   const mouse = { getCoords: vi.fn((event: { clientX: number; clientY: number }) => event), getMouseReportCoords: vi.fn((event: { clientX: number; clientY: number }) => event) }
+  const sync = { _onTimeout: vi.fn() }
   const terminal = {
     cols: 100, rows: 50, modes: { synchronizedOutputMode: false },
+    buffer: { active: { type: 'alternate', viewportY: 0, cursorX: 0, cursorY: 0 } },
+    options: { cursorInactiveStyle: 'none' }, getSelectionPosition: () => undefined,
     element: { querySelector: () => screen },
-    _core: { buffer: { ydisp: 0, lines: { get: (row: number) => row === 0 ? line : undefined } }, _renderService: { _renderer: { value: dom } }, _mouseService: mouse },
+    _core: {
+      buffer: { ydisp: 0, lines: { get: (row: number) => row === 0 ? line : blank } },
+      _inputHandler: input, coreService: { isCursorHidden: true, isCursorInitialized: true, decPrivateModes: {} },
+      _coreBrowserService: { isFocused: false }, _selectionService: { columnSelectMode: false }, _themeService: { colors: { ansi: [] } },
+      _renderService: { _renderer: { value: dom }, _syncOutputHandler: sync }, _mouseService: mouse
+    },
     onWriteParsed: vi.fn((callback: () => void) => { parsed = callback; return { dispose: vi.fn() } }),
     onRender: vi.fn((callback: () => void) => { rendered = callback; return { dispose: vi.fn() } }), refresh: vi.fn()
   }
-  const spies = Object.freeze({ addImage: storage.addImage, render: storage.render, writeToCell: storage._writeToCell, updateDimensions: dom._updateDimensions, getCoords: mouse.getCoords, getMouseReportCoords: mouse.getMouseReportCoords, handleResize: dom.handleResize, renderRows: dom.renderRows, clear: dom.clear, handleSelectionChanged: dom.handleSelectionChanged, removeLayer: renderer.removeLayerFromDom })
+  const spies = Object.freeze({ addImage: storage.addImage, render: storage.render, writeToCell: storage._writeToCell, updateDimensions: dom._updateDimensions, getCoords: mouse.getCoords, getMouseReportCoords: mouse.getMouseReportCoords, handleResize: dom.handleResize, renderRows: dom.renderRows, clear: dom.clear, clearAll: renderer.clearAll, handleSelectionChanged: dom.handleSelectionChanged, removeLayer: renderer.removeLayerFromDom })
   const hooks = preserveTerminalImages(terminal as unknown as Terminal, { _storage: storage } as unknown as ImageAddon)
   const fit = (cols: number, rows: number) => hooks.fit(cols, rows, () => {
     dom.clear(); terminal.cols = cols; terminal.rows = rows; dom.handleResize(cols, rows)
   })
-  return { hooks, fit, terminal, storage, renderer, dom, spies, screen, mouse, setters, parsed: () => parsed(), rendered: () => rendered(), failAllocation: (setter: 'width' | 'height' = 'width') => { failedSetter = setter } }
+  const writeImage = (image: HTMLCanvasElement, reservation?: () => void): void => {
+    parseWork = () => storage.addImage(image, reservation)
+    try { input.parse() } finally { parseWork = () => undefined }
+  }
+  return {
+    hooks, fit, terminal, storage, renderer, dom, spies, screen, mouse, setters, writeImage,
+    parsed: (changes = true) => { if (changes) line._data[0] = (line._data[0] ?? 0) + 1; parsed() },
+    rendered: () => rendered(),
+    watchdog: () => { terminal.modes.synchronizedOutputMode = false; sync._onTimeout() },
+    failAllocation: (setter: 'width' | 'height' = 'width') => { failedSetter = setter }
+  }
 }
 
 describe('image scene resize boundary', () => {
@@ -110,7 +137,7 @@ describe('image scene resize boundary', () => {
     f.fit(50, 40)
     const image = { width: 400 } as HTMLCanvasElement
     const reservation = vi.fn()
-    f.storage.addImage(image, reservation)
+    f.writeImage(image, reservation)
     expect(f.spies.addImage).toHaveBeenCalledExactlyOnceWith(image, reservation)
     expect(f.terminal.onWriteParsed).toHaveBeenCalledOnce()
     expect(f.terminal.onRender).toHaveBeenCalledOnce()
@@ -119,7 +146,7 @@ describe('image scene resize boundary', () => {
     expect(f.screen.style.transform).toBe('')
     expect(f.storage._writeToCell).not.toBe(f.spies.writeToCell)
     f.fit(40, 30)
-    f.storage.addImage({ width: 800 } as HTMLCanvasElement)
+    f.writeImage({ width: 800 } as HTMLCanvasElement)
     f.parsed()
     expect(f.renderer.draw).toHaveBeenCalledWith({}, 40, 40, 0, 40)
     expect(f.spies.renderRows).toHaveBeenCalledWith(0, 29)
@@ -155,7 +182,7 @@ describe('image scene resize boundary', () => {
     expect(f.spies.renderRows).toHaveBeenCalledWith(0, 39)
     expect(f.spies.handleSelectionChanged).toHaveBeenCalledWith([1, 2], [3, 4], false)
     expect(f.screen.style).toMatchObject({ width: '500px', height: '800px', transform: '', transformOrigin: '' })
-    expect(budget.charge).toBe(0)
+    expect(budget.charge).toBe(IMAGE_PRESENTATION_BYTES)
     f.hooks.dispose()
   })
 
@@ -186,7 +213,7 @@ describe('image scene resize boundary', () => {
     budget.limit = 0
     expect(() => f.fit(80, 25)).toThrow('Image resize exceeds')
     expect([f.terminal.cols, f.terminal.rows]).toEqual([100, 50])
-    expect(budget.charge).toBe(0)
+    expect(budget.charge).toBe(IMAGE_PRESENTATION_BYTES)
     f.dom.clear()
     f.dom.renderRows(0, 49)
     f.dom.handleSelectionChanged([1, 2], [3, 4], false)
@@ -207,7 +234,7 @@ describe('image scene resize boundary', () => {
   it('preserves an existing hold, its image provenance and deadline after denied repeated admission', () => {
     const f = fixture()
     f.fit(80, 25)
-    f.storage.addImage({ width: 1000 } as HTMLCanvasElement)
+    f.writeImage({ width: 1000 } as HTMLCanvasElement)
     vi.advanceTimersByTime(300)
     const before = budget.charge
     budget.limit = before + 100_000
@@ -262,7 +289,7 @@ describe('image scene resize boundary', () => {
   it('reserves held payload and intermediate width/old-height overlap before setters', () => {
     const f = fixture()
     f.fit(50, 40)
-    expect(budget.charge).toBe(2_400_000)
+    expect(budget.charge).toBe(2_400_000 + IMAGE_PRESENTATION_BYTES)
     f.parsed()
     // Simulate a font/geometry change opposing width and height without another retained bitmap.
     f.renderer.cellSize.width = 40
@@ -280,7 +307,7 @@ describe('image scene resize boundary', () => {
     const f = fixture()
     f.fit(50, 40); f.failAllocation()
     expect(() => f.parsed()).toThrow('allocation failed')
-    expect(budget.charge).toBe(2_800_000)
+    expect(budget.charge).toBe(2_800_000 + IMAGE_PRESENTATION_BYTES)
     f.hooks.dispose()
     expect(budget.charge).toBe(0)
   })
@@ -289,9 +316,9 @@ describe('image scene resize boundary', () => {
     const f = fixture()
     f.fit(100, 40)
     f.parsed()
-    expect(budget.charge).toBe(0)
+    expect(budget.charge).toBe(IMAGE_PRESENTATION_BYTES)
     // A late old-grid image extends 40 columns beyond the current 100-column grid.
-    f.storage.addImage({ width: 1400 } as HTMLCanvasElement)
+    f.writeImage({ width: 1400 } as HTMLCanvasElement)
     f.storage.render()
     expect(f.screen.style.width).toBe('1400px')
     expect(f.setters.at(-1)!.size).toEqual([1400, 800])
@@ -310,18 +337,18 @@ describe('image scene resize boundary', () => {
     f.fit(initial[0], initial[1]); f.parsed()
     if (repeated) { f.fit(70, 20); f.storage.render() }
     f.fit(70, 45)
-    f.storage.addImage({ width: 1000 } as HTMLCanvasElement)
+    f.writeImage({ width: 1000 } as HTMLCanvasElement)
     const before = f.setters.length
     f.parsed()
-    expect(f.setters.slice(before).map(entry => entry.charge)).toEqual([peak, peak])
-    expect(budget.charge).toBe(1_080_000)
+    expect(f.setters.slice(before).map(entry => entry.charge)).toEqual([peak + IMAGE_PRESENTATION_BYTES, peak + IMAGE_PRESENTATION_BYTES])
+    expect(budget.charge).toBe(1_080_000 + IMAGE_PRESENTATION_BYTES)
     f.hooks.dispose()
   })
 
   it('rejects the complete overlap before either output setter', () => {
     const f = fixture()
     f.fit(70, 20); f.parsed(); f.fit(70, 45)
-    f.storage.addImage({ width: 1000 } as HTMLCanvasElement)
+    f.writeImage({ width: 1000 } as HTMLCanvasElement)
     const before = f.setters.length
     budget.limit = 1_200_000
     expect(() => f.parsed()).toThrow('Image resize exceeds')
@@ -332,14 +359,14 @@ describe('image scene resize boundary', () => {
   it.each(['width', 'height'] as const)('retains the staged peak after a %s exception through later calls', setter => {
     const f = fixture()
     f.fit(70, 20); f.parsed(); f.fit(70, 45)
-    f.storage.addImage({ width: 1000 } as HTMLCanvasElement)
+    f.writeImage({ width: 1000 } as HTMLCanvasElement)
     f.failAllocation(setter)
     expect(() => f.parsed()).toThrow('allocation failed')
-    expect(budget.charge).toBe(1_560_000)
+    expect(budget.charge).toBe(1_560_000 + IMAGE_PRESENTATION_BYTES)
     const before = f.setters.length
     expect(() => f.renderer.rescaleCanvas()).toThrow()
     expect(f.setters).toHaveLength(before)
-    expect(budget.charge).toBe(1_560_000)
+    expect(budget.charge).toBe(1_560_000 + IMAGE_PRESENTATION_BYTES)
     f.hooks.dispose()
     expect(budget.charge).toBe(0)
   })
@@ -374,12 +401,91 @@ describe('image scene resize boundary', () => {
   })
 
   it('leaves ordinary no-image resize on the original path without reservations or transforms', () => {
-    const f = fixture(false)
+    const f = fixture(false, false)
     f.fit(80, 25)
     expect(f.spies.clear).toHaveBeenCalledOnce()
     expect(f.spies.handleResize).toHaveBeenCalledOnce()
     expect(budget.trace).toEqual([])
     expect(f.screen.style.transform).toBe('')
     f.hooks.dispose()
+  })
+
+  it('keeps a query-only completed batch held until presentation changes', () => {
+    const f = fixture()
+    f.fit(80, 25)
+    const held = { ...f.screen.style }
+    f.parsed(false)
+    expect(f.screen.style).toEqual(held)
+    expect(f.spies.handleResize).not.toHaveBeenCalled()
+    f.parsed()
+    expect(f.spies.handleResize).toHaveBeenCalledOnce()
+    expect(f.screen.style.transform).toBe('')
+    f.hooks.dispose()
+  })
+
+  it('does not let query-only batches renew the one-second deadline', () => {
+    const f = fixture()
+    f.fit(80, 25)
+    vi.advanceTimersByTime(900)
+    f.parsed(false)
+    expect(f.spies.handleResize).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(f.spies.handleResize).toHaveBeenCalledOnce()
+    f.hooks.dispose()
+  })
+
+  it('defers a held reset canvas clear until its semantic deletion completes', () => {
+    const f = fixture()
+    f.fit(80, 25)
+    f.renderer.clearAll()
+    expect(f.spies.clearAll).not.toHaveBeenCalled()
+    expect(f.renderer.canvas?.width).toBe(1000)
+    expect(f.spies.handleResize).not.toHaveBeenCalled()
+    f.storage._images.clear()
+    f.parsed()
+    expect(f.spies.handleResize).toHaveBeenCalledOnce()
+    expect(f.screen.style.transform).toBe('')
+    f.hooks.dispose()
+    expect(f.renderer.clearAll).toBe(f.spies.clearAll)
+  })
+
+  it('keeps synchronized work pending across another fit and a mode-only close', () => {
+    const f = fixture()
+    f.fit(80, 25)
+    f.terminal.modes.synchronizedOutputMode = true
+    f.parsed()
+    f.fit(70, 30)
+    f.parsed(false)
+    expect(f.spies.handleResize).not.toHaveBeenCalled()
+    f.terminal.modes.synchronizedOutputMode = false
+    f.parsed(false)
+    expect(f.spies.handleResize).toHaveBeenCalledOnce()
+    f.hooks.dispose()
+  })
+
+  it('releases on the actual watchdog even before the resize timer expires', () => {
+    const f = fixture()
+    f.terminal.modes.synchronizedOutputMode = true
+    f.parsed()
+    f.fit(80, 25)
+    vi.advanceTimersByTime(100)
+    f.watchdog()
+    expect(f.spies.handleResize).toHaveBeenCalledOnce()
+    expect(f.screen.style.transform).toBe('')
+    f.hooks.dispose()
+  })
+
+  it('admits semantic scratch before lazy activation and preserves activation after denial', () => {
+    const f = fixture(false, false)
+    budget.limit = 0
+    expect(() => f.writeImage({ width: 100 } as HTMLCanvasElement)).toThrow('Image resize exceeds')
+    expect(f.terminal.onWriteParsed).not.toHaveBeenCalled()
+    expect(f.spies.addImage).not.toHaveBeenCalled()
+    budget.limit = 16_000_000
+    f.writeImage({ width: 100 } as HTMLCanvasElement)
+    expect(f.terminal.onWriteParsed).toHaveBeenCalledOnce()
+    expect(budget.charge).toBe(IMAGE_PRESENTATION_BYTES)
+    f.hooks.dispose()
+    expect(budget.charge).toBe(0)
   })
 })

@@ -643,7 +643,8 @@ export async function waitForRendererIntegration(window: BrowserWindow): Promise
   return Promise.race([
     rendererProbe,
     new Promise<never>((_resolve, reject) =>
-      setTimeout(() => reject(new Error('renderer integration main-process timeout')), 60_000))
+      // Epic 87 added image and synchronization probes that wait for animation frames.
+      setTimeout(() => reject(new Error('renderer integration main-process timeout')), 60_000 + 30_000))
   ])
 }
 
