@@ -52,9 +52,9 @@ function auditDoctor(now, { passed = false } = {}) {
     schemaVersion: 1, profileKey: null, profileIdentity: null, availabilityFailure: null, cycleStartedAt: at, versions: digest, cycleStartupId: null,
     appVersions: { claude: null, codex: null, opencode: null }, retryUsed: false, attempt: null, qualifications: {}, continuity: null,
     results: passed ? Object.fromEntries(['hooks', 'skills', 'tools', 'rules', 'claude', 'codex', 'leftovers'].map((check) => [check, result('passed', [])])) : {
-      hooks: result('problems', [{ code: 'hook-check', item: 1, app: 'opencode' }]),
+      hooks: result('problems', [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }]),
       skills: result('passed', []),
-      tools: result('problems', [1, 2, 3].map((item) => ({ code: 'tool-check', item, app: 'opencode' }))),
+      tools: result('problems', [1, 2, 3].map((item) => ({ code: 'tool-check', item, app: 'opencode', cause: 'unlisted-exposed' }))),
       rules: result('passed', []),
       claude: result('problems', [{ code: 'auth-check', item: 1, app: 'claude' }]),
       codex: result('passed', []),

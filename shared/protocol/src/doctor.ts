@@ -1,7 +1,8 @@
 // MODULE: doctor.ts - Read-only Health doctor facts, per-check freshness and automatic retry state
 export type DoctorCheck = 'hooks' | 'skills' | 'tools' | 'rules' | 'claude' | 'codex' | 'leftovers'
 export type DoctorState = 'passed' | 'problems' | 'partial' | 'failed' | 'timeout' | 'unsupported' | 'unqualified' | 'interrupted'
-export interface DoctorProblem { code: string; item: number; count?: number; app?: 'claude' | 'codex' | 'opencode' }
+/** `cause`: for BMN's own area checks, the entry's state word (`missing`, `unlisted-exposed`, `missing:Stop`), never a name or path. */
+export interface DoctorProblem { code: string; item: number; count?: number; app?: 'claude' | 'codex' | 'opencode'; cause?: string }
 export interface DoctorLocationStat { device: string; inode: string; size: string; modified: string; changed: string; mode: string; type: 'file' | 'directory' | 'link' | 'other' }
 export interface DoctorLocationSource {
   root: string; parent: DoctorLocationStat; object: DoctorLocationStat; entry: number

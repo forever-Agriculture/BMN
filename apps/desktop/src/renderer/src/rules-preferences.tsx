@@ -42,7 +42,7 @@ import { createMachineReads, endedSince, type MachineReads } from './machine-rea
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
-import { DoctorHealth, doctorNeedsCount, useDoctorClock } from './doctor-health'
+import { DoctorHealth, doctorNeedsCount, useDoctorClock, type HealthArea } from './doctor-health'
 import { SteadyOrderContext, useSteadyOrder } from './health-order'
 import { HooksHealth, hookRowWords } from './hooks-health'
 import { SetupReadiness, useSetupApps, type SetupNavigation } from './first-run-setup'
@@ -229,17 +229,36 @@ function contextRowNeeds(row: ContextLimitView): boolean {
 }
 
 /**
+ * The causes a section row shows for its app now, as BMN's own Doctor check names them (`area:app:cause`, an entry's state
+ * word, never its name): what a Doctor finding must match to be the same issue (96 Astra review). A test failure has none.
+ */
+function rowCauses(snapshot: RulesSnapshot, area: HealthArea, app: RosterHarness): string[] {
+  const key = (cause: string): string => `${area}:${app}:${cause}`
+  const entries = (states: ReadonlyArray<string | undefined>, fine: readonly string[]): string[] =>
+    states.flatMap((state) => state === undefined || fine.includes(state) ? [] : [key(state)])
+  if (area === 'rules') return snapshot.health.state === 'checked' ? entries(snapshot.health.targets.filter((target) => target.harness === app).map((target) => target.state), ['current']) : []
+  if (area === 'skills') return entries(snapshot.skills.skills.map((skill) => skill.states[app]), ['current', 'read-directly', 'excluded'])
+  if (area === 'tools') {
+    const unlisted = snapshot.tools.apps.find((entry) => entry.harness === app)?.unlisted ?? []
+    return [...entries(snapshot.tools.tools.map((tool) => tool.states[app]), ['current', 'excluded']),
+      ...unlisted.filter((entry) => entry.state === 'exposed' || entry.managed).map((entry) => key(entry.managed ? 'unlisted-managed' : 'unlisted-exposed'))]
+  }
+  const hooks = snapshot.hooks?.state === 'checked' ? snapshot.hooks.apps.find((entry) => entry.harness === app) : undefined
+  return hooks === undefined ? [] : [...hooks.left.map((entry) => key(`missing:${entry.event}`)), ...((hooks.earlier ?? []).includes('plugin') ? [key('older-wording:plugin')] : [])]
+}
+
+/**
  * What in Health needs the owner (Story 96.6): one issue per section row (one app, one area), and each Doctor finding
- * that is not the same app, area and cause as such a row. `keys` are the rows that need him for their state (`area:app`),
- * the cause BMN's own Doctor check of that area finds too, for Doctor to merge into; a failed test is a cause of its own;
+ * that is not the same app, area and cause as such a row. `keys` are the causes the rows needing him for their state show
+ * (`area:app:cause`), for a Doctor finding of the same cause to merge into; a failed test is a cause of its own;
  * `sections` names the sections with an issue, in page order, for the head: "Read 13:39 · 2 need you: Hooks, Tools".
  */
 export function healthNeeds(snapshot: RulesSnapshot): { count: number; sections: string[]; keys: Set<string>; own: number } {
   const keys = new Set<string>()
   const found: Array<[string, number]> = []
-  const rows = <Row,>(section: string, area: string | null, list: readonly Row[], state: (row: Row) => { needs: boolean; off: boolean }, app: (row: Row) => string): void => {
+  const rows = <Row,>(section: string, area: HealthArea | null, list: readonly Row[], state: (row: Row) => { needs: boolean; off: boolean }, app: (row: Row) => RosterHarness): void => {
     const needing = list.filter((row) => state(row).needs)
-    if (area !== null) for (const row of needing) if (state(row).off) keys.add(`${area}:${app(row)}`)
+    if (area !== null) for (const row of needing) if (state(row).off) rowCauses(snapshot, area, app(row)).forEach((key) => keys.add(key))
     if (needing.length > 0) found.push([section, needing.length])
   }
   if (snapshot.health.state === 'checked') rows('Rules files', 'rules', snapshot.health.targets, (target) => rulesRowState(snapshot, target), (target) => target.harness)

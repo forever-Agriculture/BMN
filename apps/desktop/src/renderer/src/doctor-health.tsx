@@ -37,17 +37,19 @@ const COVERAGE = new Set(['leftover-source-changed', 'leftover-step', 'leftover-
 type Problem = DoctorRow['problems'][number]
 /**
  * Where one Doctor finding is counted: `area` when it comes from BMN's own check of that area and Health's section row for
- * the same app already needs the owner for that cause, its state (one issue, counted there); `coverage` when it only says
- * how fully the leftovers were read; `doctor` otherwise. A finding that names no app, or an app doctor's own finding of the
- * same code (Codex's `mcp.config` is a `tool-check` too), matches nothing and is counted by itself.
+ * the same app shows the same cause now (`area:app:cause`, the entry's state word): one issue, counted there; `coverage`
+ * when it only says how fully the leftovers were read; `doctor` otherwise. A finding that names no app or no cause (an
+ * older result), a cause Health does not show now (a stale result, another entry's), or an app doctor's own finding of
+ * the same code (Codex's `mcp.config` is a `tool-check` too) matches nothing and is counted by itself (96 Astra review).
  */
 export function doctorPlace(row: DoctorRow, problem: Problem, sections: ReadonlySet<string>): 'doctor' | 'coverage' | HealthArea {
   if (COVERAGE.has(problem.code)) return 'coverage'
   const area = AREAS[problem.code]
-  return area !== undefined && row.check === area && problem.app !== undefined && sections.has(`${area}:${problem.app}`) ? area : 'doctor'
+  return area !== undefined && row.check === area && problem.app !== undefined && problem.cause !== undefined &&
+    sections.has(`${area}:${problem.app}:${problem.cause}`) ? area : 'doctor'
 }
 
-/** Doctor's own issues: the whole-run error and each finding no Health section already counts (`sections` holds `area:app`). */
+/** Doctor's own issues: the whole-run error and each finding no Health section already counts (`sections` holds `area:app:cause`). */
 export function doctorNeedsCount(view: DoctorView | undefined, sections: ReadonlySet<string> = new Set()): number {
   if (!view) return 0
   return Number(view.error !== null) + view.rows.reduce((count, row) => count + row.problems.filter((problem) => doctorPlace(row, problem, sections) === 'doctor').length, 0)

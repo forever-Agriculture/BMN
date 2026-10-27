@@ -106,9 +106,9 @@ describe('Health doctor', () => {
   })
 
   it('counts a finding of the same app and area as a Health row there, and one of another app here (Story 96.6)', () => {
-    const hooks = row('hooks', { state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' },
-      { code: 'hook-check', item: 2, app: 'codex', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }] })
-    const sections = new Set(['hooks:opencode'])
+    const hooks = row('hooks', { state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' },
+      { code: 'hook-check', item: 2, app: 'codex', cause: 'older-wording:plugin', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }] })
+    const sections = new Set(['hooks:opencode:older-wording:plugin'])
     expect(doctorNeedsCount(view([hooks]), sections)).toBe(1)
     const html = renderToStaticMarkup(createElement(DoctorHealth, { view: view([hooks]), now: AT + 60000, sections }))
     expect(html).toContain('data-doctor-counted="hooks"')

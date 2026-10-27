@@ -59,13 +59,28 @@ describe('doctor result projection', () => {
   })
 
   it('projects BMN checks, including names and failures, before the same sinks', () => {
-    expect(parseBmnDoctor('rules', JSON.stringify({ ok: false, targets: [{ harness: 'claude', state: 'missing', path: SECRET, detail: SECRET }, { harness: 'codex', state: 'current' }, { harness: 'opencode', state: 'current' }] }), 1)).toEqual({ state: 'problems', problems: [{ code: 'rules-check', item: 1, app: 'claude' }] })
+    expect(parseBmnDoctor('rules', JSON.stringify({ ok: false, targets: [{ harness: 'claude', state: 'missing', path: SECRET, detail: SECRET }, { harness: 'codex', state: 'current' }, { harness: 'opencode', state: 'current' }] }), 1)).toEqual({ state: 'problems', problems: [{ code: 'rules-check', item: 1, app: 'claude', cause: 'missing' }] })
     const hooks = parseBmnDoctor('hooks', JSON.stringify({ agents: [{ events: [{ state: SECRET, name: SECRET }] }] }), 1)
     expect(hooks.state).toBe('partial')
     expect(hooks.problems.some((row) => row.code === 'hook-check')).toBe(false)
     expect(JSON.stringify(hooks)).not.toContain(SECRET)
     expect(parseBmnDoctor('tools', JSON.stringify({ apps: [] }), 0).state).toBe('partial')
     expect(parseBmnDoctor('skills', SECRET, 1).state).toBe('partial')
+  })
+
+  it('names the cause of each area finding as its state word only, and the trust boundary keeps nothing else (96 Astra review)', () => {
+    const tools = parseBmnDoctor('tools', JSON.stringify({ apps: ['claude', 'codex', 'opencode'].map((harness) => ({ harness, supported: true, readable: true,
+      tools: harness === 'opencode' ? [{ id: SECRET, state: 'missing' }, { id: SECRET, state: 'current' }] : [],
+      unlisted: harness === 'opencode' ? [{ id: SECRET, state: 'exposed', managed: false }, { id: SECRET, state: 'unmanaged', managed: true }] : [] })) }), 1)
+    expect(tools).toEqual({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'opencode', cause: 'missing' },
+      { code: 'tool-check', item: 2, app: 'opencode', cause: 'unlisted-exposed' }, { code: 'tool-check', item: 3, app: 'opencode', cause: 'unlisted-managed' }] })
+    expect(projectedResult(tools)).toEqual(tools)
+    for (const cause of [SECRET, '/home/owner/x', 'Missing tool', 'a'.repeat(40), 7]) {
+      expect(projectedResult({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex', cause }] }), String(cause)).toBeNull()
+    }
+    expect(projectedResult({ state: 'problems', problems: [{ code: 'auth-check', item: 1, app: 'codex', cause: 'missing' }] })).toBeNull()
+    // An older stored result without a cause stays valid; Health counts it by itself.
+    expect(projectedResult({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex' }] })).toEqual({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex' }] })
   })
 
   it('recognizes the current Claude signed-out diagnostic without forwarding its prose', () => {

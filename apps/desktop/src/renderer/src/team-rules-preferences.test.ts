@@ -1186,8 +1186,8 @@ describe('Health counts each issue once (Story 96.6)', () => {
   type Doctor = NonNullable<RulesSnapshot['doctor']>
   type Row = Doctor['rows'][number]
   const AT = Date.parse('2026-10-09T21:31:00.000Z')
-  const problem = (code: string, item: number, app?: 'claude' | 'codex' | 'opencode', extra: { count?: number; reason?: string } = {}) =>
-    ({ code, item, ...(app ? { app } : {}), ...(extra.count ? { count: extra.count } : {}), reason: extra.reason ?? `${code} reason`, fix: `${code} fix` })
+  const problem = (code: string, item: number, app?: 'claude' | 'codex' | 'opencode', extra: { count?: number; reason?: string; cause?: string } = {}) =>
+    ({ code, item, ...(app ? { app } : {}), ...(extra.count ? { count: extra.count } : {}), ...(extra.cause ? { cause: extra.cause } : {}), reason: extra.reason ?? `${code} reason`, fix: `${code} fix` })
   const doctorRow = (check: Row['check'], extra: Partial<Row> = {}): Row => ({ check, state: 'passed', problems: [], leftovers: [], checkedAt: AT, stale: false, ...extra })
   // The audit's 335 leftovers: synthetic numeric locations, in three groups.
   const leftovers = Array.from({ length: 335 }, (_, index) => {
@@ -1205,8 +1205,8 @@ describe('Health counts each issue once (Story 96.6)', () => {
       { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
     ] },
     doctor: doctor([
-      doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'opencode')] }),
-      doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode'), problem('tool-check', 2, 'opencode'), problem('tool-check', 3, 'opencode')] }),
+      doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'opencode', { cause: 'older-wording:plugin' })] }),
+      doctorRow('tools', { state: 'problems', problems: [1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })) }),
       doctorRow('claude', { state: 'problems', problems: [problem('auth-check', 1, 'claude', { reason: 'Authentication needs attention' })] }),
       doctorRow('leftovers', { state: 'partial', problems: [problem('leftover-source-changed', 1, undefined, { count: 3, reason: '3 sources changed during the check' })], leftovers })
     ])
@@ -1215,8 +1215,8 @@ describe('Health counts each issue once (Story 96.6)', () => {
   it('counts a Doctor finding of the same app and area as its Health row once, there, and names the sections in the head', () => {
     const without = healthNeeds({ ...AUDIT, doctor: undefined })
     const audit = healthNeeds(AUDIT)
-    expect(without.keys).toContain('tools:opencode')
-    expect(without.keys).toContain('hooks:opencode')
+    expect(without.keys).toContain('tools:opencode:unlisted-exposed')
+    expect(without.keys).toContain('hooks:opencode:older-wording:plugin')
     // Only the sign-in finding is Doctor's own: the hook and the three tool findings are the OpenCode rows above, the coverage note no issue.
     expect(audit.count).toBe(without.count + 1)
     expect(audit.sections.at(-1)).toBe('Doctor')
@@ -1233,9 +1233,26 @@ describe('Health counts each issue once (Story 96.6)', () => {
   })
 
   it('never merges by matching words alone: another app, or a finding that names none, is an issue of its own', () => {
-    const other = { ...AUDIT, doctor: doctor([doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'codex', { reason: 'Hook is not wired' }), problem('hook-check', 2, 'opencode', { reason: 'Hook is not wired' })] }),
+    const other = { ...AUDIT, doctor: doctor([doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'codex', { reason: 'Hook is not wired', cause: 'older-wording:plugin' }),
+      problem('hook-check', 2, 'opencode', { reason: 'Hook is not wired', cause: 'older-wording:plugin' })] }),
       doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1)] })]) }
     expect(healthNeeds(other).count).toBe(healthNeeds({ ...AUDIT, doctor: undefined }).count + 2)
+  })
+
+  it('merges only the same cause: another cause of the same app and area, or a stale result Health no longer shows, counts by itself (96 Astra review)', () => {
+    const without = healthNeeds({ ...AUDIT, doctor: undefined })
+    // OpenCode's Tools row shows three exposed connections; Doctor also finds a managed connection that left the list, and,
+    // from a stale result, an approved tool missing that Health now sees in place: two more issues, not the row's.
+    const managed = problem('tool-check', 4, 'opencode', { cause: 'unlisted-managed' })
+    const mixed = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [...[1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })), managed] }),
+      doctorRow('skills', { state: 'problems', stale: true, checkedAt: AT - 3 * 24 * 60 * 60 * 1000, problems: [problem('skill-check', 1, 'opencode', { cause: 'missing' })] })]) }
+    expect(healthNeeds(mixed).count).toBe(without.count + 2)
+    expect(doctorPlace(mixed.doctor.rows[0]!, managed, without.keys)).toBe('doctor')
+    // The same three, stale, still show what Health shows now: counted there. A finding with no cause (an older result) is its own.
+    const stale = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', stale: true, problems: [1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })) })]) }
+    expect(healthNeeds(stale).count).toBe(without.count)
+    const older = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode')] })]) }
+    expect(healthNeeds(older).count).toBe(without.count + 1)
   })
 
   it('groups the leftovers with their counts, largest first, says how fully they were read and counts none of it', () => {
@@ -1290,12 +1307,12 @@ describe('Health counts each issue once (Story 96.6)', () => {
       ? { ...app, state: 'Set up', unlisted: [], test: { at: '2026-10-09T20:00:00.000Z', version: app.version ?? '2.0.29', outcome: 'fail', detail: 'synthetic' } } : app) } }
     const needs = healthNeeds(tested)
     expect(needs.sections).toContain('Tools')
-    expect(needs.keys.has('tools:opencode')).toBe(false)
+    expect([...needs.keys].some((key) => key.startsWith('tools:opencode:'))).toBe(false)
     // Codex's own doctor reports mcp.config as a tool-check: not BMN's Tools check, so never the Tools row's issue.
-    const codexOwn = doctorRow('codex', { state: 'problems', problems: [problem('tool-check', 1, 'codex')] })
-    expect(doctorPlace(codexOwn, codexOwn.problems[0]!, new Set(['tools:codex']))).toBe('doctor')
-    const bmnOwn = doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'codex')] })
-    expect(doctorPlace(bmnOwn, bmnOwn.problems[0]!, new Set(['tools:codex']))).toBe('tools')
+    const codexOwn = doctorRow('codex', { state: 'problems', problems: [problem('tool-check', 1, 'codex', { cause: 'missing' })] })
+    expect(doctorPlace(codexOwn, codexOwn.problems[0]!, new Set(['tools:codex:missing']))).toBe('doctor')
+    const bmnOwn = doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'codex', { cause: 'missing' })] })
+    expect(doctorPlace(bmnOwn, bmnOwn.problems[0]!, new Set(['tools:codex:missing']))).toBe('tools')
   })
 
   it('leaves Test again… usable while BMN only reads in the background', () => {

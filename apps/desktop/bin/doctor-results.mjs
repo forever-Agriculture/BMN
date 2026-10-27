@@ -32,7 +32,11 @@ export const PROBLEMS = Object.freeze({
 })
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-const fact = (code, item = 1, app) => ({ code, item, ...(['claude', 'codex', 'opencode'].includes(app) ? { app } : {}) })
+/** The codes of BMN's own area checks, whose findings name their cause: the entry's state word, never its name or path (96 Astra review). */
+const AREA_CODES = Object.freeze(['hook-check', 'skill-check', 'tool-check', 'rules-check'])
+const CAUSE = /^[a-z][a-z-]{0,30}(?::[A-Za-z][\w.]{0,39})?$/u
+const fact = (code, item = 1, app, cause) => ({ code, item, ...(['claude', 'codex', 'opencode'].includes(app) ? { app } : {}),
+  ...(AREA_CODES.includes(code) && typeof cause === 'string' && CAUSE.test(cause) ? { cause } : {}) })
 const result = (problems, partial = false) => ({
   state: partial ? 'partial' : problems.length > 0 ? 'problems' : 'passed',
   problems: partial ? [...problems, fact('additional-details')] : problems
@@ -157,13 +161,13 @@ export function parseBmnDoctor(check, text, exitCode) {
   const problems = []
   let partial
   let currentApp
-  const add = (code) => problems.push(fact(code, problems.length + 1, currentApp))
+  const add = (code, cause) => problems.push(fact(code, problems.length + 1, currentApp, cause))
   if (check === 'rules' && object(data) && Array.isArray(data.targets) && data.targets.length > 0) {
     partial = !completeApps(data.targets, 'harness') || typeof data.ok !== 'boolean'
     for (const row of data.targets) {
       currentApp = row?.harness
       if (!object(row) || !['current', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'unreadable'].includes(row.state)) partial = true
-      else if (row.state !== 'current') add('rules-check')
+      else if (row.state !== 'current') add('rules-check', row.state)
     }
   } else if (check === 'hooks' && object(data) && Array.isArray(data.agents) && data.agents.length > 0) {
     partial = !completeApps(data.agents, 'agent') || typeof data.ok !== 'boolean'
@@ -180,8 +184,8 @@ export function parseBmnDoctor(check, text, exitCode) {
         if (typeof event.optional !== 'boolean' || event.optional !== optional) partial = true
         if (event.state === 'wired' || event.state === 'wired (older wording)' && ['claude', 'codex'].includes(app.agent)) continue
         if (event.state === 'missing') {
-          if (!optional || event.optional !== true) add('hook-check')
-        } else if (event.state === 'wired (older wording)' && app.agent === 'opencode' && event.event === 'plugin') add('hook-check')
+          if (!optional || event.optional !== true) add('hook-check', `missing:${event.event}`)
+        } else if (event.state === 'wired (older wording)' && app.agent === 'opencode' && event.event === 'plugin') add('hook-check', 'older-wording:plugin')
         else partial = true
       }
       if (required.some(event => !seen.has(event))) partial = true
@@ -195,10 +199,10 @@ export function parseBmnDoctor(check, text, exitCode) {
       if (!Array.isArray(rows)) { partial = true; continue }
       for (const row of rows) {
         if (!object(row) || typeof row.state !== 'string') partial = true
-        else if (!(check === 'skills' ? ['current', 'read-directly', 'excluded'] : ['current', 'excluded']).includes(row.state)) add(check === 'skills' ? 'skill-check' : 'tool-check')
+        else if (!(check === 'skills' ? ['current', 'read-directly', 'excluded'] : ['current', 'excluded']).includes(row.state)) add(check === 'skills' ? 'skill-check' : 'tool-check', row.state)
       }
       if (check === 'tools' && Array.isArray(app.unlisted)) for (const entry of app.unlisted) {
-        if (entry.state === 'exposed' || entry.managed === true) add('tool-check')
+        if (entry.state === 'exposed' || entry.managed === true) add('tool-check', entry.managed === true ? 'unlisted-managed' : 'unlisted-exposed')
       }
     }
     if (check === 'skills' && data.source?.readable !== true) partial = true
@@ -215,9 +219,10 @@ export function projectedResult(value) {
   for (const row of value.problems) {
     if (!object(row) || !Object.hasOwn(PROBLEMS, row.code) || !Number.isSafeInteger(row.item) || row.item < 1 || row.item > 10000) return null
     if (row.app !== undefined && !['claude', 'codex', 'opencode'].includes(row.app)) return null
+    if (row.cause !== undefined && (typeof row.cause !== 'string' || !CAUSE.test(row.cause) || !AREA_CODES.includes(row.code))) return null
     if (row.count !== undefined && (!Number.isSafeInteger(row.count) || row.count < 1 || row.count > 10000 || !row.code.startsWith('leftover-'))) return null
     if (row.code.startsWith('leftover-') && row.count === undefined) return null
-    problems.push({ ...fact(row.code, row.item, row.app), ...(row.count !== undefined ? { count: row.count } : {}) })
+    problems.push({ ...fact(row.code, row.item, row.app, row.cause), ...(row.count !== undefined ? { count: row.count } : {}) })
   }
   if (value.state === 'passed' && problems.length !== 0) return null
   if (value.state === 'problems' && problems.length === 0) return null

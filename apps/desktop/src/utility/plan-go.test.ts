@@ -268,6 +268,7 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     const { main, plan, home } = project()
     const sha = approved(main, home)
     const row = token(main, home)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
     const resolved = await resolvePlan(main)
     await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'committed') throw new Error('crashed') } })).rejects.toThrow('crashed')
     expect(git(plan, 'log', '-1', '--format=%s')).toBe('plan: go for Epic 7 (go 2026-10-26)')
@@ -284,6 +285,7 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     const sha = approved(main, home)
     const row = token(main, home)
     const before = snapshot(plan)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
     const resolved = await resolvePlan(main)
     await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'created') throw new Error('crashed') } })).rejects.toThrow('crashed')
     expect(snapshot(plan)).toEqual(before)
@@ -311,6 +313,38 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     const again = bmn(moved.main, moved.home, movedArgs)
     expect([again.code, again.json.outcome, again.json.row.status, again.json.board_pending]).toEqual([0, 'recorded-before', 'in-progress', false])
     expect(readFileSync(join(moved.plan, 'status.yaml'), 'utf8')).toBe(started)
+  })
+
+  it('a retry after a withdrawal not yet committed is refused and never makes the row ready again (96 Astra review)', () => {
+    const { main, plan, home } = project()
+    const args = ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home), '--json']
+    expect(bmn(main, home, args).code).toBe(0)
+    // Put back with bmn plan set, then retried with the token of the row as it now is.
+    expect(bmn(main, home, ['set', 'epic-7', 'backlog', '--expect', token(main, home), '--note', 'owner withdrew the go', '--json']).code).toBe(0)
+    const withdrawn = readFileSync(join(plan, 'status.yaml'), 'utf8')
+    const retry = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home), '--json'])
+    expect([retry.code, retry.json.error?.code]).toEqual([1, 'WITHDRAWN'])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(withdrawn)
+    // The original row restored byte for byte: the first request's token matches again, and still nothing is made ready.
+    file(plan, 'status.yaml', BOARD)
+    const original = bmn(main, home, args)
+    expect([original.code, original.json.error?.code]).toEqual([1, 'WITHDRAWN'])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(BOARD)
+    expect(git(plan, 'log', '--format=%s').split('\n')).toHaveLength(2)
+  })
+
+  it('a crash after the branch moved, then a withdrawal before the retry: the retry completes nothing (96 Astra review)', async () => {
+    const { main, plan, home } = project()
+    const sha = approved(main, home)
+    const row = token(main, home)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
+    const resolved = await resolvePlan(main)
+    await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'committed') throw new Error('crashed') } })).rejects.toThrow('crashed')
+    // He puts the row back (the board still holds the row the go was asked on, rewritten); the retry must not publish the go over it.
+    expect(bmn(main, home, ['set', 'epic-7', 'backlog', '--expect', row, '--note', 'owner withdrew the go', '--json']).code).toBe(0)
+    const retry = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', row, '--json'])
+    expect([retry.code, retry.json.error?.code]).toEqual([1, 'WITHDRAWN'])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toMatch(/^ {2}epic-7: backlog # owner withdrew the go$/mu)
   })
 })
 
