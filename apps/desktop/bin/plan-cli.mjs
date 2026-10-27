@@ -224,7 +224,7 @@ export function keepVersion(boardPath, text, environment = process.env) {
  * A go whose commit exists but whose working board does not show it yet (96 Astra review and recheck): only such a go
  * may be completed by a retry, and only over the row it was asked on (`from`, that row's token). Kept beside the
  * board's versions, outside the project, until the working board shows the go or a later act supersedes it: a
- * `bmn plan set` that changes the row, or a later commit of the row.
+ * `bmn plan set` that changes the row, or a later commit of the row. While the board is being written it says `writing`.
  */
 function pendingGoPath(boardPath, key, environment = process.env) {
   return join(versionsDirectory(boardPath, environment), `pending-go-${key}.json`)
@@ -234,12 +234,29 @@ function readPendingGo(boardPath, key) {
   try { return JSON.parse(readFileSync(pendingGoPath(boardPath, key), 'utf8')) } catch { return null }
 }
 
-function writePendingGo(boardPath, key, commit, from) {
+function writePendingGo(boardPath, key, commit, from, writing = false) {
   const path = pendingGoPath(boardPath, key)
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const temporary = `${path}.${process.pid}-${randomBytes(3).toString('hex')}.tmp`
-  writeFileSync(temporary, `${JSON.stringify({ commit, from, at: new Date().toISOString() })}\n`, { mode: 0o600 })
+  writeFileSync(temporary, `${JSON.stringify({ commit, from, writing, at: new Date().toISOString() })}\n`, { mode: 0o600 })
   renameSync(temporary, path)
+}
+
+/**
+ * Write the go's row to the working board, its pending record saying `writing` meanwhile (96 Astra recheck 2): a retry
+ * that finds `writing` beside the row the go was asked on cannot tell a board never written from one written and put
+ * back by hand, so it refuses instead of guessing. A compare-and-write that lost wrote nothing and says so again.
+ */
+function publishGo(boardPath, key, record, working, text, seam) {
+  writePendingGo(boardPath, key, record.commit, record.from, true)
+  seam('writing', record.commit)
+  if (!commit(boardPath, working, text)) {
+    writePendingGo(boardPath, key, record.commit, record.from)
+    return false
+  }
+  seam('published', record.commit)
+  clearPendingGo(boardPath, key)
+  return true
 }
 
 function clearPendingGo(boardPath, key, environment = process.env) {
@@ -687,10 +704,7 @@ export async function recordGo(plan, { epic, source: given, approved, expect, da
       if (epicIncluded) followIndex(repo, epicRel, parentEpic, treeEntry(repo, created, epicRel), undefined)
     } catch { /* the go stands; an index entry left behind only shows as a staged change */ }
     keepVersion(plan.boardPath, working)
-    if (commit(plan.boardPath, working, workingText)) {
-      seam('published', created)
-      clearPendingGo(plan.boardPath, key)
-    }
+    publishGo(plan.boardPath, key, { commit: created, from: current.token }, working, workingText, seam)
 
     // Read back what the commit holds: the row, the approved text and the trailers.
     const recordedRow = rowIn(showAt(repo, created, boardRel) ?? '', key)
@@ -726,6 +740,9 @@ function completeRecordedGo(plan, { repo, boardRel, key, epic, expect, before, n
   const workingRow = rowIn(readFileSync(plan.boardPath, 'utf8'), key)
   const shown = (row) => row !== null && recordedRow !== null && row.token === recordedRow.token
   const asked = unfinished && workingRow?.token === record.from
+  if (asked && record.writing === true && !shown(workingRow)) {
+    throw new GoRefusal('UNCERTAIN', `this go was recorded at ${before.commit.slice(0, 12)} and was being written to the board when it stopped; ${key} shows the row it was asked on, which may be a withdrawal put back by hand, so nothing is written; a new go needs a new act of his`)
+  }
   if (!shown(workingRow) && !asked && workingRow !== null && ['backlog', 'dropped'].includes(workingRow.status)) {
     throw withdrawn(unfinished ? 'on the board, changed after the go was recorded' : 'on the board, put back after the go was published', workingRow)
   }
@@ -736,7 +753,7 @@ function completeRecordedGo(plan, { repo, boardRel, key, epic, expect, before, n
     const changed = replaceRow(working, key, 'ready', recordedRow.note)
     if (changed !== null && changed.token === expect) {
       keepVersion(plan.boardPath, working)
-      if (commit(plan.boardPath, working, addToQueue(changed.text, epic) ?? changed.text)) seam('published', before.commit)
+      publishGo(plan.boardPath, key, record, working, addToQueue(changed.text, epic) ?? changed.text, seam)
     }
   }
   const row = rowIn(readFileSync(plan.boardPath, 'utf8'), key)

@@ -374,6 +374,28 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(BOARD)
   })
 
+  it('a crash after the board showed the go, then the original row restored by hand: the retry writes nothing (96 Astra recheck 2)', async () => {
+    const { main, plan, home } = project()
+    const sha = approved(main, home)
+    const row = token(main, home)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
+    const resolved = await resolvePlan(main)
+    await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'published') throw new Error('crashed') } })).rejects.toThrow('crashed')
+    file(plan, 'status.yaml', BOARD) // he puts the row back exactly as it was before the go
+    const retry = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', row, '--json'])
+    expect([retry.code, retry.json.error?.code]).toEqual([1, 'UNCERTAIN'])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(BOARD)
+    // A crash while the board was being written cannot be told from that, so it is refused the same way: a new go is needed.
+    const other = project()
+    const otherSha = approved(other.main, other.home)
+    const otherRow = token(other.main, other.home)
+    vi.stubEnv('HOME', other.home); vi.stubEnv('XDG_STATE_HOME', join(other.home, 'state'))
+    await expect(recordGo(await resolvePlan(other.main), { epic: 7, source: SOURCE, approved: otherSha, expect: otherRow, seam: (step: string) => { if (step === 'writing') throw new Error('crashed') } })).rejects.toThrow('crashed')
+    const unwritten = bmn(other.main, other.home, ['go', '7', '--source', SOURCE, '--approved', otherSha, '--expect', otherRow, '--json'])
+    expect([unwritten.code, unwritten.json.error?.code]).toEqual([1, 'UNCERTAIN'])
+    expect(readFileSync(join(other.plan, 'status.yaml'), 'utf8')).toBe(BOARD)
+  })
+
   it('a crash after the branch moved, then the row withdrawn by hand: no retry completes the go over it (96 Astra recheck)', async () => {
     const { main, plan, home } = project()
     const sha = approved(main, home)
