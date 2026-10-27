@@ -258,3 +258,14 @@ describe('Backup checks what it wrote at once (Story 75.7)', () => {
     expect(markup).not.toContain('verified, ')
   })
 })
+
+describe('QA: Health alerts help', () => {
+  it('keeps switch-off timing instructions inside the existing limitations disclosure', () => {
+    const markup = renderToStaticMarkup(createElement(PreferencesDialog, {
+      initialPage: 'notifications', settings: DEFAULT_APP_SETTINGS, onSettings: () => undefined, onClose: () => undefined,
+      saveVoice: async () => DEFAULT_APP_SETTINGS, suggestVocabulary: () => ({ ok: false as const, reason: 'test' })
+    }))
+    const disclosure = /<details class="advanced"><summary>What is checked, and what it cannot see<\/summary>.*?<\/details>/s.exec(markup)?.[0]
+    expect(disclosure).toContain('Leave the time empty to keep watching; a time already past means that time tomorrow.')
+  })
+})

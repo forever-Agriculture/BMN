@@ -130,7 +130,7 @@ export function WorkspaceResultsDialog(props: {
 
   return (
     <Dialog label={`Workspace results — ${props.workspace.name}`} onClose={props.onClose} className="workspace-results-dialog">
-      <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports; use History for earlier records.</p>
+      <p className="dialog-note">Reported by the agent, not verified by BMN.</p>
       <div className="workspace-results-toolbar">
         <button type="button" onClick={props.onOpenRuns}>dev-auto runs…</button>
         {snapshot ? <span>Read {shortDate(snapshot.checkedAt)}</span> : null}

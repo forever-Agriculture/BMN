@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ArtifactRecord, ProgressRecord, SessionRecord } from '@bmn/protocol'
-import { sameProgressRecord, workspaceResults } from './workspace-results'
+import { sameProgressRecord, workspaceResults, WorkspaceResultsDialog } from './workspace-results'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { WorkspaceRecord } from '@bmn/protocol'
 
 const now = Date.parse('2026-09-24T12:00:00.000Z')
 const sessions = [
@@ -50,5 +53,15 @@ describe('workspace results selector', () => {
     expect(sameProgressRecord(initial, { ...initial, label: 'Changed result' })).toBe(false)
     expect(sameProgressRecord(initial, { ...initial, evidence: [{ artifactId: 'new', name: 'new.md' }] })).toBe(false)
     expect(sameProgressRecord(initial, { ...initial })).toBe(true)
+  })
+})
+
+describe('QA: results provenance', () => {
+  it('labels the agent claim without pointing to an absent History control', () => {
+    const markup = renderToStaticMarkup(createElement(WorkspaceResultsDialog, { workspace: { workspaceId: 'w-one', name: 'QA' } as WorkspaceRecord, now,
+      onOpenRuns: () => undefined, onClose: () => undefined, onOpenReport: () => undefined }))
+    expect(markup).toContain('<p class="dialog-note">Reported by the agent, not verified by BMN.</p>')
+    expect(markup).not.toContain('use History')
+    expect(markup).toContain('dev-auto runs…')
   })
 })

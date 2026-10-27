@@ -998,7 +998,6 @@ export function PreferencesDialog(props: {
                 </button>
               </div>
               <p className="preferences-help">Checks temperatures, battery and mains every minute while BMN is open; your phone hears when a problem starts and ends.</p>
-              <p className="preferences-help">Leave the time empty to keep watching; a time already past means that time tomorrow.</p>
               {!canSendTest && (
                 <p className="preferences-help" role="status">
                   {telegramEnabled ? 'Telegram is not connected; nothing will be sent until it is.' : 'Telegram is off; nothing will be sent. Enable and connect Telegram to be told.'}
@@ -1009,6 +1008,7 @@ export function PreferencesDialog(props: {
               <details className="advanced">
                 <summary>What is checked, and what it cannot see</summary>
                 <div className="advanced-body">
+                  <p>Leave the time empty to keep watching; a time already past means that time tomorrow.</p>
                   <p>Alerts at these fixed limits:</p>
                   <dl className="kv" aria-label="Alerts at these fixed limits">
                     <dt>CPU</dt><dd>{HEALTH_LIMITS.cpuCritical} °C on one reading, or {HEALTH_LIMITS.cpuHot} °C on {HEALTH_LIMITS.cpuHotReadings} in a row</dd>

@@ -43,6 +43,7 @@ import { createMachineReads, endedSince, type MachineReads } from './machine-rea
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
+import { LoadingCheckHelp, RoutingCheckHelp, SkillsCheckHelp, SkillsDistributionHelp } from './rules-help'
 import { DoctorHealth, doctorNeedsCount, useDoctorClock, type HealthArea } from './doctor-health'
 import { SteadyOrderContext, useSteadyOrder } from './health-order'
 import { HooksHealth, hookRowWords } from './hooks-health'
@@ -1326,7 +1327,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
   const top = useHealthRule<HTMLDivElement>(rules)
   return (
     <>
-      <PageHead title="Skills" status={view.source.readable ? `${count} skill${count === 1 ? '' : 's'}${view.pending > 0 ? ` · ${view.pending} not installed yet` : ''}` : 'The skills folder cannot be read'} />
+      <PageHead title="Skills" status={view.source.readable ? `${count} skill${count === 1 ? '' : 's'}${view.pending > 0 ? ` · ${view.pending} not installed yet` : ''}` : view.source.detail ?? 'The skills folder cannot be read'} />
       <Notice rules={rules} />
       <div className="editor-head">
         <span className="faint mono" title={view.source.path}>{displayPath(view.source.path, snapshot.home)}</span>
@@ -1346,8 +1347,7 @@ function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
           BMN&apos;s own skill <b>{left.name}</b> is not BMN&apos;s here: {left.state === 'removed' ? 'you removed it, so BMN does not add it back' : left.state === 'foreign' ? `${left.detail}; remove it and BMN adds its own at the next start` : left.detail}.
         </p>
       ))}
-      <p className="preferences-help">A skill reaches every app unless you keep it to some; an app held to public work gets only the Public&nbsp;skills.</p>
-      <p className="preferences-help">A change takes effect on approval; BMN then installs it in each app, and at every start installs what an app lacks.</p>
+      <SkillsDistributionHelp />
 
       <details className="advanced">
         <summary>Earlier installs</summary>
@@ -1372,7 +1372,7 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
   const view = snapshot.skills
   return (
     <>
-      <h4 className="group-head">Skills<span className="caption">where each app reads skills, and whether it has the ones it may have</span></h4>
+      <h4 className="group-head">Skills<span className="caption">where each app reads skills</span></h4>
       {view.source.readable ? null : <p className="preferences-error" role="alert">{view.source.detail ?? 'The skills folder cannot be read'}</p>}
       {steady('skills', view.apps, (app) => skillsRowState(snapshot, app).needs).map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
@@ -1423,7 +1423,7 @@ function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setA
         )
       })}
       <p className="preferences-help">Nothing is written for an app until its test passed on the installed version.</p>
-      <p className="preferences-help">Skills inside a project folder, and sessions already running, are outside what BMN installs.</p>
+      <SkillsCheckHelp />
     </>
   )
 }
@@ -1883,10 +1883,10 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         )
       })}
       {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
-      <p className="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p>
+      <LoadingCheckHelp />
       {withheld.length > 0 ? <p className="preferences-help">{`It is off for ${named(withheld)}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.`}</p> : null}
 
-      <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>
+      <h4 className="group-head">Agent apps<span className="caption">program, version and destination</span></h4>
       {snapshot.ownEnvironment ? (
         <p className="page-note"><Dot label="Needs you" />BMN could not read your shell's settings ({snapshot.ownEnvironment}), so it looked for the apps with its own; a session may find more.</p>
       ) : null}
@@ -1952,7 +1952,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
         )
       })}
       <p className="preferences-help">Routing-tested versions are the ones BMN checked for where they send data. Every installed version is supported.</p>
-      <p className="preferences-help">BMN works out where an app sends data the same way on each version, and notes the version with every check.</p>
+      <RoutingCheckHelp />
 
       <SkillsHealth rules={rules} action={action} setAction={setAction} />
 

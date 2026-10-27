@@ -696,6 +696,7 @@ export function SessionTerminal(props: {
               ref={searchInput}
               aria-label={`Search ${name} output`}
               placeholder="Search output"
+              title={searchStatusText('')}
               value={searchTerm}
               onChange={(event) => {
                 setSearchTerm(event.target.value)
@@ -714,7 +715,7 @@ export function SessionTerminal(props: {
             />
             <button type="button" onClick={() => find(-1)}>Previous</button>
             <button type="button" onClick={() => find(1)}>Next</button>
-            <span className="search-result" aria-live="polite">{searchStatusText(searchResult)}</span>
+            {searchResult ? <span className="search-result" aria-live="polite">{searchStatusText(searchResult)}</span> : null}
             <button type="button" aria-label={searchAtBottom ? 'Move Find to top' : 'Move Find to bottom'}
               onClick={() => setSearchAtBottom(value => !value)}>{searchAtBottom ? 'Top' : 'Bottom'}</button>
             <button type="button" className="icon-button" aria-label="Close search" onClick={closeSearch}><Icon name="close" /></button>

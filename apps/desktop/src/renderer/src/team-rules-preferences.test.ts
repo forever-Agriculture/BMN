@@ -906,7 +906,7 @@ describe('Integrations › Health (60.6 AC4)', () => {
   it('offers no Test…: Test again… only after a failure or once BMN stopped trying, and only where the app may receive private work (Story 75.8)', () => {
     expect(markup).not.toContain('Test…')
     expect(markup).not.toMatch(/aria-label="Test [A-Za-z ]+ again"/)
-    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p><p class="preferences-help">It is off for OpenCode, which gets only the public sections.</p>')
+    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p></details><p class="preferences-help">It is off for OpenCode, which gets only the public sections.</p>')
     const allPublic = RULES.health.state === 'checked' ? { ...RULES.health, targets: RULES.health.targets.map((target) => ({ ...target, kind: 'public' as const })) } : RULES.health
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: allPublic } })))).toContain('It is off for Claude Code, Codex and OpenCode, which get only the public sections.')
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
@@ -947,7 +947,7 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCopied: noop, onClose: noop, ...extra }))
 
   it('shows under each version the program BMN finds, and says when it finds none', () => {
-    expect(markup).toContain('Agent apps<span class="caption">the program BMN finds, its version and where it sends data</span>')
+    expect(markup).toContain('Agent apps<span class="caption">program, version and destination</span>')
     // The path wraps instead of being cut: its last part is the program's name.
     expect(markup).toContain('· routing-tested</span></span><span class="path mono wrap" title="/home/synthetic/.local/bin/claude">~/.local/bin/claude</span></span>')
     expect(markup).toContain('· newer than routing-tested</span></span><span class="path mono wrap" title="/home/synthetic/.npm-global/bin/codex">~/.npm-global/bin/codex</span></span>')
@@ -1535,7 +1535,7 @@ describe('skills (60.11 AC5)', () => {
 
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
     const health = rulesMarkup('health')
-    expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
+    expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills</span></h4>')
     expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
@@ -2105,5 +2105,23 @@ describe('read-only roles on Team and Health (63.2 AC4)', () => {
     expect(notHeldWords({ held: [], proposed: ['epic-reviewer', 'consultant'] })).toBe(said)
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, readOnlyRoles: { held: [], proposed: ['epic-reviewer', 'consultant'] } } })))).toContain(said.replace("'", '&#x27;'))
     expect(words(rulesMarkup('health'))).not.toContain('held to read-only')
+  })
+})
+
+// Epic 98: these assert the actual rendered controls and disclosure placement.
+describe('QA: concise Health and Skills help', () => {
+  const details = (markup: string): string[] => [...markup.matchAll(/<details class="advanced">.*?<\/details>/gs)].map(([value]) => value)
+  it('keeps testing explanations available behind closed section disclosures', () => {
+    const shown = details(rulesMarkup('health'))
+    for (const phrase of ['A loading test starts the app once', 'BMN works out where an app sends data', 'Skills inside a project folder']) {
+      expect(shown.some(value => value.includes('<summary>How BMN checks</summary>') && value.includes(phrase)), phrase).toBe(true)
+    }
+  })
+  it('keeps skills distribution help behind its named disclosure', () => {
+    expect(details(rulesMarkup('skills')).some(value => value.includes('<summary>How skills reach apps</summary>') && value.includes('A skill reaches every app') && value.includes('A change takes effect on approval'))).toBe(true)
+  })
+  it('says that the skills folder is missing in the page head as well as the alert', () => {
+    const missing = { ...RULES, skills: { ...RULES.skills, skills: [], source: { ...RULES.skills.source, readable: false, detail: 'the folder does not exist' } } }
+    expect(rulesMarkup('skills', rules({ snapshot: missing }))).toContain('<h3 class="page-title">Skills</h3><span class="faint">the folder does not exist</span>')
   })
 })

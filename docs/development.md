@@ -56,6 +56,7 @@ All commands run from the repository root.
 | `pnpm run typecheck` | TypeScript project build of the protocol, main/preload and renderer |
 | `pnpm run test:unit` | Vitest unit and integration tests |
 | `pnpm run test:electron` | Build, run the real Electron app in self-test mode, then check that a normal start loads no self-test code |
+| `pnpm run qa:bench` | Build and start a persistent isolated BMN; drive it from the shell as described below |
 | `pnpm run test:run` | Unit tests, then the Electron self-test |
 | `pnpm run voice:build` | Build the pinned whisper.cpp engine (`node scripts/voice/build-whisper.mjs --force` rebuilds) |
 | `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release` |
@@ -154,6 +155,69 @@ covers application-controlled payloads. Chromium's private GPU allocations and l
 every-display-frame timing remain **UNVERIFIED**. Resize acceptance compares complete
 images and displayed text on every recorded native frame; Electron's subscriber is capped
 at 30 fps.
+
+## QA bench
+
+`pnpm run qa:bench` builds this checkout and starts a headless BMN with two synthetic workspaces,
+bash sessions, a temporary home and XDG folders, and a private D-Bus session. It prints a loopback
+CDP endpoint and its evidence folder. It starts no signed-in agent and inherits no agent identity,
+desktop bus, keyring or session token. The Chromium sandbox stays enabled. `strace` and
+`dbus-run-session`, Python 3 and `flock` must be installed, with a writable delegated cgroup v2
+under the current user’s `app.slice`. The bench refuses to start without kernel containment.
+In a linked worktree use `--electron` with the default
+checkout's AppArmor-approved Electron executable, as with `test:visual`.
+
+From any shell, in that checkout:
+
+```bash
+pnpm run qa:bench -- do snapshot
+pnpm run qa:bench -- do click 'button[aria-label="Command palette"]'
+pnpm run qa:bench -- do type 'input[aria-label="Search commands, workspaces, sessions and files"]' 'Search terminal output'
+pnpm run qa:bench -- do press 'Escape'
+pnpm run qa:bench -- do click 'button[aria-label="Preferences"]'
+pnpm run qa:bench -- do screenshot settings
+pnpm run qa:bench -- --stop
+```
+
+Selectors are Playwright selectors. `type` fills the selected input; `press` sends a key to the
+focused control. Screenshots use plain filenames and stay in the bench's evidence folder, beside
+the action log, process identities and whole-life file/socket trace. The last state is
+`.dev-auto/evidence/qa-bench/current.json`; it includes the local controller credential, so do not
+publish that file. Stop fences further launches, asks the app to close, then drains its dedicated
+cgroup, removes the temporary folders and waits for both workload and recovery traces to exit.
+Process lists are diagnostic; they never authorize signals. A private traced watchdog handles
+controller or app exit. If the watchdog dies, `--stop` starts a replacement. Failed cleanup keeps a
+retryable stopping state and preserves the roots; retry `--stop`. A killed tracer is reported as
+incomplete evidence even when runtime cleanup succeeds.
+
+Each traced branch has a private recorder, an inherited kernel lock lease and its own cgroup.
+Together the lease and cgroup account for launches even if the starter crashes before recording a
+child. A paused recorder that has not joined its group keeps the lease: stop returns a bounded
+error, preserves the roots and refuses another start until that recorder exits and stop is retried.
+The recorder is the tracer's actual parent. After reaping it, the recorder seals a certificate with
+the wait status, launch identities and the trace's identity, size and SHA-256. Whole-life evidence
+requires normal zero tracer exit and a terminal record for every traced descendant; an actor exit
+alone proves nothing about an orphan. `cleanupComplete` and `traceComplete` are separate results:
+successful cleanup can have incomplete evidence after a crash, signal or missing certificate.
+Recovery evidence and lease files stay beside the traces. The final empty recovery cgroup also
+stays as bookkeeping until the next traced recovery removes it; it contains no processes and is
+outside the deleted workload temporary root.
+
+Use `--no-build` to reuse an existing build, or `--binary /absolute/path/to/bmn` to drive an already
+packaged candidate in the same isolated environment. A second bench in the same checkout is refused. `--stop` also cancels a startup in progress;
+a failed or timed-out startup cleans up its cgroup and temporary roots automatically. A stopping
+command can use a different `TMPDIR` from the starting command.
+
+Playwright MCP snapshot, click and screenshot work over the printed CDP endpoint (measured with
+`@playwright/mcp@0.0.75`). Agents configured with MCP at startup can use:
+
+```bash
+npx --yes @playwright/mcp@0.0.75 --cdp-endpoint http://127.0.0.1:PORT --output-dir /absolute/evidence/folder
+```
+
+Replace `PORT` with the printed port. Follow the server’s `tools/list` schema: this version uses
+`target` for click references. Connect only to the disposable bench. The shell actions remain
+available to agents whose running app cannot add an MCP server.
 
 ## Data folders
 
