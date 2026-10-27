@@ -392,7 +392,8 @@ export interface ContextLimitView {
 }
 
 /** One skill's state in one app (60.11 AC2); `excluded` is a skill the app is not meant to have and does not have. */
-export type SkillStateName = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
+export const SKILL_STATE_NAMES = ['unreadable', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'current', 'read-directly', 'exposed', 'excluded'] as const
+export type SkillStateName = (typeof SKILL_STATE_NAMES)[number]
 
 /** One app's skills, as Integrations › Health shows them (60.11 AC5). */
 export interface SkillsAppView {
@@ -453,7 +454,8 @@ interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
 export interface SkillsPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: SkillsPlanTarget[]; exposed: { harness: RosterHarness; skill: string; fix: string }[] }
 
 /** One tool's state in one app (60.12 AC4); `excluded` is a tool the app is not meant to have and does not have, `blocked` one it cannot take as it is. */
-export type ToolStateName = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
+export const TOOL_STATE_NAMES = ['unreadable', 'missing', 'unmanaged', 'edited-outside', 'stale', 'current', 'exposed', 'excluded', 'blocked'] as const
+export type ToolStateName = (typeof TOOL_STATE_NAMES)[number]
 
 /** One app's tools, as Integrations › Health shows them (60.12 AC6). */
 export interface ToolsAppView {

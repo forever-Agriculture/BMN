@@ -55,7 +55,8 @@ his go"): one plan commit moving the epic's row to `ready` with `go YYYY-MM-DD`,
 SHA-256 of the Run needs and Decisions you were shown. A run reads them with the skill's `scripts/run_needs.py`
 from that commit, with your answer and that hash (a date first written in a later status is not a go; a commit
 whose record is incomplete or whose text differs from the hash it names grants nothing; a row put back to backlog
-or dropped withdraws the go until your next one, even if the row later moves on):
+or dropped, or taken off the board, withdraws the go until your next one, even if the row later moves on, and a
+board that cannot be read grants nothing):
 an edit made after the go does not count until you give a new go, and the run tells you about it. At start and
 at every resume the run keeps the same go, its rounds left and its money in its handoff, and asks you nothing
 about them. An epic without Run needs, or without a recorded go, runs as before: the run continues under your
@@ -81,8 +82,9 @@ provider call an agent might make, so it is a guard on those launches, not a har
 The same ledger counts your go's extra repair rounds: a run takes one with `spend_ledger.py round` at a story
 or the epic as its boundary, so a resumed run, a new lead, another worktree or a new run name sees the rounds
 already used, two runs cannot take the same last round, and a new go refills none already used. When the ledger
-lacks a go a run already began under, every boundary counts as used up to the largest allowance any of its gos
-gave, written into the ledger, so a later go with the same allowance gives nothing back.
+lacks a go a run already began under (a handoff names it, or its row is past every not-started status, an unknown
+status included), every boundary counts as used up to the largest allowance any of its gos gave, written into the
+ledger, so a later go with the same allowance gives nothing back.
 
 ## The Away grant
 

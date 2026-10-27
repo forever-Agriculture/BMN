@@ -156,12 +156,14 @@ Approved by the owner on 2026-10-20, Story 81.2 AC3; Fable design ask
 Approved by the owner on 2026-10-26 (card in run `dev-auto/epic-96-20261026`: “Approve as proposed”), design
 `plan/references/096/health-design.md` with its planner corrections.
 
-- **One issue, one count.** An issue is one app × one area × one cause with one fix. A Doctor hook, tool, skill or
-  rules finding names its cause as the entry's state word (`missing`, `unlisted-exposed`, `missing:Stop`), never a
-  name or path; one whose app, area and cause a Health row needing the owner shows now is that issue: shown faint
-  in Doctor, counted on the row. Others count in Doctor: another cause of the same app and area, a stale result
-  Health no longer shows, an older result without a cause, a finding naming no app. Matching words alone never
-  merge two issues.
+- **One issue, one count.** An issue is one app × one area × one cause with one fix. A Health row needing the owner
+  counts each distinct cause it shows (at least one) and each of its tests that failed (the skills listing and
+  loading tests apart), so one row can hold several issues. A Doctor hook, tool, skill or rules finding names its
+  cause as the entry's state word from a closed list (`missing`, `unlisted-exposed`, `missing:Stop`), never a name or
+  path; an unknown state word makes the check partial. One whose app, area and cause a Health row needing the owner
+  shows now is that issue: shown faint in Doctor, counted on the row. Others count in Doctor, once per cause: another
+  cause of the same app and area, a stale result Health no longer shows; an older result without a cause or a
+  finding naming no app counts by itself. Matching words alone never merge two issues.
 - **Head.** “Refreshing…” only while BMN re-reads the machine, otherwise “Read 13:39”, “· stale” past the Health
   rule's limit, then “· N need you: Hooks, Tools”. Tests and Doctor runs say their state on their own rows; Doctor's
   line says “Doctor ran 13:31” or “Doctor running · results below are from 13:31”. Only the head is a live status.

@@ -46,7 +46,7 @@ import {
   type RulesState
 } from './rules-preferences'
 import { needsFirst } from './health-order'
-import { DoctorHealth, doctorPlace } from './doctor-health'
+import { DoctorHealth, doctorNeedsCount, doctorPlace } from './doctor-health'
 import { hookRowWords } from './hooks-health'
 import {
   Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords,
@@ -838,9 +838,9 @@ describe('Integrations › Health (60.6 AC4)', () => {
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
     // Story 96.6: the head says when Health was read, that this is past the Health rule's limit, and which sections hold the issues; only it is a live status.
-    expect(markup).toContain(`<span class="faint"><span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 9 need you: Rules files, Skills, Tools, Context limits, Hooks</span></span>`)
+    expect(markup).toContain(`<span class="faint"><span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks</span></span>`)
     // The skills' and tools' entry counts stay in their sections; the head keeps when Health was read and the issues.
-    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 9 need you: Rules files, Skills, Tools, Context limits, Hooks</span>`)
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks</span>`)
     // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
     for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current<span class="muted"> · Full rules<\/span>/)
@@ -857,12 +857,15 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(testLine({ harness: 'codex', outcome: 'unavailable', at: '2026-10-09T20:00:00.000Z' })).toBe(`Rules test unavailable ${shortDate('2026-10-09T20:00:00.000Z')}`)
   })
 
-  it('counts in its status every row that carries the Needs-you dot, each decided the way its row decides it (Story 75.10)', () => {
-    // Two rules files, two apps' skills, three apps' tools, one context limit and one hook file.
+  it('counts in its status each cause a row with the Needs-you dot shows, each decided the way its row decides it (Stories 75.10, 96.6)', () => {
+    // Nine rows carry the dot: two rules files, two apps' skills, three apps' tools, one context limit and one hook file.
     expect(markup.split('<div class="health-row"').slice(1).filter((row) => row.includes('needs-dot'))).toHaveLength(9)
-    expect(healthNeedsCount(RULES)).toBe(9)
-    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(6)
-    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Read [^·]+ · stale · 6 need you: Skills, Tools, Context limits\s/)
+    // They show twelve causes, one app × one area × one cause each (96 Astra recheck): rules stale and missing; skills
+    // missing (Codex) and exposed (OpenCode); tools edited outside (Claude Code), missing and blocked (Codex), exposed and an
+    // unlisted connection exposed (OpenCode); Sol's context limit; Codex's PostToolUse and Interrupt hooks.
+    expect(healthNeedsCount(RULES)).toBe(12)
+    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(8)
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Read [^·]+ · stale · 8 need you: Skills, Tools, Context limits\s/)
     // Within each section those rows come first, the rest in their order.
     expect([...markup.matchAll(/data-skills="([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Missing', 'Exposed', 'Reads the source'])
     expect(needsFirst([1, 2, 3, 4], (row) => row % 2 === 0)).toEqual([2, 4, 1, 3])
@@ -1255,6 +1258,35 @@ describe('Health counts each issue once (Story 96.6)', () => {
     expect(healthNeeds(older).count).toBe(without.count + 1)
   })
 
+  it('counts two causes of one Health row as two issues, and Doctor findings of both there (96 Astra recheck)', () => {
+    const base = healthNeeds({ ...AUDIT, doctor: undefined })
+    // OpenCode's Tools row shows three exposed connections and, now, an approved tool missing: two causes, two fixes.
+    const twoCauses: RulesSnapshot = { ...AUDIT, doctor: undefined, tools: { ...AUDIT.tools, tools: [...AUDIT.tools.tools, { id: 'synthetic-missing', states: { opencode: 'missing' }, details: {} }] } }
+    const needs = healthNeeds(twoCauses)
+    expect(needs.count).toBe(base.count + 1)
+    expect(needs.keys).toContain('tools:opencode:missing')
+    const withDoctor = healthNeeds({ ...twoCauses, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode', { cause: 'missing' }), problem('tool-check', 2, 'opencode', { cause: 'unlisted-exposed' })] })]) })
+    expect(withDoctor.count).toBe(needs.count)
+  })
+
+  it('counts a failed test as one issue of its own, the skills listing and loading tests apart, and no state issue beside it (96 Astra recheck)', () => {
+    const fine: RulesSnapshot = { ...RULES, skills: { ...RULES.skills, apps: RULES.skills.apps.map((app) => app.harness === 'claude' ? { ...app, listing: null } : app) } }
+    const fail = { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'fail' as const, detail: 'synthetic', stale: false }
+    const failing = (listing: boolean, loading: boolean): RulesSnapshot => ({ ...fine, skills: { ...fine.skills, apps: fine.skills.apps.map((app) => app.harness === 'claude'
+      ? { ...app, listing: listing ? fail : null, loading: loading ? fail : null } : app) } })
+    const base = healthNeedsCount(fine)
+    expect([healthNeedsCount(failing(true, false)), healthNeedsCount(failing(false, true)), healthNeedsCount(failing(true, true))]).toEqual([base + 1, base + 1, base + 2])
+  })
+
+  it('counts Doctor findings it alone shows once per cause they name, and each finding naming none by itself (96 Astra recheck)', () => {
+    const three = doctor([doctorRow('skills', { state: 'problems', problems: [1, 2, 3].map((item) => problem('skill-check', item, 'claude', { cause: 'stale' })) })])
+    expect(doctorNeedsCount(three)).toBe(1)
+    const older = doctor([doctorRow('skills', { state: 'problems', problems: [1, 2].map((item) => problem('skill-check', item, 'claude')) })])
+    expect(doctorNeedsCount(older)).toBe(2)
+    const apart = doctor([doctorRow('skills', { state: 'problems', problems: [problem('skill-check', 1, 'claude', { cause: 'stale' }), problem('skill-check', 2, 'codex', { cause: 'stale' }), problem('skill-check', 3, 'claude', { cause: 'missing' })] })])
+    expect(doctorNeedsCount(apart)).toBe(3)
+  })
+
   it('groups the leftovers with their counts, largest first, says how fully they were read and counts none of it', () => {
     const html = rulesMarkup('health', rules({ snapshot: AUDIT }))
     expect(html).toContain('Leftovers · 335 in 3 groups · show-only')
@@ -1504,7 +1536,7 @@ describe('skills (60.11 AC5)', () => {
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Read [^·]+ · stale · 9 need you: Rules files, Skills, Tools, Context limits, Hooks/)
+    expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
@@ -1685,7 +1717,7 @@ describe('tools (60.12 AC6)', () => {
   it('Health shows one row per app: its settings file, the state in words, Full or Public tools only and the last test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Read [^·]+ · stale · 9 need you: Rules files, Skills, Tools, Context limits, Hooks/)
+    expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Checked [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
     expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Checked [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
     expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?2 tool connections available · no approved destination recorded<span class="muted"> · Public tools only<\/span><\/span><span class="faint">Names and Remove…: Tools tab › OpenCode<\/span>/)

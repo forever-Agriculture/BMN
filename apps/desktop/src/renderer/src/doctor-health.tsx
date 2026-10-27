@@ -49,10 +49,23 @@ export function doctorPlace(row: DoctorRow, problem: Problem, sections: Readonly
     sections.has(`${area}:${problem.app}:${problem.cause}`) ? area : 'doctor'
 }
 
-/** Doctor's own issues: the whole-run error and each finding no Health section already counts (`sections` holds `area:app:cause`). */
+/**
+ * Doctor's own issues: the whole-run error, and the findings no Health section already counts (`sections` holds
+ * `area:app:cause`): one issue per cause they name, however many entries share it, and each finding naming none by itself.
+ */
 export function doctorNeedsCount(view: DoctorView | undefined, sections: ReadonlySet<string> = new Set()): number {
   if (!view) return 0
-  return Number(view.error !== null) + view.rows.reduce((count, row) => count + row.problems.filter((problem) => doctorPlace(row, problem, sections) === 'doctor').length, 0)
+  const causes = new Set<string>()
+  let alone = 0
+  for (const row of view.rows) {
+    for (const problem of row.problems) {
+      if (doctorPlace(row, problem, sections) !== 'doctor') continue
+      const area = AREAS[problem.code]
+      if (area !== undefined && row.check === area && problem.app !== undefined && problem.cause !== undefined) causes.add(`${area}:${problem.app}:${problem.cause}`)
+      else alone += 1
+    }
+  }
+  return Number(view.error !== null) + causes.size + alone
 }
 
 export function doctorAge(checkedAt: number | null, now = Date.now()): string {

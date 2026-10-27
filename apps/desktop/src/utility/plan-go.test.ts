@@ -333,6 +333,63 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     expect(git(plan, 'log', '--format=%s').split('\n')).toHaveLength(2)
   })
 
+  it('a crash after the branch moved survives a wrong-token retry and a failed board write: the right retry completes it (96 Astra recheck)', async () => {
+    const { main, plan, home } = project()
+    const sha = approved(main, home)
+    const row = token(main, home)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
+    const resolved = await resolvePlan(main)
+    await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'committed') throw new Error('crashed') } })).rejects.toThrow('crashed')
+    // A retry holding another token completes nothing and leaves the go pending.
+    const wrong = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', token(main, home, '7-1-one'), '--json'])
+    expect([wrong.code, wrong.json.outcome, wrong.json.board_pending]).toEqual([1, 'recorded-before', true])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(BOARD)
+    // A writer that ignores the lock changes the board between the retry's read and its write: nothing is written, still pending.
+    const changed = BOARD.replace('  7-1-one: backlog', '  7-1-one: backlog # touched')
+    const raced = await recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'completing') file(plan, 'status.yaml', changed) } })
+    expect([raced.outcome, raced.pending]).toEqual(['recorded-before', true])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(changed)
+    // A set that changes nothing and a set refused for its token are no later act: the go stays pending.
+    expect(bmn(main, home, ['set', 'epic-7', 'backlog', '--expect', row, '--note', 'Suggested lead: Opus · fixture', '--json']).json.written[0].outcome).toBe('unchanged')
+    expect(bmn(main, home, ['set', 'epic-7', 'dropped', '--expect', token(main, home, '7-1-one'), '--json']).code).toBe(1)
+    const right = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', row, '--json'])
+    expect([right.code, right.json.outcome, right.json.row?.status, right.json.board_pending]).toEqual([0, 'recorded-before', 'ready', false])
+    expect(git(plan, 'log', '--format=%s').split('\n')).toHaveLength(2)
+  })
+
+  it('a crash after the board showed the go, before its record was cleared: the retry clears it, a later withdrawal holds (96 Astra recheck)', async () => {
+    const { main, plan, home } = project()
+    const sha = approved(main, home)
+    const row = token(main, home)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
+    const resolved = await resolvePlan(main)
+    await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'published') throw new Error('crashed') } })).rejects.toThrow('crashed')
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toMatch(/^ {2}epic-7: ready # go 2026-10-26/mu)
+    const retry = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', row, '--json'])
+    expect([retry.code, retry.json.outcome, retry.json.board_pending]).toEqual([0, 'recorded-before', false])
+    expect(bmn(main, home, ['set', 'epic-7', 'backlog', '--expect', token(main, home), '--note', 'owner withdrew the go', '--json']).code).toBe(0)
+    file(plan, 'status.yaml', BOARD) // even the row the go was asked on, restored by hand
+    const again = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', row, '--json'])
+    expect([again.code, again.json.error?.code]).toEqual([1, 'WITHDRAWN'])
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(BOARD)
+  })
+
+  it('a crash after the branch moved, then the row withdrawn by hand: no retry completes the go over it (96 Astra recheck)', async () => {
+    const { main, plan, home } = project()
+    const sha = approved(main, home)
+    const row = token(main, home)
+    vi.stubEnv('HOME', home); vi.stubEnv('XDG_STATE_HOME', join(home, 'state')) // the go's records stay in the fixture's home
+    const resolved = await resolvePlan(main)
+    await expect(recordGo(resolved, { epic: 7, source: SOURCE, approved: sha, expect: row, seam: (step: string) => { if (step === 'committed') throw new Error('crashed') } })).rejects.toThrow('crashed')
+    const withdrawn = BOARD.replace('  epic-7: backlog # Suggested lead: Opus · fixture', '  epic-7: backlog # owner withdrew the go')
+    file(plan, 'status.yaml', withdrawn)
+    for (const expectToken of [row, token(main, home)]) {
+      const retry = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', expectToken, '--json'])
+      expect([retry.code, retry.json.error?.code]).toEqual([1, 'WITHDRAWN'])
+      expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(withdrawn)
+    }
+  })
+
   it('a crash after the branch moved, then a withdrawal before the retry: the retry completes nothing (96 Astra review)', async () => {
     const { main, plan, home } = project()
     const sha = approved(main, home)

@@ -248,24 +248,31 @@ function rowCauses(snapshot: RulesSnapshot, area: HealthArea, app: RosterHarness
 }
 
 /**
- * What in Health needs the owner (Story 96.6): one issue per section row (one app, one area), and each Doctor finding
- * that is not the same app, area and cause as such a row. `keys` are the causes the rows needing him for their state show
- * (`area:app:cause`), for a Doctor finding of the same cause to merge into; a failed test is a cause of its own;
+ * What in Health needs the owner (Story 96.6): an issue is one app × one area × one cause with one fix, counted once. A
+ * section row needing him for its state counts each distinct cause it shows (`area:app:cause`; at least one), and each
+ * test of it that failed one more (Test again; the skills listing and loading tests apart); each Doctor finding not of a
+ * cause such a row shows counts as Doctor's. `keys` are those causes, for a Doctor finding of the same cause to merge into;
  * `sections` names the sections with an issue, in page order, for the head: "Read 13:39 · 2 need you: Hooks, Tools".
  */
 export function healthNeeds(snapshot: RulesSnapshot): { count: number; sections: string[]; keys: Set<string>; own: number } {
   const keys = new Set<string>()
   const found: Array<[string, number]> = []
-  const rows = <Row,>(section: string, area: HealthArea | null, list: readonly Row[], state: (row: Row) => { needs: boolean; off: boolean }, app: (row: Row) => RosterHarness): void => {
-    const needing = list.filter((row) => state(row).needs)
-    if (area !== null) for (const row of needing) if (state(row).off) rowCauses(snapshot, area, app(row)).forEach((key) => keys.add(key))
-    if (needing.length > 0) found.push([section, needing.length])
+  const rows = <Row,>(section: string, area: HealthArea | null, list: readonly Row[], state: (row: Row) => { off: boolean; tests: number }, app: (row: Row) => RosterHarness): void => {
+    let issues = 0
+    for (const row of list) {
+      const { off, tests } = state(row)
+      const causes = new Set(area !== null && off ? rowCauses(snapshot, area, app(row)) : [])
+      causes.forEach((key) => keys.add(key))
+      issues += (off ? Math.max(1, causes.size) : 0) + tests
+    }
+    if (issues > 0) found.push([section, issues])
   }
-  if (snapshot.health.state === 'checked') rows('Rules files', 'rules', snapshot.health.targets, (target) => rulesRowState(snapshot, target), (target) => target.harness)
-  rows('Skills', 'skills', snapshot.skills.apps, (app) => skillsRowState(snapshot, app), (app) => app.harness)
-  rows('Tools', 'tools', snapshot.tools.apps, (app) => toolsRowState(snapshot, app), (app) => app.harness)
-  rows('Context limits', null, snapshot.context, (row) => ({ needs: contextRowNeeds(row), off: false }), (row) => row.harness)
-  if (snapshot.hooks?.state === 'checked') rows('Hooks', 'hooks', snapshot.hooks.apps, (app) => ({ needs: hookRowWords(app).needs, off: hookRowWords(app).needs }), (app) => app.harness)
+  const tests = (...failed: boolean[]): number => failed.filter(Boolean).length
+  if (snapshot.health.state === 'checked') rows('Rules files', 'rules', snapshot.health.targets, (target) => { const now = rulesRowState(snapshot, target); return { off: now.off, tests: tests(now.again) } }, (target) => target.harness)
+  rows('Skills', 'skills', snapshot.skills.apps, (app) => { const now = skillsRowState(snapshot, app); return { off: now.off, tests: tests(now.again, now.loadAgain) } }, (app) => app.harness)
+  rows('Tools', 'tools', snapshot.tools.apps, (app) => { const now = toolsRowState(snapshot, app); return { off: now.off, tests: tests(now.again) } }, (app) => app.harness)
+  rows('Context limits', null, snapshot.context, (row) => ({ off: contextRowNeeds(row), tests: 0 }), (row) => row.harness)
+  if (snapshot.hooks?.state === 'checked') rows('Hooks', 'hooks', snapshot.hooks.apps, (app) => ({ off: hookRowWords(app).needs, tests: 0 }), (app) => app.harness)
   const doctor = doctorNeedsCount(snapshot.doctor, keys)
   if (doctor > 0) found.push(['Doctor', doctor])
   return { count: found.reduce((total, [, count]) => total + count, 0), sections: found.map(([section]) => section), keys, own: found.reduce((total, [section, count]) => section === 'Doctor' ? total : total + count, 0) }

@@ -32,11 +32,25 @@ export const PROBLEMS = Object.freeze({
 })
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-/** The codes of BMN's own area checks, whose findings name their cause: the entry's state word, never its name or path (96 Astra review). */
-const AREA_CODES = Object.freeze(['hook-check', 'skill-check', 'tool-check', 'rules-check'])
-const CAUSE = /^[a-z][a-z-]{0,30}(?::[A-Za-z][\w.]{0,39})?$/u
+/**
+ * The state words of BMN's rules, skills and tools checks: the fine ones and those a finding names as its cause, never an
+ * entry's name or path (96 Astra review and recheck). Together they are the protocol's `RULES_TARGET_STATES`,
+ * `SKILL_STATE_NAMES` and `TOOL_STATE_NAMES`; a state outside them makes the result partial and is no finding.
+ */
+export const STATE_WORDS = Object.freeze({
+  'rules-check': { fine: ['current'], needs: ['unreadable', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale'] },
+  'skill-check': { fine: ['current', 'read-directly', 'excluded'], needs: ['unreadable', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'exposed'] },
+  'tool-check': { fine: ['current', 'excluded'], needs: ['unreadable', 'missing', 'unmanaged', 'edited-outside', 'stale', 'exposed', 'blocked'] }
+})
+/** Whether a finding of BMN's own area checks may name this cause: a closed vocabulary per check, and per app for hooks. */
+export function causeAllowed(code, app, cause) {
+  if (code === 'hook-check') return Object.hasOwn(HOOK_EVENTS, app) && (cause === 'older-wording:plugin' ? app === 'opencode'
+    : cause.startsWith('missing:') && [...HOOK_EVENTS[app], ...(app === 'codex' ? CODEX_OPTIONAL_HOOKS : [])].includes(cause.slice(8)))
+  if (code === 'tool-check' && ['unlisted-exposed', 'unlisted-managed'].includes(cause)) return true
+  return Object.hasOwn(STATE_WORDS, code) && STATE_WORDS[code].needs.includes(cause)
+}
 const fact = (code, item = 1, app, cause) => ({ code, item, ...(['claude', 'codex', 'opencode'].includes(app) ? { app } : {}),
-  ...(AREA_CODES.includes(code) && typeof cause === 'string' && CAUSE.test(cause) ? { cause } : {}) })
+  ...(typeof cause === 'string' && causeAllowed(code, app, cause) ? { cause } : {}) })
 const result = (problems, partial = false) => ({
   state: partial ? 'partial' : problems.length > 0 ? 'problems' : 'passed',
   problems: partial ? [...problems, fact('additional-details')] : problems
@@ -166,8 +180,9 @@ export function parseBmnDoctor(check, text, exitCode) {
     partial = !completeApps(data.targets, 'harness') || typeof data.ok !== 'boolean'
     for (const row of data.targets) {
       currentApp = row?.harness
-      if (!object(row) || !['current', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'unreadable'].includes(row.state)) partial = true
-      else if (row.state !== 'current') add('rules-check', row.state)
+      const words = STATE_WORDS['rules-check']
+      if (!object(row) || ![...words.fine, ...words.needs].includes(row.state)) partial = true
+      else if (!words.fine.includes(row.state)) add('rules-check', row.state)
     }
   } else if (check === 'hooks' && object(data) && Array.isArray(data.agents) && data.agents.length > 0) {
     partial = !completeApps(data.agents, 'agent') || typeof data.ok !== 'boolean'
@@ -197,9 +212,12 @@ export function parseBmnDoctor(check, text, exitCode) {
       if (!object(app) || app.supported !== true || app.readable === false) { partial = true; continue }
       const rows = app[check]
       if (!Array.isArray(rows)) { partial = true; continue }
+      const code = check === 'skills' ? 'skill-check' : 'tool-check'
       for (const row of rows) {
-        if (!object(row) || typeof row.state !== 'string') partial = true
-        else if (!(check === 'skills' ? ['current', 'read-directly', 'excluded'] : ['current', 'excluded']).includes(row.state)) add(check === 'skills' ? 'skill-check' : 'tool-check', row.state)
+        const state = object(row) ? row.state : undefined
+        if (STATE_WORDS[code].needs.includes(state)) add(code, state)
+        // A state word outside the vocabulary is no finding: it could carry anything, so the result is partial (96 Astra recheck).
+        else if (!STATE_WORDS[code].fine.includes(state)) partial = true
       }
       if (check === 'tools' && Array.isArray(app.unlisted)) for (const entry of app.unlisted) {
         if (entry.state === 'exposed' || entry.managed === true) add('tool-check', entry.managed === true ? 'unlisted-managed' : 'unlisted-exposed')
@@ -219,7 +237,7 @@ export function projectedResult(value) {
   for (const row of value.problems) {
     if (!object(row) || !Object.hasOwn(PROBLEMS, row.code) || !Number.isSafeInteger(row.item) || row.item < 1 || row.item > 10000) return null
     if (row.app !== undefined && !['claude', 'codex', 'opencode'].includes(row.app)) return null
-    if (row.cause !== undefined && (typeof row.cause !== 'string' || !CAUSE.test(row.cause) || !AREA_CODES.includes(row.code))) return null
+    if (row.cause !== undefined && (typeof row.cause !== 'string' || !causeAllowed(row.code, row.app, row.cause))) return null
     if (row.count !== undefined && (!Number.isSafeInteger(row.count) || row.count < 1 || row.count > 10000 || !row.code.startsWith('leftover-'))) return null
     if (row.code.startsWith('leftover-') && row.count === undefined) return null
     problems.push({ ...fact(row.code, row.item, row.app, row.cause), ...(row.count !== undefined ? { count: row.count } : {}) })
