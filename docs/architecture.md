@@ -117,6 +117,15 @@ between characters, and no write exceeds the 131,072 bytes xterm parses at once:
 character split after its 0x80 byte. A renderer decoder failure shows a pane notice while
 text remains usable; the running process's TERM is unchanged.
 
+**Images through a resize (Epic 87).** A pane that has shown a Sixel image holds its last drawn scene,
+text and image together, while a resize settles (`terminal-image-resize.ts`). xterm's grid and the
+PTY take the new size at once; the screen keeps the previous rows, scaled down when they no longer
+fit, until the program's next completed frame, the end of an open synchronized update or a one-second
+timer (about two seconds at most, by xterm's watchdog). An image written at the last column keeps its
+tiles past the edge for that time, the screen scaled to fit them. A pane that never showed an image
+keeps xterm's own path. Known limit, accepted by the owner on 2026-10-28: in a Codex pane showing its
+pet, a blank strip about eight columns wide can cut through text after a resize; its cause is unconfirmed.
+
 **Windows and processes have separate lifetimes.** Closing the window applies each session's
 saved keep-running or stop choice; it asks about running sessions set to Ask. Keeping a session
 running minimizes the window. Quit lists the running sessions and asks first. A Stop whose outcome
