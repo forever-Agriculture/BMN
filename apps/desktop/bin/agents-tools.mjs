@@ -696,7 +696,7 @@ function planHash(targets) {
  * `absent`, what BMN runs by itself (Story 75.9), leaves an entry BMN did not write or one changed
  * outside it, and lists it as blocked.
  */
-export async function planToolsInstall(harnesses = [], { environment = process.env, versions, tests = toolsTests(), removeUnlisted = false, absent = false } = {}) {
+export async function planToolsInstall(harnesses = [], { environment = process.env, versions, tests = toolsTests(), removeUnlisted = false, absent = false, browserOnly = false } = {}) {
   const generation = approvedIfAny()
   const { routeFor, routeStillMatches } = await import('./agents-rules.mjs')
   const stop = (code, message) => ({ code, message, targets: [], exposed: [], blocked: [], planHash: null })
@@ -704,6 +704,8 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
   const named = harnesses.length > 0 ? harnesses : check.apps.filter((app) => app.supported).map((app) => app.harness)
   if (named.length === 0) return stop('TOOLS_UNSUPPORTED', 'tools are not supported yet in any app: run the test first (Preferences > Integrations > Health, or bmn tools test <app>); nothing was written')
   const tools = new Map((generation?.data.tools ?? []).map((tool) => [tool.id, tool]))
+  if (browserOnly && (removeUnlisted || absent)) return stop('TOOL_SCOPE_CONFLICT', 'the browser switch cannot be combined with automatic installation or removal')
+  if (browserOnly && !isAccountBrowser(tools.get('playwright'))) return stop('TOOL_NOT_APPROVED', 'approve Use BMN browser in Tools before applying the browser switch')
   const targets = []
   const exposed = []
   const blocked = []
@@ -719,6 +721,7 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
     if (!file.readable || file.path !== app.path) return stop('REVISION_CONFLICT', `${name}'s tools file changed while planning; nothing was written`)
     const changes = []
     for (const row of app.tools) {
+      if (browserOnly && (row.id !== 'playwright' || row.state === 'exposed')) continue
       const found = file.entries.get(row.id)
       const base = { harness, tool: row.id, path: app.path }
       if (row.state === 'blocked') {
@@ -734,7 +737,7 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
         changes.push({ ...base, action: 'set', change: row.state, words: CHANGE_WORDS[row.state], found, entry: wantedEntry(tools.get(row.id), harness, app, found).entry })
       }
     }
-    for (const row of app.unlisted) {
+    for (const row of browserOnly ? [] : app.unlisted) {
       const found = file.entries.get(row.id)
       const base = { harness, tool: row.id, path: app.path, unlisted: true }
       if (row.managed === true) changes.push({ ...base, action: 'remove', change: 'stale', words: 'removes BMN\'s entry: the tool left your list', found })
@@ -961,9 +964,9 @@ export { validRemovalWitness as validToolRemovalWitness }
  * what an entry held is kept as its own text, never the file. A failure part-way stops and keeps
  * the manifest, so `bmn rules restore --transaction` can undo what changed.
  */
-export async function installTools(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, removeUnlisted = false, absent = false, afterConfirm, beforeTarget, beforeCommit, afterTarget } = {}) {
+export async function installTools(harnesses = [], { yes = false, asJson = false, environment = process.env, versions, now = new Date(), expectedPlanHash, removeUnlisted = false, absent = false, browserOnly = false, afterConfirm, beforeTarget, beforeCommit, afterTarget } = {}) {
   const { confirm } = await import('./agents-rules.mjs')
-  const options = { environment, versions, removeUnlisted, absent }
+  const options = { environment, versions, removeUnlisted, absent, browserOnly }
   const planned = await planToolsInstall(harnesses, options)
   const open = { exposed: planned.exposed, blocked: planned.blocked }
   if (planned.code !== 'OK') return { code: planned.code, message: planned.message, transaction: null, written: [], exposed: [], blocked: [] }
@@ -1874,20 +1877,21 @@ export async function runToolsCommand(argv) {
       return code
     }
     if (action === 'install') {
-      const { options, positionals } = readOptions(rest, { flags: ['json', 'plan', 'yes', 'remove-unlisted', 'absent'], values: ['expect-plan'] })
+      const { options, positionals } = readOptions(rest, { flags: ['json', 'plan', 'yes', 'remove-unlisted', 'absent', 'browser-only'], values: ['expect-plan'] })
       asJson = options.json === true
       const unknown = positionals.filter((name) => !HARNESSES.includes(name))
       if (unknown.length > 0) return usage(appRefusal(unknown[0], `tools install expects apps from ${HARNESSES.join(', ')}, not ${unknown.join(', ')}`))
       const versions = await installedVersions()
       const removeUnlisted = options['remove-unlisted'] === true
       const absent = options.absent === true
+      const browserOnly = options['browser-only'] === true
       if (absent && removeUnlisted) return usage('tools install --absent removes nothing that is not BMN\'s: it does not take --remove-unlisted')
       if (options.plan) {
-        const planned = await planToolsInstall(positionals, { versions, removeUnlisted, absent })
+        const planned = await planToolsInstall(positionals, { versions, removeUnlisted, absent, browserOnly })
         out(asJson ? JSON.stringify(toolsPlanView(planned), null, 2) : planned.code !== 'OK' ? `${planned.code}: ${planned.message}` : planDetails(planned) || 'Every app already has its tools.')
         return planned.code === 'OK' ? 0 : EXIT.refusal
       }
-      const result = await installTools(positionals, { yes: options.yes === true, asJson, versions, removeUnlisted, absent, expectedPlanHash: options['expect-plan'] })
+      const result = await installTools(positionals, { yes: options.yes === true, asJson, versions, removeUnlisted, absent, browserOnly, expectedPlanHash: options['expect-plan'] })
       if (asJson) out(JSON.stringify(result, null, 2))
       else if (result.code === 'OK') {
         out([result.message ?? `Changed ${result.written.length} entr${result.written.length === 1 ? 'y' : 'ies'} (transaction ${result.transaction}).`,

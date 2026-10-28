@@ -704,15 +704,15 @@ function toolsView(apps: AgentAppView[], team: ReturnType<typeof approvedForPage
   }
 }
 
-function toolsPlanFrom(result: CliResult, removeUnlisted: boolean): ToolsPlan {
+function toolsPlanFrom(result: CliResult, removeUnlisted: boolean, browserOnly = false): ToolsPlan {
   const report = parseJson(result.stdout)
-  const refused = (code: string, message: string): ToolsPlan => ({ ok: false, code, message, planHash: null, removeUnlisted, targets: [], exposed: [], blocked: [] })
+  const refused = (code: string, message: string): ToolsPlan => ({ ok: false, code, message, planHash: null, removeUnlisted, ...(browserOnly ? { browserOnly: true } : {}), targets: [], exposed: [], blocked: [] })
   if (result.failed || report === null) return refused('IO_ERROR', `The tools plan could not be read${result.failed ? ` (${result.failed})` : ''}`)
   if (report.code !== 'OK') return refused(String(report.code ?? 'IO_ERROR'), String(report.message ?? 'The plan was refused'))
   const rows = (value: unknown): Record<string, unknown>[] => (Array.isArray(value) ? value as Record<string, unknown>[] : [])
   const open = (value: unknown): ToolsPlan['exposed'] => rows(value).map((row) => ({ harness: row.harness as RosterHarness, tool: String(row.tool), fix: String(row.fix) }))
   return {
-    ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, removeUnlisted,
+    ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, removeUnlisted, ...(browserOnly ? { browserOnly: true } : {}),
     // What an entry held is shown as the command line showed it: values already masked there.
     targets: rows(report.targets).map((row) => ({
       harness: row.harness as RosterHarness, tool: String(row.tool), path: String(row.path), action: row.action === 'remove' ? 'remove' : 'set', words: String(row.words ?? ''),
@@ -1428,13 +1428,14 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   })
   handle('aiterm:rules:tools-plan', async (params) => {
     const removeUnlisted = params.removeUnlisted === true
+    const browserOnly = params.browserOnly === true
     const ctx = context()
-    return toolsPlanFrom(await runCli(ctx.script, ['tools', 'install', '--plan', '--json', ...(removeUnlisted ? ['--remove-unlisted'] : [])], ctx.env), removeUnlisted)
+    return toolsPlanFrom(await runCli(ctx.script, ['tools', 'install', '--plan', '--json', ...(removeUnlisted ? ['--remove-unlisted'] : []), ...(browserOnly ? ['--browser-only'] : [])], ctx.env), removeUnlisted, browserOnly)
   })
   handle('aiterm:rules:tools-install', async (params) => {
     const planHash = textParam(params, 'planHash', 64)
     const ctx = context()
-    const result = await runCli(ctx.script, ['tools', 'install', '--expect-plan', planHash, '--yes', '--json', ...(params.removeUnlisted === true ? ['--remove-unlisted'] : [])], ctx.env)
+    const result = await runCli(ctx.script, ['tools', 'install', '--expect-plan', planHash, '--yes', '--json', ...(params.removeUnlisted === true ? ['--remove-unlisted'] : []), ...(params.browserOnly === true ? ['--browser-only'] : [])], ctx.env)
     return rulesOutcome(ctx, result, (report) => {
       const changed = Array.isArray(report.written) ? report.written.length : 0
       const exposed = Array.isArray(report.exposed) ? report.exposed.length : 0

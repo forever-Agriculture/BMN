@@ -434,8 +434,8 @@ export interface AiTerminalBridge {
   /** Story 60.12: what removing the entries that are not on the list would change in each app's settings, then the change itself, bound to that plan (75.9: the rest installs itself). */
   browserAccounts(): Promise<BrowserAccountsView>
   browserAccountAction(params: BrowserAccountAction): Promise<BrowserAccountOutcome>
-  planToolsInstall(removeUnlisted?: boolean): Promise<ToolsPlan>
-  installTools(planHash: string, removeUnlisted?: boolean): Promise<RulesOutcome>
+  planToolsInstall(removeUnlisted?: boolean, browserOnly?: boolean): Promise<ToolsPlan>
+  installTools(planHash: string, removeUnlisted?: boolean, browserOnly?: boolean): Promise<RulesOutcome>
   /** Owner-run: starts the app in an empty home folder and asks which tools it sees there. */
   testTools(harness: RosterHarness): Promise<RulesOutcome>
   /** The entries the apps already hold, proposed as tools; a value an entry held is never part of a proposal. */

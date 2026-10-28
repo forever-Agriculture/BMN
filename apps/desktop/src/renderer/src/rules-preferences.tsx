@@ -314,8 +314,8 @@ export interface RulesState {
   load(): Promise<void>
   /** Shows what saving the draft writes: the master and each app's file. A clean draft writes only the apps' files that differ. */
   beginSave(): Promise<void>
-  /** Shows what removing the entries that are not on the tools list would change in each app's settings. */
-  beginToolsRemoval(): Promise<void>
+  /** Shows the exact browser switch, or removal of entries not on the tools list. */
+  beginToolsChange(scope: 'browser' | 'unlisted'): Promise<void>
   beginUndo(transaction: string, near?: 'notice'): Promise<void>
   /** Shows what saving an earlier version again writes, the master and each app's file. */
   beginRestore(revision: number): Promise<void>
@@ -443,9 +443,9 @@ export function useRulesState(doctorVisible = false): RulesState {
       const planHash = plan.planHash
       run = () => window.aiTerminal.saveRules(text, plan.expectedHash, plan.expectedLink, plan.expectedDirectory, planHash)
     } else if (pending.kind === 'tools') {
-      const { planHash, removeUnlisted } = pending.plan
+      const { planHash, removeUnlisted, browserOnly } = pending.plan
       if (planHash === null) return
-      run = () => window.aiTerminal.installTools(planHash, removeUnlisted)
+      run = () => window.aiTerminal.installTools(planHash, removeUnlisted, browserOnly)
     } else if (pending.kind === 'undo') {
       const { transaction, plan } = pending
       if (plan.planHash === null) return
@@ -511,8 +511,8 @@ export function useRulesState(doctorVisible = false): RulesState {
         return plan.valid && !plan.ok ? plan.message ?? 'The rules cannot be saved now' : { kind: 'save', text, plan }
       })
     },
-    beginToolsRemoval: () => begin(async () => {
-      const plan = await window.aiTerminal.planToolsInstall(true)
+    beginToolsChange: (scope) => begin(async () => {
+      const plan = await window.aiTerminal.planToolsInstall(scope === 'unlisted', scope === 'browser')
       return plan.ok ? { kind: 'tools', plan } : plan.message ?? 'The tools cannot be changed now'
     }),
     beginUndo: (transaction, near) => begin(async () => {
@@ -1666,9 +1666,8 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
             </div>
           ))}
           <div className="inline tool-actions">
-            <button type="button" className="small" disabled={!idle} onClick={() => void rules.beginToolsRemoval()}>Remove them from the apps…</button>
+            <button type="button" className="small" disabled={!idle} onClick={() => void rules.beginToolsChange('unlisted')}>Remove them from the apps…</button>
           </div>
-          {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
         </>
       ) : null}
       <p className="preferences-help">A tool names environment variables and never holds their values.</p>
@@ -1686,12 +1685,12 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
         ))}
         {pending?.kind === 'undo' ? <PendingSheet rules={rules} /> : null}
       </details>
-      <BrowserAccounts team={team} />
+      {pending?.kind === 'tools' ? <PendingSheet rules={rules} /> : null}
+      <BrowserAccounts team={team} tools={view} applying={!idle || team.busy || team.needsOwner} onApplyBrowser={() => void rules.beginToolsChange('browser')} />
     </>
   )
 }
 
-/** Integrations › Health › Tools: one row per app (60.12 AC6). */
 /** An app holding tools it may not have, as what is available to it (Story 96.6): BMN saw entries, never a transfer. */
 export function exposedWords(view: Pick<RulesSnapshot['tools'], 'tools'>, app: Pick<ToolsAppView, 'harness' | 'unlisted'>): string {
   const count = view.tools.filter((tool) => tool.states[app.harness] === 'exposed').length + app.unlisted.filter((entry) => entry.state === 'exposed').length

@@ -1500,8 +1500,9 @@ or ends at another path. This is a heuristic, with the time of its last passing 
 says **Not confirmed**: the profile is kept and usable, but never written back by an agent. SessionStorage-only
 sign-ins do not survive; use the site's durable or “remember me” option where offered.
 
-**Use BMN browser…** stages the Playwright entry switch for the existing Tools Save/preview/Undo flow.
-Your approval changes only each app's entry and Undo restores its earlier bytes. The installed-version
+**Use BMN browser…** stages the Playwright tool for approval. After Save, **Apply browser switch…**
+previews the existing Playwright entries that need replacing. **Change** applies only those entries;
+**Cancel** leaves them alone, and Undo under Earlier installs restores their earlier bytes. The installed-version
 test and refusal to replace inline credentials still apply. Apps whose settings are proven to receive
 private work get the account relay under the existing `playwright` name. Other apps, tools supplied on a
 run's command, and teammate browser asks stay signed out. A Codex session reading its settings can use

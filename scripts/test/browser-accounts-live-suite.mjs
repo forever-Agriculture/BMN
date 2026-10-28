@@ -65,6 +65,22 @@ try {
   site = await syntheticSite()
   if (phase === 'keyring') {
     checks.push('minimal unlock method preflight only; no browser started')
+  } else if (phase === 'save-busy') {
+    const first = await create('same')
+    assert.equal(first.state, 'Signed in')
+    checks.push('first account saved and confirmed')
+    try {
+      const second = await create('busy')
+      assert.equal(second.state, 'Signed in', 'background traffic prevented saving the second account')
+      const resumed = await browser(second)
+      await signed(resumed)
+      assert.equal(store.metadata(first.id).state, 'Signed in')
+      checks.push('Done saves a second account whose signed-in page polls continuously; both accounts remain usable')
+    } catch (error) {
+      atomicJson(join(out, 'save-diagnostic.json'), { firstSaved: true, secondState: store.list().find(row => row.name.includes('busy'))?.state,
+        errorName: error.name, errorCode: error.code ?? null, timedOutWaitingForNetworkIdle: error.name === 'TimeoutError' && error.message.includes('networkidle') })
+      throw error
+    }
   } else if (phase === 'normalization') {
     const row = await create('same')
     const overrideAt = process.argv.indexOf('--engine-source')

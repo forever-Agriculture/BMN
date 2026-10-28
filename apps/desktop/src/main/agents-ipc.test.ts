@@ -1193,6 +1193,36 @@ describe('tools on Integrations › Tools and Health (60.12 AC1-AC6)', () => {
     await expect(call('rules:tools-test', { harness: 'vim' })).rejects.toThrow()
   })
 
+  it('keeps the browser-only scope through plan, confirmation, installation and Undo (97.5)', async () => {
+    await approvedAndInstalled()
+    stub('codex', codexTools)
+    mkdirSync(join(home, '.codex'), { recursive: true })
+    const before = '# owner settings\n[mcp_servers.playwright]\ncommand = "owner-browser"\n\n[mcp_servers.notes]\ncommand = "owner-notes"\n'
+    writeFileSync(join(home, '.codex/config.toml'), before)
+    const data = (await snapshot()).file.data as RosterDataShape
+    const staged: RosterDataShape = { ...data, tools: [
+      { id: 'playwright', name: 'Playwright', command: 'bmn', args: ['browser', 'server'], public: true, apps: ['codex'] },
+      { id: 'notes', name: 'Notes', command: 'approved-notes', apps: ['codex'] }
+    ] }
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
+    await call<RulesOutcome>('rules:tools-test', { harness: 'codex' })
+    expect(file('.codex/config.toml')).toBe(before)
+    const plan = await call<ToolsPlan>('rules:tools-plan', { browserOnly: true })
+    expect(plan).toMatchObject({ ok: true, browserOnly: true, removeUnlisted: false })
+    expect(plan.targets.map(target => [target.tool, target.action])).toEqual([['playwright', 'set']])
+    expect(await call<RulesOutcome>('rules:tools-install', { planHash: plan.planHash })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    const installed = await call<RulesOutcome>('rules:tools-install', { planHash: plan.planHash, browserOnly: true })
+    expect(installed.ok).toBe(true)
+    expect(file('.codex/config.toml')).toContain('args = ["browser", "server", "codex"]')
+    expect(file('.codex/config.toml')).toContain('command = "owner-notes"')
+    const transaction = installed.snapshot.transactions.find(entry => entry.reason === 'tools install')!
+    const undo = await call<RulesPlan>('rules:plan-restore', { transaction: transaction.id })
+    expect(undo.targets.map(target => target.entry)).toEqual(['playwright'])
+    expect(await call<RulesOutcome>('rules:restore', { transaction: transaction.id, planHash: undo.planHash })).toMatchObject({ ok: true })
+    expect(file('.codex/config.toml')).toBe(before)
+  })
+
   it('removes entries that are not on the list only when asked, each shown first', async () => {
     await approvedAndInstalled()
     stub('codex', codexTools)

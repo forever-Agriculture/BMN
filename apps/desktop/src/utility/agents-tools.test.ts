@@ -15,6 +15,7 @@ import {
 } from '../../bin/agents-tools.mjs'
 import { withDefaultsAdmission } from '../../bin/defaults-admission.mjs'
 import { replaceFileSafely } from '../../bin/safe-config-write.mjs'
+import { editJsonEntry } from '../../bin/agents-tool-files.mjs'
 import { approveRoster } from '../main/agents-approval'
 import { autoTestId, createAutoTests, type AutoTestTry } from '../main/auto-tests'
 
@@ -852,6 +853,35 @@ describe('OpenCode 2 layout and entry undo (85.2)', () => {
 })
 
 describe('install and undo (60.12 AC4)', () => {
+  it('applies only the approved browser switch, leaving unrelated pending and stale tools intact (97.5)', async () => {
+    approve(withTools(['stale: {name: Stale, command: stale-tool, public: true}']))
+    expect((await install(['claude'])).code).toBe('OK')
+    const old = readFileSync(claudeFile(), 'utf8')
+    const before = editJsonEntry(editJsonEntry(old, ['mcpServers'], 'playwright', { command: 'owner-browser' }), ['mcpServers'], 'notes', { command: 'owner-notes' })
+    put(claudeFile(), before)
+    approve(withTools([
+      'playwright: {name: Playwright, command: bmn, args: [browser, server], public: true}',
+      'notes: {name: Notes, command: approved-notes}'
+    ]))
+    const options = { environment: env, versions: VERSIONS, browserOnly: true }
+    const planned = await planToolsInstall(['claude'], options)
+    expect(planned.code).toBe('OK')
+    expect(planned.targets.map(target => [target.tool, target.action])).toEqual([['playwright', 'set']])
+    expect((await install(['claude'], { expectedPlanHash: planned.planHash! })).code).toBe('REVISION_CONFLICT')
+    expect(readFileSync(claudeFile(), 'utf8')).toBe(before)
+    const written = await install(['claude'], { browserOnly: true, expectedPlanHash: planned.planHash! })
+    expect(written.code).toBe('OK')
+    expect(written.written.map(target => target.tool)).toEqual(['playwright'])
+    expect(readAppTools('claude', env).entries.get('notes')!.value?.command).toBe('owner-notes')
+    expect(readAppTools('claude', env).entries.get('stale')!.value?.command).toBe('stale-tool')
+    expect((await planToolsInstall(['claude'], options)).targets).toEqual([])
+    expect(await restoreTransaction(written.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    expect(readFileSync(claudeFile(), 'utf8')).toBe(before)
+    expect((await planToolsInstall(['claude'], options)).targets).toHaveLength(1)
+    approve(withTools(['playwright: {name: Ordinary, command: ordinary-tool}']))
+    expect(await planToolsInstall(['claude'], options)).toMatchObject({ code: 'TOOL_NOT_APPROVED', targets: [] })
+  })
+
   it('switches private app settings to the account relay, leaves public apps anonymous, and undoes exact prior bytes (97.2)', async () => {
     approve(withTools(['playwright: {name: Playwright, command: bmn, args: [browser, server], public: true}']))
     const originals = [

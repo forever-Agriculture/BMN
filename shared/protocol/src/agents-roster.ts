@@ -519,6 +519,8 @@ export interface ToolsPlan {
   planHash: string | null
   /** Whether this plan also removes entries that are not on the list. */
   removeUnlisted: boolean
+  /** Only sets the approved Playwright browser entry; carried through confirmation and execution. */
+  browserOnly?: true
   targets: ToolsPlanTarget[]
   exposed: { harness: RosterHarness; tool: string; fix: string }[]
   blocked: { harness: RosterHarness; tool: string; fix: string }[]

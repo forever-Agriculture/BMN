@@ -58,7 +58,7 @@ export async function inspectProfile(profile, meta, options) {
     await context.addInitScript(() => { sessionStorage.clear() })
     for (const restored of context.pages()) await restored.evaluate(() => sessionStorage.clear()).catch(() => {})
     const page = context.pages()[0] || await context.newPage()
-    await page.goto(meta.start, { waitUntil: 'networkidle', timeout: 20_000 })
+    await page.goto(meta.start, { waitUntil: 'domcontentloaded', timeout: 20_000 })
     return { address: pageAddress(page.url()), fields: await hasSignInField(page) }
   } finally { await context.close() }
 }

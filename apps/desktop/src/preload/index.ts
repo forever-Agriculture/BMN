@@ -879,11 +879,11 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   browserAccounts(): Promise<BrowserAccountsView> { return invokeBridge('aiterm:browser:accounts', {}) },
   browserAccountAction(params: BrowserAccountAction): Promise<BrowserAccountOutcome> { return invokeBridge('aiterm:browser:account-action', params) },
-  planToolsInstall(removeUnlisted = false): Promise<ToolsPlan> {
-    return invokeBridge('aiterm:rules:tools-plan', { removeUnlisted })
+  planToolsInstall(removeUnlisted = false, browserOnly = false): Promise<ToolsPlan> {
+    return invokeBridge('aiterm:rules:tools-plan', { removeUnlisted, ...(browserOnly ? { browserOnly: true } : {}) })
   },
-  installTools(planHash: string, removeUnlisted = false): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:tools-install', { planHash, removeUnlisted })
+  installTools(planHash: string, removeUnlisted = false, browserOnly = false): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:tools-install', { planHash, removeUnlisted, ...(browserOnly ? { browserOnly: true } : {}) })
   },
   testTools(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:tools-test', { harness })

@@ -108,10 +108,12 @@ export async function syntheticSite() {
       ${mode === 'session' ? "sessionStorage.setItem('signed','yes');document.querySelector('main').innerHTML='<h1>Signed in</h1>'" : mode === 'fetch' || mode === 'email' || mode === 'public' ? "document.querySelector('main').innerHTML='<h1>Signed in</h1>'" : `location.href='${origin}/${mode}/app'`}}
     async function api(){await fetch('/${mode}/api',{headers:{Authorization:'Bearer ${bearer}'}})}
     </script><main>${signed ? '<h1>Signed in</h1>' : mode === 'public' ? '<h1>Public</h1>' : `<label>User name<input name="user" autocomplete="username"></label>${mode === 'email' ? '' : '<label>Password<input name="password" type="password"></label><label>Code<input name="code" autocomplete="one-time-code"></label>'}<button onclick="login()">Sign in</button>`}</main>
-    ${mode === 'session' ? "<script>if(sessionStorage.getItem('signed'))document.querySelector('main').innerHTML='<h1>Signed in</h1>'</script>" : ''}</body></html>`
+    ${mode === 'session' ? "<script>if(sessionStorage.getItem('signed'))document.querySelector('main').innerHTML='<h1>Signed in</h1>'</script>" : ''}
+    ${mode === 'busy' && signed ? '<script>setInterval(()=>fetch("/busy/poll"),100)</script>' : ''}</body></html>`
   const handler = origin => async (req, res) => {
     const [mode, path = ''] = req.url.split('?')[0].split('/').slice(1)
     res.setHeader('Content-Type', 'text/html')
+    if (mode === 'busy' && path === 'poll') { setTimeout(() => res.end('ok'), 300); return }
     if (mode === 'hostile') {
       res.end('<label>Password<input name="password" type="password" oninput="document.title=btoa(this.value);console.log(this.value)"></label>'); return
     }

@@ -1,8 +1,9 @@
 // MODULE: browser-accounts.tsx - Solid account rows in Integrations > Tools; credential input exists only until Mark is submitted.
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
-import type { BrowserAccountAction, BrowserAccountRow, BrowserAccountsView, RulesSnapshot } from '@bmn/protocol'
+import type { BrowserAccountAction, BrowserAccountRow, BrowserAccountsView, RulesSnapshot, ToolsView } from '@bmn/protocol'
 import type { TeamState } from './team-state'
 import { Dot } from './roster-marks'
+import { toolForApp } from './tools-view'
 
 export function browserAccountNeeds(row: BrowserAccountRow): boolean { return row.state === 'Keyring locked' || row.state === 'Sign in again' && !row.marked }
 export function browserAccountAttention(accounts: BrowserAccountRow[] | undefined): Array<[string, number]> {
@@ -44,7 +45,7 @@ export function BrowserAccountsHealth({ accounts }: { accounts: BrowserAccountRo
     </div>)}
   </> : null
 }
-export function BrowserAccounts(props: { team: TeamState }): React.JSX.Element {
+export function BrowserAccounts(props: { team: TeamState; tools: ToolsView; applying?: boolean; onApplyBrowser?(): void }): React.JSX.Element {
   const [view, setView] = useState<BrowserAccountsView>({ accounts: [], signingIn: [] })
   const [adding, setAdding] = useState(false), [name, setName] = useState(''), [url, setUrl] = useState('')
   const [marking, setMarking] = useState<string | null>(null), [removing, setRemoving] = useState<string | null>(null)
@@ -67,6 +68,9 @@ export function BrowserAccounts(props: { team: TeamState }): React.JSX.Element {
     finally { setBusy(false); setUsername(''); setPassword(''); setAuthenticator('') }
   }
   const clearMark = (): void => { setMarking(null); setUsername(''); setPassword(''); setAuthenticator('') }
+  const browser = props.team.approved?.tools?.find(tool => tool.id === 'playwright' && tool.command === 'bmn' && tool.args?.join(' ') === 'browser server')
+  const browserStates = props.tools.tools.find(tool => tool.id === 'playwright')?.states
+  const browserPending = browser !== undefined && props.tools.apps.some(app => app.supported && toolForApp(browser, app.harness) && ['missing', 'stale', 'unmanaged', 'edited-outside'].includes(browserStates?.[app.harness] ?? ''))
   const playwright = props.team.data?.tools?.find(tool => tool.id === 'playwright')
   const switched = playwright?.command === 'bmn' && playwright.args?.join(' ') === 'browser server'
   const switchBrowser = (): void => {
@@ -111,5 +115,6 @@ export function BrowserAccounts(props: { team: TeamState }): React.JSX.Element {
       <div className="inline"><button className="primary small" type="submit" disabled={busy || !name.trim() || !url}>Sign in…</button><button className="small" type="button" disabled={busy} onClick={() => setAdding(false)}>Cancel</button></div>
     </form> : <div className="inline tool-actions"><button type="button" disabled={busy} onClick={() => setAdding(true)}>Add account</button>
       {!switched ? <button type="button" disabled={busy || !props.team.data} onClick={switchBrowser}>Use BMN browser…</button> : null}</div>}
+    {!adding && browserPending && props.onApplyBrowser ? <div className="inline tool-actions"><button type="button" disabled={busy || props.applying} onClick={props.onApplyBrowser}>Apply browser switch…</button></div> : null}
   </section>
 }

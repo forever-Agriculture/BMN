@@ -659,7 +659,7 @@ const RULES: RulesSnapshot = {
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
   snapshot: RULES, began: Date.parse('2026-10-09T22:13:00.000Z'), loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, reading: false, acting: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
-  ensure: noop, refresh: noop, load: later, beginSave: later, beginToolsRemoval: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
+  ensure: noop, refresh: noop, load: later, beginSave: later, beginToolsChange: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
 const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
   renderToStaticMarkup(createElement(RulesPreferences, { rules: state, team: teamState, page }))
@@ -1591,6 +1591,19 @@ describe('skills (60.11 AC5)', () => {
 })
 
 describe('tools (60.12 AC6)', () => {
+  it('offers the approved browser takeover without requiring unrelated unlisted entries (97.5)', () => {
+    const browser: RosterDataShape = { ...DATA, tools: [{ id: 'playwright', name: 'Playwright', command: 'bmn', args: ['browser', 'server'], public: true }] }
+    const snapshot: RulesSnapshot = { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map(app => ({ ...app, unlisted: [] })), tools: [{ id: 'playwright', states: { claude: 'unmanaged', codex: 'edited-outside', opencode: 'current' }, details: {} }] } }
+    const state = team({ data: browser, base: browser, approved: browser })
+    expect(rulesMarkup('tools', rules({ snapshot }), state)).toContain('Apply browser switch…')
+    expect(rulesMarkup('tools', rules({ snapshot }), team({ data: browser, base: DATA, approved: DATA, hasStaged: true }))).not.toContain('Apply browser switch…')
+    const settled: RulesSnapshot = { ...snapshot, tools: { ...snapshot.tools, tools: [{ id: 'playwright', states: { claude: 'current', codex: 'current', opencode: 'current' }, details: {} }] } }
+    expect(rulesMarkup('tools', rules({ snapshot: settled }), state)).not.toContain('Apply browser switch…')
+    const plan: ToolsPlan = { ok: true, code: 'OK', removeUnlisted: false, planHash: 'b'.repeat(64), targets: [{ harness: 'claude', tool: 'playwright', path: '/home/synthetic/.claude.json', action: 'set', words: 'takes over the browser', before: '{}', after: '{"command":"bmn"}' }], exposed: [], blocked: [] }
+    const pending = rulesMarkup('tools', rules({ snapshot, pending: { kind: 'tools', plan } }), state)
+    expect(count(pending, 'aria-label="Change 1 tool entry"')).toBe(1)
+  })
+
   const TOOLS: RosterToolShape[] = [
     { id: 'browser', name: 'Browser', command: 'npx', args: ['@synthetic/browser-tool'], agents: ['luna'] },
     { id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', public: true },

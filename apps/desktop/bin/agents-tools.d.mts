@@ -118,7 +118,7 @@ export declare function writeSetupToolEntry(harness: string, path: string, id: s
 export declare function validToolRemovalWitness(value: unknown, path: string, text: string): boolean
 export interface ToolsOpen { harness: ToolsHarness; tool: string; path: string; fix: string; unlisted?: true }
 export interface ToolsPlan { code: string; message?: string; targets: ToolsTarget[]; exposed: ToolsOpen[]; blocked: ToolsOpen[]; planHash: string | null }
-interface InstallOptions { environment?: Environment; versions?: Versions; tests?: ToolsTestEntry[]; removeUnlisted?: boolean; /** Leaves an entry BMN did not write, or one changed outside it (Story 75.9). */ absent?: boolean }
+interface InstallOptions { environment?: Environment; versions?: Versions; tests?: ToolsTestEntry[]; removeUnlisted?: boolean; /** Only sets the approved Playwright browser entry. */ browserOnly?: boolean; /** Leaves an entry BMN did not write, or one changed outside it (Story 75.9). */ absent?: boolean }
 export declare function planToolsInstall(harnesses?: string[], options?: InstallOptions): Promise<ToolsPlan>
 export declare function toolsPlanView(result: ToolsPlan): { code: string; message?: string; plan_hash: string | null; targets: ToolsTarget[]; exposed: ToolsOpen[]; blocked: ToolsOpen[] }
 export interface ToolsInstallResult {
