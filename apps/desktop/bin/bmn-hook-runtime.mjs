@@ -451,13 +451,14 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
   })
   // `source` and `toolName` take the same `RULES.source` shape as the event name: a tool called "Éditeur"
   // belongs in the log as much as one called "Bash".
-  // Codex names what caused a compaction `trigger` (manual or auto), and a subagent's OpenCode
-  // compaction is logged as the subagent's, so neither is counted as the owner's (Story 36.1). A subagent's OpenCode
-  // run starting is not the owner's next message either, so it never resets the repeat watch (Story 92.2).
-  const source = hookEventName(event.source) ??
-    (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger)
-      : agent === 'opencode' && ['session.compacted', 'session.status'].includes(eventName) && openCodeSubagent(event) ? 'subagent' : undefined)
+  // Codex names what caused a compaction `trigger` (manual or auto). Every event of an OpenCode subagent's session is
+  // the subagent's, whatever source it carries: its compaction is not counted as the owner's (Story 36.1), its run
+  // starting never resets the repeat watch (Story 92.2), and its finished run is never the owner's turn (Story 93.3).
+  const source = agent === 'opencode' && openCodeSubagent(event) ? 'subagent' : hookEventName(event.source) ??
+    (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger) : undefined)
   const toolName = hookEventName(event.tool_name)
+  // What BMN's OpenCode plugin promises with every event it sends (Story 96.3); earlier plugins send none.
+  const plugin = agent === 'opencode' && Number.isSafeInteger(event.bmn_plugin) && event.bmn_plugin >= 1 && event.bmn_plugin <= 999 ? event.bmn_plugin : undefined
   const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
     (agent === 'codex' && eventName === 'PostToolUse') || (agent === 'opencode' && eventName === 'tool.execute.after')
     ? toolFingerprint(event, agent) : undefined
@@ -469,6 +470,7 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
       effects,
       ...(source === undefined ? {} : { source }),
       ...(toolName === undefined ? {} : { toolName }),
+      ...(plugin === undefined ? {} : { plugin }),
       ...(fingerprint === undefined ? {} : { fingerprint }),
       ...(apiHost === null ? {} : { apiHost }),
       ...(model === undefined ? {} : { model }),

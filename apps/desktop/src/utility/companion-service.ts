@@ -458,6 +458,10 @@ export class CompanionService {
     incarnationId: string
     agent: Exclude<HookEventAgent, 'terminal'>
     event: string
+    /** `subagent` for an OpenCode child's event, `interrupted` for the owner's stop of an OpenCode run (Story 93.3). */
+    source: string | null
+    /** What the OpenCode plugin that sent the event promises (Story 96.3); null from earlier plugins and other agents. */
+    plugin: number | null
     observedAt: string
     /** The terminal's foreground process when the report came, which is the agent's own (Story 75.4); null once it ended. */
     foreground: string | null
@@ -538,10 +542,10 @@ export class CompanionService {
       foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
       generation: (sessionId) => this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 },
       screen: async (sessionId, incarnationId) => {
-        const mirror = options.manager.screenMirror(sessionId, incarnationId)
+        const mirror = options.manager.runningScreenMirror(sessionId, incarnationId)
         if (!mirror) return null
         await mirror.settled()
-        return mirror.undimmedLines()
+        return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
       },
       write: (sessionId, text) => options.manager.writeToSession(sessionId, bracketedPaste(text, true)),
       log: (line) => {
@@ -2342,6 +2346,7 @@ export class CompanionService {
     event: string
     source: string | null
     toolName: string | null
+    plugin?: number | undefined
     fingerprint?: string | undefined
     apiHost?: string | undefined
     model?: string | undefined
@@ -2411,6 +2416,7 @@ export class CompanionService {
     agent: HookEventAgent
     apiHost?: string | undefined
     model?: string | undefined
+    plugin?: number | undefined
   }): { recorded: true } {
     const observedAt = this.iso()
     // Which incarnation has a harness reporting for it, kept whatever the log later drops.
@@ -2419,9 +2425,11 @@ export class CompanionService {
       // Only this run's own report may speak for it, so a queued event from a process that has
       // already been replaced never becomes the current run's observation.
       if (this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
-        // Only a session running an agent BMN can answer by keys pays for a screen mirror (Epic 30.2 AC1).
-        if (p.agent === 'claude' || p.agent === 'codex') {
-          if (p.event === 'SessionEnd') this.options.manager.stopScreenMirror(p.sessionId)
+        // The agent left its terminal: Claude's and Codex's SessionEnd, or BMN's OpenCode plugin unloading as OpenCode quits.
+        const ended = p.event === 'SessionEnd' || (p.agent === 'opencode' && p.event === 'tui.exit')
+        // Remote answers and the Away wake read an agent's screen; a plain shell never pays for a mirror (Epic 30.2 AC1).
+        if (p.agent === 'claude' || p.agent === 'codex' || p.agent === 'opencode') {
+          if (ended) this.options.manager.stopScreenMirror(p.sessionId)
           else this.options.manager.screenMirror(p.sessionId, p.incarnationId)
         }
         this.hookObservations.set(p.sessionId, {
@@ -2429,8 +2437,10 @@ export class CompanionService {
           incarnationId: p.incarnationId,
           agent: p.agent,
           event: p.event,
+          source: p.source,
+          plugin: p.agent === 'opencode' ? p.plugin ?? null : null,
           observedAt,
-          foreground: p.event === 'SessionEnd' ? null : this.options.manager.foregroundProcessIdentity(p.sessionId)
+          foreground: ended ? null : this.options.manager.foregroundProcessIdentity(p.sessionId)
         })
         if (p.agent === 'codex') void this.readCodexUsage(p.sessionId, p.incarnationId, p.event === 'Stop')
         if (isCompactionEvent(p)) {
@@ -2451,7 +2461,6 @@ export class CompanionService {
         const apiHost = p.apiHost ?? null
         // An agent that ended leaves a plain shell behind in the same run, and a shell has no flag;
         // a late end from an agent that has already been replaced leaves the newer one's facts.
-        const ended = p.event === 'SessionEnd'
         const staleEnd = ended && previous !== undefined && previous.incarnationId === p.incarnationId &&
           previous.agent !== p.agent
         const next: HookOriginRecord | null | undefined = staleEnd ? previous : ended ? null : {

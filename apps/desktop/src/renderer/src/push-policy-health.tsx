@@ -56,7 +56,8 @@ export function PushPolicyHealth(): React.JSX.Element {
       <h4 className="group-head" id="health-push-policy">Pushes and merges<span className="caption">what your sessions may merge or push, by owner{inForce ? ' · in force' : ''}</span></h4>
       {view === null && error === null ? <p className="preferences-help">Reading…</p> : null}
       {view?.state === 'unknown' ? <p className="preferences-error" role="alert">The policy could not be read: {view.reason}. Everything counts as denied.</p> : null}
-      {view?.state === 'read' && !inForce ? <p className="page-note" role="status"><Dot label="Not in force" />Not in force yet: {view.standing.why}.</p> : null}
+      {/* Health's head is its only live status (Story 96.6). */}
+      {view?.state === 'read' && !inForce ? <p className="page-note"><Dot label="Not in force" />Not in force yet: {view.standing.why}.</p> : null}
       {error !== null ? <p className="preferences-error" role="alert">{error}</p> : null}
       {view?.owners.map((owner) => {
         const denied = !owner.allowed

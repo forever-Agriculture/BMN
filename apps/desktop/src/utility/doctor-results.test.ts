@@ -1,6 +1,7 @@
 // MODULE: doctor-results.test.ts - Synthetic credential and incomplete-report tests for the doctor publication boundary
 import { describe, expect, it } from 'vitest'
-import { parseBmnDoctor, parseClaudeDoctor, parseCodexDoctor, projectedResult } from '../../bin/doctor-results.mjs'
+import { RULES_TARGET_STATES, SKILL_STATE_NAMES, TOOL_STATE_NAMES } from '@bmn/protocol'
+import { STATE_WORDS, causeAllowed, parseBmnDoctor, parseClaudeDoctor, parseCodexDoctor, projectedResult } from '../../bin/doctor-results.mjs'
 
 const SECRET = 'sk-SYNTHETIC-SECRET-abcdef123456'
 const codex = (checks: Record<string, unknown>, overallStatus = 'warning'): string => JSON.stringify({ schemaVersion: 1, overallStatus, checks })
@@ -59,13 +60,51 @@ describe('doctor result projection', () => {
   })
 
   it('projects BMN checks, including names and failures, before the same sinks', () => {
-    expect(parseBmnDoctor('rules', JSON.stringify({ ok: false, targets: [{ harness: 'claude', state: 'missing', path: SECRET, detail: SECRET }, { harness: 'codex', state: 'current' }, { harness: 'opencode', state: 'current' }] }), 1)).toEqual({ state: 'problems', problems: [{ code: 'rules-check', item: 1, app: 'claude' }] })
+    expect(parseBmnDoctor('rules', JSON.stringify({ ok: false, targets: [{ harness: 'claude', state: 'missing', path: SECRET, detail: SECRET }, { harness: 'codex', state: 'current' }, { harness: 'opencode', state: 'current' }] }), 1)).toEqual({ state: 'problems', problems: [{ code: 'rules-check', item: 1, app: 'claude', cause: 'missing' }] })
     const hooks = parseBmnDoctor('hooks', JSON.stringify({ agents: [{ events: [{ state: SECRET, name: SECRET }] }] }), 1)
     expect(hooks.state).toBe('partial')
     expect(hooks.problems.some((row) => row.code === 'hook-check')).toBe(false)
     expect(JSON.stringify(hooks)).not.toContain(SECRET)
     expect(parseBmnDoctor('tools', JSON.stringify({ apps: [] }), 0).state).toBe('partial')
     expect(parseBmnDoctor('skills', SECRET, 1).state).toBe('partial')
+  })
+
+  it('names the cause of each area finding as its state word only, and the trust boundary keeps nothing else (96 Astra review)', () => {
+    const tools = parseBmnDoctor('tools', JSON.stringify({ apps: ['claude', 'codex', 'opencode'].map((harness) => ({ harness, supported: true, readable: true,
+      tools: harness === 'opencode' ? [{ id: SECRET, state: 'missing' }, { id: SECRET, state: 'current' }] : [],
+      unlisted: harness === 'opencode' ? [{ id: SECRET, state: 'exposed', managed: false }, { id: SECRET, state: 'unmanaged', managed: true }] : [] })) }), 1)
+    expect(tools).toEqual({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'opencode', cause: 'missing' },
+      { code: 'tool-check', item: 2, app: 'opencode', cause: 'unlisted-exposed' }, { code: 'tool-check', item: 3, app: 'opencode', cause: 'unlisted-managed' }] })
+    expect(projectedResult(tools)).toEqual(tools)
+    for (const cause of [SECRET, '/home/owner/x', 'Missing tool', 'a'.repeat(40), 7]) {
+      expect(projectedResult({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex', cause }] }), String(cause)).toBeNull()
+    }
+    expect(projectedResult({ state: 'problems', problems: [{ code: 'auth-check', item: 1, app: 'codex', cause: 'missing' }] })).toBeNull()
+    // Only the approved vocabulary crosses: an unknown state word, however well formed, is no cause (96 Astra recheck).
+    const odd = parseBmnDoctor('tools', JSON.stringify({ apps: ['claude', 'codex', 'opencode'].map((harness) => ({ harness, supported: true, readable: true,
+      tools: harness === 'opencode' ? [{ id: 'a', state: 'customer:SecretProject42' }, { id: 'b', state: 'secretproject' }] : [], unlisted: [] })) }), 1)
+    expect(JSON.stringify(odd)).not.toMatch(/SecretProject42|secretproject/u)
+    expect(odd.state).toBe('partial')
+    for (const cause of ['secretproject', 'customer:SecretProject42', 'missing:SecretEvent']) {
+      expect(projectedResult({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex', cause }] }), cause).toBeNull()
+    }
+    expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'codex', cause: 'missing:Stop' }] })).not.toBeNull()
+    // Hook causes are the events each app's check knows: Claude has no Interrupt, only OpenCode's plugin has an older wording.
+    for (const [app, cause] of [['claude', 'missing:Interrupt'], ['claude', 'older-wording:plugin'], [undefined, 'missing:Stop'], ['codex', 'unlisted-managed']]) {
+      expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app, cause }] }), `${app} ${cause}`).toBeNull()
+    }
+    expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }] })).not.toBeNull()
+    // An older stored result without a cause stays valid; Health counts it by itself.
+    expect(projectedResult({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex' }] })).toEqual({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex' }] })
+  })
+
+  it('its state words are the protocol\'s, each fine or a cause, so Health and Doctor name the same causes (96 Astra recheck)', () => {
+    for (const [code, names] of [['rules-check', RULES_TARGET_STATES], ['skill-check', SKILL_STATE_NAMES], ['tool-check', TOOL_STATE_NAMES]] as const) {
+      const words = STATE_WORDS[code]
+      expect([...words.fine, ...words.needs].sort(), code).toEqual([...names].sort())
+      expect(words.fine.filter((word) => words.needs.includes(word)), code).toEqual([])
+      for (const word of words.needs) expect(causeAllowed(code, 'codex', word), `${code} ${word}`).toBe(true)
+    }
   })
 
   it('recognizes the current Claude signed-out diagnostic without forwarding its prose', () => {

@@ -467,7 +467,7 @@ function announcesMirroredAgent(bytes: Uint8Array): boolean {
     const body = chunk.subarray(at + AGENT_STATE_REPORT.byteLength, at + REPORT_WINDOW).toString('latin1')
     const ends = [body.indexOf('\x07'), body.indexOf('\x1b')].filter((end) => end !== -1)
     const fields = (ends.length > 0 ? body.slice(0, Math.min(...ends)) : body).split(/[;:]/u)
-    if (fields.includes('app=codex') || fields.includes('app=claude')) return true
+    if (fields.includes('app=codex') || fields.includes('app=claude') || fields.includes('app=opencode')) return true
   }
   return false
 }
@@ -1880,6 +1880,15 @@ export class SessionManager {
     return live.mirror
   }
 
+  /**
+   * The mirror already running for this run, never a new one: the Away wake reads only a mirror an agent's own report
+   * started, so a sweep that was already under way when the agent left cannot start one for the shell (Story 93.3).
+   */
+  runningScreenMirror(sessionId: string, incarnationId: string): ScreenMirror | undefined {
+    const live = this.sessions.get(sessionId)
+    return live && !live.exited && live.incarnationId === incarnationId ? live.mirror : undefined
+  }
+
   /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */
   stopScreenMirror(sessionId: string): void {
     const live = this.sessions.get(sessionId)
@@ -2507,6 +2516,7 @@ export class SessionManager {
     if (session.mirror) session.mirror.write(bytes)
     // Codex reports its state on screen long before its first hook, and its start-up animation can outgrow the tail a
     // late mirror is seeded from, which then misses the prompt it drew once (Story 90.6): that report starts the mirror.
+    // BMN's OpenCode plugin reports OpenCode's start the same way, before OpenCode redraws its screen (Story 93.3).
     else {
       const seam = session.reportCarry.byteLength > 0 ? Buffer.concat([session.reportCarry, bytes.subarray(0, REPORT_WINDOW)]) : null
       if (announcesMirroredAgent(bytes) || (seam !== null && announcesMirroredAgent(seam))) {

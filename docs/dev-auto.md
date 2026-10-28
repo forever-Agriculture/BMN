@@ -49,11 +49,19 @@ without his explicit approval for that worktree; needed evidence is preserved fi
 
 An epic planned from Epic 90 on lists its **Run needs** ([planning.md](planning.md)): extra repair rounds
 per boundary, the criteria or stories that may be deferred and when, a money cap, and named actions for an
-Away card. Your go on the epic approves them as your instruction for its runs, day or night. A run reads
-them with the skill's `scripts/run_needs.py`, from the plan commit that moved the epic's row to `ready` with
-`go YYYY-MM-DD` (a date first written in a later status is not a go): an edit made after the go does not count
-until you give a new go, and the run tells you about it. An epic without Run needs, or
-without a recorded go, runs as before.
+Away card. Your go on the epic approves them as your instruction for its runs, day or night. The planner
+records it the moment you give it, before any run, with `bmn plan go` ([planning.md](planning.md), "Recording
+his go"): one plan commit moving the epic's row to `ready` with `go YYYY-MM-DD`, naming your answer and the
+SHA-256 of the Run needs and Decisions you were shown. A run reads them with the skill's `scripts/run_needs.py`
+from that commit, with your answer and that hash (a date first written in a later status is not a go; a commit
+whose record is incomplete or whose text differs from the hash it names grants nothing; a row put back to backlog
+or dropped, or taken off the board, withdraws the go until your next one, even if the row later moves on, and a
+board that cannot be read grants nothing):
+an edit made after the go does not count until you give a new go, and the run tells you about it. At start and
+at every resume the run keeps the same go, its rounds left and its money in its handoff, and asks you nothing
+about them. An epic without Run needs, or without a recorded go, runs as before: the run continues under your
+invocation without the extra rounds or deferrals, explains in its handoff why the record is missing, and never
+asks you to restate the approval or records a go itself.
 
 A run decides a technical point itself only when the evidence is complete; otherwise it asks the consultant
 first and follows a confident answer. A point that is yours (spend beyond what you approved, a change to the work or its criteria, a
@@ -62,7 +70,8 @@ settle, goes at once under **Needs your decision** in its handoff, and the run c
 story that point does not block. It asks you only when no remaining work can go on, and never while you are
 Away; its final report lists every open entry. When a boundary's rounds are used up, a criterion your Run
 needs list as deferrable is deferred (the story is marked done with the deferral noted and named under Known
-limits, and a new story is proposed); anything else waits as Needs your decision.
+limits, and a new story is proposed); anything else waits as Needs your decision. A broad "continue" or "work
+autonomously" answers none of your points.
 
 Money: every paid job a run launches goes through the skill's `scripts/spend_ledger.py`, one ledger per plan
 and epic under `~/.local/state/dev-auto/budgets/`, the same from every worktree of the plan's repository. It
@@ -70,6 +79,12 @@ reserves the job's maximum against your go's cap before the job starts and refus
 `none` refuses every paid launch, a new go never resets what was already spent or reserved, a go older than the
 one recorded is refused, and a launch whose outcome is unknown keeps its reservation until it is settled. The ledger covers dev-auto's own paid launches only, not every
 provider call an agent might make, so it is a guard on those launches, not a hard limit on all spending.
+The same ledger counts your go's extra repair rounds: a run takes one with `spend_ledger.py round` at a story
+or the epic as its boundary, so a resumed run, a new lead, another worktree or a new run name sees the rounds
+already used, two runs cannot take the same last round, and a new go refills none already used. When the ledger
+lacks a go a run already began under (a handoff names it, or its row is past every not-started status, an unknown
+status included), every boundary counts as used up to the largest allowance any of its gos gave, written into the
+ledger, so a later go with the same allowance gives nothing back.
 
 ## The Away grant
 

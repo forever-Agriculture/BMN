@@ -6,19 +6,23 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 import { random, styledLine } from './agent-replay.mjs'
+import { assertDisposable, calibrationEnvironment, isolationIdentity, launchCalibration, prepareCalibrationHome, proveIsolation, stopOnInterrupt, stopTree } from './calibration-environment.mjs'
 import { connect, profileAll, targets } from './cpu-profiles.mjs'
 
 const USAGE = `Usage: node scripts/measure/calibration-load.mjs [--sessions claude=3,codex=1,shell=1] [--scale N[,N...]]
   [--warmup S] [--minutes N] [--width W --height H] [--pane COLSxROWS] [--appearance MODE,FONT,IDENTITY]
   [--sidebar 9,5,2] [--idle | --working N] [--steady] [--status-ms MS[,MS...]] [--tick MS] [--history N]
   [--saved-output COUNT,KB]
-  [--profile DIR [--profile-only renderer,main,utility,gpu,window-trace,rows]] [--headless] --out FILE
-Starts this checkout's built BMN (pnpm run build first) with temporary data, config, state, cache and runtime folders,
+  [--profile DIR [--profile-only renderer,main,utility,gpu,window-trace,rows]] [--headless] [--isolation-receipt FILE] --out FILE
+Starts this checkout's built BMN (pnpm run build first) with temporary data, config, state, cache, runtime and home folders
+(Story 96.4: nothing of the owner's home, agents folder or apps' settings is opened). First it runs the traced sentinel
+probe of scripts/measure/calibration-environment.mjs and refuses to start unless it passes; --isolation-receipt FILE
+reuses a passing receipt of that probe for the same builder and build instead.
 opens the sessions (each claude or codex one replays agent-like output with scripts/measure/agent-replay.mjs and reports
 its hook events, so BMN opens its screen mirror; shell sessions replay a quiet shell), shows one pane and hides the rest,
 resizes the window, then lets go of the window's debugging connection. --scale gives one scale per session in order (the
@@ -139,23 +143,23 @@ async function main(argv) {
   const history = option(argv, '--history', null)
   const savedOutput = option(argv, '--saved-output', null)?.split(',').map(Number) ?? null
   const electronPath = createRequire(join(app, 'package.json'))('electron')
-  const report = { settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', statusMs, tick, history, savedOutput, headless, profile: profileDir !== null }, steps: [] }
+  // Story 96.4 AC3: no live calibration unless the probe proved, for this builder and build, that nothing outside is touched.
+  const receiptPath = option(argv, '--isolation-receipt', null)
+  const receipt = receiptPath === null ? await proveIsolation() : JSON.parse(readFileSync(resolve(receiptPath), 'utf8'))
+  const identity = isolationIdentity()
+  if (receipt.result !== 'PASS' || receipt.builder !== identity.builder || receipt.build !== identity.build) {
+    console.error(`calibration: refused: the isolation probe ${receipt.result !== 'PASS' ? `gave ${receipt.result}${receipt.reason ? ` (${receipt.reason})` : ''}` : 'receipt is for another builder or build'}; nothing was started`)
+    return 1
+  }
+  const report = { isolation: { result: receipt.result, builder: receipt.builder, build: receipt.build, from: receiptPath ?? 'probe' }, settings: { sessions: plan, scale: scales, steady, warmup, minutes: Number(minutes), size, pane, appearance, sidebar, working: Number.isFinite(working) ? working : 'all', statusMs, tick, history, savedOutput, headless, profile: profileDir !== null }, steps: [] }
   const step = (name, detail = {}) => { report.steps.push({ at: new Date().toISOString(), name, ...detail }); console.error(`calibration: ${name}${detail.pid ? ` pid ${detail.pid} start ticks ${detail.startTicks}` : ''}`) }
-  await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
+  await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots, cleanup }) => {
     const bin = join(root, 'agents')
     mkdirSync(bin)
     for (const name of ['claude', 'codex', 'shell']) symlinkSync(join(repo, 'scripts/measure/agent-replay.mjs'), join(bin, name))
-    const runtime = process.env.XDG_RUNTIME_DIR
-    const wayland = runtime && process.env.WAYLAND_DISPLAY && !isAbsolute(process.env.WAYLAND_DISPLAY) ? join(runtime, process.env.WAYLAND_DISPLAY) : process.env.WAYLAND_DISPLAY
-    const caller = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== 'PROMPT_COMMAND' && !name.startsWith('BMN_') && !name.startsWith('AITERM_')))
-    const environment = {
-      ...caller, SHELL: '/bin/bash',
-      XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
-      BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'), BMN_STATE_HOME: join(roots.state, 'bmn'), BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
-      CLAUDE_CONFIG_DIR: join(roots.config, 'claude'), CODEX_HOME: join(roots.config, 'codex'), OPENCODE_CONFIG_DIR: join(roots.config, 'opencode'),
-      BMN_LAUNCH_CWD: root,
-      ...(wayland ? { WAYLAND_DISPLAY: wayland } : {})
-    }
+    const environment = calibrationEnvironment(process.env, { root, roots })
+    assertDisposable(environment, process.env, root)
+    prepareCalibrationHome(environment)
     if (savedOutput) seedSavedOutput(join(roots.state, 'bmn/saved-output'), savedOutput[0], savedOutput[1])
     const port = await freePort()
     const inspectPort = await freePort()
@@ -164,7 +168,9 @@ async function main(argv) {
     const flags = [`--remote-debugging-port=${port}`, `--inspect=${inspectPort}`,
       // Off the desktop: Chromium's headless display, at a device scale of 1 as test:visual uses, large enough for the window.
       ...(headless ? ['--ozone-platform=headless', '--ozone-override-screen-size=2560,1600', '--force-device-scale-factor=1'] : [])]
-    const child = spawn(electronPath, [...flags, app], { cwd: root, env: environment, stdio: ['ignore', 'ignore', 'pipe'] })
+    const child = launchCalibration({ electronPath, flags, cwd: root, env: environment })
+    // Ctrl-C stops the whole tree it started and removes the disposable folder before this process ends (96 review).
+    const release = stopOnInterrupt(async () => { await stopTree(child, root); cleanup() })
     let log = ''
     child.stderr.on('data', (chunk) => { log = `${log}${chunk}`.slice(-20_000) })
     report.launch = { pid: child.pid, startTicks: startTicks(child.pid), executable: electronPath, root }
@@ -275,14 +281,12 @@ async function main(argv) {
       step('window', report.window)
       if (!report.window.shown) console.error('calibration: the window was minimized or hidden during the run, so it measured an idle window; run it again')
     } finally {
-      child.kill('SIGTERM')
-      for (let waited = 0; child.exitCode === null && child.signalCode === null && waited < 15_000; waited += 500) await sleep(500)
-      // BMN asks before it closes with sessions running, so a SIGTERM may leave it up; then it is killed.
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGKILL')
-        await new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done() : child.once('exit', done)))
-      }
-      step('stopped', { exit: child.exitCode, signal: child.signalCode })
+      // The whole group it started, then any session leader still holding the root: BMN asks before it closes with
+      // sessions running, so a SIGTERM may leave it up; then it is killed.
+      const leftovers = await stopTree(child, root)
+      if (child.exitCode === null && child.signalCode === null) await new Promise((done) => (child.exitCode !== null || child.signalCode !== null ? done() : child.once('exit', done)))
+      release()
+      step('stopped', { exit: child.exitCode, signal: child.signalCode, leftovers })
       report.log = log.slice(-4_000)
       writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`)
     }

@@ -38,11 +38,11 @@ describe('Doctor hooks producer contract', () => {
     for (const [app, events] of Object.entries(REQUIRED)) for (const event of events) {
       const input = report(), row = input.agents.find(row => row.agent === app)!.events.find(row => row.event === event)!
       row.state = 'missing'; input.ok = false
-      expect(parse(input, 1)).toEqual({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app }] })
+      expect(parse(input, 1)).toEqual({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app, cause: `missing:${event}` }] })
     }
     const input = report()
     input.agents[2]!.events[0]!.state = 'wired (older wording)'; input.ok = false
-    expect(parse(input, 1)).toEqual({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode' }] })
+    expect(parse(input, 1)).toEqual({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }] })
   })
 
   it('keeps unknown, malformed, duplicated and incomplete contracts partial without child text', () => {
@@ -72,7 +72,7 @@ describe('Doctor hooks producer contract', () => {
       const agents = first ? [malformed, ...input.agents] : [...input.agents, malformed]
       const output = parseBmnDoctor('hooks', JSON.stringify({ ...input, agents }), 1)
       expect(output.state).toBe('partial')
-      expect(output.problems.filter(problem => problem.code === 'hook-check')).toEqual([{ code: 'hook-check', item: 1, app: 'claude' }])
+      expect(output.problems.filter(problem => problem.code === 'hook-check')).toEqual([{ code: 'hook-check', item: 1, app: 'claude', cause: `missing:${input.agents[0]!.events[0]!.event}` }])
       expect(JSON.stringify(output)).not.toContain('SYNTHETIC')
     }
   })
@@ -86,7 +86,7 @@ describe('Doctor hooks producer contract', () => {
         const knownSuccess = state === 'wired' || state === 'wired (older wording)' && app !== 'opencode'
         const output = parseBmnDoctor('hooks', JSON.stringify(value), knownFailure ? 1 : 0)
         expect(output.state, `${app}/${event}/${JSON.stringify(state)}`).toBe(knownFailure ? 'problems' : knownSuccess ? 'passed' : 'partial')
-        expect(output.problems.filter(problem => problem.code === 'hook-check')).toEqual(knownFailure ? [{ code: 'hook-check', item: 1, app }] : [])
+        expect(output.problems.filter(problem => problem.code === 'hook-check')).toEqual(knownFailure ? [{ code: 'hook-check', item: 1, app, cause: state === 'missing' ? `missing:${event}` : 'older-wording:plugin' }] : [])
         expect(JSON.stringify(output)).not.toContain('SYNTHETIC')
       }
     }
@@ -160,7 +160,7 @@ describe('Doctor hooks producer contract', () => {
       const mixedView = await readDoctorView({ environment: dependencies.environment, now: clock })
       expect(mixedView.rows.find(row => row.check === 'hooks')!.state).toBe('partial')
       expect(mixedView.rows.find(row => row.check === 'hooks')!.problems.filter(problem => problem.code === 'hook-check')).toEqual([
-        { code: 'hook-check', item: 1, app: 'claude', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }
+        { code: 'hook-check', item: 1, app: 'claude', cause: `missing:${mixed.agents[0]!.events[0]!.event}`, reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }
       ])
       expect(mixedView.rows.flatMap(row => row.problems).some(problem => problem.code === 'tool-check')).toBe(true)
     } finally { rmSync(home, { recursive: true, force: true }) }

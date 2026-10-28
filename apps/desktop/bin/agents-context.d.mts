@@ -5,6 +5,8 @@ export interface ContextTestEntry {
   harness: string
   at: string
   version: string | null
+  /** The form the setting was tried in (Story 96.5); a record without one tried the form its app had before: Codex `argv`, Claude Code `env`. */
+  control?: ContextControlForm
   limit: ContextTestOutcome
   compact: ContextTestOutcome | 'untested'
   asked: number
@@ -23,11 +25,15 @@ export interface ContextProven {
   limit: boolean
   compact: boolean
   standing?: ContextStanding
+  /** Why the limit is not applied, where the caller's form is one no test covers (a research run, Story 96.5). */
+  reason?: string
 }
+/** How a setting reaches one run: `-c` items, an `env -i` entry, or a `--settings` text of its own. */
+export type ContextControlForm = 'argv' | 'env' | 'settings' | 'settings+restricted'
 /** One app BMN should test by itself now, why, and the agents whose limit waits for it. */
 /** `set` names the sources a `sources` test would meet, so that each set is tested once. */
-export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; agents: string[]; set?: string }
-/** A source the run's own environment was seen to win over, and on which side its size lay. */
+export interface ContextAutoPlanEntry { harness: ContextApp; version: string; reason: 'untested' | 'retry' | 'sources'; control: ContextControlForm; agents: string[]; default?: number; set?: string }
+/** A source the run's own `--settings` text was seen to win over, and on which side its size lay. */
 export interface ContextPrecedence { id: string; side: 'above' | 'below' }
 /** Why a context limit is refused: see checkContext. */
 export type ContextRefusalReason = 'out-of-range' | 'conflict' | 'unresolved' | 'missing' | 'differs'
@@ -38,7 +44,7 @@ export type ContextItems =
 export interface ContextResolved {
   limit: { value: number; source: string } | { unresolved: string; conflict?: boolean } | null
   compact: { value: number; source: string } | { unresolved: string } | null
-  /** Claude Code only: every source that names a size, with its identity (`environment`, or a file's part, path and key). */
+  /** Claude Code only: every source that names a size, with its identity (`environment`, or a file's part, path and key; the run's own `--settings` starts with OWN_CONTEXT_SOURCE). */
   sizes?: { source: string; value: number; id: string }[]
 }
 export interface ContextDefault {
@@ -77,13 +83,18 @@ export declare class ContextError extends Error {
 }
 export declare const CONTEXT_CONTROLS: Record<ContextApp, {
   command: string
-  limit: { form: 'argv' | 'env'; key: string; min?: number; max?: number }
-  compact: { form: 'argv' | 'env'; key: string } | null
+  limit: { form: ContextControlForm; key: string; min?: number; max?: number }
+  compact: { form: ContextControlForm; key: string } | null
 }>
 export declare const CONTEXT_APPS: ContextApp[]
 export declare const CODEX_CONTEXT_KEYS: string[]
 export declare const CLAUDE_CONTEXT_KEY: string
 export declare const CONTEXT_TEST_SIZE: Record<ContextApp, number>
+export declare const OWN_CONTEXT_SOURCE: string
+export declare function contextTestControl(entry: Partial<ContextTestEntry> | null | undefined): ContextControlForm | null
+export declare function claudeContextSettings(size: number): string
+export declare function claudeContextSettingsSize(text: string): number | null
+export declare function researchContextProven(agent: { id?: string; harness: string; context_limit?: number }, version: string | null, tests?: ContextTestEntry[]): ContextProven
 export declare function wholeNumber(raw: unknown): number | null
 export declare function contextTestsPath(): string
 export declare function contextTests(): ContextTestEntry[]
@@ -112,5 +123,6 @@ export declare function contextAutoPlan(input: {
   versions: Partial<Record<ContextApp, string | null>>
   tests?: ContextTestEntry[]
   sources?: Partial<Record<ContextApp, ContextSource[]>>
+  defaults?: Partial<Record<ContextApp, number | null>>
 }): ContextAutoPlanEntry[]
 export declare function runContextCommand(argv: string[]): Promise<number>

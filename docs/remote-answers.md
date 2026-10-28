@@ -260,14 +260,30 @@ shapes above:
   other kind (a sign-in, for example) is never sent.
 - `form.replied { id, sessionID, answer: { <key>: value | [values] } }` becomes `question.replied` with
   each value turned back into its option's label, and `form.cancelled { id }` becomes `question.rejected`.
-- `session.execution.started` becomes `session.status` busy. `session.execution.succeeded`, and
-  `session.execution.interrupted` with `reason: "user"`, become `session.idle`. A run interrupted as
+- `session.execution.started` becomes `session.status` busy. `session.execution.succeeded` becomes
+  `session.idle`; `session.execution.interrupted` with `reason: "user"` becomes `session.idle` with
+  `source: "interrupted"`, which still opens the finished-turn notice but stays the owner's stop: the
+  Away wake never takes it for a turn that finished by itself (Story 93.3; the interrupt's reason and
+  the child's events were recorded on 2.0.29 and 2.0.32). A run interrupted as
   `superseded`, `inactivity` or `shutdown` is not a finished turn and is not sent.
   `session.execution.failed { error: { type, message } }` becomes `session.error`.
 - `session.step.started { model: { id, providerID } }` becomes `message.updated` with `info.modelID`, once
   per model. `session.compaction.ended { sessionID, reason }` (2.0.28's types; OpenCode 2 has no
-  `session.compacted`) becomes `session.compacted`, a subagent's logged as the subagent's.
-  `session.deleted` keeps its name.
+  `session.compacted`) becomes `session.compacted`. `session.deleted` keeps its name.
+- Every event of a subagent's session (any of the family other than the root the plugin pinned) is
+  observed with `source: "subagent"`: its compaction is logged as the subagent's, its run starting does
+  not reset the repeat watch, and its run finishing is never the root's turn (Story 93.3, recorded on
+  2.0.29 and 2.0.32: a child's run reaches the plugin while the terminal shows its root).
+- Every event the plugin sends carries `bmn_plugin: 1`, its promise that the owner's stop arrives as
+  `source: "interrupted"` and quitting as `tui.exit` (Story 96.3). `bmn hook opencode` passes it on as the
+  observation's `plugin`; BMN's earlier plugins sent none, and BMN's October 14 plugin, replayed, reports the
+  owner's stop as a plain `session.idle`, so the Away wake leaves alone a session whose events lack the mark.
+- As it loads, before OpenCode draws, the plugin writes `OSC 7501;state=starting:app=opencode` to its
+  terminal, which starts BMN's screen mirror (Story 93.3; 93.1 checked that mirror cell for cell against
+  the real terminal on 2.0.29 and 2.0.32). When OpenCode quits it waits for the plugin, which tells
+  BMN `tui.exit` for the pinned session after every event already on its way. BMN treats it as Claude's
+  or Codex's `SessionEnd`: it withdraws that session's requests as for `session.deleted`, the mirror
+  stops and the session's agent flag clears.
 - Moving the terminal to another session is OpenCode 1's `tui.session.select`. The first visit to one
   created while the terminal ran, or in the last 30 seconds, is `session.created`; coming back to a
   session this terminal showed before is always `tui.session.select`. Either way BMN withdraws the
@@ -323,11 +339,13 @@ reaches it (a unit test reads the sources to keep it that way).
   typed text last), Codex `["None of the above", "user_note: <text>"]`, OpenCode's label arrays. Claude permissions for other tools (`Edit`, `Write`, …) were not driven
   and are not recognised.
 - **Screen mirror.** Each live session keeps its last 64 KB of output. A headless terminal copy
-  (`screen-mirror.ts`) starts once a Claude or Codex hook reports from that session, seeded from
-  that tail, or earlier, when the app reports its own state on screen (`OSC 7501;…:app=codex`): Codex
-  does that at start, before its first hook, and its start-up animation can pass 64 KB, which would
-  leave a later mirror without the prompt it drew once (Story 90.6). It stops on the agent's
-  `SessionEnd` or the session's exit. Measured 2026-09-27: one
+  (`screen-mirror.ts`) starts once a Claude, Codex or OpenCode hook reports from that session, seeded
+  from that tail, or earlier, when the app reports its own state on screen (`OSC 7501;…:app=codex`, or
+  `app=opencode` from BMN's OpenCode plugin): Codex does that at start, before its first hook, and its
+  start-up animation can pass 64 KB, which would leave a later mirror without the prompt it drew once
+  (Story 90.6). It stops on the agent's `SessionEnd`, OpenCode's `tui.exit` or the session's exit.
+  The Away wake reads its rows and its cursor, and only from a mirror already running: a sweep under way
+  when the agent left never starts one for the shell (Story 93.3). Measured 2026-09-27: one
   50 MB flood through the session manager cost a median 1,963 ms CPU without a mirror and 2,932 ms
   with one (1.49×), above the 1.10× budget, so plain shells never pay for it.
 - **Recognition.** A dialog is on screen only when its option list appears in order at one column,

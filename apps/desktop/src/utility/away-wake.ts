@@ -1,4 +1,4 @@
-// MODULE: away-wake.ts - Story 90.6: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
+// MODULE: away-wake.ts - Stories 90.6, 93.3 and 96.3: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
 import type { AwayRecord } from '@bmn/protocol'
 
 export const AWAY_WAKE_EVERY_MS = 2 * 60 * 60 * 1000
@@ -7,7 +7,7 @@ export const AWAY_WAKE_QUIET_MS = 15 * 60 * 1000
 /** The one line BMN ever types (R90-FR6, 90.6 AC5). It is never an approval, an answer or a resume of a stopped run. */
 export const AWAY_WAKE_LINE = 'BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed, continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.'
 
-type WakeApp = 'claude' | 'codex'
+type WakeApp = 'claude' | 'codex' | 'opencode'
 
 /** The latest hook event a session's current run reported, as the companion service keeps it. */
 export interface WakeObservation {
@@ -15,8 +15,18 @@ export interface WakeObservation {
   incarnationId: string
   agent: string
   event: string
+  /** Who the event speaks for when not the session itself: an OpenCode child's `subagent`, the owner's `interrupted` stop (Story 93.3). */
+  source: string | null
+  /** What the OpenCode plugin that sent the event promises (Story 96.3); null from BMN's earlier plugins and other agents. */
+  plugin: number | null
   observedAt: string
   foreground: string | null
+}
+
+/** The settled mirror's rows with dim cells blanked, and its cursor, read together. */
+export interface WakeScreen {
+  lines: string[]
+  cursor: { x: number; y: number }
 }
 
 export interface WakeAttention {
@@ -39,16 +49,26 @@ export interface AwayWakeOptions {
   foreground(sessionId: string): string | null
   generation(sessionId: string): { generation: number; pending: number }
   /** The session's screen with dim cells blanked, once every byte so far is drawn; null when there is no mirror. */
-  screen(sessionId: string, incarnationId: string): Promise<string[] | null>
+  screen(sessionId: string, incarnationId: string): Promise<WakeScreen | null>
   write(sessionId: string, text: string): void
   log(line: string): void
   everyMs?: number
   quietMs?: number
 }
 
-/** Which agents report a finished turn with which hook events (Claude's idle_prompt Notification repeats its Stop). */
-const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'Notification'], codex: ['Stop'] }
-const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || agent === 'codex'
+/**
+ * Which agents report a finished turn with which hook events (Claude's idle_prompt Notification repeats its Stop;
+ * BMN's OpenCode plugin reports a root run that succeeded, or that the owner stopped, as `session.idle`).
+ */
+const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'Notification'], codex: ['Stop'], opencode: ['session.idle'] }
+/**
+ * The promise an OpenCode session's loaded plugin must make (Story 96.3): its events carry `bmn_plugin` 1 or later once
+ * it reports the owner's stop as `interrupted` and quitting as `tui.exit`. BMN's earlier plugins reported a stop as a
+ * finished turn and carried no mark. The file on disk says nothing about what a running OpenCode loaded or about a stop
+ * reported before (2.0.29 reloads a changed file by itself), so only the mark on the session's own event lets BMN wake it.
+ */
+export const OPENCODE_WAKE_PLUGIN = 1
+const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || agent === 'codex' || agent === 'opencode'
 
 /**
  * The app's empty prompt, recorded from real sessions on 2026-10-23 (plan/references/090, evidence 90.6/screens):
@@ -56,13 +76,27 @@ const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || age
  * followed by exactly one blank line, one block of footer lines and only blank lines to the end of the screen: a
  * draft's further lines, even after blank ones, would make a second block. Empty means nothing after the marker once
  * dim placeholder text is blanked; anything else (a draft, a dialog's options, an unknown screen) is not idle.
+ *
+ * OpenCode 2's, recorded from pinned 2.0.29 and 2.0.32 on 2026-10-25 (Story 93.1, plan/references/093): its composer is
+ * one block of `  ┃` rows whose last names the agent and model (`  ┃  Build · …`) above a `  ╹▀▀…` rule. Empty means
+ * the block's top row, one blank content row and one blank row above the name, with the cursor on the content row's
+ * first cell. An open dialog leaves that block drawn but holds the cursor in its own field, so OpenCode needs the cursor;
+ * a draft, a paste's `[Pasted ~N lines]` or a second line fills or grows the block, and Home or a child view draws none.
  */
-export function idlePrompt(app: WakeApp, lines: readonly string[]): boolean {
+export function idlePrompt(app: WakeApp, lines: readonly string[], cursor?: { x: number; y: number }): boolean {
   const rule = (line: string | undefined): boolean => line !== undefined && /^─{10,}\s*$/u.test(line)
   const empty = (line: string, marker: string): boolean => line.slice(line.indexOf(marker) + marker.length).replace(/\s/gu, '') === ''
   if (app === 'claude') {
     const inputs = lines.flatMap((line, index) => line.startsWith('❯') && rule(lines[index - 1]) && rule(lines[index + 1]) ? [line] : [])
     return inputs.length === 1 && empty(inputs[0]!, '❯')
+  }
+  if (app === 'opencode') {
+    const names = lines.flatMap((line, index) => /^ {2}┃ {2}\S.* · /u.test(line) && /^ {2}╹▀{10,}/u.test(lines[index + 1] ?? '') ? [index] : [])
+    if (cursor === undefined || names.length !== 1) return false
+    const name = names[0]!
+    let top = name
+    while (top > 0 && lines[top - 1]!.startsWith('  ┃')) top -= 1
+    return name - top === 3 && lines.slice(top, name).every((line) => /^ {2}┃\s*$/u.test(line)) && cursor.x === 5 && cursor.y === top + 1
   }
   let index = lines.length - 1
   while (index >= 0 && !lines[index]!.startsWith('›')) index -= 1
@@ -122,25 +156,29 @@ export class AwayWake {
     const app = seen.agent
     if (!isWakeApp(app)) return `${app} sessions are not woken (no recorded idle prompt)`
     if (!FINISHED[app].includes(seen.event)) return `its latest event is ${seen.event}, not a finished turn`
+    // A child's turn is not the session's, and a stop the owner made stays a stop (R93-FR2).
+    if (seen.source === 'subagent' || seen.source === 'interrupted') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
+    if (app === 'opencode' && (seen.plugin ?? 0) < OPENCODE_WAKE_PLUGIN) return 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
     if (Date.parse(seen.observedAt) <= since) return 'no hook event since the owner left'
     const mine = open.filter((row) => row.sessionId === seen.sessionId && row.state === 'open')
     const turn = mine.find((row) => row.kind === 'notice' && row.requestKey === `${app}:turn`)
     if (!turn) return 'no open finished-turn notice'
     if (this.options.now().getTime() - Date.parse(turn.openedAt) < (this.options.quietMs ?? AWAY_WAKE_QUIET_MS)) return 'its turn finished less than 15 minutes ago'
     if (mine.length !== 1) return 'another request of it is open'
-    const lines = await this.options.screen(seen.sessionId, seen.incarnationId)
+    const screen = await this.options.screen(seen.sessionId, seen.incarnationId)
     // The last checks run together, synchronously, right before the one write.
     const now = this.options.away()
     if (now.state !== 'away' || now.periodId !== period) return 'the owner is no longer away in this period'
     if (this.options.liveIncarnation(seen.sessionId) !== seen.incarnationId) return 'its run changed'
     const latest = this.options.observation(seen.sessionId)
-    if (!latest || latest.event !== seen.event || latest.observedAt !== seen.observedAt) return 'its agent reported again'
+    if (!latest || latest.agent !== seen.agent || latest.event !== seen.event || latest.source !== seen.source ||
+      latest.plugin !== seen.plugin || latest.observedAt !== seen.observedAt) return 'its agent reported again'
     const front = this.options.foreground(seen.sessionId)
     if (front === null || seen.foreground === null || front !== seen.foreground) return 'its agent is not in the foreground'
     const changes = this.options.generation(seen.sessionId)
     if (changes.generation !== generation || changes.pending > 0) return 'its requests changed'
-    if (lines === null) return 'no screen to read'
-    if (!idlePrompt(app, lines)) return 'its prompt is not empty and idle'
+    if (screen === null) return 'no screen to read'
+    if (!idlePrompt(app, screen.lines, screen.cursor)) return 'its prompt is not empty and idle'
     this.options.write(seen.sessionId, AWAY_WAKE_LINE)
     return null
   }

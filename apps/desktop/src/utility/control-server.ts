@@ -197,6 +197,8 @@ export interface ControlHandlers {
     event: string
     source: string | null
     toolName: string | null
+    /** What BMN's OpenCode plugin promises (Story 96.3): 1 reports the owner's stop and quitting; absent from earlier plugins. */
+    plugin?: number | undefined
     fingerprint?: string | undefined
     /** Hostname only, from the agent's own base-URL environment; absent when the CLI could not read one. */
     apiHost?: string | undefined
@@ -1320,13 +1322,18 @@ export class ControlServer {
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'plugin', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
           'conversation', 'turn', 'nested', 'awayLock'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalidError('event must be printable ASCII without spaces')
         const source = readText(params, 'source', RULES.shownSource)
         const toolName = readText(params, 'toolName', RULES.shownSource)
+        // Story 96.3: what BMN's OpenCode plugin says it promises; only an OpenCode hook carries it, and an older plugin none.
+        const plugin = params.plugin
+        if (plugin !== undefined && (agent !== 'opencode' || typeof plugin !== 'number' || !Number.isSafeInteger(plugin) || plugin < 1 || plugin > 999)) {
+          throw invalidError('plugin must be a whole number from 1 to 999, from an OpenCode hook')
+        }
         const fingerprint = readText(params, 'fingerprint', RULES.source)
         if (fingerprint !== undefined && !/^[0-9a-f]{16}$/.test(fingerprint)) {
           throw invalidError('fingerprint must be 16 lowercase hexadecimal characters')
@@ -1365,6 +1372,7 @@ export class ControlServer {
           event,
           source: source ?? null,
           toolName: toolName ?? null,
+          ...(plugin === undefined ? {} : { plugin }),
           ...(fingerprint === undefined ? {} : { fingerprint }),
           ...(apiHost === undefined ? {} : { apiHost }),
           ...(model === undefined ? {} : { model }),

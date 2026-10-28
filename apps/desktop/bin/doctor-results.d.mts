@@ -4,6 +4,9 @@ export interface ProjectedDoctorResult { state: DoctorState; problems: DoctorPro
 export declare const CHECKS: readonly DoctorCheck[]
 export declare const STATES: readonly DoctorState[]
 export declare const PROBLEMS: Readonly<Record<string, readonly [string, string]>>
+export type StateWordsCheck = 'rules-check' | 'skill-check' | 'tool-check'
+export declare const STATE_WORDS: Readonly<Record<StateWordsCheck, { fine: readonly string[]; needs: readonly string[] }>>
+export declare function causeAllowed(code: string, app: string | undefined, cause: string): boolean
 export declare function parseCodexDoctor(text: string, exitCode: number | null, context?: { readOnlySandbox?: boolean }): ProjectedDoctorResult
 export declare function parseClaudeDoctor(text: string, exitCode: number | null): ProjectedDoctorResult
 export declare function parseBmnDoctor(check: DoctorCheck, text: string, exitCode: number | null): ProjectedDoctorResult

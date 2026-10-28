@@ -1866,6 +1866,9 @@ echo "codex-cli 0.161.0"
 
 describe('only allowlisted paths are read (R60-NFR3)', () => {
   it('PASS: a full check reads roster state, named config files, stdin and nothing else', async () => {
+    // Exercise ancestor HEAD metadata in this test's own folder, even on a clean machine.
+    mkdirSync(join(home, '.git'))
+    expect(existsSync(join(home, '.git/HEAD'))).toBe(false)
     mkdirSync(join(home, '.codex'))
     writeFileSync(join(home, '.codex/config.toml'), 'model = "gpt-6-astra"\n')
     writeFileSync(join(home, '.codex/auth.json'), '{"secret":"never read"}')
@@ -1884,7 +1887,11 @@ process.on('exit', () => fs.writeFileSync(${JSON.stringify(join(home, 'reads.log
 `)
     const result = await runCli(['roster', 'check', '--agent', 'astra', '--role', 'epic-reviewer', '--workspace', workspace, '--data', 'private', '--stdin', 'prompt.md', '--json', '--', ...ASTRA_REVIEW(workspace)], {}, ['--import', tracer])
     expect(result.code, result.stderr).toBe(0)
-    const reads = readFileSync(join(home, 'reads.log'), 'utf8').split('\n').map((line) => line.slice(line.indexOf(' ') + 1))
+    expect(existsSync(join(home, '.git/HEAD'))).toBe(false)
+    const lines = readFileSync(join(home, 'reads.log'), 'utf8').split('\n')
+    expect(lines).toContain(`statSync ${join(home, '.git')}`)
+    expect(lines).toContain(`statSync ${join(home, '.git/HEAD')}`)
+    const reads = lines.map((line) => line.slice(line.indexOf(' ') + 1))
     const allowed = [
       new RegExp(`^${home}/\\.config/bmn/agents/(roster\\.md|state/current|state/generations/\\d+\\.json|state/generations|state/visibility/[0-9a-f]{64}\\.json|state/context-tests\\.jsonl)$`),
       new RegExp(`^${home}/\\.codex/config\\.toml$`),
@@ -1901,7 +1908,28 @@ process.on('exit', () => fs.writeFileSync(${JSON.stringify(join(home, 'reads.log
       new RegExp(`^${home}/\\.config/bmn/agents(/state/team/runs/\\.namespaces/\\d+)?$`),
       /\/apps\/desktop\/bin\//, /\/node_modules\//, /^\/proc\/self\//, /^\/(usr|lib|etc\/ld)/, new RegExp(`^${stubs}`)
     ]
-    const unexpected = reads.filter((path) => path !== '' && !allowed.some((pattern) => pattern.test(path)))
+    // A folder holding the workspace is a repository only if its HEAD has metadata, never by reading its contents.
+    const heads = new Set<string>()
+    for (let folder = workspace; ; folder = dirname(folder)) {
+      heads.add(`statSync ${join(folder, '.git/HEAD')}`)
+      if (dirname(folder) === folder) break
+    }
+    const unexpectedIn = (observed: string[]): string[] => observed.filter((line) => {
+      const path = line.slice(line.indexOf(' ') + 1)
+      return path !== '' && !heads.has(line) && !allowed.some((pattern) => pattern.test(path))
+    })
+    const forbidden = [
+      `readFileSync ${home}/.git/HEAD`,
+      `openSync ${home}/.git/HEAD`,
+      'lstatSync /tmp/.git/HEAD',
+      `lstatSync ${join(home, '.git/HEAD')}`,
+      `existsSync ${home}/.git/HEAD`,
+      'statSync /synthetic/elsewhere/.git/HEAD',
+      `statSync ${home}/.codex/auth.json`
+    ]
+    expect(unexpectedIn(forbidden)).toEqual(forbidden)
+    expect(unexpectedIn([`statSync ${join(home, '.git/HEAD')}`])).toEqual([])
+    const unexpected = unexpectedIn(lines)
     expect(unexpected, unexpected.length ? 'FAIL' : 'PASS').toEqual([])
     expect(reads.some((path) => path.includes('auth.json'))).toBe(false)
   })

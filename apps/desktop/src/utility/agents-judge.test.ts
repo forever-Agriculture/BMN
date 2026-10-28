@@ -941,57 +941,54 @@ describe('an answer that is not Jev\'s shape (65.2 AC6)', () => {
 })
 
 describe('the key appears nowhere (65.2 AC3, R65-NFR3)', () => {
-  it('not in any output or file, also when the server sends it back in a body and a header', async () => {
+  // One echo per fixture keeps the complete check inside the default test budget on one CPU.
+  // These measured request minimums total 33 across the rows, above the original aggregate >15.
+  const echoes: Array<[name: string, minimumRequests: number, echo: typeof respond]> = [
+    ["body and header", 5, (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json', 'x-echo': PLANTED_KEY })
+      response.end(JSON.stringify({ ...JSON.parse(answer()), key: PLANTED_KEY, usage: { input_tokens: 2000, note: PLANTED_KEY } }))
+    }],
+    ["score probability name", 4, (_request, response) => {
+      const body = JSON.parse(answer()) as { answers: { quality: { probabilities: Record<string, number> } } }
+      body.answers.quality.probabilities = { [PLANTED_KEY]: 1 }
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(body))
+    }],
+    ["choice probability name", 4, (_request, response) => {
+      const body = JSON.parse(answer()) as { answers: { kind: { probabilities: Record<string, number> } } }
+      body.answers.kind.probabilities = { report: 0.95, [PLANTED_KEY]: 0.05 }
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(body))
+    }],
+    ["answer value", 4, (_request, response) => {
+      response.writeHead(200, { 'x-echo': PLANTED_KEY })
+      response.end(JSON.stringify({ answers: { claim: { type: 'noul', noul: PLANTED_KEY } } }))
+    }],
+    ["401 status and body", 4, (_request, response) => {
+      response.writeHead(401, `bad key ${PLANTED_KEY}`, { 'www-authenticate': `Bearer ${PLANTED_KEY}` })
+      response.end(`{"error":"the key ${PLANTED_KEY} is not valid"}`)
+    }],
+    ["500 body and header", 8, (_request, response) => {
+      response.writeHead(500, { 'x-echo': PLANTED_KEY })
+      response.end(PLANTED_KEY)
+    }],
+    ["redirect location", 4, (_request, response) => {
+      response.writeHead(302, { location: `http://127.0.0.1:${port}/${PLANTED_KEY}` })
+      response.end()
+    }],
+  ]
+
+  it.each(echoes)('not in any output or file for %s', async (_name, minimumRequests, echo) => {
     approve(teamWithJudge())
     signIn()
-    const echoes: Array<typeof respond> = [
-      // The key in a body that is otherwise Jev's, and in a header.
-      (_request, response) => {
-        response.writeHead(200, { 'content-type': 'application/json', 'x-echo': PLANTED_KEY })
-        response.end(JSON.stringify({ ...JSON.parse(answer()), key: PLANTED_KEY, usage: { input_tokens: 2000, note: PLANTED_KEY } }))
-      },
-      // The key as the name of a probability: of a score, and of a choice.
-      (_request, response) => {
-        const body = JSON.parse(answer()) as { answers: { quality: { probabilities: Record<string, number> } } }
-        body.answers.quality.probabilities = { [PLANTED_KEY]: 1 }
-        response.writeHead(200, { 'content-type': 'application/json' })
-        response.end(JSON.stringify(body))
-      },
-      (_request, response) => {
-        const body = JSON.parse(answer()) as { answers: { kind: { probabilities: Record<string, number> } } }
-        body.answers.kind.probabilities = { report: 0.95, [PLANTED_KEY]: 0.05 }
-        response.writeHead(200, { 'content-type': 'application/json' })
-        response.end(JSON.stringify(body))
-      },
-      // The key in place of an answer.
-      (_request, response) => {
-        response.writeHead(200, { 'x-echo': PLANTED_KEY })
-        response.end(JSON.stringify({ answers: { claim: { type: 'noul', noul: PLANTED_KEY } } }))
-      },
-      // The key in an error's body and its status line.
-      (_request, response) => {
-        response.writeHead(401, `bad key ${PLANTED_KEY}`, { 'www-authenticate': `Bearer ${PLANTED_KEY}` })
-        response.end(`{"error":"the key ${PLANTED_KEY} is not valid"}`)
-      },
-      (_request, response) => {
-        response.writeHead(500, { 'x-echo': PLANTED_KEY })
-        response.end(PLANTED_KEY)
-      },
-      (_request, response) => {
-        response.writeHead(302, { location: `http://127.0.0.1:${port}/${PLANTED_KEY}` })
-        response.end()
-      }
-    ]
+    respond = echo
     const said: string[] = []
-    for (const echo of echoes) {
-      respond = echo
-      for (const extra of [[], ['--json'], ['--twice', '--json']]) {
-        const result = await runCli(['judge', 'ask', ...files(), '--data', 'public', '--purpose', 'key-test', ...extra])
-        said.push(result.stdout, result.stderr)
-      }
-      said.push(JSON.stringify(await ask()))
+    for (const extra of [[], ['--json'], ['--twice', '--json']]) {
+      const result = await runCli(['judge', 'ask', ...files(), '--data', 'public', '--purpose', 'key-test', ...extra])
+      said.push(result.stdout, result.stderr)
     }
-    expect(requests.length).toBeGreaterThan(15)
+    said.push(JSON.stringify(await ask()))
+    expect(requests.length).toBeGreaterThanOrEqual(minimumRequests)
     expect(requests.every((request) => request.headers.authorization === `Bearer ${PLANTED_KEY}`)).toBe(true)
     expect(said.join('\n')).not.toContain(PLANTED_KEY)
     expect(said.join('\n')).not.toContain(PLANTED_KEY.slice(3, 20))

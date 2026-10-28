@@ -548,9 +548,22 @@ function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView
   }
 }
 
-/** One row of Integrations › Health › Context limits (60.9 AC3): the default the app's file holds, and whether BMN may change it. */
+/** Each app's default context size as its own file holds it now, or null where it holds none or cannot be read. */
+function contextFileDefaults(env: NodeJS.ProcessEnv): Record<ContextLimitApp, number | null> {
+  return Object.fromEntries((CONTEXT_APPS as ContextLimitApp[]).map((harness) => [harness, contextDefault(harness, { environment: env }).limit])) as Record<ContextLimitApp, number | null>
+}
+
+/**
+ * One row of Integrations › Health › Context limits (60.9 AC3): the default the app's file holds, whether BMN may change
+ * it, and who acts next on the installed version (Story 96.5): BMN's own test is due (`scheduled`), nothing calls for one
+ * (`not-needed`: no agent has a limit on this app and its file holds no default), or none is coming (`none`: the test
+ * passed, or failed and waits for the owner's Test again).
+ */
 function contextView(harness: ContextLimitApp, version: string | null, generation: Generation | null, context: RulesIpcContext): ContextLimitView {
   const row = contextDefault(harness, { environment: context.env, version })
+  const data = generation?.data ?? null
+  const needed = limitedAgents(data, harness).length > 0 || row.limit !== null
+  const scheduled = version !== null && contextAutoPlan({ data, versions: { [harness]: version }, defaults: { [harness]: row.limit } }).some((entry) => entry.harness === harness)
   return {
     harness, path: row.path, exists: row.exists, limit: row.limit, compact: row.compact, version,
     ...(row.resolved_path !== undefined && row.resolved_path !== row.path ? { resolvedPath: row.resolved_path } : {}),
@@ -558,8 +571,12 @@ function contextView(harness: ContextLimitApp, version: string | null, generatio
     ...(row.unreadable === undefined ? {} : { unreadable: row.unreadable }),
     limitProven: row.proven.limit, compactProven: row.proven.compact,
     ...(row.min === undefined || row.max === undefined ? {} : { min: row.min, max: row.max }),
-    test: row.test === null ? null : { at: row.test.at, version: row.test.version, outcome: row.test.limit, detail: row.test.detail, ...(row.test.by === 'bmn' ? { by: 'bmn' as const } : {}) },
-    limits: limitedAgents(generation?.data ?? null, harness).map((agent) => {
+    test: row.test === null ? null : {
+      at: row.test.at, version: row.test.version, outcome: row.test.limit, detail: row.test.detail, asked: row.test.asked, observed: row.test.observed,
+      ...(row.test.by === 'bmn' ? { by: 'bmn' as const } : {})
+    },
+    autoTest: !needed ? 'not-needed' : scheduled ? 'scheduled' : 'none',
+    limits: limitedAgents(data, harness).map((agent) => {
       const limit = agent.context_limit as number
       try {
         const standing = limitStanding(agent, version, { environment: context.env })
@@ -569,7 +586,7 @@ function contextView(harness: ContextLimitApp, version: string | null, generatio
         return { agent: agent.name, limit, state: 'refused' as const, reason: error instanceof Error ? error.message : String(error) }
       }
     }),
-    agents: sharingAgents(generation?.data ?? null, harness)
+    agents: sharingAgents(data, harness)
   }
 }
 
@@ -832,7 +849,9 @@ function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
     const reason = why(row.why)
     apps.push({
       harness: row.agent as RosterHarness, file: String(row.file ?? ''), state: row.state as HookAppAtStart['state'],
-      placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason })
+      placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason }),
+      ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) }),
+      ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) })
     })
   }
   return { state: 'checked', checkedAt, apps }
@@ -989,8 +1008,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
         // Never beside a research or a fence test already going: it waits for the next look.
         ...(research !== null || fenceTest.running ? [] : fenceAutoPlan({ data, versions }).map((entry) => ({ ...entry, kind: 'fence' as const })))
       ]
-      // An app no agent has a limit for is not tested for one.
-      const apps = (CONTEXT_APPS as ContextLimitApp[]).filter((harness) => limitedAgents(data, harness).length > 0)
+      // An app is tested for the agents with a limit of their own on it and for a default its file holds (Story 96.5).
+      const defaults = contextFileDefaults(ctx.env)
+      const apps = (CONTEXT_APPS as ContextLimitApp[]).filter((harness) => limitedAgents(data, harness).length > 0 || defaults[harness] !== null)
       if (apps.length > 0) {
         const folder = contextTestFolder(ctx.probeEnv)
         const sources = Object.fromEntries(apps.map((harness) => {
@@ -1002,8 +1022,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
           }
         }))
         const contextVersions = Object.fromEntries(apps.map((harness) => [harness, versions[harness] ?? null]))
-        for (const entry of contextAutoPlan({ data, versions: contextVersions, sources })) {
-          entries.push({ kind: 'context', harness: entry.harness, version: entry.version, reason: entry.reason, agents: entry.agents, key: signedIn({ harness: entry.harness, key: entry.set ?? '' }) })
+        for (const entry of contextAutoPlan({ data, versions: contextVersions, sources, defaults })) {
+          // The form tested is part of what the tries are for: a test of another form has tries of its own.
+          entries.push({ kind: 'context', harness: entry.harness, version: entry.version, reason: entry.reason, agents: entry.agents,
+            key: signedIn({ harness: entry.harness, key: `${entry.control}\n${entry.set ?? ''}` }) })
         }
       }
       // The two that send a prompt to the app's provider come last.

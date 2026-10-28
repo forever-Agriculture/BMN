@@ -1314,6 +1314,58 @@
   margin-top: 10px;
 }
 
+/* Health › Doctor › Leftovers (Story 96.6): one disclosure, its groups inside it as label | count, their locations numeric and wrapping. */
+.preferences-dialog .leftovers {
+  margin-top: 6px;
+}
+
+.preferences-dialog .leftovers > summary {
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 0;
+  height: auto;
+  padding-block: 4px;
+}
+
+.preferences-dialog .leftovers > summary > .faint {
+  font-weight: 400;
+}
+
+.preferences-dialog .leftover-group {
+  padding: 0 0 0 14px;
+  border-top: 0;
+}
+
+.preferences-dialog .leftover-group > summary > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .leftover-group > summary > .count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .leftover-group > p {
+  margin: 0;
+  padding: 2px 0 4px 13px;
+}
+
+.preferences-dialog .leftover-items {
+  margin: 0;
+  padding: 0 0 6px 13px;
+  list-style: none;
+}
+
+.preferences-dialog .leftover-items > li {
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .leftover-items .path {
+  white-space: normal;
+}
+
 @media (max-width: 820px) {
   .preferences-dialog .preferences-row {
     grid-template-columns: 140px minmax(0, 1fr);
@@ -1357,6 +1409,24 @@
   .preferences-dialog .health-row:is(.policy-owner, .policy-repository) > :nth-child(2) {
     grid-column: auto;
     grid-row: auto;
+  }
+}
+
+/* Story 96.6, 640 px: two columns, the name and its state, then the path across, then the time and the actions, left. */
+@media (max-width: 680px) {
+  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .auto-test) {
+    grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .auto-test) > :nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .auto-test) > :nth-child(n + 4) {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-self: start;
   }
 }
 

@@ -11,7 +11,7 @@ import { projectedResult } from './doctor-results.mjs'
 export const leftoversModule = import.meta.url
 const malformed = Object.freeze({ code: 'MALFORMED' })
 const RUNNERS = new Set(['npx', 'uvx', 'bunx', 'pnpm', 'pnpx', 'yarn', 'docker', 'podman', 'uv', 'pipx', 'deno'])
-const BMN_SKILLS = new Set(['plan', 'team-ask', 'team-page', 'web-question', 'jev-judge', 'dev-auto', '.system', 'synced'])
+const BMN_SKILLS = new Set(['plan', 'team-ask', 'report-artifact', 'team-page', 'web-question', 'jev-judge', 'dev-auto', '.system', 'synced'])
 
 async function scanOnce(versions, keys, deadline) {
   const { SKILL_APPS, rootPath } = await import('./agents-skills.mjs')

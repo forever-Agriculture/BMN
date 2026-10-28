@@ -34,6 +34,7 @@ export const ALLOWED = {
   'apps/desktop/src/utility/store-schema.ts': 'the migration that once allowed its bindings',
   'apps/desktop/src/utility/agent-history.ts': 'a history state saved before the retirement',
   'apps/desktop/src/renderer/src/session-presentation.ts': 'its name on old sessions, sets and requests',
+  'apps/desktop/src/renderer/src/terminal-image-presentation.ts': 'xterm caret theme color keys in the image presentation signature',
   // This epic's docs and its before and after screens.
   'docs/agent-control.md': 'what the retirement means',
   'docs/features.md': 'the launcher note',

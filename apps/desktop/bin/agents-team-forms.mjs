@@ -143,7 +143,7 @@ export function askCommand(harness, program, request) {
   const asker = request.environment ?? process.env
   const home = asker.HOME ?? ''
   const path = appSearchPath(asker)
-  // The agent's context limit, where the owner's test proved the setting on this app version (60.9): `-c` items for Codex, environment for Claude Code.
+  // The agent's context limit, where the owner's test proved the setting on this app version (60.9): `-c` items for Codex, one `--settings` text for Claude Code (96.5).
   const context = request.context ?? { argv: [], env: [] }
   const contextEnvironment = Object.fromEntries(context.env.map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]))
   const pictures = request.pictures ?? []
@@ -159,7 +159,8 @@ export function askCommand(harness, program, request) {
   } else if (harness === 'claude') {
     environment = { HOME: home, PATH: `${join(request.folder, ASK_RUN_FILES.bin)}:${path}`, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}), ...contextEnvironment }
-    command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...claudeTools(request.browser, request.folder), ...(pictures.length > 0 ? ['--input-format', 'stream-json'] : [])]
+    command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...claudeTools(request.browser, request.folder), ...context.argv,
+      ...(pictures.length > 0 ? ['--input-format', 'stream-json'] : [])]
     if (pictures.length > 0) stdin = 'stream-json'
   } else if (harness === 'opencode') {
     if (request.browser) throw new Error(ASK_UNSUPPORTED.opencode.browser)

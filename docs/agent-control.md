@@ -138,9 +138,10 @@ Commands:
                                             with numbers, and BMN reads them (bmn judge --help)
   doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
                                             one shared run, also with BMN closed (bmn doctor --help)
-  plan status|check|set                     The project's planning board, in BMN's format or BMAD's: print
-                                            rows, check the plan's structure, change one row safely; not the
-                                            subscription's Plan use (bmn plan --help)
+  plan status|check|set|go                  The project's planning board, in BMN's format or BMAD's: print
+                                            rows, check the plan's structure, change one row safely, record
+                                            the owner's go in the plan's history; not the subscription's Plan
+                                            use (bmn plan --help)
   policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
                                             the repository's level and what still asks (bmn policy --help)
   grant [--run ID] | grant ask | grant use  The Away grant: a run's one card before the owner leaves, what he
@@ -706,7 +707,18 @@ keep their current startup behavior and personal configuration.
 folder exists (it creates no folder). It adds an entry only where an event has none of BMN's in any shape. It leaves as
 it is, and adds nothing beside: an entry inside a matcher, BMN's wording with a field the app will not run, a
 `bmn hook <agent>` call in a wording BMN did not write, an OpenCode plugin file BMN did not write (with its `cli.json`),
-and a file BMN cannot add to. An older wording runs and counts as in place. Every file is copied before it changes,
+and a file BMN cannot add to. An older wording runs and counts as in place. An OpenCode plugin that is byte for byte one
+BMN shipped earlier (a fixed list of SHA-256 hashes read from main's history, `EARLIER_OPENCODE_PLUGINS` in
+`bin/bmn-opencode-plugin.mjs`; BMN's comments alone never make a file BMN's) is upgraded to the current one: a copy is
+made and read back, the new text replaces the file only while the path still leads to the file BMN read with the bytes
+it read, and is read back after (Story 96.3); one edited since is left and listed as `changed`, with its `cli.json`
+entry. OpenCode 2.0.29 loads a changed plugin file again while it runs (its log says `plugin reconciliation`), and the Away
+wake-up goes by the mark on each event, so a stop the earlier plugin reported stays a stop. Known limit: the current plugin
+reports its own unloading as `tui.exit`, so a later rewrite of it while OpenCode runs in a BMN session (by hand, or a rollback
+to a copy) reaches BMN as a quit followed by the next plugin's events, which withdraws that session's open requests; the
+October 14 plugin says nothing as it unloads (Story 96.3 live check). The start-up install runs in the background and
+does not wait for sessions, so a session already running OpenCode then sees that rewrite: harmless for the October 14
+plugin, but the next change of the current plugin text will withdraw the open requests of such a session. Every file is copied before it changes,
 written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
@@ -758,7 +770,8 @@ keep it from rewriting its settings, while `install` runs.
 as `bmn/tui.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn`
 folder to `plugins` in `cli.json` there: OpenCode 2 loads a local terminal plugin only as a folder named in that list,
 and skips an entry naming a file without a word. `check` reports `plugin` (`tui.ts` byte for byte: `wired`, `wired
-(older wording)` or `missing`) and `cli.json` (whether the list names the folder); a `cli.json` that is not a JSON
+(older wording)` for one BMN shipped earlier, which BMN's next start upgrades, or `missing`, also for a copy edited since
+BMN wrote it) and `cli.json` (whether the list names the folder); a `cli.json` that is not a JSON
 object with a `plugins` list is reported and left untouched. `install` backs up every file it changes, shows the whole
 plugin file in its prompt, and moves OpenCode 1's BMN plugin, which OpenCode 2 refuses to load, out of `plugin/` or
 `plugins/` to `bmn/plugin-bmn.ts.bmn-backup-<time>`; a file there that is not BMN's stays. Restart OpenCode after
@@ -976,15 +989,29 @@ per session before anything is read, so overlapping sweeps type nothing twice. A
 the next one after now; missed times are not made up. Back, or only leaving, types nothing, and a new period starts its
 own times.
 
-A session is woken only when all of these hold: it runs Claude Code or Codex; its latest hook event is a finished turn
-reported after he left, with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
+A session is woken only when all of these hold: it runs Claude Code, Codex or OpenCode; its latest hook event is a
+finished turn reported after he left (for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
+plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`, and only from a plugin whose events carry
+`bmn_plugin` 1, its promise that it marks the interrupt and reports quitting: BMN's earlier plugins reported the owner's
+stop as a finished turn, and the plugin file on disk says nothing about what a running OpenCode loaded or about a stop
+reported before (2.0.29 reloads a changed file by itself); Story 96.3), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim
-placeholder text after the marker, as recorded from real sessions). Any state BMN cannot read skips the session for that
-time. OpenCode sessions are not woken: BMN keeps no screen mirror for them, so their prompt cannot be read.
-Epic 92 measured pinned OpenCode 2.0.32's screens (root, Home, child, typed drafts) but did not qualify every state a wake
-must refuse, such as an open dialog, so the wake waits for its own epic (2026-10-25).
+placeholder text after the marker; OpenCode's composer, one block of exactly one empty content row above its agent and
+model line, with the cursor on that row's first cell, under any agent; as recorded from real sessions, OpenCode's on
+pinned 2.0.29 and 2.0.32 in Epic 93). Any state BMN cannot read skips the session for that time. OpenCode's command
+palette and agent picker leave the empty composer drawn but hold the cursor in their own field, so the cursor refuses
+them; a draft, a paste's `[Pasted ~N lines]`, a second line, Home and a child's view are refused by their screens, a
+permission or question by its open request. Every app gets the same write: the line as one bracketed paste, then Enter.
+OpenCode submits it whole, once, with the one space it adds after any summarized paste (measured on both pins, Epic 93).
+
+The guarantee holds when BMN writes, not inside the app (Epic 93, D3; the same for every app): BMN reads the screen,
+then checks everything above and writes in one synchronous step, so what the app draws after that read (a draft it
+restores, a dialog it opens) is not seen. BMN's OpenCode plugin looks once a second at which session the terminal shows,
+and tells BMN of a switch only after every report already on its way (each is given up to 3 s, and several may be
+waiting), so after a switch at the keyboard the latest event BMN holds can still be the previous session's for a
+second or more; no fixed bound is promised. A draft of only spaces with the cursor moved back to its start reads as empty.
 
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never
@@ -1175,25 +1202,32 @@ is where the app starts summarising. BMN uses an app's setting only on a version
 | App | Limit | Where summarising starts | Tested on a live app |
 | --- | --- | --- | --- |
 | Codex | `model_context_window`: a `-c` item on a run, a top-level key of `config.toml` for your sessions | `model_auto_compact_token_limit`, the same way | not yet |
-| Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): an `env -i` entry on a run, an `env` entry of `settings.json` for your sessions | no setting | not yet |
+| Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): on a run, one `--settings` text that names it in `env` and as `autoCompactWindow`; an `env` entry of `settings.json` for your sessions | no setting | 2.1.310 (2026-10-26): `--settings` with 137 000 reported 137 000 over `settings.json`'s 450 000; the run's environment had lost to that file |
 | OpenCode | no setting | no setting | does not apply |
 
 Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or with compaction off, so
-BMN does not use it.
+BMN does not use it. Its run's environment loses to an `env` entry in your `settings.json`, while `--settings` outranks
+your files and is still read under `--restricted`, the form of a team ask (Story 96.5). A test proves only the form it
+tried: its record names it as `control`, and one from before names none and tried the run's environment for Claude Code
+and `-c` for Codex. A research run starts Claude Code in `--safe-mode` and takes no `--settings`, a form no test tried,
+so a researcher's own limit is not applied there and its step says so; packet mode takes BMN's own `--settings` text
+and no other.
 
 **The test.** `bmn context test <app>` starts the app once in an empty folder under your home folder with a short
-synthetic prompt and asks for a size no default equals (Codex 123 000, Claude Code 137 000). It passes when the app's
+synthetic prompt and asks for a size no default equals (Codex 123 000, Claude Code 137 000), in the form a run carries
+it; these sizes are the test's own and never offered as a setting. It passes when the app's
 own report shows that size: Codex's session record (a little less, as Codex keeps part back) or the Tokens line of
 Claude Code's `/context` (Codex sends one short request to its provider; Claude Code is only asked for that report).
 The result is kept per app version in `state/context-tests.jsonl`; the latest test of a version decides, and a new
 version starts untested. Until a test passed the limit is **not supported yet** on that version: BMN writes, passes and
-requires nothing. Where summarising starts has no test yet on any app. The Claude Code test also keeps which of your
+requires nothing. Where summarising starts has no test yet on any app: BMN does not fill a conversation to find out, and
+reading a file back proves neither size. The Claude Code test also keeps which of your
 files named another size for that run (`rivals`: part, file, key and size), so a pass shows the run's own value winning
 over each on its side; a file naming a size within one percent of the asked one makes the test inconclusive, naming
 the file, without starting a run.
 
-**BMN tests by itself**, only where an approved, enabled agent on that app has a limit, by the latest test of exactly
-the installed version:
+**BMN tests by itself**, only where an approved, enabled agent on that app has a limit or the app's own file holds a
+default (Story 96.5), by the latest test of exactly the installed version in the form BMN applies now:
 
 | Latest test of the installed version | What BMN does |
 | --- | --- |
@@ -1204,23 +1238,27 @@ the installed version:
 
 For Claude Code a passed version is tested once more when your files changed so that a run would meet a set of sources
 (which, and on which side of the asked size) no recorded test of that version met; each set is tested once, also when
-you change back to it, and two looks at once start one test. Health's row reads "BMN tested 2.1.296 by itself Oct 11 ·
-it takes the setting" (or "the test failed", "the test showed nothing"; Codex adds "one prompt sent"); a failure, or
-three tries that showed nothing, is told once, naming the agents whose limit does not hold. Under each app's row Health
+you change back to it, and two looks at once start one test. Health's row keeps the saved value apart from what the
+test observed, what that proves and who acts next: "BMN tested 2.1.296 by itself Oct 11 · asked for 137 000, it reported
+137 000 · proves the limit for runs BMN starts with --settings, also with --restricted, not in --safe-mode; where it summarises is not tested", "Tested on 0.164.0 · the
+test failed: … · not used; Test again… is yours", "the test showed nothing · queued: BMN tries again by itself", "Not yet proven on
+2.1.310 · queued: BMN tests it by itself", or "no automatic test: no agent has a limit here and the file holds no default"
+(Codex adds "one prompt sent"); a failure, or three tries that showed nothing, is told once, naming the agents whose
+limit does not hold. Under each app's row Health
 names every agent with a limit and whether a run started now applies it, not, or is refused, with the reason (judged
 from the test's own folder). `bmn roster check` never starts an app and writes nothing; for an untested version its step
 says "BMN tests it by itself when it starts, when Integrations > Health is read and after an update there".
 
 **Runs BMN checks.** `bmn roster role <role> --json` gives each candidate a `context` entry: `applied` with the exact
-`argv` items (Codex) or `env` entries (Claude Code), `app-default`, `not-supported-yet` or `out-of-range`. `bmn roster
+`argv` items (Codex's `-c`, Claude Code's `--settings` text), `app-default`, `not-supported-yet` or `out-of-range`. `bmn roster
 check` resolves what the run would use and refuses with `CONTEXT_MISMATCH` (after the effort, before the destination)
 when that differs from the agent's limit or cannot be resolved, with `detail` `conflict`, `unresolved`, `missing`,
 `differs` or `out-of-range`. A PASS records `context_limit_applied`, or `context_limit_note` says why the agent's limit is
 not applied. For Codex a `-c` item wins, then the selected profile, then `config.toml`; a `.codex/config.toml` in or
 above the working folder, or `/etc/codex`, that sets a size leaves it unresolved unless the run carries its own item. For
-Claude Code every source naming a size (the run's environment, `env` in each settings file it loads, a settings file's
-`autoCompactWindow`) must name the same one, unless the installed version's test saw the run's environment win over each
-other source on the same side: then the run's size holds and the step names both, so an agent may keep its own limit
+Claude Code every source naming a size (the run's own `--settings`, its environment, `env` in each settings file it
+loads, a settings file's `autoCompactWindow`) must name the same one, unless the installed version's test saw the run's
+`--settings` win over each other source on the same side: then the run's size holds and the step names both, so an agent may keep its own limit
 while your sessions' default is larger. Any other disagreement is unresolved, the same file in another part included (a
 run started in your home folder reads your user settings a second time, as that folder's own). An agent without a limit
 is never asked for one.
@@ -1231,7 +1269,8 @@ lands and the exact diff, and writes after you confirm: only the named key chang
 `<file>.bmn-backup-<time>`, a file changed since the diff was shown is left alone, and a link is replaced by a regular
 file, its target never written. `bmn context set <app> --limit N|default` does the same in a terminal, with Yes/No.
 Claude Code's file is shared by every Claude Code agent, so one whose own limit differs from a default set there is
-refused until they agree.
+refused until they agree. A Claude Code change is refused while the same file names another size as `autoCompactWindow`,
+which BMN does not change, since which of the two the app follows was never tested.
 
 ### Skills
 
@@ -1327,10 +1366,12 @@ edit.
   its own link, copy and record of that name, leaves an entry you made, and the skills install then removes the old
   name from the other apps as a skill that left.
 
-`report-artifact` is the page for finished work (dev-auto ends every completed epic with one): the agent fills its
-`template.html` in the owner's sections (why we built it, what changes, then whatever else matters, the honest opinion
-last), checks it with `check.py` (PASS/FAIL per rule) and publishes it privately, Claude Code as an Artifact and any
-other app with `bmn publish`, a new key per revision. `bmn skills own
+`report-artifact` is the page for finished work (dev-auto ends every completed epic with one), written for a reader
+who knows nothing about it: the agent fills its `template.html` (a header with one status line, In short, What changed
+as one Problem | Fix | What happens now table with a proof line per row and full-size screenshots, Still open, Next
+steps with the choices the owner can reverse, then two opinions: the lead's and the independent reviewer's), checks it
+with `check.py` (PASS/FAIL per rule, at most 900 words) and publishes it privately, Claude Code as an Artifact and any
+other app with `bmn publish`, a new key per revision, then opens it in the owner's default browser. `bmn skills own
 --plan --json` says what it would do without writing; `bmn skills check --json` lists the same rows under `own`.
 
 ### Tools (MCP)
@@ -2573,7 +2614,7 @@ BMN alone supplies the internal `--startup UUID` option to identify one applicat
 
 ## The project's plan: `bmn plan`
 
-`bmn plan status|check|set` reads, checks and changes the project's planning board, in BMN's own format (`plan/`) or BMAD's (`sprint-status.yaml`), with BMN closed: it opens no socket and needs no token. `status --json` is how dev-auto and other agents learn the plan's format and paths and each row's token; `set` changes one row only, under a lock, refusing when the row changed since its token was read. The format, the resolution rule, the guarantees of `set` and the parity map with BMAD are in [planning.md](planning.md). The name is the project's planning, not the subscription's Plan use (above).
+`bmn plan status|check|set|go` reads, checks and changes the project's planning board, in BMN's own format (`plan/`) or BMAD's (`sprint-status.yaml`), with BMN closed: it opens no socket and needs no token. `status --json` is how dev-auto and other agents learn the plan's format and paths and each row's token; `set` changes one row only, under a lock, refusing when the row changed since its token was read; `go` records the owner's go on an epic as one commit of the plan's history naming his act and the approved text, which dev-auto's `run_needs.py` reads back. The format, the resolution rule, the guarantees of `set` and the parity map with BMAD are in [planning.md](planning.md). The name is the project's planning, not the subscription's Plan use (above).
 
 ## A brief for agents
 

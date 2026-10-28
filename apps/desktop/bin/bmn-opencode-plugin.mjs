@@ -1,8 +1,30 @@
 // MODULE: bmn-opencode-plugin.mjs - the bmn command line behind bin/bmn: the agents its hooks serve and the OpenCode 2 terminal plugin `bmn hooks install opencode` writes
 
-export { HOOK_AGENTS, OPENCODE_PLUGIN }
+export { EARLIER_OPENCODE_PLUGINS, HOOK_AGENTS, OPENCODE_PLUGIN }
 
 const HOOK_AGENTS = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }
+/**
+ * Every OpenCode plugin text BMN shipped before this one, by the SHA-256 of its bytes, with the first commit on main
+ * that shipped it (Story 96.3). Only a file byte for byte one of these is BMN's to upgrade or remove by itself: a copy
+ * someone edited, or any other file, is left as it is. `terminal` texts were written as bmn/tui.ts for OpenCode 2,
+ * `server` ones as plugin/bmn.ts or plugins/bmn.ts for OpenCode 1. The list is fixed: bmn-opencode-plugin.test.ts
+ * reads each text back from its commit and checks its hash, and a new plugin text adds the one it replaces.
+ */
+const EARLIER_OPENCODE_PLUGINS = Object.freeze({
+  '32abf9442259d4a340564a9f253ed1f3dc9fbe9225a1a88c7e73fd0ae3691218': { kind: 'server', commit: '932625075f', file: 'apps/desktop/bin/bmn' },
+  '28d0275b101392a1993524824e19a85907ec28acd2cea2843e24b9d48b506d45': { kind: 'server', commit: '85c96cfc4c', file: 'apps/desktop/bin/bmn' },
+  '38c8da522311c1afcf157b4b0f548afcbb57f6b91cba5340ca7d0c3d8d02300f': { kind: 'server', commit: '8ee22dd4de', file: 'apps/desktop/bin/bmn' },
+  'd67cccdf6ea7b42c7ef22e354e85542a2b33b895148f2b8765faec2ac65bcb9d': { kind: 'server', commit: 'bbe3ec41c6', file: 'apps/desktop/bin/bmn' },
+  'ea99612ebaedcaf56a9bc45330ff82cc23967c12c920aecb72ed39a85a9a0305': { kind: 'server', commit: '9b0d890ca9', file: 'apps/desktop/bin/bmn' },
+  '03792b8fa1ebbe9298a83acee2163590933c3e60d0551f293ea1d8146ea5481a': { kind: 'terminal', commit: 'f2049d70ff', file: 'apps/desktop/bin/bmn' },
+  '98eb92129bb2f39a9c0594bf1c84abcbc0e52f4180d3010def88b9cced469f3a': { kind: 'terminal', commit: '9a54afdb63', file: 'apps/desktop/bin/bmn' },
+  '1542884bf2107a35754c13223e36a94945183b4d26682203f4eeba0bbb46466b': { kind: 'terminal', commit: 'e6015f28a8', file: 'apps/desktop/bin/bmn' },
+  // Written from 2026-10-14 to 2026-10-25 and still loaded by OpenCode on the owner's computer on 2026-10-26: it reports
+  // the owner's stop as a finished turn.
+  '4cebff68da6edb803b706447ca3ce2de3f5976f6c0db466d1b6cee8db0d99fde': { kind: 'terminal', commit: '033eb7d88f', file: 'apps/desktop/bin/bmn' },
+  '4701dc309ca619df2eff07093c8d044467f4843c6596d48646f29675f48d6ed6': { kind: 'terminal', commit: '0634703063', file: 'apps/desktop/bin/bmn-opencode-plugin.mjs' },
+  '39e45ffaa1f161009d5accae93d07c641dd1e8e5404ca62320072cdf5c075f0d': { kind: 'terminal', commit: '84111c456a', file: 'apps/desktop/bin/bmn-opencode-plugin.mjs' }
+})
 /**
  * OpenCode 2's terminal plugin, written as bmn/tui.ts and named by its folder in cli.json's "plugins"
  * (2.0.28, measured 2026-10-14). It translates OpenCode 2's events into the OpenCode 1 shapes `bmn hook opencode` reads.
@@ -41,10 +63,18 @@ const REFUSALS = [
 ]
 const refused = (error: any) => REFUSALS.includes(error?._tag)
 
+// What every event this plugin sends promises BMN (Story 96.3): the owner's stop arrives as session.idle from
+// "interrupted" and quitting as tui.exit. BMN's earlier plugins sent no such mark, so BMN's Away wake leaves alone a
+// session that still runs one, whatever file is on disk now.
+const CONTRACT = 1
+
 export default {
   id: "bmn",
   setup(context: any) {
     if (!(process.env.BMN_CONTROL_SOCKET || process.env.AITERM_CONTROL_SOCKET)) return
+    // BMN mirrors this terminal's screen once OpenCode runs in it (the Away wake reads its prompt). Saying so before
+    // OpenCode draws starts the mirror with the whole screen, not from a tail its redraws may have outgrown.
+    process.stdout.write("\\x1b]7501;state=starting:app=opencode\\x07")
     // The root session this terminal shows; BMN treats every other session of its family as a subagent's.
     let pinned: string | undefined
     const parents = new Map<string, string>()
@@ -76,9 +106,9 @@ export default {
       return root
     }
 
-    // Tells BMN one event, in order, in the shape bmn hook opencode reads.
+    // Tells BMN one event, in order, in the shape bmn hook opencode reads, with what this plugin promises.
     const hook = (name: string, payload: Record<string, unknown>) => {
-      const body = JSON.stringify({ hook_event_name: name, ...payload })
+      const body = JSON.stringify({ hook_event_name: name, ...payload, bmn_plugin: CONTRACT })
       const env = { ...process.env, BMN_OPENCODE_SESSION_ID: pinned ?? "" }
       queue = queue.then(() => run(["-s", "KILL", "3s", "bmn", "hook", "opencode"], env, body)).catch(() => undefined)
     }
@@ -283,8 +313,11 @@ export default {
           return
         case "session.execution.interrupted":
           // Only the owner's own stop ends a turn; a superseded, idle or shut-down run is not a finished turn.
+          // It stays his stop: BMN's Away wake never takes it for a turn that finished by itself.
           if (data.reason !== "user") return
-        // falls through
+          hook("session.idle", { sessionID: id, source: "interrupted" })
+          if (id === pinned) forget()
+          return
         case "session.execution.succeeded":
           hook("session.idle", { sessionID: id })
           if (id === pinned) forget()
@@ -345,10 +378,14 @@ export default {
       }
     }, 1000)
     timer.unref?.()
+    // OpenCode waits for this as it quits: BMN hears the agent left this terminal (its screen mirror stops), after
+    // every event already on its way.
     return () => {
       stopped = true
       clearInterval(timer)
       stop?.()
+      hook("tui.exit", { sessionID: pinned })
+      return queue
     }
   },
 }

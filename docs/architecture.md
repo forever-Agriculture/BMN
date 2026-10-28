@@ -85,9 +85,9 @@ launching terminal's identity and the launching agent's session identity. The ex
 
 **One live view per session.** Output goes from the PTY to one xterm.js instance over a dedicated,
 bounded MessagePort. There is no tmux and no replay of old bytes into a live terminal, because a
-second emulator tracking the same state drifts. The remote answers' screen mirror
-(`screen-mirror.ts`, [remote answers](remote-answers.md)) is a headless copy in the utility host
-that is parsed and never shown. Each view loads bounded Sixel decoding; the addon is disposed with
+second emulator tracking the same state drifts. The screen mirror that remote answers and the Away
+wake read (`screen-mirror.ts`, [remote answers](remote-answers.md)) is a headless copy in the utility
+host, kept only for sessions running Claude Code, Codex or OpenCode, that is parsed and never shown. Each view loads bounded Sixel decoding; the addon is disposed with
 the view. xterm draws with its DOM renderer. The end of a synchronized update (DECRST 2026, which
 Codex wraps around each frame) draws only the rows written during it (`terminal-sync-update.ts`):
 xterm 6.0.0 would redraw every row. Each row is a paint layer of its own (`session-panes.css`), so

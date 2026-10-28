@@ -122,6 +122,7 @@ async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPo
     liveLaunchDirectory: () => undefined,
     writeToSession: () => undefined,
     screenMirror: () => undefined,
+    runningScreenMirror: () => undefined,
     stopScreenMirror: () => undefined,
     sessionWithCurrentProcessState: (session: unknown) => session
   } as unknown as SessionManager

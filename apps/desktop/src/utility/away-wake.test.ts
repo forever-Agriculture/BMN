@@ -1,8 +1,8 @@
-// MODULE: away-wake.test.ts - Story 90.6 with a fake clock: ticks, claims, every eligibility and pre-write check, restarts, the recorded idle prompts
+// MODULE: away-wake.test.ts - Stories 90.6, 93.3 and 96.3 with a fake clock: ticks, claims, every eligibility and pre-write check, restarts, the recorded idle prompts
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { EMPTY_AWAY_RECORD, type AwayRecord } from '@bmn/protocol'
-import { AWAY_WAKE_LINE, AwayWake, idlePrompt, testAwayWakeTimes, type WakeAttention, type WakeObservation } from './away-wake'
+import { AWAY_WAKE_LINE, AwayWake, OPENCODE_WAKE_PLUGIN, idlePrompt, testAwayWakeTimes, type WakeAttention, type WakeObservation, type WakeScreen } from './away-wake'
 import { ScreenMirror } from './screen-mirror'
 
 const T = Date.parse('2026-10-23T22:00:00.000Z')
@@ -12,8 +12,11 @@ const RULE = '─'.repeat(60)
 /** Shapes recorded from real sessions on 2026-10-23 (Claude Code 2.1.309, Codex 0.164.0), dim placeholders blanked. */
 const CLAUDE_IDLE = ['● ok', '✻ Brewed for 3s', RULE, '❯ ', RULE, '  Opus 5.5 high ┃ ~/scratch']
 const CODEX_IDLE = ['› Reply with the single word ok.', '• ok', '', '›', '', '  GPT-6.1-Sol xhigh · ~/scratch', '  ? for shortcuts']
+/** OpenCode 2's empty composer as recorded on 2.0.29 and 2.0.32 (Story 93.1), with its cursor on the content row's first cell. */
+const OPENCODE_IDLE = ['   Synthetic root         +', '', '  ┃', '  ┃', '  ┃', '  ┃  Build · Synthetic Synthetic loopback', `  ╹${'▀'.repeat(60)}`, '  ~/work:master  ctrl+p commands']
+const OPENCODE_CURSOR = { x: 5, y: 3 }
 
-interface Session { seen: WakeObservation; screen: string[] | null; front: string | null; live: string; generation: number; pending: number }
+interface Session { seen: WakeObservation; screen: string[] | null; cursor: { x: number; y: number }; front: string | null; live: string; generation: number; pending: number }
 
 function world(now0 = T + 2 * HOUR) {
   let now = now0
@@ -23,10 +26,14 @@ function world(now0 = T + 2 * HOUR) {
   const written: Array<{ sessionId: string; text: string }> = []
   const logs: string[] = []
   let beforeScreen: (() => void) | undefined
-  const add = (sessionId: string, agent: string, extra: Partial<Session> & { event?: string; observedAt?: string } = {}): void => {
+  // An OpenCode session runs the current plugin unless the case says otherwise (Story 96.3).
+  const add = (sessionId: string, agent: string, extra: Partial<Session> & { event?: string; observedAt?: string; source?: string | null; plugin?: number | null } = {}): void => {
+    const { event, observedAt, source, plugin, ...rest } = extra
     sessions.set(sessionId, {
-      seen: { sessionId, incarnationId: `inc-${sessionId}`, agent, event: extra.event ?? 'Stop', observedAt: extra.observedAt ?? at(T + HOUR), foreground: `fg-${sessionId}` },
-      screen: agent === 'codex' ? CODEX_IDLE : CLAUDE_IDLE, front: `fg-${sessionId}`, live: `inc-${sessionId}`, generation: 1, pending: 0, ...extra
+      seen: { sessionId, incarnationId: `inc-${sessionId}`, agent, event: event ?? (agent === 'opencode' ? 'session.idle' : 'Stop'), source: source ?? null,
+        plugin: plugin !== undefined ? plugin : agent === 'opencode' ? OPENCODE_WAKE_PLUGIN : null, observedAt: observedAt ?? at(T + HOUR), foreground: `fg-${sessionId}` },
+      screen: agent === 'codex' ? CODEX_IDLE : agent === 'opencode' ? OPENCODE_IDLE : CLAUDE_IDLE,
+      cursor: agent === 'opencode' ? OPENCODE_CURSOR : { x: 0, y: 0 }, front: `fg-${sessionId}`, live: `inc-${sessionId}`, generation: 1, pending: 0, ...rest
     })
     attention.push({ sessionId, requestKey: `${agent}:turn`, kind: 'notice', state: 'open', openedAt: at(T + HOUR) })
   }
@@ -39,7 +46,11 @@ function world(now0 = T + 2 * HOUR) {
     liveIncarnation: (id) => sessions.get(id)?.live,
     foreground: (id) => sessions.get(id)?.front ?? null,
     generation: (id) => ({ generation: sessions.get(id)?.generation ?? 0, pending: sessions.get(id)?.pending ?? 0 }),
-    screen: async (id) => { await Promise.resolve(); beforeScreen?.(); return sessions.get(id)?.screen ?? null },
+    screen: async (id): Promise<WakeScreen | null> => {
+      await Promise.resolve(); beforeScreen?.()
+      const session = sessions.get(id)
+      return session?.screen ? { lines: session.screen, cursor: session.cursor } : null
+    },
     write: (sessionId, text) => written.push({ sessionId, text }),
     log: (line) => logs.push(line)
   })
@@ -115,7 +126,7 @@ describe('the Away wake-up (Story 90.6)', () => {
 
   it('considers only agent sessions whose latest event is a finished turn after he left, with a turn notice 15 minutes old and nothing else open', async () => {
     const w = world(T)
-    w.add('opencode', 'opencode')
+    w.add('other', 'other')
     w.add('busy', 'claude', { event: 'PreToolUse' })
     w.add('before', 'codex', { observedAt: at(T - 1000) })
     w.add('noturn', 'claude'); w.attention = w.attention.filter((row) => row.sessionId !== 'noturn')
@@ -128,7 +139,7 @@ describe('the Away wake-up (Story 90.6)', () => {
     expect(w.written.map((write) => write.sessionId)).toEqual(['idle-note'])
     const reasons = Object.fromEntries(w.logs.map((line) => [line.match(/skipped (\S+)/u)?.[1], line.split('): ')[1]]))
     expect(reasons).toMatchObject({
-      opencode: 'opencode sessions are not woken (no recorded idle prompt)',
+      other: 'other sessions are not woken (no recorded idle prompt)',
       busy: 'its latest event is PreToolUse, not a finished turn',
       before: 'no hook event since the owner left',
       noturn: 'no open finished-turn notice',
@@ -233,5 +244,210 @@ describe('the Away wake-up (Story 90.6)', () => {
     expect(testAwayWakeTimes(['electron'], env)).toEqual({})
     expect(testAwayWakeTimes(['--bmn-test-host'], env)).toEqual({ everyMs: 60000, quietMs: 5000 })
     expect(testAwayWakeTimes(['--bmn-test-host'], { BMN_TEST_AWAY_WAKE_EVERY_MS: '5' })).toEqual({})
+  })
+})
+
+/** Story 93.1's recordings: each pinned version's composer capture and the provenance capture's events and hook bodies. */
+interface OpenCodeRecordings {
+  versions: Record<string, { chunks: number[]; states: Array<{ name: string; bytes: number }> }>
+  provenance: Record<string, { events: Array<{ type: string; data: Record<string, unknown> }>; hooks: Array<{ pinned: string; body: Record<string, unknown> }> }>
+}
+const RECORDED = JSON.parse(readFileSync(new URL('./test-fixtures/away-wake/opencode-states.json', import.meta.url), 'utf8')) as OpenCodeRecordings
+/** The states 93.1 recorded that are OpenCode's empty prompt (any agent label); every other state must be refused. */
+const RECORDED_IDLE = ['root-initial', 'root-return', 'root-after-child', 'draft-cleared', 'multiline-cleared', 'spaces-cleared',
+  'palette-cleared', 'dialog-cleared', 'paste-cleared', 'agent-cycle', 'agent-restored']
+const RECORDED_REFUSED = ['home', 'same-title-child', 'typed-draft', 'blank-first-multiline', 'leading-spaces', 'command-palette',
+  'agent-dialog', 'bracketed-paste']
+
+/** Each recorded state's screen, read the way the service reads it: the raw output fed to the product mirror in its recorded chunks. */
+async function recordedScreens(version: string): Promise<Map<string, WakeScreen>> {
+  const raw = readFileSync(new URL(`./test-fixtures/away-wake/opencode-${version}.raw`, import.meta.url))
+  const { chunks, states } = RECORDED.versions[version]!
+  const mirror = new ScreenMirror(120, 40)
+  const screens = new Map<string, WakeScreen>()
+  let offset = 0
+  let chunk = 0
+  for (const state of states) {
+    while (offset < state.bytes) {
+      const length = chunks[chunk++]!
+      mirror.write(new Uint8Array(raw.subarray(offset, offset + length)))
+      offset += length
+    }
+    expect(offset, state.name).toBe(state.bytes)
+    await mirror.settled()
+    screens.set(state.name, { lines: mirror.undimmedLines(), cursor: mirror.cursor() })
+  }
+  mirror.dispose()
+  return screens
+}
+
+describe('the Away wake-up for OpenCode (Story 93.3)', () => {
+  it.each(['2.0.29', '2.0.32'])('replays every state recorded on OpenCode %s: the empty prompt under any agent is idle, nothing else is', async (version) => {
+    const screens = await recordedScreens(version)
+    expect([...screens.keys()].sort()).toEqual([...RECORDED_IDLE, ...RECORDED_REFUSED].sort())
+    for (const name of RECORDED_IDLE) expect(idlePrompt('opencode', screens.get(name)!.lines, screens.get(name)!.cursor), name).toBe(true)
+    for (const name of RECORDED_REFUSED) expect(idlePrompt('opencode', screens.get(name)!.lines, screens.get(name)!.cursor), name).toBe(false)
+  })
+
+  it.each(['2.0.29', '2.0.32'])('sweeps each state recorded on OpenCode %s: one exact line at an empty prompt, nothing at any other', async (version) => {
+    for (const [name, screen] of await recordedScreens(version)) {
+      const w = world(T)
+      w.add('s', 'opencode', { screen: screen.lines, cursor: screen.cursor })
+      const wake = w.make()
+      await wake.sweep()
+      w.now = T + 2 * HOUR
+      await wake.sweep()
+      expect(w.written, name).toEqual(RECORDED_IDLE.includes(name) ? [{ sessionId: 's', text: AWAY_WAKE_LINE }] : [])
+      if (!RECORDED_IDLE.includes(name)) expect(w.logs.at(-1), name).toContain('its prompt is not empty and idle')
+    }
+  })
+
+  it('needs the cursor: a dialog leaves the empty composer drawn but holds the cursor in its own field', () => {
+    expect(idlePrompt('opencode', OPENCODE_IDLE, OPENCODE_CURSOR)).toBe(true)
+    expect(idlePrompt('opencode', OPENCODE_IDLE)).toBe(false)
+    expect(idlePrompt('opencode', OPENCODE_IDLE, { x: 34, y: 13 })).toBe(false)
+    expect(idlePrompt('opencode', OPENCODE_IDLE, { x: 5, y: 4 })).toBe(false)
+  })
+
+  it('refuses a composer it cannot read as one empty row (synthetic shapes, not recorded ones)', () => {
+    const variant = (index: number, line: string): string[] => OPENCODE_IDLE.map((row, at) => at === index ? line : row)
+    const rule = `  ╹${'▀'.repeat(60)}`
+    const cases: Array<[string, string[], { x: number; y: number }]> = [
+      ['text in the row', variant(3, '  ┃  half a sentence'), OPENCODE_CURSOR],
+      ['a second content row', ['', '  ┃', '  ┃', '  ┃', '  ┃', '  ┃  Build · Synthetic', rule], { x: 5, y: 2 }],
+      ['one row too few', ['', '', '  ┃', '  ┃', '  ┃  Build · Synthetic', rule], { x: 5, y: 3 }],
+      ['no rule under the name', variant(6, ''), OPENCODE_CURSOR],
+      ['no agent and model on the name row', variant(5, '  ┃  Build'), OPENCODE_CURSOR],
+      ['two composers', [...OPENCODE_IDLE.slice(0, 7), ...OPENCODE_IDLE.slice(2, 7)], OPENCODE_CURSOR],
+      ['nothing on screen', [], { x: 0, y: 0 }]
+    ]
+    for (const [name, lines, cursor] of cases) expect(idlePrompt('opencode', lines, cursor), name).toBe(false)
+  })
+
+  it('wakes a root whose own run finished, never one whose latest event is a child\'s or the owner\'s interrupt', async () => {
+    const w = world(T)
+    w.add('root', 'opencode')
+    w.add('child', 'opencode', { source: 'subagent' })
+    w.add('stopped', 'opencode', { source: 'interrupted' })
+    w.add('busy', 'opencode', { event: 'session.status' })
+    w.add('switched', 'opencode', { event: 'tui.session.select' })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 'root', text: AWAY_WAKE_LINE }])
+    const reasons = Object.fromEntries(w.logs.map((line) => [line.match(/skipped (\S+)/u)?.[1], line.split('): ')[1]]))
+    expect(reasons).toMatchObject({
+      child: 'its latest event is session.idle from subagent, not its own finished turn',
+      stopped: 'its latest event is session.idle from interrupted, not its own finished turn',
+      busy: 'its latest event is session.status, not a finished turn',
+      switched: 'its latest event is tui.session.select, not a finished turn'
+    })
+  })
+
+  it.each(['subagent', 'interrupted'])('types nothing when the root\'s latest idle turns out to be from %s while the screen is read', async (source) => {
+    const w = world(T)
+    w.add('s', 'opencode')
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR
+    w.beforeScreen = () => { const session = w.sessions.get('s')!; session.seen = { ...session.seen, source } }
+    await wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs.at(-1)).toContain('its agent reported again')
+  })
+
+  it.each(['2.0.29', '2.0.32'])('replays OpenCode %s\'s recorded turns: a finished root wakes; a later child run or the owner\'s interrupt does not, nor child traffic after it', async (version) => {
+    // The plugin's hook bodies as 93.1 recorded them, as the host keeps each: the child's carry `subagent` (the hook runtime
+    // marks every event of a session other than the pinned root), and the interrupt the plugin now marks `interrupted`.
+    const { hooks, events } = RECORDED.provenance[version]!
+    expect(events.find((event) => event.type === 'session.execution.interrupted')?.data).toMatchObject({ sessionID: 'ses_root', reason: 'user' })
+    const observed = hooks.map((hook, index) => ({ event: String(hook.body.hook_event_name), source: hook.body.sessionID === hook.pinned ? null : 'subagent', index }))
+    const lastRootIdle = observed.filter((item) => item.event === 'session.idle' && item.source === null).at(-1)!.index
+    const sweepAfter = async (seen: { event: string; source: string | null }): Promise<number> => {
+      const w = world(T)
+      w.add('s', 'opencode', seen)
+      const wake = w.make()
+      await wake.sweep()
+      w.now = T + 2 * HOUR; await wake.sweep()
+      return w.written.length
+    }
+    // The root's second turn (the paste) finished by itself: woken.
+    const rootTurns = observed.filter((item) => item.event === 'session.idle' && item.source === null)
+    expect(rootTurns.length).toBe(3)
+    expect(await sweepAfter(rootTurns[1]!)).toBe(1)
+    // Then a child of it ran and finished: its idle is the latest event, so the root is not woken.
+    const childIdle = observed.find((item) => item.event === 'session.idle' && item.source === 'subagent')!
+    expect(childIdle.index).toBeGreaterThan(rootTurns[1]!.index)
+    expect(await sweepAfter(childIdle)).toBe(0)
+    // The last root idle is the owner's interrupt, which the plugin now reports as such.
+    expect(lastRootIdle).toBe(rootTurns[2]!.index)
+    expect(await sweepAfter({ event: 'session.idle', source: 'interrupted' })).toBe(0)
+    expect(await sweepAfter({ event: 'session.status', source: 'subagent' })).toBe(0)
+  })
+})
+
+describe('the Away wake-up for an OpenCode whose loaded plugin may be an earlier one (Story 96.3)', () => {
+  it('wakes only a root whose own event carries the current plugin\'s mark; an earlier plugin\'s finish or stop is left alone', async () => {
+    const w = world(T)
+    w.add('current', 'opencode')
+    // BMN's October 14 plugin reported the owner's stop as a plain session.idle and carried no mark: from the event
+    // alone, a stop and a finished turn look the same, so neither is woken.
+    w.add('earlier-finished', 'opencode', { plugin: null })
+    w.add('earlier-stopped', 'opencode', { plugin: null })
+    w.add('current-stopped', 'opencode', { source: 'interrupted' })
+    w.add('current-quit', 'opencode', { event: 'tui.exit', front: null })
+    w.add('current-child', 'opencode', { source: 'subagent' })
+    w.add('current-draft', 'opencode', { screen: OPENCODE_IDLE.map((row, index) => index === 3 ? '  ┃  half a sentence' : row) })
+    w.add('current-dialog', 'opencode', { cursor: { x: 34, y: 13 } })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 'current', text: AWAY_WAKE_LINE }])
+    const reasons = Object.fromEntries(w.logs.map((line) => [line.match(/skipped (\S+)/u)?.[1], line.split('): ')[1]]))
+    const earlier = 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
+    expect(reasons).toEqual({
+      'earlier-finished': earlier, 'earlier-stopped': earlier,
+      'current-stopped': 'its latest event is session.idle from interrupted, not its own finished turn',
+      'current-quit': 'its latest event is tui.exit, not a finished turn',
+      'current-child': 'its latest event is session.idle from subagent, not its own finished turn',
+      'current-draft': 'its prompt is not empty and idle', 'current-dialog': 'its prompt is not empty and idle'
+    })
+  })
+
+  it('a matching plugin on disk changes nothing for a session that loaded an earlier one: only the session\'s own next event does', async () => {
+    const w = world(T)
+    w.add('s', 'opencode', { plugin: null })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([])
+    // OpenCode restarted in the same terminal loads the upgraded plugin; its next finished turn carries the mark.
+    const session = w.sessions.get('s')!
+    session.seen = { ...session.seen, plugin: OPENCODE_WAKE_PLUGIN, observedAt: at(T + 2 * HOUR + 1) }
+    w.now = T + 4 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 's', text: AWAY_WAKE_LINE }])
+  })
+
+  it('types nothing when the session\'s latest event turns out to come from another plugin while the screen is read', async () => {
+    const w = world(T)
+    w.add('s', 'opencode')
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR
+    // A rollback to an earlier plugin and a restart in between: same event, no mark.
+    w.beforeScreen = () => { const session = w.sessions.get('s')!; session.seen = { ...session.seen, plugin: null } }
+    await wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs.at(-1)).toContain('its agent reported again')
+  })
+
+  it('asks no mark of Claude Code or Codex', async () => {
+    const w = world(T)
+    w.add('c', 'claude')
+    w.add('x', 'codex')
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written.map((row) => row.sessionId).sort()).toEqual(['c', 'x'])
   })
 })

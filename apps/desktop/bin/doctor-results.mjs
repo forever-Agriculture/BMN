@@ -32,7 +32,25 @@ export const PROBLEMS = Object.freeze({
 })
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
-const fact = (code, item = 1, app) => ({ code, item, ...(['claude', 'codex', 'opencode'].includes(app) ? { app } : {}) })
+/**
+ * The state words of BMN's rules, skills and tools checks: the fine ones and those a finding names as its cause, never an
+ * entry's name or path (96 Astra review and recheck). Together they are the protocol's `RULES_TARGET_STATES`,
+ * `SKILL_STATE_NAMES` and `TOOL_STATE_NAMES`; a state outside them makes the result partial and is no finding.
+ */
+export const STATE_WORDS = Object.freeze({
+  'rules-check': { fine: ['current'], needs: ['unreadable', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale'] },
+  'skill-check': { fine: ['current', 'read-directly', 'excluded'], needs: ['unreadable', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'exposed'] },
+  'tool-check': { fine: ['current', 'excluded'], needs: ['unreadable', 'missing', 'unmanaged', 'edited-outside', 'stale', 'exposed', 'blocked'] }
+})
+/** Whether a finding of BMN's own area checks may name this cause: a closed vocabulary per check, and per app for hooks. */
+export function causeAllowed(code, app, cause) {
+  if (code === 'hook-check') return Object.hasOwn(HOOK_EVENTS, app) && (cause === 'older-wording:plugin' ? app === 'opencode'
+    : cause.startsWith('missing:') && [...HOOK_EVENTS[app], ...(app === 'codex' ? CODEX_OPTIONAL_HOOKS : [])].includes(cause.slice(8)))
+  if (code === 'tool-check' && ['unlisted-exposed', 'unlisted-managed'].includes(cause)) return true
+  return Object.hasOwn(STATE_WORDS, code) && STATE_WORDS[code].needs.includes(cause)
+}
+const fact = (code, item = 1, app, cause) => ({ code, item, ...(['claude', 'codex', 'opencode'].includes(app) ? { app } : {}),
+  ...(typeof cause === 'string' && causeAllowed(code, app, cause) ? { cause } : {}) })
 const result = (problems, partial = false) => ({
   state: partial ? 'partial' : problems.length > 0 ? 'problems' : 'passed',
   problems: partial ? [...problems, fact('additional-details')] : problems
@@ -157,13 +175,14 @@ export function parseBmnDoctor(check, text, exitCode) {
   const problems = []
   let partial
   let currentApp
-  const add = (code) => problems.push(fact(code, problems.length + 1, currentApp))
+  const add = (code, cause) => problems.push(fact(code, problems.length + 1, currentApp, cause))
   if (check === 'rules' && object(data) && Array.isArray(data.targets) && data.targets.length > 0) {
     partial = !completeApps(data.targets, 'harness') || typeof data.ok !== 'boolean'
     for (const row of data.targets) {
       currentApp = row?.harness
-      if (!object(row) || !['current', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'unreadable'].includes(row.state)) partial = true
-      else if (row.state !== 'current') add('rules-check')
+      const words = STATE_WORDS['rules-check']
+      if (!object(row) || ![...words.fine, ...words.needs].includes(row.state)) partial = true
+      else if (!words.fine.includes(row.state)) add('rules-check', row.state)
     }
   } else if (check === 'hooks' && object(data) && Array.isArray(data.agents) && data.agents.length > 0) {
     partial = !completeApps(data.agents, 'agent') || typeof data.ok !== 'boolean'
@@ -180,8 +199,8 @@ export function parseBmnDoctor(check, text, exitCode) {
         if (typeof event.optional !== 'boolean' || event.optional !== optional) partial = true
         if (event.state === 'wired' || event.state === 'wired (older wording)' && ['claude', 'codex'].includes(app.agent)) continue
         if (event.state === 'missing') {
-          if (!optional || event.optional !== true) add('hook-check')
-        } else if (event.state === 'wired (older wording)' && app.agent === 'opencode' && event.event === 'plugin') add('hook-check')
+          if (!optional || event.optional !== true) add('hook-check', `missing:${event.event}`)
+        } else if (event.state === 'wired (older wording)' && app.agent === 'opencode' && event.event === 'plugin') add('hook-check', 'older-wording:plugin')
         else partial = true
       }
       if (required.some(event => !seen.has(event))) partial = true
@@ -193,12 +212,15 @@ export function parseBmnDoctor(check, text, exitCode) {
       if (!object(app) || app.supported !== true || app.readable === false) { partial = true; continue }
       const rows = app[check]
       if (!Array.isArray(rows)) { partial = true; continue }
+      const code = check === 'skills' ? 'skill-check' : 'tool-check'
       for (const row of rows) {
-        if (!object(row) || typeof row.state !== 'string') partial = true
-        else if (!(check === 'skills' ? ['current', 'read-directly', 'excluded'] : ['current', 'excluded']).includes(row.state)) add(check === 'skills' ? 'skill-check' : 'tool-check')
+        const state = object(row) ? row.state : undefined
+        if (STATE_WORDS[code].needs.includes(state)) add(code, state)
+        // A state word outside the vocabulary is no finding: it could carry anything, so the result is partial (96 Astra recheck).
+        else if (!STATE_WORDS[code].fine.includes(state)) partial = true
       }
       if (check === 'tools' && Array.isArray(app.unlisted)) for (const entry of app.unlisted) {
-        if (entry.state === 'exposed' || entry.managed === true) add('tool-check')
+        if (entry.state === 'exposed' || entry.managed === true) add('tool-check', entry.managed === true ? 'unlisted-managed' : 'unlisted-exposed')
       }
     }
     if (check === 'skills' && data.source?.readable !== true) partial = true
@@ -215,9 +237,10 @@ export function projectedResult(value) {
   for (const row of value.problems) {
     if (!object(row) || !Object.hasOwn(PROBLEMS, row.code) || !Number.isSafeInteger(row.item) || row.item < 1 || row.item > 10000) return null
     if (row.app !== undefined && !['claude', 'codex', 'opencode'].includes(row.app)) return null
+    if (row.cause !== undefined && (typeof row.cause !== 'string' || !causeAllowed(row.code, row.app, row.cause))) return null
     if (row.count !== undefined && (!Number.isSafeInteger(row.count) || row.count < 1 || row.count > 10000 || !row.code.startsWith('leftover-'))) return null
     if (row.code.startsWith('leftover-') && row.count === undefined) return null
-    problems.push({ ...fact(row.code, row.item, row.app), ...(row.count !== undefined ? { count: row.count } : {}) })
+    problems.push({ ...fact(row.code, row.item, row.app, row.cause), ...(row.count !== undefined ? { count: row.count } : {}) })
   }
   if (value.state === 'passed' && problems.length !== 0) return null
   if (value.state === 'problems' && problems.length === 0) return null

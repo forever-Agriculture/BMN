@@ -20,10 +20,10 @@ import {
   forgetUpdateWatches,
   diffSummary,
   earlierVersions,
+  healthHeadWords,
+  healthNeeds,
   healthNeedsCount,
-  needsFirst,
-  hookRowWords,
-  hookRows,
+  exposedWords,
   rulesStatus,
   targetStateWords,
   endedSince,
@@ -45,6 +45,9 @@ import {
   watchedWords,
   type RulesState
 } from './rules-preferences'
+import { needsFirst } from './health-order'
+import { DoctorHealth, doctorNeedsCount, doctorPlace } from './doctor-health'
+import { hookRowWords } from './hooks-health'
 import {
   Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords,
   retiredAppClause, shortDate, teamProposals, type TeamPage
@@ -597,10 +600,10 @@ const RULES: RulesSnapshot = {
   ],
   context: [
     { harness: 'codex', path: '/home/synthetic/.codex/config.toml', exists: true, limit: 380000, compact: 342000, version: '0.171.0', limitProven: false, compactProven: false,
-      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850' }, agents: ['Sol', 'Astra', 'Luna'],
+      test: { at: '2026-10-09T20:00:00.000Z', version: '0.161.0', outcome: 'pass', detail: 'asked for 123000; the session record shows 116850', asked: 123000, observed: 116850 }, autoTest: 'scheduled', agents: ['Sol', 'Astra', 'Luna'],
       limits: [{ agent: 'Sol', limit: 272000, state: 'not-applied', reason: 'the context setting is not tested on this Codex version yet; BMN tests it by itself when it starts' }] },
     { harness: 'claude', path: '/home/synthetic/.claude/settings.json', exists: true, limit: null, compact: null, version: '2.1.295', limitProven: true, compactProven: false, min: 100000, max: 1000000,
-      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'], limits: [] }
+      test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000', asked: 137000, observed: 137000 }, autoTest: 'none', agents: ['Opus', 'Fable'], limits: [] }
   ],
   autoTests: { running: null, stopped: [] },
   readOnlyRoles: { held: ['epic-reviewer'], proposed: [] },
@@ -655,7 +658,7 @@ const RULES: RulesSnapshot = {
 }
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
-  snapshot: RULES, began: Date.parse('2026-10-09T22:13:00.000Z'), loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
+  snapshot: RULES, began: Date.parse('2026-10-09T22:13:00.000Z'), loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, reading: false, acting: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
   ensure: noop, refresh: noop, load: later, beginSave: later, beginToolsRemoval: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
 const rulesMarkup = (page: 'editor' | 'skills' | 'tools' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
@@ -834,30 +837,35 @@ describe('Integrations › Health (60.6 AC4)', () => {
   const markup = rulesMarkup('health')
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
-    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 9 need you · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed</span>`)
-    // With the skills and the tools counted in order, the header keeps when Health was read and the rows that need him.
-    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 9 need you</span>`)
+    // Story 96.6: the head says when Health was read, that this is past the Health rule's limit, and which sections hold the issues; only it is a live status.
+    expect(markup).toContain(`<span class="faint"><span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks</span></span>`)
+    // The skills' and tools' entry counts stay in their sections; the head keeps when Health was read and the issues.
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks</span>`)
     // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
     for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current<span class="muted"> · Full rules<\/span>/)
     // A loading test sends one prompt, and says so (Story 75.8 AC2).
-    expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale · one prompt sent</span>`)
-    expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules · Save the rules to rewrite it<\/span><span class="faint">Not tested yet<\/span>/)
+    expect(markup).toContain(`<span class="faint">Rules test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale · one prompt sent</span>`)
+    expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules · Save the rules to rewrite it<\/span><span class="faint">Rules test not run yet<\/span>/)
     expect(markup).toMatch(/data-state="missing">.*?Missing · Save the rules to write it<\/span><span class="faint">No loading test<\/span>/)
     // A file that differs is a failure, listed first (Story 75.9).
     expect([...markup.matchAll(/data-state="([a-z-]+)"/g)].map((match) => match[1])).toEqual(['stale', 'missing', 'current'])
     expect(targetStateWords('edited-outside')).toBe('Differs · edited outside BMN · Save the rules to rewrite it')
-    expect(testLine(undefined)).toBe('Not tested yet')
-    expect(testLine({ harness: 'codex', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' })).toBe(`Test passed ${shortDate('2026-10-09T20:00:00.000Z')} on 0.171.0 · by BMN · one prompt sent`)
-    expect(testLine({ harness: 'codex', outcome: 'unavailable', at: '2026-10-09T20:00:00.000Z' })).toBe(`Test unavailable ${shortDate('2026-10-09T20:00:00.000Z')}`)
+    // Story 96.6: the line names its scope, the rules loading test, never the app's routing test.
+    expect(testLine(undefined)).toBe('Rules test not run yet')
+    expect(testLine({ harness: 'codex', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' })).toBe(`Rules test passed ${shortDate('2026-10-09T20:00:00.000Z')} on 0.171.0 · by BMN · one prompt sent`)
+    expect(testLine({ harness: 'codex', outcome: 'unavailable', at: '2026-10-09T20:00:00.000Z' })).toBe(`Rules test unavailable ${shortDate('2026-10-09T20:00:00.000Z')}`)
   })
 
-  it('counts in its status every row that carries the Needs-you dot, each decided the way its row decides it (Story 75.10)', () => {
-    // Two rules files, two apps' skills, three apps' tools, one context limit and one hook file.
+  it('counts in its status each cause a row with the Needs-you dot shows, each decided the way its row decides it (Stories 75.10, 96.6)', () => {
+    // Nine rows carry the dot: two rules files, two apps' skills, three apps' tools, one context limit and one hook file.
     expect(markup.split('<div class="health-row"').slice(1).filter((row) => row.includes('needs-dot'))).toHaveLength(9)
-    expect(healthNeedsCount(RULES)).toBe(9)
-    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(6)
-    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Checked [^·]+ · 6 need you ·/)
+    // They show twelve causes, one app × one area × one cause each (96 Astra recheck): rules stale and missing; skills
+    // missing (Codex) and exposed (OpenCode); tools edited outside (Claude Code), missing and blocked (Codex), exposed and an
+    // unlisted connection exposed (OpenCode); Sol's context limit; Codex's PostToolUse and Interrupt hooks.
+    expect(healthNeedsCount(RULES)).toBe(12)
+    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(8)
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Read [^·]+ · stale · 8 need you: Skills, Tools, Context limits\s/)
     // Within each section those rows come first, the rest in their order.
     expect([...markup.matchAll(/data-skills="([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Missing', 'Exposed', 'Reads the source'])
     expect(needsFirst([1, 2, 3, 4], (row) => row % 2 === 0)).toEqual([2, 4, 1, 3])
@@ -873,8 +881,24 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(markup).not.toContain('Check configured hooks')
     expect(hookRowWords({ harness: 'claude', file: 'f', state: 'left', placed: [], older: [], installed: [], left: [], why: 'unparsable' })).toEqual({ needs: true, head: 'The file · the file is not valid JSON · left as it is', lines: [] })
     expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin', 'cli.json'], older: ['plugin'], installed: [], left: [] }))
-      .toEqual({ needs: false, head: '2 entries in place', lines: ['plugin · in an older wording, which still runs'] })
-    expect(hookRows({ state: 'checked', checkedAt: 'x', apps: [] })).toEqual([])
+      .toEqual({ needs: false, head: '2 entries in place', lines: ['OpenCode 1\'s plugin file is still there too · `bmn hooks install opencode` removes it'] })
+    // Story 96.6: an earlier plugin BMN could not replace cannot tell the owner's stop from a finished turn; never harmless older wording.
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }))
+      .toEqual({ needs: true, head: 'The file · could not be written · left as it is',
+        lines: ['Older plugin · stopped turns cannot be distinguished. Automatic wake is unavailable for this session until a qualified plugin is loaded.'] })
+    // OpenCode 1's file beside BMN's current plugin, with a cli.json BMN cannot add to, is no plugin without stop protection (96 review).
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: ['plugin'], installed: [], left: [], why: 'unparsable' }).lines)
+      .toEqual(['OpenCode 1\'s plugin file is still there too · `bmn hooks install opencode` removes it'])
+    // An unusable cli.json no longer keeps the earlier plugin: it is upgraded, and the row says so.
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: [], installed: [], upgraded: ['plugin'], left: [], why: 'numbers' }).lines)
+      .toEqual(['Upgraded at start: plugin · a running OpenCode is woken only once it reports the new plugin'])
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin'], older: [], installed: [], left: [{ event: 'plugin', why: 'changed' }] }).lines)
+      .toEqual(['plugin · changed · Not BMN\'s · BMN leaves it'])
+    // An upgrade on disk is said as one, never as a loaded plugin.
+    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'installed', placed: ['plugin', 'cli.json'], older: [], installed: [], upgraded: ['plugin'], left: [] }))
+      .toEqual({ needs: false, head: '2 entries in place', lines: ['Upgraded at start: plugin · a running OpenCode is woken only once it reports the new plugin'] })
+    expect(hookRowWords({ harness: 'claude', file: 'f', state: 'checked', placed: ['PreToolUse'], older: ['PreToolUse'], installed: [], left: [] }).lines)
+      .toEqual(['PreToolUse · in an older wording, which does the same and still runs'])
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: null } })))).toContain('Not checked yet: BMN checks them each time it starts.')
     expect(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: { state: 'failed', checkedAt: 'x', reason: 'The hook install timed out' } } }))).toContain('<p class="preferences-error" role="alert">The hook install timed out</p>')
   })
@@ -896,8 +920,8 @@ describe('Integrations › Health (60.6 AC4)', () => {
   })
 
   it('shows each agent app: version, whether it is tested, where it sends data and what is recorded', () => {
-    expect(markup).toContain('<span class="mono">2.1.295</span> <span class="muted" title="BMN tested how this version picks where to send data.">· tested</span>')
-    expect(markup).toContain('<span class="mono">0.171.0</span> <span class="muted" title="Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.">· newer than tested</span>')
+    expect(markup).toContain('<span class="mono">2.1.295</span> <span class="muted" title="BMN tested how this version picks where to send data.">· routing-tested</span>')
+    expect(markup).toContain('<span class="mono">0.171.0</span> <span class="muted" title="Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.">· newer than routing-tested</span>')
     // An app that is not there is said once, not as "not found · not checked".
     expect(markup).toContain('<span class="health-state"><span class="mono" title="OpenCode is not installed, or its version cannot be read.">not found</span></span>')
     const unread = rulesMarkup('health', rules({ snapshot: { ...RULES, apps: RULES.apps.map((app) => (app.harness === 'codex' ? { ...app, version: null, versionState: 'unknown' as const, versionNote: 'Codex is not installed, or its version cannot be read.' } : app)) } }))
@@ -925,8 +949,8 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
   it('shows under each version the program BMN finds, and says when it finds none', () => {
     expect(markup).toContain('Agent apps<span class="caption">the program BMN finds, its version and where it sends data</span>')
     // The path wraps instead of being cut: its last part is the program's name.
-    expect(markup).toContain('· tested</span></span><span class="path mono wrap" title="/home/synthetic/.local/bin/claude">~/.local/bin/claude</span></span>')
-    expect(markup).toContain('· newer than tested</span></span><span class="path mono wrap" title="/home/synthetic/.npm-global/bin/codex">~/.npm-global/bin/codex</span></span>')
+    expect(markup).toContain('· routing-tested</span></span><span class="path mono wrap" title="/home/synthetic/.local/bin/claude">~/.local/bin/claude</span></span>')
+    expect(markup).toContain('· newer than routing-tested</span></span><span class="path mono wrap" title="/home/synthetic/.npm-global/bin/codex">~/.npm-global/bin/codex</span></span>')
     expect(markup).not.toContain('Program not found')
   })
 
@@ -1033,7 +1057,9 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
     expect(words(missing).replace(/\s+/g, ' ')).toContain('Installed version not read Program not found Command no program found')
     expect(missing).toContain('<button type="button" class="primary" disabled="">Copy command</button>')
     expect(missing).not.toContain('Checking…')
-    expect(rulesMarkup('health', rules({ busy: true }))).toContain('<span class="faint">Checking…</span>')
+    // Story 96.6: Refreshing… only while BMN re-reads the machine; an action the owner started leaves the head as it was.
+    expect(rulesMarkup('health', rules({ busy: true, reading: true }))).toMatch(/<span class="faint"><span role="status">Refreshing… · \d+ needs? you: [^<]+<\/span><\/span>/u)
+    expect(rulesMarkup('health', rules({ busy: true, acting: true }))).not.toContain('Refreshing…')
   })
 
   it('counts only the sessions BMN recognises and never claims their versions', () => {
@@ -1056,7 +1082,8 @@ describe('Integrations › Health: when the shell\'s settings could not be read'
   it('says so above the apps, with the reason, and says nothing when they were read', () => {
     const page = rulesMarkup('health', rules({ snapshot: { ...RULES, ownEnvironment: 'bash did not answer in 5 seconds' } }))
     expect(words(page).replace(/\s+/g, ' ')).toContain('BMN could not read your shell&#x27;s settings (bash did not answer in 5 seconds), so it looked for the apps with its own; a session may find more.')
-    expect(page).toMatch(/<p class="page-note" role="status"><span[^>]*aria-label="Needs you"/)
+    // Story 96.6: said where it is, without announcing itself; only Health's head is a live status.
+    expect(page).toMatch(/<p class="page-note"><span[^>]*aria-label="Needs you"/)
     expect(rulesMarkup('health')).not.toContain('could not read your shell')
   })
 })
@@ -1074,7 +1101,8 @@ describe('Integrations › Health: what an app reports after its update command 
     expect(watchedWords(codex, RULES.health.checkedAt)).toBe('The program now reports 0.171.0; before it reported 0.161.0.')
     expect(watchedWords(RULES.apps[0]!, RULES.health.checkedAt)).toBeNull()
     const page = rulesMarkup('health')
-    expect(page).toContain('<p class="app-note" role="status">The program now reports 0.171.0; before it reported 0.161.0.</p>')
+    // Only the head is a live status on Health (health-design.md); the report is a plain line.
+    expect(page).toContain('<p class="app-note">The program now reports 0.171.0; before it reported 0.161.0.</p>')
     expect(count(page, 'class="app-note"')).toBe(1)
     forgetUpdateWatches(['codex'])
     expect(rulesMarkup('health')).not.toContain('app-note')
@@ -1157,17 +1185,190 @@ describe('allowed workspaces (60.8 AC5)', () => {
   })
 })
 
+describe('Health counts each issue once (Story 96.6)', () => {
+  type Doctor = NonNullable<RulesSnapshot['doctor']>
+  type Row = Doctor['rows'][number]
+  const AT = Date.parse('2026-10-09T21:31:00.000Z')
+  const problem = (code: string, item: number, app?: 'claude' | 'codex' | 'opencode', extra: { count?: number; reason?: string; cause?: string } = {}) =>
+    ({ code, item, ...(app ? { app } : {}), ...(extra.count ? { count: extra.count } : {}), ...(extra.cause ? { cause: extra.cause } : {}), reason: extra.reason ?? `${code} reason`, fix: `${code} fix` })
+  const doctorRow = (check: Row['check'], extra: Partial<Row> = {}): Row => ({ check, state: 'passed', problems: [], leftovers: [], checkedAt: AT, stale: false, ...extra })
+  // The audit's 335 leftovers: synthetic numeric locations, in three groups.
+  const leftovers = Array.from({ length: 335 }, (_, index) => {
+    const [kind, app, reason] = index < 250 ? ['plugins', 'claude', 'plugin-missing'] : index < 288 ? ['plugins', 'claude', 'app-managed'] : ['mcp', 'codex', 'missing-program']
+    return { kind: kind as 'plugins' | 'mcp', app: app as 'claude' | 'codex', reason, item: index + 1, reasonText: `Synthetic ${reason}.`, location: `root 2 › parent 14 › entry ${index + 1}` }
+  })
+  const doctor = (rows: Row[]): Doctor => ({ schemaVersion: 1, locationHelp: 'Names are withheld.', running: false, cycleStartedAt: AT, attemptStartedAt: AT, retryUsed: false,
+    retryAtNextStart: false, error: null, rows, problemCount: 0, allWell: false, exitCode: 1 })
+  // The audit: three tool connections and an earlier plugin in OpenCode, a limit not applied, Doctor's own view of both, one sign-in finding and the leftovers.
+  const AUDIT: RulesSnapshot = {
+    ...RULES,
+    hooks: { state: 'checked', checkedAt: '2026-10-09T21:31:00.000Z', apps: [
+      RULES.hooks!.state === 'checked' ? RULES.hooks!.apps[0]! : (undefined as never),
+      { harness: 'codex', file: '/home/synthetic/.codex/hooks.json', state: 'checked', placed: ['PreToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: [], left: [] },
+      { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
+    ] },
+    doctor: doctor([
+      doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'opencode', { cause: 'older-wording:plugin' })] }),
+      doctorRow('tools', { state: 'problems', problems: [1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })) }),
+      doctorRow('claude', { state: 'problems', problems: [problem('auth-check', 1, 'claude', { reason: 'Authentication needs attention' })] }),
+      doctorRow('leftovers', { state: 'partial', problems: [problem('leftover-source-changed', 1, undefined, { count: 3, reason: '3 sources changed during the check' })], leftovers })
+    ])
+  }
+
+  it('counts a Doctor finding of the same app and area as its Health row once, there, and names the sections in the head', () => {
+    const without = healthNeeds({ ...AUDIT, doctor: undefined })
+    const audit = healthNeeds(AUDIT)
+    expect(without.keys).toContain('tools:opencode:unlisted-exposed')
+    expect(without.keys).toContain('hooks:opencode:older-wording:plugin')
+    // Only the sign-in finding is Doctor's own: the hook and the three tool findings are the OpenCode rows above, the coverage note no issue.
+    expect(audit.count).toBe(without.count + 1)
+    expect(audit.sections.at(-1)).toBe('Doctor')
+    expect(audit.sections).toEqual([...without.sections, 'Doctor'])
+    const html = rulesMarkup('health', rules({ snapshot: AUDIT }))
+    expect(html).toContain(`<span role="status">${healthHeadWords(false, AUDIT.health.checkedAt, true, audit)}</span>`)
+    const doctorRows = html.split('<div class="health-row" data-doctor-check').slice(1)
+    expect(doctorRows.filter((row) => row.includes('needs-dot'))).toHaveLength(1)
+    // The three tool findings are one line, with their number, under the Tools row's count.
+    expect(doctorRows.filter((row) => row.includes('data-doctor-counted="tools"'))).toHaveLength(1)
+    expect(html).toContain('Failed · tool-check reason · 3 findings')
+    expect(html).toContain('The same issue as Hooks above, counted there.')
+    expect(html).toContain('Older plugin · stopped turns cannot be distinguished.')
+  })
+
+  it('never merges by matching words alone: another app, or a finding that names none, is an issue of its own', () => {
+    const other = { ...AUDIT, doctor: doctor([doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'codex', { reason: 'Hook is not wired', cause: 'older-wording:plugin' }),
+      problem('hook-check', 2, 'opencode', { reason: 'Hook is not wired', cause: 'older-wording:plugin' })] }),
+      doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1)] })]) }
+    expect(healthNeeds(other).count).toBe(healthNeeds({ ...AUDIT, doctor: undefined }).count + 2)
+  })
+
+  it('merges only the same cause: another cause of the same app and area, or a stale result Health no longer shows, counts by itself (96 Astra review)', () => {
+    const without = healthNeeds({ ...AUDIT, doctor: undefined })
+    // OpenCode's Tools row shows three exposed connections; Doctor also finds a managed connection that left the list, and,
+    // from a stale result, an approved tool missing that Health now sees in place: two more issues, not the row's.
+    const managed = problem('tool-check', 4, 'opencode', { cause: 'unlisted-managed' })
+    const mixed = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [...[1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })), managed] }),
+      doctorRow('skills', { state: 'problems', stale: true, checkedAt: AT - 3 * 24 * 60 * 60 * 1000, problems: [problem('skill-check', 1, 'opencode', { cause: 'missing' })] })]) }
+    expect(healthNeeds(mixed).count).toBe(without.count + 2)
+    expect(doctorPlace(mixed.doctor.rows[0]!, managed, without.keys)).toBe('doctor')
+    // The same three, stale, still show what Health shows now: counted there. A finding with no cause (an older result) is its own.
+    const stale = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', stale: true, problems: [1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })) })]) }
+    expect(healthNeeds(stale).count).toBe(without.count)
+    const older = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode')] })]) }
+    expect(healthNeeds(older).count).toBe(without.count + 1)
+  })
+
+  it('counts two causes of one Health row as two issues, and Doctor findings of both there (96 Astra recheck)', () => {
+    const base = healthNeeds({ ...AUDIT, doctor: undefined })
+    // OpenCode's Tools row shows three exposed connections and, now, an approved tool missing: two causes, two fixes.
+    const twoCauses: RulesSnapshot = { ...AUDIT, doctor: undefined, tools: { ...AUDIT.tools, tools: [...AUDIT.tools.tools, { id: 'synthetic-missing', states: { opencode: 'missing' }, details: {} }] } }
+    const needs = healthNeeds(twoCauses)
+    expect(needs.count).toBe(base.count + 1)
+    expect(needs.keys).toContain('tools:opencode:missing')
+    const withDoctor = healthNeeds({ ...twoCauses, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode', { cause: 'missing' }), problem('tool-check', 2, 'opencode', { cause: 'unlisted-exposed' })] })]) })
+    expect(withDoctor.count).toBe(needs.count)
+  })
+
+  it('counts a failed test as one issue of its own, the skills listing and loading tests apart, and no state issue beside it (96 Astra recheck)', () => {
+    const fine: RulesSnapshot = { ...RULES, skills: { ...RULES.skills, apps: RULES.skills.apps.map((app) => app.harness === 'claude' ? { ...app, listing: null } : app) } }
+    const fail = { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'fail' as const, detail: 'synthetic', stale: false }
+    const failing = (listing: boolean, loading: boolean): RulesSnapshot => ({ ...fine, skills: { ...fine.skills, apps: fine.skills.apps.map((app) => app.harness === 'claude'
+      ? { ...app, listing: listing ? fail : null, loading: loading ? fail : null } : app) } })
+    const base = healthNeedsCount(fine)
+    expect([healthNeedsCount(failing(true, false)), healthNeedsCount(failing(false, true)), healthNeedsCount(failing(true, true))]).toEqual([base + 1, base + 1, base + 2])
+  })
+
+  it('counts Doctor findings it alone shows once per cause they name, and each finding naming none by itself (96 Astra recheck)', () => {
+    const three = doctor([doctorRow('skills', { state: 'problems', problems: [1, 2, 3].map((item) => problem('skill-check', item, 'claude', { cause: 'stale' })) })])
+    expect(doctorNeedsCount(three)).toBe(1)
+    const older = doctor([doctorRow('skills', { state: 'problems', problems: [1, 2].map((item) => problem('skill-check', item, 'claude')) })])
+    expect(doctorNeedsCount(older)).toBe(2)
+    const apart = doctor([doctorRow('skills', { state: 'problems', problems: [problem('skill-check', 1, 'claude', { cause: 'stale' }), problem('skill-check', 2, 'codex', { cause: 'stale' }), problem('skill-check', 3, 'claude', { cause: 'missing' })] })])
+    expect(doctorNeedsCount(apart)).toBe(3)
+  })
+
+  it('groups the leftovers with their counts, largest first, says how fully they were read and counts none of it', () => {
+    const html = rulesMarkup('health', rules({ snapshot: AUDIT }))
+    expect(html).toContain('Leftovers · 335 in 3 groups · show-only')
+    expect(html).toContain('Partly checked · 3 sources changed during the check')
+    const groups = [...html.matchAll(/data-doctor-leftover-group="[^"]+"><summary><span>([^<]+)<\/span><span class="count">(\d+)<\/span>/gu)].map((match) => [match[1], Number(match[2])])
+    expect(groups).toEqual([['Claude Code · Plugins · plugin missing', 250], ['Codex · MCP · missing program', 47], ['Claude Code · Plugins · app managed', 38]])
+    // Every location is there to open, numeric, and the inventory carries no dot.
+    expect(html.match(/data-doctor-leftover="(?:plugins|mcp)"/gu)).toHaveLength(335)
+    expect(html.slice(html.indexOf('data-doctor-leftovers=')).includes('needs-dot')).toBe(false)
+    // The main failure comes before the inventory.
+    expect(html.indexOf('Authentication needs attention')).toBeLessThan(html.indexOf('data-doctor-leftovers='))
+  })
+
+  it('says what is available to an app, never that data went anywhere', () => {
+    expect(exposedWords({ tools: [] }, { harness: 'opencode', unlisted: [{ id: 'a', state: 'exposed', managed: false }, { id: 'b', state: 'exposed', managed: false }, { id: 'c', state: 'exposed', managed: false }] }))
+      .toBe('3 tool connections available · no approved destination recorded')
+    expect(exposedWords({ tools: [] }, { harness: 'opencode', unlisted: [{ id: 'a', state: 'exposed', managed: false }] })).toBe('One tool connection available · no approved destination recorded')
+  })
+
+  it('says Refreshing… only while it reads, and the read, its staleness and the issues otherwise', () => {
+    const needs = { count: 2, sections: ['Hooks', 'Tools'] }
+    // The known issues stay in the head while it reads (96 review): the count never drops out for a refresh.
+    expect(healthHeadWords(true, '2026-10-09T22:13:00.000Z', true, needs)).toBe('Refreshing… · 2 need you: Hooks, Tools')
+    expect(healthHeadWords(true, '2026-10-09T22:13:00.000Z', true, { count: 0, sections: [] })).toBe('Refreshing…')
+    expect(healthHeadWords(false, '2026-10-09T22:13:00.000Z', false, needs)).toBe(`Read ${shortDate('2026-10-09T22:13:00.000Z')} · 2 need you: Hooks, Tools`)
+    expect(healthHeadWords(false, '2026-10-09T22:13:00.000Z', true, { count: 1, sections: ['Hooks'] })).toBe(`Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 1 needs you: Hooks`)
+    expect(healthHeadWords(false, '2026-10-09T22:13:00.000Z', false, { count: 0, sections: [] })).toBe(`Read ${shortDate('2026-10-09T22:13:00.000Z')}`)
+  })
+
+  it('reads quietly while Doctor runs: its 5-second reads never flip the head to Refreshing… (96 review)', () => {
+    const running = { ...doctor([doctorRow('hooks')]), running: true }
+    const html = rulesMarkup('health', rules({ snapshot: { ...RULES, doctor: running }, busy: true, reading: true }))
+    expect(html).not.toContain('Refreshing…')
+    expect(html).toMatch(/<span role="status">Read [^<]+ · \d+ needs? you: /u)
+  })
+
+  it('never says All well while Health has an issue of its own Doctor cannot see, a failed context limit only (96 review)', () => {
+    const passed = { ...doctor((['hooks', 'skills', 'tools', 'rules', 'claude', 'codex', 'leftovers'] as const).map((check) => doctorRow(check))), allWell: true, exitCode: 0 as const }
+    const onlyContext = healthNeeds({ ...AUDIT, doctor: passed })
+    expect(onlyContext.sections).toContain('Context limits')
+    expect([...onlyContext.keys].some((key) => key.startsWith('context'))).toBe(false)
+    const html = renderToStaticMarkup(createElement(DoctorHealth, { view: passed, now: AT + 60000, sections: new Set<string>(), issues: 1 }))
+    expect(html).not.toContain('All well')
+    expect(renderToStaticMarkup(createElement(DoctorHealth, { view: passed, now: AT + 60000, sections: new Set<string>(), issues: 0 }))).toContain('All well')
+  })
+
+  it('merges a Doctor finding only with a Health row needing the owner for the same cause, never a failed test or an app doctor\'s own check (96 review)', () => {
+    // OpenCode's Tools row needs him only because its tools test failed: its state is set up, so Doctor's tool-check stays its own.
+    const tested: RulesSnapshot = { ...AUDIT, tools: { ...AUDIT.tools, apps: AUDIT.tools.apps.map((app) => app.harness === 'opencode'
+      ? { ...app, state: 'Set up', unlisted: [], test: { at: '2026-10-09T20:00:00.000Z', version: app.version ?? '2.0.29', outcome: 'fail', detail: 'synthetic' } } : app) } }
+    const needs = healthNeeds(tested)
+    expect(needs.sections).toContain('Tools')
+    expect([...needs.keys].some((key) => key.startsWith('tools:opencode:'))).toBe(false)
+    // Codex's own doctor reports mcp.config as a tool-check: not BMN's Tools check, so never the Tools row's issue.
+    const codexOwn = doctorRow('codex', { state: 'problems', problems: [problem('tool-check', 1, 'codex', { cause: 'missing' })] })
+    expect(doctorPlace(codexOwn, codexOwn.problems[0]!, new Set(['tools:codex:missing']))).toBe('doctor')
+    const bmnOwn = doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'codex', { cause: 'missing' })] })
+    expect(doctorPlace(bmnOwn, bmnOwn.problems[0]!, new Set(['tools:codex:missing']))).toBe('tools')
+  })
+
+  it('leaves Test again… usable while BMN only reads in the background', () => {
+    const failed: RulesSnapshot = { ...RULES, probes: [{ harness: 'claude', outcome: 'fail', at: '2026-10-09T20:00:00.000Z', version: '2.1.295' }] }
+    const reading = rulesMarkup('health', rules({ snapshot: failed, busy: true, reading: true }))
+    const acting = rulesMarkup('health', rules({ snapshot: failed, busy: true, acting: true }))
+    const again = (html: string): string[] => [...html.matchAll(/<button[^>]*aria-label="Test [^"]*again"[^>]*>/gu)].map((match) => match[0])
+    expect(again(reading).length).toBeGreaterThan(0)
+    expect(again(reading).every((button) => !button.includes('disabled'))).toBe(true)
+    expect(again(acting).every((button) => button.includes('disabled'))).toBe(true)
+  })
+})
+
 describe('context limits (60.9 AC3, AC4)', () => {
   const markup = rulesMarkup('health')
 
   it('shows one row per app: its file, who shares it, the default it holds and whether the setting is tested', () => {
     expect(markup).toContain('<h4 class="group-head">Context limits<span class="caption">how large a conversation may grow in sessions you start yourself</span></h4>')
-    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not supported yet · BMN tests 0.171.0 by itself<\/span>/)
-    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Setting tested on 2.1.295<\/span>/)
+    expect(markup).toMatch(/<span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.codex\/config.toml">~\/.codex\/config.toml<\/span><span class="faint">Shared by Sol, Astra and Luna<\/span><\/span><span class="health-state"><span>380 000 tokens · summarises at 342 000<\/span><span class="faint" title="[^"]*">Not yet proven on 0.171.0 · queued: BMN tests it by itself<\/span>/)
+    expect(markup).toMatch(/<span class="faint">Shared by Opus and Fable<\/span><\/span><span class="health-state"><span>App default<\/span><span class="faint" title="[^"]*">Tested on 2.1.295 · asked for 137 000, it reported 137 000 · proves the limit for runs BMN starts with --settings, also with --restricted, not in --safe-mode; where it summarises is not tested<\/span>/)
   })
 
   it('offers Change… only where the test passed on the installed version', () => {
-    expect(markup).toContain('disabled="" aria-label="Change the default context limit of Codex" title="Not supported yet: it waits for a test that passes on this Codex version"')
+    expect(markup).toContain('disabled="" aria-label="Change the default context limit of Codex" title="Not yet proven: it waits for a test that passes on this Codex version"')
     expect(markup).toMatch(/<button type="button" class="small" aria-label="Change the default context limit of Claude Code">Change…<\/button>/)
     expect(markup).not.toMatch(/aria-label="Test the context limit of [A-Za-z ]+ again"/)
   })
@@ -1176,11 +1377,26 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextValueWords({ limit: null, compact: null })).toBe('App default')
     expect(contextValueWords({ limit: 272000, compact: null })).toBe('272 000 tokens')
     expect(contextValueWords({ limit: 272000, compact: null, unreadable: 'config.toml model_context_window is not a whole number' })).toBe("Can't be read")
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: null, test: null })).toBe('Not supported yet · the app is not found')
-    // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report.
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'fail', detail: 'd' } })).toBe('Not supported yet · the test failed on 0.162.0: d · one prompt sent')
-    expect(contextStateWords({ harness: 'claude', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.162.0', outcome: 'inconclusive', detail: 'd' } })).toBe('Not supported yet · the test was inconclusive on 0.162.0')
-    expect(contextStateWords({ harness: 'codex', limitProven: false, version: '0.162.0', test: { at: 'x', version: '0.161.0', outcome: 'pass', detail: 'd' } })).toBe('Not supported yet · BMN tests 0.162.0 by itself')
+    const test = (version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable', observed: number | null = null) => ({ at: 'x', version, outcome, detail: 'd', asked: 123000, observed })
+    expect(contextStateWords({ harness: 'codex', version: null, test: null, autoTest: 'scheduled' })).toBe('Not found · no limit can be proven without the app')
+    // Codex's test sends one short request to its provider, and says so; Claude Code's asks for its own report. A failure waits for the owner.
+    expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.162.0', 'fail', 380000), autoTest: 'none' })).toBe('Tested on 0.162.0 · the test failed: d · not used; Test again… is yours · one prompt sent')
+    expect(contextStateWords({ harness: 'claude', version: '0.162.0', test: test('0.162.0', 'inconclusive'), autoTest: 'scheduled' })).toBe('Tested on 0.162.0 · the test showed nothing · queued: BMN tries again by itself')
+    expect(contextStateWords({ harness: 'codex', version: '0.162.0', test: test('0.161.0', 'pass', 116850), autoTest: 'scheduled' })).toBe('Not yet proven on 0.162.0 · queued: BMN tests it by itself')
+  })
+
+  it('keeps the saved value, what the test observed, what it proves and who acts next apart, and promises no test that is not coming (Story 96.5 AC2, AC3)', () => {
+    const pass = { at: 'x', version: '0.164.0', outcome: 'pass' as const, detail: 'asked for 123000; the session record shows 116850', asked: 123000, observed: 116850 }
+    // What a pass proves is named, and what it does not: summarising is never tested.
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: pass, autoTest: 'none' }))
+      .toBe('Tested on 0.164.0 · asked for 123 000, it reported 116 850 · proves model_context_window; where it summarises is not tested · one prompt sent')
+    // A default in the app's file alone is a reason to test; with neither a default nor an agent's limit nothing is promised.
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'scheduled' })).toBe('Not yet proven on 0.164.0 · queued: BMN tests it by itself')
+    expect(contextStateWords({ harness: 'codex', version: '0.164.0', test: null, autoTest: 'not-needed' })).toBe('Not yet proven on 0.164.0 · no automatic test: no agent has a limit here and the file holds no default')
+    expect(contextStateWords({ harness: 'claude', version: '2.1.310', test: { ...pass, version: '2.1.310', outcome: 'inconclusive', observed: null }, autoTest: 'none' }))
+      .toBe('Tested on 2.1.310 · the test showed nothing · no automatic test is scheduled')
+    // The synthetic size a test asks for is said only as what was asked, never as a value to choose.
+    expect(markup).not.toMatch(/<option[^>]*>137/)
   })
 
   it('has no switch: BMN tests by itself, and the help says what a test starts and costs (63.1 AC4; Story 75.8 AC3)', () => {
@@ -1191,7 +1407,7 @@ describe('context limits (60.9 AC3, AC4)', () => {
   })
 
   it('says which agents\' own limits are applied, not applied or refused, with the check\'s reason behind each (63.1 AC4)', () => {
-    expect(markup).toContain('<p class="limit-note" title="the context setting is not tested on this Codex version yet; BMN tests it by itself when it starts" role="status"><span class="needs-dot" role="img" aria-label="Needs you" title="Needs you"></span>Sol: its own limit of 272 000 is not applied, so a run gets the app&#x27;s own size.</p>')
+    expect(markup).toContain('<p class="limit-note" title="the context setting is not tested on this Codex version yet; BMN tests it by itself when it starts"><span class="needs-dot" role="img" aria-label="Needs you" title="Needs you"></span>Sol: its own limit of 272 000 is not applied, so a run gets the app&#x27;s own size.</p>')
     expect(agentLimitWords({ agent: 'Haiku', limit: 100000, state: 'applied' })).toBe('Haiku: its own limit of 100 000 is applied to each run.')
     expect(agentLimitWords({ agent: 'Haiku', limit: 100000, state: 'refused', reason: 'r' })).toBe('Haiku: runs are refused, because its own limit of 100 000 cannot be applied.')
     const applied = rulesMarkup('health', rules({ snapshot: { ...RULES, context: RULES.context.map((row) => ({ ...row, limits: [{ agent: 'Haiku', limit: 100000, state: 'applied' as const }] })) } }))
@@ -1200,14 +1416,19 @@ describe('context limits (60.9 AC3, AC4)', () => {
 
   it('says of a test BMN ran by itself that it did, with its day, the version and what came of it, and while one runs (63.1 AC5)', () => {
     const at = '2026-10-09T20:00:00.000Z'
-    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', limitProven: outcome === 'pass', version: '2.1.296', test: { at, version: '2.1.296', outcome, detail: 'd', by: 'bmn' } })
-    expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · it takes the setting`)
-    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed: d`)
-    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing`)
-    // A test of another version is not this version's, whoever ran it; the owner's own test reads as before.
-    expect(contextStateWords({ harness: 'claude', limitProven: false, version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe('Not supported yet · BMN tests 2.1.297 by itself')
-    expect(contextStateWords({ harness: 'claude', limitProven: true, version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd' } })).toBe('Setting tested on 2.1.296')
-    expect(contextStateWords({ harness: 'codex', limitProven: true, version: '0.171.0', test: { at, version: '0.171.0', outcome: 'pass', detail: 'd', by: 'bmn' } })).toBe(`BMN tested 0.171.0 by itself ${shortDate(at)} · it takes the setting · one prompt sent`)
+    const own = (outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): string => contextStateWords({ harness: 'claude', version: '2.1.296',
+      test: { at, version: '2.1.296', outcome, detail: 'd', asked: 137000, observed: outcome === 'pass' ? 137000 : null, by: 'bmn' }, autoTest: outcome === 'inconclusive' ? 'scheduled' : 'none' })
+    const proves = 'proves the limit for runs BMN starts with --settings, also with --restricted, not in --safe-mode; where it summarises is not tested'
+    expect(own('pass')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · asked for 137 000, it reported 137 000 · ${proves}`)
+    expect(own('fail')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test failed: d · not used; Test again… is yours`)
+    expect(own('inconclusive')).toBe(`BMN tested 2.1.296 by itself ${shortDate(at)} · the test showed nothing · queued: BMN tries again by itself`)
+    // A test of another version is not this version's, whoever ran it; the owner's own test says no one.
+    expect(contextStateWords({ harness: 'claude', version: '2.1.297', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', asked: 137000, observed: 137000, by: 'bmn' }, autoTest: 'scheduled' }))
+      .toBe('Not yet proven on 2.1.297 · queued: BMN tests it by itself')
+    expect(contextStateWords({ harness: 'claude', version: '2.1.296', test: { at, version: '2.1.296', outcome: 'pass', detail: 'd', asked: 137000, observed: 137000 }, autoTest: 'none' }))
+      .toBe(`Tested on 2.1.296 · asked for 137 000, it reported 137 000 · ${proves}`)
+    expect(contextStateWords({ harness: 'codex', version: '0.171.0', test: { at, version: '0.171.0', outcome: 'pass', detail: 'd', asked: 123000, observed: 116850, by: 'bmn' }, autoTest: 'none' }))
+      .toBe(`BMN tested 0.171.0 by itself ${shortDate(at)} · asked for 123 000, it reported 116 850 · proves model_context_window; where it summarises is not tested · one prompt sent`)
     const running = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'context', harness: 'claude' }, stopped: [] } } }))
     expect(running).toMatch(/<span class="faint" title="[^"]*">BMN is testing Claude Code now…<\/span>/)
     expect(running).not.toContain('BMN is testing Codex')
@@ -1315,7 +1536,7 @@ describe('skills (60.11 AC5)', () => {
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Checked [^·]+ · 9 need you · 1 skill entry not installed yet · 1 skill exposed/)
+    expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
@@ -1496,10 +1717,10 @@ describe('tools (60.12 AC6)', () => {
   it('Health shows one row per app: its settings file, the state in words, Full or Public tools only and the last test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Checked [^·]+ · 9 need you · 1 skill entry not installed yet · 1 skill exposed · 2 tool entries not installed yet · 1 tool exposed/)
+    expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Checked [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
     expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Checked [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
-    expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?Exposed<span class="muted"> · Public tools only<\/span>/)
+    expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?2 tool connections available · no approved destination recorded<span class="muted"> · Public tools only<\/span><\/span><span class="faint">Names and Remove…: Tools tab › OpenCode<\/span>/)
     expect(health).not.toMatch(/aria-label="Tools test for|aria-label="Test the tools of/)
     const failed = rulesMarkup('health', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => (app.harness === 'codex'
       ? { ...app, test: { at: '2026-10-09T20:00:00.000Z', version: app.version, outcome: 'fail' as const, detail: 'd', by: 'bmn' as const } } : app)) } } }))

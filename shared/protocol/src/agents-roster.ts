@@ -375,8 +375,16 @@ export interface ContextLimitView {
   /** The sizes the app takes, where it says. */
   min?: number
   max?: number
-  /** The last test of this app, whatever version it ran against; `by` is set where BMN ran it by itself (63.1). */
-  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; by?: 'bmn' } | null
+  /**
+   * The last test of this app in the form BMN applies the setting in now, whatever version it ran against; `asked` the size it
+   * asked for, `observed` the size the app reported (null where it reported none); `by` is set where BMN ran it by itself (63.1).
+   */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; asked: number; observed: number | null; by?: 'bmn' } | null
+  /**
+   * Who acts next on the installed version (Story 96.5): `scheduled` BMN's own test is due; `none` no test is coming (it passed,
+   * or failed and waits for the owner's Test again); `not-needed` no agent has a limit on this app and its file holds no default.
+   */
+  autoTest: 'scheduled' | 'none' | 'not-needed'
   /** Each approved, enabled agent on this app that has a limit of its own, and how that limit fares for a run started now (63.1 AC4). */
   limits: ContextAgentLimit[]
   /** The approved, enabled agents that run on this app: they share this one file. */
@@ -384,7 +392,8 @@ export interface ContextLimitView {
 }
 
 /** One skill's state in one app (60.11 AC2); `excluded` is a skill the app is not meant to have and does not have. */
-export type SkillStateName = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
+export const SKILL_STATE_NAMES = ['unreadable', 'missing', 'link', 'unmanaged', 'edited-outside', 'stale', 'current', 'read-directly', 'exposed', 'excluded'] as const
+export type SkillStateName = (typeof SKILL_STATE_NAMES)[number]
 
 /** One app's skills, as Integrations › Health shows them (60.11 AC5). */
 export interface SkillsAppView {
@@ -445,7 +454,8 @@ interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
 export interface SkillsPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: SkillsPlanTarget[]; exposed: { harness: RosterHarness; skill: string; fix: string }[] }
 
 /** One tool's state in one app (60.12 AC4); `excluded` is a tool the app is not meant to have and does not have, `blocked` one it cannot take as it is. */
-export type ToolStateName = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
+export const TOOL_STATE_NAMES = ['unreadable', 'missing', 'unmanaged', 'edited-outside', 'stale', 'current', 'exposed', 'excluded', 'blocked'] as const
+export type ToolStateName = (typeof TOOL_STATE_NAMES)[number]
 
 /** One app's tools, as Integrations › Health shows them (60.12 AC6). */
 export interface ToolsAppView {
@@ -809,6 +819,10 @@ export interface HookAppAtStart {
   placed: string[]
   older: string[]
   installed: string[]
+  /** Entries BMN's own earlier release wrote, upgraded byte for byte at this start (Story 96.3); absent when none was. */
+  upgraded?: string[]
+  /** BMN's own earlier OpenCode plugin left in place because its upgrade failed: it cannot tell a stop from a finished turn (Story 96.6). */
+  earlier?: string[]
   /** Events BMN left as they are, each with why; a whole file it could not add to has `why` on the app instead. */
   left: { event: string; why: HookLeftWhy }[]
   why?: HookLeftWhy

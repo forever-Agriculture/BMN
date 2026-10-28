@@ -864,6 +864,32 @@ describe('BMN\'s own context testing on Integrations › Health (63.1)', () => {
     expect(calls('claude').every((first) => first === '--version')).toBe(true)
   })
 
+  it('tests an app for the default its file holds though no agent has a limit, and says who acts next (Story 96.5 AC2, AC3)', async () => {
+    codex('0.161.0', 116850)
+    // Claude Code's context report for the size the test asks for; every start leaves a line.
+    stub('claude', 'echo "$1" >> "$HOME/claude-calls"\nif [ "$1" = "--version" ]; then echo "2.1.295 (Claude Code)"; exit 0; fi\ncat > /dev/null\nprintf "%s\\n" "**Tokens:** 12.4k / 137k (9%)"')
+    await approved()
+    // No agent on Claude Code has a limit and its file holds no default: nothing is promised.
+    const bare = await call<RulesSnapshot>('rules:snapshot')
+    expect(bare.context[1]).toMatchObject({ harness: 'claude', limit: null, autoTest: 'not-needed', limits: [] })
+    await settled()
+    expect(calls('claude').every((first) => first === '--version')).toBe(true)
+    // The owner's shared default: a reason to test that version, as an agent's own limit is.
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    const settings = JSON.stringify({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '450000' }, autoCompactWindow: 450000 })
+    writeFileSync(join(home, '.claude/settings.json'), settings)
+    const due = await call<RulesSnapshot>('rules:snapshot')
+    expect(due.context[1]).toMatchObject({ harness: 'claude', limit: 450000, autoTest: 'scheduled', test: null })
+    for (let look = 0; look < 3; look += 1) { await settled(); await call<RulesSnapshot>('rules:snapshot') }
+    await settled()
+    const after = await call<RulesSnapshot>('rules:snapshot')
+    expect(after.context[1]).toMatchObject({ limit: 450000, limitProven: true, autoTest: 'none',
+      test: { outcome: 'pass', version: '2.1.295', by: 'bmn', asked: 137000, observed: 137000 } })
+    expect(contextTests().filter((entry) => entry.harness === 'claude').map((entry) => [entry.control, entry.limit])).toEqual([['settings+restricted', 'pass']])
+    // The test read the owner's file and left it as it was.
+    expect(file('.claude/settings.json')).toBe(settings)
+  })
+
   it('tests at the start of BMN and when an update ended, without Health, and starts no app that no agent has a limit on (AC1; Story 75.8 AC1)', async () => {
     codex('0.161.0', 116850)
     stub('claude', 'echo "$1" >> "$HOME/claude-calls"\necho "2.1.295 (Claude Code)"')
