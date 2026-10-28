@@ -48,6 +48,40 @@ export function rowToken(key, status, note) {
   return createHash('sha256').update(`${key}\0${status}\0${note}`).digest('hex').slice(0, 16)
 }
 
+/** The first lead and flag, excluding the rationale and any other suggested roles. */
+export function suggestedLeadHint(text) {
+  const value = /^\*\*Suggested lead:\*\*[ \t]*([^\r\n]+)/mu.exec(text)?.[1]
+  if (!value) return null
+  const primary = value.split(/\s+[—–]\s+|:\s+|\s+\*\*/u)[0].trim()
+  const lead = /^.*?\p{Regional_Indicator}{2}/u.exec(primary)?.[0] ?? primary
+  return lead ? `Suggested lead: ${lead}` : null
+}
+
+/** A missing hint is supported; ambiguous or unreadable epic files must not silently lose one. */
+export function epicLeadHint(planRoot, key) {
+  const number = /^epic-(\d+)$/u.exec(key)?.[1]
+  if (number === undefined) return null
+  const files = epicFiles(planRoot).filter((file) => file.number === Number(number))
+  if (files.length > 1) throw new PlanError('DUPLICATE', `${key} has more than one epic file; fix the plan first`)
+  if (files.length === 0) return null
+  return suggestedLeadHint(readFileSync(files[0].path, 'utf8'))
+}
+
+/** Keep the go head, replace all hint segments, and clip only the trailing run text. */
+export function withLeadHint(note, hint, date) {
+  const head = /^go \d{4}-\d{2}-\d{2}(?:\s*·\s*|$)/u.exec(note)
+  const go = date ? `go ${date}` : head?.[0].replace(/\s*·\s*$/u, '').trim()
+  const rest = head ? note.slice(head[0].length) : note
+  const text = rest.split('·').map((part) => part.replace(/Suggested lead:.*$/u, '').trim()).filter(Boolean)
+  const prefix = [go, hint].filter(Boolean).join(' · ')
+  if ([...prefix].length > NOTE_LIMIT) throw new PlanError('HINT_TOO_LONG', `the lead hint leaves no room in a ${NOTE_LIMIT}-character note: ${hint}`)
+  const full = [prefix, ...text].join(' · ')
+  const points = [...full]
+  const clipped = points.length > NOTE_LIMIT
+  if (clipped && [...prefix].length + 4 > NOTE_LIMIT) throw new PlanError('HINT_TOO_LONG', `the lead hint leaves no room to clip run text: ${hint}`)
+  return { note: clipped ? `${points.slice(0, NOTE_LIMIT - 1).join('')}…` : full, clipped }
+}
+
 /** Epic number of a row key: `epic-77`, `77-1-slug`, `epic-77-retrospective`. */
 function rowEpic(key) {
   const match = /^(?:epic-)?(\d+)(?:[-.]|$)/u.exec(key)
@@ -259,7 +293,7 @@ export function readEpicFile(path) {
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
     if (criterion) current.criteria.push({ id: Number(criterion[1]), line: index + 1 })
   })
-  return { path, bytes: Buffer.byteLength(text), legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, sections, stories }
+  return { path, bytes: Buffer.byteLength(text), legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories }
 }
 
 function epicFiles(planRoot) {
@@ -350,6 +384,11 @@ export async function checkPlan(resolved) {
     if (epicsSeen.has(epic.epic)) add(at, `duplicate epic ${epic.epic} (also ${epicsSeen.get(epic.epic)})`)
     epicsSeen.set(epic.epic, at)
     if (!epicRows.has(epic.epic)) add(at, `epic ${epic.epic} has no epic-${epic.epic} row`)
+    const row = epicRows.get(epic.epic)
+    if (row && !FINISHED.includes(row.status) && epic.suggestedLead) {
+      const hints = [...row.note.matchAll(/Suggested lead:[^·]*/gu)].map((match) => match[0].trim())
+      if (hints.length !== 1 || hints[0] !== epic.suggestedLead) add(`${boardName}:${row.line}`, `${row.key} must carry one hint: ${epic.suggestedLead}`)
+    }
     if (!epic.legacy) {
       for (const section of EPIC_SECTIONS) if (!epic.sections.includes(section)) add(at, `missing section ## ${section}`)
       if (epic.bytes > EPIC_LIMIT) add(at, `${epic.bytes} bytes, over the ${EPIC_LIMIT}-byte ceiling`)

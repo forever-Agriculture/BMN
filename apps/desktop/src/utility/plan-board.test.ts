@@ -1,3 +1,4 @@
+// MODULE: plan-board.test.ts - Planning CLI, board checks and durable suggested-lead hints
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -39,8 +40,86 @@ development_status:
   epic-2: ready # go 2026-10-17
   2-1-second: backlog
 `
+
+describe('epic lead hints survive run updates (Story 100.1)', () => {
+  function hinted(): string {
+    const main = ownProject(fixture())
+    file(main, 'plan/epics/002-second.md', epicText(2, [1]).replace('## Outcome', '**Suggested lead:** Sol 🇺🇸: fixture.\n\n## Outcome'))
+    return main
+  }
+  const noteOf = (main: string): string => JSON.parse(bmn(main, fixture(), 'status', '--json').out).rows.find((row: { key: string }) => row.key === 'epic-2').note
+  const update = (main: string, note?: string) => {
+    const row = JSON.parse(bmn(main, fixture(), 'status', '--json').out).rows.find((row: { key: string }) => row.key === 'epic-2')
+    return bmn(main, fixture(), 'set', 'epic-2', 'review', '--expect', row.token, ...(note === undefined ? [] : ['--note', note]), '--json')
+  }
+
+  it('keeps a go head and replaces stale or repeated hints while preserving run text', () => {
+    const main = hinted()
+    const result = update(main, 'go 2026-10-17 · Suggested lead: Opus 🇺🇸 · runtime passed · Suggested lead: Fable 🇺🇸 · install pending')
+    expect(result.code, result.err).toBe(0)
+    expect(noteOf(main)).toBe('go 2026-10-17 · Suggested lead: Sol 🇺🇸 · runtime passed · install pending')
+    const current = readFileSync(join(main, 'plan/status.yaml'), 'utf8')
+    expect(update(main).code).toBe(0)
+    expect(readFileSync(join(main, 'plan/status.yaml'), 'utf8')).toBe(current)
+  })
+
+  it('clips only hinted epic run text, reports clipping and returns the written token', () => {
+    const main = hinted()
+    const result = update(main, '🧪'.repeat(200))
+    expect(result.code, result.err).toBe(0)
+    const note = noteOf(main)
+    expect([...note]).toHaveLength(160)
+    expect(note).toMatch(/^Suggested lead: Sol 🇺🇸 · 🧪+…$/u)
+    expect(JSON.parse(result.out)).toMatchObject({ note_clipped: true, written: [{ token: rowToken('epic-2', 'review', note) }] })
+    const text = bmn(main, fixture(), 'set', 'epic-2', 'review', '--expect', rowToken('epic-2', 'review', note), '--note', 'x'.repeat(200))
+    expect(text.code).toBe(0)
+    expect(text.err).toContain('clipped')
+  })
+
+  it('leaves story notes and epic notes with no hint line as given', () => {
+    const main = hinted()
+    file(main, 'plan/epics/002-second.md', epicText(2, [1]))
+    expect(update(main, 'literal note').code).toBe(0)
+    expect(noteOf(main)).toBe('literal note')
+    const note = 'Suggested lead: literal text · story evidence'
+    expect(bmn(main, fixture(), 'set', '2-1-second', 'review', '--expect', rowToken('2-1-second', 'backlog', ''), '--note', note).code).toBe(0)
+    expect(readFileSync(join(main, 'plan/status.yaml'), 'utf8')).toContain(`2-1-second: review # ${note}`)
+  })
+
+  it.each(['no hint', 'Suggested lead: Opus 🇺🇸 · old', 'Suggested lead: Sol 🇺🇸 · Suggested lead: Sol 🇺🇸'])('names the line and expected hint for %s', async (note) => {
+    const main = hinted()
+    const path = join(main, 'plan/status.yaml')
+    writeFileSync(path, BOARD.replace('go 2026-10-17', note))
+    const findings = (await checkPlan(await resolvePlan(main))).findings
+    expect(findings).toContainEqual({ where: 'plan/status.yaml:8', reason: 'epic-2 must carry one hint: Suggested lead: Sol 🇺🇸' })
+    expect(update(main, 'accepted locally').code).toBe(0)
+    expect((await checkPlan(await resolvePlan(main))).findings).toEqual([])
+    const fixed = readFileSync(path, 'utf8')
+    writeFileSync(path, fixed.replace('  - 2\n', '').replace('epic-2: review', 'epic-2: dropped').replace('Suggested lead: Sol 🇺🇸 · accepted locally', 'owner dropped'))
+    expect((await checkPlan(await resolvePlan(main))).findings).toEqual([])
+  })
+
+  it('each tracked board copy uses its own epic lead and returns its actual written token', () => {
+    const root = fixture()
+    const main = repo(join(root, 'main'))
+    file(main, 'plan/status.yaml', BOARD)
+    file(main, 'plan/epics/002-second.md', epicText(2, [1]).replace('## Outcome', '**Suggested lead:** Opus 🇺🇸 — fixture.\n\n## Outcome'))
+    git(main, 'add', 'plan'); git(main, 'commit', '-qm', 'tracked board')
+    const run = join(root, 'run'); git(main, 'worktree', 'add', '-qb', 'run', run)
+    file(run, 'plan/epics/002-second.md', epicText(2, [1]).replace('## Outcome', '**Suggested lead:** Sol 🇺🇸 — fixture.\n\n## Outcome'))
+    const result = bmn(run, fixture(), 'set', 'epic-2', 'review', '--expect', rowToken('epic-2', 'ready', 'go 2026-10-17'), '--note', 'checks passed', '--json')
+    expect(result.code, result.err).toBe(0)
+    const written = JSON.parse(result.out).written
+    for (const [checkout, lead] of [[run, 'Sol'], [main, 'Opus']]) {
+      const note = `Suggested lead: ${lead} 🇺🇸 · checks passed`
+      const board = join(checkout!, 'plan/status.yaml')
+      expect(readFileSync(board, 'utf8')).toContain(`epic-2: review # ${note}`)
+      expect(written.find((entry: { board: string }) => entry.board === board).token).toBe(rowToken('epic-2', 'review', note))
+    }
+  })
+})
 function epicText(number: number, stories: number[], extra = ''): string {
-  return `# Epic ${number}: Fixture ${number}\n\n**Suggested lead:** Opus — fixture.\n\n## Outcome\n\nIt works.\n\n## Why\n\nThe owner, 2026-10-17: "make it".\n\n## Boundary and dependencies\n\nNone.\n\n## Truth impact\n\nnone: a fixture.\n\n## Stories\n\n${stories.map((story) => `### Story ${number}.${story}: Part ${story}\n\nAs the owner, I want it.\n\n**Acceptance criteria:**\n1. **Given** a, **then** b.\n2. **Given** c, **then** d.\n\n**Verification:** unit tests.\n`).join('\n')}${extra}`
+  return `# Epic ${number}: Fixture ${number}\n\n## Outcome\n\nIt works.\n\n## Why\n\nThe owner, 2026-10-17: "make it".\n\n## Boundary and dependencies\n\nNone.\n\n## Truth impact\n\nnone: a fixture.\n\n## Stories\n\n${stories.map((story) => `### Story ${number}.${story}: Part ${story}\n\nAs the owner, I want it.\n\n**Acceptance criteria:**\n1. **Given** a, **then** b.\n2. **Given** c, **then** d.\n\n**Verification:** unit tests.\n`).join('\n')}${extra}`
 }
 function planText(): string {
   return readFileSync(join(TEMPLATES, 'PLAN.md'), 'utf8')
@@ -282,7 +361,7 @@ describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', 
   it('passes the epic template filled in as epic 90', async () => {
     const main = ownProject(fixture())
     const fill = (text: string): string => text.replaceAll('<N+1>', '91').replaceAll('<N>', '90').replaceAll('<slug>', 'first')
-    file(main, 'plan/status.yaml', `${BOARD}\n  epic-90: backlog # planned\n  90-1-first: backlog\n`)
+    file(main, 'plan/status.yaml', `${BOARD}\n  epic-90: backlog # Suggested lead: <from \`bmn roster role lead\`> · planned\n  90-1-first: backlog\n`)
     file(main, 'plan/epics/090-first.md', fill(readFileSync(join(TEMPLATES, 'epic.md'), 'utf8')))
     expect(await reasons(main)).toEqual([])
   })

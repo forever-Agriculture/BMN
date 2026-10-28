@@ -42,11 +42,15 @@ export interface EpicFile {
   legacy: boolean
   legacyNote: string | null
   epic: number | null
+  suggestedLead: string | null
   sections: string[]
   stories: Array<{ id: string; epic: number; line: number; criteria: Array<{ id: number; line: number }>; verification: boolean }>
 }
 
 export declare function rowToken(key: string, status: string, note: string): string
+export declare function suggestedLeadHint(text: string): string | null
+export declare function epicLeadHint(planRoot: string, key: string): string | null
+export declare function withLeadHint(note: string, hint: string, date?: string): { note: string; clipped: boolean }
 export declare function resolvePlan(start: string): Promise<ResolvedPlan>
 export declare function readBoard(path: string, options?: { epics?: number[] }): Promise<Board>
 export declare function readEpicFile(path: string): EpicFile

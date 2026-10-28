@@ -5,7 +5,7 @@ import { chmodSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import {
-  BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, readBoard, resolvePlan, rowToken
+  BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, epicLeadHint, readBoard, resolvePlan, rowToken, withLeadHint
 } from './plan-board.mjs'
 
 const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
@@ -26,12 +26,14 @@ check   structural validation, one finding per line: duplicate keys, malformed r
         identifiers, missing sections, stories without criteria or Verification, queue problems, a done
         epic with unfinished stories, blocked/paused/dropped rows without a reason, files over their
         ceiling, and from Epic 90 on a missing Run needs section or Owner line, or an owner step
-        between unattended stories. A BMAD board is checked for duplicate keys and row grammar only. Whether the plan says
+        between unattended stories, and a missing/stale/repeated suggested-lead hint on an unfinished epic.
+        A BMAD board is checked for duplicate keys and row grammar only. Whether the plan says
         the right thing is the readiness method's and review's, not this command's.
 set     changes one row's status (and note with --note; without it the note is kept) after checking that
         the row still matches TOKEN, the row token status --json printed. It locks the board, rereads it,
         changes that one line, keeps every other byte and the file's mode, and writes atomically; the
-        version before is kept in ~/.local/state/bmn/plan-versions (the last 20). A board tracked by the
+        version before is kept in ~/.local/state/bmn/plan-versions (the last 20). An epic --note keeps its
+        canonical suggested lead and any go head, clipping run text with … when needed (reported in output). A board tracked by the
         product repository and read from a linked worktree is changed in both copies, the default
         checkout's too; when that copy's row differs, --expect-default gives its token. An epic row of a
         plan with Git history is not set to ready this way: its go is recorded with go.
@@ -402,11 +404,21 @@ async function set(argv) {
     return refuse(json, 'GO_NEEDS_RECORD', `${key} becomes ready only with the owner's go recorded in the plan's history: bmn plan go ${key.slice(5)} --source TEXT --approved sha256:HEX --expect TOKEN`)
   }
   const noteLimit = own ? NOTE_LIMIT : 1000
-  if (options.note !== undefined && [...options.note].length > noteLimit) throw new PlanUsageError(`--note is ${[...options.note].length} characters, over ${noteLimit}`)
   const copies = [{ path: plan.boardPath, expect: options.expect, name: plan.boardCheckout === plan.runCheckout ? 'run checkout' : 'default checkout' }]
   if (plan.tracked && plan.runCheckout !== plan.defaultCheckout) {
     const other = join(plan.defaultCheckout, plan.boardPath.slice(plan.runCheckout.length + 1))
     copies.push({ path: other, expect: options['expect-default'] ?? options.expect, name: 'default checkout' })
+  }
+  try {
+    for (const copy of copies) {
+      copy.note = options.note
+      const hint = own && options.note !== undefined ? epicLeadHint(dirname(copy.path), key) : null
+      if (hint) Object.assign(copy, withLeadHint(options.note, hint))
+      if (copy.note !== undefined && [...copy.note].length > noteLimit) throw new PlanUsageError(`--note is ${[...copy.note].length} characters, over ${noteLimit}`)
+    }
+  } catch (error) {
+    if (error instanceof PlanUsageError) throw error
+    return failure(error, json)
   }
   // Both copies are locked (in one order, so two writers never wait on each other) and checked before either is
   // written, so a cooperating writer's change refuses the whole set and changes nothing.
@@ -419,7 +431,7 @@ async function set(argv) {
       let text
       try { text = readFileSync(copy.path, 'utf8') } catch { return failure(new PlanError('UNREADABLE', `${copy.path} cannot be read`), json) }
       let found
-      try { found = replaceRow(text, key, status, options.note) } catch (error) { return failure(error, json) }
+      try { found = replaceRow(text, key, status, copy.note) } catch (error) { return failure(error, json) }
       if (found === null) {
         if (json) out(JSON.stringify({ ok: false, error: { code: 'UNKNOWN_ROW', message: `no row ${key} in the ${copy.name}'s board ${copy.path}` } }, null, 2))
         else err(`bmn: UNKNOWN_ROW: no row ${key} in the ${copy.name}'s board ${copy.path}`)
@@ -431,7 +443,7 @@ async function set(argv) {
     const results = []
     for (const copy of copies) {
       let result
-      try { result = await setRow(copy.path, { key, status, note: options.note, expect: copy.expect, locked: true }) } catch (error) { return failure(error, json, results) }
+      try { result = await setRow(copy.path, { key, status, note: copy.note, expect: copy.expect, locked: true }) } catch (error) { return failure(error, json, results) }
       if (result.outcome === 'conflict') return conflict(json, copy, key, { before: result.current, token: result.current.token }, results)
       if (result.outcome === 'busy') {
         if (json) out(JSON.stringify({ ok: false, error: { code: 'BUSY', message: `${copy.path} kept changing; nothing written there` }, written: results }, null, 2))
@@ -440,8 +452,10 @@ async function set(argv) {
       }
       results.push({ board: copy.path, outcome: result.outcome, token: result.token, kept: result.kept ?? null })
     }
-    if (json) out(JSON.stringify({ ok: true, key, status, written: results }, null, 2))
+    const clipped = copies.some((copy) => copy.clipped)
+    if (json) out(JSON.stringify({ ok: true, key, status, written: results, ...(clipped ? { note_clipped: true } : {}) }, null, 2))
     else out(results.map((one) => `${one.outcome === 'unchanged' ? 'unchanged' : 'set'} ${key}: ${status} in ${one.board} (token ${one.token})`).join('\n'))
+    if (clipped && !json) err(`bmn: note clipped to ${noteLimit} characters; the suggested lead and go head were kept`)
     return EXIT.ok
   } finally { releases.forEach((release) => release()) }
 }
@@ -645,7 +659,9 @@ export async function recordGo(plan, { epic, source: given, approved, expect, da
     if (current === null) throw new PlanError('UNKNOWN_ROW', `no row ${key} in ${plan.boardPath}`)
     if (current.token !== expect) throw new GoRefusal('CONFLICT', `${key} is now "${current.status}${current.note ? ` # ${current.note}` : ''}" (token ${current.token}), not the row the go was asked on; read it again and ask again if it changed`)
     if (FINISHED_STATUSES.includes(current.status)) throw new GoRefusal('FINISHED', `${key} is ${current.status}; a go approves work still to do`)
-    const nextNote = note ?? goNote(goDate, current.note)
+    const hint = epicLeadHint(plan.planRoot, key)
+    const normalized = hint ? withLeadHint(note ?? current.note, hint, goDate) : null
+    const nextNote = normalized?.note ?? note ?? goNote(goDate, current.note)
 
     const head = readHistory(() => gitSync(repo, ['rev-parse', '--verify', 'HEAD^{commit}']).trim())
     let branch
@@ -713,7 +729,7 @@ export async function recordGo(plan, { epic, source: given, approved, expect, da
       throw new PlanError('READBACK', `commit ${created} does not read back as the go it was written to be; see git -C ${repo} show ${created.slice(0, 12)}`)
     }
     const row = rowIn(readFileSync(plan.boardPath, 'utf8'), key)
-    return { outcome: 'recorded', commit: created, date: goDate, source, approvedSha, file: `epics/${name}`, repo, epicIncluded, row, pending: row?.token !== recordedRow.token }
+    return { outcome: 'recorded', commit: created, date: goDate, source, approvedSha, file: `epics/${name}`, repo, epicIncluded, row, pending: row?.token !== recordedRow.token, noteClipped: normalized?.clipped ?? false }
   } finally { release() }
 }
 
@@ -794,7 +810,7 @@ async function go(argv) {
     out(JSON.stringify({
       ok: true, epic, outcome: result.outcome, go_date: result.date, commit: result.commit, history_repo: result.repo, approval_source: result.source,
       approved_text: `sha256:${result.approvedSha}`, approved_file: result.file, epic_file_committed: result.epicIncluded, row, board: plan.boardPath,
-      board_pending: result.pending
+      board_pending: result.pending, ...(result.noteClipped ? { note_clipped: true } : {})
     }, null, 2))
   } else {
     out([
@@ -805,6 +821,7 @@ async function go(argv) {
       `dev-auto reads it with run_needs.py ${epic} --project ${plan.productRoot}`
     ].join('\n'))
   }
+  if (result.noteClipped && !json) err(`bmn: note clipped to ${NOTE_LIMIT} characters; the suggested lead and go head were kept`)
   return result.pending ? EXIT.findings : EXIT.ok
 }
 

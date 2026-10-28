@@ -70,6 +70,18 @@ function snapshot(plan: string): { head: string; board: string; index: string; s
 }
 
 describe('the owner\'s go becomes one commit of the plan\'s history (Story 96.1 AC1)', () => {
+  it('records one canonical lead and flag after the go head, replacing stale repeated hints (100.1 AC2)', () => {
+    const { main, plan, home } = project()
+    file(plan, 'epics/007-fixture.md', epicText().replace('Opus — fixture.', 'Sol 🇺🇸: fixture.'))
+    git(plan, 'add', 'epics/007-fixture.md'); git(plan, 'commit', '-qm', 'update suggested lead')
+    const note = 'go 2026-10-26 · Suggested lead: Opus 🇺🇸 · checked · Suggested lead: Fable 🇺🇸'
+    const result = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home), '--note', note, '--json'])
+    expect(result.code, result.err).toBe(0)
+    expect(result.json.row.note).toBe('go 2026-10-26 · Suggested lead: Sol 🇺🇸 · checked')
+    expect(git(plan, 'show', 'HEAD:status.yaml')).toContain(`epic-7: ready # ${result.json.row.note}`)
+    expect(bmn(main, home, ['check']).code).toBe(0)
+  })
+
   it('commits the row\'s change to ready with the queue alone, naming his act and the approved text, and the working board follows', () => {
     const { main, plan, home } = project()
     const sha = approved(main, home)
@@ -423,7 +435,7 @@ describe('one act records one go, whatever was interrupted (Story 96.1 AC3)', ()
     expect(bmn(main, home, ['set', 'epic-7', 'backlog', '--expect', row, '--note', 'owner withdrew the go', '--json']).code).toBe(0)
     const retry = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', sha, '--expect', row, '--json'])
     expect([retry.code, retry.json.error?.code]).toEqual([1, 'WITHDRAWN'])
-    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toMatch(/^ {2}epic-7: backlog # owner withdrew the go$/mu)
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toMatch(/^ {2}epic-7: backlog # Suggested lead: Opus · owner withdrew the go$/mu)
   })
 })
 

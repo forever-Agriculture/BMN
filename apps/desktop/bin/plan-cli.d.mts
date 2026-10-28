@@ -20,5 +20,5 @@ export declare function recordGo(plan: Awaited<ReturnType<typeof import('./plan-
   epic: number; source?: string; approved?: string; expect: string; date?: string; note?: string; now?: Date; seam?: (step: string, commit: string) => void
 }): Promise<{
   outcome: 'recorded' | 'recorded-before'; commit: string; date: string; source: string; approvedSha: string; file: string; repo: string; epicIncluded: boolean
-  row: { status: string; note: string; token: string } | null; pending: boolean
+  row: { status: string; note: string; token: string } | null; pending: boolean; noteClipped?: boolean
 }>
