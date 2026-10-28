@@ -71,12 +71,34 @@ async function closePreferences(dialog: HTMLDialogElement): Promise<void> {
   await waitFor('preferences closed', () => (preferencesDialog() ? undefined : true))
 }
 
-async function approveWordVia(dialog: HTMLDialogElement, word: string): Promise<void> {
-  const input = dialog.querySelector<HTMLInputElement>('#preferences-voice-add-word')
-  if (!input) throw new Error('voice integration: the Add word field was not rendered')
+async function vocabularySaved(dialog: HTMLDialogElement, label: string, word: string, present = true): Promise<void> {
+  await waitFor(label, async () => {
+    const saved = (await window.aiTerminal.getSettings()).voice.vocabulary
+    const input = dialog.querySelector<HTMLInputElement>('#preferences-voice-add-word')
+    const rendered = approvedWords(dialog)
+    return input?.isConnected && !input.disabled && rendered.includes(word) === present &&
+      JSON.stringify(rendered) === JSON.stringify(saved)
+  })
+}
+
+export async function approveWordVia(dialog: HTMLDialogElement, word: string): Promise<void> {
+  if (!dialog.querySelector('#preferences-voice-add-word')) throw new Error('voice integration: the Add word field was not rendered')
+  const input = await waitFor('Add word ready', () => {
+    const current = dialog.querySelector<HTMLInputElement>('#preferences-voice-add-word')
+    return current?.isConnected && !current.disabled ? current : undefined
+  })
   setInputValue(input, word)
   input.closest('form')?.requestSubmit()
-  await waitFor(`${word} approved`, () => approvedWords(dialog).includes(word))
+  await vocabularySaved(dialog, `${word} approved`, word)
+}
+
+export async function removeWordVia(dialog: HTMLDialogElement, word: string): Promise<void> {
+  const button = await waitFor('Remove word ready', () => {
+    const current = dialog.querySelector<HTMLButtonElement>(`button[aria-label=${JSON.stringify(`Remove ${word}`)}]`)
+    return current?.isConnected && !current.disabled ? current : undefined
+  })
+  button.click()
+  await vocabularySaved(dialog, 'word removed', word, false)
 }
 
 /** Rows joined without separators: a shell input line wraps, and the marker must still be found whole. */
@@ -125,6 +147,26 @@ async function announced(text: string): Promise<string> {
   })
 }
 
+export async function approveSuggestedVoiceWords(dialog: HTMLDialogElement): Promise<string[]> {
+  buttonIn(dialog, 'Suggest from current session').click()
+  const suggested = (await waitFor('suggestions', () => {
+    const inputs = candidateInputs(dialog)
+    return inputs.length > 0 ? inputs : undefined
+  })).map((input) => input.value)
+  if (EXCLUDED.some((token) => suggested.includes(token))) throw new Error(`voice integration: an excluded token was suggested: ${JSON.stringify(suggested)}`)
+
+  const edited = candidateInputs(dialog).find((input) => input.value === 'pty_host')
+  if (!edited) throw new Error(`voice integration: pty_host was not suggested: ${JSON.stringify(suggested)}`)
+  setInputValue(edited, 'pty-host')
+  buttonIn(edited.parentElement!, 'Approve').click()
+  await vocabularySaved(dialog, 'edited word approved', 'pty-host')
+  const manager = candidateInputs(dialog).find((input) => input.value === 'SessionManager')
+  if (!manager) throw new Error('voice integration: SessionManager was not suggested')
+  buttonIn(manager.parentElement!, 'Approve').click()
+  await vocabularySaved(dialog, 'SessionManager approved', 'SessionManager')
+  return suggested
+}
+
 export async function runVoiceIntegration(options: {
   sessionId: string
   workspaceId: string
@@ -140,22 +182,7 @@ export async function runVoiceIntegration(options: {
     (await window.aiTerminal.getLayout(workspaceId)).layout.selectedSessionId === sessionId)
 
   let dialog = await openPreferences()
-  buttonIn(dialog, 'Suggest from current session').click()
-  const suggested = (await waitFor('suggestions', () => {
-    const inputs = candidateInputs(dialog)
-    return inputs.length > 0 ? inputs : undefined
-  })).map((input) => input.value)
-  if (EXCLUDED.some((token) => suggested.includes(token))) throw new Error(`voice integration: an excluded token was suggested: ${JSON.stringify(suggested)}`)
-
-  const edited = candidateInputs(dialog).find((input) => input.value === 'pty_host')
-  if (!edited) throw new Error(`voice integration: pty_host was not suggested: ${JSON.stringify(suggested)}`)
-  setInputValue(edited, 'pty-host')
-  buttonIn(edited.parentElement!, 'Approve').click()
-  await waitFor('edited word approved', () => approvedWords(dialog).includes('pty-host'))
-  const manager = candidateInputs(dialog).find((input) => input.value === 'SessionManager')
-  if (!manager) throw new Error('voice integration: SessionManager was not suggested')
-  buttonIn(manager.parentElement!, 'Approve').click()
-  await waitFor('SessionManager approved', () => approvedWords(dialog).includes('SessionManager'))
+  const suggested = await approveSuggestedVoiceWords(dialog)
   await approveWordVia(dialog, 'BMN')
   const chipsOnOneLine = chipsShareLine(dialog)
 
@@ -178,8 +205,7 @@ export async function runVoiceIntegration(options: {
     duplicate.parentElement?.parentElement?.querySelector('.preferences-error')?.textContent)
   const duplicateRejected = { message: duplicateMessage, candidateKept: duplicate.isConnected && duplicate.value === 'bmn' }
 
-  dialog.querySelector<HTMLButtonElement>('button[aria-label="Remove pty-host"]')?.click()
-  await waitFor('word removed', () => !approvedWords(dialog).includes('pty-host'))
+  await removeWordVia(dialog, 'pty-host')
   const approvedAfterRemove = approvedWords(dialog)
   const promptShown = dialog.querySelector('[data-testid="voice-vocabulary-prompt"]')?.textContent ?? ''
   const persistedInSettings = JSON.stringify((await window.aiTerminal.getSettings()).voice.vocabulary) === JSON.stringify(approvedAfterRemove)
