@@ -1,3 +1,4 @@
+# MODULE: turn-changes.md - capture, turn boundaries, recording, diagnostic evidence and owner-visible results
 # Turn changes: how a work tree is captured, where a turn's ends are proven, how a turn is recorded and what the owner reads
 
 BMN can record what differs in a Git work tree between the moment the owner sends a prompt and
@@ -548,6 +549,14 @@ the event is a sub-agent's, so that BMN can tell a tool event of the turn from a
   leaves the turn open. `error` is in the list; no measured event sends it. BMN answers `queued`
   at once and scans ("after") within 2 s, from the turn's own root and only while that folder is
   still the folder it scanned first (the same device and file number).
+
+The [handshake diagnostic](development.md#turn-changes-handshake-diagnostics) drives the real
+hook through the private socket, recorder and capture engine with synthetic process identity.
+It distinguishes a confirmed snapshot from capture expiry, a refused capture and connection
+loss during publication. All four can return a quiet hook exit: that proves the agent was
+not disturbed, while the mark statuses and published record establish whether a before
+snapshot was kept. These isolated checks do not identify the cause of a historical packaged
+failure or replace packaged verification.
 
 ### How a turn moves
 

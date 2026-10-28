@@ -102,6 +102,34 @@ All commands run from the repository root.
   `pnpm run test:visual -- --out DIR` there, never restyling the current build. In a worktree, add
   `--electron` with the main checkout's Electron, the one the AppArmor profile above allows.
 
+### Turn Changes handshake diagnostics
+
+The `real hook diagnostic` cases in `turn-changes-host.test.ts` join the actual hook CLI,
+private control socket, CompanionService, recorder and capture engine. They use a synthetic
+foreground identity and `/proc` fixture, private homes and a small real Git repository.
+The integration selection used for the three-revision diagnosis is:
+
+```bash
+node node_modules/vitest/vitest.mjs run apps/desktop/src/utility/turn-changes-host.test.ts \
+  -t 'real hook diagnostic' --pool=threads --maxWorkers=1 --no-file-parallelism --bail=1 \
+  --exclude '.dev-auto/**' --exclude '.claude/**'
+```
+
+The recorded comparisons also wrapped Node with a run-owned launch recorder and syscall
+tracing. Set `BMN_TURN_DIAGNOSTIC_DIR` to a private output directory to retain each case's
+synthetic stage/status record, source hashes, stored turn and cleanup result.
+
+The four cases cover timely confirmation, capture expiry, connection loss during publication
+and an immediately refused capture. Explicit reached/release barriers control the negative
+cases; the production 300 ms deadline remains unchanged. Every hook must exit quietly and
+forward its ordinary event. Only timely confirmation keeps the before snapshot and yields
+one file with two added lines; the other cases keep honest missing-before output and discard
+unconfirmed staging. The stand-in's unread version keeps the ordering caveat and labels.
+
+These checks exercise the subprocess/socket/capture boundary. They do not establish the cause
+of an earlier packaged failure or packaged baseline parity, and do not launch Electron or a
+real agent. A quiet hook exit alone does not establish successful snapshot publication.
+
 ## Terminal image resizing
 
 The renderer pins xterm.js 6.0.0 and image addon 0.9.0. The maintained addon patch

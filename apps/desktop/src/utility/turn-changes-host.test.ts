@@ -1,9 +1,12 @@
 // MODULE: turn-changes-host.test.ts - turn changes in the host, through its real control socket: on in every unarchived workspace, a turn from a hook's marks, the pause that only the window sees and that lifts by itself, and no file name or content in anything a token can read
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   ERROR_CODES, METHOD_REGISTRY, TURN_FILES_LIMIT, TURN_LABELS, TURN_LIST_LIMIT, TURN_RETRY_AFTER_MS, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
@@ -18,7 +21,7 @@ import { listTurns, sweepTurns, type TurnRow } from './database-turn-store'
 import { createWorkspace, listSessions, listWorkspaces, selectWorkspace, updateWorkspace } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
-import { refusal } from './turn-changes-capture'
+import { refusal, type CaptureSeams } from './turn-changes-capture'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
 import { scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
@@ -28,6 +31,16 @@ const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string) => Dat
 const NOW = '2026-10-13T12:00:00.000Z'
 const CONVERSATION = '01a0b657-21a8-7f00-addd-b73646828f5b'
 const MARKER = 'MARKER-69-4'
+
+/** A barrier has a watchdog, never a sleep that decides when the product should have finished. */
+async function reached<T>(promise: Promise<T>, stage: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([promise, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`diagnostic did not reach ${stage}`)), 5_000)
+    })])
+  } finally { clearTimeout(timer) }
+}
 
 interface Answer {
   result?: unknown
@@ -96,7 +109,7 @@ interface Host {
 
 const hosts: Host[] = []
 let requests = 0
-async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port): Promise<Host> {
+async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port, version: string | null = '0.162.1'): Promise<Host> {
   const at = scratch(name)
   const root = mkdtempSync(join(tmpdir(), 'bmn-th-'))
   const database = new BetterSqlite3(':memory:')
@@ -136,8 +149,8 @@ async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPo
     emit: (message) => emitted.push(message),
     now: () => new Date(),
     turnChanges: { ...wrap(inProcessPort(engine)), removeCaptures: inProcessKeeper(engine).removeCaptures },
-    turnVersion: () => Promise.resolve('0.162.1'),
-    turnForegroundFolder: () => foreground.folder
+    turnVersion: () => Promise.resolve(version),
+    turnForegroundFolder: (identity) => identity === '34817:7001:555:1:2' ? foreground.folder : null
   })
   await service.start()
   const socket = service['socketPath']
@@ -180,15 +193,16 @@ async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPo
   hosts.push(made)
   return made
 }
+async function closeHost(made: Host): Promise<void> {
+  await made.idle()
+  await made.service.close()
+  made.engine.close()
+  made.database.close()
+  rmSync(made.root, { recursive: true, force: true })
+  made.at.done()
+}
 afterEach(async () => {
-  for (const made of hosts.splice(0)) {
-    await made.idle()
-    await made.service.close()
-    made.engine.close()
-    made.database.close()
-    rmSync(made.root, { recursive: true, force: true })
-    made.at.done()
-  }
+  for (const made of hosts.splice(0)) await closeHost(made)
 })
 
 describe('where turns are recorded (Story 75.4)', () => {
@@ -612,4 +626,231 @@ describe('what the window reads (Story 69.5)', () => {
     h.service.turnsChanged()
     expect(h.emitted).toEqual([{ kind: 'app-event', topic: 'turns', sessionId: null }])
   })
+})
+
+describe('real hook diagnostic (Epic 99)', () => {
+  const cases = ['timely', 'capture-expiry', 'publication-disconnect', 'capture-refusal'] as const
+  const cli = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
+  const sourceRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+  const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex')
+
+  it.each(cases)('%s: observes the actual CLI, socket, recorder, capture and stored result', async (scenario) => {
+    const started = performance.now()
+    const events: Array<{ stage: string; ms: number; [key: string]: unknown }> = []
+    const note = (stage: string, detail: Record<string, unknown> = {}): void => {
+      events.push({ stage, ms: Math.round((performance.now() - started) * 100) / 100, ...detail })
+    }
+    const captureReached = Promise.withResolvers<void>()
+    const publicationReached = Promise.withResolvers<void>()
+    const aborted = Promise.withResolvers<void>()
+    const dropped = Promise.withResolvers<void>()
+    const releaseCapture = Promise.withResolvers<void>()
+    const releasePublication = Promise.withResolvers<void>()
+    const children: Array<{ pid: number; startTicks: string; exited: boolean }> = []
+    let h: Host | undefined
+    let result: TurnRow | undefined
+    let failure: string | null = null
+    let cleaned = false
+    let runtime: Record<string, unknown> = {}
+    let preEndCaptures: string[] = []
+    const hooks: Array<{ event: string; code: number | null; stdout: string; stderr: string }> = []
+    try {
+      h = await host(`hook-${scenario}`, (port) => ({
+        ...port,
+        capture: async (request, signal) => {
+          const made = h!
+          note('capture-start', { before: !request.publish, folder: request.folder, named: request.named })
+          const cancel = (): void => {
+            note('capture-abort')
+            made.engine.cancel(request.job)
+            aborted.resolve()
+          }
+          if (signal?.aborted) return refusal('cancelled', 'cancelled')
+          signal?.addEventListener('abort', cancel, { once: true })
+          const seams: CaptureSeams = request.publish ? {} : {
+            afterRootOpened: async () => {
+              note('capture-root-opened')
+              captureReached.resolve()
+              if (scenario === 'capture-expiry') await releaseCapture.promise
+            },
+            beforeMove: async (moved) => {
+              if (moved !== 0) return
+              note('publication-moving')
+              publicationReached.resolve()
+              if (scenario === 'publication-disconnect') await releasePublication.promise
+            }
+          }
+          try {
+            const answer = await made.engine.capture(request, seams)
+            note('capture-result', {
+              before: !request.publish, state: answer.state,
+              ...('record' in answer ? { id: answer.record.id, published: answer.published } : { reason: answer.reason })
+            })
+            return answer
+          } finally { signal?.removeEventListener('abort', cancel) }
+        },
+        publish: async (id, until, signal) => {
+          note('publish-start', { id, until })
+          const record = await port.publish(id, until, signal)
+          note('publish-result', { id, kept: record !== null, aborted: signal?.aborted === true })
+          return record
+        },
+        discard: async (id) => {
+          note('discard', { id })
+          await port.discard(id)
+        }
+      }), null)
+      const made = h
+      const recorder = made.service['turns']!
+      const foreground = recorder['options'].foreground
+      const identity = foreground.identity
+      foreground.identity = (sessionId) => {
+        const actual = identity(sessionId)
+        note('foreground-identity', { sessionId, identity: actual })
+        return actual
+      }
+      const folder = foreground.folder
+      foreground.folder = (processIdentity) => {
+        const actual = folder(processIdentity)
+        note('foreground-folder', { identity: processIdentity, folder: actual })
+        return actual
+      }
+      made.engine['options'].observeGit = (call) => {
+        // Record the fixed command, never the process's whole environment or authentication.
+        note('git', { command: call.command, executable: call.executable, folder: call.folder, home: call.env.HOME, environmentKeys: Object.keys(call.env), argv: call.argv })
+      }
+      const handlers = made.service['control']['options'].handlers
+      const mark = handlers.markTurn
+      handlers.markTurn = async (params) => {
+        note('mark-start', { edge: params.edge, requestId: params.requestId, until: params.until, remainingMs: params.until === null ? null : params.until - Date.now() })
+        const status = await mark(params)
+        note('mark-result', { edge: params.edge, requestId: params.requestId, status })
+        return status
+      }
+      const drop = handlers.dropTurnMark
+      handlers.dropTurnMark = (sessionId, requestId) => {
+        note('connection-dropped', { sessionId, requestId })
+        drop(sessionId, requestId)
+        dropped.resolve()
+      }
+      const observation = handlers.observeHookEvent
+      handlers.observeHookEvent = async (params) => {
+        note('hook-forwarded', { event: params.event })
+        return observation(params)
+      }
+      await made.recordHere(true)
+      const proc = join(made.at.base, 'proc')
+      for (const [pid, comm, parent] of [[process.pid, 'sh', 7001], [7001, 'codex', 1]] as const) {
+        const directory = join(proc, String(pid))
+        mkdirSync(directory, { recursive: true })
+        const fields = ['S', parent, 7001, 7001, 34817, 7001, ...Array<number>(13).fill(0), 555]
+        writeFileSync(join(directory, 'stat'), `${pid} (${comm}) ${fields.join(' ')}\n`)
+        writeFileSync(join(directory, 'cmdline'), `${comm}\0`)
+      }
+      const env = {
+        PATH: '/usr/bin:/bin', HOME: made.at.home, LC_ALL: 'C',
+        XDG_CONFIG_HOME: join(made.at.base, 'config'), XDG_DATA_HOME: join(made.at.base, 'data'),
+        XDG_STATE_HOME: join(made.at.base, 'state'), XDG_CACHE_HOME: join(made.at.base, 'cache'),
+        XDG_RUNTIME_DIR: join(made.at.base, 'runtime'), BMN_PROC_ROOT: proc,
+        BMN_CONTROL_SOCKET: made.socket, BMN_TOKEN: made.session, BMN_SESSION_ID: 's1'
+      }
+      runtime = { base: made.at.base, home: made.at.home, serviceRoot: made.root, socket: made.socket, proc, environmentKeys: Object.keys(env) }
+      const hook = (event: string): Promise<void> => new Promise((resolve, reject) => {
+        const child = execFile(process.execPath, [cli, 'hook', 'codex'], { cwd: made.at.repo, env, timeout: 15_000 }, (error, stdout, stderr) => {
+          if (identityRecord) identityRecord.exited = true
+          const answer = { event, code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr }
+          hooks.push(answer)
+          note('hook-exited', { event, code: answer.code, stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr) })
+          try { expect(answer).toEqual({ event, code: 0, stdout: '', stderr: '' }); resolve() } catch (problem) { reject(problem) }
+        })
+        const pid = child.pid!
+        const identityRecord = { pid, startTicks: readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[19]!, exited: false }
+        children.push(identityRecord)
+        child.stdin?.end(JSON.stringify({ hook_event_name: event, session_id: CONVERSATION, turn_id: 'diagnostic-1', cwd: made.at.repo, prompt: 'Synthetic turn' }))
+      })
+      if (scenario === 'capture-refusal') made.foreground.folder = join(made.at.base, 'absent')
+      note('prompt-launch')
+      const prompt = hook('UserPromptSubmit')
+      // Attach immediately: a failed hook cannot become an unhandled rejection while a barrier is awaited.
+      void prompt.catch(() => undefined)
+      if (scenario === 'capture-expiry') {
+        await reached(captureReached.promise, 'capture root')
+        await reached(aborted.promise, 'production deadline cancellation')
+        releaseCapture.resolve()
+      } else if (scenario === 'publication-disconnect') {
+        await reached(publicationReached.promise, 'publication')
+        const connections = [...made.service['control']['connections']]
+        expect(connections).toHaveLength(1)
+        note('disconnect-injected')
+        connections[0]!.socket.destroy()
+        await reached(dropped.promise, 'real server disconnect handler')
+        releasePublication.resolve()
+      }
+      await reached(prompt, 'quiet prompt exit')
+      await made.idle()
+      const store = made.engine.store('s1', made.at.repo)
+      await store.settled()
+      preEndCaptures = store.captures()
+      expect(made.engine['held'].size).toBe(0)
+      expect(preEndCaptures).toHaveLength(scenario === 'timely' ? 1 : 0)
+      const statuses = events.filter((entry) => entry.stage === 'mark-result')
+      if (scenario === 'timely') expect(statuses.map((entry) => entry.status)).toEqual(['captured', 'confirmed'])
+      if (scenario === 'capture-refusal') expect(statuses.map((entry) => entry.status)).toEqual(['unavailable'])
+      if (scenario === 'publication-disconnect') {
+        expect(statuses.map((entry) => entry.status)).toEqual(['captured', 'late'])
+        expect(events).toContainEqual(expect.objectContaining({ stage: 'publish-result', kept: false, aborted: true }))
+      }
+      if (scenario === 'capture-expiry') expect(statuses.map((entry) => entry.status)).toEqual(['late'])
+      made.foreground.folder = made.at.repo
+      write(made.at.repo, 'two-lines.txt', 'one\ntwo\n')
+      await hook('Stop')
+      await made.idle()
+      result = made.turns()[0]
+      expect(made.turns()).toHaveLength(1)
+      expect(result).toMatchObject({ state: 'provisional', endKind: 'finished', appVersion: null })
+      expect(result?.after).not.toBeNull()
+      expect(events.filter((entry) => entry.stage === 'hook-forwarded').map((entry) => entry.event)).toEqual(['UserPromptSubmit', 'Stop'])
+      for (const call of events.filter((entry) => entry.stage === 'git')) {
+        expect(call.folder).toBe(made.at.repo)
+        expect(call.home).toBe(made.at.home)
+        expect(call.argv).toContain('core.hooksPath=/dev/null')
+        expect(call.argv).toContain('credential.helper=')
+      }
+      if (scenario === 'timely') {
+        expect(result).toMatchObject({ workTree: made.at.repo, totals: { files: 1, added: 2, removed: 0 }, totalsState: 'not-complete', wording: 'Ordering unverified on Codex (version not read); early writes may be missed' })
+        expect(result?.before).not.toBeNull()
+        expect(result!.labels.length).toBeGreaterThanOrEqual(4)
+      } else expect(result).toMatchObject({ before: null, totals: null, totalsState: 'none', wording: 'Before snapshot unavailable' })
+      note('assertions-passed')
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error)
+      throw error
+    } finally {
+      releaseCapture.resolve()
+      releasePublication.resolve()
+      if (h) {
+        const made = h
+        const index = hosts.indexOf(made)
+        if (index !== -1) hosts.splice(index, 1)
+        await closeHost(made)
+        cleaned = !existsSync(made.root) && !existsSync(made.at.base) && !existsSync(made.socket) && children.every((child) => child.exited)
+        note('cleanup', { complete: cleaned })
+      }
+      const evidenceDirectory = process.env.BMN_TURN_DIAGNOSTIC_DIR
+      if (evidenceDirectory) {
+        mkdirSync(evidenceDirectory, { recursive: true })
+        const sources = ['apps/desktop/bin/bmn', 'apps/desktop/bin/bmn-hook-runtime.mjs', 'apps/desktop/bin/turn-marks.mjs', 'apps/desktop/src/utility/companion-service.ts', 'apps/desktop/src/utility/turn-changes-recorder.ts', 'apps/desktop/src/utility/turn-changes-engine.ts', 'apps/desktop/src/utility/turn-changes-capture.ts', 'apps/desktop/src/utility/turn-changes-service.ts', 'shared/protocol/dist/index.js']
+        const report = {
+          scenario, sourceRoot: realpathSync(sourceRoot), cli: realpathSync(cli), node: process.execPath,
+          sourceHashes: Object.fromEntries(sources.map((file) => [file, sha(join(sourceRoot, file))])),
+          fixtureSha256: sha(fileURLToPath(import.meta.url)), runtime, events, hooks, preEndCaptures, result, children,
+          cleanup: cleaned, failure, historicalCause: 'UNKNOWN', packagedParity: 'UNVERIFIED'
+        }
+        const path = join(evidenceDirectory, `${scenario}.json`)
+        writeFileSync(`${path}.new`, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+        renameSync(`${path}.new`, path)
+      }
+      expect(cleaned).toBe(true)
+    }
+  }, 20_000)
 })
