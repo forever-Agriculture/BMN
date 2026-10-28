@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { BrowserAccountsStore, profileArchive, restoreArchive } from '../../apps/desktop/bin/browser-accounts-store.mjs'
-import { pageAddress, signedInVerdict } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
+import { pageAddress, profileObservation, signedInVerdict } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
 import { AccountBrowserRelay, authenticatorCode, safeHeaders } from '../../apps/desktop/bin/browser-account-relay.mjs'
 import { accountBrowserDefinition, isAccountBrowser } from '../../apps/desktop/bin/agents-tools.mjs'
 const roots = []
@@ -234,6 +234,51 @@ describe('signed-in heuristic', () => {
   ])('compares actual signed-in and anonymous pages', (fresh, expected) => expect(signedInVerdict(signed, fresh, signed.address)).toBe(expected))
   it('keeps the consultant’s noncanonical-start mismatch as Not confirmed', () => expect(signedInVerdict({ address: 'https://app.test/', fields: false }, { address: 'https://app.test/login', fields: true }, signed.address)).toBe(false))
   it('never confirms a page with password/code fields', () => expect(signedInVerdict({ ...signed, fields: true }, { address: 'https://app.test/login', fields: true }, signed.address)).toBe(false))
+  it('keeps either unrendered profile inconclusive', () => {
+    const fresh = { ready: true, address: 'https://app.test/login', fields: true }
+    expect(signedInVerdict({ ...signed, ready: false }, fresh, signed.address)).toBe(false)
+    expect(signedInVerdict(signed, { ...fresh, ready: false }, signed.address)).toBe(false)
+  })
+})
+describe('profile rendering observations', () => {
+  const shell = { ready: false, address: 'https://app.test/', fields: false }
+  const rendered = { ready: true, address: 'https://app.test/login?synthetic=query', fields: true }
+  it('waits for a rendered page after the empty SPA shell', async () => {
+    vi.useFakeTimers()
+    try {
+      const page = { evaluate: vi.fn().mockResolvedValueOnce(shell).mockResolvedValue(rendered), isClosed: () => false }
+      const observation = profileObservation(page)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(await observation).toEqual({ ...rendered, address: 'https://app.test/login' })
+      expect(page.evaluate).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
+  it('bounds empty-page retries and returns an explicit inconclusive observation', async () => {
+    vi.useFakeTimers()
+    try {
+      const page = { evaluate: vi.fn().mockResolvedValue(shell), isClosed: () => false }
+      const observation = profileObservation(page)
+      await vi.advanceTimersByTimeAsync(1500)
+      expect(await observation).toEqual({ ready: false, address: '', fields: false })
+      expect(page.evaluate.mock.calls.length).toBeLessThanOrEqual(30)
+    } finally { vi.useRealTimers() }
+  })
+  it('retries navigation invalidation within the same deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const page = { evaluate: vi.fn().mockRejectedValue(new Error('Execution context was destroyed, most likely because of a navigation')), isClosed: () => false }
+      const observation = profileObservation(page)
+      await vi.advanceTimersByTimeAsync(1500)
+      expect((await observation).ready).toBe(false)
+      expect(page.evaluate.mock.calls.length).toBeLessThanOrEqual(30)
+    } finally { vi.useRealTimers() }
+  })
+  it('never treats a closed page or another execution error as a field-free observation', async () => {
+    for (const [message, closed] of [['synthetic execution failure', false], ['Execution context was destroyed', true]]) {
+      const error = new Error(message)
+      await expect(profileObservation({ evaluate: vi.fn().mockRejectedValue(error), isClosed: () => closed })).rejects.toBe(error)
+    }
+  })
 })
 describe('agent privacy boundaries', () => {
   it('returns only name, sites and state to an agent, excluding tokenized start URLs', async () => {

@@ -1,3 +1,4 @@
+/* global document, NodeFilter, getComputedStyle, location */
 // MODULE: browser-accounts-engine.mjs - Shared Chrome launch, observed sign-in pages and the two-profile signed-in heuristic.
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
@@ -51,43 +52,98 @@ export async function openProfile(profile, { headless = true, environment = proc
     return context
   } catch (error) { await context.close().catch(() => {}); throw error }
 }
-export async function inspectProfile(profile, meta, options) {
-  const context = await openProfile(profile, options)
-  try {
+async function prepareInspection(context, meta) {
     // Session-only sign-ins are deliberately unsupported: a restart must prove durable storage.
     await context.addInitScript(() => { sessionStorage.clear() })
     for (const restored of context.pages()) await restored.evaluate(() => sessionStorage.clear()).catch(() => {})
     const page = context.pages()[0] || await context.newPage()
     await page.goto(meta.start, { waitUntil: 'domcontentloaded', timeout: 20_000 })
-    return { address: pageAddress(page.url()), fields: await hasSignInField(page) }
-  } finally { await context.close() }
+    return { context, page }
+}
+async function readProfilePage(page, deadline) {
+  let timer
+  try {
+    const observation = await Promise.race([
+      page.evaluate(selector => {
+        // A client-rendered sign-in can still be an empty shell at DOMContentLoaded.
+        // Visible text permits an observation; it is never proof of authentication.
+        let ready = false
+        if (document.body) {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const parent = node.parentElement
+            if (!node.textContent.trim() || !parent || parent.closest('script,style,template,noscript')) continue
+            const style = getComputedStyle(parent)
+            if (style.visibility === 'hidden' || style.visibility === 'collapse') continue
+            const range = document.createRange(); range.selectNodeContents(node)
+            if ([...range.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)) { ready = true; break }
+          }
+        }
+        return { ready, address: location.href, fields: Boolean(document.querySelector(selector)) }
+      }, SIGN_IN_FIELDS),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new BrowserAccountError('PROFILE_NOT_READY', 'Browser sign-in check did not finish.')), Math.max(0, deadline - performance.now())) })
+    ])
+    return { ...observation, address: pageAddress(observation.address) }
+  } finally { clearTimeout(timer) }
+}
+export async function profileObservation(page, deadline = performance.now() + 1500) {
+  do {
+    try {
+      const observation = await readProfilePage(page, deadline)
+      if (observation.ready) return observation
+    } catch (error) {
+      if (error.code === 'PROFILE_NOT_READY') break
+      if (page.isClosed() || !/Execution context was destroyed|Cannot find context with specified id/u.test(error.message)) throw error
+    }
+    await new Promise(ok => setTimeout(ok, Math.max(0, Math.min(50, deadline - performance.now()))))
+  } while (performance.now() < deadline)
+  return { ready: false, address: '', fields: false }
 }
 export function signedInVerdict(saved, fresh, landing) {
-  return !saved.fields && saved.address === pageAddress(landing) && (fresh.fields || fresh.address !== saved.address)
+  return saved.ready !== false && fresh.ready !== false && !saved.fields && saved.address === pageAddress(landing) && (fresh.fields || fresh.address !== saved.address)
 }
 export async function checkProfile(store, lease, meta) {
-  const empty = store.anonymous()
+  const contexts = []
   try {
-    const results = await Promise.allSettled([
-      inspectProfile(lease.profile, meta, { environment: store.environment }),
-      inspectProfile(empty.profile, meta, { environment: store.environment })
-    ])
+    const savedContext = await openProfile(lease.profile, { environment: store.environment }); contexts.push(savedContext)
+    const browser = savedContext.browser()
+    if (!browser) throw new BrowserAccountError('PROFILE_CHECK_UNAVAILABLE', 'Browser account verification is unavailable.')
+    // A new incognito context shares only the trusted Chrome process, never the
+    // saved context's cookies, storage, headers or authentication configuration.
+    const freshContext = await browser.newContext({ viewport: { width: 1280, height: 720 }, acceptDownloads: false }); contexts.push(freshContext)
+    const results = await Promise.allSettled(contexts.map(context => prepareInspection(context, meta)))
     for (const result of results) if (result.status === 'rejected') throw result.reason
-    const [saved, fresh] = results.map(result => result.value)
+    const inspections = results.map(result => result.value)
+    // Let client-side auth redirects settle in both profiles before any positive
+    // verdict. A fresh login may appear before an expired saved shell redirects.
+    const deadline = performance.now() + 1500
+    let [saved, fresh] = await Promise.all(inspections.map(({ page }) => profileObservation(page, deadline)))
+    if (saved.ready && fresh.ready && !saved.fields && saved.address === pageAddress(meta.landing)) {
+      await new Promise(ok => setTimeout(ok, Math.max(0, deadline - performance.now() - 100)))
+      try { [saved, fresh] = await Promise.all(inspections.map(({ page }) => readProfilePage(page, deadline))) }
+      catch (error) {
+        if (error.code === 'PROFILE_NOT_READY' || /Execution context was destroyed|Cannot find context with specified id/u.test(error.message)) return false
+        throw error
+      }
+    }
     if (store.onCheck) store.onCheck({ saved, fresh, landing: meta.landing })
     return signedInVerdict(saved, fresh, meta.landing)
-  } finally { store.discard(empty) }
+  } finally {
+    // Anonymous pages close first; closing the persistent context also drains
+    // the browser that owns both, inside the saved lease's writer barrier.
+    for (const context of contexts.toReversed()) await context.close().catch(() => {})
+  }
 }
 export async function validateSaved(store, id) {
-  let lease
+  let lease, meta
   try {
     lease = await store.checkout(id)
-    const meta = store.metadata(id)
-    if (meta.state === 'Not confirmed') return false
+    meta = store.metadata(id)
     if (await checkProfile(store, lease, meta)) return await store.publish(lease, { state: 'Signed in' })
-    await store.setState(id, 'Sign in again'); return false
+    if (meta.state !== 'Not confirmed') await store.setState(id, 'Sign in again')
+    return false
   } catch (error) {
-    if (error.code !== 'KEYRING_LOCKED' && error.code !== 'ACCOUNT_REMOVED') await store.setState(id, 'Sign in again')
+    if (meta?.state !== 'Not confirmed' && error.code !== 'KEYRING_LOCKED' && error.code !== 'ACCOUNT_REMOVED') await store.setState(id, 'Sign in again')
     return false
   } finally { if (lease) store.discard(lease) }
 }

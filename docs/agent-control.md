@@ -1494,10 +1494,12 @@ then **Sign in…** opens a separate Chrome window. Sign in there, including any
 **Done** or close the window. **Cancel** discards a new account. Accounts have separate profiles, including
 when several use the same site; BMN imports nothing from your everyday browsers.
 
-BMN checks the start page on the saved profile and a fresh profile. **Signed in** means the saved profile
+BMN checks the start page on the saved profile and a fresh, signed-out browser context. It allows a
+short interval for client-rendered sign-in redirects before comparing them. **Signed in** means the saved profile
 reaches the recorded landing page without a password or code field, and the fresh one shows such a field
 or ends at another path. This is a heuristic, with the time of its last passing check. Otherwise the row
-says **Not confirmed**: the profile is kept and usable, but never written back by an agent. SessionStorage-only
+says **Not confirmed**: the profile is kept and usable. Selecting it checks again, so a previously inconclusive
+sign-in can become confirmed without another login; an unconfirmed profile is not written back. SessionStorage-only
 sign-ins do not survive; use the site's durable or “remember me” option where offered.
 
 **Use BMN browser…** stages the Playwright tool for approval. After Save, **Apply browser switch…**

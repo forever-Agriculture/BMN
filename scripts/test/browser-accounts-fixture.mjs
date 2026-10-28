@@ -105,7 +105,7 @@ export async function syntheticSite() {
     async function seed(){let d=await db(),k=await crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']),iv=crypto.getRandomValues(new Uint8Array(12)),ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},k,new TextEncoder().encode('${indexed}'));await new Promise(ok=>{let t=d.transaction('kv','readwrite');t.objectStore('kv').put(k,'key');t.objectStore('kv').put({iv,ct},'blob');t.oncomplete=ok});localStorage.setItem('token','${local}')}
     async function decryptToken(){let d=await db(),get=k=>new Promise(ok=>{let r=d.transaction('kv').objectStore('kv').get(k);r.onsuccess=()=>ok(r.result)}),k=await get('key'),b=await get('blob');return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:b.iv},k,b.ct))}
     async function login(){let r=await fetch('/${mode}/login',{method:'POST',body:JSON.stringify({username:document.querySelector('[name=user]')?.value,password:document.querySelector('[name=password]')?.value,code:document.querySelector('[name=code]')?.value})});if(!r.ok)return;await seed();console.log('before-sign-in-history');
-      ${mode === 'session' ? "sessionStorage.setItem('signed','yes');document.querySelector('main').innerHTML='<h1>Signed in</h1>'" : mode === 'fetch' || mode === 'email' || mode === 'public' ? "document.querySelector('main').innerHTML='<h1>Signed in</h1>'" : `location.href='${origin}/${mode}/app'`}}
+      ${mode === 'session' ? "sessionStorage.setItem('signed','yes');document.querySelector('main').innerHTML='<h1>Signed in</h1>'" : mode === 'fetch' || mode === 'email' || mode === 'public' ? "document.querySelector('main').innerHTML='<h1>Signed in</h1>'" : `location.href='${origin}/${mode}/${mode === 'deferred' ? '' : 'app'}'`}}
     async function api(){await fetch('/${mode}/api',{headers:{Authorization:'Bearer ${bearer}'}})}
     </script><main>${signed ? '<h1>Signed in</h1>' : mode === 'public' ? '<h1>Public</h1>' : `<label>User name<input name="user" autocomplete="username"></label>${mode === 'email' ? '' : '<label>Password<input name="password" type="password"></label><label>Code<input name="code" autocomplete="one-time-code"></label>'}<button onclick="login()">Sign in</button>`}</main>
     ${mode === 'session' ? "<script>if(sessionStorage.getItem('signed'))document.querySelector('main').innerHTML='<h1>Signed in</h1>'</script>" : ''}
@@ -113,12 +113,21 @@ export async function syntheticSite() {
   const handler = origin => async (req, res) => {
     const [mode, path = ''] = req.url.split('?')[0].split('/').slice(1)
     res.setHeader('Content-Type', 'text/html')
+    if (path === 'saved-worker.js' || path === 'anonymous-worker.js') {
+      res.setHeader('Content-Type', 'application/javascript')
+      res.end('self.addEventListener("install",()=>self.skipWaiting());self.addEventListener("activate",event=>event.waitUntil(self.clients.claim()));'); return
+    }
     if (mode === 'busy' && path === 'poll') { setTimeout(() => res.end('ok'), 300); return }
     if (mode === 'hostile') {
       res.end('<label>Password<input name="password" type="password" oninput="document.title=btoa(this.value);console.log(this.value)"></label>'); return
     }
     const present = /(?:^|; )session=([^;]+)/u.exec(req.headers.cookie || '')?.[1]
     const signed = mode !== 'session' && active.get(mode)?.has(present)
+    if (mode === 'deferred' && path === '' && !signed) {
+      // Both profiles initially land on the same SPA shell. The signed-out app
+      // decides to navigate only after its asynchronous authentication check.
+      res.end('<!doctype html><html><body><main>Loading…</main><script>setTimeout(()=>location.href="/deferred/login",localStorage.getItem("token")?1000:500)</script></body></html>'); return
+    }
     if (path === 'login' && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk
       let data; try { data = JSON.parse(body) } catch { data = {} }
@@ -141,7 +150,7 @@ export async function syntheticSite() {
       res.setHeader('Set-Cookie', `session=${value}; HttpOnly; Path=/${mode}/`); res.end('refreshed'); return
     }
     if (mode === 'cross' && !signed && origin !== crossOrigin) { res.writeHead(302, { Location: `${crossOrigin}/cross/login` }); res.end(); return }
-    if (path === '' && !['fetch', 'email', 'public', 'session', 'noncanonical'].includes(mode)) { res.writeHead(302, { Location: `/${mode}/${signed ? 'app' : 'login'}` }); res.end(); return }
+    if (path === '' && !['fetch', 'email', 'public', 'session', 'noncanonical', 'deferred'].includes(mode)) { res.writeHead(302, { Location: `/${mode}/${signed ? 'app' : 'login'}` }); res.end(); return }
     if (path === 'app' && !signed) { res.writeHead(302, { Location: `/${mode}/login` }); res.end(); return }
     res.setHeader('Set-Cookie', 'anonymous=before-sign-in; Path=/')
     if (signed && path === 'app') completed.set(mode, (completed.get(mode) || 0) + 1)

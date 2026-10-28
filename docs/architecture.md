@@ -52,6 +52,10 @@ value-free rows, except credential input until submission. `browser-accounts-sto
 closed profiles with AES-256-GCM, keeps keys in Secret Service via `browser-keyring.mjs`, and creates
 decrypted leases only in a private tmpfs runtime. Account locks cover checkout, atomic publication
 and cleanup; a version comparison prevents a stale parallel session overwriting a newer profile.
+Confirmation compares the saved profile with an independent anonymous browser context in the same
+trusted Chrome process, after a bounded interval for client-rendered authentication redirects. No saved
+storage or authentication configuration is copied to the anonymous context; it closes before the
+persistent context, and both remain inside the saved lease's writer barrier.
 The same-user OS access limit is documented in [Browser accounts](agent-control.md#browser-accounts).
 
 **One owner of workspace state.** The utility process alone creates workspace, session, file and request IDs

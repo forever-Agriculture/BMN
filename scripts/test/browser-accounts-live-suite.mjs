@@ -1,4 +1,4 @@
-/* global document, window */
+/* global document, window, indexedDB, caches */
 // MODULE: browser-accounts-live-suite.mjs - Isolated synthetic acceptance of profile variants, relay credentials and refresh.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -7,7 +7,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { BrowserAccountsStore, atomicJson } from '../../apps/desktop/bin/browser-accounts-store.mjs'
-import { AccountSignIn, openProfile } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
+import { AccountSignIn, checkProfile, openProfile } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
 import { AccountBrowserRelay, authenticatorCode } from '../../apps/desktop/bin/browser-account-relay.mjs'
 import { assertNoValues, isolatedMain, privateKeyring, recordProcess, result, stopProcess, syntheticSite } from './browser-accounts-fixture.mjs'
 
@@ -65,6 +65,73 @@ try {
   site = await syntheticSite()
   if (phase === 'keyring') {
     checks.push('minimal unlock method preflight only; no browser started')
+  } else if (phase === 'context-isolation') {
+    const row = await create('same'), lease = await store.checkout(row.id); leases.push(lease)
+    const saved = await openProfile(lease.profile); contexts.push(saved)
+    const page = saved.pages()[0]; await page.goto(site.url('same'))
+    const chrome = saved.browser(); assert(chrome, 'pinned persistent Chrome has no browser handle')
+    const anonymous = await chrome.newContext({ viewport: { width: 1280, height: 720 }, acceptDownloads: false }); contexts.push(anonymous)
+    const fresh = await anonymous.newPage(); await fresh.goto(site.url('same'))
+    assert.equal(await fresh.locator('input[type=password]').count(), 1)
+    assert(!(await anonymous.cookies()).some(cookie => cookie.name === 'session'), 'anonymous context inherited authenticated cookie')
+    async function seed(page, tag) {
+      await page.evaluate(async tag => {
+        localStorage.setItem('isolation', tag)
+        const db = await new Promise(ok => { const r = indexedDB.open('isolation', 1); r.onupgradeneeded = () => r.result.createObjectStore('marks'); r.onsuccess = () => ok(r.result) })
+        await new Promise(ok => { const t = db.transaction('marks', 'readwrite'); t.objectStore('marks').put(tag, tag); t.oncomplete = ok }); db.close()
+        await (await caches.open(tag)).put('/context-marker', new Response(tag))
+        await navigator.serviceWorker.register('/same/' + tag + '-worker.js', { scope: '/same/' })
+      }, tag)
+    }
+    async function marks(page) {
+      return page.evaluate(async () => {
+        const db = await new Promise(ok => { const r = indexedDB.open('isolation', 1); r.onupgradeneeded = () => r.result.createObjectStore('marks'); r.onsuccess = () => ok(r.result) })
+        const keys = await new Promise(ok => { const r = db.transaction('marks').objectStore('marks').getAllKeys(); r.onsuccess = () => ok(r.result) }); db.close()
+        return { local: localStorage.getItem('isolation'), keys, caches: await caches.keys(), workers: (await navigator.serviceWorker.getRegistrations()).map(r => r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL) }
+      })
+    }
+    await seed(page, 'saved')
+    const empty = await marks(fresh)
+    assert.equal(empty.local, null); assert.deepEqual(empty.keys, []); assert.deepEqual(empty.caches, []); assert.deepEqual(empty.workers, [])
+    await seed(fresh, 'anonymous')
+    await anonymous.addCookies([{ name: 'anonymous-only', value: 'synthetic', url: site.origin }])
+    const savedMarks = await marks(page), anonymousMarks = await marks(fresh)
+    assert.equal(savedMarks.local, 'saved'); assert.deepEqual(savedMarks.keys, ['saved']); assert.deepEqual(savedMarks.caches, ['saved'])
+    assert.equal(savedMarks.workers.length, 1)
+    assert(savedMarks.workers.every(url => url.endsWith('/saved-worker.js')))
+    assert.equal(anonymousMarks.local, 'anonymous'); assert.deepEqual(anonymousMarks.keys, ['anonymous']); assert.deepEqual(anonymousMarks.caches, ['anonymous'])
+    assert.equal(anonymousMarks.workers.length, 1)
+    assert(anonymousMarks.workers.every(url => url.endsWith('/anonymous-worker.js')))
+    assert(!(await saved.cookies()).some(cookie => cookie.name === 'anonymous-only'))
+    await anonymous.close()
+    assert.equal(await page.getByRole('heading', { name: 'Signed in' }).count(), 1, 'closing anonymous context closed saved pages')
+    await saved.close(); contexts = []
+    assert(await store.publish(lease, { state: 'Signed in' })); store.discard(lease); leases = []
+    const reopenedLease = await store.checkout(row.id); leases.push(reopenedLease)
+    const reopened = await openProfile(reopenedLease.profile); contexts.push(reopened)
+    const reopenedPage = reopened.pages()[0]; await reopenedPage.goto(site.url('same'))
+    const retained = await marks(reopenedPage)
+    assert.equal(retained.local, 'saved'); assert.deepEqual(retained.keys, ['saved']); assert.deepEqual(retained.caches, ['saved'])
+    assert.equal(retained.workers.length, 1)
+    assert(retained.workers.every(url => url.endsWith('/saved-worker.js')))
+    assert(!(await reopened.cookies()).some(cookie => cookie.name === 'anonymous-only'))
+    await reopened.close(); contexts = []; store.discard(reopenedLease); leases = []
+    checks.push('pinned persistent Chrome supports independent anonymous context; bidirectional cookie/localStorage/IndexedDB/cache/service-worker isolation')
+    checks.push('closing anonymous context preserves saved pages; anonymous mutations absent after saved-profile publication and reopen')
+  } else if (phase === 'deferred-auth') {
+    const row = await create('deferred')
+    assert.equal(row.state, 'Signed in', 'asynchronous signed-out redirect was checked before the login form appeared')
+    checks.push('Done confirms a durable dashboard when the anonymous SPA redirects after DOMContentLoaded')
+    await store.setState(row.id, 'Not confirmed')
+    const recovered = await browser(row)
+    assert.equal(store.metadata(row.id).state, 'Signed in')
+    await signed(recovered); await recovered.end(false)
+    checks.push('actual account relay pick rechecks and confirms an existing unconfirmed saved profile')
+    site.expire('deferred')
+    const lease = await store.checkout(row.id); leases.push(lease)
+    assert.equal(await checkProfile(store, lease, store.metadata(row.id)), false, 'expired profiles must not become confirmed during the SPA redirect')
+    checks.push('the same delayed redirect with an expired saved session stays unconfirmed')
+    store.discard(lease); leases = []
   } else if (phase === 'save-busy') {
     const first = await create('same')
     assert.equal(first.state, 'Signed in')
@@ -259,6 +326,8 @@ try {
     const lease = await store.checkout(row.id); leases.push(lease)
     const context = await openProfile(lease.profile); contexts.push(context)
     await context.pages()[0].goto(site.url('same'))
+    const anonymous = await context.browser().newContext({ acceptDownloads: false }); contexts.push(anonymous)
+    const anonymousPage = await anonymous.newPage(); await anonymousPage.goto(site.url('same'))
     const records = readdirSync(join(store.runtime(), '.launches')).filter(name => name.endsWith('.json'))
       .map(name => JSON.parse(readFileSync(join(store.runtime(), '.launches', name), 'utf8')))
       .filter(record => record.folder === lease.folder)
