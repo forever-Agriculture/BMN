@@ -124,7 +124,9 @@ fit, until the program's next completed frame, the end of an open synchronized u
 timer (about two seconds at most, by xterm's watchdog). An image written at the last column keeps its
 tiles past the edge for that time, the screen scaled to fit them. A pane that never showed an image
 keeps xterm's own path. Known limit, accepted by the owner on 2026-10-28: in a Codex pane showing its
-pet, a blank strip about eight columns wide can cut through text after a resize; its cause is unconfirmed.
+pet, a blank strip of nine columns can cut through text after a resize. Codex causes it, not BMN: before
+each pet frame Codex 0.165.0 prints spaces over the pet's column, and after a width change over the old
+pet column too, wrapping to the left edge when the window shrinks; its screen model never repaints them.
 
 **Windows and processes have separate lifetimes.** Closing the window applies each session's
 saved keep-running or stop choice; it asks about running sessions set to Ask. Keeping a session
