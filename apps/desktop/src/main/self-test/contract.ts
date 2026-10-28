@@ -24,7 +24,7 @@ export interface SelfTestTaps {
   workspaceRequest(method: ProtocolMethod, params: object): Promise<void>
   fileReferenceClient(client: RequestClient): RequestClient
   shownInFolder(path: string): void
-  appNotice(notice: { title: string; body: string }): void
+  appNotice(notice: { title: string; body: string }, clicked?: () => void): void
   readonly captureAttentionNotifications: boolean
   /** The owner is looking elsewhere: Wayland compositors ignore blur(), so a shown self-test window can keep focus. */
   readonly windowUnwatched: boolean

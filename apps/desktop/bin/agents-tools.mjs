@@ -2,8 +2,10 @@
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { BROWSER_MCP_PACKAGE } from './agents-team-browser.mjs'
 import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, appName, appRefusal, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
 import { ToolFileError, commentFreeJson, editJsonEntry, editJsonEntryWithReceipt, invertJsonEntry, editTomlEntry, readJsonEntries, readOpenCodeEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
@@ -19,7 +21,8 @@ import { home, isObject, spellings } from './shared-helpers.mjs'
  * the owner's test showed, on exactly the installed version, that the app reads tools from the
  * file BMN would change (60.12 AC1); until then its tools are "not supported yet".
  *
- * A tool names environment variables, it never holds their values, and BMN keeps none: an entry
+ * A tool names environment variables and never holds their values. Browser accounts separately
+ * keep encrypted sign-ins and keyring credentials. An entry
  * that holds a value inline is never replaced, since putting it back would need the value. What
  * BMN prints of an entry it did not write has every such value masked.
  */
@@ -74,8 +77,31 @@ function priorProblem(entry) {
   return null
 }
 
+function accountBrowserLauncher() {
+  const packaged = join(dirname(process.execPath), 'resources/bin/bmn')
+  if (existsSync(packaged)) return packaged
+  const source = fileURLToPath(new URL('./bmn', import.meta.url))
+  return existsSync(source) ? source : fileURLToPath(new URL('../../bin/bmn', import.meta.url))
+}
+export function isAccountBrowser(tool) { return tool?.id === 'playwright' && tool.command === 'bmn' && JSON.stringify(tool.args) === JSON.stringify(['browser', 'server']) }
+export function accountBrowserDefinition(harness, privateWork, launcher = accountBrowserLauncher()) {
+  return privateWork && ['claude', 'codex', 'opencode'].includes(harness)
+    ? { command: launcher, args: ['browser', 'server', harness] }
+    : { command: 'npx', args: ['--offline', BROWSER_MCP_PACKAGE, '--headless', '--isolated', '--viewport-size', '1280x720'] }
+}
+
+// Codex filters the environment of stdio servers and may start a turn before optional tools arrive.
+export const ACCOUNT_BROWSER_CODEX_SETTINGS = Object.freeze({
+  required: true,
+  env_vars: Object.freeze(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'BMN_DATA_HOME'])
+})
+
 function wantedEntry(tool, harness, app, found) {
-  const result = renderTool(tool, harness, app)
+  const result = renderTool(isAccountBrowser(tool) ? { ...tool, ...accountBrowserDefinition(harness, app.kind === 'full') } : tool, harness, app)
+  if (result.entry && isAccountBrowser(tool) && harness === 'codex' && app.kind === 'full') {
+    result.entry = { ...result.entry, ...ACCOUNT_BROWSER_CODEX_SETTINGS,
+      env_vars: [...new Set([...(result.entry.env_vars ?? []), ...ACCOUNT_BROWSER_CODEX_SETTINGS.env_vars])] }
+  }
   if (result.entry && harness === 'opencode') for (const key of ['enabled', 'disabled']) {
     if (typeof found?.value?.[key] === 'boolean') result.entry[key] = found.value[key]
   }
@@ -366,6 +392,7 @@ export function neutralOf(value, harness) {
   let definition
   if (harness === 'codex') {
     known = ['command', 'args', 'env_vars', 'env', 'url', 'env_http_headers', 'http_headers']
+    if (value.required === true && value.command === accountBrowserLauncher() && JSON.stringify(value.args) === JSON.stringify(['browser', 'server', 'codex'])) known.push('required')
     if (typeof value.url === 'string') {
       const headers = isObject(value.env_http_headers) && Object.values(value.env_http_headers).every((name) => typeof name === 'string') ? value.env_http_headers : {}
       if (value.env_http_headers !== undefined && headers !== value.env_http_headers) extras.push('env_http_headers')
@@ -1206,7 +1233,7 @@ export function runTools(data, agent) {
     if (!full && tool.public !== true) return false
     if (tool.agents !== undefined) return tool.agents.includes(agent.id)
     return tool.apps === undefined || tool.apps.includes(agent.harness)
-  })
+  }).map(tool => isAccountBrowser(tool) ? { ...tool, ...accountBrowserDefinition(agent.harness, false) } : tool)
 }
 
 /**

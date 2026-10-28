@@ -791,6 +791,7 @@ export interface RulesSnapshot {
   skills: SkillsView
   /** Each approved tool's state in each app, and where each app keeps its tools. */
   tools: ToolsView
+  browserAccounts?: import('./browser-accounts').BrowserAccountRow[]
   /**
    * Set when BMN could not ask the owner's shell for its settings and inspected with its own
    * environment instead: why, in words. A session may then find other programs than BMN does.

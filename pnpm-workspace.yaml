@@ -22,3 +22,5 @@ onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
   - electron-builder
+patchedDependencies:
+  playwright-core@1.61.0-alpha-1778188671000: patches/playwright-core@1.61.0-alpha-1778188671000.patch

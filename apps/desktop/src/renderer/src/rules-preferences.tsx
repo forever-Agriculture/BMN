@@ -1,3 +1,4 @@
+import { BrowserAccounts, BrowserAccountsHealth, browserAccountAttention, useBrowserAccountHealth } from './browser-accounts'
 // MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Integrations: the master editor with what each app reads, install and earlier versions; Skills and Tools with each one's apps and state; Health with each rules file and agent app
 import { useCallback, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { takesPress, type CommandPress, type CommandStart, type RunInSession } from './session-command'
@@ -56,20 +57,15 @@ import {
   EMPTY_DRAFT, MAX_TOOLS, SCOPE_WORDS, addable, draftFrom, idFromName, removeTool, setTool, setToolPublic, toggleToolAgent, toggleToolApp, toolForApp, toolFrom, toolStateHint, toolStateWords,
   toolVariables, toolsTestLine, transportWords, withProposals, type ToolDraft, type ToolScope
 } from './tools-view'
-
 export { diffSummary, endedSince, undoWords }
-
 type RulesPage = 'editor' | 'skills' | 'tools' | 'health'
-
 const PLAN_DELAY_MS = 300
-
 /** What Insert adds: a section's two marker lines with the cursor between them, or the Team phrase where the cursor is. */
 export const INSERTS: ReadonlyArray<{ id: 'apps' | 'public' | 'team'; label: string; line: string; text: string; caret: number; inline: boolean }> = [
   { id: 'apps', label: 'Section for some apps', line: 'Only the apps you name read it', text: '<!-- bmn:apps claude codex -->\n\n<!-- /bmn:apps -->\n', caret: 31, inline: false },
   { id: 'public', label: 'Public section', line: 'Also given to public-only agents', text: '<!-- bmn:public -->\n\n<!-- /bmn:public -->\n', caret: 20, inline: false },
   { id: 'team', label: 'Team', line: 'Your approved agents, named by app', text: '<!-- bmn:team -->', caret: 17, inline: true }
 ]
-
 /** The text with `insert` placed at the selection, and where the cursor goes; a section starts on its own line. */
 export function insertAt(text: string, start: number, end: number, insert: (typeof INSERTS)[number]): { text: string; caret: number } {
   const before = text.slice(0, start)
@@ -199,7 +195,6 @@ export function targetStateWords(state: RulesTargetState): string {
   return `${STATE_WORDS[state]} · Save the rules to write it`
 }
 
-
 // Which Health rows carry the Needs-you dot, one test per section: the rows and the page status count alike (Story 75.10).
 /** A rules file: not current, or its loading test offers Test again. */
 function rulesRowState(snapshot: RulesSnapshot, target: RulesTargetHealth): { again: boolean; off: boolean; needs: boolean } {
@@ -271,6 +266,7 @@ export function healthNeeds(snapshot: RulesSnapshot): { count: number; sections:
   if (snapshot.health.state === 'checked') rows('Rules files', 'rules', snapshot.health.targets, (target) => { const now = rulesRowState(snapshot, target); return { off: now.off, tests: tests(now.again) } }, (target) => target.harness)
   rows('Skills', 'skills', snapshot.skills.apps, (app) => { const now = skillsRowState(snapshot, app); return { off: now.off, tests: tests(now.again, now.loadAgain) } }, (app) => app.harness)
   rows('Tools', 'tools', snapshot.tools.apps, (app) => { const now = toolsRowState(snapshot, app); return { off: now.off, tests: tests(now.again) } }, (app) => app.harness)
+  found.push(...browserAccountAttention(snapshot.browserAccounts))
   rows('Context limits', null, snapshot.context, (row) => ({ off: contextRowNeeds(row), tests: 0 }), (row) => row.harness)
   if (snapshot.hooks?.state === 'checked') rows('Hooks', 'hooks', snapshot.hooks.apps, (app) => ({ off: hookRowWords(app).needs, tests: 0 }), (app) => app.harness)
   const doctor = doctorNeedsCount(snapshot.doctor, keys)
@@ -338,6 +334,7 @@ export function useRulesState(doctorVisible = false): RulesState {
   if (doctorVisible && !doctorVisibility.current) doctorRefresh.current = true
   doctorVisibility.current = doctorVisible
   const [snapshot, setSnapshot] = useState<RulesSnapshot | null>(null)
+  useBrowserAccountHealth(doctorVisible, setSnapshot)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [draftPlan, setDraftPlan] = useState<RulesMasterPlan | null>(null)
@@ -1689,6 +1686,7 @@ function ToolsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Ele
         ))}
         {pending?.kind === 'undo' ? <PendingSheet rules={rules} /> : null}
       </details>
+      <BrowserAccounts team={team} />
     </>
   )
 }
@@ -1960,6 +1958,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <SkillsHealth rules={rules} action={action} setAction={setAction} />
 
       <ToolsHealth rules={rules} action={action} setAction={setAction} />
+
+      <BrowserAccountsHealth accounts={snapshot.browserAccounts} />
 
       <ContextLimits rules={rules} action={action} setAction={setAction} />
 

@@ -31,6 +31,9 @@ import {
   type TeamAsksSnapshot,
   type ResearchSnapshot,
   type ToolProposalView,
+  type BrowserAccountsView,
+  type BrowserAccountAction,
+  type BrowserAccountOutcome,
   type ToolsPlan,
   type RulesOutcome,
   type RulesMasterPlan,
@@ -874,6 +877,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   testSkillsLoading(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:skills-loading-test', { harness })
   },
+  browserAccounts(): Promise<BrowserAccountsView> { return invokeBridge('aiterm:browser:accounts', {}) },
+  browserAccountAction(params: BrowserAccountAction): Promise<BrowserAccountOutcome> { return invokeBridge('aiterm:browser:account-action', params) },
   planToolsInstall(removeUnlisted = false): Promise<ToolsPlan> {
     return invokeBridge('aiterm:rules:tools-plan', { removeUnlisted })
   },

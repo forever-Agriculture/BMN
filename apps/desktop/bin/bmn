@@ -28,6 +28,7 @@ async function main(argv) {
   if (argv[0] === 'grant') return (await import('./grant-cli.mjs')).runGrantCommand(argv.slice(1), { readCredentials, call })
   // Epic 77: the project's plan and board are files in the project; no socket, and it works with BMN closed.
   if (argv[0] === 'plan') return (await import('./plan-cli.mjs')).runPlanCommand(argv.slice(1))
+  if (argv[0] === 'browser') return (await import('./browser-accounts-cli.mjs')).runBrowserCommand(argv.slice(1))
   if (argv[0] === 'doctor') return (await import('./doctor.mjs')).runDoctorCommand(argv.slice(1))
   // Epic 60: the roster, its check and the rules master are owner files; no socket, no token.
   if (argv[0] === 'team' || argv[0] === 'roster' || argv[0] === 'rules' || argv[0] === 'context' || argv[0] === 'skills' || argv[0] === 'tools' || argv[0] === 'research' || argv[0] === 'judge') {

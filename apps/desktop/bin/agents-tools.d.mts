@@ -7,6 +7,9 @@ export type ToolsHarness = 'claude' | 'codex' | 'opencode'
 export type ToolState = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
 export type ToolsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 type Versions = Partial<Record<ToolsHarness, string | null>>
+export declare function isAccountBrowser(tool: unknown): boolean
+export declare function accountBrowserDefinition(harness: string, privateWork: boolean, launcher?: string): { command: string; args: string[] }
+export declare const ACCOUNT_BROWSER_CODEX_SETTINGS: Readonly<{ required: true; env_vars: readonly string[] }>
 
 export declare const TOOL_APPS: Record<ToolsHarness, {
   command: string; format: 'json' | 'toml'; path: string[]; file: (environment: Environment) => string

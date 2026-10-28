@@ -1388,8 +1388,9 @@ browser: {name: Browser, command: npx, args: ["@playwright/mcp@0.0.75"], agents:
 
 A tool is a program (`command`, `args`) or an address (`url`). **It names environment variables and never holds their
 values:** `env` maps an entry the program receives to the variable it comes from, `headers` does the same for a request
-header, and an argument may be `{env: NAME}`. BMN keeps no value anywhere: not in the team file, its state, a plan or an
-undo. A tool reaches every app, unless `apps` keeps it to some or `agents` to the runs of some agents; `public: true`
+header, and an argument may be `{env: NAME}`. Tool entries keep no values in the team file, state, plans or undo.
+Browser accounts, described below, are the explicit exception for stored sign-ins and keyring credentials.
+A tool reaches every app, unless `apps` keeps it to some or `agents` to the runs of some agents; `public: true`
 lets an app that gets public work only have it. At most 64 tools; an id is lowercase letters, digits, `-` and `_`.
 
 **What counts as a value.** In an entry BMN did not write, an argument is a value unless it is plainly not one: a flag, a
@@ -1485,6 +1486,63 @@ inline is left out and named, never stored or printed. `--yes` adds the proposal
 app until you approve them in BMN. On the Tools page **Add tool**, **Edit** and **From your apps…** are staged like any
 team change, the footer naming the apps reached; **Remove them from the apps…** shows each unlisted entry first; Health
 → Tools has one row per app (file, state, Full or Public tools only, last test).
+
+#### Browser accounts
+
+Integrations › **Tools** has a Browser accounts section. **Add account** asks for a name and start page,
+then **Sign in…** opens a separate Chrome window. Sign in there, including any second factor, then press
+**Done** or close the window. **Cancel** discards a new account. Accounts have separate profiles, including
+when several use the same site; BMN imports nothing from your everyday browsers.
+
+BMN checks the start page on the saved profile and a fresh profile. **Signed in** means the saved profile
+reaches the recorded landing page without a password or code field, and the fresh one shows such a field
+or ends at another path. This is a heuristic, with the time of its last passing check. Otherwise the row
+says **Not confirmed**: the profile is kept and usable, but never written back by an agent. SessionStorage-only
+sign-ins do not survive; use the site's durable or “remember me” option where offered.
+
+**Use BMN browser…** stages the Playwright entry switch for the existing Tools Save/preview/Undo flow.
+Your approval changes only each app's entry and Undo restores its earlier bytes. The installed-version
+test and refusal to replace inline credentials still apply. Apps whose settings are proven to receive
+private work get the account relay under the existing `playwright` name. Other apps, tools supplied on a
+run's command, and teammate browser asks stay signed out. A Codex session reading its settings can use
+accounts; a run's own tool set is a separate path.
+The private Codex entry waits for the browser tools at startup and passes the runtime directory,
+session-bus address and optional BMN data-directory override by variable name so it uses the same
+RAM storage and keyring as BMN. A browser-server startup failure is reported before the turn starts.
+
+The relay starts the pinned Playwright server (0.0.75), headless at 1280 × 720. Before picking an account
+it offers the regular browser tools. `browser_accounts` lists names, sites and states;
+`browser_account_pick` selects an account, starting a fresh browser on its own profile copy. Parallel
+sessions use separate copies. Account sessions refuse `browser_run_code_unsafe`. Network tools return
+inline results, remove credential headers, and refuse bodies from the account's sign-in origins and
+network output filenames. Page scripts retain their normal access to the site's data.
+
+When a session ends or switches account, its profile replaces the saved version only if the saved
+version has not changed and the signed-in check passes. A failing or stale copy is discarded and the
+saved version is rechecked. An expired sign-in shows **Sign in again**, with one notice per occurrence
+and a Needs-you dot in Health. Click the notice or the row's **Sign in again** to reopen the window.
+Sites that rotate refresh tokens may invalidate parallel sessions; this is shown as needing sign-in.
+
+**Agents may sign in** shows the sign-in origins observed in your window and takes a user name,
+password and optional authenticator key, with the password and key hidden. Those values live only in the system
+keyring. A marked account offers `BMN_USERNAME` and `BMN_PASSWORD` as names to `browser_type` and
+`browser_account_code` to type the current code. The relay checks the account, keyring, top-page origin
+and target frame before each secret use. It allows only navigation, snapshots, screenshots, clicks,
+typing, key presses and waiting on marked sign-in origins. After sign-in, it restarts on the refreshed
+profile before exposing browser history. SMS and push approval remain yours. Unmarking revokes the
+next secret use; **Remove** deletes the profile and keyring entries and closes its active browsers.
+
+Saved profiles are encrypted with AES-256-GCM in owner-only account folders. Their keys, passwords
+and authenticator keys are kept in the system keyring; decrypted copies and browser scratch files
+exist only in the owner-only RAM runtime directory and are removed at session end. A locked or
+missing keyring refuses access and shows **Keyring locked**, asking for unlock rather than another
+sign-in. Crash leftovers are removed on the next start. Other programs running as your OS user can
+read an active RAM profile or ask your unlocked keyring, as they can your gh and gcloud credentials;
+this feature does not isolate agents behind a separate OS user.
+
+The owner CLI is `bmn browser accounts list`, `add NAME --url URL`, `sign-in NAME`, `mark NAME`,
+`unmark NAME` and `remove NAME`. List output contains no credential values. Google sign-in may be
+refused by Google in automated browsers; it is supported only when the owner's installed check succeeds.
 
 **Which tools a run starts with.** While your team lists no tools the check leaves them unjudged. From the first tool on,
 every checked Claude Code run must be kept to exactly its own set (the tools for every app, for its app and for its

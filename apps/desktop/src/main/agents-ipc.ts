@@ -101,6 +101,8 @@ interface AgentsIpcRegistrar {
 
 interface AgentsIpcOptions {
   senderIsAllowed(event: IpcMainInvokeEvent): boolean
+  /** Account metadata from the app-owned controller; no keyring or profile access enters settings. */
+  browserAccounts?(): NonNullable<RulesSnapshot['browserAccounts']>
   /** The bmn CLI script the Rules section runs for check, install, restore and probe. */
   cliScript(): string
   /** This process's environment; tests replace it. */
@@ -490,6 +492,7 @@ function renderAll(path: string, text: string, generation: Generation | null): R
 
 interface RulesIpcContext {
   script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date
+  browserAccounts(): NonNullable<RulesSnapshot['browserAccounts']>
   /** Why the shell's settings could not be read, when BMN's own environment stands in for them. */
   ownEnvironment?: string
   /** The tests BMN runs by itself, as they stand for the installed versions; absent where nothing can start a test. */
@@ -783,6 +786,7 @@ async function rulesSnapshot(context: RulesIpcContext, freshDoctorLocations = fa
     readOnlyRoles: generation === null ? null : { held: generation.data.roles.filter((role) => role.read_only === true).map((role) => role.id), proposed: readOnlyProposal(generation.data) },
     skills: skillsView(apps, pages, context),
     tools: toolsView(apps, pages, context),
+    browserAccounts: context.browserAccounts(),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     hooks: context.hooks?.() ?? null,
     doctor: await readDoctorView({ environment: context.env, now: context.now().getTime(), appVersions: Object.fromEntries(apps.map((app) => [app.harness, app.version])),
@@ -942,6 +946,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const environment = options.environment?.() ?? session?.env ?? process.env
     return {
       script: options.cliScript(), env: rulesEnvironment(environment), probeEnv: probeEnvironment(environment), now: options.now ?? (() => new Date()),
+      browserAccounts: () => options.browserAccounts?.() ?? [],
       ...(session?.source === 'app' ? { ownEnvironment: session.reason ?? 'the shell could not be asked' } : {}),
       autoTests: (versions) => autoTests.view(versions),
       autoTestsLook: () => { void autoTests.trigger() },
