@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path'
 import { APP_NAMES } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { teamRunsDirectory } from './agents-check.mjs'
-import { ASK_READS, ASK_RUN_FILES } from './agents-team-forms.mjs'
+import { ASK_READS, ASK_RUN_FILES, askReads } from './agents-team-forms.mjs'
 import { LIMITS } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
@@ -83,7 +83,7 @@ function readsView(request, manifest) {
     const before = BEFORE_FORMS[request.access]
     return { form: null, scope: before?.scope ?? 'text', reach: before?.reach ?? null, words: null, folder: before === undefined ? null : text(manifest?.project?.root, 4096), files, pictures, ...browser }
   }
-  const reads = ASK_READS[form]
+  const reads = askReads(form, { interact: manifest?.browser?.tools?.includes('browser_run_code_unsafe') === true })
   return {
     form, scope: reads.scope, reach: reads.scope === 'text' ? null : reads.reach, words: text(manifest.reads?.words, 1000) ?? reads.words,
     folder: reads.scope === 'text' ? null : text(manifest.reads?.folder, 4096), files, pictures, ...browser

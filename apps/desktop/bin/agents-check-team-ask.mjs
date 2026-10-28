@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { RosterError, appName, canonicalJson, classRefusal, isRetired, publicOnlyReasons, retiredWords, sha256 } from './agents-roster.mjs'
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { checkContext, contextItems, provenControls, provenPrecedence } from './agents-context.mjs'
-import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, claudePictureMessage, sameProgram } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, sameProgram } from './agents-team-forms.mjs'
 import { BROWSER_STATEMENT, browserOrigin } from './agents-team-browser.mjs'
 import { OPENCODE_ASK_AGENTS, openCodeAskConfig } from './agents-opencode.mjs'
 import { NEXT_STEP, Refusal, TESTED_HARNESS_VERSIONS, readText, refuse } from './agents-check-base.mjs'
@@ -77,9 +77,9 @@ export function askRequest(agent, version, { form, effort, cwd, folder, rules = 
  * any other (R72-NFR6): a mode that reads the whole computer needs the provider's own permission, one
  * kept in its working folder that folder's, and one that reads only the asker's text nothing more.
  */
-export function modeInput(form, appWords, project) {
-  const reads = ASK_READS[form]
-  if (reads.scope === 'computer') return { kind: 'mode', label: `what ${appWords}'s read-only mode can read (${reads.reach})`, root: null }
+export function modeInput(form, appWords, project, browser = null) {
+  const reads = askReads(form, browser)
+  if (reads.scope === 'computer') return { kind: 'mode', label: `what ${appWords}'s ${browser?.interact === true ? 'interactive Playwright scripts' : 'read-only mode'} can read (${reads.reach})`, root: null }
   if (reads.scope === 'folder' && project !== null) return { kind: 'mode', label: `what ${appWords}'s read-only mode can read (the project ${project})`, root: project }
   return null
 }
@@ -177,6 +177,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
 
     // The form: the app's one read-only form, OpenCode's asker where it may read nothing but the asker's text.
     const form = askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
+    const reads = askReads(form, browser)
     if (manifest.form !== form) refuse('WORKSPACE_MISMATCH', `the ask's manifest names the form ${manifest.form}, not ${form}`)
     // A public ask goes only through a form that reads nothing beyond the asker's text (R72-NFR5).
     if (label === 'public' && ASK_READS[form].scope !== 'text') refuse('PUBLIC_NOT_VERIFIED', `${agent.id} works with ${appName(agent.harness)}'s own tools, which read beyond what you hand over, so its asks are private (R72-NFR5)`)
@@ -261,7 +262,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     const destination = matchedDestination(data, agent, agent.harness, resolution.route, note)
 
     // Consent covers the inputs named and what the form's own mode can read (R72-NFR6).
-    const reading = modeInput(form, appName(agent.harness), project)
+    const reading = modeInput(form, appName(agent.harness), project, browser)
     const consent = askConsent(data, destination, [...manifest.inputs, ...(reading === null ? [] : [reading])], label, now, note)
     const answer = privateWorkAnswer(data, destination, null)
     note(`private work: ${answer.reason}`)
@@ -270,7 +271,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       version: 1, mode: 'ask', verdict: 'PASS', agent: agent.id, class: agent.class, harness: agent.harness, model: model.value,
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
-      form, reads: { scope: ASK_READS[form].scope, words: ASK_READS[form].words, folder: cwd }, project, cwd, ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
+      form, reads: { scope: reads.scope, words: reads.words, folder: cwd }, project, cwd, ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
       sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: '--sandbox read-only', approval_policy: 'never', tools: 'Codex\'s own: shell, Git, web search, sub-agents' }
         : agent.harness === 'claude' ? { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'WebSearch', 'Agent'] }
           : { mode: 'read-only', source: '--agent', agent: own.agent, tools: form === 'opencode-reader' ? ['read', 'glob', 'grep', 'list', 'git log', 'git show', 'git diff', 'git blame', 'websearch', `subagent ${OPENCODE_ASK_AGENTS.subagent}`] : [] },

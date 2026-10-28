@@ -2234,11 +2234,11 @@ check). Codex gets each picture with `-i`, Claude Code as image blocks in one st
 (`inputs/message.jsonl`, its standard input). OpenCode is not asked about pictures (never measured);
 such an ask is refused saying so.
 
-### A browser for your local app (Story 74.3)
+### A browser for your local app (Stories 74.3, 74.5)
 
 `--origin http://127.0.0.1:PORT --disposable [--interact]` asks a teammate to check a web app you
-started. For that one ask BMN adds Playwright's MCP server (`@playwright/mcp@0.0.75`, the version
-dev-auto's `luna-browse.sh` runs, from npx's cache, offline) to the teammate's own app, and nothing
+started. For that one ask BMN adds the pinned Playwright MCP server (`@playwright/mcp@0.0.75`,
+from npx's cache, offline) to the teammate's own app, and nothing
 else of MCP:
 
 - **Codex:** `-c mcp_servers={playwright={…, enabled_tools=[…], default_tools_approval_mode="approve",
@@ -2250,8 +2250,16 @@ else of MCP:
 
 A look may navigate, go back, read the page (snapshot), wait, take screenshots, read the console and
 the network requests, use tabs, resize and close. `--interact` adds click, type, fill in a form,
-select, press a key and hover. Never offered: script evaluation (`browser_evaluate`,
-`browser_run_code_unsafe`), file upload, drag and drop, dialogs and one request's body.
+select, press a key, hover, page evaluation (`browser_evaluate`) and complete Playwright callbacks
+(`browser_run_code_unsafe`). Use `browser_run_code_unsafe` with `{ code: "async (page) => { ... }" }`;
+the older name `browser_run_code` is not the pinned server's tool name. Use the native
+`browser_take_screenshot` tool for screenshots retained in the ask record. Look-only asks do not
+offer script execution. File upload, drag and drop, dialogs and one request's body remain unlisted.
+
+Interactive scripts execute JavaScript in the MCP server process as your user. They can read/write
+files and make network requests outside the app's read-only mode. BMN accounts for that computer-wide
+read reach in provider consent, manifests, receipts and the Asks display; a project-folder exception
+does not cover it. The origin list, Chrome sandbox and artifact folder do not contain server scripts.
 
 The server runs headless with its profile in memory (`--isolated`), Chrome's own sandbox on
 (`--sandbox`), downloads refused (`--config bin/ask-browser-config.json`: Playwright's
@@ -2264,7 +2272,8 @@ sockets Chrome makes there), which BMN removes with the record. It starts throug
 (a screenshot, a snapshot, a console or network log) inside the client's first workspace root, and
 Codex or Claude Code may give the project as that root. The relay starts the server in `browser/`
 and takes the client's offer of roots out of its start, so every such file lands in `browser/` and a
-name reaching out of it is refused by Playwright (measured in 74.3).
+name reaching out of it is refused by Playwright's managed artifact tools (measured in 74.3).
+Those rules direct managed artifacts; arbitrary callback file operations are not confined by them.
 
 Playwright's origin limit, in its own words, "does not serve as a security boundary": it does not
 stop redirects or every request a page makes itself. So every browser ask needs `--disposable`,
@@ -2284,7 +2293,8 @@ A finish a crash ended is finished again from `browser.json`, never from an empt
 stand, and its screenshots where the file is still the one it recorded. `asks show`, the JSON,
 Agents › Asks and the export give the pages and screenshots, and each says the origin limit
 ("Playwright keeps the browser's requests to this address, but it is not a security boundary: a
-redirect can leave it. Downloads are refused."); the app's text in them stays plain text.
+redirect can leave it. Downloads are refused."), plus the interactive script access caveat;
+the app's text in them stays plain text.
 
 ### Sign-in
 

@@ -5,6 +5,7 @@ export declare const ASK_FORMS_CHECKED: Readonly<Record<string, { version: strin
 export declare const ASK_UNSUPPORTED: Readonly<Record<string, Record<string, string>>>
 export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; inputs: string; snapshots: string; receipt: string; answer: string; outcome: string; question: string; work: string; bin: string; codexAnswer: string; projectStart: string; browser: string; browserRecord: string }>
 export declare const ASK_READS: Readonly<Record<AskFormName, { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }>>
+export declare function askReads(form: AskFormName, browser?: { interact: boolean } | null): { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }
 export declare const CLAUDE_ASK_TOOLS: readonly string[]
 export interface AskProgram { launcher: string; payload: string }
 export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean } | null }

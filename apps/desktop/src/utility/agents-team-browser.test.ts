@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BROWSER_CONFIG, BROWSER_LIMITS, BROWSER_LIMIT_WORDS, BROWSER_MCP_PACKAGE, BROWSER_RELAY, BROWSER_STATEMENT, INTERACT_TOOLS, LOOK_TOOLS, browserOrigin, browserRecord, browserServer, browserTemporary, browserTools, sessionCalls } from '../../bin/agents-team-browser.mjs'
 import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
+import { modeInput } from '../../bin/agents-check.mjs'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { askOutcome, exportAsk, finishBrowser, startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { askJson, showWords } from '../../bin/agents-team-cli.mjs'
@@ -73,7 +74,7 @@ function serverFiles(folder: string): void {
 /** A run's manifest naming its browser, as an ask writes it: what the finish reads. */
 function browserManifest(folder: string, interact = false): void {
   mkdirSync(join(folder, 'inputs'), { recursive: true })
-  writeFileSync(join(folder, ASK_RUN_FILES.manifest), JSON.stringify({ browser: { origin: ORIGIN, interact } }))
+  writeFileSync(join(folder, ASK_RUN_FILES.manifest), JSON.stringify({ browser: { origin: ORIGIN, interact, tools: browserTools(interact) } }))
 }
 
 /** The record every test of a finished browser ask expects of `serverFiles`. */
@@ -139,10 +140,11 @@ describe('the app\'s address and the tools a browser ask offers (74.3 AC1, AC4)'
     }
   })
 
-  it('a look offers navigate, back, snapshot, wait, screenshot, console, network requests, tabs, resize and close; --interact adds click, type, fill, select, press and hover; script, upload, drag and dialogs never', () => {
+  it('retains every browser tool and adds native callback execution and evaluation with --interact (74.5)', () => {
     expect(browserTools(false)).toEqual(['browser_navigate', 'browser_navigate_back', 'browser_snapshot', 'browser_wait_for', 'browser_take_screenshot', 'browser_console_messages', 'browser_network_requests', 'browser_tabs', 'browser_resize', 'browser_close'])
-    expect(browserTools(true)).toEqual([...LOOK_TOOLS, 'browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_hover'])
-    for (const never of ['browser_evaluate', 'browser_run_code_unsafe', 'browser_file_upload', 'browser_drag', 'browser_drop', 'browser_handle_dialog', 'browser_network_request']) {
+    expect(browserTools(true)).toEqual([...LOOK_TOOLS, 'browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_hover', 'browser_run_code_unsafe', 'browser_evaluate'])
+    for (const script of ['browser_evaluate', 'browser_run_code_unsafe']) expect(LOOK_TOOLS).not.toContain(script)
+    for (const never of ['browser_file_upload', 'browser_drag', 'browser_drop', 'browser_handle_dialog', 'browser_network_request']) {
       expect([...LOOK_TOOLS, ...INTERACT_TOOLS]).not.toContain(never)
     }
   })
@@ -171,6 +173,8 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     expect(look.argv.filter((part) => part.startsWith('mcp_servers'))).toHaveLength(1)
     const interact = ask({ browser: { origin: ORIGIN, disposable: true, interact: true } })
     expect(interact.argv.find((part) => part.startsWith('mcp_servers='))).toContain(`enabled_tools=${JSON.stringify([...LOOK_TOOLS, ...INTERACT_TOOLS])}`)
+    expect(interact.argv.find((part) => part.startsWith('mcp_servers='))).toContain('"browser_run_code_unsafe","browser_evaluate"')
+    expect(readFileSync(join(interact.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain('browser_run_code_unsafe({ code: "async (page) => { ... }" })')
     // The prompt says where the app is and what the teammate may do there; the record keeps the asker's statement.
     expect(readFileSync(join(look.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain(`The asker started a web app at ${ORIGIN}`)
     expect(JSON.parse(readFileSync(join(look.folder, ASK_RUN_FILES.request), 'utf8')).browser).toEqual({ origin: ORIGIN, interact: false, statement: BROWSER_STATEMENT })
@@ -188,7 +192,30 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     expect(look.argv[look.argv.indexOf('--permission-mode') + 1]).toBe('dontAsk')
     const interact = ask({ role: 'designer', browser: { origin: ORIGIN, disposable: true, interact: true } })
     expect(interact.argv).toEqual(expect.arrayContaining(INTERACT_TOOLS.map((tool) => `mcp__playwright__${tool}`)))
-    expect(interact.argv.join(' ')).not.toMatch(/browser_(evaluate|run_code_unsafe|file_upload|drag|drop|handle_dialog)/u)
+    expect(interact.argv).toEqual(expect.arrayContaining(['mcp__playwright__browser_run_code_unsafe', 'mcp__playwright__browser_evaluate']))
+    expect(interact.argv.join(' ')).not.toMatch(/browser_(file_upload|drag|drop|handle_dialog)/u)
+  })
+
+  it('accounts for script server access in consent, manifests, receipts and displayed scope (74.5)', () => {
+    const project = mkdtempSync(join(home, 'project-'))
+    spawnSync('git', ['init', '-q', project])
+    const browser = { origin: ORIGIN, disposable: true, interact: true }
+    // A folder-only provider exception must never cover a server script's computer-wide reads.
+    expect(modeInput('claude-read-tools', 'Claude Code', project, browser)).toMatchObject({ kind: 'mode', root: null })
+    expect(modeInput('claude-read-tools', 'Claude Code', project, { ...browser, interact: false })).toMatchObject({ root: project })
+    const prepared = ask({ role: 'designer', project, browser })
+    const receipt = prepared.verdict.receipt!
+    expect(receipt.reads).toMatchObject({ scope: 'computer', words: expect.stringContaining('MCP server process') })
+    expect(receipt.reads.words).not.toContain('writes nothing')
+    const manifest = JSON.parse(readFileSync(join(prepared.folder, ASK_RUN_FILES.manifest), 'utf8'))
+    expect(manifest.reads).toEqual(receipt.reads)
+    expect(askJson(prepared.folder)).toMatchObject({ teammate: { could_read: manifest.reads.words } })
+    expect(appAskDetail(prepared.id).line.reads).toMatchObject({ scope: 'computer', words: manifest.reads.words })
+    // Old interactive records did not have scripts; do not widen their historical access claims.
+    manifest.browser.tools = manifest.browser.tools.filter((name: string) => !['browser_run_code_unsafe', 'browser_evaluate'].includes(name))
+    manifest.reads = { scope: 'folder', words: 'Historical folder-only mode', folder: project }
+    writeFileSync(join(prepared.folder, ASK_RUN_FILES.manifest), JSON.stringify(manifest))
+    expect(appAskDetail(prepared.id).line.reads).toMatchObject({ scope: 'folder', words: 'Historical folder-only mode' })
   })
 
   it('an ask without --origin keeps each app\'s MCP configuration empty, and its request hash is the one it had', () => {
@@ -218,6 +245,23 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
 })
 
 describe('the record of a browser ask (74.3 AC3)', () => {
+  it('preserves the run\'s tool snapshot on first finish and repeated recovery after an upgrade (74.5 P2)', () => {
+    const folder = mkdtempSync(join(home, 'historical-browser-'))
+    const beforeScripts = browserTools(true).filter(tool => !['browser_run_code_unsafe', 'browser_evaluate'].includes(tool))
+    mkdirSync(join(folder, 'inputs'))
+    writeFileSync(join(folder, ASK_RUN_FILES.manifest), JSON.stringify({ browser: { origin: ORIGIN, interact: true, tools: beforeScripts } }))
+    serverFiles(join(folder, 'browser'))
+    const first = finishBrowser(folder)!
+    expect(first.tools).toEqual(beforeScripts)
+    expect(finishBrowser(folder)!.tools).toEqual(beforeScripts)
+    expect(browserRecord(folder, { origin: ORIGIN, interact: true, tools: browserTools(true) }, first).record.tools).toEqual(beforeScripts)
+    const current = mkdtempSync(join(home, 'current-browser-'))
+    browserManifest(current, true)
+    expect(finishBrowser(current)!.tools).toEqual(browserTools(true))
+    const unknown = mkdtempSync(join(home, 'unknown-browser-'))
+    expect(browserRecord(unknown, { origin: ORIGIN, interact: true }).record.tools).toEqual([])
+  })
+
   it('reads the server\'s own session log: each call, the page it left, the screenshots it saved by name', () => {
     const calls = sessionCalls(SESSION)
     expect(calls).toHaveLength(10)
@@ -230,7 +274,7 @@ describe('the record of a browser ask (74.3 AC3)', () => {
   it('keeps the pages in order and the screenshots the log names, bounded; removes the log, page snapshots, downloads, links and anything oversized, the record written first', () => {
     const folder = mkdtempSync(join(home, 'run-'))
     serverFiles(join(folder, 'browser'))
-    const { record, removed } = browserRecord(folder, { origin: ORIGIN, interact: false })
+    const { record, removed } = browserRecord(folder, { origin: ORIGIN, interact: false, tools: browserTools(false) })
     expect([...removed].sort()).toEqual(['big.png', 'console-2026-10-15T15-40-09-392Z.log', 'link.png', 'made-up.bin', 'made-up.png', 'page-2026-10-15T15-40-09-516Z.yml', 'session-1792078809142'])
     expect(record.removed).toBe(removed.length)
     // Reading deletes nothing: the finish writes the record, then deletes.
@@ -254,7 +298,7 @@ describe('a finish a crash ended is finished again from its record (74.3 AC3, fu
       serverFiles(join(folder, 'browser'))
       browserManifest(folder)
       // The record written, the crash before the deletions.
-      const { record } = browserRecord(folder, { origin: ORIGIN, interact: false })
+      const { record } = browserRecord(folder, { origin: ORIGIN, interact: false, tools: browserTools(false) })
       writeFileSync(join(folder, ASK_RUN_FILES.browserRecord), JSON.stringify(record))
       mkdirSync(join(temporary, 'playwright_chromiumdev_profile-made-up'), { recursive: true })
       writeFileSync(join(temporary, 'playwright_chromiumdev_profile-made-up', 'Cookies'), 'made-up')

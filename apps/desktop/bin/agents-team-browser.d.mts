@@ -20,4 +20,4 @@ export declare function browserTools(interact: boolean): string[]
 export declare function browserServer(browser: AskBrowser, folder: string): { command: string; args: string[] }
 export declare function browserPrompt(prompt: string, browser: AskBrowser): string
 export declare function sessionCalls(text: string): Array<{ tool: string | null; args: unknown; page: { url: string; title: string | null } | null; shots: string[] }>
-export declare function browserRecord(folder: string, browser: AskBrowser, prior?: BrowserRecord | null): { record: BrowserRecord; removed: string[] }
+export declare function browserRecord(folder: string, browser: AskBrowser & { tools?: string[] }, prior?: BrowserRecord | null): { record: BrowserRecord; removed: string[] }

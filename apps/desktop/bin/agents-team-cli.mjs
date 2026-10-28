@@ -33,14 +33,18 @@ const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --questi
 Asks one approved teammate in a role, in its own app's read-only mode with that mode's tools: Codex's
 read-only sandbox, Claude Code's read tools, Git history, web search and sub-agents, OpenCode's
 read-only agent (docs/agent-control.md, "Asking a teammate"). It works in the project (--project;
-the default is your repository, else an empty folder of the run's own) and writes nothing; what its
-mode can read is in the record. --file gives whole text files in the prompt; --image gives PNG, JPEG
+the default is your repository, else an empty folder of the run's own). Its app's own tools write
+nothing; interactive browser scripts have the access described below and in the record.
+--file gives whole text files in the prompt; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
 role. --origin gives the teammate (the browser role unless --role names another) a browser for your
 web app at that loopback address: Playwright's tools in its own app, only that origin loading; it may
 navigate, read, take screenshots and read the console and network requests, and with --interact also
-click, type, fill in, select, press keys and hover; the pages it visited and its screenshots stay in
-the record. Playwright's limit does not stop redirects or requests a page makes itself: --disposable
+click, type, fill in, select, press keys, hover, evaluate page JavaScript and execute full Playwright
+callbacks with browser_run_code_unsafe. Interactive scripts run in the MCP server process as your
+user, outside the app's read-only mode, and can read/write files and make network requests.
+The pages it visited and native screenshots stay in the record. Playwright's limit does not stop
+redirects or requests a page makes itself, and does not contain server scripts: --disposable
 is your statement that the app and its services are disposable test instances with synthetic data
 and no production backend or credentials; without it the ask is refused. Codex and Claude Code
 teammates only. The run has a systemd user scope of its own: Stop and the time limit end everything it

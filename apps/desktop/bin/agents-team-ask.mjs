@@ -6,7 +6,7 @@ import { basename, dirname, join, relative } from 'node:path'
 import { APP_NAMES, agentState, collisionWords, projectChoiceFor, publicOnlyReasons } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, modeInput, teamRunsDirectory, workspaceRoot } from './agents-check.mjs'
-import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, claudePictureMessage, executableIdentity } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, executableIdentity } from './agents-team-forms.mjs'
 import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
@@ -183,7 +183,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     // A teammate with tools reads beyond what the asker hands over, so its asks are private (R72-NFR5).
     if (label === 'public' && ASK_READS[form].scope !== 'text') return { allowed: false, reason: `${APP_NAMES[agent.harness]}'s own tools read beyond what you hand over, so its asks are private`, code: 'PUBLIC_NOT_VERIFIED' }
     try {
-      const reading = modeInput(form, APP_NAMES[agent.harness], project)
+      const reading = modeInput(form, APP_NAMES[agent.harness], project, browser)
       // A private ask needs the agent's destination to allow it for every input and for what its mode can read; a public one is verified as R72-NFR5 says.
       if (label === 'private' && publicOnlyReasons(agent, data).length === 0 && reading === null) return { allowed: true }
       askConsent(data, expectedDestination(data, agent), [...inputsOf(agent), ...(reading === null ? [] : [reading])], label, now)
@@ -212,6 +212,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // Only now is anything written: the run's folder and its inputs.
   const harness = choice.agent.harness
   const form = formOf(choice.agent)
+  const reads = askReads(form, browser)
   const folder = join(runs, id)
   mkdirSync(runs, { recursive: true, mode: 0o700 })
   mkdirSync(folder, { mode: 0o700 })
@@ -249,7 +250,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // The browser's server saves its files here, its session log among them; BMN reads its record from it (74.3 AC3).
   if (browser !== null) mkdirSync(join(folder, ASK_RUN_FILES.browser), { mode: 0o700 })
   const manifest = {
-    version: 2, id, data: label, form, reads: { scope: ASK_READS[form].scope, words: ASK_READS[form].words, folder: workIn },
+    version: 2, id, data: label, form, reads: { scope: reads.scope, words: reads.words, folder: workIn },
     project: project === null ? null : { root: project },
     question: { bytes: question.bytes, sha256: question.sha256 },
     inputs: inputsOf(choice.agent),
@@ -266,7 +267,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
     version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
-    billing: choice.agent.paid_by ?? 'unknown', project, form, reads: ASK_READS[form].words, data: label, app_version: installed.version, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
+    billing: choice.agent.paid_by ?? 'unknown', project, form, reads: reads.words, data: label, app_version: installed.version, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
     ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, statement: BROWSER_STATEMENT } }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),

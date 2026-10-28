@@ -56,6 +56,13 @@ export const ASK_READS = Object.freeze({
   'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
 })
 
+/** Interactive browser callbacks execute outside the app's own read-only mode (74.5). */
+export function askReads(form, browser = null) {
+  if (browser?.interact !== true) return ASK_READS[form]
+  return { scope: 'computer', reach: 'any file your user can read',
+    words: 'Interactive Playwright scripts: any file your user can read; scripts run in the MCP server process as your user and can write files and make network requests, outside the app\'s read-only mode' }
+}
+
 /** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
 const OPENCODE_ASK_TITLE = 'BMN ask'
 

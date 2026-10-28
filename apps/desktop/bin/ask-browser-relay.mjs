@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url'
  * root, read once when the client starts it, or inside its own folder when the client offers no roots;
  * Codex and Claude Code may offer the project they work in. So the client's offer of roots is taken out
  * of its `initialize` request, and the server starts in the run's browser folder, its output folder too.
- * Every other message passes unchanged.
+ * Every other message passes unchanged. This directs managed artifacts; it does not sandbox
+ * the filesystem or network access of interactive server scripts.
  */
 function withoutRoots(line) {
   let message

@@ -15,7 +15,8 @@ import { maskCredentials } from './agents-team-inputs.mjs'
  * completed call with the page it left, written by the server, never by the model. The server writes a
  * file the model names (a screenshot, a snapshot, a log) in the client's workspace, which may be the
  * asker's project: BMN's relay (ask-browser-relay.mjs) starts it in `browser/` and keeps the app's
- * workspace roots from it, so every file it writes lands there.
+ * workspace roots from it, so managed screenshot and session artifacts land there. Interactive
+ * scripts run in the server process; neither those roots nor its cwd contain their effects.
  * Playwright's origin list does not stop redirects or requests a page makes itself (its own words:
  * "does not serve as a security boundary"), so every browser ask states that the app is a disposable
  * test instance with synthetic data. Downloads are refused by Playwright's own configuration, so no
@@ -34,8 +35,8 @@ export const BROWSER_STATEMENT = 'the app and its services are disposable test i
 /** A look ask's tools (74.3 AC1): navigate, back, snapshot, wait, screenshot, console, network requests, tabs, resize, close. */
 export const LOOK_TOOLS = Object.freeze(['browser_navigate', 'browser_navigate_back', 'browser_snapshot', 'browser_wait_for', 'browser_take_screenshot',
   'browser_console_messages', 'browser_network_requests', 'browser_tabs', 'browser_resize', 'browser_close'])
-/** What `--interact` adds: click, type, fill, select, press, hover. Script evaluation, file upload, drag and dialogs are never offered. */
-export const INTERACT_TOOLS = Object.freeze(['browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_hover'])
+/** What `--interact` adds: interaction, full Playwright callbacks and page evaluation. */
+export const INTERACT_TOOLS = Object.freeze(['browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_hover', 'browser_run_code_unsafe', 'browser_evaluate'])
 
 /** What the record keeps of a browser ask: its pages and screenshots, bounded. */
 export const BROWSER_LIMITS = Object.freeze({ pages: 200, url: 2000, pageTitle: 300, screenshots: 20, screenshot: 5 * 1024 * 1024 })
@@ -48,7 +49,7 @@ export const BROWSER_RELAY = fileURLToPath(new URL('./ask-browser-relay.mjs', im
 /** Playwright's configuration for every browser ask: downloads refused (measured: a download could otherwise take a screenshot's name). */
 export const BROWSER_CONFIG = fileURLToPath(new URL('./ask-browser-config.json', import.meta.url))
 /** What every view of a browser ask says of the origin limit (74.3 AC5's known limit). */
-export const BROWSER_LIMIT_WORDS = 'Playwright keeps the browser\'s requests to this address, but it is not a security boundary: a redirect can leave it. Downloads are refused.'
+export const BROWSER_LIMIT_WORDS = 'Playwright keeps the browser\'s requests to this address, but it is not a security boundary: a redirect can leave it. Downloads are refused. Interactive scripts run in the MCP server process as your user; the origin list and output folder do not contain their file or network access.'
 
 /** The owner's private runtime folder, where each browser ask's temporary folder goes. */
 function browserRuntime() {
@@ -105,8 +106,9 @@ export function browserServer(browser, folder) {
 
 /** The prompt's part that tells the teammate the app's address and what it may do there. */
 export function browserPrompt(prompt, browser) {
-  const may = browser.interact ? 'look at it and use it: navigate, read, take screenshots, click, type, fill in, select, press keys and hover' : 'look at it: navigate, read, take screenshots, and read its console and network requests; you cannot click or type'
-  return `${prompt.replace(/\n?$/u, '\n')}\nThe asker started a web app at ${browser.origin} and gave you a browser (Playwright's tools) for it. You may ${may}. Playwright keeps the browser's requests to that address, though a redirect can leave it, and downloads are refused; the app is a disposable test instance with synthetic data. Say which pages you visited and what you saw.\n`
+  const may = browser.interact ? 'look at it and use it: navigate, read, take screenshots, click, type, fill in, select, press keys, hover, execute Playwright callbacks and evaluate page JavaScript' : 'look at it: navigate, read, take screenshots, and read its console and network requests; you cannot click or type'
+  const scripts = browser.interact ? '\nFor a complete Playwright callback use browser_run_code_unsafe({ code: "async (page) => { ... }" }); page evaluation uses browser_evaluate({ function: "() => ..." }). These scripts run in the MCP server process as your user, outside the app\'s read-only mode, and can write files and make network requests. Use browser_take_screenshot for screenshots retained in the ask record.\n' : ''
+  return `${prompt.replace(/\n?$/u, '\n')}\nThe asker started a web app at ${browser.origin} and gave you a browser (Playwright's tools) for it. You may ${may}. Playwright keeps the browser's requests to that address, though a redirect can leave it, and downloads are refused; the app is a disposable test instance with synthetic data. Say which pages you visited and what you saw.\n${scripts}`
 }
 
 /** The calls in the server's session log: each completed call's tool, its arguments, the page it left and the screenshots it saved (by file name). */
@@ -194,8 +196,10 @@ export function browserRecord(folder, browser, prior = null) {
     }
   }
   const removed = entries.filter((name) => !screenshots.some((shot) => shot.name === name))
+  // Capabilities belong to the run's snapshot, never the current installation's defaults.
+  const tools = Array.isArray(prior?.tools) ? prior.tools : Array.isArray(browser.tools) ? browser.tools : []
   return {
-    record: { version: 1, origin: browser.origin, interact: browser.interact === true, tools: browserTools(browser.interact === true), statement: BROWSER_STATEMENT, calls, pages, screenshots, removed: prior?.removed ?? removed.length },
+    record: { version: 1, origin: browser.origin, interact: browser.interact === true, tools: [...tools], statement: BROWSER_STATEMENT, calls, pages, screenshots, removed: prior?.removed ?? removed.length },
     removed
   }
 }
