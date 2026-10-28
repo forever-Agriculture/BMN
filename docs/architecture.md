@@ -1,7 +1,10 @@
+# MODULE: architecture.md - BMN processes, state ownership and integration boundaries.
 # Architecture
 
 BMN is an Electron application with four kinds of process. One of them, the utility
-process, owns all durable state and every running terminal. The window only presents it.
+process, owns workspace state and every running terminal. The window only presents it.
+Browser accounts use an owner-only filesystem store and system keyring shared by main's account
+actions and the standalone browser relay; they do not put credential values in workspace records.
 
 ```mermaid
 flowchart LR
@@ -40,7 +43,18 @@ database, and `scripts/measure/calibration-load.mjs` replays such a load against
 
 ## Rules the code follows
 
-**One owner of state.** The utility process alone creates workspace, session, file and request IDs
+**Account browser boundary.** Tools writes a settings-only `playwright` relay entry for apps proven
+to receive private work. `browser-account-relay.mjs` hosts the pinned MCP server's public connection
+API over a Playwright context and filters account tools, network output and secret entry before
+returning MCP results. Run-owned tools and sealed teammate asks retain their anonymous browser.
+Main's owner-checked account IPC opens sign-in windows and handles notices; the renderer holds only
+value-free rows, except credential input until submission. `browser-accounts-store.mjs` encrypts
+closed profiles with AES-256-GCM, keeps keys in Secret Service via `browser-keyring.mjs`, and creates
+decrypted leases only in a private tmpfs runtime. Account locks cover checkout, atomic publication
+and cleanup; a version comparison prevents a stale parallel session overwriting a newer profile.
+The same-user OS access limit is documented in [Browser accounts](agent-control.md#browser-accounts).
+
+**One owner of workspace state.** The utility process alone creates workspace, session, file and request IDs
 and writes records. Every addressed action names its session and, for a live process, its
 *incarnation* (one run of the session's command). The currently focused pane never fills in a
 missing target.
@@ -324,3 +338,17 @@ scripts/
   tests/                 unit tests for the scripts above
   voice/                 pinned whisper.cpp build
 ```
+
+The account relay pins `@playwright/mcp@0.0.75` and its
+`playwright-core@1.61.0-alpha-1778188671000` with the maintained pnpm patch
+`patches/playwright-core@1.61.0-alpha-1778188671000.patch` (SHA256
+`574211e91abb9402f46712a624f024a1d1aa0605bb09eb7e53e745a8923249e4`).
+It binds policy checks to the server's selected page and the document performing
+an evaluation, and prevents account console logs and downloads from being written.
+The engine checks the patched bundle's SHA256 before launch; a missing or altered
+patch refuses account use. Hooks are inert without the relay's per-context policy;
+ordinary signed-out entries and teammate browsers keep their existing server.
+Once a secret is typed, console and network history remain private across all tabs
+until the entire context restarts. Unmark and Remove serialize against in-flight
+secret entry; a completed revocation prevents the next use. A keyring lock applies
+at the final keyring read; already-authorized entry is in flight.

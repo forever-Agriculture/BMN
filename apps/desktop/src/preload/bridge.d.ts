@@ -23,6 +23,9 @@ import type {
   TeamAsksSnapshot,
   ResearchSnapshot,
   ToolProposalView,
+  BrowserAccountsView,
+  BrowserAccountAction,
+  BrowserAccountOutcome,
   ToolsPlan,
   RulesOutcome,
   RulesMasterPlan,
@@ -429,6 +432,8 @@ export interface AiTerminalBridge {
   /** Owner-run: one prompt to that app's provider, to see whether the app hands a test skill to its model. */
   testSkillsLoading(harness: RosterHarness): Promise<RulesOutcome>
   /** Story 60.12: what removing the entries that are not on the list would change in each app's settings, then the change itself, bound to that plan (75.9: the rest installs itself). */
+  browserAccounts(): Promise<BrowserAccountsView>
+  browserAccountAction(params: BrowserAccountAction): Promise<BrowserAccountOutcome>
   planToolsInstall(removeUnlisted?: boolean): Promise<ToolsPlan>
   installTools(planHash: string, removeUnlisted?: boolean): Promise<RulesOutcome>
   /** Owner-run: starts the app in an empty home folder and asks which tools it sees there. */

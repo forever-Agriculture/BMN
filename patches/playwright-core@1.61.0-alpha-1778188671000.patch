@@ -1,0 +1,91 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index 8c084940eada9335c8fb1cc0eecbe30a212e6df6..16aacf3ca34ec17455de16466122b111511d62eb 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -57451,8 +57451,10 @@ function defineTool(tool) {
+ function defineTabTool(tool) {
+   return {
+     ...tool,
++    bmnTabTool: true,
+     handle: async (context2, params2, response2, signal) => {
+       const tab2 = await context2.ensureTab();
++      await context2.bmnPolicy?.beforeTabTool(tool.schema.name, tab2.page, params2);
+       const modalStates = tab2.modalStates().map((state) => state.type);
+       if (tool.clearsModalState && !modalStates.includes(tool.clearsModalState))
+         response2.addError(`Error: The tool "${tool.schema.name}" can only be used when there is related modal state present.`);
+@@ -57964,6 +57966,8 @@ var init_tab = __esm({
+         });
+       }
+       async _downloadStarted(download) {
++        if (this.context.bmnPolicy?.downloads === false)
++          return;
+         const outputFile2 = await this.context.outputFile({ suggestedFilename: sanitizeForFilePath2(download.suggestedFilename()), prefix: "download", ext: "bin" }, { origin: "code" });
+         const entry = {
+           download,
+@@ -58006,7 +58010,7 @@ var init_tab = __esm({
+       _handleConsoleMessage(message) {
+         const wallTime = message.timestamp;
+         this._addLogEntry({ type: "console", wallTime, message });
+-        if (shouldIncludeMessage(this.context.config.console?.level, message.type))
++        if (this.context.bmnPolicy?.persistConsole !== false && shouldIncludeMessage(this.context.config.console?.level, message.type))
+           this._consoleLog.appendLine(wallTime, message.toString());
+       }
+       logErrorMessage(text2) {
+@@ -58284,6 +58288,11 @@ var init_context = __esm({
+         this.sessionLog = options.sessionLog;
+         this.options = options;
+         this._rawBrowserContext = browserContext;
++        this.bmnPolicy = browserContext[Symbol.for("bmn.mcpPolicy")];
++        if (this.bmnPolicy) {
++          this.bmnPolicy.ensurePage = async () => (await this.ensureTab()).page;
++          this.bmnPolicy.currentPage = () => this.currentTab()?.page;
++        }
+         testDebug("create context");
+         process.on("unhandledRejection", this._onUnhandledRejection);
+       }
+@@ -58974,6 +58983,8 @@ ${message}` }],
+         context2.setRunningTool(name);
+         let responseObject;
+         try {
++          if (!tool.bmnTabTool && context2.bmnPolicy)
++            await context2.bmnPolicy.beforeTabTool(name, (await context2.ensureTab()).page, parsedArguments);
+           await tool.handle(context2, parsedArguments, response2, signal);
+           for (const reason of context2.drainPendingUnhandledRejections())
+             response2.addError(formatRejectionReason(reason));
+@@ -59443,19 +59454,32 @@ var init_evaluate = __esm({
+         await tab.waitForCompletion(async () => {
+           let evalResult;
+           if (locator?.locator) {
+-            evalResult = await locator.locator.evaluate(async (element, expr) => {
++            evalResult = await locator.locator.evaluate(async (element, { expression: expr, protectedOrigins }) => {
++              if (protectedOrigins.length) {
++                const origins = [location.origin];
++                for (let i = 0; i < location.ancestorOrigins.length; i++) origins.push(location.ancestorOrigins[i]);
++                for (const origin of origins) {
++                  if (!origin || origin === "null") throw new Error("Unverifiable evaluation origin");
++                  for (const protectedOrigin of protectedOrigins)
++                    if (origin === protectedOrigin) throw new Error("Evaluation on a sign-in origin is refused");
++                }
++              }
+               const value = eval(`(${expr})`);
+               const isFunction = typeof value === "function";
+               const result = await (isFunction ? value(element) : value);
+               return { result, isFunction };
+-            }, expression);
++            }, { expression, protectedOrigins: tab.context.bmnPolicy?.evaluateOrigins() || [] });
+           } else {
+-            evalResult = await tab.page.evaluate(async (expr) => {
++            evalResult = await tab.page.evaluate(async ({ expression: expr, protectedOrigins }) => {
++              const origin = location.origin;
++              if (protectedOrigins.length && (!origin || origin === "null")) throw new Error("Unverifiable evaluation origin");
++              for (const protectedOrigin of protectedOrigins)
++                if (origin === protectedOrigin) throw new Error("Evaluation on a sign-in origin is refused");
+               const value = eval(`(${expr})`);
+               const isFunction = typeof value === "function";
+               const result = await (isFunction ? value() : value);
+               return { result, isFunction };
+-            }, expression);
++            }, { expression, protectedOrigins: tab.context.bmnPolicy?.evaluateOrigins() || [] });
+           }
+           const codeExpression = evalResult.isFunction ? expression : `() => (${expression})`;
+           if (locator)

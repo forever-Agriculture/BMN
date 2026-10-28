@@ -852,6 +852,51 @@ describe('OpenCode 2 layout and entry undo (85.2)', () => {
 })
 
 describe('install and undo (60.12 AC4)', () => {
+  it('switches private app settings to the account relay, leaves public apps anonymous, and undoes exact prior bytes (97.2)', async () => {
+    approve(withTools(['playwright: {name: Playwright, command: bmn, args: [browser, server], public: true}']))
+    const originals = [
+      '{\n "mcpServers": {"playwright": {"command":"npx","args":["@playwright/mcp@0.0.75","--isolated"]}},\n "tips": {}\n}\n',
+      '# mine\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["@playwright/mcp@0.0.75", "--isolated"]\n',
+      '{"mcp":{"servers":{"playwright":{"type":"local","command":["playwright-mcp"],"enabled":true}}}}\n'
+    ]
+    const paths = [claudeFile(), codexFile(), opencodeFile()]
+    paths.forEach((path, index) => put(path, originals[index]!))
+    const planned = await planToolsInstall([], { environment: env, versions: VERSIONS })
+    expect(planned.code).toBe('OK')
+    const written = await install([], { expectedPlanHash: planned.planHash! })
+    expect(written.code).toBe('OK')
+    for (const harness of ['claude', 'codex'] as const) {
+      const value = readAppTools(harness, env).entries.get('playwright')!.value
+      expect(value).toMatchObject({ command: CLI, args: ['browser', 'server', harness] })
+      if (harness === 'codex') expect(value).toMatchObject({ required: true, env_vars: ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'BMN_DATA_HOME'] })
+      else expect(value).not.toHaveProperty('required')
+      expect(neutralOf(value, harness)!.extras).toEqual([])
+    }
+    expect(readAppTools('opencode', env).entries.get('playwright')!.value).toMatchObject({
+      command: ['npx', '--offline', '@playwright/mcp@0.0.75', '--headless', '--isolated', '--viewport-size', '1280x720']
+    })
+    const repeated = await planToolsInstall([], { environment: env, versions: VERSIONS })
+    expect(repeated.code).toBe('OK')
+    expect(repeated.targets).toEqual([])
+    const codex = readAppTools('codex', env).entries.get('playwright')!.value
+    expect(neutralOf({ ...codex, required: 'yes' }, 'codex')!.extras).toContain('required')
+    expect(neutralOf({ ...codex, command: 'ordinary-tool' }, 'codex')!.extras).toContain('required')
+    expect(await restoreTransaction(written.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
+    paths.forEach((path, index) => expect(readFileSync(path, 'utf8')).toBe(originals[index]))
+  })
+
+  it('keeps account-entry installation behind the exact-version test and inline-value refusal (97.2)', async () => {
+    approve(withTools(['playwright: {name: Playwright, command: bmn, args: [browser, server], public: true}']))
+    const before = JSON.stringify({ mcpServers: { playwright: { command: 'npx', env: { KEY: SECRET } } } })
+    put(claudeFile(), before)
+    const planned = await planToolsInstall(['claude'], { environment: env, versions: VERSIONS })
+    expect(JSON.stringify(planned)).not.toContain(SECRET)
+    expect(planned.blocked.some(entry => entry.tool === 'playwright')).toBe(true)
+    expect(readFileSync(claudeFile(), 'utf8')).toBe(before)
+    const stale = await planToolsInstall(['codex'], { environment: env, versions: { ...VERSIONS, codex: '999.0.0' } })
+    expect(stale.code).toBe('TOOLS_UNSUPPORTED')
+  })
+
   it('adds each app\'s entries to a file that holds much else, and changes no other byte', async () => {
     const claudeBefore = `{\n  "numStartups": 18446744073709551615,\n  // SYNTHETIC-COMMENT\n  "projects": { "/synthetic": { "history": ["a"] } },\n  "mcpServers": {\n    "mine": { "command": "mine-tool", "env": { "MINE_KEY": "${SECRET}" } }\n  },\n  "tips": {}\n}\n`
     const codexBefore = '# SYNTHETIC\nmodel = "gpt-synthetic"\n\n[mcp_servers.mine]\ncommand = "mine-tool"\n\n[profiles.deep]\nmodel = "gpt-deep"\n'
@@ -1261,6 +1306,16 @@ describe('the tools of one agent\'s run (60.12 AC5)', () => {
   const itemsOf = (id: string) => toolItems(agent(id), data(), proven) as { state: string; tools: string[]; argv: string[]; hash: string }
   const setOf = (id: string): Record<string, unknown> => JSON.parse(itemsOf(id).argv[2]!).mcpServers
   const REVIEW = { type: 'stdio', command: 'review-tool', args: [], env: { REVIEW_KEY: '${REVIEW_KEY}' } }
+
+  it('gives run-owned tools only anonymous Playwright, including a private Claude run (97.2)', () => {
+    approve(withTools(['playwright: {name: Playwright, command: bmn, args: [browser, server], public: true}']))
+    for (const id of ['opus', 'astra', 'luna']) {
+      const tool = runTools(data(), agent(id)).find(tool => tool.id === 'playwright')!
+      expect(tool.command).toBe('npx')
+      expect(tool.args).toContain('--isolated')
+      expect(tool.args).not.toContain('server')
+    }
+  })
 
   it('gives every candidate the items for exactly the tools its run may have: for all apps, for its app, and its own', () => {
     expect(runTools(data(), agent('fable')).map((tool) => tool.id)).toEqual(['docs', 'files', 'notes', 'review'])

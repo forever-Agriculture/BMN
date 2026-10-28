@@ -440,6 +440,13 @@ test of BMN's can show which tools a Codex run starts with. For the same reason 
 Codex run checked with `--packet`, which must carry none.
 `bmn tools import` proposes what your apps already hold.
 
+Tools' **Browser accounts** section opens a separate sign-in window per named account and keeps its
+profile encrypted, with its key in the system keyring. Private-work app sessions can pick an account
+through the Playwright relay, each on its own RAM copy. Passing refreshed profiles are saved; expired
+ones ask you to sign in again. Accounts you mark can use a keyring password and authenticator code on
+their observed sign-in origins. Public-only apps, run-owned tools and teammate asks stay signed out.
+The Playwright settings switch uses Tools' preview, Save and exact Undo.
+
 Team → **Models** has one of the agents your team names a researcher look up your models'
 published prices and context windows, in an empty folder, sent nothing but the model names and the
 source list. A Claude Code researcher runs with web tools only. A Codex researcher runs with a

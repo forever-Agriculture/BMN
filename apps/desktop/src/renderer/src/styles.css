@@ -13,3 +13,19 @@
 @import './styles/file-reference.css';
 @import './styles/cards-and-palette.css';
 @import './styles/narrow-and-tail.css';
+
+.browser-accounts { margin-block: 24px; }
+.browser-account { background: var(--surface); padding: 12px 14px; margin-block: 2px; }
+.browser-account-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+.browser-account-name { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.browser-account-name .line-detail { display: block; }
+.browser-account-state { font-size: 12px; white-space: nowrap; }
+.browser-account-state .needs-dot { margin-right: 6px; vertical-align: middle; }
+.browser-account-actions { margin-left: auto; flex-wrap: wrap; }
+.browser-account-editor { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 14px; background: var(--surface); }
+.browser-account-editor label { display: grid; gap: 6px; flex: 1 1 180px; font-size: 12px; }
+.browser-account-editor input { width: 100%; min-width: 0; }
+.browser-account-editor > .line-detail { flex-basis: 100%; }
+.browser-account .browser-account-editor { padding-inline: 0; }
+.browser-account-confirm { padding-top: 12px; flex-wrap: wrap; }
+.browser-account-empty { padding-block: 8px; color: var(--muted); }

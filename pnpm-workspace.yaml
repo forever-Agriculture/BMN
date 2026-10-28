@@ -25,3 +25,4 @@ onlyBuiltDependencies:
 # Keep Sixel on the same presentation path as terminal text (Epic 87).
 patchedDependencies:
   '@xterm/addon-image@0.9.0': patches/@xterm__addon-image@0.9.0.patch
+  playwright-core@1.61.0-alpha-1778188671000: patches/playwright-core@1.61.0-alpha-1778188671000.patch

@@ -142,8 +142,11 @@ export class SelfTestRecorder implements SelfTestTaps {
     this.shownFileReferences.push(path)
   }
 
-  appNotice(notice: { title: string; body: string }): void {
+  readonly appNoticeClicks: Array<(() => void) | undefined> = []
+
+  appNotice(notice: { title: string; body: string }, clicked?: () => void): void {
     this.appNotices.push(notice)
+    this.appNoticeClicks.push(clicked)
   }
 
   lifecycleCaptured(sessionId: string, status: SavedOutputCaptureOutcome['status']): void {

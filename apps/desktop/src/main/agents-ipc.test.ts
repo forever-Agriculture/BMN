@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { createServer, type Server, type ServerResponse } from 'node:http'
+import { BrowserAccountsStore } from '../../bin/browser-accounts-store.mjs'
 import type { AddressInfo } from 'node:net'
 import { LUNA_GO_PROPOSAL, type AutoTestKind, type AutoTestsView } from '@bmn/protocol'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSavePlan, RulesSnapshot, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
@@ -88,6 +89,7 @@ beforeEach(() => {
   openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
   autoKinds.length = 0
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
+    browserAccounts: () => new BrowserAccountsStore({ environment: { HOME: home, ...appEnv } }).list(),
     get setupDefaults() { return setupTeamInput ? async () => [] : undefined },
     setupTeam: async () => setupTeamInput ?? { profile: null, apps: { apps: [], platform: 'linux', checkedAt: '', curlAvailable: true }, defaults: { code: 'EXISTING_PROFILE', source: null, names: [], rows: [] } },
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, BMN_SHIPPED_SKILLS: join(home, 'shipped'), ...appEnv }),
@@ -129,6 +131,14 @@ const shownOf = (state: AgentsSnapshot): AgentsShownRevision => ({ generation: s
 const shown = async (): Promise<AgentsShownRevision> => shownOf(await snapshot())
 
 describe('Health doctor cache and startup', () => {
+  it('reads browser accounts from the app data home rather than the filtered app-inspection environment', async () => {
+    appEnv.BMN_DATA_HOME = join(home, 'account-data')
+    const folder = join(appEnv.BMN_DATA_HOME, 'browser-accounts', '11111111-1111-1111-1111-111111111111')
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'account.json'), JSON.stringify({ id: '11111111-1111-1111-1111-111111111111', name: 'Synthetic account', origins: ['https://example.test'], state: 'Sign in again', signInOrigins: [], marked: false }))
+    expect((await call<RulesSnapshot>('rules:snapshot')).browserAccounts).toMatchObject([{ name: 'Synthetic account', state: 'Sign in again' }])
+  })
+
   for (const [harness, selector] of [['codex', 'CODEX_HOME'], ['claude', 'CLAUDE_CONFIG_DIR'], ['opencode', 'OPENCODE_CONFIG_DIR']] as const) it(`keeps the Health snapshot available for an unreadable selected profile: ${harness}`, async () => {
     const folder = join(home, `selected-${harness}`)
     mkdirSync(folder); appEnv[selector] = folder

@@ -1,3 +1,5 @@
+import { registerBrowserAccounts } from './browser-accounts-ipc'
+import type { AccountSignIn } from '../../bin/browser-accounts-engine.mjs'
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
 import { chmodSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -234,6 +236,9 @@ let closePromptCoordinator: ClosePromptCoordinator | undefined
 const setupProfileReadiness = createSetupProfileReadiness()
 /** Present only while `--self-test` runs; production code calls it with optional chaining. */
 let selfTestTaps: SelfTestTaps | undefined
+let rendererAccountController: AccountSignIn | undefined
+/** The isolated renderer driver uses the same notice recorder without starting the full self-test. */
+let rendererNoticeTaps: Pick<SelfTestTaps, 'appNotice'> | undefined
 
 const allowedSenders = new Set<number>()
 /** The session each renderer shows as selected, so a notification skips the session the owner is looking at. */
@@ -256,9 +261,10 @@ const presence = createPresenceMonitor({
   }
 })
 /** A notice from BMN itself, not from a session: a click brings the window forward. */
-function showAppNotice(notice: { title: string; body: string }): void {
-  if (selfTestTaps) {
-    selfTestTaps.appNotice(notice)
+function showAppNotice(notice: { title: string; body: string }, clicked?: () => void): void {
+  const noticeTaps = selfTestTaps ?? rendererNoticeTaps
+  if (noticeTaps) {
+    noticeTaps.appNotice(notice, clicked)
     return
   }
   if (!Notification.isSupported()) return
@@ -266,6 +272,7 @@ function showAppNotice(notice: { title: string; body: string }): void {
   notification.on('click', () => {
     notification.close()
     focusExistingWindow(applicationWindow)
+    clicked?.()
   })
   notification.show()
 }
@@ -618,7 +625,11 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     onRead: async snapshot => { if (setupDefaultsEnabled()) await setupDefaults.refresh(snapshot) },
     defaultsReport: () => setupDefaults.report()
   })
+  const browserAccounts = registerBrowserAccounts({ handle: bridgeIpc.handle, allowed: senderIsAllowed, environment: process.env, notify: showAppNotice,
+    ...(browserAccountTestMode ? { testController: controller => { rendererAccountController = controller } } : {}) })
+  app.once('will-quit', () => { void browserAccounts.dispose() })
   const agentsIpc = installAgentsIpcHandlers(bridgeIpc, {
+    browserAccounts: () => browserAccounts.view().accounts,
     senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), openExternal: (address) => shell.openExternal(address), notifyApp: showAppNotice,
     doctorTerminalEnvironment: environment => terminalGraphicsEnvironment(null, environment,
       bundledTerminfoAsset(resolveApplicationRoots().data, process.resourcesPath, __dirname)),
@@ -1084,6 +1095,7 @@ function testRunStartInstalls(value: string | undefined): StartInstall[] {
   return (value ?? '').split(',').filter((kind): kind is StartInstall => (START_INSTALLS as readonly string[]).includes(kind))
 }
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
+const browserAccountTestMode = rendererTestMode && Boolean(process.env.BMN_BROWSER_ACCOUNTS_TEST_ROOT && process.env.BMN_BROWSER_ACCOUNTS_TEST_ORIGIN)
 if (selfTest) {
   // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
@@ -1325,6 +1337,19 @@ if (primaryInstance) void app.whenReady().then(async () => {
   }
 
   // Automated runs share the owner's desktop session, so their panes must not follow the owner's idle time.
+  if (browserAccountTestMode) {
+    const { SelfTestRecorder } = await import('./self-test/taps')
+    if (!rendererAccountController) throw new Error('The disposable account controller was not registered.')
+    const { attachBrowserAccountHands } = await import('./self-test/browser-accounts')
+    attachBrowserAccountHands(app, rendererAccountController, process.env)
+    rendererAccountController = undefined
+    const recorder = new SelfTestRecorder()
+    rendererNoticeTaps = recorder
+    // Main-process debugger events only: no production listener or renderer IPC is added.
+    const noticeEvents: NodeJS.EventEmitter = app
+    noticeEvents.on('bmn-test:app-notices', (read: (notices: typeof recorder.appNotices) => void) => read(recorder.appNotices))
+    noticeEvents.on('bmn-test:app-notice-click', (index: number) => recorder.appNoticeClicks[index]?.())
+  }
   if (!rendererTestMode) presence.start()
   try {
     const startup = await initializeApplication(rendererTestMode)

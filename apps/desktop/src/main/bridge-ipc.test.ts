@@ -1,4 +1,8 @@
+// MODULE: bridge-ipc.test.ts - Real typed-envelope boundaries for workspace and owner account invokes.
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -11,6 +15,7 @@ import {
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent, UtilityProcess } from 'electron'
 import { bridgeInvokeRegistrar } from './bridge-ipc'
+import { registerBrowserAccounts } from './browser-accounts-ipc'
 import { PtyHostClient } from './pty-host-client'
 import { MainIpcError, installWorkspaceIpcHandlers } from './workspace-ipc'
 import { unwrapBridgeInvoke } from '../preload/bridge-invoke'
@@ -250,5 +255,18 @@ describe('typed bridge error contract (main -> preload -> renderer)', () => {
       code: ERROR_CODES.unauthorized,
       message: 'Renderer sender is not authorized'
     })))
+  })
+
+  it.each(['aiterm:browser:accounts', 'aiterm:browser:account-action'])('browser account invokes reject an unauthorized sender through the typed envelope: %s', async channel => {
+    const home = mkdtempSync(join(tmpdir(), 'bmn-account-bridge-'))
+    const registrar = bridgeInvokeRegistrar({ handle: () => {} })
+    const accounts = registerBrowserAccounts({ handle: registrar.handle, allowed: () => false, environment: { HOME: home }, notify: () => {} })
+    try {
+      const registration = registrar.registrations().find(row => row.channel === channel)
+      expect(registration).toBeDefined()
+      await expect(unwrapBridgeInvoke(() => registration!.invoke({} as IpcMainInvokeEvent))).rejects.toMatchObject({
+        name: 'BridgeError', code: ERROR_CODES.unauthorized
+      })
+    } finally { await accounts.dispose(); rmSync(home, { recursive: true, force: true }) }
   })
 })

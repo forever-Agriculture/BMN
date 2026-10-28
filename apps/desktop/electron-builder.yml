@@ -142,6 +142,20 @@ extraResources:
     to: bin/agents-context.mjs
   - from: bin/agents-skills.mjs
     to: bin/agents-skills.mjs
+  - from: bin/browser-keyring.mjs
+    to: bin/browser-keyring.mjs
+  - from: bin/browser-process.mjs
+    to: bin/browser-process.mjs
+  - from: bin/browser-accounts-store.mjs
+    to: bin/browser-accounts-store.mjs
+  - from: bin/browser-accounts-engine.mjs
+    to: bin/browser-accounts-engine.mjs
+  - from: bin/browser-accounts-launch.py
+    to: bin/browser-accounts-launch.py
+  - from: bin/browser-accounts-cli.mjs
+    to: bin/browser-accounts-cli.mjs
+  - from: bin/browser-account-relay.mjs
+    to: bin/browser-account-relay.mjs
   - from: bin/agents-tools.mjs
     to: bin/agents-tools.mjs
   - from: bin/agents-tool-files.mjs
