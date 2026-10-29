@@ -208,6 +208,17 @@ packaged candidate in the same isolated environment. A second bench in the same 
 a failed or timed-out startup cleans up its cgroup and temporary roots automatically. A stopping
 command can use a different `TMPDIR` from the starting command.
 
+The bench has two checks of its own. `pnpm run qa:bench:find` drives the running bench and checks
+that an empty Find bar shows no result text and keeps its coverage note on the input.
+`pnpm run qa:bench:recovery -- OUT [--case NAME | --timeout] [--electron PATH]` runs the bench's
+lifecycle regressions (startup, stop, recorder and recovery cases) on synthetic cgroup workloads
+and writes `OUT/results.json`.
+
+Every bench process runs under `strace -f`. BMN refuses terminal input to a traced-stopped process
+by design (`foreground-process.ts` rejects the `t` state), so anything that needs a session's
+foreground identity, such as remote answers, live producers or Turn Changes, can fail falsely on
+the bench. Run the full self-test with `pnpm run test:electron`, outside the bench.
+
 Playwright MCP snapshot, click and screenshot work over the printed CDP endpoint (measured with
 `@playwright/mcp@0.0.75`). Agents configured with MCP at startup can use:
 

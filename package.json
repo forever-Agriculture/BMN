@@ -13,6 +13,8 @@
     "test:electron": "pnpm run build && node scripts/test/electron-self-test.mjs && node scripts/test/electron-normal-start.mjs",
     "test:visual": "pnpm run build && node scripts/test/electron-visual.mjs",
     "qa:bench": "node scripts/qa/bench.mjs",
+    "qa:bench:find": "node scripts/test/qa-slop.mjs",
+    "qa:bench:recovery": "node scripts/test/qa-bench-recovery.mjs",
     "test:run": "pnpm run test:unit && pnpm run test:electron",
     "lint": "eslint apps shared scripts eslint.config.mjs",
     "typecheck": "tsc -b shared/protocol apps/desktop/tsconfig.node.json apps/desktop/tsconfig.web.json",
