@@ -59,7 +59,7 @@ export const ASK_READS = Object.freeze({
 
 /** Interactive browser callbacks execute outside the app's own read-only mode (74.5). */
 export function askReads(form, browser = null) {
-  if (browser?.interact !== true) return ASK_READS[form]
+  if (browser?.interact !== true || browser.qa === true) return ASK_READS[form]
   return { scope: 'computer', reach: 'any file your user can read',
     words: 'Interactive Playwright scripts: any file your user can read; scripts run in the MCP server process as your user and can write files and make network requests, outside the app\'s read-only mode' }
 }
@@ -127,7 +127,7 @@ function codexEnvironment(asker) {
 }
 
 /** Native configuration inspection only: no MCP, sign-in or model starts. Never retain transport secrets. */
-export function codexMcpServers(program, cwd, environment = process.env, { config = [], enabled = undefined } = {}) {
+export function codexMcpServers(program, cwd, environment = process.env, { config = [], enabled = undefined, browserServer: expected = undefined } = {}) {
   const overrides = [...new Set([...CODEX_ASK_MCP_OFF, ...config])]
   const result = spawnSync(program.launcher, ['mcp', 'list', '--json', ...overrides.flatMap((item) => ['-c', item])], {
     cwd, env: codexEnvironment(environment), encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']
@@ -139,6 +139,10 @@ export function codexMcpServers(program, cwd, environment = process.env, { confi
   try { servers = JSON.parse(result.stdout) } catch { throw failure() }
   if (!Array.isArray(servers)) throw failure()
   if (enabled !== undefined && JSON.stringify(servers.filter((server) => server.enabled === true).map((server) => server.name).sort()) !== JSON.stringify([...enabled].sort())) throw new Error('Codex MCP configuration does not isolate this ask\'s tools; no teammate started')
+  if (expected !== undefined) {
+    const actual = servers.find(server => server.name === BROWSER_SERVER)?.transport
+    if (actual?.type !== 'stdio' || actual.command !== expected.command || JSON.stringify(actual.args) !== JSON.stringify(expected.args) || actual.cwd !== expected.cwd || Object.keys(actual.env ?? {}).length || (actual.env_vars ?? []).length) throw new Error('Codex Playwright transport retains an unexpected command, arguments, directory or environment; no teammate started')
+  }
   const names = new Set()
   return servers.map((server) => {
     if (typeof server?.name !== 'string' || !/^[A-Za-z0-9_.-]+$/u.test(server.name) || names.has(server.name) || typeof server.enabled !== 'boolean' || !['stdio', 'streamable_http'].includes(server.transport?.type)) throw failure()
@@ -148,9 +152,11 @@ export function codexMcpServers(program, cwd, environment = process.env, { confi
 }
 
 /** Check the full exec configuration natively, including profiles: a map override must not add tools. */
-export function checkCodexMcp(program, built, browser = null) {
+export function checkCodexMcp(program, built, browser = null, folder = null) {
   const config = built.command.filter((_, index) => built.command[index - 1] === '-c')
-  codexMcpServers(program, built.cwd, built.environment, { config, enabled: browser ? [BROWSER_SERVER] : [] })
+  if (browser && folder === null) throw new Error('The browser run folder is required for native transport verification')
+  codexMcpServers(program, built.cwd, built.environment, { config, enabled: browser ? [BROWSER_SERVER] : [],
+    ...(browser ? { browserServer: { ...browserServer(browser, folder), cwd: join(folder, ASK_RUN_FILES.browser) } } : {}) })
 }
 
 /** Codex's MCP configuration for an ask: none, or the browser's server with only its tools enabled and approved (74.3 AC1). */
@@ -160,7 +166,7 @@ function codexServers(browser, folder, inherited = []) {
   if (browser === null || browser === undefined) return `mcp_servers={${entries.join(',')}}`
   const server = browserServer(browser, folder)
   const list = (items) => `[${items.map((item) => JSON.stringify(item)).join(',')}]`
-  entries.unshift(`${BROWSER_SERVER}={command=${JSON.stringify(server.command)},args=${list(server.args)},enabled=true,enabled_tools=${list(browserTools(browser.interact))},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}`)
+  entries.unshift(`${BROWSER_SERVER}={command=${JSON.stringify(server.command)},args=${list(server.args)},cwd=${JSON.stringify(join(folder, ASK_RUN_FILES.browser))},env={},env_vars=[],enabled=true,enabled_tools=${list(browserTools(browser.interact, browser.qa))},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}`)
   return `mcp_servers={${entries.join(',')}}`
 }
 
@@ -169,7 +175,7 @@ function claudeTools(browser, folder) {
   if (browser === null || browser === undefined) return [...CLAUDE_ASK_TOOLS]
   const tools = [...CLAUDE_ASK_TOOLS]
   tools[tools.indexOf('--mcp-config') + 1] = JSON.stringify({ mcpServers: { [BROWSER_SERVER]: browserServer(browser, folder) } })
-  tools.splice(tools.indexOf('--permission-mode'), 0, ...browserTools(browser.interact).map((tool) => `mcp__${BROWSER_SERVER}__${tool}`))
+  tools.splice(tools.indexOf('--permission-mode'), 0, ...browserTools(browser.interact, browser.qa).map((tool) => `mcp__${BROWSER_SERVER}__${tool}`))
   return tools
 }
 

@@ -173,6 +173,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       if (ASK_UNSUPPORTED[agent.harness]?.browser !== undefined) refuse('ACCESS_UNAVAILABLE', ASK_UNSUPPORTED[agent.harness].browser)
       if (browserOrigin(browser.origin).origin !== browser.origin || typeof browser.interact !== 'boolean') refuse('WORKSPACE_MISMATCH', 'the ask\'s browser is not a loopback origin BMN wrote')
       if (browser.statement !== BROWSER_STATEMENT) refuse('WORKSPACE_MISMATCH', 'a browser ask needs the asker\'s statement that the app is a disposable test instance')
+      if ((browser.qa === true) !== (inputs.role === 'qa')) refuse('WORKSPACE_MISMATCH', 'the QA browser mode does not match the checked role')
     }
 
     // The form: the app's one read-only form, OpenCode's asker where it may read nothing but the asker's text.
@@ -200,10 +201,10 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       if (error.code !== 'ENOENT') refuse('WORKSPACE_MISMATCH', 'the instruction snapshot of this ask cannot be read')
     }
     if (rules !== null && (agent.harness !== 'opencode' || label !== 'private')) refuse('WORKSPACE_MISMATCH', 'only a private OpenCode ask carries the owner\'s rules: Codex and Claude Code read their own')
-    const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), browser: browser === null ? null : { origin: browser.origin, interact: browser.interact }, inherited, environment, contextTestLog })
+    const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), browser: browser === null ? null : { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}) }, inherited, environment, contextTestLog })
     const built = askCommand(agent.harness, program, request)
     if (agent.harness === 'codex') {
-      try { checkCodexMcp(program, built, browser) } catch (error) { refuse('TOOL_MISMATCH', error.message) }
+      try { checkCodexMcp(program, built, browser, folder) } catch (error) { refuse('TOOL_MISMATCH', error.message) }
     }
     if (!Array.isArray(inputs.argv) || canonicalJson(inputs.argv) !== canonicalJson(built.argv)) {
       const at = Array.isArray(inputs.argv) ? built.argv.findIndex((value, index) => inputs.argv[index] !== value) : 0

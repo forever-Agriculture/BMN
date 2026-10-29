@@ -223,6 +223,8 @@ extraResources:
     to: bin/ask-git.sh
   - from: bin/agents-team-browser.mjs
     to: bin/agents-team-browser.mjs
+  - from: bin/agents-team-qa.mjs
+    to: bin/agents-team-qa.mjs
   - from: bin/ask-browser-relay.mjs
     to: bin/ask-browser-relay.mjs
   - from: bin/ask-browser-config.json

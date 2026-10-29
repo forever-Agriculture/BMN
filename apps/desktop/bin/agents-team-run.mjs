@@ -11,6 +11,7 @@ import { readChildAccounting } from './opencode-child-accounting.mjs'
 import { ASK_RUN_FILES, checkCodexMcp, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
 import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
 import { browserRecord, browserTemporary } from './agents-team-browser.mjs'
+import { finishQa } from './agents-team-qa.mjs'
 import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { readJson, readJsonOrNull } from './shared-helpers.mjs'
@@ -130,7 +131,7 @@ function startChange(prepared) {
     try { current = codexMcpServers(prepared.program, prepared.cwd, environment) } catch { return 'Codex MCP configuration could not be inspected before launch' }
     if (canonicalJson(current) !== canonicalJson(manifest.codex_mcp_servers ?? [])) return 'Codex MCP configuration changed after the check'
     const command = prepared.argv.slice(prepared.argv.indexOf(prepared.program.launcher))
-    try { checkCodexMcp(prepared.program, { command, cwd: prepared.cwd, environment }, manifest.browser ?? null) } catch { return 'Codex MCP configuration no longer isolates this ask\'s tools' }
+    try { checkCodexMcp(prepared.program, { command, cwd: prepared.cwd, environment }, manifest.browser ?? null, prepared.folder) } catch { return 'Codex MCP configuration no longer isolates this ask\'s tools' }
   }
   return null
 }
@@ -725,6 +726,7 @@ export function finishRun(folder, { interrupted = null } = {}) {
   } else {
     outcome = 'answered'
   }
+  let qa = null
   if (seen.answer !== null) {
     // A credential in the answer is masked before anything keeps or shows it (R72-NFR5, 72.9 AC6). The output was masked
     // first, so an answer read from it shows BMN's own mark where it held one; Codex's last-message file is masked here.
@@ -732,6 +734,7 @@ export function finishRun(folder, { interrupted = null } = {}) {
     masked.answer = maskedNames(kept.text)
     const text = kept.text.endsWith('\n') ? kept.text : `${kept.text}\n`
     writeWhole(join(folder, outcome === 'answered' ? ASK_RUN_FILES.answer : 'diagnostic-answer.md'), text)
+    if (outcome === 'answered') qa = finishQa(folder, kept.text)
   }
   for (const part of TRANSIENT) rmSync(join(folder, part), { recursive: true, force: true })
   const projectStart = readJsonOrNull(join(folder, ASK_RUN_FILES.projectStart))
@@ -742,6 +745,7 @@ export function finishRun(folder, { interrupted = null } = {}) {
     version: 1, id: request.id ?? null, state: outcome, exit: OUTCOME_EXIT[outcome], ...(reason === null ? {} : { reason }), ...(refusal === null ? {} : { refusal }),
     requested: { agent: request.agent ?? null, model: request.model ?? null, effort: request.effort ?? null },
     observed: seen.observed, subagents: seen.subagents ?? [], usage: seen.usage, ...(seen.rateLimit === null ? {} : { rate_limit: seen.rateLimit }), problems: seen.problems,
+    ...(qa === null ? {} : { qa }),
     ...(masked.answer.length + masked.output.length > 0 ? { credentials_masked: { answer: masked.answer, output: masked.output } } : {}),
     ...(project === null ? {} : { project }),
     started_at: state.started_at ?? null, ended_at: exit.at ?? new Date().toISOString(), time_limit_minutes: readJsonOrNull(join(folder, RUN_FILES.launch))?.time_limit_minutes ?? null
@@ -816,7 +820,7 @@ export function stopAsk(folder) {
 // The export
 
 /** What an export carries (the contract's record table): never the app's raw error stream or a session record of the app's own. */
-const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'project-start.json', 'browser.json', 'browser', 'answer.md', 'outcome.json'])
+const EXPORTED = Object.freeze(['request.json', 'question.md', 'inputs', 'snapshots', 'receipt.json', 'launch.json', 'state.json', 'exit.json', 'events.jsonl', 'session-info.json', 'project-start.json', 'browser.json', 'browser', 'qa', 'answer.md', 'outcome.json'])
 
 /** The launch with every environment value the app is given left out: names only. */
 function launchWithoutValues(launch) {

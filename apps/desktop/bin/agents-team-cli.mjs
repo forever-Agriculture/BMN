@@ -15,7 +15,8 @@ import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, askRunId, prepareAsk } from
 import { OUTCOME_EXIT, StartRefusal, TIME_LIMIT, TRANSIENT, askOutcome, exportAsk, startAsk, stopAsk, waitAsk } from './agents-team-run.mjs'
 import { scopeStarts, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { nestedAsk } from './agents-team-nested.mjs'
-import { BROWSER_LIMIT_WORDS, BROWSER_ROLE } from './agents-team-browser.mjs'
+import { BROWSER_LIMIT_WORDS, BROWSER_ROLE, browserOrigin } from './agents-team-browser.mjs'
+import { qaAskInputs } from './agents-team-qa.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
 const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
@@ -23,6 +24,7 @@ const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --questi
          [--data public] [--time-limit MINUTES] [--background] [--json]
        bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K
          --origin http://127.0.0.1:PORT --disposable [--interact] [other options as above]
+       bmn team ask --role qa --brief BRIEF --origin http://127.0.0.1:PORT --disposable --key K
        bmn team ask --features [--json]             What each installed app is asked with here, and what its mode reads
        bmn team asks [--json]                       Your asks, newest first
        bmn team asks show <id> [--json]             One ask: its state, who answered, the answer
@@ -55,9 +57,9 @@ goes on. Exit: 0 answered, 1 failed, 2 usage, 3-7 team state, 10 refused, 14 bus
 16 stopped, 17 answer not attributed.`
 
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
-const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'data', 'time-limit', 'key', 'origin']
+const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'data', 'time-limit', 'key', 'origin', 'brief']
 const REPEATED = ['file', 'image']
-const FLAGS = ['small-work', 'background', 'json', 'help', 'features', 'disposable', 'interact']
+const FLAGS = ['small-work', 'background', 'json', 'help', 'features', 'disposable', 'interact', 'bench']
 /** Options an ask no longer takes, each refused with the new spelling (72.9 AC4). */
 const GONE = { access: ACCESS_GONE, 'wide-read': WIDE_READ_GONE }
 
@@ -153,6 +155,7 @@ export function askJson(folder) {
       requested: { model: request.model ?? null, effort: request.effort ?? null }, observed: outcome.observed ?? null
     },
     subagents: outcome.subagents ?? [], usage: outcome.usage ?? null, ...(outcome.project === undefined ? {} : { project_state: outcome.project }),
+    ...(outcome.qa === undefined ? {} : { qa: outcome.qa }),
     ...(outcome.credentials_masked === undefined ? {} : { credentials_masked: outcome.credentials_masked }), answer, started_at: outcome.started_at ?? null, ended_at: outcome.ended_at ?? null,
     time_limit_minutes: outcome.time_limit_minutes ?? null, record: folder,
     ...(request.browser === undefined ? {} : { browser: browserJson(folder, request.browser, read(ASK_RUN_FILES.browserRecord)) })
@@ -165,7 +168,8 @@ export function askJson(folder) {
  */
 function browserJson(folder, browser, record) {
   return {
-    origin: browser.origin ?? null, interact: browser.interact === true, statement: browser.statement ?? null, limit: BROWSER_LIMIT_WORDS, recorded: record !== null,
+    origin: browser.origin ?? null, interact: browser.interact === true, statement: browser.statement ?? null,
+    limit: browser.qa ? 'Quick QA stays signed out; unsafe callbacks are refused by the relay. The origin list is not a security boundary; use a disposable synthetic app.' : BROWSER_LIMIT_WORDS, recorded: record !== null,
     calls: record?.calls ?? 0, pages: Array.isArray(record?.pages) ? record.pages : [],
     screenshots: (Array.isArray(record?.screenshots) ? record.screenshots : []).map((shot) => ({ ...shot, path: join(folder, ASK_RUN_FILES.browser, basename(String(shot.name))) }))
   }
@@ -201,6 +205,7 @@ export function showWords(shown) {
     `${shown.role} -> ${shown.teammate.agent} (${shown.teammate.app ?? '?'}${shown.teammate.app_version ? ` ${shown.teammate.app_version}` : ''} ${shown.teammate.requested.model ?? '?'}, ${shown.teammate.requested.effort ?? '?'}), chosen by ${shown.chosen_by}`,
     `Could read: ${shown.teammate.could_read ?? 'not recorded'}${shown.teammate.works_in ? `; worked in ${shown.teammate.works_in}` : ''}`,
     ...browserLines(shown.browser),
+    ...(shown.qa === undefined ? [] : [`QA: ${shown.qa.valid ? shown.qa.verdict : 'report invalid'}${shown.qa.errors.length ? ` — ${shown.qa.errors.join('; ')}` : ''}`]),
     ...(shown.subagents.length === 0 ? [] : [`Sub-agents: ${shown.subagents.map((entry) => `${entry.name ?? entry.session} (${entry.kind}${entry.model ? `, ${entry.model}` : ''})`).join('; ')}`]),
     ...(project === undefined ? [] : [`Project ${project.root}: at the start ${stateWords(project.start)}; at the end ${stateWords(project.end)}`]),
     ...(shown.credentials_masked === undefined ? [] : [`Credentials masked: ${[...new Set([...shown.credentials_masked.answer, ...shown.credentials_masked.output])].join(', ')}`]),
@@ -366,10 +371,17 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (options.features) {
       if (Object.keys(options).some((name) => !['features', 'json', ...REPEATED].includes(name)) || REPEATED.some((name) => options[name].length > 0)) throw new AgentsUsageError('--features takes only --json')
     } else {
+      if (options.brief !== undefined && options.role !== 'qa') throw new AgentsUsageError('--brief is for --role qa')
+      if (options.bench && options.role !== 'qa') throw new AgentsUsageError('--bench is for --role qa')
+      if (options.role === 'qa') {
+        if (options.brief === undefined) throw new AgentsUsageError('a QA ask requires --brief BRIEF')
+        if (!options.bench && options.origin === undefined) throw new AgentsUsageError('a quick QA ask requires --origin and --disposable')
+        if (options.question !== undefined || options['question-file'] !== undefined || options.file.length || options.image.length) throw new AgentsUsageError('a QA ask gets its instructions and inputs from the curated --brief, without extra questions, files or images')
+      }
       // A picture ask goes to the designer unless the asker names another role (72.8 AC1); a browser ask to the browser role (74.3).
       if (options.role === undefined && options.image.length === 0 && options.origin === undefined) throw new AgentsUsageError('team ask needs --role')
       for (const name of ['disposable', 'interact']) if (options[name] !== undefined && options.origin === undefined) throw new AgentsUsageError(`--${name} goes with --origin, the address of the app to check`)
-      if ((options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
+      if (options.role !== 'qa' && (options.question === undefined) === (options['question-file'] === undefined)) throw new AgentsUsageError('team ask takes exactly one of --question and --question-file')
       if (options['time-limit'] !== undefined && !/^\d{1,3}$/u.test(options['time-limit'])) throw new AgentsUsageError(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
     }
   } catch (error) {
@@ -379,6 +391,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const asJson = options.json === true
   const nested = nestedAsk()
   if (nested !== null) return refused(asJson, 'NESTED', `this runs inside teammate ask ${nested}; a teammate's run may not ask the team`)
+  if (options.bench) return refused(asJson, 'QA_BENCH_UNAVAILABLE', 'The BMN bench has no verified filesystem/network boundary on this host; use a disposable loopback web app')
   if (options.features) return printFeatures(asJson, environment)
   const minutes = options['time-limit'] === undefined ? TIME_LIMIT.default : Number(options['time-limit'])
   if (minutes < TIME_LIMIT.min || minutes > TIME_LIMIT.max) return usage(`--time-limit takes minutes, ${TIME_LIMIT.min} to ${TIME_LIMIT.max}`)
@@ -391,15 +404,21 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   // A session must name its key, so that its retry finds this ask; a plain shell may leave it to BMN.
   if (options.key === undefined && asker.kind === 'session') return refused(asJson, 'KEY_REQUIRED', `an ask from a session needs --key: today's UTC day and a name of yours, as ${makeKey('review-1', now())}; keep it, and a retry with the same key and request finds this ask`)
   if (options.key !== undefined && keyDay(options.key) === null) return usage(`--key ${options.key} is not a key: today's UTC day and a name (letters, digits, . _ -), as ${makeKey('review-1', now())}`)
-  let question
+  let question, qa = null
   try {
-    question = options.question ?? readText(options['question-file'] === '-' ? '-' : resolve(cwd, options['question-file']), LIMITS.question)
+    if (options.role === 'qa') {
+      const target = browserOrigin(options.origin)
+      if (target.reason !== undefined) throw new InputRefusal('QA_TARGET_INVALID', target.reason)
+      qa = qaAskInputs(options.brief, { cwd, home: environment.HOME ?? homedir(), origin: target.origin })
+      question = qa.question
+    } else question = options.question ?? readText(options['question-file'] === '-' ? '-' : resolve(cwd, options['question-file']), LIMITS.question)
   } catch (error) {
     if (error instanceof AgentsUsageError) return usage(error.message)
+    if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
     return usage(`cannot read the question from ${options['question-file'] === '-' ? 'standard input' : options['question-file']}`)
   }
   const home = environment.HOME ?? homedir()
-  const files = options.file.map((path) => (isAbsolute(path) ? path : resolve(cwd, path)))
+  const files = qa?.files ?? options.file.map((path) => (isAbsolute(path) ? path : resolve(cwd, path)))
   const images = options.image.map((path) => (isAbsolute(path) ? path : resolve(cwd, path)))
   let project
   try {
@@ -411,7 +430,8 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const request = {
     role: options.role ?? (options.origin !== undefined ? BROWSER_ROLE : DESIGNER_ROLE), question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
     project: options.project, files, images, data: options.data,
-    ...(options.origin === undefined ? {} : { browser: { origin: options.origin, disposable: options.disposable === true, interact: options.interact === true } })
+    ...(qa === null ? {} : { qa: { brief: qa.brief } }),
+    ...(options.origin === undefined ? {} : { browser: { origin: options.origin, disposable: options.disposable === true, interact: qa !== null || options.interact === true } })
   }
   const runs = teamRunsDirectory()
   const key = options.key ?? makeKey('shell', now())

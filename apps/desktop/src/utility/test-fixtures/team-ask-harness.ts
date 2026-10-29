@@ -35,8 +35,11 @@ for (const item of config) {
   for (const server of servers) if (item.includes(JSON.stringify(server.name) + "={enabled=false}")) server.enabled = false;
   if (item.includes("playwright={command=")) {
     const own = servers.find(server => server.name === "playwright");
-    if (own) own.enabled = true;
-    else servers.push({ name: "playwright", enabled: true, transport: { type: "stdio" } });
+    const value = item.slice(item.indexOf("playwright={") + 12);
+    const field = (name, next) => JSON.parse(value.slice(value.indexOf(name + "=") + name.length + 1, value.indexOf("," + next + "=")));
+    const transport = { type: "stdio", command: field("command", "args"), args: field("args", "cwd"), cwd: field("cwd", "env"), env: own?.transport?.env ?? {}, env_vars: [] };
+    if (own) { own.enabled = true; own.transport = transport; }
+    else servers.push({ name: "playwright", enabled: true, transport });
   }
 }
 console.log(JSON.stringify(servers));

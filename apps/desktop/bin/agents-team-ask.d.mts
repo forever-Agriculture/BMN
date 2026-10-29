@@ -10,6 +10,7 @@ export interface AskAsked {
   /** Gone in 72.9: given, the ask is refused with the new spelling. */
   access?: string; wide?: boolean
   files?: string[]; images?: string[]; data?: string
+  qa?: { brief: Record<string, unknown> }
   /** A browser ask (74.3): the asker's app, its `--disposable` statement and whether the teammate may click and type. */
   browser?: { origin: string; disposable?: boolean; interact?: boolean } | null
   key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }; inputHashes?: { files?: string[]; images?: string[] }

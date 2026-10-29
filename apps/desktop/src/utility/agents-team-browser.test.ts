@@ -170,7 +170,7 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     const look = ask()
     expect(look.verdict.verdict).toBe('PASS')
     const servers = look.argv.find((part) => part.startsWith('mcp_servers='))
-    expect(servers).toBe(`mcp_servers={playwright={command="node",args=${JSON.stringify(browserServer({ origin: ORIGIN, interact: false }, look.folder).args)},enabled=true,enabled_tools=${JSON.stringify(LOOK_TOOLS)},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}}`)
+    expect(servers).toBe(`mcp_servers={playwright={command="node",args=${JSON.stringify(browserServer({ origin: ORIGIN, interact: false }, look.folder).args)},cwd=${JSON.stringify(join(look.folder, 'browser'))},env={},env_vars=[],enabled=true,enabled_tools=${JSON.stringify(LOOK_TOOLS)},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}}`)
     expect(look.argv.filter((part) => part.startsWith('mcp_servers'))).toHaveLength(1)
     const interact = ask({ browser: { origin: ORIGIN, disposable: true, interact: true } })
     expect(interact.argv.find((part) => part.startsWith('mcp_servers='))).toContain(`enabled_tools=${JSON.stringify([...LOOK_TOOLS, ...INTERACT_TOOLS])}`)

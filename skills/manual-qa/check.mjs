@@ -42,6 +42,23 @@ function walk(value, node, root, path, errors) {
   else if (node.type === 'integer' && value < (node.minimum ?? -Infinity)) fail(`expected at least ${node.minimum}`)
 }
 
+/** Validate a brief before it is sent to a QA; use the report's one schema. */
+export function checkQaBrief(brief, schema = SCHEMA) {
+  const problem = schemaProblem(schema, schema)
+  if (problem) return [problem]
+  const errors = []
+  walk(brief, schema.$defs.brief, schema, '$.brief', errors)
+  if (errors.length) return errors
+  for (const [items, key, path] of [[brief.criteria, 'id', 'criteria'], [brief.accounts, 'alias', 'accounts']]) {
+    const seen = new Set()
+    for (const [index, item] of items.entries()) {
+      if (seen.has(item[key])) errors.push(`$.brief.${path}[${index}].${key}: duplicate`)
+      seen.add(item[key])
+    }
+  }
+  return errors
+}
+
 /** Validity is shape and consistency only; this does not authenticate the QA observations. */
 export function checkQaReport(report, brief, schema = SCHEMA) {
   const problem = schemaProblem(schema, schema)

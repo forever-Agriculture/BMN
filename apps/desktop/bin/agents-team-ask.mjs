@@ -15,6 +15,7 @@ import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
 import { ASK_GIT } from './agents-team-run.mjs'
 import { BROWSER_STATEMENT, browserInstalled, browserOrigin, browserPrompt, browserTools } from './agents-team-browser.mjs'
+import { qaAskInputs } from './agents-team-qa.mjs'
 
 /**
  * Making an ask ready follows one order, so that nothing is written before it is allowed: the
@@ -117,15 +118,20 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     if (request.browser.disposable !== true) throw new AskRefusal('DISPOSABLE_REQUIRED', `a browser ask needs --disposable: your statement that ${BROWSER_STATEMENT}; Playwright's origin limit does not stop redirects or requests the page makes itself`)
     const ready = browserInstalled({ PATH: appSearchPath(environment), HOME: environment.HOME ?? '' })
     if (ready.reason !== undefined) throw new AskRefusal('BROWSER_UNAVAILABLE', ready.reason)
-    browser = { origin: origin.origin, interact: request.browser.interact === true }
+    browser = { origin: origin.origin, interact: request.browser.interact === true, ...(request.role === 'qa' ? { qa: true } : {}) }
   }
 
   // Everything the asker gave is read and scanned before anything else happens.
   const question = checkQuestion(request.question)
   const texts = files.map((path) => textFile(path, { cwd, home }))
+  if (request.role === 'qa') {
+    if (request.qa === undefined || browser === null) throw new AskUsageError('a QA ask requires its curated brief and disposable browser')
+    const qa = qaAskInputs(files[0], { cwd, home, origin: browser.origin })
+    if (request.question !== qa.question || images.length || files.length !== qa.files.length || texts.some((file, index) => file.real !== qa.files[index]) || JSON.stringify(request.qa.brief) !== JSON.stringify(qa.brief)) throw new InputRefusal('QA_INPUT_MISMATCH', 'QA inputs must be the curated brief and shared skill, without extra instructions or files')
+  } else if (request.qa !== undefined) throw new AskUsageError('only the qa role takes a QA brief')
   const promptBytes = Buffer.byteLength(request.question) + texts.reduce((sum, file) => sum + file.bytes.length, 0)
   if (promptBytes > LIMITS.prompt) throw new InputRefusal('INPUT_TOO_LARGE', `the question and the files' text are ${Math.round(promptBytes / 1024)} KiB together, over the limit of ${LIMITS.prompt / 1024 / 1024} MiB`)
-  const project = askProject(request.project, { cwd, home })
+  const project = request.qa === undefined ? askProject(request.project, { cwd, home }) : null
   // Each picture is read, bounded and its metadata taken out before anything else: what may leave is what is sent (72.8 AC2).
   const pictures = images.map((path) => pictureFile(path, { cwd, home }))
   // The bytes read here must be the bytes the request's hash names: a file changed after the asking command hashed
@@ -267,14 +273,15 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
       label: picture.path, real: picture.real, copy: pictureCopies[index], media_type: picture.media_type, width: picture.width, height: picture.height,
       before: picture.before, bytes: picture.bytes.length, sha256: picture.sha256, removed: picture.removed, kept: picture.kept
     })),
-    ...(browser === null ? {} : { browser: { ...browser, tools: browserTools(browser.interact), statement: BROWSER_STATEMENT } }),
+    ...(browser === null ? {} : { browser: { ...browser, tools: browserTools(browser.interact, browser.qa), statement: BROWSER_STATEMENT } }),
+    ...(request.qa === undefined ? {} : { qa: request.qa }),
     prompt_sha256: sha256Of(Buffer.from(prompt))
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
     version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
     billing: choice.agent.paid_by ?? 'unknown', project, form, reads: reads.words, data: label, app_version: installed.version, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
-    ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, statement: BROWSER_STATEMENT } }),
+    ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}), statement: BROWSER_STATEMENT } }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
     asked_by: request.askedBy ?? askerOf(environment), asked_at: now.toISOString()

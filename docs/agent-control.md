@@ -2126,6 +2126,23 @@ BMN ships `manual-qa` for Claude Code and Codex from the same source. It teaches
 goal on a running candidate, risk-based cases, exploratory charters, UI/slop checks and retests.
 The lead supplies a curated brief rather than implementation claims or previous test evidence.
 
+For a signed-out pass on a disposable loopback web app:
+
+```bash
+bmn team ask --role qa --brief brief.json --origin http://127.0.0.1:41901 --disposable --key 20261029-cart-qa
+```
+
+The brief follows `manual-qa/schema.json` (`mode: quick-web`, no accounts, target matching the origin).
+BMN supplies that brief, the shared skill, report instructions and schema in an empty run folder.
+It refuses additional questions, files or images so implementation claims cannot enter the QA input.
+QA gets the browser's look and interaction tools, excluding unsafe server callbacks and accounts.
+The effective Codex MCP command, arguments, working directory and environment are checked before launch.
+`--bench` currently returns `QA_BENCH_UNAVAILABLE`: a compliant bench boundary has not been established.
+
+The saved ask contains `qa/brief.json`, `qa/report.json` when JSON was returned, `qa/result.json`,
+`browser.json`, and native browser screenshots. `bmn team asks show ID` reports the verdict only for
+a valid report bound to retained browser evidence; otherwise it says `report invalid`.
+
 `bmn qa report check REPORT --brief BRIEF` reads local JSON files without a socket. It checks the
 revision, target, mode, every criterion, finding references, account context and verdict. Exit 0
 means a consistent report, including a valid NO-GO; it never means release approval. Invalid
