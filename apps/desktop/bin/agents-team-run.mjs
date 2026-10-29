@@ -8,7 +8,7 @@ import { canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { openCodeFolder, openCodeSessionInfo, openCodeChildSessions } from './agents-opencode.mjs'
 import { readChildAccounting } from './opencode-child-accounting.mjs'
-import { ASK_RUN_FILES, sameProgram } from './agents-team-forms.mjs'
+import { ASK_RUN_FILES, checkCodexMcp, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
 import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
 import { browserRecord, browserTemporary } from './agents-team-browser.mjs'
 import { askSettings } from './agents-team-places.mjs'
@@ -121,7 +121,18 @@ function startChange(prepared) {
   }
   const identity = readJsonOrNull(join(prepared.folder, ASK_RUN_FILES.snapshots, 'executable.json'))
   if (identity === null || !prepared.program || !sameProgram(identity, prepared.program)) return 'the app\'s program changed after the check'
-  return judgedChange(prepared)
+  const changed = judgedChange(prepared)
+  if (changed !== null) return changed
+  if (receipt.harness === 'codex') {
+    const manifest = readJsonOrNull(join(prepared.folder, ASK_RUN_FILES.manifest))
+    const environment = Object.fromEntries(prepared.argv.slice(2, prepared.argv.indexOf(prepared.program.launcher)).map((pair) => [pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1)]))
+    let current
+    try { current = codexMcpServers(prepared.program, prepared.cwd, environment) } catch { return 'Codex MCP configuration could not be inspected before launch' }
+    if (canonicalJson(current) !== canonicalJson(manifest.codex_mcp_servers ?? [])) return 'Codex MCP configuration changed after the check'
+    const command = prepared.argv.slice(prepared.argv.indexOf(prepared.program.launcher))
+    try { checkCodexMcp(prepared.program, { command, cwd: prepared.cwd, environment }, manifest.browser ?? null) } catch { return 'Codex MCP configuration no longer isolates this ask\'s tools' }
+  }
+  return null
 }
 
 /**

@@ -8,10 +8,13 @@ export declare const ASK_READS: Readonly<Record<AskFormName, { scope: 'computer'
 export declare function askReads(form: AskFormName, browser?: { interact: boolean } | null): { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }
 export declare const CLAUDE_ASK_TOOLS: readonly string[]
 export interface AskProgram { launcher: string; payload: string }
-export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean } | null }
+export interface CodexMcpServer { name: string; transport: 'stdio' | 'streamable_http' }
+export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean } | null; inherited?: CodexMcpServer[] }
 export interface AskCommand { argv: string[]; environment: Record<string, string>; command: string[]; cwd: string; stdin: 'text' | 'stream-json' }
 export declare function appSearchPath(environment?: NodeJS.ProcessEnv | Record<string, string>): string
 export declare function askProgram(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): AskProgram | null
+export declare function codexMcpServers(program: AskProgram, cwd: string, environment?: NodeJS.ProcessEnv | Record<string, string>, options?: { config?: string[]; enabled?: string[] }): CodexMcpServer[]
+export declare function checkCodexMcp(program: AskProgram, built: Pick<AskCommand, 'command' | 'cwd' | 'environment'>, browser?: { origin: string; interact: boolean } | null): void
 export declare function askFormName(harness: string, options: { project: string | null; label: string; textOnly?: boolean }): AskFormName
 export declare function askCommand(harness: string, program: AskProgram, request: AskCommandRequest): AskCommand
 export declare function claudePictureMessage(pictures: { media_type: string; bytes: Buffer }[], prompt: string): string

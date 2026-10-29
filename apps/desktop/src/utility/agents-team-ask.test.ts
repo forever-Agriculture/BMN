@@ -13,7 +13,8 @@ import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } fr
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
-import { goSignInInBmnFolder, stubOpenCode } from './test-fixtures/team-ask-harness'
+import { CODEX_MCP_LIST, goSignInInBmnFolder, stubOpenCode } from './test-fixtures/team-ask-harness'
+import { startAsk } from '../../bin/agents-team-run.mjs'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const SHIM = fileURLToPath(new URL('../../bin/ask-git.sh', import.meta.url))
@@ -54,9 +55,9 @@ function approve(text: string): void {
   approveRoster({ generation, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
 }
 
-/** A stand-in app that only says its version: an ask is made ready here, never started. */
+/** A stand-in app with version/config inspection: an ask is made ready here, never started. */
 function stubApp(name: 'claude' | 'codex', version: string): void {
-  writeFileSync(join(stubs, name), `#!/bin/sh\n[ "$1" = --version ] && echo ${JSON.stringify(version)} && exit 0\nexit 3\n`)
+  writeFileSync(join(stubs, name), `#!/bin/sh\n[ "$1" = --version ] && echo ${JSON.stringify(version)} && exit 0\n${CODEX_MCP_LIST}\nexit 3\n`)
   chmodSync(join(stubs, name), 0o755)
 }
 
@@ -300,6 +301,35 @@ describe('the project an ask works in (72.9 AC4)', () => {
 })
 
 describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
+  it('explicitly disables all inherited MCP servers and refuses config drift before re-evaluation', () => {
+    const servers = [
+      { name: 'playwright', enabled: true, transport: { type: 'stdio' } },
+      { name: 'other.read', enabled: true, transport: { type: 'streamable_http' } }
+    ]
+    writeFileSync(join(home, 'mcp-list.json'), JSON.stringify(servers))
+    const result = ask({})
+    expect(result.verdict.verdict).toBe('PASS')
+    expect(result.argv).toEqual(expect.arrayContaining(['mcp_servers={"other.read"={enabled=false},"playwright"={enabled=false}}', 'approval_policy="never"', '--sandbox', 'read-only']))
+    const manifest = JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.manifest), 'utf8'))
+    expect(manifest.codex_mcp_servers).toEqual([{ name: 'other.read', transport: 'streamable_http' }, { name: 'playwright', transport: 'stdio' }])
+    writeFileSync(join(home, 'mcp-list.json'), JSON.stringify([...servers, { name: 'new', enabled: true, transport: { type: 'stdio' } }]))
+    expect(evaluateAsk({ agent: 'astra', role: 'epic-reviewer', effort: 'medium', data: 'private', run: result.folder, argv: result.argv, cwd: result.cwd }, { environment: env, now: NOW })).toMatchObject({ verdict: 'REFUSED', code: 'TOOL_MISMATCH', message: expect.stringContaining('MCP configuration changed') })
+    let launched = false
+    expect(() => startAsk(result, { start: () => { launched = true; return { pid: 1, start: 'synthetic' } } })).toThrow('MCP configuration changed')
+    expect(launched).toBe(false)
+  })
+
+  it('refuses unreadable native MCP configuration without starting a teammate', () => {
+    writeFileSync(join(home, 'mcp-list.json'), 'not JSON')
+    expect(refusal(() => ask({}))).toMatchObject({ code: 'ACCESS_UNAVAILABLE', message: expect.stringContaining('MCP configuration') })
+  })
+
+  it('refuses a resultant configuration that still enables an inherited server', () => {
+    writeFileSync(join(home, 'mcp-list.json'), JSON.stringify([{ name: 'unsafe', enabled: true, transport: { type: 'stdio' } }]))
+    writeFileSync(join(home, 'mcp-list-ignores-overrides'), '')
+    expect(ask({}).verdict).toMatchObject({ verdict: 'REFUSED', code: 'TOOL_MISMATCH', message: expect.stringContaining('does not isolate') })
+  })
+
   it('a question ask with no project: the chain\'s Codex teammate in its own read-only sandbox, in an empty folder of the run\'s own, the owner\'s own home, judged PASS', () => {
     const result = ask({})
     const work = join(result.folder, ASK_RUN_FILES.work)
@@ -324,7 +354,7 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(result.argv.slice(0, 2)).toEqual(['/usr/bin/env', '-i'])
     expect(result.argv).toContain(`HOME=${home}`)
     const command = result.argv.slice(result.argv.indexOf(join(stubs, 'codex')))
-    expect(command).toEqual([join(stubs, 'codex'), 'exec', '--skip-git-repo-check', '-C', work, '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=medium', '-c', 'mcp_servers={}', '-c', 'approval_policy="never"',
+    expect(command).toEqual([join(stubs, 'codex'), 'exec', '--skip-git-repo-check', '-C', work, '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=medium', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'mcp_servers={}', '-c', 'approval_policy="never"',
       '--sandbox', 'read-only', '--json', '-o', join(result.folder, ASK_RUN_FILES.codexAnswer), '-'])
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.manifest), 'utf8'))).toMatchObject({ version: 2, form: 'codex-read-only', reads: { scope: 'computer', folder: work }, project: null })
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.request), 'utf8'))).toMatchObject({ role: 'epic-reviewer', agent: 'astra', effort: 'medium', chosen_by: 'chain', form: 'codex-read-only', reads: ASK_READS['codex-read-only'].words, data: 'private', app_version: '0.162.1' })

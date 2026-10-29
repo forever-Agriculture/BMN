@@ -6,7 +6,7 @@ import { basename, dirname, join, relative } from 'node:path'
 import { APP_NAMES, agentState, collisionWords, projectChoiceFor, publicOnlyReasons } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, modeInput, teamRunsDirectory, workspaceRoot } from './agents-check.mjs'
-import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, executableIdentity } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, codexMcpServers, executableIdentity } from './agents-team-forms.mjs'
 import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
@@ -222,6 +222,11 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const workIn = project ?? join(folder, ASK_RUN_FILES.work)
   if (project === null) mkdirSync(workIn, { mode: 0o700 })
   const installed = versionOf(harness)
+  let inherited = []
+  if (harness === 'codex') {
+    try { inherited = codexMcpServers(installed.program, workIn, environment) } catch (error) { throw new AskRefusal('ACCESS_UNAVAILABLE', error.message) }
+    if (browser !== null && inherited.some((server) => server.name === 'playwright' && server.transport !== 'stdio')) throw new AskRefusal('ACCESS_UNAVAILABLE', 'the inherited Playwright HTTP transport cannot be replaced by this browser ask')
+  }
   // Each file is kept in the run as it was read and scanned; its text is in the prompt.
   const copies = texts.map((file, index) => {
     const copy = `${ASK_RUN_FILES.files.slice(ASK_RUN_FILES.inputs.length + 1)}/${index + 1}-${basename(file.real)}`
@@ -251,6 +256,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   if (browser !== null) mkdirSync(join(folder, ASK_RUN_FILES.browser), { mode: 0o700 })
   const manifest = {
     version: 2, id, data: label, form, reads: { scope: reads.scope, words: reads.words, folder: workIn },
+    ...(harness === 'codex' ? { codex_mcp_servers: inherited } : {}),
     project: project === null ? null : { root: project },
     question: { bytes: question.bytes, sha256: question.sha256 },
     inputs: inputsOf(choice.agent),
@@ -275,7 +281,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   }, null, 2)}\n`)
 
   const built = askCommand(harness, installed.program, askRequest(choice.agent, installed.version, {
-    form, effort: choice.effort, cwd: workIn, folder, rules, pictures: pictureCopies.map((copy) => join(inputs, copy)), browser, environment, contextTestLog
+    form, effort: choice.effort, cwd: workIn, folder, rules, pictures: pictureCopies.map((copy) => join(inputs, copy)), browser, inherited, environment, contextTestLog
   }))
   // Claude Code takes its pictures as one user message on standard input, the pictures first, then the prompt.
   if (built.stdin === 'stream-json') writePrivate(join(folder, ASK_RUN_FILES.message), claudePictureMessage(pictures, prompt))

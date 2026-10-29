@@ -21,6 +21,28 @@ export const ANSWER_KEY = ['sk', 'proj', 'Qw7Er9Ty2Ui4Op6As8Df1Gh3Jk5Lz0Xc'].joi
 export const CODEX_CHILD = 'eeeeeeee-0000-7000-8000-000000000000'
 export const CODEX_STRANGER = 'dddddddd-0000-7000-8000-000000000000'
 
+/** Config-only stand-in. Native override/merge semantics are checked separately with installed Codex. */
+export const CODEX_MCP_LIST = `if [ "$1" = mcp ] && [ "$2" = list ]; then
+exec ${JSON.stringify(process.execPath)} -e '
+const fs = require("node:fs");
+const file = process.env.HOME + "/mcp-list.json";
+const servers = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
+const args = process.argv.slice(1);
+const config = args.filter((_, index) => args[index - 1] === "-c");
+if (fs.existsSync(process.env.HOME + "/mcp-list-ignores-overrides")) { console.log(JSON.stringify(servers)); process.exit(0); }
+for (const item of config) {
+  if (!item.startsWith("mcp_servers=")) continue;
+  for (const server of servers) if (item.includes(JSON.stringify(server.name) + "={enabled=false}")) server.enabled = false;
+  if (item.includes("playwright={command=")) {
+    const own = servers.find(server => server.name === "playwright");
+    if (own) own.enabled = true;
+    else servers.push({ name: "playwright", enabled: true, transport: { type: "stdio" } });
+  }
+}
+console.log(JSON.stringify(servers));
+' "$@"
+fi`
+
 /** Approves a team file in the home `process.env.HOME` names, as the owner does in the Team view. */
 export function approve(home: string, text: string): void {
   mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
@@ -56,6 +78,7 @@ case $question in *FAIL*) echo 'provider error' >&2; exit 3;; esac
 export function stubCodex(stubs: string, version = '0.162.1'): void {
   writeFileSync(join(stubs, 'codex'), `#!/bin/sh
 [ "$1" = --version ] && echo "codex-cli ${version}" && exit 0
+${CODEX_MCP_LIST}
 model=; effort=; prev=; last=
 pictures=
 for a in "$@"; do

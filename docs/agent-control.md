@@ -117,6 +117,8 @@ Commands:
                                             Ask one teammate in a role, in its own app's read-only mode with
                                             its tools; --origin gives it a browser for your local app; the
                                             answer is advice. team asks lists your asks (bmn team ask --help)
+  qa report check REPORT --brief BRIEF      Validate a local QA report against its brief; reads files only,
+                                            no socket. Exit 0 valid, 1 invalid/unreadable, 2 usage
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
@@ -2118,7 +2120,25 @@ the new spelling (`--project` names the folder, `--file` gives files). Foregroun
 standard output and progress to standard error. Closing the waiting command, tool call or window
 only detaches it: the run's supervisor owns the run (below).
 
+### Checking a manual QA report
+
+BMN ships `manual-qa` for Claude Code and Codex from the same source. It teaches testing the user's
+goal on a running candidate, risk-based cases, exploratory charters, UI/slop checks and retests.
+The lead supplies a curated brief rather than implementation claims or previous test evidence.
+
+`bmn qa report check REPORT --brief BRIEF` reads local JSON files without a socket. It checks the
+revision, target, mode, every criterion, finding references, account context and verdict. Exit 0
+means a consistent report, including a valid NO-GO; it never means release approval. Invalid
+reports name the field or contradiction and exit 1; usage errors exit 2. The installed skill's
+`check.mjs` uses the same validator. Reports and evidence stay local and uncommitted; real-account
+evidence never goes to the report publisher.
+
 ### Each app's own read-only mode
+
+Codex asks turn off plugins and connected apps for that run, list the effective MCP configuration in the
+ask's working folder, and explicitly disable inherited servers. Browser asks enable BMN's Playwright
+entry and disable the other listed servers. BMN checks the resulting configuration before launch and refuses unreadable or changed
+configuration. Your normal Codex configuration, home and sign-in stay in place.
 
 The teammate's app runs as the owner's user, in the project (or the run's empty `work/` folder),
 under `env -i` with only the environment its form names. It uses his own app home, sign-in and
@@ -2129,7 +2149,7 @@ options, every shell redirection, a background shell) and every tool not given. 
 
 | App | Form | Command (after `env -i HOME PATH …`) | What it can read |
 | --- | --- | --- | --- |
-| Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c mcp_servers={} -c approval_policy="never" --sandbox read-only [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read, with its shell, Git, web search and sub-agents; its sandbox writes nothing and keeps the shell off the network |
+| Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c features.plugins=false -c features.apps=false -c mcp_servers=<isolated-map> -c approval_policy="never" --sandbox read-only [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read, with its shell, Git, web search and sub-agents; its sandbox writes nothing and keeps the shell off the network |
 | Claude Code | `claude-read-tools` | `claude -p --model <model> --effort <effort> --restricted --tools Read,Grep,Glob,Bash,WebSearch,Agent --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' WebSearch Agent --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose`, BMN's `git` first on `PATH` | its working folder only (`--restricted`), with Read, Grep, Glob, Git history, web search and sub-agents |
 | OpenCode, a private project ask to a teammate whose provider takes private work | `opencode-reader` | `opencode run --standalone --format json --agent bmn-ask-reader -m <provider>/<model>#<effort> --title 'BMN ask'` in BMN's own OpenCode folder (its Go sign-in, 70.4), the agents given in `OPENCODE_CONFIG_CONTENT`, BMN's `git` first on `PATH` | the project folder only, through BMN's read/glob/grep/Git broker, with web search and one bounded read-only sub-agent `bmn-reader`; outside and symlink escapes are refused |
 | OpenCode, any other ask | `opencode-asker` | the same with `--agent bmn-ask-asker`, every action denied (`"*": "deny"`) | nothing beyond the asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public work only, where the owner's folder exceptions can cover the question and files but never the project reader |

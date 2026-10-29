@@ -445,6 +445,7 @@ process.stdout.write(JSON.stringify(results))
   it('the teammate\'s app gets none of BMN\'s environment, and a BMN command it runs is refused as nested', async () => {
     writeFileSync(join(stubs, 'codex'), `#!/bin/sh
 [ "$1" = --version ] && echo "codex-cli 0.162.1" && exit 0
+[ "$1" = mcp ] && [ "$2" = list ] && echo '[]' && exit 0
 model=; effort=; prev=
 for a in "$@"; do
   [ "$prev" = -m ] && model=$a

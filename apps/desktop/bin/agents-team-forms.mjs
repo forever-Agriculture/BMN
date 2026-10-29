@@ -1,5 +1,6 @@
 // MODULE: agents-team-forms.mjs - Epic 72: each app's own read-only command for an ask, as Story 72.9 measured it: Codex's sandbox, Claude Code's tool permissions and OpenCode's agent permissions, each with every tool its mode keeps read-only
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { OPENCODE_FORM_TESTED, openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
@@ -68,6 +69,8 @@ const OPENCODE_ASK_TITLE = 'BMN ask'
 
 /** Codex logs the turn span that names each thread's model and effort only at this level; the log holds no prompt or answer text (72.1 AC2). */
 const CODEX_ASK_LOG = 'codex_core=info,codex_core::stream_events_utils=debug'
+/** The same per-run switches as research: plugin/app MCPs have a different config namespace. */
+const CODEX_ASK_MCP_OFF = Object.freeze(['features.plugins=false', 'features.apps=false'])
 
 /** Claude Code's read tools, web search and sub-agents; Bash only for Git's four read commands, through BMN's git first on PATH (72.9 AC1). A browser ask replaces the empty MCP configuration and allows its browser tools (74.3). */
 export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent',
@@ -119,12 +122,46 @@ export function askFormName(harness, { project, label, textOnly = false }) {
 
 const pairs = (environment) => Object.entries(environment).map(([name, value]) => `${name}=${value}`)
 
+function codexEnvironment(asker) {
+  return { HOME: asker.HOME ?? '', PATH: appSearchPath(asker), RUST_LOG: CODEX_ASK_LOG, ...(asker.CODEX_HOME ? { CODEX_HOME: asker.CODEX_HOME } : {}) }
+}
+
+/** Native configuration inspection only: no MCP, sign-in or model starts. Never retain transport secrets. */
+export function codexMcpServers(program, cwd, environment = process.env, { config = [], enabled = undefined } = {}) {
+  const overrides = [...new Set([...CODEX_ASK_MCP_OFF, ...config])]
+  const result = spawnSync(program.launcher, ['mcp', 'list', '--json', ...overrides.flatMap((item) => ['-c', item])], {
+    cwd, env: codexEnvironment(environment), encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']
+  })
+  // CLI diagnostics may contain private configuration: give a bounded explanation, never their raw text.
+  const failure = () => new Error('Codex MCP configuration could not be inspected; no teammate started')
+  if (result.error || result.status !== 0) throw failure()
+  let servers
+  try { servers = JSON.parse(result.stdout) } catch { throw failure() }
+  if (!Array.isArray(servers)) throw failure()
+  if (enabled !== undefined && JSON.stringify(servers.filter((server) => server.enabled === true).map((server) => server.name).sort()) !== JSON.stringify([...enabled].sort())) throw new Error('Codex MCP configuration does not isolate this ask\'s tools; no teammate started')
+  const names = new Set()
+  return servers.map((server) => {
+    if (typeof server?.name !== 'string' || !/^[A-Za-z0-9_.-]+$/u.test(server.name) || names.has(server.name) || typeof server.enabled !== 'boolean' || !['stdio', 'streamable_http'].includes(server.transport?.type)) throw failure()
+    names.add(server.name)
+    return { name: server.name, transport: server.transport.type }
+  }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+}
+
+/** Check the full exec configuration natively, including profiles: a map override must not add tools. */
+export function checkCodexMcp(program, built, browser = null) {
+  const config = built.command.filter((_, index) => built.command[index - 1] === '-c')
+  codexMcpServers(program, built.cwd, built.environment, { config, enabled: browser ? [BROWSER_SERVER] : [] })
+}
+
 /** Codex's MCP configuration for an ask: none, or the browser's server with only its tools enabled and approved (74.3 AC1). */
-function codexServers(browser, folder) {
-  if (browser === null || browser === undefined) return 'mcp_servers={}'
+function codexServers(browser, folder, inherited = []) {
+  // Quote names inside the TOML value. Codex splits dotted CLI keys literally, including quotes.
+  const entries = inherited.filter((server) => !browser || server.name !== BROWSER_SERVER).map((server) => `${JSON.stringify(server.name)}={enabled=false}`)
+  if (browser === null || browser === undefined) return `mcp_servers={${entries.join(',')}}`
   const server = browserServer(browser, folder)
   const list = (items) => `[${items.map((item) => JSON.stringify(item)).join(',')}]`
-  return `mcp_servers={${BROWSER_SERVER}={command=${JSON.stringify(server.command)},args=${list(server.args)},enabled_tools=${list(browserTools(browser.interact))},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}}`
+  entries.unshift(`${BROWSER_SERVER}={command=${JSON.stringify(server.command)},args=${list(server.args)},enabled=true,enabled_tools=${list(browserTools(browser.interact))},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}`)
+  return `mcp_servers={${entries.join(',')}}`
 }
 
 /** Claude Code's tool permissions for an ask: its read tools, and for a browser ask the browser's server and its tools by their MCP names (74.3 AC1). */
@@ -159,9 +196,12 @@ export function askCommand(harness, program, request) {
   let stdin = 'text'
   if (harness === 'codex') {
     // dev-auto's command (models.md:154-160), without --ephemeral, in the owner's own Codex home.
-    environment = { HOME: home, PATH: path, RUST_LOG: CODEX_ASK_LOG, ...(asker.CODEX_HOME ? { CODEX_HOME: asker.CODEX_HOME } : {}) }
+    environment = codexEnvironment(asker)
+    // An empty table merges with Codex's inherited map. Disable every recorded server explicitly;
+    // a browser ask enables only its own stdio server in the override above.
+    const mcp = codexServers(request.browser, request.folder, request.inherited)
     command = [program.launcher, 'exec', '--skip-git-repo-check', '-C', request.cwd, '-m', request.model, '-c', `model_reasoning_effort=${request.effort}`,
-      '-c', codexServers(request.browser, request.folder), '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
+      ...CODEX_ASK_MCP_OFF.flatMap((item) => ['-c', item]), '-c', mcp, '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
       '--json', '-o', join(request.folder, ASK_RUN_FILES.codexAnswer), '-']
   } else if (harness === 'claude') {
     environment = { HOME: home, PATH: `${join(request.folder, ASK_RUN_FILES.bin)}:${path}`, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',

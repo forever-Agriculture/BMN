@@ -144,6 +144,8 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
     ['an unsupported flag', [...ASTRA_REVIEW('/x').slice(0, -1), '--oss', '-'], 'ROUTE_UNSUPPORTED'],
     ['a prompt on the command line', ['codex', 'exec', '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=medium', 'do the review'], 'ROUTE_UNSUPPORTED'],
     ['an unknown -c key', ['codex', 'exec', '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=medium', '-c', 'chatgpt_base_url_x=1', '-'], 'ROUTE_UNSUPPORTED'],
+    ['enabling plugins is not a neutral isolation switch', ['codex', 'exec', '-m', 'gpt-6-astra', '-c', 'features.plugins=true', '-'], 'ROUTE_UNSUPPORTED'],
+    ['an unrelated feature is not a neutral isolation switch', ['codex', 'exec', '-m', 'gpt-6-astra', '-c', 'features.foo=false', '-'], 'ROUTE_UNSUPPORTED'],
     ['a wrapper script', ['/home/x/luna-browse.sh', 'a', 'b'], 'ROUTE_UNSUPPORTED'],
     ['env without -i', ['env', 'A=1', 'codex', 'exec', '-'], 'ROUTE_UNSUPPORTED'],
     ['the wrong harness', ['claude', '-p', '--model', 'gpt-6-astra', '--effort', 'medium'], 'ROUTE_UNSUPPORTED'],

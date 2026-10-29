@@ -136,6 +136,8 @@ Commands:
                                             Ask one teammate in a role, in its own app's read-only mode with
                                             its tools; --origin gives it a browser for your local app; the
                                             answer is advice. team asks lists your asks (bmn team ask --help)
+  qa report check REPORT --brief BRIEF      Validate a local QA report against its brief; reads files only,
+                                            no socket. Exit 0 valid, 1 invalid/unreadable, 2 usage
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch

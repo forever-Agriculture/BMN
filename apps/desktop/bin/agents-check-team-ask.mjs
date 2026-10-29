@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { RosterError, appName, canonicalJson, classRefusal, isRetired, publicOnlyReasons, retiredWords, sha256 } from './agents-roster.mjs'
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { checkContext, contextItems, provenControls, provenPrecedence } from './agents-context.mjs'
-import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, sameProgram } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, checkCodexMcp, claudePictureMessage, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
 import { BROWSER_STATEMENT, browserOrigin } from './agents-team-browser.mjs'
 import { OPENCODE_ASK_AGENTS, openCodeAskConfig } from './agents-opencode.mjs'
 import { NEXT_STEP, Refusal, TESTED_HARNESS_VERSIONS, readText, refuse } from './agents-check-base.mjs'
@@ -66,10 +66,10 @@ export function askConsent(data, destination, inputs, label, now = new Date(), n
  * works in, the pictures' paths, the owner's rules where the form carries them, and the agent's context
  * limit where the owner's test proved its setting on this app version (60.9), as `evaluate` applies it.
  */
-export function askRequest(agent, version, { form, effort, cwd, folder, rules = null, pictures = [], browser = null, environment = process.env, contextTestLog = undefined }) {
+export function askRequest(agent, version, { form, effort, cwd, folder, rules = null, pictures = [], browser = null, inherited = [], environment = process.env, contextTestLog = undefined }) {
   const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
   const items = contextItems(agent, proven)
-  return { form, model: agent.model, provider: agent.provider, effort, cwd, folder, rules, pictures, browser, environment, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
+  return { form, model: agent.model, provider: agent.provider, effort, cwd, folder, rules, pictures, browser, inherited, environment, context: items.state === 'applied' ? { argv: items.argv, env: items.env } : { argv: [], env: [] } }
 }
 
 /**
@@ -183,6 +183,13 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     if (label === 'public' && ASK_READS[form].scope !== 'text') refuse('PUBLIC_NOT_VERIFIED', `${agent.id} works with ${appName(agent.harness)}'s own tools, which read beyond what you hand over, so its asks are private (R72-NFR5)`)
     const cwd = project ?? `${folder}/${ASK_RUN_FILES.work}`
     if (inputs.cwd !== cwd) refuse('WORKSPACE_MISMATCH', `the ask runs in ${cwd}, not ${inputs.cwd}`)
+    const inherited = manifest.codex_mcp_servers ?? []
+    if (agent.harness === 'codex') {
+      let current
+      try { current = codexMcpServers(program, cwd, environment) } catch { refuse('TOOL_MISMATCH', 'Codex MCP configuration could not be inspected; nothing starts') }
+      if (canonicalJson(inherited) !== canonicalJson(current)) refuse('TOOL_MISMATCH', 'Codex MCP configuration changed after this ask was prepared; prepare a new ask')
+      if (browser !== null && current.some((server) => server.name === 'playwright' && server.transport !== 'stdio')) refuse('TOOL_MISMATCH', 'the inherited Playwright HTTP transport cannot be replaced by this browser ask')
+    }
 
     // The command BMN builds for this ask, recomputed; the one given must be it, whole.
     const proven = agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(agent.harness, version, contextTestLog)
@@ -193,8 +200,11 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       if (error.code !== 'ENOENT') refuse('WORKSPACE_MISMATCH', 'the instruction snapshot of this ask cannot be read')
     }
     if (rules !== null && (agent.harness !== 'opencode' || label !== 'private')) refuse('WORKSPACE_MISMATCH', 'only a private OpenCode ask carries the owner\'s rules: Codex and Claude Code read their own')
-    const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), browser: browser === null ? null : { origin: browser.origin, interact: browser.interact }, environment, contextTestLog })
+    const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), browser: browser === null ? null : { origin: browser.origin, interact: browser.interact }, inherited, environment, contextTestLog })
     const built = askCommand(agent.harness, program, request)
+    if (agent.harness === 'codex') {
+      try { checkCodexMcp(program, built, browser) } catch (error) { refuse('TOOL_MISMATCH', error.message) }
+    }
     if (!Array.isArray(inputs.argv) || canonicalJson(inputs.argv) !== canonicalJson(built.argv)) {
       const at = Array.isArray(inputs.argv) ? built.argv.findIndex((value, index) => inputs.argv[index] !== value) : 0
       refuse('ROUTE_UNSUPPORTED', `the command is not the ask BMN builds for ${agent.id}${at === -1 ? ' (it carries more)' : ` (it differs at argument ${at})`}`)
@@ -242,7 +252,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
 
     // Where it goes, read as `roster check` reads the same app's dispatch from the same folder: the same answers evaluate gives.
     const parsed = agent.harness === 'codex'
-      ? { harness: 'codex', command: program.launcher, envMode: 'clean', assignments: built.environment, config: [...request.context.argv.filter((_, index) => index % 2 === 1), `model_reasoning_effort=${inputs.effort}`, 'mcp_servers={}', 'approval_policy="never"'], disable: [], model: agent.model, sandbox: 'read-only', resume: null, cd: cwd }
+      ? { harness: 'codex', command: program.launcher, envMode: 'clean', assignments: built.environment, config: built.command.filter((_, index) => built.command[index - 1] === '-c'), disable: [], model: agent.model, sandbox: 'read-only', resume: null, cd: cwd }
       : agent.harness === 'claude'
         ? { harness: 'claude', command: program.launcher, envMode: 'clean', assignments: built.environment, addDir: [], model: agent.model, effort: inputs.effort }
         // OpenCode's command read by the same parser as every OpenCode dispatch.

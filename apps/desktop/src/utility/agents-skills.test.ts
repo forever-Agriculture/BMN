@@ -18,6 +18,7 @@ import {
 } from '../../bin/agents-skills.mjs'
 import { machineDiff, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
+import { installOwnSkills } from '../../bin/agents-own-skills.mjs'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -147,6 +148,18 @@ afterEach(() => {
 })
 
 describe('the skills section of the team file (60.11 AC2, AC3)', () => {
+  it('installs the shipped manual-qa tree for Claude Code and Codex from the same source (100.2 AC1)', async () => {
+    env.BMN_SHIPPED_SKILLS = fileURLToPath(new URL('../../../../skills/', import.meta.url))
+    const own = installOwnSkills({ source, environment: env })
+    expect(own.rows.find(row => row.name === 'manual-qa')).toMatchObject({ state: 'installed' })
+    tested('claude', CLAUDE, [{ root: '.claude/skills', folder: true, link: true }])
+    expect((await install(['claude', 'codex'])).code).toBe('OK')
+    const original = join(env.BMN_SHIPPED_SKILLS, 'manual-qa')
+    for (const destination of [join(source, 'manual-qa'), join(codexFolder(), 'manual-qa')]) {
+      for (const name of ['SKILL.md', 'report.md', 'schema.json', 'check.mjs']) expect(readFileSync(join(destination, name), 'utf8')).toBe(readFileSync(join(original, name), 'utf8'))
+    }
+  })
+
   it('reads the folder, the public list and the per-app scope, and a team file without the section keeps its data', () => {
     const plain = parseRoster(EXAMPLE).data!
     expect(Object.keys(plain)).not.toContain('skills')

@@ -235,6 +235,8 @@ extraResources:
   # Story 77.4: BMN's own skills and the module that installs them into the skills folder at start.
   - from: bin/agents-own-skills.mjs
     to: bin/agents-own-skills.mjs
+  - from: bin/qa-cli.mjs
+    to: bin/qa-cli.mjs
   - from: ../../skills
     to: skills
     filter:

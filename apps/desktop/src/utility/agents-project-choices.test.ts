@@ -83,7 +83,7 @@ beforeEach(() => {
   stubs = join(home, 'stubs')
   mkdirSync(stubs)
   for (const [name, version] of [['claude', '2.1.300 (Claude Code)'], ['codex', 'codex-cli 0.162.1']] as const) {
-    writeFileSync(join(stubs, name), `#!/bin/sh\n[ "$1" = --version ] && echo ${JSON.stringify(version)} && exit 0\nexit 3\n`)
+    writeFileSync(join(stubs, name), `#!/bin/sh\n[ "$1" = --version ] && echo ${JSON.stringify(version)} && exit 0\n[ "$1" = mcp ] && [ "$2" = list ] && echo '[]' && exit 0\nexit 3\n`)
     chmodSync(join(stubs, name), 0o755)
   }
   env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }

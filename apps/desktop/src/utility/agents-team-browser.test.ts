@@ -110,6 +110,7 @@ function stubBrowsingApps(): void {
     renameSync(join(stubs, app), join(stubs, `${app}-answer`))
     writeFileSync(join(stubs, app), `#!/bin/sh
 [ "$1" = --version ] && exec "$(dirname "$0")/${app}-answer" "$@"
+[ "$1" = mcp ] && exec "$(dirname "$0")/${app}-answer" "$@"
 dir=
 for a in "$@"; do case $a in *'"--output-dir","'*) dir=$(printf %s "$a" | sed -n 's/.*"--output-dir","\\([^"]*\\)".*/\\1/p');; esac; done
 [ -n "$dir" ] && sh ${JSON.stringify(fixture)} "$dir"
@@ -169,7 +170,7 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     const look = ask()
     expect(look.verdict.verdict).toBe('PASS')
     const servers = look.argv.find((part) => part.startsWith('mcp_servers='))
-    expect(servers).toBe(`mcp_servers={playwright={command="node",args=${JSON.stringify(browserServer({ origin: ORIGIN, interact: false }, look.folder).args)},enabled_tools=${JSON.stringify(LOOK_TOOLS)},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}}`)
+    expect(servers).toBe(`mcp_servers={playwright={command="node",args=${JSON.stringify(browserServer({ origin: ORIGIN, interact: false }, look.folder).args)},enabled=true,enabled_tools=${JSON.stringify(LOOK_TOOLS)},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}}`)
     expect(look.argv.filter((part) => part.startsWith('mcp_servers'))).toHaveLength(1)
     const interact = ask({ browser: { origin: ORIGIN, disposable: true, interact: true } })
     expect(interact.argv.find((part) => part.startsWith('mcp_servers='))).toContain(`enabled_tools=${JSON.stringify([...LOOK_TOOLS, ...INTERACT_TOOLS])}`)
@@ -179,6 +180,18 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     expect(readFileSync(join(look.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain(`The asker started a web app at ${ORIGIN}`)
     expect(JSON.parse(readFileSync(join(look.folder, ASK_RUN_FILES.request), 'utf8')).browser).toEqual({ origin: ORIGIN, interact: false, statement: BROWSER_STATEMENT })
     expect(existsSync(join(look.folder, ASK_RUN_FILES.browser))).toBe(true)
+  })
+
+  it('Codex disables inherited servers except its own browser and refuses an HTTP transport collision', () => {
+    writeFileSync(join(home, 'mcp-list.json'), JSON.stringify([
+      { name: 'playwright', enabled: true, transport: { type: 'stdio' } }, { name: 'other.read', enabled: true, transport: { type: 'stdio' } }
+    ]))
+    const look = ask({})
+    expect(look.verdict.verdict).toBe('PASS')
+    expect(look.argv.find((part) => part.startsWith('mcp_servers='))).toContain('"other.read"={enabled=false}')
+    expect(look.argv.find((part) => part.startsWith('mcp_servers='))).not.toContain('"playwright"={enabled=false}')
+    writeFileSync(join(home, 'mcp-list.json'), JSON.stringify([{ name: 'playwright', enabled: true, transport: { type: 'streamable_http' } }]))
+    expect(refusal(() => ask({}))).toMatchObject({ code: 'ACCESS_UNAVAILABLE', message: expect.stringContaining('HTTP transport') })
   })
 
   it('Claude Code: the server alone in its strict MCP configuration, its tools allowed by their MCP names, every other tool of the server refused by dontAsk', () => {
@@ -396,6 +409,7 @@ describe.skipIf(!SCOPES)('a browser ask run whole (74.3 AC3)', { timeout: 30_000
 
   it('after a crash, whoever finishes the record keeps the pages and screenshots and removes every download and snapshot', async () => {
     const prepared = ask({ question: 'Does the checkout page load? SLEEP' })
+    expect(existsSync(join(prepared.folder, 'browser', 'made-up.bin'))).toBe(false)
     // What the browser's profile leaves in the run's temporary folder: recovery removes it.
     mkdirSync(join(browserTemporary(prepared.folder), 'playwright-artifacts-made-up'), { recursive: true })
     const started = startAsk(prepared, { timeLimitMinutes: 2 })

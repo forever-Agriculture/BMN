@@ -124,6 +124,9 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
       }
     } else if (keys.length === 1 && CODEX_NEUTRAL_KEYS.includes(keys[0])) {
       continue
+    } else if (entry === 'features.plugins=false' || entry === 'features.apps=false') {
+      // Fixed ask/research tool isolation switches; no other feature setting becomes neutral.
+      continue
     } else if (keys[0] === 'mcp_servers') {
       // A tool given to this one run: what it may be is the tools check's question (60.12 AC5), not the destination's.
       continue
