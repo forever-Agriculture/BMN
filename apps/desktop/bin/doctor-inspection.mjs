@@ -1,23 +1,44 @@
 // MODULE: doctor-inspection.mjs - Bounded per-input acquisition and private per-row reconstruction evidence
 import { randomBytes } from 'node:crypto'
+import { lstatSync, readFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { observeAbsent, observeAccess, observeDatabases, observeDirectory, observeFile, observeTree,
   absenceUnchanged, accessUnchanged, unchangedSince, locationRoots } from './doctor-locations.mjs'
 import { privateTag, validWorkerKeys } from './doctor-continuity.mjs'
 import { validateLocation } from './doctor-locations.mjs'
 
 const identity = (value) => value === null ? null : Object.fromEntries(['device', 'inode', 'mode', 'owner', 'group', 'type'].map((k) => [k, value[k] ?? null]))
-const routeValue = (route, leaf = 'identity') => route ? [route.nodes.map((node, i) => [node.name,
-  // These two ancestors are BMN-created namespace mounts, with new devices on every worker.
-  // Their policy identity is fixed; every restored profile/entry/link below them keeps its real identity.
-  node.object.type === 'directory' && ['/tmp', '/var/tmp'].includes(node.path) ? ['private-tmpfs', node.path] :
+// Only the real inspection worker supplies this view. Host callers retain every inode.
+export function privateTmpfsView() {
+  try {
+    if (process.cwd() !== '/tmp/bmn-doctor-work') return null
+    const mounts = readFileSync('/proc/self/mountinfo', 'utf8').trim().split('\n').map(line => {
+      const [before, after] = line.split(' - '), fields = before.split(' ')
+      return { path: fields[4].replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))),
+        options: fields[5].split(','), type: after.split(' ')[0] }
+    })
+    const mountAt = path => mounts.findLast(mount => mount.path === path)
+    if (!mountAt('/')?.options.includes('ro')) return null
+    return ['/tmp', '/var/tmp'].map(path => {
+      const object = lstatSync(path)
+      if (!object.isDirectory() || mountAt(path)?.type !== 'tmpfs' || object.dev === lstatSync(dirname(path)).dev) throw new Error('not private')
+      return { path, device: String(object.dev) }
+    })
+  } catch { return null }
+}
+
+const routeValue = (route, leaf = 'identity', privateTmpfs = null) => route ? [route.nodes.map((node, i) => [node.name,
+  // Namespace scaffolding is stable policy; restored bind roots keep their real devices.
+  node.object.type === 'directory' && privateTmpfs?.some(root => node.object.device === root.device &&
+    (node.path === root.path || node.path.startsWith(root.path + '/'))) ? ['private-tmpfs', node.path] :
     node.object.type === 'link' || leaf === 'full' && i === route.nodes.length - 1 ? node.object : identity(node.object),
   node.link ?? null, node.target === undefined ? null : identity(node.target)]), route.missing ? [route.missing.path, route.missing.code] : null] : null
 const ordered = (values) => [...values].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
-const treeValue = (value) => [routeValue(value.routes?.[0]), value.revisions.map(({ path, snapshot }) =>
+const treeValue = (value, privateTmpfs) => [routeValue(value.routes?.[0], 'identity', privateTmpfs), value.revisions.map(({ path, snapshot }) =>
   [path, snapshot?.object ?? null, snapshot?.target ?? null]), ordered(value.files.keys()).map((name) => [name, value.files.get(name)]),
   ordered(value.directories.keys()).map((name) => [name, value.directories.get(name)]), value.link]
 
-export function createInspectionSession(profile, suppliedKeys, deadline) {
+export function createInspectionSession(profile, suppliedKeys, deadline, privateTmpfs = null) {
   const keys = suppliedKeys ?? { item: randomBytes(32).toString('hex'), context: randomBytes(32).toString('hex') }
   if (!validWorkerKeys(keys)) throw new Error('continuity unavailable')
   const roots = locationRoots(profile), inputs = new Map(), gaps = new Map(), rows = [], acquisitionChanged = new Set()
@@ -94,13 +115,13 @@ export function createInspectionSession(profile, suppliedKeys, deadline) {
   }
   const tuple = (source, mode = 'semantic') => {
     if (!source?.known) return null
-    if (source.kind === 'tree' || source.kind === 'cache-tree') return treeValue(source.value)
-    if (source.kind === 'file') return source.value.observation ? [routeValue(source.value.observation.routes?.[0], mode === 'item' ? 'full' : 'identity'),
-      mode === 'item' ? source.value.observation.bytes : null] : routeValue(source.value.frontier.route)
-    if (source.kind === 'directory') return routeValue(source.value.frontier.route)
+    if (source.kind === 'tree' || source.kind === 'cache-tree') return treeValue(source.value, privateTmpfs)
+    if (source.kind === 'file') return source.value.observation ? [routeValue(source.value.observation.routes?.[0], mode === 'item' ? 'full' : 'identity', privateTmpfs),
+      mode === 'item' ? source.value.observation.bytes : null] : routeValue(source.value.frontier.route, 'identity', privateTmpfs)
+    if (source.kind === 'directory') return routeValue(source.value.frontier.route, 'identity', privateTmpfs)
     if (source.kind === 'database') return source.value.map((value) => value === null ? null : [value.path, identity(value.locator.object),
-      value.locator.target ? identity(value.locator.target) : null, routeValue(value.routes?.find((r) => r.nodes.some((n) => n.path === value.path)))])
-    return [routeValue(source.value.route), source.kind === 'access' ? [source.value.outcome, source.value.uid, source.value.gid, source.value.groups] : source.value.outcome]
+      value.locator.target ? identity(value.locator.target) : null, routeValue(value.routes?.find((r) => r.nodes.some((n) => n.path === value.path)), 'identity', privateTmpfs)])
+    return [routeValue(source.value.route, 'identity', privateTmpfs), source.kind === 'access' ? [source.value.outcome, source.value.uid, source.value.gid, source.value.groups] : source.value.outcome]
   }
   const locator = (source, { start = null, rowid = null, databaseIndex = 0 } = {}) => {
     const observation = ['tree', 'cache-tree'].includes(source?.kind) ? source.value : source?.kind === 'database' ? source.value?.[databaseIndex] : source?.value?.observation

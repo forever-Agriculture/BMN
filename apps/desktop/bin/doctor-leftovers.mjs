@@ -13,11 +13,11 @@ const malformed = Object.freeze({ code: 'MALFORMED' })
 const RUNNERS = new Set(['npx', 'uvx', 'bunx', 'pnpm', 'pnpx', 'yarn', 'docker', 'podman', 'uv', 'pipx', 'deno'])
 const BMN_SKILLS = new Set(['plan', 'team-ask', 'report-artifact', 'team-page', 'web-question', 'jev-judge', 'manual-qa', 'dev-auto', '.system', 'synced'])
 
-async function scanOnce(versions, keys, deadline) {
+async function scanOnce(versions, keys, deadline, privateTmpfs) {
   const { SKILL_APPS, rootPath } = await import('./agents-skills.mjs')
   const { TOOL_APPS, neutralOf } = await import('./agents-tools.mjs')
   const env = process.env, profile = selectedProfile(env), H = profile.home
-  const s = createInspectionSession(profile, keys, deadline)
+  const s = createInspectionSession(profile, keys, deadline, privateTmpfs)
   if (profile.invalid || profile.unavailable) { s.gap('profile', 'step', { code: 'UNSUPPORTED' }); return s.finish() }
   if (profile.inline) s.gap('inline-config', 'step', { code: 'UNSUPPORTED' })
   const file = (path) => s.file(path)
@@ -390,9 +390,9 @@ async function scanOnce(versions, keys, deadline) {
 }
 
 // scan is an internal deterministic test seam, never an environment or worker-context switch.
-export async function inspectLeftovers(versions = {}, { keys = null, privateReceipts = false, deadline = Date.now() + 58000, scan = scanOnce } = {}) {
+export async function inspectLeftovers(versions = {}, { keys = null, privateReceipts = false, deadline = Date.now() + 58000, scan = scanOnce, privateTmpfs = null } = {}) {
   keys ??= { item: randomBytes(32).toString('hex'), context: randomBytes(32).toString('hex') }
-  const first = await scan(versions, keys, deadline)
+  const first = await scan(versions, keys, deadline, privateTmpfs)
   const acquisitionChanged = first.acquisitionChanged ?? new Set()
   const changing = new Set([...first.unstable, ...acquisitionChanged])
   const changed = (source, second = null, itemPath = null) => {
@@ -404,7 +404,7 @@ export async function inspectLeftovers(versions = {}, { keys = null, privateRece
   if (changing.size && !first.timedOut && Date.now() + 1000 < deadline) {
     // Retain compact commitments and attribution, not a second database-sized byte graph.
     for (const source of first.inputs.values()) { source.value = null; source.stable = null }
-    const second = await scan(versions, keys, deadline).catch((error) => {
+    const second = await scan(versions, keys, deadline, privateTmpfs).catch((error) => {
       if (error?.code !== 'TIME_BOUND') throw error
       first.gap('inspection-deadline', 'step', error, 'revalidate')
       return { rows: [], inputs: new Map(), unstable: new Set(), unverified: new Set(), gaps: new Map(), timedOut: true }

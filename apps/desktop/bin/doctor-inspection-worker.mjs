@@ -2,6 +2,7 @@
 import { readFileSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { inspectLeftovers } from './doctor-leftovers.mjs'
+import { privateTmpfsView } from './doctor-inspection.mjs'
 import { matchContinuity, validRowReceipts, validWorkerKeys } from './doctor-continuity.mjs'
 
 async function main() {
@@ -12,7 +13,7 @@ async function main() {
   const deadline = Number(process.argv[3])
   if (!Number.isSafeInteger(deadline)) throw new Error('inspection unavailable')
   const { result, rows } = await inspectLeftovers(JSON.parse(process.argv[2]), { keys: context.keys, privateReceipts: true,
-    deadline: Math.min(deadline, Date.now() + 58000) })
+    deadline: Math.min(deadline, Date.now() + 58000), privateTmpfs: privateTmpfsView() })
   if (!validRowReceipts(rows, result.leftovers?.length ?? 0)) throw new Error('inspection unavailable')
   if (context.mode === 'acquire') {
     process.stderr.write(JSON.stringify(rows))
