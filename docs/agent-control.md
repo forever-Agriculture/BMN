@@ -119,6 +119,9 @@ Commands:
                                             answer is advice. team asks lists your asks (bmn team ask --help)
   qa report check REPORT --brief BRIEF      Validate a local QA report against its brief; reads files only,
                                             no socket. Exit 0 valid, 1 invalid/unreadable, 2 usage
+  qa start --brief BRIEF --key K            Start a QA pane in this session's workspace; uses its own folder
+  qa wait ID [--timeout SECONDS]            Read this caller's checked report; a missing report fails
+  qa stop ID                               Stop this caller's exact QA incarnation; retain its record
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
@@ -1546,7 +1549,10 @@ read an active RAM profile or ask your unlocked keyring, as they can your gh and
 this feature does not isolate agents behind a separate OS user.
 
 The owner CLI is `bmn browser accounts list`, `add NAME --url URL`, `sign-in NAME`, `mark NAME`,
-`unmark NAME` and `remove NAME`. List output contains no credential values. Google sign-in may be
+`unmark NAME`, `test NAME`, `untest NAME` and `remove NAME`. Test and untest run only on the owner's
+word and change QA interaction classification, separately from permission to sign in. List shows the
+test mark and permission revision; changes to test status, sign-in permissions, sites or account state
+invalidate the old revision. List output contains no credential values. Google sign-in may be
 refused by Google in automated browsers; it is supported only when the owner's installed check succeeds.
 
 **Which tools a run starts with.** While your team lists no tools the check leaves them unjudged. From the first tool on,
@@ -2149,6 +2155,31 @@ means a consistent report, including a valid NO-GO; it never means release appro
 reports name the field or contradiction and exit 1; usage errors exit 2. The installed skill's
 `check.mjs` uses the same validator. Reports and evidence stay local and uncommitted; real-account
 evidence never goes to the report publisher.
+
+### QA panes
+
+`bmn qa start --brief BRIEF --key K` requires a live workspace session and a `mode: session`
+brief. Main checks the approved QA role and provider, then creates an ordinary pane in its own
+QA folder. The native Codex app runs read-only with a scoped Playwright entry. Repeating a key
+returns the same run; changed brief bytes under that key refuse. BMN persists its binding before
+answering, and restart recovery finds a pane created before a lost response without launching another.
+
+`bmn qa wait ID [--timeout SECONDS] --json` returns the checked report or a named missing/invalid-report
+failure. `bmn qa stop ID` stops that exact incarnation and keeps its evidence under BMN's data folder.
+Only the caller and owner may read or stop it. The relay's PID, start ticks and ancestry are checked
+against that QA pane before it can connect; an ordinary session has no QA policy.
+
+The isolated signed-out desktop rehearsal has exercised the visible pane, repeated key, native
+agent/relay connection, retained screenshots and valid report. This does not establish native tool
+confinement. Account access remains disabled while that boundary is unresolved. Quick signed-out
+asks and signed-out pane checks never qualify authenticated access.
+
+V2 account reports reference a host-owned sealed ledger receipt. The host binds its run, brief,
+revision, immutable grants/cards, cumulative reservation/send counts, terminal outcomes and durable
+audit. It compares the receipt against a fresh SQLite projection at finish. The local report checker
+accepts `--host-summary RECEIPT` for consistency checks; it cannot authenticate a supplied file.
+Open/incomplete audits and uncertain operations require NO-GO. The production account/relay path
+and installed account verification remain unverified; the receipt implementation does not enable them.
 
 ### Each app's own read-only mode
 
@@ -2979,6 +3010,12 @@ show choices read-only; answer in the terminal. How a Telegram tap or Other answ
 needs, and that nothing submitted or uncertain is replayed:
 [remote-answers.md](remote-answers.md#explicit-manual-checkpoints-epics-5052). Text-only asks retain their
 existing behavior.
+
+QA activity permission cards are BMN-owned records linked to immutable account/site/activity limits.
+Their dedicated Approve and Deny controls record that decision without terminal input. Agent socket
+calls cannot open or resolve their reserved `bmn:qa-grant:` keys or answer a grant, even with the CLI
+owner token. Mark answered, Dismiss and typed replies grant nothing. Telegram offers approval only
+when it can show the complete terms. Account execution remains disabled pending native verification.
 
 Live question ownership is scoped to the foreground agent and current PTY incarnation,
 separate from durable Resume binding. Native Codex Default cards without observed

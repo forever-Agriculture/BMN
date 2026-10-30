@@ -16,6 +16,10 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'process_incarnation',
   'progress_evidence',
   'progress_observation',
+  'qa_audit',
+  'qa_grant',
+  'qa_grant_use',
+  'qa_run',
   'schema_migration',
   'session',
   'session_message',
@@ -810,5 +814,43 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
     version: 32,
     sql: `ALTER TABLE first_run_setup ADD COLUMN defaults_id TEXT NULL
       CHECK (defaults_id IS NULL OR length(defaults_id) = 36);`
+  },
+  {
+    version: 33,
+    sql: `CREATE TABLE qa_run (
+      qa_id TEXT PRIMARY KEY,
+      caller_session_id TEXT NOT NULL,
+      operation_key TEXT NOT NULL,
+      session_id TEXT UNIQUE,
+      record_json TEXT NOT NULL CHECK (json_valid(record_json)),
+      UNIQUE(caller_session_id, operation_key)
+    );`
+  },
+  {
+    version: 34,
+    sql: `CREATE TABLE qa_grant (
+      grant_id TEXT PRIMARY KEY,
+      qa_id TEXT NOT NULL REFERENCES qa_run(qa_id),
+      request_key TEXT NOT NULL,
+      card_id TEXT UNIQUE,
+      record_json TEXT NOT NULL CHECK(json_valid(record_json)),
+      UNIQUE(qa_id, request_key)
+    );
+    CREATE TABLE qa_grant_use (
+      use_id TEXT PRIMARY KEY,
+      qa_id TEXT NOT NULL REFERENCES qa_run(qa_id),
+      grant_id TEXT NOT NULL REFERENCES qa_grant(grant_id),
+      account_id TEXT NOT NULL,
+      activity TEXT NOT NULL,
+      record_json TEXT NOT NULL CHECK(json_valid(record_json))
+    );
+    CREATE INDEX qa_use_account ON qa_grant_use(account_id);
+    CREATE INDEX qa_use_grant_activity ON qa_grant_use(grant_id,activity);
+    CREATE TABLE qa_audit (
+      qa_id TEXT NOT NULL REFERENCES qa_run(qa_id),
+      sequence INTEGER NOT NULL CHECK(sequence > 0),
+      record_json TEXT NOT NULL CHECK(json_valid(record_json)),
+      PRIMARY KEY(qa_id,sequence)
+    );`
   }
 ])

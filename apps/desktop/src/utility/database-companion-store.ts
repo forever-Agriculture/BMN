@@ -1,5 +1,5 @@
 // MODULE: database-companion-store.ts - artifacts, attention, progress, receipts, drafts, Telegram message map and settings rows
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   AGENT_HISTORY_KEEP_DAYS,
   ARCHIVE_DELETE_AFTER_DAYS,
@@ -21,6 +21,7 @@ import {
   readStoredProducer,
   readStoredManualChoices,
   type ManualChoices,
+  type QaGrantTerms,
   type AttentionProducerBinding,
   validateVocabulary,
   AWAY_OWNER_ORIGINS,
@@ -57,6 +58,8 @@ import { TURN_OPERATIONS } from './database-turn-store'
 import { AWAY_OPERATIONS } from './database-away-store'
 import { PUSH_POLICY_OPERATIONS } from './database-push-policy-store'
 import { GRANT_OPERATIONS } from './database-grant-store'
+import { QA_OPERATIONS, getQaRun } from './database-qa-store'
+import { QA_GRANT_OPERATIONS, askQaGrant, qaGrantForKey, qaGrantForCard, bindQaGrantCard, answerQaGrant } from './database-qa-grant-store'
 import { AWAY_SUMMARY_OPERATIONS } from './database-away-summary'
 import { DECISION_OPERATIONS } from './database-decision-store'
 import { invalidWorkspaceStore as invalid, selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
@@ -184,8 +187,10 @@ interface AttentionRow {
   manual_choices_json: string | null
 }
 
-function attentionFromRow(row: AttentionRow): AttentionRecord {
+function attentionFromRow(database: DatabaseConnection, row: AttentionRow): AttentionRecord {
+  const grant = qaGrantForCard(database, row.request_id)
   return {
+    ...(grant ? { qaGrantId: grant.id } : {}),
     requestId: row.request_id,
     sessionId: row.session_id,
     incarnationId: row.incarnation_id,
@@ -258,7 +263,7 @@ export function openAttention(
          AND (incarnation_id IS ? OR incarnation_id IS NULL)
        ORDER BY opened_at DESC LIMIT 1`
     ).get(params.sessionId, params.incarnationId) as AttentionRow | undefined
-    if (covered) return { ...attentionFromRow(covered), changed: false }
+    if (covered) return { ...attentionFromRow(database, covered), changed: false }
   }
   const existing = database.prepare(
     "SELECT * FROM attention_request WHERE session_id = ? AND request_key = ? AND state = 'open'"
@@ -269,7 +274,7 @@ export function openAttention(
     // say better: same kind, nothing changes, so no revision bump, no unread flag and no second page.
     const sameProducer = (existing.producer_json ?? null) === (params.producer ? JSON.stringify(params.producer) : null)
     if (sameProducer && params.manualChoices === undefined && params.prompt === undefined && stored !== null && existing.kind === params.kind) {
-      return { ...attentionFromRow(existing), changed: false }
+      return { ...attentionFromRow(database, existing), changed: false }
     }
     const merged = params.prompt !== undefined && stored !== null ? mergeSamePrompt(stored, params.prompt) : null
     const nextPrompt = params.manualChoices ? null : merged ?? params.prompt ?? stored
@@ -288,7 +293,7 @@ export function openAttention(
         database.prepare('UPDATE attention_request SET prompt_json = ? WHERE request_id = ?').run(promptJson, existing.request_id)
         return { ...getAttention(database, existing.request_id), changed: false }
       }
-      return { ...attentionFromRow(existing), changed: false }
+      return { ...attentionFromRow(database, existing), changed: false }
     }
     // Another dialog of the agent takes the slot (a Claude permission its countdown denied, then the next one): the one
     // before is kept as closed without an answer, under an id of its own, so it is not lost to his return (Epic 78).
@@ -346,7 +351,76 @@ export function getAttention(database: DatabaseConnection, requestId: string): A
     | AttentionRow
     | undefined
   if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'The attention request was not found')
-  return attentionFromRow(row)
+  return attentionFromRow(database, row)
+}
+
+/** Only display fields enter the fingerprint; answering/seeing a card never changes its terms. */
+function qaGrantCardSha256(record: AttentionRecord): string {
+  return createHash('sha256').update(JSON.stringify({
+    sessionId: record.sessionId, incarnationId: record.incarnationId, requestKey: record.requestKey,
+    kind: record.kind, title: record.title, body: record.body, expiresAt: record.expiresAt,
+    manualChoices: record.manualChoices, prompt: record.prompt
+  })).digest('hex')
+}
+
+/** Internal broker operation. Socket attention.open cannot create or change this reserved namespace. */
+export function openQaGrantRequest(database: DatabaseConnection, request: {
+  id: string; key: string; terms: QaGrantTerms; incarnationId: string | null
+}, now: string): { grant: ReturnType<typeof askQaGrant>; card: AttentionRecord } {
+  return database.transaction(() => {
+    const grant = askQaGrant(database, request, now)
+    if (grant.card) return { grant, card: getAttention(database, grant.card.id) }
+    const run = getQaRun(database, grant.terms.qaId)!
+    const caller = selectSession(database, run.callerSessionId)
+    if (caller.archivedAt !== null || caller.workspaceId !== run.workspaceId) return invalid('QA_GRANT_RUN_CHANGED')
+    const terms = grant.terms
+    const card = openAttention(database, {
+      sessionId: caller.sessionId, incarnationId: request.incarnationId,
+      requestKey: `bmn:qa-grant:${grant.id}`, kind: 'permission', origin: 'cli',
+      title: 'Allow these QA activities?', expiresAt: terms.expiresAt,
+      body: [`Account: ${terms.account.alias}`, `Site: ${terms.origin}`,
+        ...terms.limits.map(limit => `${limit.activity === 'report.generate' ? 'Report generation' : 'Brainstorming sessions'}: at most ${limit.count}`),
+        `Expires: ${terms.expiresAt}`,
+        'Failed or uncertain activities still consume their limit.',
+        'Approving adds a new allowance; it does not replace earlier approvals.'].join('\n'),
+      manualChoices: { options: [{ label: 'Approve', description: 'Allow only the activities and limits shown.' },
+        { label: 'Deny', description: 'Keep this account look-only.' }], allowOther: true }
+    }, randomUUID(), now)
+    const bound = bindQaGrantCard(database, grant.id, { id: card.requestId, revision: card.revision, sha256: qaGrantCardSha256(card) })
+    return { grant: bound, card: getAttention(database, card.requestId) }
+  })()
+}
+
+/** Concurrent held requests retain the first card's expiry and all its other immutable terms. */
+export function openQaHeldGrantRequest(database: DatabaseConnection, request: Parameters<typeof openQaGrantRequest>[1], now: string): ReturnType<typeof openQaGrantRequest> {
+  return database.transaction(() => {
+    const previous = qaGrantForKey(database, request.terms.qaId, request.key)
+    return openQaGrantRequest(database, previous ? { ...request, terms: { ...request.terms, expiresAt: previous.terms.expiresAt } } : request, now)
+  })()
+}
+
+/** Host-only owner route: the actual card and grant change together, never terminal input or drafts. */
+export function answerQaGrantCard(database: DatabaseConnection, request: {
+  requestId: string; revision: number; approved: boolean; via: 'app' | 'telegram';
+  operationKey: string; runIncarnationId: string | null
+}, now: string): AttentionRecord {
+  return database.transaction(() => {
+    const grant = qaGrantForCard(database, request.requestId)
+    const card = getAttention(database, request.requestId)
+    const run = grant ? getQaRun(database, grant.terms.qaId) : null
+    if (!grant || !run || !['preparing', 'running'].includes(run.state) || run.incarnationId !== request.runIncarnationId ||
+      card.sessionId !== run.callerSessionId || card.state !== 'open' || card.kind !== 'permission' ||
+      card.revision !== request.revision || card.revision !== grant.card?.revision || qaGrantCardSha256(card) !== grant.card.sha256) {
+      return invalid('QA_GRANT_CARD_STALE')
+    }
+    const caller = selectSession(database, card.sessionId)
+    if (caller.archivedAt !== null || caller.workspaceId !== run.workspaceId) return invalid('QA_GRANT_RUN_CHANGED')
+    answerQaGrant(database, { id: grant.id, cardId: card.requestId, cardRevision: card.revision,
+      cardSha256: qaGrantCardSha256(card), approved: request.approved, via: request.via, operationKey: request.operationKey }, now)
+    return closeAttention(database, { requestId: card.requestId, expectedRevision: card.revision }, 'answered',
+      request.approved ? 'Approved the named QA activities and limits' : 'Denied QA activities', now,
+      request.via === 'app' ? 'owner' : 'telegram')
+  })()
 }
 
 /**
@@ -469,7 +543,7 @@ export function listAttention(database: DatabaseConnection): AttentionRecord[] {
   const closed = database.prepare(
     "SELECT * FROM attention_request WHERE state NOT IN ('open', 'recorded') ORDER BY resolved_at DESC, rowid DESC LIMIT 50"
   ).all() as AttentionRow[]
-  return [...open, ...closed].map(attentionFromRow)
+  return [...open, ...closed].map(row => attentionFromRow(database, row))
 }
 
 /**
@@ -484,7 +558,7 @@ export function awayWentOn(database: DatabaseConnection, call: { since: string; 
   const args = [call.since, call.until, ...AWAY_OWNER_ORIGINS]
   const { total } = database.prepare(`SELECT COUNT(*) AS total FROM attention_request WHERE ${where}`).get(...args) as { total: number }
   const rows = database.prepare(`SELECT * FROM attention_request WHERE ${where} ORDER BY resolved_at, rowid LIMIT ?`).all(...args, call.limit) as AttentionRow[]
-  return { records: rows.map(attentionFromRow), complete: rows.length === total, total }
+  return { records: rows.map(row => attentionFromRow(database, row)), complete: rows.length === total, total }
 }
 
 /**
@@ -500,14 +574,14 @@ export function awayAnsweredWaits(database: DatabaseConnection, call: { since: s
   const args = [...AWAY_OWNER_ORIGINS, call.since, call.until, call.minWaitMs]
   const { total } = database.prepare(`SELECT COUNT(*) AS total FROM attention_request WHERE ${where}`).get(...args) as { total: number }
   const rows = database.prepare(`SELECT * FROM attention_request WHERE ${where} ORDER BY opened_at, rowid LIMIT ?`).all(...args, call.limit) as AttentionRow[]
-  return { records: rows.map(attentionFromRow), complete: rows.length === total, total }
+  return { records: rows.map(row => attentionFromRow(database, row)), complete: rows.length === total, total }
 }
 
 /** Private delivery metadata never enters AttentionRecord, receipts or agent APIs. */
 export function listQuietAttention(database: DatabaseConnection): Array<{ record: AttentionRecord; heldAt: number; eligible: boolean }> {
   const rows = database.prepare(`SELECT * FROM attention_request WHERE telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL ORDER BY opened_at, rowid`)
     .all() as Array<AttentionRow & { telegram_quiet_held_at: number; telegram_quiet_eligible: number }>
-  return rows.map(row => ({ record: attentionFromRow(row), heldAt: row.telegram_quiet_held_at, eligible: row.telegram_quiet_eligible === 1 }))
+  return rows.map(row => ({ record: attentionFromRow(database, row), heldAt: row.telegram_quiet_held_at, eligible: row.telegram_quiet_eligible === 1 }))
 }
 
 /** A durable attempt remains suppressive even after delivery membership or history is retired. */
@@ -1475,6 +1549,11 @@ export const COMPANION_OPERATIONS = Object.freeze({
   ...AWAY_OPERATIONS,
   ...PUSH_POLICY_OPERATIONS,
   ...GRANT_OPERATIONS,
+  ...QA_OPERATIONS,
+  ...QA_GRANT_OPERATIONS,
+  openQaGrantRequest,
+  openQaHeldGrantRequest,
+  answerQaGrantCard,
   ...DECISION_OPERATIONS,
   ...AWAY_SUMMARY_OPERATIONS
 })

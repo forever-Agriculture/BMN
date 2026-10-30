@@ -11,6 +11,7 @@ export declare class BrowserAccountsStore {
   create(name: string, start: string): Promise<AccountMetadata>
   mark(id: string, credentials: { username: string; password: string; authenticator?: string }): Promise<AccountMetadata>
   unmark(id: string): Promise<void>
+  setTest(id: string, enabled: boolean): Promise<AccountMetadata>
   remove(id: string): Promise<void>
   setState(id: string, state: string, options?: { notify?: boolean }): Promise<AccountMetadata>
 }

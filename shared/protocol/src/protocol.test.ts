@@ -74,6 +74,8 @@ describe('protocol surface', () => {
         'setup.workspace',
         'setup.defaults.claim',
         'setup.hookEvidence',
+        'qa.bind',
+        'qa.grant.answer',
         'session.create',
         'session.list',
         'session.update',
@@ -173,7 +175,8 @@ describe('protocol surface', () => {
     // Story79.3 adds first-run initialization, progress read and owner completion.
     // Story79.4 adds the one-time ownership identity claim.
     // Story79.3 also reads state-only evidence that a Codex hook was observed.
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(96)
+    // Epic100 adds the main-only exact QA binding.
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(98)
   })
 
   it('exports the initial stable error codes', () => {

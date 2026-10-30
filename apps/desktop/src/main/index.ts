@@ -84,6 +84,7 @@ import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import { START_INSTALLS, installAgentsIpcHandlers, messageTeamAnswer, type StartInstall } from './agents-ipc'
+import { prepareQaPane } from '../../bin/agents-team-qa-prepare.mjs'
 import { createSessionEnvironmentReader } from './session-environment'
 import { transcribeRecording } from './voice-engine'
 import {
@@ -481,7 +482,23 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   })
   launched.client.onProgramCopy((message) => void programCopy(message))
   // Epic 66: the host asks here what only this process may read from the owner's team.
-  launched.client.answerMessageTeam(messageTeamAnswer)
+  launched.client.answerMessageTeam(async question => {
+    if (question.kind !== 'qa-launch') return messageTeamAnswer(question)
+    let created: Awaited<ReturnType<typeof createSessionRuntime>> | undefined
+    try {
+      const environment = createSessionEnvironmentReader(() => process.env)
+      await environment.refresh()
+      const launch = prepareQaPane(question.request, environment.current().env, bmnCliScript())
+      created = await createSessionRuntime({ workspaceId: question.request.workspaceId, name: 'QA', cwd: question.request.folder,
+        executable: launch.executable, argv: launch.argv, cols: 100, rows: 28 }, testMode)
+      await launched.client.request(METHOD_REGISTRY.qaBind, { id: question.request.qaId, sessionId: created.session.sessionId, incarnationId: created.startup.incarnationId })
+      try { applicationWindow?.webContents.send('aiterm:qa-created', created) } catch { /* Startup recovery still includes the bound pane. */ }
+      return { qa: { sessionId: created.session.sessionId, incarnationId: created.startup.incarnationId } }
+    } catch {
+      if (created) await launched.client.request(METHOD_REGISTRY.sessionStop, { sessionId: created.session.sessionId, incarnationId: created.startup.incarnationId, cause: 'explicit' }).catch(() => undefined)
+      return { qaFailure: 'QA_START_FAILED: the approved route or pane could not be prepared; inspect the local QA record' }
+    }
+  })
   void appEvents.prime()
   reportPresence()
   const setupProfile = await launched.client.request<FirstRunSetupRecord>(METHOD_REGISTRY.setupInitialize, { existingProfile: hasExistingSetupProfile() })

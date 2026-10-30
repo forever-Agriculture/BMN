@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { BrowserAccountsStore, profileArchive, restoreArchive } from '../../apps/desktop/bin/browser-accounts-store.mjs'
+import { runBrowserCommand } from '../../apps/desktop/bin/browser-accounts-cli.mjs'
 import { pageAddress, profileObservation, signedInVerdict } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
 import { AccountBrowserRelay, authenticatorCode, safeHeaders } from '../../apps/desktop/bin/browser-account-relay.mjs'
 import { accountBrowserDefinition, isAccountBrowser } from '../../apps/desktop/bin/agents-tools.mjs'
@@ -29,6 +30,52 @@ function fixture() {
   return { store, secrets, root, runtime, lock: () => { locked = true }, unlock: () => { locked = false } }
 }
 function seed(lease, value = 'synthetic-session') { mkdirSync(join(lease.profile, 'Default'), { recursive: true }); writeFileSync(join(lease.profile, 'Default', 'Cookies'), value) }
+describe('QA test-account marks', () => {
+  it('defaults to ordinary and persists idempotent test/untest with monotonic permission revisions', async () => {
+    const { store } = fixture(), account = await store.create('Synthetic QA', 'https://synthetic.test')
+    expect(store.list()[0]).toMatchObject({ test: false, qaRevision: 1 })
+    await store.setTest(account.id, true)
+    expect(store.metadata(account.id)).toMatchObject({ test: true, qaRevision: 2, marked: false })
+    await store.setTest(account.id, true)
+    expect(store.metadata(account.id).qaRevision).toBe(2)
+    const reopened = new BrowserAccountsStore({ environment: store.environment })
+    expect(reopened.list()[0]).toMatchObject({ test: true, qaRevision: 2 })
+    await reopened.setTest(account.id, false)
+    expect(store.metadata(account.id)).toMatchObject({ test: false, qaRevision: 3 })
+    await expect(store.setTest(account.id, 'true')).rejects.toThrow()
+  })
+  it('invalidates the revision for changed permission fields, never for a checked timestamp', async () => {
+    const { store } = fixture(), account = await store.create('Synthetic QA', 'https://synthetic.test')
+    store.writeMeta({ ...store.metadata(account.id), qaRevision: 999, checked: '2026-10-29T13:00:00.000Z' })
+    expect(store.metadata(account.id).qaRevision).toBe(1)
+    for (const changed of [{ origins: ['https://another-synthetic.test'] }, { signInOrigins: ['https://login.synthetic.test'] },
+      { marked: true }, { credentialRevision: 'synthetic-new-credentials' }, { state: 'Sign in again' }]) {
+      const old = store.metadata(account.id)
+      store.writeMeta({ ...old, ...changed })
+      expect(store.metadata(account.id).qaRevision).toBe(old.qaRevision + 1)
+    }
+  })
+  it('legacy metadata is ordinary and cannot supply an arbitrary permission revision', async () => {
+    const { store } = fixture(), account = await store.create('Synthetic QA', 'https://synthetic.test')
+    const legacy = { ...account }; delete legacy.test; delete legacy.qaRevision
+    writeFileSync(join(store.folder(account.id), 'account.json'), JSON.stringify(legacy))
+    expect(store.metadata(account.id)).toMatchObject({ test: false, qaRevision: 1 })
+    store.writeMeta({ ...store.metadata(account.id), qaRevision: 100 })
+    expect(store.metadata(account.id).qaRevision).toBe(1)
+  })
+  it('the actual CLI test, list and untest paths work without signing in or reading credentials', async () => {
+    const { store } = fixture(), account = await store.create('Synthetic CLI QA', 'https://synthetic.test')
+    vi.stubEnv('BMN_DATA_HOME', store.environment.BMN_DATA_HOME)
+    const output = []; const write = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { output.push(String(chunk)); return true })
+    try {
+      expect(await runBrowserCommand(['accounts', 'test', account.name])).toBe(0)
+      expect(await runBrowserCommand(['accounts', 'list'])).toBe(0)
+      expect(JSON.parse(output.at(-1))[0]).toMatchObject({ id: account.id, test: true, marked: false, qaRevision: 2 })
+      expect(await runBrowserCommand(['accounts', 'untest', account.name])).toBe(0)
+      expect(store.metadata(account.id)).toMatchObject({ test: false, marked: false, qaRevision: 3 })
+    } finally { write.mockRestore(); vi.unstubAllEnvs() }
+  })
+})
 describe('keyring process timeout', () => {
   it('stops a stalled keyring helper through verified pidfd without ChildProcess.kill', async () => {
     const { spawn: realSpawn, spawnSync: realSpawnSync } = await vi.importActual('node:child_process')

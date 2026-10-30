@@ -31,11 +31,17 @@ debrief notes, never findings.
 ## 3. Mode and permissions
 
 - **quick-web / quick-bench:** signed out, on the named disposable loopback web app or isolated BMN bench.
-- **session:** use only the account aliases in the brief. An account marked test-full allows UI
-  interaction on its test site. Other accounts are look-only: navigate, read, snapshot, screenshot,
-  console, tabs and wait; no click, typing, fill, select, key press, upload, drag or evaluation.
+- **session, signed out with `accounts: []`:** on the named disposable synthetic loopback target,
+  perform the brief's UI interactions within the host's restrictions. Empty accounts authorize
+  no account selection or authenticated activity.
+- **session, using an account:** use only the aliases in the brief. The host must verify a saved
+  test mark before offering full test-site interaction. An ordinary account without a verified
+  owner grant is look-only: navigate, read, snapshot, screenshot, console, tabs and wait.
+  A verified planning grant or answered card permits only its named account, site, activities
+  and counts. `ordinary-granted` in a V2 brief describes testing intent; it grants nothing.
+  Arbitrary evaluation, unsafe callbacks and network-body tools stay unavailable on ordinary accounts.
 
-Record each used alias, its permission from the brief and its observed tool restrictions. Also
+Record each used alias, its permission (V1) or intent (V2) and observed tool restrictions. Also
 record the overall account/tool context. An alias, a brief
 or an instruction does not prove permission. Never use `browser_run_code_unsafe`; use
 `browser_evaluate` only on the disposable bench or loopback web target. Do not bypass a refusal,
@@ -44,8 +50,9 @@ or expose files.
 
 Before sending, deleting, paying or publishing on a test account, wait for a selectable action
 card naming the account, action, target and effect. Approval covers only that action and target.
-Timeout approves nothing. Continue independent checks; mark dependent criteria BLOCKED. Never
-perform state-changing actions on production or real accounts; use their look-only tools. Keep relevant redacted evidence local; real-account
+Timeout approves nothing. Continue independent checks; mark dependent criteria BLOCKED. Ordinary
+account activity requires the host's verified bounded grant before any request reaches the service.
+Do not retry an uncertain outcome or infer fresh allowance. Keep relevant redacted evidence local; real-account
 evidence stays inside the local BMN run folder and never goes to a report publisher.
 
 ## 4. Reconnaissance and smoke
@@ -142,7 +149,9 @@ ask returns JSON for the lead to save. The lead runs
 `bmn qa report check REPORT --brief BRIEF`; the bundled `node check.mjs REPORT --brief BRIEF`
 uses the same checker when BMN is unavailable. Do not work around a nested-command refusal.
 
-Keep reports and evidence local and uncommitted. For account use in a session, include the audit's
-observed-traffic summary, completeness and gaps; it is not proof that all changes were authorized.
+Keep reports and evidence local and uncommitted. V1 retains its observed-traffic audit summary.
+V2 account reports reference the host's sealed receipt by `receiptId` and `sha256`; never author
+counter totals. Missing receipt support blocks the account check. Open/incomplete audit or an
+uncertain activity requires NO-GO. See report.md for the local checker's `--host-summary` option.
 The lead may put a sanitized summary on the report page; real-account evidence is local-only.
 A valid report proves shape and consistency, not authenticity, authorization or screenshot quality.

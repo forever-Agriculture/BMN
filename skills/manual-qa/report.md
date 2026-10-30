@@ -50,3 +50,33 @@ node check.mjs REPORT --brief BRIEF
 Exit 0 means structurally consistent, including a valid NO-GO report; exit 1 names invalid fields
 or contradictions; exit 2 is usage. This command reads files only and needs no BMN socket. It does
 not prove the build was tested, enforce account permissions, waive acceptance or publish evidence.
+
+## V2 account sessions
+
+Authenticated sessions use `$defs.briefV2` and `$defs.reportV2`, both version 2 and `mode: "session"`.
+Accounts use `{alias, intent}`: `test-full`, `look-only` or `ordinary-granted`. The host verifies
+test marks and owner grants independently; the brief never authorizes an operation. The report's
+used aliases and intents must match the brief. V1 quick and signed-out reports keep their existing form.
+
+The host seals execution, marks unfinished reservations uncertain and closes the audit before
+deriving `host-summary.json` from SQLite. The model includes only
+`host_summary: {receiptId, sha256}`. The SHA-256 covers the canonical receipt bytes without the
+final newline. Inline counters or an inline audit summary are refused. The local checker uses:
+
+```sh
+bmn qa report check REPORT --brief BRIEF --host-summary HOST_RECEIPT
+```
+
+The receipt binds its run, reserved brief hash and revision, grant/card identities, account and site,
+approval source, activity counts and sanitized observed-traffic groups. `reserved` counts distinct
+durable reservations; `sent` counts distinct send commitments. These cumulative counts overlap;
+neither means the service executed an operation. Terminal outcomes are `succeeded`, `failed` and
+`uncertain`. Failed and uncertain reservations remain spent. An open/incomplete audit, any gap or
+uncertain outcome requires NO-GO, even when the observed UI goal passed.
+
+At session finish, the host compares the local receipt with a fresh derivation from the sealed
+database and verifies the model's reference. Missing, foreign, stale or modified receipts invalidate
+the report; the host never replaces a submitted claim. The standalone checker checks consistency
+with the supplied file and cannot authenticate that file against BMN's database. Only the sanitized
+receipt may accompany the verdict, goal, findings and dispositions on a report page. Account pages,
+responses, screenshots, bodies, headers, cookies and query values stay out of that projection.

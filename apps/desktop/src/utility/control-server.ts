@@ -19,6 +19,8 @@ import {
   type DecisionPayload,
   type DecisionReferenceKind,
   ERROR_CODES,
+  isQaRequestMeta,
+  QA_ACTIVITIES,
   isRecord,
   GUARD_AGENTS,
   GUARD_CAUSES,
@@ -74,6 +76,8 @@ export class ControlError extends Error {
 type ConversationAgentCli = LiveAgentCli
 
 export interface ControlHandlers {
+  qaSession?(sessionId: string, incarnationId: string): Promise<boolean>
+  qaRequest?(scope: ControlScope, method: string, params: Record<string, unknown>): Promise<unknown>
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
   isCurrentIncarnation(sessionId: string, incarnationId: string): boolean
   sessionExists(sessionId: string): boolean
@@ -971,6 +975,9 @@ export class ControlServer {
    * receipt, as `idempotent` would give it; a new request keeps the validation error.
    */
   private async dispatchOrReplay(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
+    // Check before dispatch and receipt replay: even a pre-binding receipt grants no wider QA scope.
+    if (scope.kind === 'session' && await this.options.handlers.qaSession?.(scope.sessionId, scope.incarnationId) &&
+      !['qa.policy', 'qa.agent', 'qa.connect', 'qa.grant.ask', 'qa.reserve', 'qa.send', 'qa.settle', 'qa.audit', 'qa.audit.close', 'qa.hold', 'qa.summary'].includes(method)) throw unauthorized('QA_CONTROL_SCOPE: this pane may only use its scoped QA protocol')
     try {
       return await this.dispatch(scope, method, rawParams, connection)
     } catch (error) {
@@ -994,6 +1001,62 @@ export class ControlServer {
   private async dispatch(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
     const { handlers } = this.options
     switch (method) {
+      case 'qa.grant.ask': {
+        const params = closedParams(rawParams, ['id', 'key', 'accountId', 'origin', 'limits', 'expiresAt'])
+        for (const key of ['id', 'key', 'accountId', 'origin', 'expiresAt']) requireText(params, key, { ...RULES.source, max: key === 'origin' ? 2048 : 128 })
+        if (!Array.isArray(params.limits) || params.limits.length < 1 || params.limits.length > 2) throw invalidError('QA limits must name one or two activities')
+        for (const item of params.limits) {
+          const limit = closedParams(item, ['activity', 'count'])
+          if (!QA_ACTIVITIES.includes(limit.activity as typeof QA_ACTIVITIES[number]) || !Number.isInteger(limit.count) || Number(limit.count) < 1 || Number(limit.count) > 3) throw invalidError('Invalid QA activity limit')
+        }
+        if (!handlers.qaRequest) throw invalidError('QA_SESSIONS_UNAVAILABLE')
+        return handlers.qaRequest(scope, method, params)
+      }
+      case 'qa.reserve':
+      case 'qa.send':
+      case 'qa.settle':
+      case 'qa.audit':
+      case 'qa.hold':
+      case 'qa.summary':
+      case 'qa.audit.close': {
+        const keys = method === 'qa.summary' ? [] : method === 'qa.reserve' ? ['id', 'grantId', 'activity', 'request', 'requestSha256'] : method === 'qa.settle' ? ['id', 'state', 'status'] : method === 'qa.audit' ? ['accountId', 'request', 'held'] : method === 'qa.hold' ? ['accountId', 'request', 'reason'] : method === 'qa.audit.close' ? ['gap'] : ['id']
+        const params = closedParams(rawParams, keys)
+        if (method === 'qa.reserve') {
+          for (const key of ['id', 'grantId', 'requestSha256']) requireText(params, key, RULES.source)
+          if (!QA_ACTIVITIES.includes(params.activity as typeof QA_ACTIVITIES[number]) || !/^[a-f0-9]{64}$/.test(String(params.requestSha256)) || !isQaRequestMeta(params.request)) throw invalidError('Invalid QA activity reservation')
+        } else if (method === 'qa.audit' || method === 'qa.hold') {
+          requireText(params, 'accountId', RULES.source)
+          if (!isQaRequestMeta(params.request) || method === 'qa.audit' && typeof params.held !== 'boolean') throw invalidError('Invalid QA audit metadata')
+          if (method === 'qa.hold') requireText(params, 'reason', RULES.source)
+        } else if (method === 'qa.audit.close') {
+          if (params.gap !== null && !['overflow', 'interrupted', 'relay-incomplete', 'broker-unreachable'].includes(String(params.gap))) throw invalidError('Invalid QA audit gap')
+        } else if (method !== 'qa.summary') {
+          requireText(params, 'id', RULES.source)
+          if (method === 'qa.settle' && (!['succeeded', 'failed', 'uncertain'].includes(String(params.state)) || params.status !== null && (!Number.isInteger(params.status) || Number(params.status) < 100 || Number(params.status) > 599))) throw invalidError('Invalid QA activity outcome')
+        }
+        if (!handlers.qaRequest) throw invalidError('QA_SESSIONS_UNAVAILABLE')
+        return handlers.qaRequest(scope, method, params)
+      }
+      case 'qa.start':
+      case 'qa.status':
+      case 'qa.stop':
+      case 'qa.policy':
+      case 'qa.agent':
+      case 'qa.connect': {
+        const keys = method === 'qa.start' ? ['brief', 'key'] : ['qa.connect', 'qa.agent'].includes(method) ? ['pid', 'ticks'] : method === 'qa.policy' ? [] : ['id']
+        const params = closedParams(rawParams, keys)
+        if (method === 'qa.start') {
+          if (!isRecord(params.brief) || JSON.stringify(params.brief).length > 128 * 1024) throw invalidError('QA brief must be a bounded object')
+          requireText(params, 'key', RULES.idempotencyKey)
+        } else if (['qa.connect', 'qa.agent'].includes(method)) {
+          requirePid(params)
+          if (!/^\d{1,20}$/.test(requireText(params, 'ticks', RULES.source))) throw invalidError('ticks must be a process start time')
+        } else if (method !== 'qa.policy') requireText(params, 'id', RULES.source)
+        if (!handlers.qaRequest) throw invalidError('QA_SESSIONS_UNAVAILABLE')
+        return handlers.qaRequest(scope, method, params)
+      }
+      case 'qa.grant.answer':
+        throw unauthorized('Only the owner answers QA activity grants in the BMN window')
       case 'auth':
         throw invalidError('Connection is already authenticated')
       case 'state.snapshot': {
@@ -1174,6 +1237,7 @@ export class ControlServer {
         if (requestKey.startsWith('handoff:')) throw invalidError('The handoff request key is reserved')
         // Only the plan-use watch opens these; a session re-opening one would rewrite its reset period (Story 37.2).
         if (requestKey.startsWith('usage:')) throw invalidError('The usage request key is reserved')
+        if (requestKey.startsWith('bmn:qa-grant:')) throw invalidError('The QA grant request key is reserved')
         const kind = requireEnum(params, 'kind', ATTENTION_KINDS)
         const title = requireText(params, 'title', RULES.title)
         const body = readText(params, 'body', RULES.body)
@@ -1285,6 +1349,7 @@ export class ControlServer {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin', 'evidence', 'producer'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalidError('Deliver or discard the handoff to resolve it')
+        if (requestKey.startsWith('bmn:qa-grant:')) throw invalidError('Use the owner card to answer a QA grant')
         const resolution = requireText(params, 'resolution', RULES.resolution)
         const origin = this.usableOrigin(params, scope, method, handlers)
         const evidence = readEvidence(params)

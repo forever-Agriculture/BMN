@@ -1,3 +1,4 @@
+// MODULE: pty-host-client.ts - typed requests and asynchronous main-owned answers for the terminal host
 import { randomUUID } from 'node:crypto'
 import { kill as killProcess } from 'node:process'
 import {
@@ -177,7 +178,7 @@ export class PtyHostClient {
   >()
   private readonly latestSessionStates = new Map<string, SessionProcessStateChangedMessage>()
   private readonly programCopyListeners = new Set<(message: ProgramCopyMessage) => void>()
-  private messageTeamAnswerer: ((question: MessageTeamQuestion) => MessageTeamAnswer) | null = null
+  private messageTeamAnswerer: ((question: MessageTeamQuestion) => MessageTeamAnswer | Promise<MessageTeamAnswer>) | null = null
   private readonly exitComplete: Promise<void>
   private resolveExit = (): void => undefined
   private rejectReady: (error: Error) => void = () => undefined
@@ -241,13 +242,14 @@ export class PtyHostClient {
       }
       if (isMessageTeamQuestionMessage(message)) {
         // The host waits a bounded time for this, so every question gets an answer, a failed one included.
-        let answer: MessageTeamAnswer = { failed: true }
-        try {
-          if (this.messageTeamAnswerer) answer = this.messageTeamAnswerer(message.question)
-        } catch {
-          answer = { failed: true }
+        const send = (answer: MessageTeamAnswer): void => {
+          this.process.postMessage({ kind: 'message-team-answer', id: message.id, answer } satisfies MessageTeamAnswerMessage)
         }
-        this.process.postMessage({ kind: 'message-team-answer', id: message.id, answer } satisfies MessageTeamAnswerMessage)
+        try {
+          const answer = this.messageTeamAnswerer?.(message.question) ?? { failed: true } as MessageTeamAnswer
+          if (answer instanceof Promise) void answer.then(send, () => send({ failed: true }))
+          else send(answer)
+        } catch { send({ failed: true }) }
         return
       }
       if (!isControlResponse(message)) return
@@ -327,7 +329,7 @@ export class PtyHostClient {
    * Epic 66: who answers the host's two questions about a message (a folder's repository; whether a provider
    * may see a sender's work). Only the app's entry point reads the owner's team, so the host has to ask.
    */
-  answerMessageTeam(answerer: (question: MessageTeamQuestion) => MessageTeamAnswer): void {
+  answerMessageTeam(answerer: (question: MessageTeamQuestion) => MessageTeamAnswer | Promise<MessageTeamAnswer>): void {
     this.messageTeamAnswerer = answerer
   }
 

@@ -669,13 +669,14 @@ export class TelegramCardKeeper {
       const ability = await this.deps.answerability(record)
       const active = ability.answerable && record.incarnationId !== null && record.incarnationId === this.deps.liveIncarnationId(record.sessionId)
       const tokens = active ? record.manualChoices.options.map(() => this.newToken()) : null
-      const other = active && !progress.typing ? this.newToken() : null
-      const typing = active && progress.typing ? this.newToken() : null
+      const other = active && !record.qaGrantId && !progress.typing ? this.newToken() : null
+      const typing = active && !record.qaGrantId && progress.typing ? this.newToken() : null
       const actions: TapAction[] = !active ? [] : typing ? [{ type: 'options', step: 0 }]
-        : [...record.manualChoices.options.map((_, index): TapAction => ({ type: 'choice', step: 0, index })), { type: 'other', step: 0 }]
-      return { state: active ? 'buttons' : 'open', actions, offersOther: active,
-        rendered: manualChoiceCard(header, record, tokens, other, typing, note ?? (!ability.answerable
-          ? ability.detail ?? (ability.reason === 'permissions-off' ? 'Phone permission answers are off. Use the laptop.' : null) : null)) }
+        : [...record.manualChoices.options.map((_, index): TapAction => ({ type: 'choice', step: 0, index })),
+          ...(other ? [{ type: 'other' as const, step: 0 }] : [])]
+      const rendered = manualChoiceCard(header, record, tokens, other, typing, note ?? (!ability.answerable
+        ? ability.detail ?? (ability.reason === 'permissions-off' ? 'Phone permission answers are off. Use the laptop.' : null) : null))
+      return rendered.keyboard ? { state: 'buttons', actions, offersOther: !!other, rendered } : { ...none, rendered }
     }
     if (!prompt) {
       if (record.kind === 'notice' && this.deps.acknowledge) return this.composeNotice(record, note)

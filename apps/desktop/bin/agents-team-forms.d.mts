@@ -1,5 +1,5 @@
 // MODULE: agents-team-forms.d.mts - types for each app's own read-only ask command (Epic 72, 72.9)
-export type AskFormName = 'codex-read-only' | 'claude-read-tools' | 'opencode-reader' | 'opencode-asker'
+export type AskFormName = 'codex-read-only' | 'codex-qa' | 'claude-read-tools' | 'opencode-reader' | 'opencode-asker'
 export declare const ASK_APPS: readonly string[]
 export declare const ASK_FORMS_CHECKED: Readonly<Record<string, { version: string; on: string }>>
 export declare const ASK_UNSUPPORTED: Readonly<Record<string, Record<string, string>>>
@@ -13,7 +13,7 @@ export interface AskCommandRequest { form: AskFormName; model: string; provider?
 export interface AskCommand { argv: string[]; environment: Record<string, string>; command: string[]; cwd: string; stdin: 'text' | 'stream-json' }
 export declare function appSearchPath(environment?: NodeJS.ProcessEnv | Record<string, string>): string
 export declare function askProgram(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): AskProgram | null
-export declare function codexMcpServers(program: AskProgram, cwd: string, environment?: NodeJS.ProcessEnv | Record<string, string>, options?: { config?: string[]; enabled?: string[]; browserServer?: { command: string; args: string[]; cwd: string } }): CodexMcpServer[]
+export declare function codexMcpServers(program: AskProgram, cwd: string, environment?: NodeJS.ProcessEnv | Record<string, string>, options?: { config?: string[]; enabled?: string[]; browserServer?: { command: string; args: string[]; cwd: string; env_vars?: string[] } }): CodexMcpServer[]
 export declare function checkCodexMcp(program: AskProgram, built: Pick<AskCommand, 'command' | 'cwd' | 'environment'>, browser?: { origin: string; interact: boolean; qa?: boolean } | null, folder?: string | null): void
 export declare function askFormName(harness: string, options: { project: string | null; label: string; textOnly?: boolean }): AskFormName
 export declare function askCommand(harness: string, program: AskProgram, request: AskCommandRequest): AskCommand
@@ -21,3 +21,6 @@ export declare function claudePictureMessage(pictures: { media_type: string; byt
 export interface ProgramFile { path: string; real: string; sha256: string; link: string | null; dev: string; ino: string; size: string; mtime_ns: string; ctime_ns: string }
 export declare function executableIdentity(program: AskProgram): { launcher: ProgramFile; payload: ProgramFile }
 export declare function sameProgram(identity: { launcher: ProgramFile; payload: ProgramFile }, program: AskProgram): boolean
+
+export declare const CODEX_QA_CONFIG: readonly string[]
+export declare const CODEX_QA_DISABLED: readonly string[]

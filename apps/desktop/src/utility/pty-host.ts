@@ -333,7 +333,7 @@ async function start(): Promise<void> {
     const timer = setTimeout(() => {
       teamQuestions.delete(id)
       resolve({ failed: true })
-    }, MESSAGE_TEAM_ANSWER_MS)
+    }, question.kind === 'qa-launch' ? 60_000 : MESSAGE_TEAM_ANSWER_MS)
     teamQuestions.set(id, { resolve, timer })
     parentPort.postMessage({ kind: 'message-team-question', id, question } satisfies MessageTeamQuestionMessage)
   })
@@ -383,6 +383,7 @@ async function start(): Promise<void> {
       if (!('allowed' in answer)) throw new Error('The app did not answer for the approved team')
       return answer
     },
+    qaLaunch: request => askTeam({ kind: 'qa-launch', request }),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion
@@ -713,6 +714,10 @@ async function start(): Promise<void> {
             finish()
           }
         }
+      case METHOD_REGISTRY.qaBind: {
+        if (Object.keys(params).length !== 3) throw new HostControlError(ERROR_CODES.invalidArgument, 'QA binding requires id and exact incarnation')
+        return database.companion('bindQaRun', stringValue(params, 'id'), stringValue(params, 'sessionId'), stringValue(params, 'incarnationId'))
+      }
       case METHOD_REGISTRY.sessionCreate: {
         if (!isSessionCreateParams(params)) {
           throw new HostControlError(

@@ -15,6 +15,7 @@ export function SessionRequestCard(props: {
   anchor: HTMLElement | null
   onAcknowledge(request: AttentionRecord): void
   onMarkAnswered(request: AttentionRecord): void
+  onAnswerGrant?(request: AttentionRecord, choice: 0 | 1): void
   onClose(returnFocus: boolean): void
 }): React.JSX.Element {
   const element = useRef<HTMLElement>(null)
@@ -64,7 +65,7 @@ export function SessionRequestCard(props: {
 
   const item = (request: AttentionRecord, cleared: boolean, phone = props.phone): React.JSX.Element => {
     const actionable = isActionableAttention(request)
-    const answerable = actionable && request.kind !== 'handoff'
+    const answerable = actionable && request.kind !== 'handoff' && !request.qaGrantId
     const place = props.place(request.sessionId)
     const age = relativeAge(request.openedAt, props.now)
     const expiry = expiryText(request.expiresAt, props.now)
@@ -87,7 +88,10 @@ export function SessionRequestCard(props: {
         <section key={index} aria-label={stripFormatCharacters(question.text)}>
           <h4>{stripFormatCharacters(question.text)}</h4>
           <ul>{question.options.map((option, optionIndex) => <li key={optionIndex}>
-            <span className="attention-prompt-label">{stripFormatCharacters(option.label)}</span>
+            {request.qaGrantId && props.onAnswerGrant && !cleared && optionIndex < 2
+              ? <button type="button" onClick={() => props.onAnswerGrant?.(request, optionIndex as 0 | 1)}>
+                {stripFormatCharacters(option.label)}</button>
+              : <span className="attention-prompt-label">{stripFormatCharacters(option.label)}</span>}
             {option.description ? <span className="attention-prompt-description">{stripFormatCharacters(option.description)}</span> : null}
           </li>)}</ul>
         </section>)}</div> : request.prompt?.type === 'permission' ? <div className="attention-prompt">

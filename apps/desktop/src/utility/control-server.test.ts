@@ -119,6 +119,8 @@ class TestClient {
 
 function fakeHandlers(current: Map<string, string>) {
   return {
+    qaSession: vi.fn<NonNullable<ControlHandlers['qaSession']>>(async () => false),
+    qaRequest: vi.fn(async (): Promise<unknown> => ({ qaId: 'qa-run', accounts: false })),
     isCurrentIncarnation: vi.fn((sessionId: string, incarnationId: string) => current.get(sessionId) === incarnationId),
     sessionExists: vi.fn((sessionId: string) => current.has(sessionId)),
     snapshot: vi.fn(async (): Promise<unknown> => ({ watermark: 7, sessions: [] })),
@@ -802,6 +804,8 @@ describe('control server validation', () => {
     ['missing publish key', 'artifact.publish', { path: '/tmp/notes.md' }],
     ['bad kind', 'attention.open', { requestKey: 'q', kind: 'urgent', title: 'Title' }],
     ['the plan-use notice key', 'attention.open', { requestKey: 'usage:codex:10080:29823300', kind: 'notice', title: 'T' }],
+    ['the QA grant key', 'attention.open', { requestKey: 'bmn:qa-grant:synthetic', kind: 'permission', title: 'T' }],
+    ['resolving a QA grant key', 'attention.resolve', { requestKey: 'bmn:qa-grant:synthetic', resolution: 'approved' }],
     ['expiry without timezone', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', expiresAt: '2026-09-14T12:00:00' }],
     ['unknown prompt type', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', prompt: { type: 'survey' } }],
     ['permission prompt on a question', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', prompt: {
@@ -1756,6 +1760,9 @@ describe('Away grant (Story 84.3)', () => {
     const answer = { periodId: 'p-1', runId: 'r', cardRevision: 1, choices: { rounds: 3 }, operationKey: 'k' }
     expectError(await owner.request('grant.answer', answer), ERROR_CODES.unauthorized)
     expectError(await agent.request('grant.answer', answer), ERROR_CODES.unauthorized)
+    const qaAnswer = { requestId: 'synthetic-card', revision: 1, choice: 0 }
+    expectError(await owner.request('qa.grant.answer', qaAnswer), ERROR_CODES.unauthorized)
+    expectError(await agent.request('qa.grant.answer', qaAnswer), ERROR_CODES.unauthorized)
   })
 
   it('reads a grant for any scope and records a use from a session only, naming one boundary or one item', async () => {
@@ -1900,5 +1907,59 @@ describe('decision records (Story 76.5)', () => {
     expect((await agent.request('decision.outcome', { key: 'storage-format', op: 'built', result: 'done', evidenceIds: ['artifact-1'] })).error).toBeUndefined()
     expect(fixture.handlers.decisionOutcome).toHaveBeenCalledWith({ sessionId: 'session-1', key: 'storage-format', op: 'built', result: 'done', evidence: ['artifact-1'] })
     expectError(await agent.request('decision.outcome', { key: 'storage-format', op: 'built', result: 'approved' }), ERROR_CODES.invalidArgument)
+  })
+})
+
+describe('QA control scope', () => {
+  it('admits only closed broker messages and refuses private request payloads', async () => {
+    const fixture = await serverFixture(); fixture.handlers.qaSession.mockResolvedValue(true)
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const meta = { method: 'POST', origin: 'http://127.0.0.1:4173', path: '/paid/report', queryKeys: [] }
+    const reservation = { id: 'use-1', grantId: 'grant-1', activity: 'report.generate', request: meta, requestSha256: 'a'.repeat(64) }
+    expect((await client.request('qa.reserve', reservation)).error).toBeUndefined()
+    expect((await client.request('qa.send', { id: 'use-1' })).error).toBeUndefined()
+    expect((await client.request('qa.settle', { id: 'use-1', state: 'succeeded', status: 200 })).error).toBeUndefined()
+    expect((await client.request('qa.summary', {})).error).toBeUndefined()
+    const admitted = fixture.handlers.qaRequest.mock.calls.length
+    for (const request of [{ ...meta, headers: {} }, { ...meta, body: 'private' }, { ...meta, path: '/paid/report?secret=value' }]) {
+      expectError(await client.request('qa.reserve', { ...reservation, request }), ERROR_CODES.invalidArgument)
+    }
+    expectError(await client.request('qa.reserve', { ...reservation, activity: 'invented' }), ERROR_CODES.invalidArgument)
+    expectError(await client.request('qa.settle', { id: 'use-1', state: 'refunded', status: 200 }), ERROR_CODES.invalidArgument)
+    expectError(await client.request('qa.summary', { counters: { spent: 0 } }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.qaRequest.mock.calls).toHaveLength(admitted)
+  })
+  it('checks bounded requested limits but never offers owner approval over the socket', async () => {
+    const fixture = await serverFixture(); fixture.handlers.qaSession.mockResolvedValue(true)
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const request = { id: 'qa-run', key: 'planning-1', accountId: 'synthetic-account', origin: 'http://127.0.0.1:4173',
+      limits: [{ activity: 'report.generate', count: 1 }], expiresAt: '2026-10-29T14:00:00.000Z' }
+    expect((await client.request('qa.grant.ask', request)).error).toBeUndefined()
+    for (const count of [0, 4, '1']) expectError(await client.request('qa.grant.ask', { ...request, limits: [{ activity: 'report.generate', count }] }), ERROR_CODES.invalidArgument)
+    expectError(await client.request('qa.grant.answer', { approved: true }), ERROR_CODES.unauthorized)
+  })
+  it('refuses ordinary socket methods, including nested starts, while allowing only its QA protocol', async () => {
+    const fixture = await serverFixture(); fixture.handlers.qaSession.mockResolvedValue(true)
+    const client = await authenticated(fixture, sessionToken(fixture))
+    for (const method of ['state.snapshot', 'session.list', 'message.send', 'handoff.prepare', 'artifact.publish', 'qa.start', 'qa.status', 'qa.grant.answer']) {
+      const result = await client.request(method, {})
+      expectError(result, ERROR_CODES.unauthorized)
+      expect(result.error?.message).toContain('QA_CONTROL_SCOPE')
+    }
+    expect((await client.request('qa.policy', {})).result).toEqual({ qaId: 'qa-run', accounts: false })
+    expect(fixture.handlers.snapshot).not.toHaveBeenCalled()
+    expect(fixture.handlers.sendMessage).not.toHaveBeenCalled()
+  })
+  it('a receipt from before QA binding cannot replay around the narrower scope; ordinary sessions and owner still work', async () => {
+    const fixture = await serverFixture(); const client = await authenticated(fixture, sessionToken(fixture))
+    const params = { path: join(fixture.root, 'synthetic.txt'), idempotencyKey: 'before-qa-binding' }
+    expect((await client.request('artifact.publish', params)).error).toBeUndefined()
+    fixture.handlers.qaSession.mockImplementation(async sessionId => sessionId === 'session-1')
+    expectError(await client.request('artifact.publish', params), ERROR_CODES.unauthorized)
+    expect(fixture.handlers.publishArtifact).toHaveBeenCalledTimes(1)
+    const ordinary = await authenticated(fixture, sessionToken(fixture, 'session-2', 'incarnation-2'))
+    expect((await ordinary.request('state.snapshot')).result).toMatchObject({ watermark: 7 })
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expect((await owner.request('state.snapshot')).result).toMatchObject({ watermark: 7 })
   })
 })

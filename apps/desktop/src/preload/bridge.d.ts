@@ -255,6 +255,7 @@ export interface AiTerminalBridge {
   /** Whether Quick look holds unsaved edits, so the window's close and Quit ask first (Story 68.1); never what they are. */
   reportQuickLookUnsaved(unsaved: boolean): void
   onOpenSession(listener: (sessionId: string) => void): () => void
+  onQaSessionCreated(listener: (created: CreatedSession) => void): () => void
   /** Story 42.1: a program in one of the window's sessions put text on the clipboard with OSC 52. */
   onProgramCopy(listener: (notice: ProgramCopyNotice) => void): () => void
   /** Whether the owner has left the desktop idle; replays the current value to each new listener. */
@@ -292,6 +293,7 @@ export interface AiTerminalBridge {
   cancelQuickLookSearch(requestId: string): Promise<{ cancelled: true }>
   listAttention(): Promise<AttentionRecord[]>
   markAttentionSeen(requestId: string): Promise<AttentionRecord>
+  answerQaGrant(requestId: string, revision: number, choice: 0 | 1): Promise<AttentionRecord>
   resolveAttention(
     requestId: string,
     resolution?: string,

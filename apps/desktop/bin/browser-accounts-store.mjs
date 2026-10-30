@@ -27,6 +27,15 @@ export function atomicJson(path, value) {
   return JSON.parse(readFileSync(path, 'utf8'))
 }
 function readJson(path) { return JSON.parse(readFileSync(path, 'utf8')) }
+function qaMetadata(meta) {
+  const qaRevision = meta.qaRevision ?? 1
+  if (!Number.isSafeInteger(qaRevision) || qaRevision < 1) throw new BrowserAccountError('ACCOUNT_METADATA_INVALID', 'Account permission revision is invalid.')
+  return { ...meta, test: meta.test === true, qaRevision }
+}
+function permissionFields(meta) {
+  return JSON.stringify([meta.name, meta.state, meta.marked === true, meta.test === true, meta.credentialRevision ?? null,
+    [...(meta.origins ?? [])].sort(), [...(meta.signInOrigins ?? [])].sort()])
+}
 export async function withAccountLock(path, action, shared = false) {
   privateFolder(dirname(path))
   const fd = openSync(path, 'a', 0o600); closeSync(fd)
@@ -76,13 +85,21 @@ export class BrowserAccountsStore {
   }
   folder(id) { if (!/^[a-f0-9-]{36}$/u.test(id)) throw new Error('Invalid account id'); return join(this.root, id) }
   lock(id, fn, shared = false) { return withAccountLock(join(this.root, 'locks', `${id}.lock`), fn, shared) }
-  metadata(id) { try { return readJson(join(this.folder(id), 'account.json')) } catch { throw new BrowserAccountError('ACCOUNT_REMOVED', 'Browser account no longer exists.') } }
-  writeMeta(meta) { return atomicJson(join(this.folder(meta.id), 'account.json'), meta) }
+  metadata(id) { try { return qaMetadata(readJson(join(this.folder(id), 'account.json'))) } catch { throw new BrowserAccountError('ACCOUNT_REMOVED', 'Browser account no longer exists or its metadata is invalid.') } }
+  writeMeta(meta) {
+    const path = join(this.folder(meta.id), 'account.json'), previous = existsSync(path) ? this.metadata(meta.id) : null
+    const qaRevision = previous ? previous.qaRevision + Number(permissionFields(previous) !== permissionFields(meta)) : 1
+    return atomicJson(path, qaMetadata({ ...meta, qaRevision }))
+  }
+  async setTest(id, enabled) {
+    if (typeof enabled !== 'boolean') throw new BrowserAccountError('TEST_MARK_INVALID', 'Use test or untest for this account.')
+    return this.lock(id, () => this.writeMeta({ ...this.metadata(id), test: enabled }))
+  }
   list() {
     if (!existsSync(this.root)) return []
     return readdirSync(this.root).filter(id => /^[a-f0-9-]{36}$/u.test(id)).flatMap(id => {
       try { return [this.metadata(id)] } catch { return [] }
-    }).map(({ id, name, start, landing, origins, state, checked, marked, signInOrigins }) => ({ id, name, start, landing, sites: origins, state, checked, marked, signInOrigins }))
+    }).map(({ id, name, start, landing, origins, state, checked, marked, signInOrigins, test, qaRevision }) => ({ id, name, start, landing, sites: origins, state, checked, marked, signInOrigins, test, qaRevision }))
   }
   find(name) { const row = this.list().find(row => row.id === name || row.name === name); if (!row) throw new BrowserAccountError('ACCOUNT_MISSING', 'Browser account was not found.'); return row.id }
   runtime() {

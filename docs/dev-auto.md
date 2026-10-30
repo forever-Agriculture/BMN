@@ -109,6 +109,36 @@ expiry, the counts it records) and what is the run's rule are in [agent-control.
 Away grant".
 
 
+## Manual QA in the review phase
+
+dev-auto's shared Claude Code/Codex instructions run the `qa` teammate beside the quick pre-review
+on a frozen candidate with a disposable running interface. The lead supplies the goal, original
+problem, scope, criteria, designs, regression checklist and starting state, excluding implementation
+claims and earlier review conclusions. QA findings join the same consolidated repair. Repaired and
+later materially changed flows are retested inside the existing allowance.
+
+A consistent NO-GO remains blocking; report-validation exit 0 never means product acceptance.
+The workflow gate also checks the native record, frozen revision/target, retained screenshot hashes,
+original finding facts and current retest observations. A finding left open proves no retest, and
+an unchanged candidate cannot close an intermittent defect as a verified fix. Only approved Run needs
+can defer a criterion; its original report and product verdict remain visible.
+
+A manual-QA epic keeps an implementing lead: dispatch QA, triage, fix within scope or record allowed
+deferrals with follow-up coordinates, retest repairs, then perform whole-epic reviews. Completing its
+audit mission does not claim a product GO. Report pages show QA's goal check, verdict, findings and
+their fate using synthetic or sanitized evidence. After three real epics with a running interface,
+the owner receives the planned evaluation of QA's findings, misses, coverage, unavailable passes,
+false findings and known time/usage; no automatic switch-off.
+
+The gate accepts quick-ask exports and saved `bmn qa wait --json` session receipts. A session receipt
+binds the native agent, relay, reserved brief, report and retained image hashes. It establishes
+record consistency; native tool confinement and account permission require separate verification.
+
+Current fallback: QA runs on signed-out loopback web targets, through quick asks or visible native
+QA sessions. Bench QA is unavailable. Account access stays disabled while native tool confinement
+is unresolved; a passing signed-out session never qualifies authenticated access.
+Candidates without any running interface record QA not applicable with the reason.
+
 ## Morning digest
 
 Enable Morning digest and choose a local time in Preferences → Notifications → Telegram. It is off by default,

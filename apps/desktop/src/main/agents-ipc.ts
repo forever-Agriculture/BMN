@@ -911,6 +911,7 @@ async function rulesOutcome(context: RulesIpcContext, result: CliResult, success
  * team can be read, which the caller answers as a failure and the host treats as a refusal.
  */
 export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAnswer {
+  if (question.kind === 'qa-launch') return { failed: true } // The entry point owns session creation.
   if (question.kind === 'source-root') return { root: workspaceRoot(question.folder) }
   if (question.kind === 'policy-pointer') {
     // Story 83.3: the push policy authorizes nothing unless the master points to it; Rules Undo takes the pointer away.

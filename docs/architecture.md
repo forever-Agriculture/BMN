@@ -101,6 +101,24 @@ launching terminal's identity and the launching agent's session identity. The ex
 `SHELL_ENVIRONMENT_PRIVATE_KEYS` in `session-manager.ts`; owner configuration such as
 `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE` passes through.
 
+**QA panes.** The control socket admits a start only from a live workspace session. SQLite reserves
+its caller/key identity before main reads the approved team and creates an ordinary session in a
+QA-owned folder. Main persists its exact session/incarnation binding before answering. Native Codex
+uses read-only mode with one scoped Playwright relay; the utility checks the relay's process ancestry
+and start ticks. Reports belong to the caller and owner. Restart recovery never starts another QA.
+An isolated signed-out desktop rehearsal exercised the visible pane, repeated key, actual native
+agent/relay connection, retained screenshots and valid report. Native tool confinement and the
+production account path remain unverified, so account access stays disabled.
+
+The QA permission ledger stores immutable grants, first-writer card links, non-refundable activity
+reservations and ordered redacted audit metadata in SQLite. Owner answers close the actual unchanged
+card and update its grant in one transaction, through window IPC or the verified Telegram handler.
+Neither path writes to a terminal or creates a draft. Restart converts unfinished operations to
+uncertain outcomes, preserving consumed limits and marking interrupted audits incomplete. The
+browser request gate has source tests, and the actual isolated owner-window approval path has been
+exercised. Production account wiring, native qualification and the browser/service path remain
+unverified; these tables alone enable no account.
+
 **One live view per session.** Output goes from the PTY to one xterm.js instance over a dedicated,
 bounded MessagePort. There is no tmux and no replay of old bytes into a live terminal, because a
 second emulator tracking the same state drifts. The screen mirror that remote answers and the Away

@@ -411,8 +411,29 @@ export function manualCardFits(title: string, labels: readonly string[], request
   return escapeHtml(title).length + escapeHtml(requestKey).length + labels.reduce((sum, label) => sum + escapeHtml(label).length + 12, 0) + 1000 <= 4096
 }
 
+/** A grant is a BMN decision. Never offer consent to clipped or redacted terms. */
+function qaActivityGrantCard(header: CardHeader, record: AttentionRecord, tokens: string[] | null, note: string | null): RenderedCard {
+  const choices = record.manualChoices!
+  const heading = [headerLine('🔐', header), `<b>${escapeHtml(said(record.title))}</b>`,
+    '<i>QA activity permission · records approval in BMN</i>']
+  const body = record.body ?? ''
+  const shown = said(body)
+  let base = [...heading, ...choices.options.map((option, index) =>
+    `${index + 1}. <b>${escapeHtml(said(option.label))}</b>${option.description ? ` — ${escapeHtml(said(option.description))}` : ''}`),
+    '', escapeHtml(shown)].join('\n')
+  let trailer = escapeHtml(clip(note ?? (tokens ? 'Choose Approve or Deny.' : 'Phone permission answers are unavailable; use the laptop.'), 240))
+  if (shown !== body || base.length + trailer.length + 12 > 4096) {
+    tokens = null
+    base = heading.join('\n')
+    trailer = 'Review the full permission terms at the laptop and approve or deny there.'
+  }
+  return { base, text: `${base}\n\n<i>${trailer}</i>`, keyboard: tokens === null ? null :
+    choices.options.map((option, index) => [{ text: said(option.label), callback_data: tokens[index]! }]) }
+}
+
 export function manualChoiceCard(header: CardHeader, record: AttentionRecord,
   tokens: string[] | null, other: string | null, typing: string | null, note: string | null): RenderedCard {
+  if (record.qaGrantId) return qaActivityGrantCard(header, record, tokens, note)
   const choices = record.manualChoices!
   const essential = [headerLine(record.kind === 'permission' ? '🔐' : '❓', header),
     `<b>${escapeHtml(said(record.title))}</b>`,

@@ -857,6 +857,26 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
 
 describe('manual choice cards without native epochs', () => {
   const manual = () => record(null, { manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: 'Keep pending' }], allowOther: true } })
+  it('a QA grant offers only exact choices and displays all permission terms', async () => {
+    const request = { ...manual(), qaGrantId: 'grant-a', body: 'Terms: ' + 'S'.repeat(700) }
+    const h = setup({ record: request, epoch: null })
+    await h.keeper.page(request)
+    expect(h.connector.sends[0]!.options.keyboard!.flat().map(button => button.text)).toEqual(['Proceed', 'Wait'])
+    expect(h.connector.sends[0]!.text).toContain(request.body)
+    expect(h.connector.sends[0]!.text).toContain('records approval in BMN')
+    expect(h.connector.sends[0]!.text).not.toContain('sends a message')
+    expect(h.connector.sends[0]!.text).not.toContain('or Other')
+    h.keeper.dispose()
+  })
+  it('a QA grant whose full terms do not fit offers no approval buttons', async () => {
+    const request = { ...manual(), qaGrantId: 'grant-a', body: '<'.repeat(1500) }
+    const h = setup({ record: request, epoch: null })
+    await h.keeper.page(request)
+    expect(h.connector.buttons()).toEqual([])
+    expect(h.connector.sends[0]!.text).toContain('laptop')
+    expect(h.connector.sends[0]!.text.length).toBeLessThanOrEqual(4096)
+    h.keeper.dispose()
+  })
   it('offers exact options and Other, submits once, and leaves direct replies to preference routing', async () => {
     const h = setup({ record: manual(), epoch: null })
     await h.keeper.page(h.state.record!)

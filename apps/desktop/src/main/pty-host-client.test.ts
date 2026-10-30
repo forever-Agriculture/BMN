@@ -1,3 +1,4 @@
+// MODULE: pty-host-client.test.ts - terminal-host lifecycle and synchronous/asynchronous main answers
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
@@ -113,6 +114,19 @@ describe('PtyHostClient lifecycle', () => {
       [{ kind: 'message-team-answer', id: 'team-1', answer: { failed: true } }],
       [{ kind: 'message-team-answer', id: 'team-2', answer: { failed: true } }]
     ])
+  })
+
+  it('waits for an asynchronous QA launch and preserves its question identity', async () => {
+    const { client, process } = await connectedClient()
+    let answer!: (value: { qa: { sessionId: string; incarnationId: string } }) => void
+    client.answerMessageTeam(() => new Promise(resolve => { answer = resolve }))
+    process.postMessage.mockClear()
+    const question = { kind: 'qa-launch', request: { qaId: 'qa-a', workspaceId: 'work-a', sourceRoot: '/synthetic/product', folder: '/synthetic/qa', brief: {} } }
+    process.emit('message', { kind: 'message-team-question', id: 'qa-question', question })
+    expect(process.postMessage).not.toHaveBeenCalled()
+    answer({ qa: { sessionId: 'qa-pane', incarnationId: 'incarnation' } })
+    await Promise.resolve()
+    expect(process.postMessage).toHaveBeenCalledWith({ kind: 'message-team-answer', id: 'qa-question', answer: { qa: { sessionId: 'qa-pane', incarnationId: 'incarnation' } } })
   })
 
   it('times out a hung control request with a typed error', async () => {

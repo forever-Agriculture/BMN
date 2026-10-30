@@ -120,15 +120,15 @@ describe('team and rules state has no path into the database, Backup export, Tel
     // 75.8 put context-auto and skills-auto into the one auto-tests; 77.4 added agents-own-skills;
     // 80.16 split agents-check into seven parts behind its facade; 80.15 added the helpers they share (shared-helpers).
     // Epic 81 adds eight doctor modules, including selected profiles and safe coordinates, to this closed graph.
-    // Story100.4 adds the quick-QA module to this closed graph.
-    expect(HOLDERS).toHaveLength(79)
+    // Story100.4 adds the quick-QA module to this closed graph; 100.5 adds main-only QA preparation.
+    expect(HOLDERS).toHaveLength(80)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-qa|team-cli|team-forms|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree)|doctor(?:-(?:adapters|state|results|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-qa|team-qa-prepare|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree)|doctor(?:-(?:adapters|state|results|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
     // New adapters remain inside this graph; injected store or delivery imports must fail it.
     for (const file of HOLDERS.filter(file => /(?:setup-|defaults-)/.test(file) || file.endsWith('/agents-team-qa.mjs'))) {
       for (const forbidden of ['./database-client', './telegram-service', './backup-export', './logger']) {
@@ -159,9 +159,9 @@ describe('team and rules state has no path into the database, Backup export, Tel
       ...inFolder('apps/desktop/src/main', /\.ts$/), ...inFolder('apps/desktop/src/utility', /\.ts$/),
       ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn',
       // Story 80.17: the CLI's parts.
-      ...inFolder('apps/desktop/bin', /^bmn-.+\.mjs$/)
+      ...inFolder('apps/desktop/bin', /^bmn-.+\.mjs$/), 'apps/desktop/bin/qa-pane-run.mjs'
     ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
-    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills|research|guard)|visibility-refresh)(\.mjs)?$/.test(name)))
+    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills|research|guard|team-qa-prepare)|visibility-refresh)(\.mjs)?$/.test(name)))
     expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/bin/bmn-hook-runtime.mjs', 'apps/desktop/bin/bmn-hooks.mjs', 'apps/desktop/src/main/index.ts'])
   })
 })

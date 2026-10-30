@@ -4,6 +4,7 @@ import type { BinaryLike } from 'node:crypto'
 export declare function isObject(value: unknown): value is Record<string, unknown>
 export declare function onlyKeys(value: object, keys: readonly string[]): boolean
 export declare function sha256(text: BinaryLike): string
+export declare function canonicalJson(value: unknown): string
 export declare function readJson(path: string): unknown
 export declare function readJsonOrNull(path: string): unknown
 export declare function pause(ms: number): Promise<void>

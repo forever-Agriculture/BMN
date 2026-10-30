@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Epic 100.2 manual QA brief and report, version 1",
+  "title": "Manual QA brief and report: V1 signed-out and V2 account sessions",
   "$defs": {
     "text": { "type": "string", "minLength": 1 },
     "texts": { "type": "array", "items": { "$ref": "#/$defs/text" } },
@@ -95,6 +95,310 @@
         "audit_summary": {
           "type": "object", "additionalProperties": false, "required": ["complete", "observed_traffic", "gaps"],
           "properties": { "complete": { "type": "boolean" }, "observed_traffic": { "$ref": "#/$defs/texts" }, "gaps": { "$ref": "#/$defs/texts" } }
+        }
+      }
+    },
+    "accountIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alias",
+        "intent"
+      ],
+      "properties": {
+        "alias": {
+          "$ref": "#/$defs/text"
+        },
+        "intent": {
+          "enum": [
+            "test-full",
+            "look-only",
+            "ordinary-granted"
+          ]
+        }
+      }
+    },
+    "briefV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "revision",
+        "target",
+        "mode",
+        "goal",
+        "why",
+        "scope",
+        "decisions",
+        "designs",
+        "regression_checklist",
+        "starting_state",
+        "fixtures",
+        "accounts",
+        "time_budget_minutes",
+        "criteria"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/text"
+        },
+        "target": {
+          "$ref": "#/$defs/text"
+        },
+        "mode": {
+          "const": "session"
+        },
+        "goal": {
+          "$ref": "#/$defs/text"
+        },
+        "why": {
+          "$ref": "#/$defs/text"
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "included",
+            "excluded"
+          ],
+          "properties": {
+            "included": {
+              "$ref": "#/$defs/steps"
+            },
+            "excluded": {
+              "$ref": "#/$defs/texts"
+            }
+          }
+        },
+        "decisions": {
+          "$ref": "#/$defs/texts"
+        },
+        "designs": {
+          "$ref": "#/$defs/texts"
+        },
+        "regression_checklist": {
+          "$ref": "#/$defs/texts"
+        },
+        "starting_state": {
+          "$ref": "#/$defs/text"
+        },
+        "fixtures": {
+          "$ref": "#/$defs/texts"
+        },
+        "accounts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/accountIntent"
+          }
+        },
+        "time_budget_minutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/briefCriterion"
+          }
+        },
+        "prior_findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "finding",
+              "disposition"
+            ],
+            "properties": {
+              "finding": {
+                "$ref": "#/$defs/finding"
+              },
+              "disposition": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        }
+      }
+    },
+    "reportV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "revision",
+        "target",
+        "mode",
+        "account_context",
+        "goal_check",
+        "criteria",
+        "findings",
+        "debrief",
+        "untested_areas",
+        "verdict",
+        "host_summary"
+      ],
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/text"
+        },
+        "target": {
+          "$ref": "#/$defs/text"
+        },
+        "mode": {
+          "const": "session"
+        },
+        "account_context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "signed_out",
+            "used_accounts",
+            "observed_restrictions"
+          ],
+          "properties": {
+            "signed_out": {
+              "const": false
+            },
+            "observed_restrictions": {
+              "$ref": "#/$defs/steps"
+            },
+            "used_accounts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "alias",
+                  "intent",
+                  "observed_restrictions"
+                ],
+                "properties": {
+                  "alias": {
+                    "$ref": "#/$defs/text"
+                  },
+                  "observed_restrictions": {
+                    "$ref": "#/$defs/steps"
+                  },
+                  "intent": {
+                    "enum": [
+                      "test-full",
+                      "look-only",
+                      "ordinary-granted"
+                    ]
+                  }
+                }
+              },
+              "minItems": 1
+            }
+          }
+        },
+        "goal_check": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "execution",
+            "steps",
+            "observations"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "achieved",
+                "partly",
+                "not achieved",
+                "uncertain"
+              ]
+            },
+            "execution": {
+              "enum": [
+                "started",
+                "not started"
+              ]
+            },
+            "steps": {
+              "$ref": "#/$defs/texts"
+            },
+            "observations": {
+              "$ref": "#/$defs/text"
+            },
+            "question": {
+              "$ref": "#/$defs/text"
+            }
+          }
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/criterion"
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "debrief": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "confidence",
+            "summary",
+            "notes"
+          ],
+          "properties": {
+            "confidence": {
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "summary": {
+              "$ref": "#/$defs/text"
+            },
+            "notes": {
+              "$ref": "#/$defs/texts"
+            }
+          }
+        },
+        "untested_areas": {
+          "$ref": "#/$defs/texts"
+        },
+        "verdict": {
+          "enum": [
+            "GO",
+            "GO WITH ISSUES",
+            "NO-GO"
+          ]
+        },
+        "host_summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "receiptId",
+            "sha256"
+          ],
+          "properties": {
+            "receiptId": {
+              "$ref": "#/$defs/text"
+            },
+            "sha256": {
+              "$ref": "#/$defs/text"
+            }
+          }
         }
       }
     }

@@ -1,6 +1,7 @@
 // MODULE: session-messages.ts - a short message one session leaves for another in its workspace, and a handoff's pointer: limits, states, stamps (Epic 66, Story 75.5)
 import { hasDisallowedHandoffControl } from './companion'
 import { stripFormatCharacters } from './file-reference'
+import { isQaLaunchRequest } from './qa'
 
 /** The longest message text, counted after invisible and direction-changing characters are removed. */
 const SESSION_MESSAGE_MAX_CHARACTERS = 2000
@@ -134,6 +135,7 @@ export interface MessageDestination {
  * the owner's team (its files never reach the process that holds the database). The host asks, the app answers.
  */
 export type MessageTeamQuestion =
+  | { kind: 'qa-launch'; request: import('./qa').QaLaunchRequest }
   /** The Git root, or the folder itself, of a folder the host already resolved. */
   | { kind: 'source-root'; folder: string }
   /** May the provider behind this destination see private work under this root, by the approved team now? */
@@ -141,7 +143,8 @@ export type MessageTeamQuestion =
   /** Story 83.3: does the owner's rules master carry the push policy's pointer? Null when it cannot be read. */
   | { kind: 'policy-pointer' }
 
-export type MessageTeamAnswer = { root: string } | { allowed: boolean; reason: string } | { pointer: boolean | null } | { failed: true }
+export type MessageTeamAnswer = { root: string } | { allowed: boolean; reason: string } | { pointer: boolean | null } | { failed: true } |
+  { qa: { sessionId: string; incarnationId: string } } | { qaFailure: string }
 
 export interface MessageTeamQuestionMessage { kind: 'message-team-question'; id: string; question: MessageTeamQuestion }
 export interface MessageTeamAnswerMessage { kind: 'message-team-answer'; id: string; answer: MessageTeamAnswer }
@@ -151,6 +154,7 @@ const text = (value: unknown, max: number): value is string => typeof value === 
 export function isMessageTeamQuestion(value: unknown): value is MessageTeamQuestion {
   if (typeof value !== 'object' || value === null) return false
   const question = value as Record<string, unknown>
+  if (question.kind === 'qa-launch') return Object.keys(question).length === 2 && isQaLaunchRequest(question.request)
   if (question.kind === 'source-root') return Object.keys(question).length === 2 && text(question.folder, 4096)
   if (question.kind === 'policy-pointer') return Object.keys(question).length === 1
   if (question.kind !== 'provider' || Object.keys(question).length !== 3 || !text(question.senderRoot, 4096)) return false
@@ -170,6 +174,11 @@ export function isMessageTeamAnswerMessage(value: unknown): value is MessageTeam
   const message = value as Record<string, unknown>
   if (message.kind !== 'message-team-answer' || !text(message.id, 100) || typeof message.answer !== 'object' || message.answer === null) return false
   const answer = message.answer as Record<string, unknown>
+  if (Object.keys(answer).length === 1 && typeof answer.qaFailure === 'string') return answer.qaFailure.length <= 1000
+  if (Object.keys(answer).length === 1 && typeof answer.qa === 'object' && answer.qa !== null) {
+    const qa = answer.qa as Record<string, unknown>
+    return Object.keys(qa).length === 2 && text(qa.sessionId, 100) && text(qa.incarnationId, 100)
+  }
   return answer.failed === true || text(answer.root, 4096) || (typeof answer.allowed === 'boolean' && typeof answer.reason === 'string') ||
     (Object.keys(answer).length === 1 && (answer.pointer === true || answer.pointer === false || answer.pointer === null))
 }

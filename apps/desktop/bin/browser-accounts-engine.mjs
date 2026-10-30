@@ -9,7 +9,7 @@ import { browserLaunchHelper, processIdentity } from './browser-accounts-store.m
 const packaged = join(dirname(process.execPath), 'resources/app.asar/package.json')
 const require = createRequire(existsSync(packaged) ? packaged : import.meta.url)
 // Resolve Playwright beside the pinned MCP dependency, so profiles use the server's actual browser implementation.
-let libraries
+let libraries, pngRead
 export function browserLibraries() {
   if (libraries) return libraries
   const mcp = require.resolve('@playwright/mcp')
@@ -19,8 +19,10 @@ export function browserLibraries() {
   if (createHash('sha256').update(readFileSync(core)).digest('hex') !== '4f552ee37917f6550287e75a26c0fa117aceb4db5d78afca9c8bbda5b9b0d95d')
     throw new BrowserAccountError('BROWSER_POLICY_MISSING', 'The browser account safety patch is missing. Reinstall BMN before using accounts.')
   libraries = { ...require('@playwright/mcp'), ...fromMcp('playwright') }
+  pngRead = fromMcp(join(dirname(fromMcp.resolve('playwright-core')), 'lib/utilsBundle.js')).PNG.sync.read
   return libraries
 }
+export function readBrowserPng(bytes) { browserLibraries(); return pngRead(bytes) }
 export const pageAddress = url => {
   try { const u = new URL(url); return ['http:', 'https:'].includes(u.protocol) ? `${u.origin}${u.pathname}` : '' }
   catch { return '' }
@@ -28,7 +30,7 @@ export const pageAddress = url => {
 export const pageOrigin = url => { try { return new URL(url).origin } catch { return '' } }
 export const SIGN_IN_FIELDS = 'input[type=password],input[autocomplete="one-time-code"]'
 export async function hasSignInField(page) { return await page.locator(SIGN_IN_FIELDS).count() > 0 }
-export async function openProfile(profile, { headless = true, environment = process.env } = {}) {
+export async function openProfile(profile, { headless = true, environment = process.env, qa = false } = {}) {
   // Playwright creates userDataDir before invoking the launch helper. Reject a
   // late call here too; the helper revalidates under its lifecycle lock before exec.
   try {
@@ -39,7 +41,7 @@ export async function openProfile(profile, { headless = true, environment = proc
   const scratch = join(dirname(profile), 'browser-home')
   const context = await browserLibraries().chromium.launchPersistentContext(profile, {
     channel: 'chrome', executablePath: browserLaunchHelper(), headless, chromiumSandbox: true, viewport: { width: 1280, height: 720 },
-    acceptDownloads: false, args: ['--password-store=basic', '--restore-last-session'],
+    acceptDownloads: false, ...(qa ? { serviceWorkers: 'block' } : {}), args: ['--password-store=basic', ...(qa ? [] : ['--restore-last-session'])],
     // Chrome's scratch files and crash files belong to this decrypted RAM copy too.
     env: { ...environment, HOME: scratch, XDG_CONFIG_HOME: join(scratch, 'config'),
       XDG_CACHE_HOME: join(scratch, 'cache'), XDG_DATA_HOME: join(scratch, 'share'),

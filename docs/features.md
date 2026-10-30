@@ -447,6 +447,14 @@ ones ask you to sign in again. Accounts you mark can use a keyring password and 
 their observed sign-in origins. Public-only apps, run-owned tools and teammate asks stay signed out.
 The Playwright settings switch uses Tools' preview, Save and exact Undo.
 
+The `qa` teammate uses BMN's shared `manual-qa` skill to test a running goal, acceptance criteria,
+exploration, UI quality and repaired flows. Quick QA asks take a curated brief and a disposable
+loopback web target, stay signed out, and retain a checked report with native browser evidence.
+The report's GO, GO WITH ISSUES or NO-GO is shown only after validation. Unsafe browser callbacks
+are unavailable to QA. Bench QA is refused until a compliant boundary is established. A signed-out
+QA pane has passed an isolated native desktop rehearsal; account access remains disabled pending
+native tool confinement and the production account path.
+
 Team → **Models** has one of the agents your team names a researcher look up your models'
 published prices and context windows, in an empty folder, sent nothing but the model names and the
 source list. A Claude Code researcher runs with web tools only. A Codex researcher runs with a

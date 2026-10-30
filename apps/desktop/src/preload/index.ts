@@ -325,6 +325,11 @@ ipcRenderer.on('aiterm:terminal:capture-request', (_event, requestId: unknown, s
 
 const appEventListeners = new Set<(message: AppEventMessage) => void>()
 const openSessionListeners = new Set<(sessionId: string) => void>()
+const qaSessionListeners = new Set<(created: import('./bridge').CreatedSession) => void>()
+ipcRenderer.on('aiterm:qa-created', (_event, created: import('./bridge').CreatedSession) => {
+  recordLiveSession(created.startup, created.session)
+  for (const listener of qaSessionListeners) listener(created)
+})
 
 ipcRenderer.on('aiterm:app-event', (_event, message: unknown) => {
   if (!isAppEventMessage(message)) return
@@ -554,6 +559,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     openSessionListeners.add(listener)
     return () => openSessionListeners.delete(listener)
   },
+  onQaSessionCreated(listener: (created: import('./bridge').CreatedSession) => void): () => void {
+    qaSessionListeners.add(listener)
+    return () => qaSessionListeners.delete(listener)
+  },
   onProgramCopy(listener: (notice: ProgramCopyNotice) => void): () => void {
     programCopyListeners.add(listener)
     return () => programCopyListeners.delete(listener)
@@ -650,6 +659,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   markAttentionSeen(requestId: string): Promise<AttentionRecord> {
     return invokeBridge('aiterm:attention:seen', { requestId })
+  },
+  answerQaGrant(requestId: string, revision: number, choice: 0 | 1): Promise<AttentionRecord> {
+    return invokeBridge('aiterm:qa:grant-answer', { requestId, revision, choice })
   },
   resolveAttention(
     requestId: string,

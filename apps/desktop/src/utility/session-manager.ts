@@ -1817,6 +1817,12 @@ export class SessionManager {
     return live && !live.exited ? live.incarnationId : undefined
   }
 
+  /** Root of the current pane's process tree, used to attest its QA relay. */
+  liveProcessId(sessionId: string): number | undefined {
+    const live = this.sessions.get(sessionId)
+    return live && !live.exited ? live.pty.pid : undefined
+  }
+
   /** Kernel-owned foreground identity, never a conversation ID or durable resume binding. */
   foregroundProcessIdentity(sessionId: string): string | null {
     const live = this.sessions.get(sessionId)

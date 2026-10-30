@@ -3871,6 +3871,76 @@ describe('session ports (Story 41.1)', () => {
   })
 })
 
+describe('QA owner activity cards', () => {
+  const ask = () => {
+    COMPANION_OPERATIONS.reserveQaRun(database, { id: 'qa-a', callerSessionId: 's1', workspaceId: DEFAULT_WORKSPACE_ID,
+      key: 'qa-a', inputSha256: 'a'.repeat(64), brief: {}, folder: '/work/two', state: 'preparing', sessionId: null,
+      incarnationId: null, createdAt: now, failure: null, connection: null, result: null })
+    return COMPANION_OPERATIONS.openQaGrantRequest(database, { id: 'grant-a', key: 'planning-a', incarnationId: 'incarnation-1',
+      terms: { version: 1, qaId: 'qa-a', account: { id: 'synthetic', alias: 'Synthetic only', revision: 1 }, origin: 'http://127.0.0.1:4173',
+        contract: { id: 'synthetic-paid@1', sha256: 'b'.repeat(64) }, limits: [{ activity: 'report.generate', count: 1 }],
+        expiresAt: '2026-09-14T13:00:00.000Z' } }, now).card
+  }
+  const phone = (card: AttentionRecord, choice: number | { typed: string } = 0) => ({ requestId: card.requestId,
+    revision: card.revision, epoch: -1, incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [choice] } })
+  const permissionsOn = () => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, answerPermissions: true }, now)
+
+  it.each([0, 1] as const)('records app choice %i without any terminal input or draft', async choice => {
+    const card = ask()
+    expect(await service.route(METHOD_REGISTRY.qaGrantAnswer, { requestId: card.requestId, revision: card.revision, choice })).toMatchObject({ state: 'answered' })
+    expect(COMPANION_OPERATIONS.getQaGrant(database, 'grant-a')?.state).toBe(choice === 0 ? 'approved' : 'denied')
+    expect(writes).toEqual([]); expect(COMPANION_OPERATIONS.listDrafts(database)).toEqual([])
+  })
+  it('a Telegram tap changes only the ledger/card and cannot be applied twice', async () => {
+    const card = ask(); permissionsOn()
+    expect(await service.answerability(card)).toMatchObject({ answerable: true })
+    expect(await service.answerAttention(phone(card))).toMatchObject({ state: 'confirmed' })
+    expect(await service.answerAttention(phone(card))).toMatchObject({ state: 'refused' })
+    expect(COMPANION_OPERATIONS.getQaGrant(database, 'grant-a')).toMatchObject({ state: 'approved', approval: { via: 'telegram' } })
+    expect(writes).toEqual([]); expect(COMPANION_OPERATIONS.listDrafts(database)).toEqual([])
+  })
+  it.each([2, -1, { typed: 'Approve' }])('refuses a typed or unsupported choice %j', async choice => {
+    const card = ask(); permissionsOn()
+    expect(await service.answerAttention(phone(card, choice))).toMatchObject({ state: 'refused' })
+    expect(COMPANION_OPERATIONS.getQaGrant(database, 'grant-a')?.state).toBe('pending')
+    expect(writes).toEqual([]); expect(COMPANION_OPERATIONS.listDrafts(database)).toEqual([])
+  })
+  it('keeps phone permission settings binding and rejects card/revision/expiry changes', async () => {
+    const card = ask()
+    expect(await service.answerAttention(phone(card))).toMatchObject({ state: 'refused', reason: 'permissions-off' })
+    permissionsOn()
+    expect(await service.answerAttention({ ...phone(card), revision: 99 })).toMatchObject({ state: 'refused' })
+    database.prepare("UPDATE attention_request SET body = 'synthetic changed display' WHERE request_id = ?").run(card.requestId)
+    expect(await service.answerAttention(phone(card))).toMatchObject({ state: 'refused' })
+    clock = '2026-09-14T14:00:00.000Z'
+    expect(await service.answerAttention(phone(card))).toMatchObject({ state: 'refused' })
+    expect(COMPANION_OPERATIONS.getQaGrant(database, 'grant-a')?.state).toBe('pending')
+    expect(writes).toEqual([])
+  })
+  it('refuses the answer when the running QA incarnation changed', async () => {
+    const card = ask(); permissionsOn()
+    database.prepare('UPDATE session SET argv_json = ? WHERE session_id = ?').run('["qa-a"]', 's2')
+    COMPANION_OPERATIONS.bindQaRun(database, 'qa-a', 's2', 'incarnation-2')
+    liveIncarnations.set('s2', 'replacement-incarnation')
+    expect(await service.answerAttention(phone(card))).toMatchObject({ state: 'refused' })
+    expect(COMPANION_OPERATIONS.getQaGrant(database, 'grant-a')?.state).toBe('pending')
+    expect(writes).toEqual([])
+  })
+  it.each([true, false])('never submits or drafts a Telegram grant reply with autoSubmit=%s', async autoSubmitReplies => {
+    const card = ask(); await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, autoSubmitReplies }, now)
+    COMPANION_OPERATIONS.putTelegramCard(database, { messageId: 901, sessionId: 's1', requestId: card.requestId,
+      incarnationId: 'incarnation-1', revision: card.revision, state: 'buttons', card: { base: 'Synthetic QA grant', format: 'html' } }, now)
+    const sendMessage = vi.fn(async () => ({ messageId: 903 }))
+    service['telegram'] = { sendMessage } as unknown as TelegramConnector
+    vi.spyOn(service['cards'], 'typedReply').mockResolvedValue(false)
+    await service['handleTelegramReplyOnce']({ updateId: 902, chatId: 1, fromUserId: 1, messageId: 902, replyToMessageId: 901, text: 'Approve', file: null })
+    expect(sendMessage).toHaveBeenCalledWith(expect.stringContaining('Use Approve or Deny'), { replyToMessageId: 902 })
+    expect(COMPANION_OPERATIONS.getQaGrant(database, 'grant-a')?.state).toBe('pending')
+    expect(writes).toEqual([]); expect(COMPANION_OPERATIONS.listDrafts(database)).toEqual([])
+  })
+})
+
 describe('explicit manual answers to a live foreground conversation', () => {
   const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
   const choices = { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: 'Keep pending' }], allowOther: true as const }

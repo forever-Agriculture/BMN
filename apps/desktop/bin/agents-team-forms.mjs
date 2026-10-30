@@ -52,6 +52,7 @@ export const ASK_RUN_FILES = Object.freeze({
  */
 export const ASK_READS = Object.freeze({
   'codex-read-only': { scope: 'computer', reach: 'any file your user can read', words: 'Codex\'s read-only sandbox: any file your user can read, with its shell, Git, web search and sub-agents; it writes nothing' },
+  'codex-qa': { scope: 'computer', reach: 'any file your user can read', words: 'Codex QA form: native command, web, app and collaboration tools switched off; read-only sandbox; tool closure remains unverified until its version-pinned fence passes' },
   'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history through BMN\'s git, web search and sub-agents; it writes nothing' },
   'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
   'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
@@ -71,6 +72,12 @@ const OPENCODE_ASK_TITLE = 'BMN ask'
 const CODEX_ASK_LOG = 'codex_core=info,codex_core::stream_events_utils=debug'
 /** The same per-run switches as research: plugin/app MCPs have a different config namespace. */
 const CODEX_ASK_MCP_OFF = Object.freeze(['features.plugins=false', 'features.apps=false'])
+/** QA sessions add native tool closure; a passing fence, not these switches, establishes its scope. */
+export const CODEX_QA_CONFIG = Object.freeze(['web_search="disabled"', 'features.shell_tool=false', 'features.unified_exec=false',
+  'features.multi_agent=false', 'skills.include_instructions=false', 'skills.bundled.enabled=false', 'include_apps_instructions=false',
+  'include_collaboration_mode_instructions=false', 'include_environment_context=false', 'project_doc_max_bytes=0'])
+export const CODEX_QA_DISABLED = Object.freeze(['view_image', 'goals', 'image_generation', 'sleep_tool', 'hooks'])
+
 
 /** Claude Code's read tools, web search and sub-agents; Bash only for Git's four read commands, through BMN's git first on PATH (72.9 AC1). A browser ask replaces the empty MCP configuration and allows its browser tools (74.3). */
 export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent',
@@ -141,7 +148,7 @@ export function codexMcpServers(program, cwd, environment = process.env, { confi
   if (enabled !== undefined && JSON.stringify(servers.filter((server) => server.enabled === true).map((server) => server.name).sort()) !== JSON.stringify([...enabled].sort())) throw new Error('Codex MCP configuration does not isolate this ask\'s tools; no teammate started')
   if (expected !== undefined) {
     const actual = servers.find(server => server.name === BROWSER_SERVER)?.transport
-    if (actual?.type !== 'stdio' || actual.command !== expected.command || JSON.stringify(actual.args) !== JSON.stringify(expected.args) || actual.cwd !== expected.cwd || Object.keys(actual.env ?? {}).length || (actual.env_vars ?? []).length) throw new Error('Codex Playwright transport retains an unexpected command, arguments, directory or environment; no teammate started')
+    if (actual?.type !== 'stdio' || actual.command !== expected.command || JSON.stringify(actual.args) !== JSON.stringify(expected.args) || actual.cwd !== expected.cwd || Object.keys(actual.env ?? {}).length || JSON.stringify([...(actual.env_vars ?? [])].sort()) !== JSON.stringify([...(expected.env_vars ?? [])].sort())) throw new Error('Codex Playwright transport retains an unexpected command, arguments, directory or environment; no teammate started')
   }
   const names = new Set()
   return servers.map((server) => {
@@ -207,7 +214,7 @@ export function askCommand(harness, program, request) {
     // a browser ask enables only its own stdio server in the override above.
     const mcp = codexServers(request.browser, request.folder, request.inherited)
     command = [program.launcher, 'exec', '--skip-git-repo-check', '-C', request.cwd, '-m', request.model, '-c', `model_reasoning_effort=${request.effort}`,
-      ...CODEX_ASK_MCP_OFF.flatMap((item) => ['-c', item]), '-c', mcp, '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
+      ...CODEX_ASK_MCP_OFF.flatMap((item) => ['-c', item]), ...(request.form === 'codex-qa' ? [...CODEX_QA_CONFIG.flatMap(item => ['-c', item]), ...CODEX_QA_DISABLED.flatMap(feature => ['--disable', feature])] : []), '-c', mcp, '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
       '--json', '-o', join(request.folder, ASK_RUN_FILES.codexAnswer), '-']
   } else if (harness === 'claude') {
     environment = { HOME: home, PATH: `${join(request.folder, ASK_RUN_FILES.bin)}:${path}`, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',

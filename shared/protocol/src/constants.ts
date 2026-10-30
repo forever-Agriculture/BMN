@@ -17,6 +17,8 @@ export const METHOD_REGISTRY = Object.freeze({
   setupDefaultsClaim: 'setup.defaults.claim',
   setupHookEvidence: 'setup.hookEvidence',
   sessionCreate: 'session.create',
+  qaBind: 'qa.bind',
+  qaGrantAnswer: 'qa.grant.answer',
   sessionList: 'session.list',
   sessionUpdate: 'session.update',
   sessionBindingGet: 'session.binding.get',

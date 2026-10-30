@@ -183,6 +183,7 @@ function App(): React.JSX.Element {
   const commandRuns = useRef(new Set<SessionCommandRun>())
   const liveRef = useRef(new Map<string, LiveStartup>())
   const sessionsRef = useRef<SessionRecord[]>([])
+  const qaCreatedRef = useRef<(created: CreatedSession) => Promise<void>>(async () => {})
   const workspacesRef = useRef<WorkspaceRecord[]>([])
   const armedRef = useRef(false)
   /** The resume-after-stop offer is read once per window, not on every renderer recovery. */
@@ -670,6 +671,7 @@ function App(): React.JSX.Element {
       void refresh[message.topic](message.sessionId).catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
+    const stopQaCreated = window.aiTerminal.onQaSessionCreated(created => { void qaCreatedRef.current(created).catch(fail('QA pane could not be shown')) })
     const programCopyBurst = createProgramCopyBurst()
     const stopProgramCopy = window.aiTerminal.onProgramCopy((copy) => {
       const name = sessionsRef.current.find((item) => item.sessionId === copy.sessionId)?.name ?? 'a session'
@@ -737,6 +739,7 @@ function App(): React.JSX.Element {
       stopCapture()
       stopAppEvent()
       stopOpenSession()
+      stopQaCreated()
       stopProgramCopy()
       stopClosePrompt()
       clearInterval(ticker)
@@ -1850,6 +1853,15 @@ function App(): React.JSX.Element {
     applyTreeSessionAction(selectTreeSession([...sessionsRef.current.filter(row => row.sessionId !== created.session.sessionId), created.session], created.session.sessionId))
     requestAnimationFrame(() => controllers.current.get(created.session.sessionId)?.focus())
   }
+  qaCreatedRef.current = async created => {
+    const listed = await window.aiTerminal.listWorkspaces(true)
+    const { layout: nextLayout } = await window.aiTerminal.getLayout(created.session.workspaceId)
+    writer.adopt(nextLayout)
+    setWorkspaces(listed)
+    setSessions(current => [...current.filter(row => row.sessionId !== created.session.sessionId), created.session])
+    setLive(current => ({ ...current, [created.session.sessionId]: created.startup }))
+    applyTreeSessionAction(selectTreeSession([...sessionsRef.current.filter(row => row.sessionId !== created.session.sessionId), created.session], created.session.sessionId))
+  }
 
   const guardCardStop = guardCard ? guardStops.find(item => item.sessionId === guardCard.sessionId) ?? null : null
   const turnCardState = turnCard ? turnRecording.find(item => item.sessionId === turnCard.sessionId && item.state === 'paused') ?? null : null
@@ -2281,6 +2293,13 @@ function App(): React.JSX.Element {
             place={place} now={now} anchor={requestCard.anchor}
             onAcknowledge={request => {
               void dismissAttentionReminder(window.aiTerminal, request, 'Dismissed in BMN', refresh.attention).catch(fail('Request update failed'))
+            }}
+            onAnswerGrant={(request, choice) => {
+              if (answering.current.has(request.requestId)) return
+              answering.current.add(request.requestId)
+              void window.aiTerminal.answerQaGrant(request.requestId, request.revision, choice)
+                .then(() => refresh.attention()).catch(fail('QA activity permission could not be recorded'))
+                .finally(() => answering.current.delete(request.requestId))
             }}
             onMarkAnswered={request => {
               if (answering.current.has(request.requestId)) return

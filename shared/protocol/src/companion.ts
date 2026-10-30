@@ -93,6 +93,8 @@ export interface AttentionRecord {
   /** Absent/null on old records. Never reconstructed from historical resume metadata. */
   producer?: AttentionProducerBinding | null
   manualChoices?: ManualChoices | null
+  /** Derived from the grant table's card link, never from an agent's key, title or prompt. */
+  qaGrantId?: string
 }
 
 /**

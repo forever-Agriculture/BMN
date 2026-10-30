@@ -146,6 +146,7 @@ import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
 import { AwayWake } from './away-wake'
 import { GrantDepartureNotices } from './agent-grant-notices'
+import { QaSessions } from './qa-sessions'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
@@ -237,6 +238,7 @@ interface CompanionServiceOptions {
   messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => Promise<{ allowed: boolean; reason: string }> | { allowed: boolean; reason: string }
   /** Story 83.3: whether the rules master carries the push policy's pointer, answered by the entry point; without it, null (not in force). */
   policyPointer?: () => Promise<boolean | null>
+  qaLaunch?: (request: import('@bmn/protocol').QaLaunchRequest) => Promise<import('@bmn/protocol').MessageTeamAnswer>
   /** Story 83.3: the git and gh reads Health's policy listing needs; tests give their own. */
   policyReader?: PolicyReader
   /** Story 90.6: a test-mode host shortens the Away wake-up's 2 hours and 15 minutes. */
@@ -809,6 +811,13 @@ export class CompanionService {
         put: (record) => options.database.companion('putReceipt', record, this.iso())
       },
       handlers: {
+        qaSession: sessionId => this.controlCall(async () => options.database.companion('isQaSession', sessionId)),
+        qaRequest: (scope, method, params) => this.controlCall(() => new QaSessions({
+          database: options.database, data: options.roots.data, cliPath: options.cliPath,
+          session: id => this.knownSessions.get(id), live: id => options.manager.liveIncarnationId(id), processId: id => options.manager.liveProcessId(id),
+          launch: request => options.qaLaunch?.(request) ?? Promise.resolve({ failed: true }),
+          stop: (sessionId, incarnationId) => options.manager.stop({ sessionId, incarnationId }), now: () => this.iso()
+        }).request(scope, method, params)),
         isCurrentIncarnation: (sessionId, incarnationId) =>
           options.manager.liveIncarnationId(sessionId) === incarnationId,
         sessionExists: (sessionId) => this.knownSessions.has(sessionId),
@@ -1069,6 +1078,8 @@ export class CompanionService {
     // Story 76.3 (R76-NFR1): the said state is restored before anything at start can deliver.
     this.awayRecord = await this.options.database.companion('getAway')
     this.grantRead = (await this.options.database.companion('getGrants')).read
+    await this.options.database.companion('recoverQaGrantUses', this.iso())
+    await this.options.database.companion('recoverQaRuns')
     this.awayNotices.load(await this.options.database.companion('getAwayNotices'))
     // Epic 69: a turn stored as open has nobody left to end it.
     await this.turns?.start()
@@ -1278,6 +1289,12 @@ export class CompanionService {
         const record = await database.companion('markAttentionSeen', text(params, 'requestId'), this.iso())
         this.emit('attention', record.sessionId)
         return record
+      }
+      case METHOD_REGISTRY.qaGrantAnswer: {
+        if (Object.keys(params).some(key => !['requestId', 'revision', 'choice'].includes(key)) ||
+          !Number.isSafeInteger(params.revision) || Number(params.revision) < 1 ||
+          (params.choice !== 0 && params.choice !== 1)) invalid('A current QA grant card and Approve or Deny choice are required')
+        return this.answerQaGrantOwner(text(params, 'requestId'), Number(params.revision), Number(params.choice), 'app')
       }
       case METHOD_REGISTRY.attentionResolve: {
         const state = params.state === 'withdrawn' ? 'withdrawn' : 'answered'
@@ -2162,6 +2179,22 @@ export class CompanionService {
    */
   async answerAttention(request: AnswerRequest): Promise<AnswerOutcome> {
     const manual = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
+    const grant = await this.options.database.companion('qaGrantForCard', request.requestId)
+    if (grant) {
+      if (!manual || manual.state !== 'open' || manual.revision !== request.revision || this.requestExpired(manual) ||
+        manual.incarnationId !== (request.incarnationId || null) || request.answer.type !== 'choices' ||
+        request.answer.choices.length !== 1 || ![0, 1].includes(request.answer.choices[0] as number)) return { state: 'refused', reason: 'unsupported' }
+      const settings = await this.options.database.companion('getSettings')
+      if (!settings.telegram.answerPermissions) return { state: 'refused', reason: 'permissions-off' }
+      try {
+        const record = await this.answerQaGrantOwner(request.requestId, request.revision, request.answer.choices[0] as number, 'telegram')
+        return { state: 'confirmed', sent: [record.resolution!] }
+      } catch (error) {
+        return error && typeof error === 'object' && 'code' in error && error.code === ERROR_CODES.invalidArgument
+          ? { state: 'refused', reason: 'changed' }
+          : { state: 'sent-unconfirmed', sent: ['QA activity decision; check the current card before retrying'] }
+      }
+    }
     if (manual?.manualChoices) return this.answerManual(manual, request, false)
     const outcome = await this.answers.answer(request)
     if (outcome.state === 'submitted') {
@@ -2181,6 +2214,21 @@ export class CompanionService {
       }
     }
     return outcome
+  }
+
+  private async answerQaGrantOwner(requestId: string, revision: number, choice: number, via: 'app' | 'telegram'): Promise<AttentionRecord> {
+    const database = this.options.database
+    const grant = await database.companion('qaGrantForCard', requestId)
+    const run = grant ? await database.companion('getQaRun', grant.terms.qaId) : null
+    if (!run || !['preparing', 'running'].includes(run.state) || (choice !== 0 && choice !== 1) ||
+      run.state === 'running' && (!run.sessionId || !run.incarnationId ||
+        this.options.manager.liveIncarnationId(run.sessionId) !== run.incarnationId)) invalid('QA_GRANT_RUN_UNAVAILABLE')
+    const record = await database.companion('answerQaGrantCard', {
+      requestId, revision, approved: choice === 0, via, operationKey: `${via}:${randomUUID()}`,
+      runIncarnationId: run!.incarnationId
+    }, this.iso())
+    this.emit('attention', record.sessionId)
+    return record
   }
 
   private async answerManual(record: AttentionRecord, request: AnswerRequest, automatic: boolean): Promise<AnswerOutcome> {
@@ -2312,6 +2360,15 @@ export class CompanionService {
     { answerable: true; deny: boolean } | { answerable: false; reason: 'unsupported' | 'permissions-off'; detail?: string }
   > {
     if (this.requestExpired(record)) return { answerable: false, reason: 'unsupported', detail: 'This request expired. Nothing sent.' }
+    const grant = await this.options.database.companion('qaGrantForCard', record.requestId)
+    if (grant) {
+      const run = await this.options.database.companion('getQaRun', grant.terms.qaId)
+      if (record.state !== 'open' || grant.state !== 'pending' || grant.card?.revision !== record.revision || !run ||
+        !['preparing', 'running'].includes(run.state) || run.state === 'running' &&
+        (!run.sessionId || this.options.manager.liveIncarnationId(run.sessionId) !== run.incarnationId)) return { answerable: false, reason: 'unsupported' }
+      const settings = await this.options.database.companion('getSettings')
+      return settings.telegram.answerPermissions ? { answerable: true, deny: false } : { answerable: false, reason: 'permissions-off' }
+    }
     if (record.manualChoices) {
       if (!this.producers.current(record, false)) return { answerable: false, reason: 'unsupported', detail: record.producer ? 'Conversation unavailable. Nothing sent; use its current question at the laptop.' : 'Conversation not confirmed. Nothing sent; use the laptop.' }
       const settings = await this.options.database.companion('getSettings')
@@ -3573,6 +3630,11 @@ export class CompanionService {
       return
     }
     const manual = target.requestId ? await this.options.database.companion('getAttention', target.requestId).catch(() => null) : null
+    if (target.requestId && await database.companion('qaGrantForCard', target.requestId)) {
+      await connector.sendMessage('Nothing sent. Use Approve or Deny on the current QA activity card.',
+        { replyToMessageId: reply.messageId }).catch(() => undefined)
+      return
+    }
     if (manual?.manualChoices && manual.state === 'open' && reply.text && !reply.file) {
       if (target.revision !== manual.revision) {
         await connector.sendMessage('Nothing sent. This card changed; use its latest controls or open the request at the laptop.',

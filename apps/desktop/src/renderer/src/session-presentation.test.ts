@@ -470,6 +470,21 @@ describe('session presentation', () => {
     expect(markup).not.toContain('Dismiss')
   })
 
+  it('shows approval controls only for a DB-linked QA card and never Mark answered', () => {
+    const card = { ...request('grant', 's1', '2026-09-14T11:55:00.000Z'), kind: 'permission' as const,
+      qaGrantId: 'grant-a', manualChoices: { options: [{ label: 'Approve', description: null }, { label: 'Deny', description: null }], allowOther: true as const } }
+    const render = (record: AttentionRecord): string => renderToStaticMarkup(createElement(SessionRequestCard, {
+      requests: [record], cleared: [], now, anchor: null, place: () => ({ workspace: 'Work', session: 'QA' }),
+      onAcknowledge: () => undefined, onMarkAnswered: () => undefined, onAnswerGrant: () => undefined, onClose: () => undefined
+    }))
+    expect(render(card)).toContain('>Approve</button>')
+    expect(render(card)).toContain('>Deny</button>')
+    expect(render(card)).not.toContain('Mark answered')
+    const ordinary: AttentionRecord = { ...card }; delete ordinary.qaGrantId
+    expect(render(ordinary)).not.toContain('>Approve</button>')
+    expect(render(ordinary)).toContain('Mark answered')
+  })
+
   it('shows the deadline after the age and in the row name, and nothing without one', () => {
     const popover = (requests: AttentionRecord[]): string => renderToStaticMarkup(createElement(SessionRequestCard, {
       requests, cleared: [], now, anchor: null,

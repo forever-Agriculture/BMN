@@ -29,13 +29,17 @@ export async function runBrowserCommand(argv) {
     return runAccountBrowser(argv[1])
   }
   const [part, command, name, ...rest] = argv
-  if (part !== 'accounts' || !['list', 'add', 'sign-in', 'remove', 'mark', 'unmark'].includes(command)) {
-    stdout.write('Usage: bmn browser accounts list|add NAME --url URL|sign-in NAME|remove NAME|mark NAME|unmark NAME\n'); return 2
+  if (part !== 'accounts' || !['list', 'add', 'sign-in', 'remove', 'mark', 'unmark', 'test', 'untest'].includes(command)) {
+    stdout.write('Usage: bmn browser accounts list|add NAME --url URL|sign-in NAME|remove NAME|mark NAME|unmark NAME|test NAME|untest NAME\n'); return 2
   }
   const store = new BrowserAccountsStore()
   try {
     if (command === 'list') { stdout.write(JSON.stringify(store.list(), null, 2) + '\n'); return 0 }
     if (!name) throw new Error('Name an account.')
+    if (command === 'test' || command === 'untest') {
+      if (rest.length) throw new Error('Use only the account name with test or untest.')
+      await store.setTest(store.find(name), command === 'test'); return 0
+    }
     if (command === 'remove') { await store.remove(store.find(name)); return 0 }
     if (command === 'unmark') { await store.unmark(store.find(name)); return 0 }
     if (command === 'mark') {

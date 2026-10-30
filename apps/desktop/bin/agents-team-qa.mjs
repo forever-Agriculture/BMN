@@ -1,10 +1,11 @@
 // MODULE: agents-team-qa.mjs - curated quick-QA inputs and checked reports bound to native browser evidence
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { InputRefusal, textFile } from './agents-team-inputs.mjs'
 import { writeWhole } from './agents-team-supervisor.mjs'
+import { canonicalJson, sha256 } from './shared-helpers.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 export const QA_SKILL = [resolve(here, '../skills/manual-qa'), resolve(here, '../../../skills/manual-qa')].find(path => existsSync(join(path, 'check.mjs')))
@@ -29,7 +30,7 @@ export function qaAskInputs(path, { cwd = process.cwd(), home = process.env.HOME
 }
 
 /** The native browser's record, rather than a model-supplied filename, admits retained evidence. */
-export function finishQa(folder, answer) {
+export function finishQa(folder, answer, { hostSummary } = {}) {
   let manifest
   try { manifest = read(join(folder, 'inputs/manifest.json')) } catch { return null }
   if (manifest.qa === undefined) return null
@@ -40,8 +41,23 @@ export function finishQa(folder, answer) {
   let report, errors
   try {
     report = JSON.parse(answer)
-    errors = checker === null ? ['The shipped QA checker is unavailable'] : checker.checkQaReport(report, brief)
+    errors = checker === null ? ['The shipped QA checker is unavailable'] : checker.checkQaReport(report, brief, undefined,
+      hostSummary ? { hostSummary, receiptSha256: sha256(canonicalJson(hostSummary)) } : undefined)
   } catch { errors = ['QA answer must be one JSON report object'] }
+  if (errors.length === 0 && report.version === 2) {
+    let file
+    try {
+      if (!hostSummary || hostSummary.briefSha256 !== sha256(JSON.stringify(brief)) || hostSummary.revision !== brief.revision || hostSummary.receiptId !== `${hostSummary.qaId}:summary:1`) throw new Error('binding')
+      file = openSync(join(folder, 'host-summary.json'), constants.O_RDONLY | constants.O_NOFOLLOW)
+      const stat = fstatSync(file)
+      if (!stat.isFile() || stat.size > 256 * 1024) throw new Error('size')
+      const expected = canonicalJson(hostSummary)
+      if (readFileSync(file, 'utf8') !== expected + '\n' || report.host_summary.receiptId !== hostSummary.receiptId || report.host_summary.sha256 !== sha256(expected)) throw new Error('mismatch')
+      const blocked = hostSummary.audit.open || !hostSummary.audit.complete || hostSummary.audit.gaps.length > 0 || hostSummary.grants.some(grant => grant.activities.some(activity => activity.uncertain > 0))
+      if (blocked && report.verdict !== 'NO-GO') errors.push('$.report.verdict: host audit gaps or uncertain activity require NO-GO')
+    } catch { errors.push('$.report.host_summary: missing, stale or mismatched sealed host receipt') }
+    finally { if (file !== undefined) closeSync(file) }
+  }
   if (errors.length === 0) {
     let browser
     try { browser = read(join(folder, 'browser.json')) } catch { errors.push('Native browser evidence is unavailable') }

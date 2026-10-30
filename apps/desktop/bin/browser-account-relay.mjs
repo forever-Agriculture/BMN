@@ -55,7 +55,7 @@ export class PlaywrightBridge {
   async close() { await this.server?.close(); for (const { no } of this.pending?.values() || []) no(new Error('Browser closed')); this.pending?.clear() }
 }
 export class AccountBrowserRelay {
-  constructor({ store = new BrowserAccountsStore(), allowed = false } = {}) { this.store = store; this.allowed = allowed; this.requests = []; this.redactions = new Set(); this.revoked = false }
+  constructor({ store = new BrowserAccountsStore(), allowed = false, qa = false, beforeReady = null } = {}) { this.store = store; this.allowed = allowed; this.qa = qa; this.beforeReady = beforeReady; this.requests = []; this.redactions = new Set(); this.revoked = false }
   async start(id = null) {
     await this.store.cleanup()
     if (id) this.lease = await this.store.checkout(id)
@@ -63,7 +63,8 @@ export class AccountBrowserRelay {
     mkdirSync(this.lease.profile, { recursive: true, mode: 0o700 })
     this.id = id; this.requests = []; this.secretTyped = false; this.secretPage = null
     this.protectedOrigins = new Set()
-    this.context = await openProfile(this.lease.profile, { environment: this.store.environment })
+    this.context = await openProfile(this.lease.profile, { environment: this.store.environment, qa: this.qa })
+    if (this.beforeReady) await this.beforeReady(this.context)
     if (id) {
       this.policy = {
         persistConsole: false, downloads: false,

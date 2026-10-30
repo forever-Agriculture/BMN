@@ -9,6 +9,9 @@ export interface BrowserAccountRow {
   state: 'Signed in' | 'Not confirmed' | 'Sign in again' | 'Keyring locked'
   checked: string | null
   marked: boolean
+  /** Missing on legacy snapshots; the account store reads those as ordinary, revision 1. */
+  test?: boolean
+  qaRevision?: number
 }
 export interface BrowserAccountsView { accounts: BrowserAccountRow[]; signingIn: string[] }
 export type BrowserAccountAction =

@@ -1,9 +1,9 @@
 // MODULE: agents-roster.mjs - Epic 60: parse, validate and print the owner's typed agent roster (~/.config/bmn/agents/roster.md)
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isObject, sha256 } from './shared-helpers.mjs'
-// The roster module still exports sha256: its callers import it from here.
-export { sha256 }
+import { canonicalJson, isObject, sha256 } from './shared-helpers.mjs'
+// Keep existing imports compatible while utility consumers use the generic helpers directly.
+export { canonicalJson, sha256 }
 
 /**
  * The roster is Markdown: a `## <section>` per agent and per table, each holding exactly one fenced
@@ -349,15 +349,6 @@ export class RosterError extends Error {
     this.code = code
     Object.assign(this, details)
   }
-}
-
-/** JSON with keys sorted at every level: the bytes every hash in Epic 60 is taken over. */
-export function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (value !== null && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
-  }
-  return JSON.stringify(value)
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -138,6 +138,9 @@ Commands:
                                             answer is advice. team asks lists your asks (bmn team ask --help)
   qa report check REPORT --brief BRIEF      Validate a local QA report against its brief; reads files only,
                                             no socket. Exit 0 valid, 1 invalid/unreadable, 2 usage
+  qa start --brief BRIEF --key K            Start a QA pane in this session's workspace; uses its own folder
+  qa wait ID [--timeout SECONDS]            Read this caller's checked report; a missing report fails
+  qa stop ID                               Stop this caller's exact QA incarnation; retain its record
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch

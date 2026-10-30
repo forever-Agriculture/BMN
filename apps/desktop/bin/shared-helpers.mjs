@@ -12,6 +12,15 @@ export const onlyKeys = (value, keys) => Object.keys(value).every((key) => keys.
 
 export const sha256 = (text) => createHash('sha256').update(text).digest('hex')
 
+/** JSON with keys sorted at every level: shared hash bytes, without importing owner state. */
+export function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
 /** The JSON in a file; it throws when the file cannot be read or parsed. */
 export const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
