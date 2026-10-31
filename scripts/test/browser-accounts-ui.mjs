@@ -113,6 +113,9 @@ try {
     await row.getByRole('button', { name: 'Remove', exact: true }).click()
     await capture('removing', width, row)
     await row.getByRole('button', { name: 'Keep', exact: true }).click()
+    await row.getByRole('button', { name: 'Test account', exact: true }).click()
+    await capture('testing', width, row)
+    await row.getByRole('button', { name: 'Keep look-only', exact: true }).click()
   }
   for (const text of ['Not confirmed', 'Sign in again', 'Keyring locked', 'Agents sign in']) assert(await section.getByText(text, { exact: true }).count())
   checks.push('all nine written states and marking editor captured at 1440 and 900, usable actions and no horizontal overflow')
@@ -134,6 +137,23 @@ try {
     const deadline = Date.now() + 30_000
     while (!await condition()) { assert(Date.now() < deadline, 'driven action did not complete'); await new Promise(ok => setTimeout(ok, 100)) }
   }
+  // d72: only the owner's window makes a test account, after its confirm step; the same switch clears it.
+  const owner = section.locator('.browser-account', { hasText: 'Synthetic owner' }), ownerId = store.find('Synthetic owner')
+  const testSwitch = owner.getByRole('button', { name: 'Test account', exact: true })
+  assert.equal(await testSwitch.getAttribute('aria-pressed'), 'false')
+  await testSwitch.click()
+  await owner.getByRole('button', { name: 'Keep look-only', exact: true }).click()
+  assert.equal(store.metadata(ownerId).test, false, 'Keep look-only changed the mark')
+  await testSwitch.click()
+  await owner.getByRole('button', { name: 'Make test account', exact: true }).click()
+  await until(() => store.metadata(ownerId).test === true)
+  await until(async () => await testSwitch.getAttribute('aria-pressed') === 'true')
+  await owner.getByText(/· test account$/).waitFor()
+  await capture('test-on', 900, owner)
+  await testSwitch.click()
+  await until(() => store.metadata(ownerId).test === false)
+  await until(async () => await testSwitch.getAttribute('aria-pressed') === 'false')
+  checks.push('actual UI Test account: confirm step, Keep look-only leaves the mark, Make test account sets it, the switch clears it')
   await section.getByRole('button', { name: 'Add account', exact: true }).click()
   await section.getByLabel('Name', { exact: true }).fill('Driven account')
   await section.getByLabel('Start page').fill(site.url('same'))

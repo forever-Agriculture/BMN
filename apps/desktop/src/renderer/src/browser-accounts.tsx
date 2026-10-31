@@ -11,9 +11,11 @@ export function browserAccountAttention(accounts: BrowserAccountRow[] | undefine
   return count ? [['Browser accounts', count]] : []
 }
 export function accountWords(row: BrowserAccountRow): string {
-  if (row.state === 'Keyring locked' || row.state === 'Sign in again' || row.state === 'Not confirmed') return row.state
-  if (row.marked) return 'Agents sign in'
-  return `Signed in${row.checked ? ` · checked ${new Date(row.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+  const words = row.state === 'Keyring locked' || row.state === 'Sign in again' || row.state === 'Not confirmed' ? row.state
+    : row.marked ? 'Agents sign in'
+    : `Signed in${row.checked ? ` · checked ${new Date(row.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`
+  // A test account gets full QA interaction (d72), so the row says so wherever it is listed.
+  return row.test ? `${words} · test account` : words
 }
 export function useBrowserAccountHealth(visible: boolean, setSnapshot: Dispatch<SetStateAction<RulesSnapshot | null>>): void {
   useEffect(() => {
