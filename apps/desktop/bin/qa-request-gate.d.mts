@@ -2,6 +2,6 @@
 import type { QaActivity, QaRequestMeta } from '@bmn/protocol'
 export interface QaSiteContract { readonly id: string; readonly sha256: string; readonly origin: string }
 export function syntheticPaidContract(origin: string): QaSiteContract
-export function classifyQaRequest(contract: QaSiteContract | null, method: string, address: string): {
-  request: QaRequestMeta; classification: 'unknown' | 'read' | 'activity'; activity: QaActivity | null
+export function classifyQaRequest(contract: QaSiteContract | null, method: string, address: string, ownOrigins?: readonly string[]): {
+  request: QaRequestMeta; classification: 'unknown' | 'read' | 'activity'; activity: QaActivity | null; reviewed: boolean
 }

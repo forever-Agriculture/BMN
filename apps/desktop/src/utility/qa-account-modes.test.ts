@@ -63,6 +63,17 @@ it('names outside the brief, and runs without their own qualification, are refus
   qualified = false
   await expect(broker.pick(run, 'Synthetic test')).rejects.toThrow('QA_NATIVE_QUALIFICATION_REQUIRED')
 })
+it('a version 1 run never opens an account, whatever its brief names', async () => {
+  database.prepare('INSERT INTO session(session_id,workspace_id,name,cwd,executable,argv_json,revision,created_at,position) VALUES(?,?,?, ?,?, ?,1,?,0)')
+    .run('qa-v1', DEFAULT_WORKSPACE_ID, 'qa-v1', '/synthetic/qa-v1', '/bin/bash', '["--run","run-v1"]', now)
+  store.reserveQaRun(database, { id: 'run-v1', callerSessionId: 'caller', workspaceId: DEFAULT_WORKSPACE_ID, key: 'run-v1-key', inputSha256: 'b'.repeat(64),
+    brief: { version: 1, revision: 'synthetic', accounts: [{ alias: 'Synthetic test', permission: 'test' }] },
+    folder: '/synthetic/qa-v1', state: 'preparing', sessionId: null, incarnationId: null, createdAt: now, failure: null, connection: null, result: null })
+  store.bindQaRun(database, 'run-v1', 'qa-v1', 'qa-inc')
+  store.bindQaAgent(database, 'run-v1', { pid: 201, ticks: '200', at: now })
+  store.connectQaRelay(database, 'run-v1', { pid: 202, ticks: '201', at: now })
+  await expect(broker.pick(store.getQaRun(database, 'run-v1')!, 'Synthetic test')).rejects.toThrow('QA_ACCOUNTS_REQUIRE_V2')
+})
 it('a refused interaction is audited with the tool name and no page data', async () => {
   await broker.refuse(run, 'account-look', 'browser_click')
   expect(store.qaAuditRecords(database, 'run-a')).toMatchObject([{ method: 'TOOL', path: '/[tool]/browser_click', accountAlias: 'Synthetic look', result: 'held', classification: 'unknown' }])
@@ -87,4 +98,18 @@ it('a reservation without a named grant uses the next approved grant and never o
 it('a lead may ask by the brief alias; the grant binds the stored account identity', async () => {
   const grant = await broker.ask(run, { key: 'by-name', accountId: 'Synthetic granted', origin, limits: [{ activity: 'brainstorm.start', count: 1 }], expiresAt: '2026-10-29T14:00:00.000Z' }, 'caller-inc')
   expect(grant.terms.account).toEqual({ id: 'account-granted', alias: 'Synthetic granted', revision: 1 })
+})
+it('a look-only account reads its unreviewed site through audited GETs; writes and other sites never pass (d71)', async () => {
+  const shop = 'https://shop.example', look = { ...accounts['Synthetic look']!, origins: [origin, shop] }
+  const operations = store as unknown as Record<string, (...args: unknown[]) => unknown>
+  const client = { companion: async (name: string, ...args: unknown[]) => operations[name]!(database, ...args) } as unknown as DatabaseWorkerClient
+  const sites = new QaGrantBroker({ database: client, account: key => key === look.id || key === look.name ? look : byIdOrName(key),
+    contract: site => site === origin ? contract : null, qualified: () => true, live: () => 'qa-inc', now: () => now, changed: () => {} })
+  await sites.observe(run, look.id, { method: 'GET', origin: shop, path: '/[unreviewed]', queryKeys: ['page'] })
+  for (const meta of [{ method: 'POST', origin: shop, path: '/[unclassified]', queryKeys: [] }, { method: 'GET', origin: 'https://tracker.example', path: '/[unreviewed]', queryKeys: [] },
+    { method: 'GET', origin, path: '/[unreviewed]', queryKeys: [] }]) await expect(sites.observe(run, look.id, meta)).rejects.toThrow('QA_ACTIVITY_RESERVATION_REQUIRED')
+  await sites.observe(run, look.id, { method: 'POST', origin: shop, path: '/[unclassified]', queryKeys: [] }, true)
+  expect(store.qaAuditRecords(database, 'run-a')).toMatchObject([
+    { method: 'GET', origin: shop, path: '/[unreviewed]', queryKeys: ['page'], classification: 'read', result: 'observed' },
+    { method: 'POST', origin: shop, path: '/[unclassified]', classification: 'unknown', result: 'held' }])
 })

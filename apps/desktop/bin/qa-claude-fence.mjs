@@ -10,7 +10,7 @@ import { sameProgram } from './agents-team-forms.mjs'
 import { writeWhole } from './agents-team-supervisor.mjs'
 
 /** Raise when the fence's forced calls or its acceptance rule change, so older proofs stop qualifying runs. */
-export const QA_FENCE_POLICY = 1
+export const QA_FENCE_POLICY = 2
 export const QA_RELAY_SERVER = 'playwright'
 const here = fileURLToPath(import.meta.url)
 const CANARY = 'QA-FENCE-CANARY-5d1e'
@@ -59,6 +59,9 @@ export async function qualifyClaudeQa(folder, { timeoutMs = 120_000 } = {}) {
   writeFileSync(join(root, 'home/.claude/.claude.json'), JSON.stringify({ mcpServers: { canary: canaryServer } }))
   writeFileSync(join(root, 'cwd/.mcp.json'), JSON.stringify({ mcpServers: { canary: canaryServer } }))
   const expected = launch.tools.map(name => `mcp__${QA_RELAY_SERVER}__${name}`)
+  // With --json-schema Claude Code adds one tool that only returns the final answer; an empty report must come back refused by its schema check.
+  const structured = launch.built.command.includes('--json-schema'), builtins = ['DeferredToolPlaceholder', ...(structured ? ['StructuredOutput'] : [])]
+  const forcedCalls = (root, port) => [...forced(root, port), ...(structured ? [['StructuredOutput', {}]] : [])]
   const requests = [], results = new Map()
   let fetched = 0, calls = []
   const server = createServer((request, response) => {
@@ -81,7 +84,7 @@ export async function qualifyClaudeQa(folder, { timeoutMs = 120_000 } = {}) {
   })
   await new Promise(done => server.listen(0, '127.0.0.1', done))
   const port = server.address().port
-  calls = [...forced(root, port), ...expected.map(name => [name, {}])].map(([name, input], index) => ({ type: 'tool_use', id: `toolu_${index}_${name}`, name, input }))
+  calls = [...forcedCalls(root, port), ...expected.map(name => [name, {}])].map(([name, input], index) => ({ type: 'tool_use', id: `toolu_${index}_${name}`, name, input }))
   const command = launch.built.command.map((arg, index, all) => all[index - 1] === '--mcp-config'
     ? JSON.stringify({ mcpServers: { [QA_RELAY_SERVER]: { type: 'stdio', command: process.execPath, args: [here, '--mcp', JSON.stringify(launch.tools)] } } }) : arg)
   const environment = { HOME: join(root, 'home'), CLAUDE_CONFIG_DIR: join(root, 'home/.claude'), PATH: launch.built.environment.PATH,
@@ -101,13 +104,13 @@ export async function qualifyClaudeQa(folder, { timeoutMs = 120_000 } = {}) {
   await new Promise(done => server.close(done))
   const offered = [...new Set(requests.filter(entry => entry.prompt && entry.tools).flatMap(entry => entry.tools))].sort()
   const byName = Object.fromEntries(calls.map(call => [call.name, results.get(call.id) ?? null]))
-  const refusals = forced(root, port).map(([name]) => ({ name, completed: byName[name] !== null, refused: byName[name]?.error === true && !byName[name].text.includes(CANARY), text: byName[name]?.text.slice(0, 160) ?? null }))
+  const refusals = forcedCalls(root, port).map(([name]) => ({ name, completed: byName[name] !== null, refused: byName[name]?.error === true && !byName[name].text.includes(CANARY), text: byName[name]?.text.slice(0, 160) ?? null }))
   const usable = expected.map(name => ({ name, ok: byName[name]?.error === false && byName[name].text.includes('QA-FENCE-MCP-OK') }))
   const extra = offered.filter(name => !expected.includes(name))
   const intact = readFileSync(join(root, 'home/canary.txt'), 'utf8') === CANARY + '\n' && !existsSync(join(root, 'cwd/written.txt')) && !existsSync(hookMark) && fetched === 0 && !requests.some(entry => entry.canary)
   const initTools = Array.isArray(init?.tools) ? [...init.tools].sort() : null
-  const pass = exit === 0 && expected.every(name => offered.includes(name)) && extra.every(name => name === 'DeferredToolPlaceholder' && byName[name]?.error === true) &&
-    refusals.every(item => item.completed && item.refused) && usable.every(item => item.ok) && intact && initTools !== null && initTools.every(name => expected.includes(name) || name === 'DeferredToolPlaceholder')
+  const pass = exit === 0 && expected.every(name => offered.includes(name)) && extra.every(name => builtins.includes(name) && byName[name]?.error === true) &&
+    refusals.every(item => item.completed && item.refused) && (!structured || /required schema/.test(byName.StructuredOutput?.text ?? '')) && usable.every(item => item.ok) && intact && initTools !== null && initTools.every(name => expected.includes(name) || builtins.includes(name))
   const receipt = { version: 1, binding: fenceBinding(launch), pass, exit, offered, extra, refusals, usable, intact, fetched,
     initTools, initToolsSha256: initTools ? toolsSha256(initTools) : null, initMcpServers: init?.mcp_servers ?? null,
     requests: requests.map(({ method, path, prompt, canary, tools }) => ({ method, path, prompt, canary, tools: tools?.length ?? null })),

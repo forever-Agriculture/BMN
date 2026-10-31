@@ -16,13 +16,15 @@ export function syntheticPaidContract(origin) {
   return Object.freeze({ id, sha256, origin })
 }
 
-export function classifyQaRequest(contract, method, address) {
+/** `ownOrigins` are the picked account's sites: with no reviewed contract there, a GET is an audited page read and every other method stays held (d71). */
+export function classifyQaRequest(contract, method, address, ownOrigins = []) {
   const url = new URL(address), matches = contract?.id === id && contract.sha256 === sha256 && contract.origin === url.origin
   const rule = matches && !url.search && !url.username && !url.password && rules.find(item => item[0] === method && item[1] === url.pathname)
+  const page = !contract && method === 'GET' && !url.username && !url.password && ownOrigins.includes(url.origin)
   // Unknown path segments may themselves contain secrets. Keep only the reviewed literal paths.
-  const meta = { method, origin: url.origin, path: rule ? url.pathname : '/[unclassified]',
+  const meta = { method, origin: url.origin, path: rule ? url.pathname : page ? '/[unreviewed]' : '/[unclassified]',
     queryKeys: [...new Set([...url.searchParams.keys()].filter(key => /^[A-Za-z0-9_-]{1,80}$/.test(key)))].sort().slice(0, 40) }
-  return { request: meta, classification: !rule ? 'unknown' : rule[2] === 'read' ? 'read' : 'activity', activity: rule && rule[2] !== 'read' ? rule[2] : null }
+  return { request: meta, classification: rule ? (rule[2] === 'read' ? 'read' : 'activity') : page ? 'read' : 'unknown', activity: rule && rule[2] !== 'read' ? rule[2] : null, reviewed: Boolean(rule) }
 }
 
 const escapeHtml = text => text.replace(/[&"<>']/g, char => `&#${char.charCodeAt(0)};`)
@@ -54,7 +56,7 @@ export async function gateQaRequest(route, broker, closeContext) {
   try {
     const request = route.request(), policy = await broker.policy()
     if (!policy.active) { await route.abort('blockedbyclient'); await closeContext(); return }
-    const classified = classifyQaRequest(policy.contract, request.method(), request.url())
+    const classified = classifyQaRequest(policy.contract, request.method(), request.url(), policy.origins)
     if (classified.classification === 'unknown') {
       await broker.hold(classified.request, 'unsupported-request')
       await route.abort('blockedbyclient'); return

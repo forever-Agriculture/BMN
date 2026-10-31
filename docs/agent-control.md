@@ -2183,17 +2183,26 @@ Code's `claude-qa` form, never Codex: `--restricted --tools '' --disable-slash-c
 command against a stand-in provider with a synthetic relay, canary settings, hooks and MCP files and
 21 forced calls to tools it was not given. The pane starts only if every call was refused and
 nothing else connected, and its first init event must list the same tools (`fence.json`,
-`init.json` in the QA folder); otherwise the run fails closed.
+`init.json` in the QA folder); otherwise the run fails closed. Claude Code checks the final report
+against the QA schema (`--json-schema`) and asks the model again on a mismatch; the fence admits
+its one `StructuredOutput` tool only after that tool refuses an empty report.
 
 The agent sees aliases only, and `browser_account_pick` asks the host for the mode. A `test-full`
 alias on an account marked as a test account interacts fully except unsafe browser code; its own
 sites pass and are audited, other sites are held. Any other alias is look-only: snapshots and
-screenshots, with each refused interaction recorded by tool name. An `ordinary-granted` alias
+screenshots, with each refused interaction recorded by tool name. On an account site with no
+reviewed site contract, an ordinary account's GET requests (page loads and their resources) are
+audited reads that pass, recorded with the method, origin and query key names only; every other
+method, and every request to a site the account does not list, is held. A site that loads assets
+from another origin needs that origin among the account's sites. An `ordinary-granted` alias
 interacts once the owner approved a grant for that account; each activity request then spends one
 approved count, and anything else is held on a card. The lead asks for a planning grant with
 `bmn qa grant`, whose card names the account, site, activities, counts and expiry. Saved sign-in
 secrets are never typed in a QA session. `browser_qa_seal` ends account use and returns the host
-receipt the report must cite. QA browsers keep a saved account's session cookies but never reopen
+receipt the report must cite. Only version 2 briefs may name accounts. A QA pick never opens the
+separate sign-in check or write-back browsers, whose requests would bypass the QA routes: sign-in is
+judged on the routed page, and a QA session never saves an account back, so a site that rotates
+its sign-in tokens may ask to sign in again afterwards. QA browsers keep a saved account's session cookies but never reopen
 its saved tabs, whose requests would start before the audit routes exist. A page redirect comes back
 as a page that navigates again, so every hop crosses the same route and audit with its cookies
 kept; an activity's redirect stays uncertain and other redirects are blocked. The pane shows the
@@ -2203,8 +2212,8 @@ V2 account reports reference a host-owned sealed ledger receipt. The host binds 
 revision, immutable grants/cards, cumulative reservation/send counts, terminal outcomes and durable
 audit. It compares the receipt against a fresh SQLite projection at finish. The local report checker
 accepts `--host-summary RECEIPT` for consistency checks; it cannot authenticate a supplied file.
-Open/incomplete audits and uncertain operations require NO-GO. The pick's own sign-in check loads the
-account's landing page outside the QA audit, and installed account sessions are the owner's check.
+Open/incomplete audits and uncertain operations require NO-GO. Installed account sessions are the
+owner's check.
 
 ### Each app's own read-only mode
 

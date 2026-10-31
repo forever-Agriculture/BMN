@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { BrowserAccountsStore, atomicJson } from '../../apps/desktop/bin/browser-accounts-store.mjs'
 import { AccountSignIn, checkProfile, openProfile } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
@@ -191,7 +192,34 @@ try {
     const picked = await relay.tool('browser_account_pick', { name: row.name })
     assert.equal(JSON.parse(picked.content[0].text).state, 'Signed in', 'the QA relay pick lost the session-cookie sign-in')
     await signed(relay)
-    checks.push('QA browser keeps a session-cookie sign-in across two checkout/publish cycles and reopens no saved tab; a QA relay pick replacing its startup tab stays signed in')
+    await relay.end(false)
+    // A landing page that posts a paid operation on load: a QA pick, switch and end must send nothing outside the QA route.
+    const hits = []
+    const service = createServer((request, response) => {
+      hits.push(`${request.method} ${request.url.split('?')[0]}`); request.resume()
+      if (request.url.startsWith('/setup')) { response.writeHead(302, { 'Set-Cookie': 'studio=qa; Path=/; HttpOnly', Location: '/app' }).end(); return }
+      response.writeHead(200, { 'Content-Type': 'text/html' }).end('<title>Studio</title><h1>Signed in</h1><script>fetch("/paid/report",{method:"POST",body:"x"})</script>')
+    })
+    await new Promise(done => service.listen(0, '127.0.0.1', done))
+    const studio = `http://127.0.0.1:${service.address().port}`
+    try {
+      for (const name of ['QA landing one', 'QA landing two']) {
+        const meta = await store.create(name, `${studio}/app`), seed = await store.checkout(meta.id); leases.push(seed)
+        const context = await openProfile(seed.profile); contexts.push(context)
+        await context.pages()[0].goto(`${studio}/setup`); await context.close(); contexts = []
+        assert(await store.publish(seed, { state: 'Signed in' })); store.discard(seed); leases = []
+      }
+      hits.length = 0
+      const routed = [], held = new AccountBrowserRelay({ store, qa: true, allowed: true, beforeReady: async context => {
+        await context.route('**/*', route => { routed.push(route.request().method()); return route.abort('blockedbyclient') })
+        await replaceStartupPages(context)
+      } }); relays.push(held)
+      for (const name of ['QA landing one', 'QA landing two']) await held.tool('browser_account_pick', { name })
+      await held.end()
+      assert.deepEqual(hits, [], 'a QA pick, switch or end sent site requests outside the QA route')
+      assert(routed.length >= 2, 'the QA route saw no account landing')
+    } finally { service.closeAllConnections(); await new Promise(done => service.close(done)) }
+    checks.push('QA browser keeps a session-cookie sign-in across two checkout/publish cycles and reopens no saved tab; a QA relay pick replacing its startup tab stays signed in; QA picks, a switch and end send no site request outside the QA route')
   } else if (phase === 'output-boundary') {
     const row = await create('same')
     await store.mark(row.id, { username: 'synthetic', password: site.password, authenticator: site.authenticator })

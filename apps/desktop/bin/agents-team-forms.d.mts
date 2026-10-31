@@ -9,7 +9,7 @@ export declare function askReads(form: AskFormName, browser?: { interact: boolea
 export declare const CLAUDE_ASK_TOOLS: readonly string[]
 export interface AskProgram { launcher: string; payload: string }
 export interface CodexMcpServer { name: string; transport: 'stdio' | 'streamable_http' }
-export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean; qa?: boolean } | null; inherited?: CodexMcpServer[]; qaRelay?: { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }; qaTools?: string[] }
+export interface AskCommandRequest { form: AskFormName; model: string; provider?: string; effort: string; cwd: string; folder: string; pictures?: string[]; rules?: string | null; context?: { argv: string[]; env: string[] }; environment?: NodeJS.ProcessEnv | Record<string, string>; browser?: { origin: string; interact: boolean; qa?: boolean } | null; inherited?: CodexMcpServer[]; qaRelay?: { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }; qaTools?: string[]; qaSchema?: Record<string, unknown> | null }
 export interface AskCommand { argv: string[]; environment: Record<string, string>; command: string[]; cwd: string; stdin: 'text' | 'stream-json' }
 export declare function appSearchPath(environment?: NodeJS.ProcessEnv | Record<string, string>): string
 export declare function askProgram(harness: string, environment?: NodeJS.ProcessEnv | Record<string, string>): AskProgram | null
@@ -24,4 +24,4 @@ export declare function sameProgram(identity: { launcher: ProgramFile; payload: 
 
 export declare const CODEX_QA_CONFIG: readonly string[]
 export declare const CODEX_QA_DISABLED: readonly string[]
-export declare function claudeQaArgs(relay: { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }, tools: string[]): string[]
+export declare function claudeQaArgs(relay: { type: 'stdio'; command: string; args: string[]; env: Record<string, string> }, tools: string[], schema?: Record<string, unknown> | null): string[]

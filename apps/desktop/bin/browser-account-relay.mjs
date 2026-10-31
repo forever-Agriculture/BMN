@@ -102,7 +102,8 @@ export class AccountBrowserRelay {
     if (this.revoked) throw new Error('This session’s account was removed. Start a new browser session.')
     await this.end()
     const id = this.store.find(name)
-    await validateSaved(this.store, id)
+    // A QA browser checks sign-in only on its own routed page: validation opens browsers outside the QA audit.
+    if (!this.qa) await validateSaved(this.store, id)
     await this.start(id)
     const meta = this.store.metadata(id), page = await this.policy.ensurePage()
     await page.goto(meta.start, { waitUntil: 'domcontentloaded', timeout: 20_000 })
@@ -220,6 +221,8 @@ export class AccountBrowserRelay {
     await page.goto(landing || this.store.metadata(id).landing, { waitUntil: 'domcontentloaded', timeout: 20_000 })
   }
   async end(writeBack = true) {
+    // QA never writes an account back: checking the copy would open browsers outside the QA audit.
+    if (this.qa) writeBack = false
     clearInterval(this.watch)
     const lease = this.lease, id = this.id
     if (!lease) return
@@ -236,7 +239,7 @@ export class AccountBrowserRelay {
           }
         }
       }
-    } catch (error) { if (id && error.code !== 'ACCOUNT_REMOVED') await validateSaved(this.store, id) }
+    } catch (error) { if (id && !this.qa && error.code !== 'ACCOUNT_REMOVED') await validateSaved(this.store, id) }
     finally { this.bridge = null; this.context = null; this.id = null; this.store.discard(lease); this.redactions.clear() }
   }
   async tools() {

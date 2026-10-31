@@ -34,6 +34,12 @@ it('the QA form names no built-in tool, no settings, only the relay and its exac
   expect(command.slice(command.indexOf('--permission-mode'), command.indexOf('--permission-mode') + 2)).toEqual(['--permission-mode', 'dontAsk'])
   expect(env).toEqual({ HOME: '/synthetic/home', PATH: '/usr/bin', DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', CLAUDE_CONFIG_DIR: '/synthetic/claude' })
 })
+it('a schema makes Claude Code check the final report itself; without one the command is unchanged', () => {
+  const schema = { type: 'object', required: ['verdict'], properties: { verdict: { type: 'string' } } }
+  const command = askCommand('claude', program, { form: 'claude-qa', model: 'claude-opus-5-5', effort: 'high', cwd: '/synthetic/qa', folder: '/synthetic/qa', environment, qaRelay: relay, qaTools: tools, qaSchema: schema }).command
+  expect(JSON.parse(command[command.indexOf('--json-schema') + 1]!)).toEqual(schema)
+  expect(built().command).not.toContain('--json-schema')
+})
 it('ordinary Claude Code asks keep their read-tools form', () => {
   const command = askCommand('claude', program, { form: 'claude-read-tools', model: 'm', effort: 'high', cwd: '/synthetic', folder: '/synthetic', environment }).command
   expect(command).toContain('Read,Grep,Glob,Bash,WebSearch,Agent')

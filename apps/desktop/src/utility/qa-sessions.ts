@@ -123,7 +123,8 @@ export class QaSessions {
         await db.companion('connectQaRelay', run.id, { pid: params.pid as number, ticks: params.ticks as string, at: this.options.now() })
       }
       // Aliases only name what the brief allows; each pick is decided by the broker, which requires the run's own qualification.
-      const aliases = ((run.brief.accounts ?? []) as Array<{ alias: string; permission?: string; intent?: string }>).map(item => ({ alias: item.alias, intent: item.intent ?? item.permission ?? 'look-only' }))
+      // Only a version 2 run seals and reconciles its host audit, so a version 1 run is never offered an account.
+      const aliases = run.brief.version !== 2 ? [] : ((run.brief.accounts ?? []) as Array<{ alias: string; intent: string }>).map(item => ({ alias: item.alias, intent: item.intent }))
       return { qaId: run.id, target: run.brief.target, accounts: this.options.accounts && aliases.length ? aliases : false }
     }
     const run = await db.companion('getQaRun', params.id as string)

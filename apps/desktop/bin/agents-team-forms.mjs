@@ -86,9 +86,11 @@ export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,
   '--permission-mode', 'dontAsk', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--output-format', 'stream-json', '--verbose'])
 
 /** The QA form: no built-in tools or settings, only the QA relay's named tools, refused rather than asked otherwise (100.6). */
-export function claudeQaArgs(relay, tools) {
+export function claudeQaArgs(relay, tools, schema = null) {
   return ['--restricted', '--tools', '', '--disable-slash-commands', '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { [BROWSER_SERVER]: relay } }),
-    '--allowedTools', tools.map((tool) => `mcp__${BROWSER_SERVER}__${tool}`).join(','), '--permission-mode', 'dontAsk', '--output-format', 'stream-json', '--verbose']
+    '--allowedTools', tools.map((tool) => `mcp__${BROWSER_SERVER}__${tool}`).join(','), '--permission-mode', 'dontAsk', '--output-format', 'stream-json', '--verbose',
+    // Claude Code checks the final report against the QA schema and asks again on a mismatch, through its one StructuredOutput tool.
+    ...(schema ? ['--json-schema', JSON.stringify(schema)] : [])]
 }
 
 /** PATH without BMN's own wrappers, so the app found is the one the owner installed. */
@@ -225,7 +227,7 @@ export function askCommand(harness, program, request) {
       '--json', '-o', join(request.folder, ASK_RUN_FILES.codexAnswer), '-']
   } else if (harness === 'claude' && request.form === 'claude-qa') {
     environment = { HOME: home, PATH: path, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}) }
-    command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...claudeQaArgs(request.qaRelay, request.qaTools)]
+    command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...claudeQaArgs(request.qaRelay, request.qaTools, request.qaSchema ?? null)]
   } else if (harness === 'claude') {
     environment = { HOME: home, PATH: `${join(request.folder, ASK_RUN_FILES.bin)}:${path}`, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}), ...contextEnvironment }

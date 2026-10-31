@@ -96,7 +96,7 @@ export async function runQaBrowser(folder) {
   let current = null, sealed = false, audited = false
   const contractFor = origin => { try { return syntheticPaidContract(origin) } catch { return null } }
   const brokerFor = (account, origin) => ({
-    policy: async () => ({ active: !sealed && relay.id === account.accountId, contract: contractFor(origin) }),
+    policy: async () => ({ active: !sealed && relay.id === account.accountId, contract: contractFor(origin), origins: account.origins }),
     reserve: async operation => account.mode === 'ordinary-granted' ? rpc('qa.reserve', { ...operation, grantId: null, accountId: account.accountId }) : { allowed: false, reason: 'look-only' },
     send: id => rpc('qa.send', { id }),
     settle: (id, state, status) => rpc('qa.settle', { id, state, status }),

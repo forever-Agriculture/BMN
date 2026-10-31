@@ -3,9 +3,9 @@ import { expect, it, vi } from 'vitest'
 import { classifyQaRequest, gateQaRequest, passQaRequest, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
 
 const origin = 'http://127.0.0.1:4173', contract = syntheticPaidContract(origin)
-function fixture({ path = '/paid/report', method = 'POST', status = 200, navigation = false, headers = [] } = {}) {
+function fixture({ path = '/paid/report', method = 'POST', status = 200, navigation = false, headers = [], site = origin } = {}) {
   const events = [], route = {
-    request: () => ({ url: () => origin + path, method: () => method, isNavigationRequest: () => navigation }),
+    request: () => ({ url: () => site + path, method: () => method, isNavigationRequest: () => navigation }),
     abort: vi.fn(async () => { events.push('abort') }),
     continue: vi.fn(async () => { events.push('continue') }),
     fetch: vi.fn(async options => { events.push('network'); expect(options).toEqual({ maxRedirects: 0, maxRetries: 0 })
@@ -117,4 +117,26 @@ it('test-account and signed-out routes fetch every request themselves so no redi
   expect(hop.route.fulfill.mock.calls[0][0].body).toContain('url=https://elsewhere.test/')
   const down = fixture({ path: '/app', method: 'GET', navigation: true }); down.route.fetch.mockRejectedValue(new Error('refused'))
   await passQaRequest(down.route); expect(down.route.abort).toHaveBeenCalledWith('failed')
+})
+
+const shop = 'https://shop.example'
+it('an unreviewed account site is read with audited GETs only; its writes and other sites stay held (d71)', async () => {
+  const read = fixture({ site: shop, path: '/orders/7731?page=2&token=secret', method: 'GET', navigation: true })
+  read.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [shop] })
+  await gateQaRequest(read.route, read.broker, read.close)
+  expect(read.events).toEqual(['observe', 'network', 'fulfill'])
+  expect(read.broker.observe.mock.calls[0][0]).toEqual({ method: 'GET', origin: shop, path: '/[unreviewed]', queryKeys: ['page', 'token'] })
+  expect(JSON.stringify(read.broker.observe.mock.calls)).not.toMatch(/7731|secret/)
+  for (const [method, site] of [['POST', shop], ['PUT', shop], ['DELETE', shop], ['PATCH', shop], ['GET', 'https://tracker.example']]) {
+    const f = fixture({ site, path: '/cart', method }); f.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [shop] })
+    await gateQaRequest(f.route, f.broker, f.close)
+    expect(f.route.fetch).not.toHaveBeenCalled(); expect(f.broker.hold.mock.calls[0][0].path).toBe('/[unclassified]')
+  }
+  // A reviewed site keeps its literal contract: an unlisted GET is still held there.
+  expect(classifyQaRequest(contract, 'GET', origin + '/unlisted', [origin]).classification).toBe('unknown')
+  expect(classifyQaRequest(null, 'GET', 'https://user:pw@shop.example/', [shop]).classification).toBe('unknown')
+  const hop = fixture({ site: shop, path: '/', method: 'GET', status: 302, navigation: true, headers: redirect('/signin') })
+  hop.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [shop] })
+  await gateQaRequest(hop.route, hop.broker, hop.close)
+  expect(hop.route.fulfill.mock.calls[0][0].body).toContain(`url=${shop}/signin`)
 })

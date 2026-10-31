@@ -51,6 +51,8 @@ export class QaGrantBroker {
   /** The relay's account choice: only a brief alias, its mode decided here from the stored mark, intent and approved grants. */
   async pick(run: QaRun, name: string): Promise<QaAccountPick> {
     this.current(run)
+    // Only a version 2 run seals and reconciles its host audit, so only it may open an account.
+    if ((run.brief as { version?: number }).version !== 2) return fail('QA_ACCOUNTS_REQUIRE_V2')
     const found = this.options.account(name)
     if (found.name !== name) return fail('QA_ACCOUNT_IDENTITY_CHANGED')
     const account = this.account(run, found.id), intent = this.intent(run, name)
@@ -135,8 +137,9 @@ export class QaGrantBroker {
     this.current(run)
     if (!isQaRequestMeta(meta)) return fail('QA_REQUEST_INVALID')
     const account = this.account(run, accountId), contract = this.options.contract(meta.origin)
-    const classified = classifyQaRequest(contract, meta.method, meta.origin + meta.path)
-    if (!held && !account.test && (meta.queryKeys.length || classified.classification !== 'read')) return fail('QA_ACTIVITY_RESERVATION_REQUIRED')
+    const classified = classifyQaRequest(contract, meta.method, meta.origin + meta.path, account.origins)
+    // A reviewed read is a literal path without a query; an unreviewed site's page read (d71) keeps only its query key names.
+    if (!held && !account.test && (classified.classification !== 'read' || classified.reviewed && meta.queryKeys.length)) return fail('QA_ACTIVITY_RESERVATION_REQUIRED')
     if (!held && !account.origins.includes(meta.origin)) return fail('QA_ACCOUNT_SITE_MISMATCH')
     const event: QaAuditEvent = { ...meta, path: classified.request.path, accountAlias: account.name, classification: held ? 'unknown' : account.test ? 'test-full' : 'read',
       result: held ? 'held' : 'observed', grantId: null, cardId: null, useId: null, status: null }

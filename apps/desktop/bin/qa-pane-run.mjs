@@ -112,7 +112,11 @@ async function executeQaPane(id, folder, environment, trace) {
       if (!checked && event.type === 'system' && event.subtype === 'init') {
         checked = true
         if (!checkQaInit(folder, event, identity).ok) { refused = 'QA_INIT_TOOLS_CHANGED'; terminate() }
-      } else if (event.type === 'result' && typeof event.result === 'string' && checked && !refused) writeWhole(join(folder, 'claude-answer.md'), event.result)
+      } else if (event.type === 'result' && checked && !refused) {
+        // The schema-checked StructuredOutput answer is the report; plain text is kept only when none was given.
+        const answer = event.structured_output !== undefined ? JSON.stringify(event.structured_output) : event.result
+        if (typeof answer === 'string') writeWhole(join(folder, 'claude-answer.md'), answer)
+      }
     }).on('close', done)
   }) : Promise.resolve()
   const exit = new Promise((done, fail) => { child.once('error', fail); child.once('exit', code => done(code ?? 1)) })
