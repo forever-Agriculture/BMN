@@ -25,7 +25,11 @@ export interface QaGrant {
   card: { id: string; revision: number; sha256: string } | null
   approval: { via: 'app' | 'telegram'; operationKey: string; at: string; approved: boolean } | null
 }
-export interface QaRequestMeta { method: string; origin: string; path: string; queryKeys: string[] }
+/** Epic 101: a reviewed contract's closed body detail; never a body, variables or token. An unreviewed GraphQL request has no name (D9). */
+export type QaBodyMeta =
+  | { kind: 'graphql'; operation: 'query' | 'mutation' | 'subscription' | null; name: string | null; sha256: string }
+  | { kind: 'form'; grant: 'refresh_token' }
+export interface QaRequestMeta { method: string; origin: string; path: string; queryKeys: string[]; body?: QaBodyMeta }
 export interface QaGrantUse {
   id: string
   qaId: string
@@ -87,11 +91,17 @@ export function isQaGrantTerms(value: unknown): value is QaGrantTerms {
   }
   return true
 }
+export function isQaBodyMeta(value: unknown): value is QaBodyMeta {
+  if (!isRecord(value)) return false
+  if (value.kind === 'form') return hasExactKeys(value, ['kind', 'grant']) && value.grant === 'refresh_token'
+  return value.kind === 'graphql' && hasExactKeys(value, ['kind', 'operation', 'name', 'sha256']) && (value.operation === null || ['query', 'mutation', 'subscription'].includes(value.operation as string)) &&
+    (value.name === null || typeof value.name === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(value.name)) && sha(value.sha256) && (value.name === null || value.operation === 'query')
+}
 export function isQaRequestMeta(value: unknown): value is QaRequestMeta {
-  return isRecord(value) && hasExactKeys(value, ['method', 'origin', 'path', 'queryKeys']) && typeof value.method === 'string' && /^[A-Z]{3,12}$/.test(value.method) && origin(value.origin) && text(value.path, 2048) && value.path.startsWith('/') && !/[?#]/.test(value.path) && Array.isArray(value.queryKeys) && value.queryKeys.length <= 40 && value.queryKeys.every(key => typeof key === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(key))
+  return isRecord(value) && hasExactKeys(value, ['method', 'origin', 'path', 'queryKeys'], ['body']) && (value.body === undefined || isQaBodyMeta(value.body)) && typeof value.method === 'string' && /^[A-Z]{3,12}$/.test(value.method) && origin(value.origin) && text(value.path, 2048) && value.path.startsWith('/') && !/[?#]/.test(value.path) && Array.isArray(value.queryKeys) && value.queryKeys.length <= 40 && value.queryKeys.every(key => typeof key === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(key))
 }
 export function isQaAuditEvent(value: unknown): value is QaAuditEvent {
-  if (!isRecord(value) || !hasExactKeys(value, ['method', 'origin', 'path', 'queryKeys', 'accountAlias', 'classification', 'result', 'grantId', 'useId', 'cardId', 'status'])) return false
-  const meta = { method: value.method, origin: value.origin, path: value.path, queryKeys: value.queryKeys }
+  if (!isRecord(value) || !hasExactKeys(value, ['method', 'origin', 'path', 'queryKeys', 'accountAlias', 'classification', 'result', 'grantId', 'useId', 'cardId', 'status'], ['body'])) return false
+  const meta = { method: value.method, origin: value.origin, path: value.path, queryKeys: value.queryKeys, ...(value.body === undefined ? {} : { body: value.body }) }
   return isQaRequestMeta(meta) && (value.accountAlias === null || text(value.accountAlias, 100)) && ['read', 'activity', 'unknown', 'test-full'].includes(value.classification as string) && ['observed', 'held', 'reserved', 'sent', 'succeeded', 'failed', 'uncertain'].includes(value.result as string) && ['grantId', 'useId', 'cardId'].every(key => value[key] === null || id(value[key])) && (value.status === null || Number.isInteger(value.status) && (value.status as number) >= 100 && (value.status as number) <= 599)
 }

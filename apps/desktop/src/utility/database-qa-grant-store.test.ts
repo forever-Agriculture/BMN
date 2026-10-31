@@ -96,7 +96,19 @@ it('a real database reopen keeps uncertainty, consumed limits and monotonic inco
 it('audits retain ordered account switches but reject headers, bodies and query values', () => {
   appendQaAudit(database, 'run-a', audit(), now); appendQaAudit(database, 'run-a', audit('another-synthetic'), later)
   expect(qaAuditRecords(database, 'run-a').map(row => [row.sequence, row.accountAlias])).toEqual([[1, 'synthetic'], [2, 'another-synthetic']])
-  for (const forged of [{ ...audit(), headers: 'synthetic-private' }, { ...audit(), body: 'synthetic-private' }, { ...audit(), path: '/read?token=synthetic-private' }]) expect(() => appendQaAudit(database, 'run-a', forged, now)).toThrow('QA_AUDIT_METADATA_INVALID')
+  // Epic 101: a closed body detail is the only body field; variables, tokens, a named mutation or extra keys are refused.
+  const sha = 'a'.repeat(64)
+  for (const forged of [{ ...audit(), headers: 'synthetic-private' }, { ...audit(), body: 'synthetic-private' }, { ...audit(), path: '/read?token=synthetic-private' },
+    { ...audit(), body: { kind: 'graphql', operation: 'query', name: 'SyntheticRead', sha256: sha, variables: 'synthetic-private' } },
+    { ...audit(), body: { kind: 'graphql', operation: 'mutation', name: 'SyntheticWrite', sha256: sha } },
+    { ...audit(), body: { kind: 'graphql', operation: 'query', name: 'synthetic-private value', sha256: sha } },
+    { ...audit(), body: { kind: 'form', grant: 'password' } }, { ...audit(), body: { kind: 'form', grant: 'refresh_token', refresh_token: 'synthetic-private' } }])
+    expect(() => appendQaAudit(database, 'run-a', forged as never, now)).toThrow('QA_AUDIT_METADATA_INVALID')
+  appendQaAudit(database, 'run-a', { ...audit(), body: { kind: 'graphql', operation: 'query', name: 'SyntheticRead', sha256: sha } }, later)
+  appendQaAudit(database, 'run-a', { ...audit(), body: { kind: 'graphql', operation: 'mutation', name: null, sha256: sha } }, later)
+  appendQaAudit(database, 'run-a', { ...audit(), body: { kind: 'form', grant: 'refresh_token' } }, later)
+  expect(qaAuditRecords(database, 'run-a').slice(2).map(row => row.body)).toEqual([{ kind: 'graphql', operation: 'query', name: 'SyntheticRead', sha256: sha },
+    { kind: 'graphql', operation: 'mutation', name: null, sha256: sha }, { kind: 'form', grant: 'refresh_token' }])
   expect(JSON.stringify(qaAuditRecords(database, 'run-a'))).not.toContain('synthetic-private')
 })
 it('audit overflow is durable, never silently short and never repaired by a clean close', () => {

@@ -2194,8 +2194,9 @@ alias on an account marked as a test account interacts fully except unsafe brows
 sites pass and are audited, other sites are held. Any other alias is look-only: snapshots and
 screenshots, with each refused interaction recorded by tool name. A reviewed site contract names a
 site's read paths and paid activities; the host registers contracts, and the relay classifies only
-by those (the one synthetic contract exists only for a test-mode BMN's studio origin, so today every
-real site, loopback apps included, is unreviewed). On an unreviewed account site an ordinary
+by those (the synthetic contract exists only for a test-mode BMN's studio origin, and the one real
+contract is the Piche TEST read contract below; every other site, loopback apps included, is
+unreviewed). On an unreviewed account site an ordinary
 account's GET requests (page loads and their resources) are audited reads that pass, recorded with
 the method, origin and query key names only; every other method, and every request to a site the
 account does not list, is held without a card. A site that loads assets from another origin needs
@@ -2215,6 +2216,51 @@ its saved tabs, whose requests would start before the audit routes exist. A page
 as a page that navigates again, so every hop crosses the same route and audit with its cookies
 kept; an activity's redirect stays uncertain and other redirects are blocked. The pane shows the
 agent's words and each browser action, not raw events.
+
+**The Piche TEST read contract (Epic 101).** The host always registers `piche-test-read@1` for
+three `https` origins: the page `https://epic5web.gpark.lv`, the API `https://epic5.gpark.lv` and
+sign-in `https://identity-epic5.gpark.lv`. Its rules are fixed in BMN's code
+(`apps/desktop/bin/qa-request-gate.mjs`) and hashed into the contract's SHA-256; a brief can
+neither register nor widen it. Only a test-mode BMN may add a loopback twin of the same rules
+(`BMN_TEST_QA_PICHE_ORIGINS`: three distinct `127.0.0.1` origins, page, API and sign-in). The
+contract binds an account whose saved sites include its page origin; its API and sign-in origins
+then count as that account's sites too. For any other account those origins are other sites.
+
+On a bound contract's origins the contract alone decides, ahead of the unreviewed-site rule above:
+
+- **Page origin:** GET requests pass as audited reads (`/[unreviewed]`); every other method is held.
+- **API origin:** only `POST /graphql` with no URL query passes, in a closed envelope:
+  `application/json` (optionally `; charset=utf-8`), at most 16 KiB of UTF-8, one JSON object with
+  only `query`, `variables` (an object) and `operationName`, and no repeated keys, so no
+  `extensions` and no batches. graphql-js parses the query (at most 4000 tokens). It must be
+  exactly one `query` operation named after a reviewed template: the 18 Q Automations reads,
+  `UserInfo` and `MyFeatureFlags` (whose resolver also records flag exposure, counted as a read
+  by the owner on 31 October 2026). It may have only that template's one root field (an alias is
+  allowed), no fragments, no directives other than `@include` and `@skip`, and no introspection
+  field other than `__typename`. A given `operationName` must equal the operation's name.
+- **Sign-in origin:** only the renewal passes: `POST /realms/piche/protocol/openid-connect/token`,
+  form-encoded, with no URL query and exactly the fields `grant_type=refresh_token`,
+  `refresh_token` and `client_id=piche`, each once. Another realm, client or grant, an extra or
+  repeated field, the logout path and every other sign-in path are held.
+
+Everything else on those origins is refused before it is sent. Modes:
+
+- **Look-only and ordinary accounts:** the contract has no paid activities, so a held request
+  opens no card and no grant can let it through.
+- **`test-full` on an account marked as a test account:** every request to the three origins
+  passes and is audited as on its own sites.
+
+Websockets stay closed and service workers blocked, as on every QA browser. `synthetic-paid@1` and
+other sites keep their rules.
+
+The audit keeps the method, the origin, a literal path (`/graphql`, the token path,
+`/[unreviewed]` or `/[unclassified]`), query key names and a closed body detail. For GraphQL that
+is `{kind: "graphql", operation, name, sha256}`: the operation type, the template name for a
+reviewed read only (held requests have none) and the SHA-256 of the query text. For the renewal it
+is `{kind: "form", grant: "refresh_token"}`, plus a second record holding its response status
+(`succeeded` for 2xx, `failed` otherwise). Status appears on no other record. Variables, bodies,
+tokens and replies are never recorded. The host re-checks every record against the contract from
+this metadata alone and refuses a record that does not match.
 
 V2 account reports reference a host-owned sealed ledger receipt. The host binds its run, brief,
 revision, immutable grants/cards, cumulative reservation/send counts, terminal outcomes and durable

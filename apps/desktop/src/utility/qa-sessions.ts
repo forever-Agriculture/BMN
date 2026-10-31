@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { ERROR_CODES, type MessageTeamAnswer, type QaActivity, type QaAuditGap, type QaGrantTerms, type QaLaunchRequest, type QaRequestMeta, type QaRun, type SessionRecord } from '@bmn/protocol'
 import { QaGrantBroker, type QaGrantBrokerOptions } from './qa-grants'
-import { syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
+import { picheReadContract, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
 import { canonicalJson, sha256 } from '../../bin/shared-helpers.mjs'
 import { writeWhole } from '../../bin/agents-team-supervisor.mjs'
 import type { DatabaseWorkerClient } from './database-client'
@@ -23,8 +23,10 @@ export interface QaSessionsOptions {
   stop(sessionId: string, incarnationId: string): Promise<void>
   now(): string
   /** `contracts`: the origins whose reviewed site contract the host registered; the relay classifies only by these. */
-  accounts?: Pick<QaGrantBrokerOptions, 'account' | 'contract' | 'qualified' | 'changed'> & { contracts: readonly string[] }
+  accounts?: Pick<QaGrantBrokerOptions, 'account' | 'contract' | 'qualified' | 'changed'> & { contracts: readonly string[]; reviewed?: readonly QaReviewedContract[] }
 }
+/** Epic 101: a reviewed contract the host registered, sent to the relay by id and origins; its rules are the gate's own code. */
+export interface QaReviewedContract { id: string; origins: { page: string; api: string; signIn: string } }
 const fail = (message: string): never => { throw new ControlError(ERROR_CODES.invalidArgument, message) }
 
 /**
@@ -36,22 +38,34 @@ export function testQaContractOrigin(argv: readonly string[], env: NodeJS.Proces
   if (!argv.includes('--bmn-test-host') || origin === undefined) return null
   return /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(origin) ? origin : null
 }
+/** A test-mode host's loopback twin of the Piche read contract (Epic 101.2): three distinct loopback origins, page, API and sign-in. */
+export function testQaPicheOrigins(argv: readonly string[], env: NodeJS.ProcessEnv): QaReviewedContract['origins'] | null {
+  const value = env.BMN_TEST_QA_PICHE_ORIGINS
+  if (!argv.includes('--bmn-test-host') || value === undefined) return null
+  const [page, api, signIn, ...rest] = value.split(',')
+  if (rest.length || !page || !api || !signIn) return null
+  try { return { ...picheReadContract({ page, api, signIn }).origins } } catch { return null }
+}
 
 /**
  * Production account checks, loaded from the shipped CLI folder like the report checker: the owner's stored
- * accounts and test marks, the reviewed site contracts the host registered (none outside a test-mode run, so
- * every site is unreviewed: audited reads only, d71), and the run's own fence and init proof (d68).
+ * accounts and test marks, the reviewed site contracts the host registered (the Piche TEST read contract always,
+ * Epic 101; the synthetic studio and the Piche twin only in a test-mode run; every other site is unreviewed: audited reads only, d71), and the run's own fence and init proof (d68).
  */
-export function shippedQaAccounts(cliPath: string, changed: (sessionId: string) => void, contractOrigin: string | null = null): NonNullable<QaSessionsOptions['accounts']> {
+export function shippedQaAccounts(cliPath: string, changed: (sessionId: string) => void, contractOrigin: string | null = null,
+  picheTwin: QaReviewedContract['origins'] | null = null): NonNullable<QaSessionsOptions['accounts']> {
   const load = <T>(name: string): T => createRequire(import.meta.url)(join(dirname(cliPath), name)) as T
+  // Epic 101: the Piche TEST read contract is always registered; a test-mode host adds its loopback twin.
+  const reviewed = [picheReadContract(), ...(picheTwin ? [picheReadContract(picheTwin)] : [])]
   return {
     account: idOrName => {
       const { BrowserAccountsStore } = load<typeof import('../../bin/browser-accounts-store.mjs')>('browser-accounts-store.mjs')
       const store = new BrowserAccountsStore(), meta = store.metadata(store.find(idOrName))
       return { id: meta.id, name: meta.name, origins: [...meta.origins], test: meta.test === true, qaRevision: meta.qaRevision ?? 1 }
     },
-    contract: origin => contractOrigin !== null && origin === contractOrigin ? syntheticPaidContract(origin) : null,
+    contract: origin => contractOrigin !== null && origin === contractOrigin ? syntheticPaidContract(origin) : reviewed.find(contract => Object.values(contract.origins).includes(origin)) ?? null,
     contracts: contractOrigin === null ? [] : [contractOrigin],
+    reviewed: reviewed.map(contract => ({ id: contract.id, origins: { ...contract.origins } })),
     qualified: run => load<typeof import('../../bin/qa-claude-fence.mjs')>('qa-claude-fence.mjs').qualifiedQaRun(run.folder, run.agent),
     changed
   }
@@ -95,7 +109,7 @@ export class QaSessions {
         activity: params.activity as QaActivity, request: params.request as QaRequestMeta, requestSha256: params.requestSha256 as string })
       if (method === 'qa.send') return broker.send(run, params.id as string)
       if (method === 'qa.settle') return broker.settle(run, params.id as string, params.state as 'succeeded' | 'failed' | 'uncertain', params.status as number | null)
-      if (method === 'qa.audit') return broker.observe(run, params.accountId as string, params.request as QaRequestMeta, params.held as boolean)
+      if (method === 'qa.audit') return broker.observe(run, params.accountId as string, params.request as QaRequestMeta, params.held as boolean, (params.status ?? null) as number | null)
       if (method === 'qa.hold') return broker.hold(run, params.accountId as string, params.request as QaRequestMeta, params.reason as string)
       return broker.gap(run, params.gap as QaAuditGap | null)
     }
@@ -137,7 +151,7 @@ export class QaSessions {
       // Aliases only name what the brief allows; each pick is decided by the broker, which requires the run's own qualification.
       // Only a version 2 run seals and reconciles its host audit, so a version 1 run is never offered an account.
       const aliases = run.brief.version !== 2 ? [] : ((run.brief.accounts ?? []) as Array<{ alias: string; intent: string }>).map(item => ({ alias: item.alias, intent: item.intent }))
-      return { qaId: run.id, target: run.brief.target, accounts: this.options.accounts && aliases.length ? aliases : false, contracts: [...this.options.accounts?.contracts ?? []] }
+      return { qaId: run.id, target: run.brief.target, accounts: this.options.accounts && aliases.length ? aliases : false, contracts: [...this.options.accounts?.contracts ?? []], reviewed: [...this.options.accounts?.reviewed ?? []] }
     }
     const run = await db.companion('getQaRun', params.id as string)
     if (!run) return fail('QA_NOT_FOUND')

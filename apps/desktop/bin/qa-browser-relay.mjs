@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { AccountBrowserRelay, agentAccountRows } from './browser-account-relay.mjs'
 import { BrowserAccountsStore } from './browser-accounts-store.mjs'
-import { classifyQaRequest, gateQaRequest, passQaRequest, syntheticPaidContract } from './qa-request-gate.mjs'
+import { classifyQaRequest, gateQaRequest, passQaRequest, picheReadContract, qaOwnOrigin, qaRequestPayload, syntheticPaidContract } from './qa-request-gate.mjs'
 import { readBrowserPng } from './browser-accounts-engine.mjs'
 import { processIdentity } from './browser-process.mjs'
 import { BROWSER_LIMITS, LOOK_TOOLS, browserTools } from './agents-team-browser.mjs'
@@ -110,23 +110,29 @@ export async function runQaBrowser(folder) {
   let current = null, sealed = false, audited = false
   // Only the contracts the host registered apply; a site's hostname never implies one (Opus F2).
   const contracts = Array.isArray(policy.contracts) ? policy.contracts : []
-  const contractFor = origin => { try { return contracts.includes(origin) ? syntheticPaidContract(origin) : null } catch { return null } }
+  // Epic 101: reviewed contracts arrive by id with their origins; only the Piche read contract exists, and its rules are this code's.
+  const reviewed = (Array.isArray(policy.reviewed) ? policy.reviewed : []).flatMap(item => { try { return item?.id === 'piche-test-read@1' ? [picheReadContract(item.origins)] : [] } catch { return [] } })
+  const contractFor = origin => {
+    try { if (contracts.includes(origin)) return syntheticPaidContract(origin) } catch { return null }
+    return reviewed.find(contract => Object.values(contract.origins).includes(origin)) ?? null
+  }
   const brokerFor = (account, origin) => ({
     policy: async () => ({ active: !sealed && relay.id === account.accountId, contract: contractFor(origin), origins: account.origins }),
     reserve: async operation => account.mode === 'ordinary-granted' ? rpc('qa.reserve', { ...operation, grantId: null, accountId: account.accountId }) : { allowed: false, reason: 'look-only' },
     send: id => rpc('qa.send', { id }),
     settle: (id, state, status) => rpc('qa.settle', { id, state, status }),
-    observe: request => rpc('qa.audit', { accountId: account.accountId, request, held: false }),
+    observe: (request, status) => rpc('qa.audit', { accountId: account.accountId, request, held: false, ...(status === undefined ? {} : { status }) }),
     // A look-only pick never reserves, so its held requests are audited without opening a card it could not use.
     hold: (request, reason) => account.mode === 'look-only' ? rpc('qa.audit', { accountId: account.accountId, request, held: true }) : rpc('qa.hold', { accountId: account.accountId, request, reason }),
     gap: gap => rpc('qa.audit.close', { gap })
   })
   // A test account's own sites are observed and pass; anything else is held. Ordinary accounts cross the broker gate.
   const testRoute = async (route, account) => {
-    const classified = classifyQaRequest(contractFor(new URL(route.request().url()).origin), route.request().method(), route.request().url())
     try {
       if (sealed || relay.id !== account.accountId) { await route.abort('blockedbyclient'); return }
-      if (!account.origins.includes(classified.request.origin)) { await rpc('qa.hold', { accountId: account.accountId, request: classified.request, reason: 'outside-account-sites' }); await route.abort('blockedbyclient'); return }
+      const contract = contractFor(new URL(route.request().url()).origin)
+      const classified = classifyQaRequest(contract, route.request().method(), route.request().url(), account.origins, qaRequestPayload(route.request()))
+      if (!qaOwnOrigin(contract, account.origins, classified.request.origin)) { await rpc('qa.hold', { accountId: account.accountId, request: classified.request, reason: 'outside-account-sites' }); await route.abort('blockedbyclient'); return }
       await rpc('qa.audit', { accountId: account.accountId, request: classified.request, held: false })
       await passQaRequest(route)
     } catch {

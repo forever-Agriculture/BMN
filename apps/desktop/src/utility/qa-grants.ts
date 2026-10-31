@@ -1,7 +1,7 @@
 // MODULE: qa-grants.ts - authoritative account/contract checks in front of the SQLite activity ledger
 import { createHash, randomUUID } from 'node:crypto'
 import { ERROR_CODES, isQaGrantTerms, isQaRequestMeta, type QaActivity, type QaAuditEvent, type QaAuditGap, type QaGrant, type QaGrantTerms, type QaRequestMeta, type QaRun, type QaUseDecision } from '@bmn/protocol'
-import { classifyQaRequest, type QaSiteContract } from '../../bin/qa-request-gate.mjs'
+import { classifyQaMeta, classifyQaRequest, qaOwnOrigin, type QaSiteContract } from '../../bin/qa-request-gate.mjs'
 import type { DatabaseWorkerClient } from './database-client'
 import { ControlError } from './control-server'
 
@@ -134,16 +134,19 @@ export class QaGrantBroker {
     this.current(run)
     await this.options.database.companion('settleQaGrantUse', run.id, id, state, status, this.options.now())
   }
-  async observe(run: QaRun, accountId: string, meta: QaRequestMeta, held = false): Promise<void> {
+  /** `status`: only a passed sign-in renewal's reply status (Epic 101 D6), recorded as its own event after the send. */
+  async observe(run: QaRun, accountId: string, meta: QaRequestMeta, held = false, status: number | null = null): Promise<void> {
     this.current(run)
     if (!isQaRequestMeta(meta)) return fail('QA_REQUEST_INVALID')
     const account = this.account(run, accountId), contract = this.options.contract(meta.origin)
-    const classified = classifyQaRequest(contract, meta.method, meta.origin + meta.path, account.origins)
+    // The host never sees a body: a reviewed contract's read is re-checked from its closed body detail (Epic 101 D9).
+    const classified = classifyQaMeta(contract, meta, account.origins)
     // A reviewed read is a literal path without a query; an unreviewed site's page read (d71) keeps only its query key names.
     if (!held && !account.test && (classified.classification !== 'read' || classified.reviewed && meta.queryKeys.length)) return fail('QA_ACTIVITY_RESERVATION_REQUIRED')
-    if (!held && !account.origins.includes(meta.origin)) return fail('QA_ACCOUNT_SITE_MISMATCH')
+    if (!held && !qaOwnOrigin(contract, account.origins, meta.origin)) return fail('QA_ACCOUNT_SITE_MISMATCH')
+    if (status !== null && (held || account.test || meta.body?.kind !== 'form' || !Number.isInteger(status) || status < 100 || status > 599)) return fail('QA_REQUEST_INVALID')
     const event: QaAuditEvent = { ...meta, path: classified.request.path, accountAlias: account.name, classification: held ? 'unknown' : account.test ? 'test-full' : 'read',
-      result: held ? 'held' : 'observed', grantId: null, cardId: null, useId: null, status: null }
+      result: held ? 'held' : status === null ? 'observed' : status >= 200 && status < 300 ? 'succeeded' : 'failed', grantId: null, cardId: null, useId: null, status }
     const result = await this.options.database.companion('appendQaAudit', run.id, event, this.options.now())
     if (!result.recorded) fail('QA_AUDIT_INCOMPLETE')
   }
@@ -151,7 +154,7 @@ export class QaGrantBroker {
     this.current(run)
     if (!isQaRequestMeta(meta)) return fail('QA_REQUEST_INVALID')
     const account = this.account(run, accountId), contract = this.options.contract(meta.origin)
-    const classified = classifyQaRequest(contract, meta.method, meta.origin + meta.path)
+    const classified = classifyQaMeta(contract, meta, account.origins)
     let grant: QaGrant | null = null
     if (!meta.queryKeys.length && classified.classification === 'activity' && classified.activity) {
       const key = `held-${digest([run.id, account.id, account.qaRevision, meta.origin, contract?.sha256, classified.activity, reason])}`

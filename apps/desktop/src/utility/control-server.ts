@@ -1032,7 +1032,7 @@ export class ControlServer {
       case 'qa.hold':
       case 'qa.summary':
       case 'qa.audit.close': {
-        const keys = method === 'qa.summary' ? [] : method === 'qa.reserve' ? ['id', 'grantId', 'accountId', 'activity', 'request', 'requestSha256'] : method === 'qa.settle' ? ['id', 'state', 'status'] : method === 'qa.audit' ? ['accountId', 'request', 'held'] : method === 'qa.hold' ? ['accountId', 'request', 'reason'] : method === 'qa.audit.close' ? ['gap'] : ['id']
+        const keys = method === 'qa.summary' ? [] : method === 'qa.reserve' ? ['id', 'grantId', 'accountId', 'activity', 'request', 'requestSha256'] : method === 'qa.settle' ? ['id', 'state', 'status'] : method === 'qa.audit' ? ['accountId', 'request', 'held', 'status'] : method === 'qa.hold' ? ['accountId', 'request', 'reason'] : method === 'qa.audit.close' ? ['gap'] : ['id']
         const params = closedParams(rawParams, keys)
         if (method === 'qa.reserve') {
           for (const key of ['id', 'requestSha256']) requireText(params, key, RULES.source)
@@ -1043,6 +1043,7 @@ export class ControlServer {
         } else if (method === 'qa.audit' || method === 'qa.hold') {
           requireText(params, 'accountId', RULES.source)
           if (!isQaRequestMeta(params.request) || method === 'qa.audit' && typeof params.held !== 'boolean') throw invalidError('Invalid QA audit metadata')
+          if (params.status !== undefined && (method !== 'qa.audit' || params.held !== false || !Number.isInteger(params.status) || Number(params.status) < 100 || Number(params.status) > 599)) throw invalidError('Invalid QA audit status')
           if (method === 'qa.hold') requireText(params, 'reason', RULES.source)
         } else if (method === 'qa.audit.close') {
           if (params.gap !== null && !['overflow', 'interrupted', 'relay-incomplete', 'broker-unreachable'].includes(String(params.gap))) throw invalidError('Invalid QA audit gap')
