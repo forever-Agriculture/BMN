@@ -90,8 +90,9 @@ it('a card worded apart from the question but offering its same specific answers
     manualChoices: choices(['Send the vendor email (Recommended)', 'Keep it unsent']) })
   expect(askedTwice(question, retold)).toBe(true)
   expect(mirrorOf(retold, [question, retold])?.requestId).toBe('question')
-  // One answer list of a several-question prompt is enough.
-  expect(askedTwice({ ...question, prompt: prompt([['Ten samples', 'Fifty samples'], ['Send the vendor email', 'Keep it unsent']]) }, retold)).toBe(true)
+  // One answer list of a several-question prompt is enough, when it belongs to the question about the card's subject.
+  expect(askedTwice({ ...question, prompt: prompt([['Send the vendor email', 'Keep it unsent'], ['Ten samples', 'Fifty samples']]) }, retold)).toBe(true)
+  expect(askedTwice({ ...question, prompt: prompt([['Ten samples', 'Fifty samples'], ['Send the vendor email', 'Keep it unsent']]) }, retold)).toBe(false)
   // Answers that name no action say nothing about which decision they answer.
   const generic = (labels: string[]): [AttentionRecord, AttentionRecord] => [{ ...question, prompt: prompt([labels]) }, { ...retold, manualChoices: choices(labels) }]
   expect(askedTwice(...generic(['Yes', 'No']))).toBe(false)
@@ -108,6 +109,30 @@ it('a card worded apart from the question but offering its same specific answers
   const colorCard = request('color-card', { openedBy: 'cli', kind: 'permission', openedAt: at(20), title: 'Banner color for the preview build?', manualChoices: choices(['Gold (Recommended)', 'Black']) })
   expect(askedTwice(colorQuestion, colorCard)).toBe(true)
   expect(askedTwice(colorQuestion, { ...colorCard, title: 'Which synthetic gallery border should the sample banner use?' })).toBe(false)
+  // A card title that asks nothing names no other word, so the same short answers still need a shared subject.
+  expect(askedTwice(colorQuestion, { ...colorCard, title: 'Border tone' })).toBe(false)
+})
+
+it('the same answers pair only about one subject, for one choice, and never as bare words (review 20261031T194544-8ad3ab8f)', () => {
+  const ask = (text: string, labels: string[], multiSelect = false): AttentionRecord => request('native', { openedBy: 'hook:codex:PreToolUse', title: `Codex asks: ${text}`, body: `1. ${text}`,
+    prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'tool',
+      questions: [{ id: null, header: null, text, multiSelect, options: labels.map(label => ({ label, description: null })) }] } })
+  const card = (title: string, labels: string[], body: string | null = null): AttentionRecord => request('card', { openedBy: 'cli', kind: 'permission', openedAt: at(15), title, body,
+    manualChoices: { options: labels.map(label => ({ label, description: null })), allowOther: true } })
+  const backoff = ['Use bounded exponential backoff', 'Keep single attempt']
+  const upload = ask('Should the synthetic upload worker retry failed chunks?', backoff)
+  // Five naming words, but the card is about another worker: only "retry" and "failed" are shared.
+  expect(askedTwice(upload, card('Should the sample deployment runner retry failed jobs?', backoff))).toBe(false)
+  expect(askedTwice(upload, card('Retry policy for the synthetic upload worker chunks', backoff))).toBe(true)
+  // A question that takes several answers is not a card that takes one, even with the same labels (each retold apart).
+  const parts = ['Gallery thumbnails', 'Sample banner', 'Preview footer']
+  const which = 'Which synthetic gallery preview parts should the sample build refresh? Yesterday the cache layer served stale thumbnails to reviewers.'
+  const partsCard = card('Synthetic parts to refresh in this build', parts, 'Regenerating costs about four minutes on the shared runner; outputs land beside the nightly artifacts.')
+  expect(askedTwice(ask(which, parts, true), partsCard)).toBe(false)
+  expect(askedTwice(ask(which, parts), partsCard)).toBe(true)
+  // Accept / Reject name no action, whatever the card says.
+  expect(askedTwice(ask('Should I accept synthetic deployment A for the sample gallery?', ['Accept', 'Reject']),
+    card('Approve deletion of synthetic gallery B', ['Accept (Recommended)', 'Reject']))).toBe(false)
 })
 
 it('the pager sends the first of a mirrored pair and records the second as mirrored, unsent', async () => {

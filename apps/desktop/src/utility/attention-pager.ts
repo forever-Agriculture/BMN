@@ -21,9 +21,10 @@ const nativeQuestion = (record: AttentionRecord): boolean => record.kind === 'qu
 const askCard = (record: AttentionRecord): boolean => record.openedBy === 'cli' && (record.kind === 'question' || record.kind === 'permission')
 
 /**
- * Words two copies of one decision must share: at least MIRROR_SHARED_WORDS, and MIRROR_WORD_SHARE of the smaller set.
- * Replayed on his 149 close card/question pairs (2026-10-24..31), every pair at or above both bounds was one decision and
- * the doubtful ones fell below; a missed merge only leaves a duplicate, a wrong one would keep a question off his phone.
+ * Words two copies of one decision share when they do not offer the same answers (sameDecision): at least
+ * MIRROR_SHARED_WORDS, and MIRROR_WORD_SHARE of the smaller set. Replayed on his 149 close card/question pairs
+ * (2026-10-24..31), every pair at or above both bounds was one decision and the doubtful ones fell below; a missed merge
+ * only leaves a duplicate, a wrong one would keep a question off his phone.
  */
 export const MIRROR_SHARED_WORDS = 8
 export const MIRROR_WORD_SHARE = 0.8
@@ -60,45 +61,66 @@ function questionPolarity(record: AttentionRecord): { plain: Set<string>; negate
 }
 const tokens = (record: AttentionRecord): Set<string> => new Set(decisionParts(record).join('\n').toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? [])
 /** Answer words that name no action: an answer list made only of them says nothing about which decision it answers. */
-const BARE_ANSWER = new Set('yes no okay approve approved deny denied allow cancel continue stop skip later other done sure please proceed'.split(' '))
+const BARE_ANSWER = new Set(('yes no okay approve approved deny denied allow cancel continue stop skip later other done sure please proceed ' +
+  'accept accepted reject rejected decline confirm agree disagree retry abort ignore dismiss submit').split(' '))
 const answerLabel = (label: string): string => label.toLowerCase().replace(/\(recommended\)/gu, '').replace(/\s+/gu, ' ').trim()
-/** Naming words an identical answer list needs to settle a pair alone, even beside a retold question's other words. */
+const namingWords = (text: string): string[] => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => word.length >= 4 && !COMMON.has(word))
+/** Naming words an identical answer list needs to pair without the other-word veto (sameDecision). */
 export const MIRROR_ANSWER_WORDS = 4
-/** Each question's answers, and a card's own choices, of at least two labels: the sorted list and its naming words. */
-function answerLists(record: AttentionRecord): { list: string; naming: number }[] {
-  const lists = record.prompt?.type === 'questions' ? record.prompt.questions.map(item => item.options.map(option => option.label)) : []
-  if (record.manualChoices) lists.push(record.manualChoices.options.map(option => option.label))
-  return lists.filter(labels => labels.length >= 2).map(labels => {
-    const labelled = labels.map(answerLabel)
-    const naming = new Set(labelled.join(' ').match(/[\p{L}\p{N}]+/gu)?.filter(word => word.length >= 4 && !COMMON.has(word) && !BARE_ANSWER.has(word)))
-    return { list: labelled.sort().join('\n'), naming: naming.size }
+/** Words outside the answers that what a question asks and what its card says must share for the same answers to pair. */
+export const MIRROR_SUBJECT_WORDS = 3
+interface AnswerList { list: string; naming: number; subject: Set<string> }
+/**
+ * Each single-choice question's answers, and a card's own choices, of at least two labels: the sorted list, its naming
+ * words, and the words of what it answers outside them (that question alone, or the card's title and body). A
+ * several-choice question takes a set of answers where a card takes one, so it never offers the same answers.
+ */
+function answerLists(record: AttentionRecord): AnswerList[] {
+  const lists = record.prompt?.type === 'questions'
+    ? record.prompt.questions.filter(item => !item.multiSelect).map(item => ({ labels: item.options.map(option => option.label), about: `${item.header ?? ''} ${item.text}` }))
+    : []
+  if (record.manualChoices) lists.push({ labels: record.manualChoices.options.map(option => option.label), about: `${record.title} ${record.body ?? ''}` })
+  return lists.filter(item => item.labels.length >= 2).map(item => {
+    const labelled = item.labels.map(answerLabel)
+    const answered = new Set(namingWords(labelled.join(' ')))
+    return { list: labelled.sort().join('\n'), naming: [...answered].filter(word => !BARE_ANSWER.has(word)).length,
+      subject: new Set(namingWords(item.about).filter(word => !answered.has(word))) }
   }).filter(item => item.naming > 0)
 }
-/** The naming words of the richest answer list both requests offer word for word, or 0. */
-function sameAnswers(one: AttentionRecord, other: AttentionRecord): number {
-  const theirs = new Set(answerLists(other).map(item => item.list))
-  return Math.max(0, ...answerLists(one).filter(item => theirs.has(item.list)).map(item => item.naming))
+/** The richest answer list both requests offer word for word about one subject (MIRROR_SUBJECT_WORDS shared), or null. */
+function sameAnswers(one: AttentionRecord, other: AttentionRecord): AnswerList | null {
+  const theirs = answerLists(other)
+  let best: AnswerList | null = null
+  for (const mine of answerLists(one)) {
+    for (const item of theirs) {
+      if (item.list !== mine.list || [...mine.subject].filter(word => item.subject.has(word)).length < MIRROR_SUBJECT_WORDS) continue
+      if (!best || mine.naming > best.naming) best = mine
+    }
+  }
+  return best
 }
 /**
  * Two copies of one decision: no word one question asks about plainly is asked with a negation in the other ("Publish X?"
- * against "Not publish X?"), and either they offer the same answers word for word, with at least MIRROR_ANSWER_WORDS
- * naming words ("Send the E2B email" / "Keep the packet local and unsent"), or the two do not each ask about a word the
- * other never uses ("Delete X?" beside "Publish X?", "Which border?" beside "Which color?" with Gold / Black) and they share
- * fewer naming answers or most words. Constraints outside the question sentences ("Do not push main.") never count.
- * Replayed on his 245 close card/question pairs (2026-10-01..31): 74 retold pairs with the same answers paged twice under
- * shared words alone, each one decision, and none of his pairs with the same answers was two decisions; a wrong merge would
- * keep another question off his phone, so bare answers ("Yes" / "No") never pair (review 20261031T115619-9dbd0ec0).
+ * against "Not publish X?"), and either they offer the same answers word for word about one subject (sameAnswers), with
+ * at least MIRROR_ANSWER_WORDS naming words ("Send the E2B email" / "Keep the packet local and unsent"), or the two do not
+ * each ask about a word the other never uses ("Delete X?" beside "Publish X?", "Which border?" beside "Which color?" with
+ * Gold / Black) and they offer the same answers with fewer naming words or share most words. Constraints outside the
+ * question sentences ("Do not push main.") never count. Replayed on his 245 close card/question pairs (2026-10-01..31): 74
+ * retold pairs with the same answers paged twice under shared words alone, each one decision; a wrong merge would keep
+ * another question off his phone, so bare answers ("Yes" / "No", "Accept" / "Reject") never pair, and the same answers
+ * about another subject ("retry the upload" beside "retry the deploy") do not (reviews 20261031T115619-9dbd0ec0,
+ * 20261031T194544-8ad3ab8f).
  */
 function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
   const x = questionPolarity(one), y = questionPolarity(other)
   const turned = (p: typeof x, q: typeof x): boolean => [...p.negated].some(word => q.plain.has(word) && !q.negated.has(word))
   if (turned(x, y) || turned(y, x)) return false
   const answers = sameAnswers(one, other)
-  if (answers >= MIRROR_ANSWER_WORDS) return true
+  if (answers && answers.naming >= MIRROR_ANSWER_WORDS) return true
   const asked = (p: typeof x): string[] => [...p.plain, ...p.negated].filter(word => word.length >= 4 && !COMMON.has(word))
   const mine = tokens(one), theirs = tokens(other)
   if (asked(x).some(word => !theirs.has(word)) && asked(y).some(word => !mine.has(word))) return false
-  if (answers > 0) return true
+  if (answers) return true
   const a = decisionWords(one), b = decisionWords(other)
   const shared = [...a].filter(word => b.has(word)).length
   return shared >= MIRROR_SHARED_WORDS && shared >= MIRROR_WORD_SHARE * Math.min(a.size, b.size)
@@ -106,8 +128,8 @@ function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
 
 /**
  * The open request this one mirrors, or null. An agent that asks with its own question tool (BMN's hook reports it) and
- * also opens a `bmn ask` card asks one decision twice; both opening in one session within MIRROR_WINDOW_MS in the same
- * words pair them, and the earlier one is the page. Tool approvals, notices, two cards or two questions never pair: they are separate decisions.
+ * also opens a `bmn ask` card asks one decision twice; both opening in one session within MIRROR_WINDOW_MS as the same
+ * decision (sameDecision: the same answers or mostly the same words) pair them, and the earlier one is the page. Tool approvals, notices, two cards or two questions never pair: they are separate decisions.
  */
 export function mirrorOf(record: AttentionRecord, others: readonly AttentionRecord[]): AttentionRecord | null {
   const opened = Date.parse(record.openedAt)
