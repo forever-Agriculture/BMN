@@ -14,6 +14,88 @@ export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.fre
 /** A request that fell due while the owner was at the desk is still sent if they leave this soon after it opened. */
 export const LEFT_WITHIN_MS = 10 * 60_000
 
+/** How far apart an agent's own question and its `bmn ask` card may open and still be one decision. */
+export const MIRROR_WINDOW_MS = 120_000
+
+const nativeQuestion = (record: AttentionRecord): boolean => record.kind === 'question' && (record.openedBy ?? '').startsWith('hook:')
+const askCard = (record: AttentionRecord): boolean => record.openedBy === 'cli' && (record.kind === 'question' || record.kind === 'permission')
+
+/**
+ * Words two copies of one decision must share: at least MIRROR_SHARED_WORDS, and MIRROR_WORD_SHARE of the smaller set.
+ * Replayed on his 149 close card/question pairs (2026-10-24..31), every pair at or above both bounds was one decision and
+ * the doubtful ones fell below; a missed merge only leaves a duplicate, a wrong one would keep a question off his phone.
+ */
+export const MIRROR_SHARED_WORDS = 8
+export const MIRROR_WORD_SHARE = 0.8
+const COMMON = new Set(('that this with from have your will what which when then than them they into only also does after before about would ' +
+  'could should there their these those were been being more most some such each other over under just like make made want need asks codex ' +
+  'claude opencode questions question recommended keep').split(' '))
+function decisionParts(record: AttentionRecord): string[] {
+  const prompt = record.prompt?.type === 'questions' ? record.prompt.questions.flatMap(item => [item.header ?? '', item.text, ...item.options.map(option => option.label)]) : []
+  return [record.title, record.body ?? '', ...prompt, ...(record.manualChoices?.options.map(option => option.label) ?? [])]
+}
+function decisionWords(record: AttentionRecord): Set<string> {
+  return new Set((decisionParts(record).join(' ').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => word.length >= 4 && !COMMON.has(word)))
+}
+const NEGATION = /^(?:not|no|never|cannot|without|.+n['’]t)$/u
+const FILLER = new Set(['a', 'an', 'the', 'to', 'be'])
+/**
+ * Words the request's question sentences (ending in '?') ask about, split by whether a negation turns them around: the
+ * word right after it at any length ("not run"), or a longer word up to two words after it ("never the gallery page").
+ */
+function questionPolarity(record: AttentionRecord): { plain: Set<string>; negated: Set<string> } {
+  const plain = new Set<string>(), negated = new Set<string>()
+  for (const sentence of decisionParts(record).flatMap(part => part.split(/(?<=[?.!])\s+|\n+/u))) {
+    if (!sentence.trim().endsWith('?')) continue
+    const words = sentence.toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? []
+    words.forEach((word, index) => {
+      if (NEGATION.test(word) || FILLER.has(word)) return
+      const before = words.slice(Math.max(0, index - 3), index).filter(item => !FILLER.has(item)).slice(-2)
+      const turned = before.length > 0 && NEGATION.test(before[before.length - 1]!) ||
+        word.length >= 4 && !COMMON.has(word) && before.some(item => NEGATION.test(item))
+      ;(turned ? negated : plain).add(word)
+    })
+  }
+  return { plain, negated }
+}
+/**
+ * Two copies of one decision share most words, and no word one question asks about plainly is asked with a negation in
+ * the other ("Publish X?" against "Not publish X?"). Constraints outside the question sentences ("Do not push main.")
+ * never count: replayed on his 51 mirrored pairs, a negation anywhere in the text split a third of them, the question
+ * sentences none.
+ */
+function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
+  const a = decisionWords(one), b = decisionWords(other)
+  const shared = [...a].filter(word => b.has(word)).length
+  if (shared < MIRROR_SHARED_WORDS || shared < MIRROR_WORD_SHARE * Math.min(a.size, b.size)) return false
+  const x = questionPolarity(one), y = questionPolarity(other)
+  const turned = (p: typeof x, q: typeof x): boolean => [...p.negated].some(word => q.plain.has(word) && !q.negated.has(word))
+  return !turned(x, y) && !turned(y, x)
+}
+
+/**
+ * The open request this one mirrors, or null. An agent that asks with its own question tool (BMN's hook reports it) and
+ * also opens a `bmn ask` card asks one decision twice; both opening in one session within MIRROR_WINDOW_MS in the same
+ * words pair them, and the earlier one is the page. Tool approvals, notices, two cards or two questions never pair: they are separate decisions.
+ */
+export function mirrorOf(record: AttentionRecord, others: readonly AttentionRecord[]): AttentionRecord | null {
+  const opened = Date.parse(record.openedAt)
+  return others.find(other => other.state === 'open' && askedTwice(record, other) &&
+    (Date.parse(other.openedAt) < opened || Date.parse(other.openedAt) === opened && other.requestId < record.requestId)) ?? null
+}
+
+/**
+ * Whether two requests, open or closed, are one decision asked through the agent's question tool and a `bmn ask` card.
+ * When both name the agent conversation that made them, it must be the same one, as dev-auto's interruption count requires.
+ */
+export function askedTwice(one: AttentionRecord, other: AttentionRecord): boolean {
+  const a = one.producer, b = other.producer
+  const sameAgent = !a || !b || a.conversationReference === b.conversationReference && a.generation === b.generation
+  return one.requestId !== other.requestId && one.sessionId === other.sessionId && sameAgent &&
+    (nativeQuestion(one) && askCard(other) || askCard(one) && nativeQuestion(other)) &&
+    Math.abs(Date.parse(other.openedAt) - Date.parse(one.openedAt)) <= MIRROR_WINDOW_MS && sameDecision(one, other)
+}
+
 interface AttentionPagerOptions {
   /** The request as stored now, or null when it is gone. */
   current(requestId: string): Promise<AttentionRecord | null>
@@ -30,6 +112,12 @@ interface AttentionPagerOptions {
   observeDelivery?: TelegramDeliveryObserver
   /** Runs before the desktop rule so overnight requests retain delivery eligibility. */
   holdQuiet?(record: AttentionRecord): Promise<boolean>
+  /**
+   * The earlier open request this one mirrors (mirrorOf), or null. The mirror is not sent once that request reached the
+   * phone; while it still waits (timer, desk, quiet hours, retry) the mirror waits with it, and pages on its own if that
+   * request ends unsent (closed, seen, expired, failed).
+   */
+  mirrorOf?(record: AttentionRecord): Promise<AttentionRecord | null>
 }
 
 /**
@@ -54,6 +142,25 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   const handled = new Set<string>()
   const unsent = new Map<string, AttentionRecord>()
   const inFlight = new Set<string>()
+  /** Revisions whose page reached Telegram, and mirrors waiting on an earlier request's revision. */
+  const delivered = new Set<string>()
+  const mirrors = new Map<string, { record: AttentionRecord; openedAt: number | undefined; original: string }>()
+  const stillWaiting = (key: string): boolean => pending.has(key) || atDesk.has(key) || unsent.has(key) || inFlight.has(key)
+  /** A request reached its end: its waiting mirrors are done when it was sent, else each pages on its own. */
+  const settle = (key: string, sent: boolean): void => {
+    for (const [mirrorKey, mirror] of [...mirrors]) {
+      if (mirror.original !== key) continue
+      mirrors.delete(mirrorKey)
+      if (sent) finishMirror(mirrorKey, mirror.record)
+      else void page(mirrorKey, mirror.record, mirror.openedAt)
+    }
+  }
+  const finish = (key: string): void => { handled.add(key); settle(key, false) }
+  const finishMirror = (key: string, record: AttentionRecord): void => {
+    observeTelegramDelivery(options.observeDelivery, record, 'request-mirrored')
+    handled.add(key)
+    settle(key, true)
+  }
   let availability = 0
   let closed = false
   const page = async (key: string, record: AttentionRecord, openedAt?: number): Promise<void> => {
@@ -69,8 +176,20 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         observeTelegramDelivery(options.observeDelivery, record,
           closed || !current ? 'request-unavailable' : current.state !== 'open' ? 'request-closed'
             : current.seenAt !== null ? 'request-seen' : 'request-revised')
-        handled.add(key)
+        finish(key)
         return
+      }
+      // One decision, one phone message: the agent's own question and its `bmn ask` card page once (owner, 2026-10-31).
+      const original = await options.mirrorOf?.(current).catch(() => null) ?? null
+      if (original) {
+        const originalKey = `${original.requestId}:${original.revision}`
+        if (delivered.has(originalKey)) { finishMirror(key, current); return }
+        if (stillWaiting(originalKey)) {
+          observeTelegramDelivery(options.observeDelivery, current, 'mirror-waiting')
+          mirrors.set(key, { record: current, openedAt, original: originalKey })
+          return
+        }
+        // That request ended without a page, or this pager never saw it: this copy is the page.
       }
       // Departure made this revision eligible already; reconnects must not reset or expire that eligibility.
       let held = false
@@ -92,14 +211,21 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         else unsent.set(key, current)
         return
       }
+      let failed = false
       const consumed = await options.send(current).catch(() => {
         observeTelegramDelivery(options.observeDelivery, record, 'page-error')
+        failed = true
         return true
       })
       if (consumed === false && !closed) {
         unsent.set(key, current)
         retry = started !== availability
-      } else handled.add(key)
+      } else if (failed || closed) finish(key)
+      else {
+        delivered.add(key)
+        handled.add(key)
+        settle(key, true)
+      }
     } finally {
       inFlight.delete(key)
       // Recovery may arrive while an unavailable attempt is still settling.
@@ -111,18 +237,18 @@ export function createAttentionPager(options: AttentionPagerOptions): {
       if (options.now() - waiting.openedAt <= leftWithinMs) continue
       observeTelegramDelivery(options.observeDelivery, waiting.record, 'departure-window-expired')
       atDesk.delete(key)
-      handled.add(key)
+      finish(key)
     }
   }
   return {
     retire: record => {
       const key = `${record.requestId}:${record.revision}`
       pending.get(key)?.(); pending.delete(key)
-      atDesk.delete(key); unsent.delete(key); handled.add(key)
+      atDesk.delete(key); unsent.delete(key); mirrors.delete(key); finish(key)
     },
     opened: (record) => {
       const key = `${record.requestId}:${record.revision}`
-      if (closed || record.state !== 'open' || record.seenAt !== null || pending.has(key) || atDesk.has(key) || handled.has(key) || unsent.has(key) || inFlight.has(key)) {
+      if (closed || record.state !== 'open' || record.seenAt !== null || pending.has(key) || atDesk.has(key) || handled.has(key) || unsent.has(key) || inFlight.has(key) || mirrors.has(key)) {
         return
       }
       const openedAt = options.now()
@@ -162,6 +288,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
       pending.clear()
       atDesk.clear()
       unsent.clear()
+      mirrors.clear()
     }
   }
 }

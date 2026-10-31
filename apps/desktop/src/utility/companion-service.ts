@@ -122,7 +122,7 @@ import { HostControlError, invalidHostControl as invalid, type SessionIdentity, 
 import { codexRolloutPath } from './conversation-binding'
 import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
-import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
+import { PAGE_AFTER_MS, askedTwice, createAttentionPager, mirrorOf } from './attention-pager'
 import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, ownerTurn, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
@@ -637,6 +637,7 @@ export class CompanionService {
       current: (requestId) => this.attentionForDelivery(requestId),
       send: (record) => this.cards.page(record),
       holdQuiet: record => this.quietDelivery.hold(record),
+      mirrorOf: async record => mirrorOf(record, await options.database.companion('listAttention')),
       schedule: (callback, ms) => {
         const timer = setTimeout(callback, ms)
         timer.unref()
@@ -2203,6 +2204,7 @@ export class CompanionService {
     if (outcome.state === 'submitted') {
       await this.clearSubmittedQuestionReminder(request.requestId, request.revision)
     }
+    if (outcome.state === 'submitted' || outcome.state === 'confirmed') await this.withdrawMirrorCards(request.requestId)
     if (outcome.state === 'sent-unconfirmed' && request.answer.type === 'permission' && request.answer.decision === 'deny') {
       // Claude reports a deny through no hook, so its request would otherwise stay open after the dialog closed.
       const record = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
@@ -2217,6 +2219,24 @@ export class CompanionService {
       }
     }
     return outcome
+  }
+
+  /**
+   * The agent's own question was answered from the phone: a `bmn ask` card it opened for the same decision (askedTwice)
+   * closes too, so nobody answers it twice. A card's answer never closes the agent's question, whose dialog may still wait.
+   */
+  private async withdrawMirrorCards(requestId: string): Promise<void> {
+    const all = await this.options.database.companion('listAttention').catch(() => [] as AttentionRecord[])
+    const answered = all.find(item => item.requestId === requestId)
+    if (!answered || answered.openedBy === 'cli') return
+    for (const card of all.filter(item => item.state === 'open' && item.openedBy === 'cli' && askedTwice(answered, item))) {
+      const closed = await this.options.database.companion('closeAttention', { requestId: card.requestId, expectedRevision: card.revision },
+        'withdrawn', 'Answered from Telegram through the agent\'s own question', this.iso(), 'telegram').catch(() => null)
+      if (closed) {
+        this.answers.closed(closed)
+        this.emit('attention', closed.sessionId)
+      }
+    }
   }
 
   private async answerQaGrantOwner(requestId: string, revision: number, choice: number, via: 'app' | 'telegram'): Promise<AttentionRecord> {

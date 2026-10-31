@@ -1372,6 +1372,32 @@ describe('Telegram attention notifications', () => {
     )
   })
 
+  it('a phone answer to the agent\'s own question closes the `bmn ask` card it opened for the same decision, and only that card', async () => {
+    await service.sessionsChanged()
+    const asked = 'Which synthetic gallery color should the sample banner use for the preview build: gold or black?'
+    const opened = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question', title: `Codex asks: ${asked.slice(0, 80)}`, origin: 'hook:codex:PreToolUse',
+      prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: 'async-1', toolUseId: 'call-1',
+        questions: [{ id: 'color', header: 'Color', text: asked, multiSelect: false,
+          options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }] }
+    })
+    const record = COMPANION_OPERATIONS.getAttention(database, opened.requestId)
+    expect(record.openedBy).toBe('hook:codex:PreToolUse')
+    const choices = { options: [{ label: 'Gold (Recommended)', description: null }, { label: 'Black', description: null }], allowOther: true as const }
+    // Its mirror, opened by the agent's `bmn ask` seconds later; an older card and another session's card stay open.
+    const mirror = COMPANION_OPERATIONS.openAttention(database, { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-color',
+      kind: 'permission', title: 'Synthetic gallery banner color', body: asked, origin: 'cli', manualChoices: choices }, 'mirror-card', new Date(Date.parse(record.openedAt) + 13_000).toISOString())
+    const older = COMPANION_OPERATIONS.openAttention(database, { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-older',
+      kind: 'question', title: 'Synthetic gallery banner color', body: asked, origin: 'cli', manualChoices: choices }, 'older-card', new Date(Date.parse(record.openedAt) - 600_000).toISOString())
+    const request = { requestId: record.requestId, revision: record.revision, epoch: service.answerEpoch(record.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'submitted' })
+    expect(COMPANION_OPERATIONS.getAttention(database, mirror.requestId)).toMatchObject({
+      state: 'withdrawn', resolvedBy: 'telegram', resolution: 'Answered from Telegram through the agent\'s own question'
+    })
+    expect(COMPANION_OPERATIONS.getAttention(database, older.requestId)).toMatchObject({ state: 'open' })
+  })
+
   it('submits Codex Default button answers as one durable ordinary message without a native receipt', async () => {
     await service.sessionsChanged()
     const opened = await service['openAttention']({

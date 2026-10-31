@@ -11,7 +11,7 @@ type TelegramDeliveryPhase =
   | 'scheduled' | 'timer-fired' | 'held-at-desk' | 'held-quiet' | 'departure-window-expired'
   | 'quiet-history-unavailable'
   | 'quiet-backlog' | 'quiet-capacity' | 'quiet-restarting'
-  | 'request-unavailable' | 'request-read-failed' | 'request-closed' | 'request-seen' | 'request-revised'
+  | 'request-unavailable' | 'request-read-failed' | 'request-closed' | 'request-seen' | 'request-revised' | 'request-mirrored' | 'mirror-waiting'
   | 'already-notified-elsewhere'
   | 'connector-unavailable' | 'page-error' | 'send-started' | 'send-confirmed' | 'attachment-confirmed' | 'attachment-failed'
   | 'send-uncertain' | 'format-fallback' | 'fallback-failed' | 'mapping-write-failed'
