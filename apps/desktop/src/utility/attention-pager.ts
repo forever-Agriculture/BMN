@@ -59,23 +59,49 @@ function questionPolarity(record: AttentionRecord): { plain: Set<string>; negate
   return { plain, negated }
 }
 const tokens = (record: AttentionRecord): Set<string> => new Set(decisionParts(record).join('\n').toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? [])
+/** Answer words that name no action: an answer list made only of them says nothing about which decision it answers. */
+const BARE_ANSWER = new Set('yes no okay approve approved deny denied allow cancel continue stop skip later other done sure please proceed'.split(' '))
+const answerLabel = (label: string): string => label.toLowerCase().replace(/\(recommended\)/gu, '').replace(/\s+/gu, ' ').trim()
+/** Naming words an identical answer list needs to settle a pair alone, even beside a retold question's other words. */
+export const MIRROR_ANSWER_WORDS = 4
+/** Each question's answers, and a card's own choices, of at least two labels: the sorted list and its naming words. */
+function answerLists(record: AttentionRecord): { list: string; naming: number }[] {
+  const lists = record.prompt?.type === 'questions' ? record.prompt.questions.map(item => item.options.map(option => option.label)) : []
+  if (record.manualChoices) lists.push(record.manualChoices.options.map(option => option.label))
+  return lists.filter(labels => labels.length >= 2).map(labels => {
+    const labelled = labels.map(answerLabel)
+    const naming = new Set(labelled.join(' ').match(/[\p{L}\p{N}]+/gu)?.filter(word => word.length >= 4 && !COMMON.has(word) && !BARE_ANSWER.has(word)))
+    return { list: labelled.sort().join('\n'), naming: naming.size }
+  }).filter(item => item.naming > 0)
+}
+/** The naming words of the richest answer list both requests offer word for word, or 0. */
+function sameAnswers(one: AttentionRecord, other: AttentionRecord): number {
+  const theirs = new Set(answerLists(other).map(item => item.list))
+  return Math.max(0, ...answerLists(one).filter(item => theirs.has(item.list)).map(item => item.naming))
+}
 /**
- * Two copies of one decision share most words, no word one question asks about plainly is asked with a negation in the
- * other ("Publish X?" against "Not publish X?"), and the two do not each ask about a word the other never uses ("Delete
- * X?" beside "Publish X?"). Constraints outside the question sentences ("Do not push main.") never count. Replayed on his
- * 51 mirrored pairs, the negation rule split none and the action rule 11: those still page twice, the safe failure,
- * since a wrong merge would keep another question off his phone (review 20261031T115619-9dbd0ec0).
+ * Two copies of one decision: no word one question asks about plainly is asked with a negation in the other ("Publish X?"
+ * against "Not publish X?"), and either they offer the same answers word for word, with at least MIRROR_ANSWER_WORDS
+ * naming words ("Send the E2B email" / "Keep the packet local and unsent"), or the two do not each ask about a word the
+ * other never uses ("Delete X?" beside "Publish X?", "Which border?" beside "Which color?" with Gold / Black) and they share
+ * fewer naming answers or most words. Constraints outside the question sentences ("Do not push main.") never count.
+ * Replayed on his 245 close card/question pairs (2026-10-01..31): 74 retold pairs with the same answers paged twice under
+ * shared words alone, each one decision, and none of his pairs with the same answers was two decisions; a wrong merge would
+ * keep another question off his phone, so bare answers ("Yes" / "No") never pair (review 20261031T115619-9dbd0ec0).
  */
 function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
-  const a = decisionWords(one), b = decisionWords(other)
-  const shared = [...a].filter(word => b.has(word)).length
-  if (shared < MIRROR_SHARED_WORDS || shared < MIRROR_WORD_SHARE * Math.min(a.size, b.size)) return false
   const x = questionPolarity(one), y = questionPolarity(other)
   const turned = (p: typeof x, q: typeof x): boolean => [...p.negated].some(word => q.plain.has(word) && !q.negated.has(word))
   if (turned(x, y) || turned(y, x)) return false
+  const answers = sameAnswers(one, other)
+  if (answers >= MIRROR_ANSWER_WORDS) return true
   const asked = (p: typeof x): string[] => [...p.plain, ...p.negated].filter(word => word.length >= 4 && !COMMON.has(word))
   const mine = tokens(one), theirs = tokens(other)
-  return !(asked(x).some(word => !theirs.has(word)) && asked(y).some(word => !mine.has(word)))
+  if (asked(x).some(word => !theirs.has(word)) && asked(y).some(word => !mine.has(word))) return false
+  if (answers > 0) return true
+  const a = decisionWords(one), b = decisionWords(other)
+  const shared = [...a].filter(word => b.has(word)).length
+  return shared >= MIRROR_SHARED_WORDS && shared >= MIRROR_WORD_SHARE * Math.min(a.size, b.size)
 }
 
 /**

@@ -76,6 +76,40 @@ it('a card asking another action is another decision: it pages, and an answer to
   expect(mirrorOf(other, [question, other])).toBeNull()
 })
 
+it('a card worded apart from the question but offering its same specific answers is the same decision', () => {
+  // Shaped like his 2026-10-31 19:27Z pair: the card retells the question in its own words and offers the same two answers.
+  const ask = 'May I send the prepared synthetic compatibility request from qa@example.test to vendor support at help@vendor.example? It asks whether they can supply the sample features the epic needs, includes no key or source code, and authorizes no charges.'
+  const prompt = (labels: string[][], text = ask) => ({ type: 'questions' as const, harness: 'codex' as const, shape: 'async-choice' as const, requestRef: null, toolUseId: 'tool',
+    questions: labels.map((set, index) => ({ id: null, header: null, text: index === 0 ? text : 'Which sample size should the follow-up use?', multiSelect: false,
+      options: set.map(label => ({ label, description: null })) })) })
+  const question = request('question', { openedBy: 'hook:codex:PreToolUse', title: `Codex asks: ${ask.slice(0, 80)}`, body: `1. ${ask}`,
+    prompt: prompt([['Send the vendor email', 'Keep it unsent']]) })
+  const choices = (labels: string[]) => ({ options: labels.map(label => ({ label, description: null })), allowOther: true as const })
+  const retold = request('retold', { openedBy: 'cli', kind: 'permission', openedAt: at(26), title: 'Send prepared vendor support email?',
+    body: 'Send exactly the request in the synthetic delivery file, from the connected test mailbox to the vendor. Subject: hosted sample kernel. No other message is authorized by this card.',
+    manualChoices: choices(['Send the vendor email (Recommended)', 'Keep it unsent']) })
+  expect(askedTwice(question, retold)).toBe(true)
+  expect(mirrorOf(retold, [question, retold])?.requestId).toBe('question')
+  // One answer list of a several-question prompt is enough.
+  expect(askedTwice({ ...question, prompt: prompt([['Ten samples', 'Fifty samples'], ['Send the vendor email', 'Keep it unsent']]) }, retold)).toBe(true)
+  // Answers that name no action say nothing about which decision they answer.
+  const generic = (labels: string[]): [AttentionRecord, AttentionRecord] => [{ ...question, prompt: prompt([labels]) }, { ...retold, manualChoices: choices(labels) }]
+  expect(askedTwice(...generic(['Yes', 'No']))).toBe(false)
+  expect(askedTwice(...generic(['Approve (Recommended)', 'Deny']))).toBe(false)
+  // Other answers, or the same answers to a question asked the other way round, keep them apart.
+  expect(askedTwice(question, { ...retold, manualChoices: choices(['Send the partner email', 'Keep it unsent']) })).toBe(false)
+  expect(askedTwice(question, { ...retold, title: 'Should I not send the prepared vendor support email?' })).toBe(false)
+  // Answers with four naming words settle it even when each retelling names something the other does not.
+  expect(askedTwice(question, { ...retold, title: 'Kernel outreach: send the prepared message now?' })).toBe(true)
+  // Fewer naming words, as value answers, still need the questions to ask about the same thing ("border" is not "color").
+  const color = 'Which synthetic gallery color should the sample banner use for the preview build?'
+  const colorQuestion = request('color', { openedBy: 'hook:codex:PreToolUse', title: `Codex asks: ${color}`, body: `1. ${color}`,
+    prompt: prompt([['Gold', 'Black']], color) })
+  const colorCard = request('color-card', { openedBy: 'cli', kind: 'permission', openedAt: at(20), title: 'Banner color for the preview build?', manualChoices: choices(['Gold (Recommended)', 'Black']) })
+  expect(askedTwice(colorQuestion, colorCard)).toBe(true)
+  expect(askedTwice(colorQuestion, { ...colorCard, title: 'Which synthetic gallery border should the sample banner use?' })).toBe(false)
+})
+
 it('the pager sends the first of a mirrored pair and records the second as mirrored, unsent', async () => {
   const stored = new Map([native, card].map(item => [item.requestId, item]))
   const sent: string[] = [], phases: Array<[string, string]> = []
