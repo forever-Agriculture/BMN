@@ -9,6 +9,7 @@ import { createInterface } from 'node:readline'
 import { BrowserAccountsStore, atomicJson } from '../../apps/desktop/bin/browser-accounts-store.mjs'
 import { AccountSignIn, checkProfile, openProfile } from '../../apps/desktop/bin/browser-accounts-engine.mjs'
 import { AccountBrowserRelay, authenticatorCode } from '../../apps/desktop/bin/browser-account-relay.mjs'
+import { replaceStartupPages } from '../../apps/desktop/bin/qa-browser-relay.mjs'
 import { assertNoValues, isolatedMain, privateKeyring, recordProcess, result, stopProcess, syntheticSite } from './browser-accounts-fixture.mjs'
 
 const phase = process.argv[2] || 'profiles', out = resolve(process.argv[3] || `.dev-auto/evidence/live-${phase}`)
@@ -174,6 +175,23 @@ try {
       await store.publish(lease, { state: 'Signed in' }); store.discard(lease); leases = []
     }
     checks.push('multi-tab archive opens as one tab across four checkout/publish cycles; later real popups and working IndexedDB survive')
+  } else if (phase === 'qa-restore') {
+    // A QA browser opens before its audit routes exist: session cookies must survive, saved tabs must never reopen.
+    const row = await create('same')
+    for (let n = 0; n < 2; n++) {
+      const lease = await store.checkout(row.id); leases.push(lease)
+      const context = await openProfile(lease.profile, { qa: true }); contexts.push(context)
+      assert.deepEqual(context.pages().map(page => page.url()), ['about:blank'], 'a saved tab reopened in a QA browser')
+      const page = context.pages()[0]; await page.goto(site.url('same'))
+      await page.getByRole('heading', { name: 'Signed in' }).waitFor({ timeout: 5000 })
+      await context.close(); contexts = []
+      await store.publish(lease, { state: 'Signed in' }); store.discard(lease); leases = []
+    }
+    const relay = new AccountBrowserRelay({ store, qa: true, allowed: true, beforeReady: replaceStartupPages }); relays.push(relay)
+    const picked = await relay.tool('browser_account_pick', { name: row.name })
+    assert.equal(JSON.parse(picked.content[0].text).state, 'Signed in', 'the QA relay pick lost the session-cookie sign-in')
+    await signed(relay)
+    checks.push('QA browser keeps a session-cookie sign-in across two checkout/publish cycles and reopens no saved tab; a QA relay pick replacing its startup tab stays signed in')
   } else if (phase === 'output-boundary') {
     const row = await create('same')
     await store.mark(row.id, { username: 'synthetic', password: site.password, authenticator: site.authenticator })

@@ -5,8 +5,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export async function runQaCommand(argv) {
   if (['start', 'wait', 'stop'].includes(argv[0])) return runQaSessionCommand(argv)
+  if (argv[0] === 'grant') return runQaGrantCommand(argv.slice(1))
   if (argv[0] !== 'report' || argv[1] !== 'check') {
-    process.stderr.write('Usage: bmn qa report check REPORT --brief BRIEF\n       bmn qa start --brief BRIEF --key K | wait ID [--timeout SECONDS] | stop ID\n')
+    process.stderr.write('Usage: bmn qa report check REPORT --brief BRIEF\n       bmn qa start --brief BRIEF --key K | wait ID [--timeout SECONDS] | stop ID\n       bmn qa grant ID --account NAME --origin ORIGIN --activity ACTIVITY=COUNT... --hours H --key K\n')
     return 2
   }
   const here = dirname(fileURLToPath(import.meta.url))
@@ -45,5 +46,31 @@ async function runQaSessionCommand(argv) {
     }
     process.stdout.write(options.json ? JSON.stringify(result, null, 2) + '\n' : `${result.id}: ${result.result?.verdict ?? result.failure ?? result.state}\n`)
     return command === 'wait' && result.state !== 'finished' ? 1 : 0
+  } catch (error) { process.stderr.write(`bmn qa: ${error.code ?? 'QA_FAILED'} ${error.message}\n`); return 1 }
+}
+
+/** A lead's planning request: it opens the owner's grant card and grants nothing until he answers (100.6, D19). */
+async function runQaGrantCommand(args) {
+  const usage = () => { process.stderr.write('Usage: bmn qa grant ID --account NAME --origin ORIGIN --activity ACTIVITY=COUNT... --hours H --key K [--json]\n'); return 2 }
+  const options = { activity: [] }, positional = []
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (['--account', '--origin', '--activity', '--hours', '--key'].includes(arg) && args[index + 1] && !args[index + 1].startsWith('--')) {
+      const value = args[++index]
+      if (arg === '--activity') options.activity.push(value); else options[arg.slice(2)] = value
+    } else if (arg === '--json') options.json = true
+    else if (!arg.startsWith('--')) positional.push(arg)
+    else return usage()
+  }
+  const hours = Number(options.hours)
+  const limits = options.activity.map(item => /^([a-z]+\.[a-z]+)=([1-9][0-9]*)$/.exec(item)).map(match => match && { activity: match[1], count: Number(match[2]) })
+  if (positional.length !== 1 || !options.account || !options.origin || !options.key || !limits.length || limits.some(item => !item) || !Number.isFinite(hours) || hours <= 0 || hours > 24) return usage()
+  try {
+    const { call, readCredentials } = await import('./bmn-commands.mjs')
+    const { socketPath, token } = readCredentials({})
+    const grant = await call(socketPath, token, 'qa.grant.ask', { id: positional[0], key: options.key, accountId: options.account, origin: options.origin, limits,
+      expiresAt: new Date(Date.now() + hours * 3_600_000).toISOString() })
+    process.stdout.write(options.json ? JSON.stringify(grant, null, 2) + '\n' : `${grant.id}: ${grant.state}; the owner answers its card\n`)
+    return 0
   } catch (error) { process.stderr.write(`bmn qa: ${error.code ?? 'QA_FAILED'} ${error.message}\n`); return 1 }
 }

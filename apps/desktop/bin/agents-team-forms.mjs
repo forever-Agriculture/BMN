@@ -53,6 +53,7 @@ export const ASK_RUN_FILES = Object.freeze({
 export const ASK_READS = Object.freeze({
   'codex-read-only': { scope: 'computer', reach: 'any file your user can read', words: 'Codex\'s read-only sandbox: any file your user can read, with its shell, Git, web search and sub-agents; it writes nothing' },
   'codex-qa': { scope: 'computer', reach: 'any file your user can read', words: 'Codex QA form: native command, web, app and collaboration tools switched off; read-only sandbox; tool closure remains unverified until its version-pinned fence passes' },
+  'claude-qa': { scope: 'text', reach: 'nothing beyond its QA brief and browser', words: 'Claude Code QA form: restricted, no built-in tools, only the QA relay\'s browser tools; a stand-in fence proves that closure for each run' },
   'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history through BMN\'s git, web search and sub-agents; it writes nothing' },
   'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
   'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
@@ -83,6 +84,12 @@ export const CODEX_QA_DISABLED = Object.freeze(['view_image', 'goals', 'image_ge
 export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent',
   '--allowedTools', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'WebSearch', 'Agent',
   '--permission-mode', 'dontAsk', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--output-format', 'stream-json', '--verbose'])
+
+/** The QA form: no built-in tools or settings, only the QA relay's named tools, refused rather than asked otherwise (100.6). */
+export function claudeQaArgs(relay, tools) {
+  return ['--restricted', '--tools', '', '--disable-slash-commands', '--strict-mcp-config', '--mcp-config', JSON.stringify({ mcpServers: { [BROWSER_SERVER]: relay } }),
+    '--allowedTools', tools.map((tool) => `mcp__${BROWSER_SERVER}__${tool}`).join(','), '--permission-mode', 'dontAsk', '--output-format', 'stream-json', '--verbose']
+}
 
 /** PATH without BMN's own wrappers, so the app found is the one the owner installed. */
 export function appSearchPath(environment = process.env) {
@@ -216,6 +223,9 @@ export function askCommand(harness, program, request) {
     command = [program.launcher, 'exec', '--skip-git-repo-check', '-C', request.cwd, '-m', request.model, '-c', `model_reasoning_effort=${request.effort}`,
       ...CODEX_ASK_MCP_OFF.flatMap((item) => ['-c', item]), ...(request.form === 'codex-qa' ? [...CODEX_QA_CONFIG.flatMap(item => ['-c', item]), ...CODEX_QA_DISABLED.flatMap(feature => ['--disable', feature])] : []), '-c', mcp, '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
       '--json', '-o', join(request.folder, ASK_RUN_FILES.codexAnswer), '-']
+  } else if (harness === 'claude' && request.form === 'claude-qa') {
+    environment = { HOME: home, PATH: path, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}) }
+    command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...claudeQaArgs(request.qaRelay, request.qaTools)]
   } else if (harness === 'claude') {
     environment = { HOME: home, PATH: `${join(request.folder, ASK_RUN_FILES.bin)}:${path}`, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}), ...contextEnvironment }

@@ -1,13 +1,15 @@
 // MODULE: qa-request-gate.test.mjs - no network request can outrun its durable activity commitment
 import { expect, it, vi } from 'vitest'
-import { classifyQaRequest, gateQaRequest, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
+import { classifyQaRequest, gateQaRequest, passQaRequest, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
 
 const origin = 'http://127.0.0.1:4173', contract = syntheticPaidContract(origin)
-function fixture({ path = '/paid/report', method = 'POST', status = 200 } = {}) {
+function fixture({ path = '/paid/report', method = 'POST', status = 200, navigation = false, headers = [] } = {}) {
   const events = [], route = {
-    request: () => ({ url: () => origin + path, method: () => method }),
+    request: () => ({ url: () => origin + path, method: () => method, isNavigationRequest: () => navigation }),
     abort: vi.fn(async () => { events.push('abort') }),
-    fetch: vi.fn(async options => { events.push('network'); expect(options).toEqual({ maxRedirects: 0, maxRetries: 0 }); return { status: () => status } }),
+    continue: vi.fn(async () => { events.push('continue') }),
+    fetch: vi.fn(async options => { events.push('network'); expect(options).toEqual({ maxRedirects: 0, maxRetries: 0 })
+      return { status: () => status, headersArray: () => headers, headers: () => Object.fromEntries(headers.map(header => [header.name.toLowerCase(), header.value])) } }),
     fulfill: vi.fn(async () => { events.push('fulfill') })
   }
   const broker = {
@@ -83,4 +85,32 @@ it('a forged contract or another origin never classifies a permitted activity', 
     expect(classifyQaRequest(c, 'POST', origin + '/paid/report').classification).toBe('unknown')
   }
   expect(() => syntheticPaidContract('https://example.com')).toThrow('QA_SYNTHETIC_ORIGIN_INVALID')
+})
+
+const redirect = (location, cookies = []) => [{ name: 'Location', value: location }, ...cookies.map(value => ({ name: 'Set-Cookie', value }))]
+it('a read page redirect returns as a page that navigates again through the route, keeping its cookies', async () => {
+  const f = fixture({ path: '/', method: 'GET', status: 302, navigation: true, headers: redirect('/app?x="1"', ['a=1; Path=/', 'b=2; HttpOnly']) })
+  await gateQaRequest(f.route, f.broker, f.close)
+  expect(f.events).toEqual(['observe', 'network', 'fulfill'])
+  const reply = f.route.fulfill.mock.calls[0][0]
+  expect(reply).toMatchObject({ status: 200, headers: { 'set-cookie': 'a=1; Path=/\nb=2; HttpOnly', 'cache-control': 'no-store' } })
+  expect(reply.body).toBe(`<!doctype html><meta http-equiv="refresh" content="0;url=${origin}/app?x=%221%22">`)
+})
+it.each([
+  ['a subresource', { navigation: false, headers: redirect('/app') }],
+  ['a script URL', { navigation: true, headers: redirect('javascript:alert(1)') }],
+  ['a missing location', { navigation: true, headers: [] }]
+])('a read redirect from %s is blocked, not followed', async (_, options) => {
+  const f = fixture({ path: '/', method: 'GET', status: 302, ...options }); await gateQaRequest(f.route, f.broker, f.close)
+  expect(f.route.fulfill).not.toHaveBeenCalled(); expect(f.route.abort).toHaveBeenCalledWith('blockedbyclient')
+})
+it('test-account and signed-out routes fetch page loads themselves so redirect hops are routed again', async () => {
+  const sub = fixture({ path: '/state', method: 'GET' }); await passQaRequest(sub.route)
+  expect(sub.events).toEqual(['continue'])
+  const page = fixture({ path: '/app', method: 'GET', navigation: true }); await passQaRequest(page.route)
+  expect(page.events).toEqual(['network', 'fulfill'])
+  const hop = fixture({ path: '/', method: 'GET', status: 301, navigation: true, headers: redirect('https://elsewhere.test/') }); await passQaRequest(hop.route)
+  expect(hop.route.fulfill.mock.calls[0][0].body).toContain('url=https://elsewhere.test/')
+  const down = fixture({ path: '/app', method: 'GET', navigation: true }); down.route.fetch.mockRejectedValue(new Error('refused'))
+  await passQaRequest(down.route); expect(down.route.abort).toHaveBeenCalledWith('failed')
 })

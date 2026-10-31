@@ -8,9 +8,13 @@ import { ControlError } from './control-server'
 export interface QaAccountMetadata {
   id: string; name: string; origins: string[]; test: boolean; qaRevision: number
 }
+/** test-full: a marked test account with full interaction; ordinary-granted: an unmarked account with an approved grant; else look-only. */
+export type QaAccountMode = 'test-full' | 'look-only' | 'ordinary-granted'
+export interface QaAccountPick { accountId: string; alias: string; mode: QaAccountMode; origins: string[] }
 export interface QaGrantBrokerOptions {
   database: DatabaseWorkerClient
-  account(id: string): QaAccountMetadata
+  /** An account by id or by name; the broker still requires the brief to name it. */
+  account(idOrName: string): QaAccountMetadata
   contract(origin: string): QaSiteContract | null
   qualified(run: QaRun): boolean
   live(sessionId: string): string | undefined
@@ -27,12 +31,42 @@ export class QaGrantBroker {
     if (run.state !== 'running' || !run.sessionId || !run.incarnationId || this.options.live(run.sessionId) !== run.incarnationId) fail('QA_RUN_UNAVAILABLE')
     if (!run.agent || !run.connection || !this.options.qualified(run)) fail('QA_NATIVE_QUALIFICATION_REQUIRED')
   }
+  private intent(run: QaRun, name: string): string | null {
+    const alias = (run.brief.accounts as Array<{ alias: string; permission?: string; intent?: string }> | undefined)?.find(alias => alias.alias === name)
+    return alias ? (run.brief.version === 2 ? alias.intent : alias.permission) ?? null : null
+  }
   private account(run: QaRun, id: string): QaAccountMetadata {
     const account = this.options.account(id)
     if (account.id !== id) return fail('QA_ACCOUNT_IDENTITY_CHANGED')
-    const alias = (run.brief.accounts as Array<{ alias: string; permission?: string; intent?: string }> | undefined)?.find(alias => alias.alias === account.name)
-    if (!alias) return fail('QA_ACCOUNT_OUT_OF_SCOPE')
-    return { ...account, test: account.test && (run.brief.version === 2 ? alias.intent : alias.permission) === 'test-full' }
+    const intent = this.intent(run, account.name)
+    if (!intent) return fail('QA_ACCOUNT_OUT_OF_SCOPE')
+    return { ...account, test: account.test && intent === 'test-full' }
+  }
+  private async approved(run: QaRun, accountId: string, origin: string | null, activity: QaActivity | null): Promise<QaGrant[]> {
+    const now = Date.parse(this.options.now())
+    return (await this.options.database.companion('qaGrantsForRun', run.id)).filter(grant => grant.state === 'approved' && grant.approval?.approved === true &&
+      grant.terms.account.id === accountId && (origin === null || grant.terms.origin === origin) && Date.parse(grant.terms.expiresAt) > now &&
+      (activity === null || grant.terms.limits.some(limit => limit.activity === activity)))
+  }
+  /** The relay's account choice: only a brief alias, its mode decided here from the stored mark, intent and approved grants. */
+  async pick(run: QaRun, name: string): Promise<QaAccountPick> {
+    this.current(run)
+    const found = this.options.account(name)
+    if (found.name !== name) return fail('QA_ACCOUNT_IDENTITY_CHANGED')
+    const account = this.account(run, found.id), intent = this.intent(run, name)
+    const mode: QaAccountMode = account.test ? 'test-full'
+      : intent === 'ordinary-granted' && (await this.approved(run, account.id, null, null)).length > 0 ? 'ordinary-granted' : 'look-only'
+    this.current(run)
+    return { accountId: account.id, alias: account.name, mode, origins: [...account.origins] }
+  }
+  /** A refused interaction is audited like a held request; it carries the tool's name only. */
+  async refuse(run: QaRun, accountId: string, tool: string): Promise<void> {
+    this.current(run)
+    if (!/^browser_[a-z_]{1,40}$/.test(tool)) return fail('QA_REQUEST_INVALID')
+    const account = this.account(run, accountId)
+    const result = await this.options.database.companion('appendQaAudit', run.id, { method: 'TOOL', origin: account.origins[0] ?? run.brief.target as string, path: `/[tool]/${tool}`, queryKeys: [],
+      accountAlias: account.name, classification: 'unknown', result: 'held', grantId: null, useId: null, cardId: null, status: null }, this.options.now())
+    if (!result.recorded) fail('QA_AUDIT_INCOMPLETE')
   }
   private contract(origin: string): QaSiteContract {
     const contract = this.options.contract(origin)
@@ -41,7 +75,8 @@ export class QaGrantBroker {
   }
   async ask(run: QaRun, request: { key: string; accountId: string; origin: string; limits: QaGrantTerms['limits']; expiresAt: string }, callerIncarnation: string | null, held = false): Promise<QaGrant> {
     if (!['preparing', 'running'].includes(run.state)) return fail('QA_RUN_UNAVAILABLE')
-    const account = this.account(run, request.accountId), contract = this.contract(request.origin)
+    // A lead names the account as the brief does; its stored identity is bound into the terms.
+    const account = this.account(run, this.options.account(request.accountId).id), contract = this.contract(request.origin)
     if (!account.origins.includes(request.origin)) return fail('QA_ACCOUNT_SITE_MISMATCH')
     const terms: QaGrantTerms = { version: 1, qaId: run.id, account: { id: account.id, alias: account.name, revision: account.qaRevision },
       origin: contract.origin, contract: { id: contract.id, sha256: contract.sha256 }, limits: request.limits, expiresAt: request.expiresAt }
@@ -60,14 +95,26 @@ export class QaGrantBroker {
       contract.id !== grant.terms.contract.id || contract.sha256 !== grant.terms.contract.sha256) return fail('QA_GRANT_SCOPE_CHANGED')
     return { grant, account, contract }
   }
-  async reserve(run: QaRun, request: { id: string; grantId: string; activity: QaActivity; request: QaRequestMeta; requestSha256: string }): Promise<QaUseDecision> {
+  async reserve(run: QaRun, request: { id: string; grantId: string | null; accountId?: string | undefined; activity: QaActivity; request: QaRequestMeta; requestSha256: string }): Promise<QaUseDecision> {
     if (!isQaRequestMeta(request.request)) return fail('QA_REQUEST_INVALID')
+    if (request.grantId === null) {
+      // The relay names no grant: try this account's approved grants for the activity in order; refusals change nothing.
+      this.current(run)
+      if (typeof request.accountId !== 'string') return fail('QA_REQUEST_INVALID')
+      let decision: QaUseDecision = { allowed: false, reason: 'not-approved' }
+      for (const grant of await this.approved(run, request.accountId, request.request.origin, request.activity)) {
+        decision = await this.reserve(run, { ...request, grantId: grant.id })
+        if (decision.allowed || decision.reason !== 'exhausted') return decision
+      }
+      return decision
+    }
     const { grant, account, contract } = await this.grant(run, request.grantId)
     const classified = classifyQaRequest(contract, request.request.method, request.request.origin + request.request.path)
     if (request.request.queryKeys.length || classified.classification !== 'activity' || classified.activity !== request.activity ||
       digest(classified.request) !== digest(request.request) || digest(request.request) !== request.requestSha256) return fail('QA_ACTIVITY_CONTRACT_MISMATCH')
     this.current(run)
-    return this.options.database.companion('reserveQaGrantUse', { ...request, qaId: run.id, accountRevision: account.qaRevision, contractSha256: grant.terms.contract.sha256 }, this.options.now())
+    return this.options.database.companion('reserveQaGrantUse', { id: request.id, grantId: grant.id, activity: request.activity, request: request.request, requestSha256: request.requestSha256,
+      qaId: run.id, accountRevision: account.qaRevision, contractSha256: grant.terms.contract.sha256 }, this.options.now())
   }
   async send(run: QaRun, id: string): Promise<QaUseDecision> {
     this.current(run)

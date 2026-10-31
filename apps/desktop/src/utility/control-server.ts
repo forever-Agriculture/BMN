@@ -977,7 +977,7 @@ export class ControlServer {
   private async dispatchOrReplay(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
     // Check before dispatch and receipt replay: even a pre-binding receipt grants no wider QA scope.
     if (scope.kind === 'session' && await this.options.handlers.qaSession?.(scope.sessionId, scope.incarnationId) &&
-      !['qa.policy', 'qa.agent', 'qa.connect', 'qa.grant.ask', 'qa.reserve', 'qa.send', 'qa.settle', 'qa.audit', 'qa.audit.close', 'qa.hold', 'qa.summary'].includes(method)) throw unauthorized('QA_CONTROL_SCOPE: this pane may only use its scoped QA protocol')
+      !['qa.policy', 'qa.agent', 'qa.connect', 'qa.grant.ask', 'qa.account', 'qa.refuse', 'qa.reserve', 'qa.send', 'qa.settle', 'qa.audit', 'qa.audit.close', 'qa.hold', 'qa.summary'].includes(method)) throw unauthorized('QA_CONTROL_SCOPE: this pane may only use its scoped QA protocol')
     try {
       return await this.dispatch(scope, method, rawParams, connection)
     } catch (error) {
@@ -1012,6 +1012,19 @@ export class ControlServer {
         if (!handlers.qaRequest) throw invalidError('QA_SESSIONS_UNAVAILABLE')
         return handlers.qaRequest(scope, method, params)
       }
+      case 'qa.account': {
+        const params = closedParams(rawParams, ['name'])
+        requireText(params, 'name', { ...RULES.source, max: 100 })
+        if (!handlers.qaRequest) throw invalidError('QA_SESSIONS_UNAVAILABLE')
+        return handlers.qaRequest(scope, method, params)
+      }
+      case 'qa.refuse': {
+        const params = closedParams(rawParams, ['accountId', 'tool'])
+        requireText(params, 'accountId', RULES.source)
+        if (!/^browser_[a-z_]{1,40}$/.test(requireText(params, 'tool', RULES.source))) throw invalidError('Invalid QA tool name')
+        if (!handlers.qaRequest) throw invalidError('QA_SESSIONS_UNAVAILABLE')
+        return handlers.qaRequest(scope, method, params)
+      }
       case 'qa.reserve':
       case 'qa.send':
       case 'qa.settle':
@@ -1019,10 +1032,13 @@ export class ControlServer {
       case 'qa.hold':
       case 'qa.summary':
       case 'qa.audit.close': {
-        const keys = method === 'qa.summary' ? [] : method === 'qa.reserve' ? ['id', 'grantId', 'activity', 'request', 'requestSha256'] : method === 'qa.settle' ? ['id', 'state', 'status'] : method === 'qa.audit' ? ['accountId', 'request', 'held'] : method === 'qa.hold' ? ['accountId', 'request', 'reason'] : method === 'qa.audit.close' ? ['gap'] : ['id']
+        const keys = method === 'qa.summary' ? [] : method === 'qa.reserve' ? ['id', 'grantId', 'accountId', 'activity', 'request', 'requestSha256'] : method === 'qa.settle' ? ['id', 'state', 'status'] : method === 'qa.audit' ? ['accountId', 'request', 'held'] : method === 'qa.hold' ? ['accountId', 'request', 'reason'] : method === 'qa.audit.close' ? ['gap'] : ['id']
         const params = closedParams(rawParams, keys)
         if (method === 'qa.reserve') {
-          for (const key of ['id', 'grantId', 'requestSha256']) requireText(params, key, RULES.source)
+          for (const key of ['id', 'requestSha256']) requireText(params, key, RULES.source)
+          // A relay names no grant; the broker then chooses among this account's approved grants.
+          if (params.grantId === null || params.grantId === undefined) requireText(params, 'accountId', RULES.source)
+          else requireText(params, 'grantId', RULES.source)
           if (!QA_ACTIVITIES.includes(params.activity as typeof QA_ACTIVITIES[number]) || !/^[a-f0-9]{64}$/.test(String(params.requestSha256)) || !isQaRequestMeta(params.request)) throw invalidError('Invalid QA activity reservation')
         } else if (method === 'qa.audit' || method === 'qa.hold') {
           requireText(params, 'accountId', RULES.source)

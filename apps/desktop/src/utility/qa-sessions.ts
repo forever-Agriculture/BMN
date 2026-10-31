@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { ERROR_CODES, type MessageTeamAnswer, type QaActivity, type QaAuditGap, type QaGrantTerms, type QaLaunchRequest, type QaRequestMeta, type QaRun, type SessionRecord } from '@bmn/protocol'
 import { QaGrantBroker, type QaGrantBrokerOptions } from './qa-grants'
+import { syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
 import { canonicalJson, sha256 } from '../../bin/shared-helpers.mjs'
 import { writeWhole } from '../../bin/agents-team-supervisor.mjs'
 import type { DatabaseWorkerClient } from './database-client'
@@ -24,6 +25,25 @@ export interface QaSessionsOptions {
   accounts?: Pick<QaGrantBrokerOptions, 'account' | 'contract' | 'qualified' | 'changed'>
 }
 const fail = (message: string): never => { throw new ControlError(ERROR_CODES.invalidArgument, message) }
+
+/**
+ * Production account checks, loaded from the shipped CLI folder like the report checker: the owner's stored
+ * accounts and test marks, the one reviewed synthetic contract (loopback only; d4 holds every other site), and
+ * the run's own fence and init proof (d68).
+ */
+export function shippedQaAccounts(cliPath: string, changed: (sessionId: string) => void): NonNullable<QaSessionsOptions['accounts']> {
+  const load = <T>(name: string): T => createRequire(import.meta.url)(join(dirname(cliPath), name)) as T
+  return {
+    account: idOrName => {
+      const { BrowserAccountsStore } = load<typeof import('../../bin/browser-accounts-store.mjs')>('browser-accounts-store.mjs')
+      const store = new BrowserAccountsStore(), meta = store.metadata(store.find(idOrName))
+      return { id: meta.id, name: meta.name, origins: [...meta.origins], test: meta.test === true, qaRevision: meta.qaRevision ?? 1 }
+    },
+    contract: origin => { try { return syntheticPaidContract(origin) } catch { return null } },
+    qualified: run => load<typeof import('../../bin/qa-claude-fence.mjs')>('qa-claude-fence.mjs').qualifiedQaRun(run.folder, run.agent),
+    changed
+  }
+}
 const unauthorized = (): never => { throw new ControlError(ERROR_CODES.unauthorized, 'Only the QA caller and the owner may access this run') }
 
 export class QaSessions {
@@ -36,7 +56,7 @@ export class QaSessions {
   }
   async request(scope: ControlScope, method: string, params: Record<string, unknown>): Promise<unknown> {
     const db = this.options.database
-    if (['qa.grant.ask', 'qa.reserve', 'qa.send', 'qa.settle', 'qa.audit', 'qa.audit.close', 'qa.hold', 'qa.summary'].includes(method)) {
+    if (['qa.grant.ask', 'qa.account', 'qa.refuse', 'qa.reserve', 'qa.send', 'qa.settle', 'qa.audit', 'qa.audit.close', 'qa.hold', 'qa.summary'].includes(method)) {
       const accounts = this.options.accounts
       if (!accounts) return fail('QA_NATIVE_QUALIFICATION_REQUIRED')
       const broker = new QaGrantBroker({ ...accounts, database: db, live: this.options.live, now: this.options.now })
@@ -57,8 +77,10 @@ export class QaSessions {
         writeWhole(file, bytes + '\n')
         return { receiptId: summary.receiptId, sha256: sha256(bytes) }
       }
-      if (method === 'qa.reserve') return broker.reserve(run, { id: params.id as string, grantId: params.grantId as string, activity: params.activity as QaActivity,
-        request: params.request as QaRequestMeta, requestSha256: params.requestSha256 as string })
+      if (method === 'qa.account') return broker.pick(run, params.name as string)
+      if (method === 'qa.refuse') return broker.refuse(run, params.accountId as string, params.tool as string)
+      if (method === 'qa.reserve') return broker.reserve(run, { id: params.id as string, grantId: (params.grantId ?? null) as string | null, accountId: params.accountId as string | undefined,
+        activity: params.activity as QaActivity, request: params.request as QaRequestMeta, requestSha256: params.requestSha256 as string })
       if (method === 'qa.send') return broker.send(run, params.id as string)
       if (method === 'qa.settle') return broker.settle(run, params.id as string, params.state as 'succeeded' | 'failed' | 'uncertain', params.status as number | null)
       if (method === 'qa.audit') return broker.observe(run, params.accountId as string, params.request as QaRequestMeta, params.held as boolean)
@@ -100,8 +122,9 @@ export class QaSessions {
         if (!this.relayProcess(run, params.pid as number, params.ticks as string)) return fail('QA_RELAY_IDENTITY_INVALID')
         await db.companion('connectQaRelay', run.id, { pid: params.pid as number, ticks: params.ticks as string, at: this.options.now() })
       }
-      // Account use stays closed until the durable permission broker is connected.
-      return { qaId: run.id, target: run.brief.target, accounts: false }
+      // Aliases only name what the brief allows; each pick is decided by the broker, which requires the run's own qualification.
+      const aliases = ((run.brief.accounts ?? []) as Array<{ alias: string; permission?: string; intent?: string }>).map(item => ({ alias: item.alias, intent: item.intent ?? item.permission ?? 'look-only' }))
+      return { qaId: run.id, target: run.brief.target, accounts: this.options.accounts && aliases.length ? aliases : false }
     }
     const run = await db.companion('getQaRun', params.id as string)
     if (!run) return fail('QA_NOT_FOUND')
@@ -119,12 +142,15 @@ export class QaSessions {
   }
   private agentProcess(run: QaRun, pid: number, ticks: string): boolean {
     try {
-      const process = this.process(pid), launch = JSON.parse(readFileSync(join(run.folder, 'launch.json'), 'utf8')) as { built: { command: string[] }; identity: { launcher: { real: string } } }
+      const process = this.process(pid), launch = JSON.parse(readFileSync(join(run.folder, 'launch.json'), 'utf8')) as { form: string; built: { command: string[] }; identity: { launcher: { real: string }; payload: { dev: string; ino: string } } }
       if (process.ticks !== ticks || process.parent !== this.options.processId(run.sessionId!) || realpathSync(`/proc/${pid}/cwd`) !== realpathSync(run.folder)) return false
       const expected = launch.built.command
       const exact = JSON.stringify(process.argv) === JSON.stringify(expected)
       const nodeLauncher = process.argv.length === expected.length + 1 && realpathSync(process.argv[1]!) === launch.identity.launcher.real && JSON.stringify(process.argv.slice(2)) === JSON.stringify(expected.slice(1))
-      return (exact || nodeLauncher) && this.process(pid).ticks === ticks
+      // Claude Code retitles its process; its executable file, parent and folder identify it instead.
+      const executable = statSync(`/proc/${pid}/exe`, { bigint: true })
+      const native = launch.form === 'claude-qa' && String(executable.dev) === launch.identity.payload.dev && String(executable.ino) === launch.identity.payload.ino
+      return (exact || nodeLauncher || native) && this.process(pid).ticks === ticks
     } catch { return false }
   }
   private relayProcess(run: QaRun, pid: number, ticks: string): boolean {
@@ -135,7 +161,7 @@ export class QaSessions {
       const launch = JSON.parse(readFileSync(join(run.folder, 'launch.json'), 'utf8')) as { identity: { payload: { dev: string; ino: string } } }
       const executable = statSync(`/proc/${relay.parent}/exe`, { bigint: true })
       if (String(executable.dev) !== launch.identity.payload.dev || String(executable.ino) !== launch.identity.payload.ino) return false
-      // Only a direct native Codex child can connect, not a shell or another descendant carrying its token.
+      // Only a direct child of the native agent can connect, not a shell or another descendant carrying its token.
       for (let depth = 0, current = relay.parent; current > 1 && depth < 64; depth++) {
         const process = this.process(current)
         if (current === run.agent.pid) return process.ticks === run.agent.ticks && this.process(pid).ticks === ticks
@@ -149,7 +175,8 @@ export class QaSessions {
     if (!run.connection || !run.agent) return db.companion('finishQaRun', run.id, { state: 'failed', failure: 'QA_RELAY_UNPROVEN', result: null })
     try {
       const qa = createRequire(import.meta.url)(join(dirname(this.options.cliPath), 'agents-team-qa.mjs')) as typeof import('../../bin/agents-team-qa.mjs')
-      const answer = readFileSync(join(run.folder, 'codex-answer.md'), 'utf8')
+      const launch = JSON.parse(readFileSync(join(run.folder, 'launch.json'), 'utf8')) as { form: string }
+      const answer = readFileSync(join(run.folder, launch.form === 'claude-qa' ? 'claude-answer.md' : 'codex-answer.md'), 'utf8')
       let hostSummary
       if (run.brief.version === 2) {
         try { hostSummary = await db.companion('qaHostSummary', run.id) }

@@ -20,6 +20,7 @@ const auditState = (database: DatabaseConnection, qaId: string): QaAuditState =>
 }
 export function getQaGrant(database: DatabaseConnection, id: string): QaGrant | null { return read(database.prepare('SELECT record_json FROM qa_grant WHERE grant_id = ?').get(id)) }
 export function qaGrantForKey(database: DatabaseConnection, qaId: string, key: string): QaGrant | null { return read(database.prepare('SELECT record_json FROM qa_grant WHERE qa_id = ? AND request_key = ?').get(qaId, key)) }
+export function qaGrantsForRun(database: DatabaseConnection, qaId: string): QaGrant[] { return database.prepare("SELECT record_json FROM qa_grant WHERE qa_id = ? ORDER BY json_extract(record_json,'$.createdAt'), grant_id").all(qaId).map(row => read<QaGrant>(row)!) }
 export function qaGrantForCard(database: DatabaseConnection, id: string): QaGrant | null { return read(database.prepare('SELECT record_json FROM qa_grant WHERE card_id = ?').get(id)) }
 const writeGrant = (database: DatabaseConnection, grant: QaGrant): QaGrant => {
   database.prepare('UPDATE qa_grant SET card_id = ?, record_json = ? WHERE grant_id = ?').run(grant.card?.id ?? null, JSON.stringify(grant), grant.id)
@@ -213,4 +214,4 @@ export function recoverQaGrantUses(database: DatabaseConnection, now: string): v
     }
   })()
 }
-export const QA_GRANT_OPERATIONS = Object.freeze({ askQaGrant, getQaGrant, qaGrantForKey, qaGrantForCard, bindQaGrantCard, answerQaGrant, revokeQaGrant, reserveQaGrantUse, sendQaGrantUse, settleQaGrantUse, getQaGrantUse, appendQaAudit, closeQaAudit, qaAuditSummary, qaAuditRecords, recoverQaGrantUses, qaHostSummary, sealQaHostSummary })
+export const QA_GRANT_OPERATIONS = Object.freeze({ askQaGrant, getQaGrant, qaGrantForKey, qaGrantsForRun, qaGrantForCard, bindQaGrantCard, answerQaGrant, revokeQaGrant, reserveQaGrantUse, sendQaGrantUse, settleQaGrantUse, getQaGrantUse, appendQaAudit, closeQaAudit, qaAuditSummary, qaAuditRecords, recoverQaGrantUses, qaHostSummary, sealQaHostSummary })

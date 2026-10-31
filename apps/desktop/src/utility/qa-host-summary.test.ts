@@ -159,7 +159,8 @@ it.each([false, true])('the coordinator reconciles the submitted receipt with fr
     const grant = JSON.parse(row.record_json); grant.terms.limits[0].count = 2
     database.prepare('UPDATE qa_grant SET record_json = ? WHERE grant_id = ?').run(JSON.stringify(grant), 'grant-a')
   }
-  writeFileSync(join(root, 'codex-answer.md'), JSON.stringify(r)); live = false
+  // V2 account runs use the Claude Code form, whose pane runner keeps the final answer in claude-answer.md.
+  writeFileSync(join(root, 'launch.json'), JSON.stringify({ form: 'claude-qa' })); writeFileSync(join(root, 'claude-answer.md'), JSON.stringify(r)); live = false
   const result = await service.request({ kind: 'owner' }, 'qa.status', { id: 'run-a' }) as import('@bmn/protocol').QaRun
   expect(result).toMatchObject(tampered ? { state: 'failed', failure: 'QA_REPORT_INVALID' } : { state: 'finished', result: { valid: true, verdict: 'GO', hostSummary: summary } })
 })

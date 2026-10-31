@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it } from 'vitest'
 import { QaSessions } from './qa-sessions'
-import { waitForQaChild } from '../../bin/qa-pane-run.mjs'
+import { qaPaneLines, waitForQaChild } from '../../bin/qa-pane-run.mjs'
 import { processIdentity } from '../../bin/browser-process.mjs'
 
 async function heldLauncher(check, exitFirst = false) {
@@ -59,3 +59,15 @@ it('fails closed when that same child exits before its pinned launcher appears',
   await rejected
   expect(child.stdin.writableLength).toBe(0)
 }, true), 10_000)
+
+it('the QA pane shows readable agent words, browser actions and refusals instead of raw Claude Code events', () => {
+  expect(qaPaneLines({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', tools: ['mcp__playwright__browser_click', 'mcp__playwright__browser_snapshot'] }))
+    .toEqual(['QA agent started: claude-opus-5-5, 2 browser tools.'])
+  expect(qaPaneLines({ type: 'assistant', message: { content: [{ type: 'text', text: 'Picking the\ntest account.' }, { type: 'tool_use', name: 'mcp__playwright__browser_account_pick', input: { name: 'Synthetic test' } }] } }))
+    .toEqual(['Picking the test account.', '→ browser_account_pick {"name":"Synthetic test"}'])
+  expect(qaPaneLines({ type: 'user', message: { content: [{ type: 'tool_result', is_error: true, content: [{ type: 'text', text: 'This account is look-only in this QA.' }] }, { type: 'tool_result', content: 'snapshot' }] } }))
+    .toEqual(['  refused or failed: This account is look-only in this QA.'])
+  expect(qaPaneLines({ type: 'result', subtype: 'success', num_turns: 12 })).toEqual(['QA finished: success, 12 turns.'])
+  expect(qaPaneLines({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(900) }] } })[0]).toHaveLength(600)
+  expect(qaPaneLines({ type: 'rate_limit_event' })).toEqual([])
+})

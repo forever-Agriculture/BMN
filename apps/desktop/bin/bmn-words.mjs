@@ -141,6 +141,9 @@ Commands:
   qa start --brief BRIEF --key K            Start a QA pane in this session's workspace; uses its own folder
   qa wait ID [--timeout SECONDS]            Read this caller's checked report; a missing report fails
   qa stop ID                               Stop this caller's exact QA incarnation; retain its record
+  qa grant ID --account NAME --origin ORIGIN --activity A=N... --hours H --key K
+                                            Ask the owner on a card for counted activities on an ordinary
+                                            account in your QA run; nothing runs before he approves
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch

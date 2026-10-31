@@ -122,6 +122,9 @@ Commands:
   qa start --brief BRIEF --key K            Start a QA pane in this session's workspace; uses its own folder
   qa wait ID [--timeout SECONDS]            Read this caller's checked report; a missing report fails
   qa stop ID                               Stop this caller's exact QA incarnation; retain its record
+  qa grant ID --account NAME --origin ORIGIN --activity A=N... --hours H --key K
+                                            Ask the owner on a card for counted activities on an ordinary
+                                            account in your QA run; nothing runs before he approves
   roster validate|status|role|route|visibility|check|explain|bind|fence
                                             The team file in ~/.config/bmn/agents: validate it, list pending
                                             differences, print a role's chain, and check a dispatch
@@ -2170,16 +2173,38 @@ Only the caller and owner may read or stop it. The relay's PID, start ticks and 
 against that QA pane before it can connect; an ordinary session has no QA policy.
 
 The isolated signed-out desktop rehearsal has exercised the visible pane, repeated key, native
-agent/relay connection, retained screenshots and valid report. This does not establish native tool
-confinement. Account access remains disabled while that boundary is unresolved. Quick signed-out
-asks and signed-out pane checks never qualify authenticated access.
+agent/relay connection, retained screenshots and valid report. Quick signed-out asks and signed-out
+pane checks never qualify authenticated access.
+
+A V2 brief names saved accounts by alias, each with an intent. BMN runs that session on Claude
+Code's `claude-qa` form, never Codex: `--restricted --tools '' --disable-slash-commands
+--strict-mcp-config`, BMN's QA relay as the only MCP server, exactly its browser tools allowed,
+`--permission-mode dontAsk`, and a PATH without BMN's commands. Before each run BMN tries that exact
+command against a stand-in provider with a synthetic relay, canary settings, hooks and MCP files and
+21 forced calls to tools it was not given. The pane starts only if every call was refused and
+nothing else connected, and its first init event must list the same tools (`fence.json`,
+`init.json` in the QA folder); otherwise the run fails closed.
+
+The agent sees aliases only, and `browser_account_pick` asks the host for the mode. A `test-full`
+alias on an account marked as a test account interacts fully except unsafe browser code; its own
+sites pass and are audited, other sites are held. Any other alias is look-only: snapshots and
+screenshots, with each refused interaction recorded by tool name. An `ordinary-granted` alias
+interacts once the owner approved a grant for that account; each activity request then spends one
+approved count, and anything else is held on a card. The lead asks for a planning grant with
+`bmn qa grant`, whose card names the account, site, activities, counts and expiry. Saved sign-in
+secrets are never typed in a QA session. `browser_qa_seal` ends account use and returns the host
+receipt the report must cite. QA browsers keep a saved account's session cookies but never reopen
+its saved tabs, whose requests would start before the audit routes exist. A page redirect comes back
+as a page that navigates again, so every hop crosses the same route and audit with its cookies
+kept; an activity's redirect stays uncertain and other redirects are blocked. The pane shows the
+agent's words and each browser action, not raw events.
 
 V2 account reports reference a host-owned sealed ledger receipt. The host binds its run, brief,
 revision, immutable grants/cards, cumulative reservation/send counts, terminal outcomes and durable
 audit. It compares the receipt against a fresh SQLite projection at finish. The local report checker
 accepts `--host-summary RECEIPT` for consistency checks; it cannot authenticate a supplied file.
-Open/incomplete audits and uncertain operations require NO-GO. The production account/relay path
-and installed account verification remain unverified; the receipt implementation does not enable them.
+Open/incomplete audits and uncertain operations require NO-GO. The pick's own sign-in check loads the
+account's landing page outside the QA audit, and installed account sessions are the owner's check.
 
 ### Each app's own read-only mode
 

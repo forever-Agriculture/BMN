@@ -30,6 +30,8 @@ export const pageAddress = url => {
 export const pageOrigin = url => { try { return new URL(url).origin } catch { return '' } }
 export const SIGN_IN_FIELDS = 'input[type=password],input[autocomplete="one-time-code"]'
 export async function hasSignInField(page) { return await page.locator(SIGN_IN_FIELDS).count() > 0 }
+// Chrome's saved windows and tabs; session cookies live in the cookie store and survive their removal.
+export const CHROME_SESSION_FILES = ['Sessions', 'Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']
 export async function openProfile(profile, { headless = true, environment = process.env, qa = false } = {}) {
   // Playwright creates userDataDir before invoking the launch helper. Reject a
   // late call here too; the helper revalidates under its lifecycle lock before exec.
@@ -39,9 +41,11 @@ export async function openProfile(profile, { headless = true, environment = proc
     if (claim.sealed || claim.folder !== folder || claim.profile !== profile || claim.pid !== owner.pid || claim.ticks !== owner.ticks) throw new Error('Inactive lease')
   } catch { throw new BrowserAccountError('LEASE_CLOSED', 'Browser lease is closed. Open a fresh account session.') }
   const scratch = join(dirname(profile), 'browser-home')
+  // QA keeps restored session cookies but never restored tabs: their requests would start before the QA audit routes exist.
+  if (qa) for (const name of CHROME_SESSION_FILES) rmSync(join(profile, 'Default', name), { recursive: true, force: true })
   const context = await browserLibraries().chromium.launchPersistentContext(profile, {
     channel: 'chrome', executablePath: browserLaunchHelper(), headless, chromiumSandbox: true, viewport: { width: 1280, height: 720 },
-    acceptDownloads: false, ...(qa ? { serviceWorkers: 'block' } : {}), args: ['--password-store=basic', ...(qa ? [] : ['--restore-last-session'])],
+    acceptDownloads: false, ...(qa ? { serviceWorkers: 'block' } : {}), args: ['--password-store=basic', '--restore-last-session'],
     // Chrome's scratch files and crash files belong to this decrypted RAM copy too.
     env: { ...environment, HOME: scratch, XDG_CONFIG_HOME: join(scratch, 'config'),
       XDG_CACHE_HOME: join(scratch, 'cache'), XDG_DATA_HOME: join(scratch, 'share'),

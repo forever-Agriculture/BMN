@@ -146,7 +146,7 @@ import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
 import { AwayWake } from './away-wake'
 import { GrantDepartureNotices } from './agent-grant-notices'
-import { QaSessions } from './qa-sessions'
+import { QaSessions, shippedQaAccounts } from './qa-sessions'
 import { foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
@@ -816,7 +816,8 @@ export class CompanionService {
           database: options.database, data: options.roots.data, cliPath: options.cliPath,
           session: id => this.knownSessions.get(id), live: id => options.manager.liveIncarnationId(id), processId: id => options.manager.liveProcessId(id),
           launch: request => options.qaLaunch?.(request) ?? Promise.resolve({ failed: true }),
-          stop: (sessionId, incarnationId) => options.manager.stop({ sessionId, incarnationId }), now: () => this.iso()
+          stop: (sessionId, incarnationId) => options.manager.stop({ sessionId, incarnationId }), now: () => this.iso(),
+          accounts: shippedQaAccounts(options.cliPath, sessionId => this.emit('attention', sessionId))
         }).request(scope, method, params)),
         isCurrentIncarnation: (sessionId, incarnationId) =>
           options.manager.liveIncarnationId(sessionId) === incarnationId,

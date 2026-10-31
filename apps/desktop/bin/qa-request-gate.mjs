@@ -25,6 +25,31 @@ export function classifyQaRequest(contract, method, address) {
   return { request: meta, classification: !rule ? 'unknown' : rule[2] === 'read' ? 'read' : 'activity', activity: rule && rule[2] !== 'read' ? rule[2] : null }
 }
 
+const escapeHtml = text => text.replace(/[&"<>']/g, char => `&#${char.charCodeAt(0)};`)
+/** A page redirect returns as a tiny page that navigates again, so the next hop crosses the same route and audit with the redirect's cookies kept. */
+export async function fulfillRedirect(route, response) {
+  const request = route.request(), location = response.headers().location
+  if (!request.isNavigationRequest() || request.method() !== 'GET' || !location) return false
+  let target
+  try { target = new URL(location, request.url()) } catch { return false }
+  if (!['http:', 'https:'].includes(target.protocol)) return false
+  const cookies = response.headersArray().filter(header => header.name.toLowerCase() === 'set-cookie').map(header => header.value)
+  await route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...(cookies.length ? { 'set-cookie': cookies.join('\n') } : {}) },
+    body: `<!doctype html><meta http-equiv="refresh" content="0;url=${escapeHtml(target.href)}">` })
+  return true
+}
+/** Route.continue() lets the browser follow redirects unseen; a top-level GET is fetched here so each hop is routed again. */
+export async function passQaRequest(route) {
+  const request = route.request()
+  if (!request.isNavigationRequest() || request.method() !== 'GET') { await route.continue(); return }
+  let response
+  // An unreachable site is the page's own failure, as under continue(); it is not an audit gap.
+  try { response = await route.fetch({ maxRedirects: 0, maxRetries: 0 }) } catch { await route.abort('failed'); return }
+  const status = response.status()
+  if (status >= 300 && status < 400) { if (!await fulfillRedirect(route, response)) await route.abort('blockedbyclient'); return }
+  await route.fulfill({ response })
+}
+
 /** Broker methods are bound to one registered relay/run/account, never taken from page content. */
 export async function gateQaRequest(route, broker, closeContext) {
   let use = null, sent = false
@@ -53,7 +78,8 @@ export async function gateQaRequest(route, broker, closeContext) {
     const response = await route.fetch({ maxRedirects: 0, maxRetries: 0 })
     const status = response.status()
     if (use) await broker.settle(use, status >= 300 && status < 400 ? 'uncertain' : status >= 200 && status < 300 ? 'succeeded' : 'failed', status)
-    if (status >= 300 && status < 400) { await route.abort('blockedbyclient'); return }
+    // An activity's redirect stays uncertain; a read's page redirect is routed again as a new request.
+    if (status >= 300 && status < 400) { if (use || !await fulfillRedirect(route, response)) await route.abort('blockedbyclient'); return }
     await route.fulfill({ response })
   } catch {
     if (use && sent) await broker.settle(use, 'uncertain', null).catch(() => {})

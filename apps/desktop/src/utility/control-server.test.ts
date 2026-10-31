@@ -1929,6 +1929,22 @@ describe('QA control scope', () => {
     expectError(await client.request('qa.summary', { counters: { spent: 0 } }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.qaRequest.mock.calls).toHaveLength(admitted)
   })
+  it('passes account picks and refused tools as closed messages, and a pick by alias with no grant id may reserve', async () => {
+    const fixture = await serverFixture(); fixture.handlers.qaSession.mockResolvedValue(true)
+    const client = await authenticated(fixture, sessionToken(fixture))
+    expect((await client.request('qa.account', { name: 'Synthetic test' })).error).toBeUndefined()
+    expect((await client.request('qa.refuse', { accountId: 'account-look', tool: 'browser_click' })).error).toBeUndefined()
+    const meta = { method: 'POST', origin: 'http://127.0.0.1:4173', path: '/paid/report', queryKeys: [] }
+    expect((await client.request('qa.reserve', { id: 'use-2', grantId: null, accountId: 'account-granted', activity: 'report.generate', request: meta, requestSha256: 'b'.repeat(64) })).error).toBeUndefined()
+    const admitted = fixture.handlers.qaRequest.mock.calls.length
+    expect(fixture.handlers.qaRequest.mock.calls.map((call) => (call as unknown[])[1])).toEqual(['qa.account', 'qa.refuse', 'qa.reserve'])
+    for (const [method, params] of [['qa.account', { name: '' }], ['qa.account', { name: 'Synthetic test', id: 'account-test' }],
+      ['qa.refuse', { accountId: 'account-look', tool: 'browser_click; drop' }], ['qa.refuse', { accountId: 'account-look', tool: 'Bash' }],
+      ['qa.refuse', { accountId: 'account-look', tool: 'browser_click', page: 'private' }]] as const) {
+      expectError(await client.request(method, params), ERROR_CODES.invalidArgument)
+    }
+    expect(fixture.handlers.qaRequest.mock.calls).toHaveLength(admitted)
+  })
   it('checks bounded requested limits but never offers owner approval over the socket', async () => {
     const fixture = await serverFixture(); fixture.handlers.qaSession.mockResolvedValue(true)
     const client = await authenticated(fixture, sessionToken(fixture))

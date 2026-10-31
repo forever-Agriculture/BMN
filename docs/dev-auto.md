@@ -131,12 +131,14 @@ the owner receives the planned evaluation of QA's findings, misses, coverage, un
 false findings and known time/usage; no automatic switch-off.
 
 The gate accepts quick-ask exports and saved `bmn qa wait --json` session receipts. A session receipt
-binds the native agent, relay, reserved brief, report and retained image hashes. It establishes
-record consistency; native tool confinement and account permission require separate verification.
+binds the native agent, relay, reserved brief, report and retained image hashes; a quick export's
+brief, report and target must equal BMN's input manifest, retained answer and browser request. It
+establishes record consistency; tool confinement and account permission are BMN's own checks.
 
-Current fallback: QA runs on signed-out loopback web targets, through quick asks or visible native
-QA sessions. Bench QA is unavailable. Account access stays disabled while native tool confinement
-is unresolved; a passing signed-out session never qualifies authenticated access.
+QA runs on signed-out loopback web targets through quick asks or visible native QA sessions, and
+on saved accounts through V2 session briefs (Claude Code `claude-qa` form, host-decided account
+modes, owner grant cards; see agent-control.md, QA panes). Bench QA is unavailable. A passing
+signed-out session never qualifies authenticated access.
 Candidates without any running interface record QA not applicable with the reason.
 
 ## Morning digest
