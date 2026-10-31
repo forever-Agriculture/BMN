@@ -38,10 +38,8 @@ export async function fulfillRedirect(route, response) {
     body: `<!doctype html><meta http-equiv="refresh" content="0;url=${escapeHtml(target.href)}">` })
   return true
 }
-/** Route.continue() lets the browser follow redirects unseen; a top-level GET is fetched here so each hop is routed again. */
+/** Route.continue() lets the browser follow redirects unseen, so every request is fetched here: a page redirect is routed again, any other redirect is blocked. */
 export async function passQaRequest(route) {
-  const request = route.request()
-  if (!request.isNavigationRequest() || request.method() !== 'GET') { await route.continue(); return }
   let response
   // An unreachable site is the page's own failure, as under continue(); it is not an audit gap.
   try { response = await route.fetch({ maxRedirects: 0, maxRetries: 0 }) } catch { await route.abort('failed'); return }

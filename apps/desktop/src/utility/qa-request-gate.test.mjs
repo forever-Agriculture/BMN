@@ -104,9 +104,13 @@ it.each([
   const f = fixture({ path: '/', method: 'GET', status: 302, ...options }); await gateQaRequest(f.route, f.broker, f.close)
   expect(f.route.fulfill).not.toHaveBeenCalled(); expect(f.route.abort).toHaveBeenCalledWith('blockedbyclient')
 })
-it('test-account and signed-out routes fetch page loads themselves so redirect hops are routed again', async () => {
+it('test-account and signed-out routes fetch every request themselves so no redirect hop leaves their route unseen', async () => {
   const sub = fixture({ path: '/state', method: 'GET' }); await passQaRequest(sub.route)
-  expect(sub.events).toEqual(['continue'])
+  expect(sub.events).toEqual(['network', 'fulfill']); expect(sub.route.continue).not.toHaveBeenCalled()
+  for (const options of [{ path: '/asset', method: 'GET' }, { path: '/read', method: 'POST', navigation: true }]) {
+    const away = fixture({ ...options, status: 302, headers: redirect('http://127.0.0.1:9/outside') }); await passQaRequest(away.route)
+    expect(away.route.fulfill).not.toHaveBeenCalled(); expect(away.route.abort).toHaveBeenCalledWith('blockedbyclient')
+  }
   const page = fixture({ path: '/app', method: 'GET', navigation: true }); await passQaRequest(page.route)
   expect(page.events).toEqual(['network', 'fulfill'])
   const hop = fixture({ path: '/', method: 'GET', status: 301, navigation: true, headers: redirect('https://elsewhere.test/') }); await passQaRequest(hop.route)
