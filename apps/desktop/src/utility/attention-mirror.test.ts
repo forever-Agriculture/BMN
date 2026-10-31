@@ -1,7 +1,7 @@
 // MODULE: attention-mirror.test.ts - one decision, one phone message: an agent's own question and its `bmn ask` card page once
 import type { AttentionRecord } from '@bmn/protocol'
 import { expect, it } from 'vitest'
-import { LEFT_WITHIN_MS, MIRROR_WINDOW_MS, answeredTogether, askedTwice, createAttentionPager, mirrorOf } from './attention-pager'
+import { LEFT_WITHIN_MS, MIRROR_WINDOW_MS, askedTwice, createAttentionPager, mirrorOf } from './attention-pager'
 
 const at = (seconds: number): string => new Date(Date.UTC(2026, 9, 31, 10, 20, 0) + seconds * 1000).toISOString()
 function request(id: string, change: Partial<AttentionRecord> = {}): AttentionRecord {
@@ -65,14 +65,15 @@ it('a question asked the other way round is another decision; a constraint besid
   expect(mirrorOf(constrained, [plain, constrained])?.requestId).toBe('plain')
 })
 
-it('an answer closes only a card that asks the same action; another action stays open though it paged once', () => {
+it('a card asking another action is another decision: it pages, and an answer to the question leaves it open', () => {
   const ask = 'Should I publish the synthetic gallery report page privately now and open it for review after the sample checks pass?'
   const question = request('question', { openedBy: 'hook:codex:PreToolUse', title: `Codex asks: ${ask.slice(0, 80)}`, body: `1. ${ask}` })
   const same = request('same', { openedBy: 'cli', kind: 'permission', openedAt: at(10), title: 'Synthetic gallery report page', body: ask })
   const other = { ...same, requestId: 'other', body: ask.replace('Should I publish', 'Should I delete') }
-  expect(answeredTogether(question, same)).toBe(true)
-  expect(askedTwice(question, other)).toBe(true)
-  expect(answeredTogether(question, other)).toBe(false)
+  expect(askedTwice(question, same)).toBe(true)
+  expect(mirrorOf(same, [question, same])?.requestId).toBe('question')
+  expect(askedTwice(question, other)).toBe(false)
+  expect(mirrorOf(other, [question, other])).toBeNull()
 })
 
 it('the pager sends the first of a mirrored pair and records the second as mirrored, unsent', async () => {

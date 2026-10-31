@@ -60,10 +60,11 @@ function questionPolarity(record: AttentionRecord): { plain: Set<string>; negate
 }
 const tokens = (record: AttentionRecord): Set<string> => new Set(decisionParts(record).join('\n').toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? [])
 /**
- * Two copies of one decision share most words, and no word one question asks about plainly is asked with a negation in
- * the other ("Publish X?" against "Not publish X?"). Constraints outside the question sentences ("Do not push main.")
- * never count: replayed on his 51 mirrored pairs, a negation anywhere in the text split a third of them, the question
- * sentences none.
+ * Two copies of one decision share most words, no word one question asks about plainly is asked with a negation in the
+ * other ("Publish X?" against "Not publish X?"), and the two do not each ask about a word the other never uses ("Delete
+ * X?" beside "Publish X?"). Constraints outside the question sentences ("Do not push main.") never count. Replayed on his
+ * 51 mirrored pairs, the negation rule split none and the action rule 11: those still page twice, the safe failure,
+ * since a wrong merge would keep another question off his phone (review 20261031T115619-9dbd0ec0).
  */
 function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
   const a = decisionWords(one), b = decisionWords(other)
@@ -71,22 +72,10 @@ function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
   if (shared < MIRROR_SHARED_WORDS || shared < MIRROR_WORD_SHARE * Math.min(a.size, b.size)) return false
   const x = questionPolarity(one), y = questionPolarity(other)
   const turned = (p: typeof x, q: typeof x): boolean => [...p.negated].some(word => q.plain.has(word) && !q.negated.has(word))
-  return !turned(x, y) && !turned(y, x)
-}
-
-/**
- * Stricter than askedTwice, for closing a card on the answer to the agent's own question: besides that, the two must not
- * each ask about a word the other never uses, so a card for another action ("Delete X?" beside "Publish X?") stays open.
- * Replayed on his 51 mirrored pairs this closes 40 cards; the other 11 stay open in the window, never on his phone.
- */
-export function answeredTogether(one: AttentionRecord, other: AttentionRecord): boolean {
-  if (!askedTwice(one, other)) return false
-  const asked = (record: AttentionRecord): string[] => {
-    const { plain, negated } = questionPolarity(record)
-    return [...plain, ...negated].filter(word => word.length >= 4 && !COMMON.has(word))
-  }
-  const a = tokens(one), b = tokens(other)
-  return !(asked(one).some(word => !b.has(word)) && asked(other).some(word => !a.has(word)))
+  if (turned(x, y) || turned(y, x)) return false
+  const asked = (p: typeof x): string[] => [...p.plain, ...p.negated].filter(word => word.length >= 4 && !COMMON.has(word))
+  const mine = tokens(one), theirs = tokens(other)
+  return !(asked(x).some(word => !theirs.has(word)) && asked(y).some(word => !mine.has(word)))
 }
 
 /**

@@ -122,7 +122,7 @@ import { HostControlError, invalidHostControl as invalid, type SessionIdentity, 
 import { codexRolloutPath } from './conversation-binding'
 import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
-import { PAGE_AFTER_MS, answeredTogether, createAttentionPager, mirrorOf } from './attention-pager'
+import { PAGE_AFTER_MS, askedTwice, createAttentionPager, mirrorOf } from './attention-pager'
 import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, ownerTurn, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
@@ -2223,13 +2223,13 @@ export class CompanionService {
 
   /**
    * The agent's own question was answered from the phone: a `bmn ask` card it opened for the same decision (askedTwice)
-   * closes too (answeredTogether), so nobody answers it twice. A card's answer never closes the agent's question, whose dialog may still wait.
+   * closes too, so nobody answers it twice. A card's answer never closes the agent's question, whose dialog may still wait.
    */
   private async withdrawMirrorCards(requestId: string): Promise<void> {
     const all = await this.options.database.companion('listAttention').catch(() => [] as AttentionRecord[])
     const answered = all.find(item => item.requestId === requestId)
     if (!answered || answered.openedBy === 'cli') return
-    for (const card of all.filter(item => item.state === 'open' && item.openedBy === 'cli' && answeredTogether(answered, item))) {
+    for (const card of all.filter(item => item.state === 'open' && item.openedBy === 'cli' && askedTwice(answered, item))) {
       const closed = await this.options.database.companion('closeAttention', { requestId: card.requestId, expectedRevision: card.revision },
         'withdrawn', 'Answered from Telegram through the agent\'s own question', this.iso(), 'telegram').catch(() => null)
       if (closed) {

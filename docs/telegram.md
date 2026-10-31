@@ -61,7 +61,7 @@ session. It uses a bot you create and own. It is off by default.
   card for it (same session and agent conversation, opened within 2 minutes, mostly the same words), only
   the first goes out, and answering the agent's question from Telegram closes the card. A tool approval
   never counts as a copy, nor does a question asked the other way round ("Publish it?" against "Not publish
-  it?"); a pair BMN is not sure of is still sent twice rather than kept from you, and if the first copy never
+  it?") or about another action ("Delete it?"); a pair BMN is not sure of is still sent twice rather than kept from you, and if the first copy never
   reaches the phone (answered, seen or out of its desk window first) the second is sent in its place.
   A question from a Claude session connected to Remote Control is left to the Claude app; a permission
   is sent anyway (Epic 78), and whichever answer comes first, the app's, the card's or the desk's, wins. Optionally it also tells you when a session's process exits while you
