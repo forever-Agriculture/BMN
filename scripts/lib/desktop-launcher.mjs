@@ -44,10 +44,18 @@ updating() {
   systemctl --user is-active --quiet "$unit" 2>/dev/null
 }
 
+# BMN's own helpers (its CLI, team-ask supervisors, QA relays) run the binary as Node and may outlive the
+# window; only the app counts as running. An unreadable environment counts as the app.
+helper() {
+  sed -z -n '/^ELECTRON_RUN_AS_NODE=./q 7' "$1/environ" 2>/dev/null
+  [ $? -eq 7 ]
+}
+
 running() {
   for exe in /proc/[0-9]*/exe; do
     target=$(readlink "$exe" 2>/dev/null) || continue
-    [ "\${target% (deleted)}" = "$binary" ] && return 0
+    [ "\${target% (deleted)}" = "$binary" ] || continue
+    helper "\${exe%/exe}" || return 0
   done
   return 1
 }

@@ -219,6 +219,25 @@ describe('desktop launcher', () => {
     }
   })
 
+  it('waits for the update instead of starting the old build when only BMN helpers run the binary', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-launcher-helper-'))
+    roots.push(root)
+    const binary = join(root, 'bmn')
+    copyFileSync(process.execPath, binary)
+    chmodSync(binary, 0o755)
+    // A team-ask supervisor or the CLI: the packaged binary run as Node, alive after the window closed.
+    const helper = spawn(binary, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
+    try {
+      const run = fixture({ phase: 'waiting-for-exit', activeChecks: 3, binary, zenity: fakeZenity() })
+      const result = spawnSync(run.launcher, ['-e', ''], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+
+      expect(result.status).toBe(0)
+      expect(run.read('zenity-args')).toContain('BMN is updating')
+    } finally {
+      helper.kill()
+    }
+  }, 15_000)
+
   it('quotes paths that contain shell syntax', () => {
     const script = launcherScript({ binary: "/opt/it's $HOME/bmn", statusPath: '/state/latest.json' })
     expect(script).toContain(`binary='/opt/it'\\''s $HOME/bmn'`)

@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   desktopEntryRunsLauncher,
   repositoryReadiness,
-  runningExecutablePids
+  runningAppPids
 } from '../install/update-desktop.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -24,7 +24,28 @@ describe('desktop source update', () => {
       symlinkSync(binary, join(root, '19', 'exe'))
       symlinkSync(other, join(root, '7', 'exe'))
 
-      expect(runningExecutablePids(binary, root)).toEqual([19])
+      expect(runningAppPids(binary, root)).toEqual([19])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not count BMN helpers that run the packaged binary as Node as an open BMN', () => {
+    // 2026-10-31: team-ask supervisors outlived the closed window, so the queued update kept waiting
+    // and the launcher started the old build again.
+    const root = mkdtempSync(join(tmpdir(), 'bmn-update-helpers-'))
+    try {
+      const binary = join(root, 'bmn')
+      writeFileSync(binary, '')
+      const processes = { 30: 'HOME=/home/o\0LANG=C', 31: 'HOME=/home/o\0ELECTRON_RUN_AS_NODE=1\0LANG=C', 32: 'ELECTRON_RUN_AS_NODE=\0HOME=/home/o', 33: null }
+      for (const [pid, environ] of Object.entries(processes)) {
+        mkdirSync(join(root, pid))
+        symlinkSync(binary, join(root, pid, 'exe'))
+        if (environ !== null) writeFileSync(join(root, pid, 'environ'), environ)
+      }
+
+      // 31 is a helper; an empty value does not make Node of it (32); an unreadable environment counts as the app (33).
+      expect(runningAppPids(binary, root)).toEqual([30, 32, 33])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

@@ -37,8 +37,13 @@ const desktopEntry = join(
 const launcher = launcherPath()
 const unit = UPDATE_UNIT
 
-/** Returns processes whose executable is the packaged BMN binary, without matching command text. */
-export function runningExecutablePids(executable, procRoot = '/proc') {
+/**
+ * Returns the processes of an open packaged BMN: its executable is the packaged binary, without matching
+ * command text. BMN's own helpers (its CLI, team-ask supervisors, QA relays) run that binary as Node with
+ * ELECTRON_RUN_AS_NODE and may outlive the window, so they never count as BMN being open; a process whose
+ * environment cannot be read counts as open.
+ */
+export function runningAppPids(executable, procRoot = '/proc') {
   const expected = resolve(executable)
   let entries
   try {
@@ -51,12 +56,20 @@ export function runningExecutablePids(executable, procRoot = '/proc') {
     if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) continue
     try {
       const target = readlinkSync(join(procRoot, entry.name, 'exe')).replace(/ \(deleted\)$/u, '')
-      if (resolve(target) === expected) pids.push(Number(entry.name))
+      if (resolve(target) === expected && !runsAsNode(join(procRoot, entry.name, 'environ'))) pids.push(Number(entry.name))
     } catch {
       // Processes may exit or deny inspection between the directory read and readlink.
     }
   }
   return pids.sort((left, right) => left - right)
+}
+
+function runsAsNode(environPath) {
+  try {
+    return /(?:^|\0)ELECTRON_RUN_AS_NODE=[^\0]/u.test(readFileSync(environPath, 'latin1'))
+  } catch {
+    return false
+  }
 }
 
 export function repositoryReadiness({ branch, head, originHead, status }) {
@@ -123,7 +136,7 @@ function runStep(label, args) {
 async function waitForPackagedAppToExit() {
   let announced = false
   for (;;) {
-    const pids = runningExecutablePids(binary)
+    const pids = runningAppPids(binary)
     if (pids.length > 0) {
       if (!announced) {
         log(`WAIT packaged BMN is running (${pids.join(', ')})`)
@@ -134,7 +147,7 @@ async function waitForPackagedAppToExit() {
     }
     // A quiet window prevents an immediate desktop relaunch from racing the replacement.
     await delay(3_000)
-    if (runningExecutablePids(binary).length === 0) return
+    if (runningAppPids(binary).length === 0) return
     announced = false
   }
 }
