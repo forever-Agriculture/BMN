@@ -47,6 +47,28 @@ it('packages every file the bmn CLI loads beside bmn.mjs', () => {
   expect(loaded.filter(name => !packaged.has(name))).toEqual([])
 })
 
+it('packages every module a separately started bin program or a runtime load needs (Story 100.8)', () => {
+  // The installed QA pane crashed on import: qa-pane-run.mjs and qa-browser-relay.mjs start as programs of their own, and the
+  // utility process loads qa-claude-fence.mjs from the packaged bin folder, so the bmn graph above never reached their imports.
+  const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../apps/desktop')
+  const bin = join(appDir, 'bin')
+  const { load } = createRequire(createRequire(createRequire(join(appDir, 'package.json')).resolve('electron-builder')).resolve('app-builder-lib'))('js-yaml')
+  const packaged = new Set(load(readFileSync(join(appDir, 'electron-builder.yml'), 'utf8')).extraResources
+    .filter(entry => entry.to === entry.from && entry.from.startsWith('bin/'))
+    .map(entry => entry.from.slice('bin/'.length)))
+  const modules = new Set(readdirSync(bin).filter(name => name.endsWith('.mjs')))
+  const sources = [
+    ...readdirSync(bin).filter(name => name.endsWith('.mjs') || name === 'bmn').map(name => join(bin, name)),
+    ...readdirSync(join(appDir, 'src'), { recursive: true }).filter(file => /\.ts$/u.test(file) && !/\.test\.ts$|test-fixtures/u.test(file)).map(file => join(appDir, 'src', file))
+  ]
+  // A bin module named as a plain string, not imported: a path the code starts, spawns or requires at run time.
+  const started = new Set(sources.flatMap(file => [...readFileSync(file, 'utf8').matchAll(/(?<!(?:from|import\(|new URL\()\s*)['"]([\w-]+\.mjs)['"]/gu)]
+    .map(match => match[1]).filter(name => modules.has(name))))
+  expect([...started]).toEqual(expect.arrayContaining(['qa-pane-run.mjs', 'qa-browser-relay.mjs', 'qa-claude-fence.mjs', 'agents-team-qa.mjs', 'doctor-inspection-worker.mjs']))
+  const needed = new Set([...started].flatMap(name => [name, ...cliModules(bin, name)]))
+  expect([...needed].filter(name => !packaged.has(name)).sort()).toEqual([])
+})
+
 it('loads every CLI module without starting a child program, as the packaged smoke does', () => {
   const bin = resolve(dirname(fileURLToPath(import.meta.url)), '../../apps/desktop/bin')
   const home = mkdtempSync(join(tmpdir(), 'bmn-cli-import-'))

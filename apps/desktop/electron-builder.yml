@@ -245,6 +245,11 @@ extraResources:
     to: bin/qa-pane-run.mjs
   - from: bin/qa-browser-relay.mjs
     to: bin/qa-browser-relay.mjs
+  # Story 100.8: the relay's request gate and the Claude QA fence; the pane, the relay and the utility process load them beside bmn.mjs.
+  - from: bin/qa-request-gate.mjs
+    to: bin/qa-request-gate.mjs
+  - from: bin/qa-claude-fence.mjs
+    to: bin/qa-claude-fence.mjs
   - from: ../../skills
     to: skills
     filter:
