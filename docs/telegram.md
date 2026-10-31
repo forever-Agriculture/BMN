@@ -59,7 +59,7 @@ session. It uses a bot you create and own. It is off by default.
   `bmn away` on your word), a permission goes out at once instead of after BMN's usual 15 s wait.
   One decision is one message: when an agent asks with its own question tool and also opens a `bmn ask`
   card for it (same session and agent conversation, opened within 2 minutes, mostly the same words or the
-  same answers word for word, however the card retells the question; bare answers such as Yes / No never count), only
+  same answers word for word about the same thing, however the card retells it; bare answers such as Yes / No never count), only
   the first goes out, and answering the agent's question from Telegram closes the card. A tool approval
   never counts as a copy, nor does a question asked the other way round ("Publish it?" against "Not publish
   it?") or about another action ("Delete it?"); a pair BMN is not sure of is still sent twice rather than kept from you, and if the first copy never

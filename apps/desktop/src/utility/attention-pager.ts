@@ -65,8 +65,6 @@ const BARE_ANSWER = new Set(('yes no okay approve approved deny denied allow can
   'accept accepted reject rejected decline confirm agree disagree retry abort ignore dismiss submit').split(' '))
 const answerLabel = (label: string): string => label.toLowerCase().replace(/\(recommended\)/gu, '').replace(/\s+/gu, ' ').trim()
 const namingWords = (text: string): string[] => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(word => word.length >= 4 && !COMMON.has(word))
-/** Naming words an identical answer list needs to pair without the other-word veto (sameDecision). */
-export const MIRROR_ANSWER_WORDS = 4
 /** Words outside the answers that what a question asks and what its card says must share for the same answers to pair. */
 export const MIRROR_SUBJECT_WORDS = 3
 interface AnswerList { list: string; naming: number; subject: Set<string> }
@@ -87,40 +85,31 @@ function answerLists(record: AttentionRecord): AnswerList[] {
       subject: new Set(namingWords(item.about).filter(word => !answered.has(word))) }
   }).filter(item => item.naming > 0)
 }
-/** The richest answer list both requests offer word for word about one subject (MIRROR_SUBJECT_WORDS shared), or null. */
-function sameAnswers(one: AttentionRecord, other: AttentionRecord): AnswerList | null {
+/** Whether both requests offer one answer list word for word about one subject (MIRROR_SUBJECT_WORDS shared). */
+function sameAnswers(one: AttentionRecord, other: AttentionRecord): boolean {
   const theirs = answerLists(other)
-  let best: AnswerList | null = null
-  for (const mine of answerLists(one)) {
-    for (const item of theirs) {
-      if (item.list !== mine.list || [...mine.subject].filter(word => item.subject.has(word)).length < MIRROR_SUBJECT_WORDS) continue
-      if (!best || mine.naming > best.naming) best = mine
-    }
-  }
-  return best
+  return answerLists(one).some(mine => theirs.some(item => item.list === mine.list &&
+    [...mine.subject].filter(word => item.subject.has(word)).length >= MIRROR_SUBJECT_WORDS))
 }
 /**
  * Two copies of one decision: no word one question asks about plainly is asked with a negation in the other ("Publish X?"
- * against "Not publish X?"), and either they offer the same answers word for word about one subject (sameAnswers), with
- * at least MIRROR_ANSWER_WORDS naming words ("Send the E2B email" / "Keep the packet local and unsent"), or the two do not
- * each ask about a word the other never uses ("Delete X?" beside "Publish X?", "Which border?" beside "Which color?" with
- * Gold / Black) and they offer the same answers with fewer naming words or share most words. Constraints outside the
- * question sentences ("Do not push main.") never count. Replayed on his 245 close card/question pairs (2026-10-01..31): 74
- * retold pairs with the same answers paged twice under shared words alone, each one decision; a wrong merge would keep
- * another question off his phone, so bare answers ("Yes" / "No", "Accept" / "Reject") never pair, and the same answers
- * about another subject ("retry the upload" beside "retry the deploy") do not (reviews 20261031T115619-9dbd0ec0,
- * 20261031T194544-8ad3ab8f).
+ * against "Not publish X?"), the two do not each ask about a word the other never uses ("Delete X?" beside "Publish X?",
+ * "the alpha service?" beside "the beta service?", "Which border?" beside "Which color?"), and they either offer the same
+ * answers word for word about one subject (sameAnswers: "Send the E2B email" / "Keep it unsent", however the card retells
+ * the question) or share most words. Constraints outside the question sentences ("Do not push main.") never count.
+ * Replayed on his 245 close card/question pairs (2026-10-01..31): retold pairs with the same answers paged twice under
+ * shared words alone, each one decision; a wrong merge would keep another question off his phone, so bare answers ("Yes" /
+ * "No", "Accept" / "Reject") never pair, the same answers about another subject do not, and no answer list, however rich,
+ * outweighs a target only one side names (reviews 20261031T115619-9dbd0ec0, 20261031T194544-8ad3ab8f, 20261031T195251-471e8d7a).
  */
 function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
   const x = questionPolarity(one), y = questionPolarity(other)
   const turned = (p: typeof x, q: typeof x): boolean => [...p.negated].some(word => q.plain.has(word) && !q.negated.has(word))
   if (turned(x, y) || turned(y, x)) return false
-  const answers = sameAnswers(one, other)
-  if (answers && answers.naming >= MIRROR_ANSWER_WORDS) return true
   const asked = (p: typeof x): string[] => [...p.plain, ...p.negated].filter(word => word.length >= 4 && !COMMON.has(word))
   const mine = tokens(one), theirs = tokens(other)
   if (asked(x).some(word => !theirs.has(word)) && asked(y).some(word => !mine.has(word))) return false
-  if (answers) return true
+  if (sameAnswers(one, other)) return true
   const a = decisionWords(one), b = decisionWords(other)
   const shared = [...a].filter(word => b.has(word)).length
   return shared >= MIRROR_SHARED_WORDS && shared >= MIRROR_WORD_SHARE * Math.min(a.size, b.size)

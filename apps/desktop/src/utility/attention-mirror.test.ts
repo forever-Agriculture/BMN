@@ -100,8 +100,8 @@ it('a card worded apart from the question but offering its same specific answers
   // Other answers, or the same answers to a question asked the other way round, keep them apart.
   expect(askedTwice(question, { ...retold, manualChoices: choices(['Send the partner email', 'Keep it unsent']) })).toBe(false)
   expect(askedTwice(question, { ...retold, title: 'Should I not send the prepared vendor support email?' })).toBe(false)
-  // Answers with four naming words settle it even when each retelling names something the other does not.
-  expect(askedTwice(question, { ...retold, title: 'Kernel outreach: send the prepared message now?' })).toBe(true)
+  // However rich the same answers, a retelling that names something the other never does keeps them apart.
+  expect(askedTwice(question, { ...retold, title: 'Kernel outreach: send the prepared message now?' })).toBe(false)
   // Fewer naming words, as value answers, still need the questions to ask about the same thing ("border" is not "color").
   const color = 'Which synthetic gallery color should the sample banner use for the preview build?'
   const colorQuestion = request('color', { openedBy: 'hook:codex:PreToolUse', title: `Codex asks: ${color}`, body: `1. ${color}`,
@@ -130,6 +130,12 @@ it('the same answers pair only about one subject, for one choice, and never as b
   const partsCard = card('Synthetic parts to refresh in this build', parts, 'Regenerating costs about four minutes on the shared runner; outputs land beside the nightly artifacts.')
   expect(askedTwice(ask(which, parts, true), partsCard)).toBe(false)
   expect(askedTwice(ask(which, parts), partsCard)).toBe(true)
+  // The same rich answers about another target: each names a service the other never does (recheck 20261031T195251-471e8d7a).
+  const rollout = ['Use blue-green rollout', 'Keep dual-write enabled']
+  expect(askedTwice(ask('Should the synthetic alpha service use this database migration strategy?', rollout),
+    card('Should the synthetic beta service use this database migration strategy?', rollout))).toBe(false)
+  expect(askedTwice(ask('Should the synthetic alpha service use this database migration strategy?', rollout),
+    card('Database migration strategy for the synthetic alpha service', rollout))).toBe(true)
   // Accept / Reject name no action, whatever the card says.
   expect(askedTwice(ask('Should I accept synthetic deployment A for the sample gallery?', ['Accept', 'Reject']),
     card('Approve deletion of synthetic gallery B', ['Accept (Recommended)', 'Reject']))).toBe(false)
