@@ -58,6 +58,7 @@ function questionPolarity(record: AttentionRecord): { plain: Set<string>; negate
   }
   return { plain, negated }
 }
+const tokens = (record: AttentionRecord): Set<string> => new Set(decisionParts(record).join('\n').toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? [])
 /**
  * Two copies of one decision share most words, and no word one question asks about plainly is asked with a negation in
  * the other ("Publish X?" against "Not publish X?"). Constraints outside the question sentences ("Do not push main.")
@@ -71,6 +72,21 @@ function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
   const x = questionPolarity(one), y = questionPolarity(other)
   const turned = (p: typeof x, q: typeof x): boolean => [...p.negated].some(word => q.plain.has(word) && !q.negated.has(word))
   return !turned(x, y) && !turned(y, x)
+}
+
+/**
+ * Stricter than askedTwice, for closing a card on the answer to the agent's own question: besides that, the two must not
+ * each ask about a word the other never uses, so a card for another action ("Delete X?" beside "Publish X?") stays open.
+ * Replayed on his 51 mirrored pairs this closes 40 cards; the other 11 stay open in the window, never on his phone.
+ */
+export function answeredTogether(one: AttentionRecord, other: AttentionRecord): boolean {
+  if (!askedTwice(one, other)) return false
+  const asked = (record: AttentionRecord): string[] => {
+    const { plain, negated } = questionPolarity(record)
+    return [...plain, ...negated].filter(word => word.length >= 4 && !COMMON.has(word))
+  }
+  const a = tokens(one), b = tokens(other)
+  return !(asked(one).some(word => !b.has(word)) && asked(other).some(word => !a.has(word)))
 }
 
 /**

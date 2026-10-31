@@ -1389,9 +1389,13 @@ describe('Telegram attention notifications', () => {
       kind: 'permission', title: 'Synthetic gallery banner color', body: asked, origin: 'cli', manualChoices: choices }, 'mirror-card', new Date(Date.parse(record.openedAt) + 13_000).toISOString())
     const older = COMPANION_OPERATIONS.openAttention(database, { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-older',
       kind: 'question', title: 'Synthetic gallery banner color', body: asked, origin: 'cli', manualChoices: choices }, 'older-card', new Date(Date.parse(record.openedAt) - 600_000).toISOString())
+    // A card the same minute about another choice (border, not color) is not closed by the color answer.
+    const otherChoice = COMPANION_OPERATIONS.openAttention(database, { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-border',
+      kind: 'permission', title: 'Synthetic gallery banner border', body: asked.replace('color', 'border'), origin: 'cli', manualChoices: choices }, 'border-card', new Date(Date.parse(record.openedAt) + 20_000).toISOString())
     const request = { requestId: record.requestId, revision: record.revision, epoch: service.answerEpoch(record.requestId)!,
       incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
     await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'submitted' })
+    expect(COMPANION_OPERATIONS.getAttention(database, otherChoice.requestId)).toMatchObject({ state: 'open' })
     expect(COMPANION_OPERATIONS.getAttention(database, mirror.requestId)).toMatchObject({
       state: 'withdrawn', resolvedBy: 'telegram', resolution: 'Answered from Telegram through the agent\'s own question'
     })
