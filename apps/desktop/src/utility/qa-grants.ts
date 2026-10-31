@@ -10,7 +10,7 @@ export interface QaAccountMetadata {
 }
 /** test-full: a marked test account with full interaction; ordinary-granted: an unmarked account with an approved grant; else look-only. */
 export type QaAccountMode = 'test-full' | 'look-only' | 'ordinary-granted'
-export interface QaAccountPick { accountId: string; alias: string; mode: QaAccountMode; origins: string[] }
+export interface QaAccountPick { accountId: string; alias: string; mode: QaAccountMode; origins: string[]; grantedOrigins: string[] }
 export interface QaGrantBrokerOptions {
   database: DatabaseWorkerClient
   /** An account by id or by name; the broker still requires the brief to name it. */
@@ -56,10 +56,11 @@ export class QaGrantBroker {
     const found = this.options.account(name)
     if (found.name !== name) return fail('QA_ACCOUNT_IDENTITY_CHANGED')
     const account = this.account(run, found.id), intent = this.intent(run, name)
-    const mode: QaAccountMode = account.test ? 'test-full'
-      : intent === 'ordinary-granted' && (await this.approved(run, account.id, null, null)).length > 0 ? 'ordinary-granted' : 'look-only'
+    const granted = !account.test && intent === 'ordinary-granted' ? await this.approved(run, account.id, null, null) : []
+    const mode: QaAccountMode = account.test ? 'test-full' : granted.length > 0 ? 'ordinary-granted' : 'look-only'
     this.current(run)
-    return { accountId: account.id, alias: account.name, mode, origins: [...account.origins] }
+    // The relay allows interaction only on the sites these grants name (Opus F5).
+    return { accountId: account.id, alias: account.name, mode, origins: [...account.origins], grantedOrigins: [...new Set(granted.map(grant => grant.terms.origin))] }
   }
   /** A refused interaction is audited like a held request; it carries the tool's name only. */
   async refuse(run: QaRun, accountId: string, tool: string): Promise<void> {

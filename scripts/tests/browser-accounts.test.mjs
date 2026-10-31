@@ -63,17 +63,21 @@ describe('QA test-account marks', () => {
     store.writeMeta({ ...store.metadata(account.id), qaRevision: 100 })
     expect(store.metadata(account.id).qaRevision).toBe(1)
   })
-  it('the actual CLI test, list and untest paths work without signing in or reading credentials', async () => {
+  it('the CLI never makes a test account (d72) but lists and clears the mark without signing in or reading credentials', async () => {
     const { store } = fixture(), account = await store.create('Synthetic CLI QA', 'https://synthetic.test')
     vi.stubEnv('BMN_DATA_HOME', store.environment.BMN_DATA_HOME)
     const output = []; const write = vi.spyOn(process.stdout, 'write').mockImplementation(chunk => { output.push(String(chunk)); return true })
+    const errors = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
-      expect(await runBrowserCommand(['accounts', 'test', account.name])).toBe(0)
+      expect(await runBrowserCommand(['accounts', 'test', account.name])).not.toBe(0)
+      expect(String(errors.mock.calls.at(-1)?.[0])).toContain('TEST_MARK_OWNER_ONLY')
+      expect(store.metadata(account.id)).toMatchObject({ test: false, qaRevision: 1 })
+      await store.setTest(account.id, true)
       expect(await runBrowserCommand(['accounts', 'list'])).toBe(0)
       expect(JSON.parse(output.at(-1))[0]).toMatchObject({ id: account.id, test: true, marked: false, qaRevision: 2 })
       expect(await runBrowserCommand(['accounts', 'untest', account.name])).toBe(0)
       expect(store.metadata(account.id)).toMatchObject({ test: false, marked: false, qaRevision: 3 })
-    } finally { write.mockRestore(); vi.unstubAllEnvs() }
+    } finally { write.mockRestore(); errors.mockRestore(); vi.unstubAllEnvs() }
   })
 })
 describe('keyring process timeout', () => {

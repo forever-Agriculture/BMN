@@ -38,6 +38,8 @@ export function registerBrowserAccounts(options: {
           if (typeof params.username !== 'string' || typeof params.password !== 'string' || params.username.length > 10_000 || params.password.length > 10_000 || params.authenticator && params.authenticator.length > 1000) throw new Error('Enter a user name and password.')
           await store.mark(id, { username: params.username, password: params.password, ...(params.authenticator ? { authenticator: params.authenticator } : {}) })
         } else if (params.action === 'unmark') await store.unmark(id)
+        // The test mark gives QA full interaction, so only the owner's window sets it (d72); the CLI only clears it.
+        else if (params.action === 'test' || params.action === 'untest') await store.setTest(id, params.action === 'test')
         else throw new Error('Unknown account action.')
       }
       return { ok: true, view: view() }

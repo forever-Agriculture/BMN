@@ -12,7 +12,7 @@ import { initializeDatabase, type DatabaseConnection } from './database-initiali
 import { selectSession } from './database-workspace-store'
 import { QA_OPERATIONS, connectQaRelay, bindQaAgent } from './database-qa-store'
 import type { DatabaseWorkerClient } from './database-client'
-import { QaSessions, type QaSessionsOptions } from './qa-sessions'
+import { QaSessions, shippedQaAccounts, testQaContractOrigin, type QaSessionsOptions } from './qa-sessions'
 
 const require = createRequire(import.meta.url)
 const Sqlite = require('better-sqlite3') as new (path: string) => DatabaseConnection
@@ -112,3 +112,15 @@ child.on('spawn',()=>console.log(JSON.stringify({relay:child.pid})));`)
     await expect(qa.request(qaScope, 'qa.connect', { pid: relay, ticks: 'stale' })).rejects.toThrow('QA_RELAY_IDENTITY_INVALID')
   } finally { child.stdin!.end(); await exited }
 }, 15_000)
+
+it('no loopback site inherits the synthetic contract: only a test-mode host registers its one studio origin (Opus F2)', () => {
+  const studio = 'http://127.0.0.1:4173'
+  const production = shippedQaAccounts(cliPath, () => {})
+  for (const origin of [studio, 'http://127.0.0.1:5173', 'https://example.com']) expect(production.contract(origin)).toBeNull()
+  expect(production.contracts).toEqual([])
+  const test = shippedQaAccounts(cliPath, () => {}, studio)
+  expect(test.contract(studio)).toMatchObject({ origin: studio }); expect(test.contract('http://127.0.0.1:5173')).toBeNull(); expect(test.contracts).toEqual([studio])
+  expect(testQaContractOrigin(['node', 'host', '--bmn-test-host'], { BMN_TEST_QA_CONTRACT_ORIGIN: studio })).toBe(studio)
+  expect(testQaContractOrigin(['node', 'host'], { BMN_TEST_QA_CONTRACT_ORIGIN: studio })).toBeNull()
+  for (const origin of ['http://localhost:4173', 'https://example.com', 'http://127.0.0.1:4173/app']) expect(testQaContractOrigin(['--bmn-test-host'], { BMN_TEST_QA_CONTRACT_ORIGIN: origin })).toBeNull()
+})

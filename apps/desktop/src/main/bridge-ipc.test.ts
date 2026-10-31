@@ -16,6 +16,7 @@ import {
 import type { IpcMainInvokeEvent, UtilityProcess } from 'electron'
 import { bridgeInvokeRegistrar } from './bridge-ipc'
 import { registerBrowserAccounts } from './browser-accounts-ipc'
+import { BrowserAccountsStore } from '../../bin/browser-accounts-store.mjs'
 import { PtyHostClient } from './pty-host-client'
 import { MainIpcError, installWorkspaceIpcHandlers } from './workspace-ipc'
 import { unwrapBridgeInvoke } from '../preload/bridge-invoke'
@@ -255,6 +256,21 @@ describe('typed bridge error contract (main -> preload -> renderer)', () => {
       code: ERROR_CODES.unauthorized,
       message: 'Renderer sender is not authorized'
     })))
+  })
+
+  it('only the owner window makes a test account, and it can clear the mark again (d72)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'bmn-account-test-mark-')), environment = { HOME: home, BMN_DATA_HOME: join(home, 'data') }
+    const secrets = new Map<string, unknown>()
+    const seed = new BrowserAccountsStore({ environment, keyring: async (op: string, id: string, kind: string, value: unknown) => { const key = `${id}:${kind}`; if (op === 'set') { secrets.set(key, value); return true } if (op === 'delete') { secrets.delete(key); return null } return secrets.get(key) ?? null } })
+    const account = await seed.create('Synthetic window QA', 'https://synthetic.test')
+    const registrar = bridgeInvokeRegistrar({ handle: () => {} })
+    const accounts = registerBrowserAccounts({ handle: registrar.handle, allowed: () => true, environment, notify: () => {} })
+    try {
+      const action = registrar.registrations().find(row => row.channel === 'aiterm:browser:account-action')!
+      const run = async (name: 'test' | 'untest'): Promise<unknown> => unwrapBridgeInvoke(() => action.invoke({} as IpcMainInvokeEvent, { action: name, id: account.id }))
+      expect(await run('test')).toMatchObject({ ok: true }); expect(seed.metadata(account.id).test).toBe(true)
+      expect(await run('untest')).toMatchObject({ ok: true }); expect(seed.metadata(account.id).test).toBe(false)
+    } finally { await accounts.dispose(); rmSync(home, { recursive: true, force: true }) }
   })
 
   it.each(['aiterm:browser:accounts', 'aiterm:browser:account-action'])('browser account invokes reject an unauthorized sender through the typed envelope: %s', async channel => {

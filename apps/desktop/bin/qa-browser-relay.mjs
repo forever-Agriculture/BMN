@@ -69,6 +69,20 @@ export function qaToolAllowed(mode, name) {
   if (ORDINARY_HIDDEN.has(name)) return false
   return mode === 'ordinary-granted' || LOOK_TOOLS.includes(name)
 }
+/** An ordinary account's grant opens interaction only on the sites its approved grants name (Opus F5). */
+export function qaMode(account, address) {
+  if (account.mode !== 'ordinary-granted') return account.mode
+  let origin = null
+  try { origin = new URL(address).origin } catch { /* no page yet */ }
+  return origin !== null && (account.grantedOrigins ?? []).includes(origin) ? 'ordinary-granted' : 'look-only'
+}
+/** Signed out, a session changes only a loopback app; on any other site it may only load pages (Opus F4). */
+export function signedOutPasses(target, method, address) {
+  const url = new URL(address), site = new URL(target)
+  return url.origin === site.origin && (['127.0.0.1', 'localhost', '[::1]'].includes(site.hostname) || method === 'GET')
+}
+/** QA browsers open only web pages: a file:// or other scheme never reaches Playwright. */
+export const webAddressOnly = (name, args) => !['browser_navigate', 'browser_tabs'].includes(name) || args.url === undefined || /^https?:\/\//iu.test(String(args.url))
 export const QA_SEAL_TOOL = { name: 'browser_qa_seal', description: 'Finish account use for this QA: ends account access, seals BMN\'s host receipt and returns {receiptId, sha256} for a version 2 report\'s host_summary. Call once, after your last browser action.', inputSchema: { type: 'object', properties: {} } }
 /** Pages opened before the QA routes are replaced, never all closed first: closing the last tab ends Chrome's session and its session cookies. */
 export async function replaceStartupPages(context) {
@@ -94,7 +108,9 @@ export async function runQaBrowser(folder) {
   const save = () => writeWhole(join(folder, 'browser.json'), JSON.stringify(record, null, 2) + '\n')
   const store = new BrowserAccountsStore()
   let current = null, sealed = false, audited = false
-  const contractFor = origin => { try { return syntheticPaidContract(origin) } catch { return null } }
+  // Only the contracts the host registered apply; a site's hostname never implies one (Opus F2).
+  const contracts = Array.isArray(policy.contracts) ? policy.contracts : []
+  const contractFor = origin => { try { return contracts.includes(origin) ? syntheticPaidContract(origin) : null } catch { return null } }
   const brokerFor = (account, origin) => ({
     policy: async () => ({ active: !sealed && relay.id === account.accountId, contract: contractFor(origin), origins: account.origins }),
     reserve: async operation => account.mode === 'ordinary-granted' ? rpc('qa.reserve', { ...operation, grantId: null, accountId: account.accountId }) : { allowed: false, reason: 'look-only' },
@@ -124,7 +140,7 @@ export async function runQaBrowser(folder) {
     if (relay.id && account?.accountId !== relay.id) throw new Error('QA_ACCOUNT_CHANGED')
     if (!account) {
       await context.route('**/*', async route => {
-        try { if (new URL(route.request().url()).origin === new URL(policy.target).origin) await passQaRequest(route); else await route.abort('blockedbyclient') }
+        try { if (signedOutPasses(policy.target, route.request().method(), route.request().url())) await passQaRequest(route); else await route.abort('blockedbyclient') }
         catch { await route.abort('blockedbyclient').catch(() => {}) }
       })
     } else if (account.mode === 'test-full') await context.route('**/*', route => testRoute(route, account))
@@ -174,7 +190,7 @@ export async function runQaBrowser(folder) {
       } else if (message.method === 'tools/call') {
         record.calls++
         const name = message.params.name, args = message.params.arguments ?? {}
-        const mode = relay.id && current ? current.mode : null
+        const mode = relay.id && current ? qaMode(current, relay.page()?.url()) : null
         if (!allowed.has(name)) result = refused('QA tool unavailable; account access requires the permission broker.')
         else if (name === 'browser_accounts') result = text(agentAccountRows(store.list().filter(row => aliases.some(alias => alias.alias === row.name))).map(row => ({ ...row, intent: aliases.find(alias => alias.alias === row.name).intent })))
         else if (name === 'browser_account_pick') result = await pick(args.name)
@@ -182,10 +198,11 @@ export async function runQaBrowser(folder) {
         else if (!qaToolAllowed(mode, name)) {
           record.refused++
           await rpc('qa.refuse', { accountId: current.accountId, tool: name })
-          result = refused(mode === 'look-only' ? 'This account is look-only in this QA: interaction is refused and recorded.' : 'Evaluation, unsafe code and network data are unavailable on an ordinary account; the attempt is recorded.')
+          result = refused(mode === 'look-only' ? 'This account is look-only on this site in this QA: interaction is refused and recorded.' : 'Evaluation, unsafe code and network data are unavailable on an ordinary account; the attempt is recorded.')
         } else if (name === 'browser_take_screenshot') result = await captureQaScreenshot(folder, record, args, values => relay.tool('browser_take_screenshot', values))
         else if (name === 'browser_type' && /^BMN_[A-Z_]+$/.test(String(args.text ?? ''))) result = refused('Saved sign-in secrets are never typed in a QA session; use an account that is already signed in.')
         else if (Object.hasOwn(args, 'filename')) result = refused('QA files are retained by the browser relay; explicit output filenames are unavailable for this tool.')
+        else if (!webAddressOnly(name, args)) result = refused('QA browsers open only http and https pages.')
         else result = await relay.tool(name, args)
         record.pages = relay.context ? relay.context.pages().filter(page => !page.isClosed()).map(page => ({ url: page.url() })) : []
         save()

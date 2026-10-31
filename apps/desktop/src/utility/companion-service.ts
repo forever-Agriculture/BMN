@@ -239,6 +239,8 @@ interface CompanionServiceOptions {
   /** Story 83.3: whether the rules master carries the push policy's pointer, answered by the entry point; without it, null (not in force). */
   policyPointer?: () => Promise<boolean | null>
   qaLaunch?: (request: import('@bmn/protocol').QaLaunchRequest) => Promise<import('@bmn/protocol').MessageTeamAnswer>
+  /** A test-mode run's synthetic studio origin, the only site with a reviewed contract (100.6). */
+  qaContractOrigin?: string | null
   /** Story 83.3: the git and gh reads Health's policy listing needs; tests give their own. */
   policyReader?: PolicyReader
   /** Story 90.6: a test-mode host shortens the Away wake-up's 2 hours and 15 minutes. */
@@ -817,7 +819,7 @@ export class CompanionService {
           session: id => this.knownSessions.get(id), live: id => options.manager.liveIncarnationId(id), processId: id => options.manager.liveProcessId(id),
           launch: request => options.qaLaunch?.(request) ?? Promise.resolve({ failed: true }),
           stop: (sessionId, incarnationId) => options.manager.stop({ sessionId, incarnationId }), now: () => this.iso(),
-          accounts: shippedQaAccounts(options.cliPath, sessionId => this.emit('attention', sessionId))
+          accounts: shippedQaAccounts(options.cliPath, sessionId => this.emit('attention', sessionId), options.qaContractOrigin ?? null)
         }).request(scope, method, params)),
         isCurrentIncarnation: (sessionId, incarnationId) =>
           options.manager.liveIncarnationId(sessionId) === incarnationId,

@@ -22,16 +22,27 @@ export interface QaSessionsOptions {
   launch(request: QaLaunchRequest): Promise<MessageTeamAnswer>
   stop(sessionId: string, incarnationId: string): Promise<void>
   now(): string
-  accounts?: Pick<QaGrantBrokerOptions, 'account' | 'contract' | 'qualified' | 'changed'>
+  /** `contracts`: the origins whose reviewed site contract the host registered; the relay classifies only by these. */
+  accounts?: Pick<QaGrantBrokerOptions, 'account' | 'contract' | 'qualified' | 'changed'> & { contracts: readonly string[] }
 }
 const fail = (message: string): never => { throw new ControlError(ERROR_CODES.invalidArgument, message) }
 
 /**
- * Production account checks, loaded from the shipped CLI folder like the report checker: the owner's stored
- * accounts and test marks, the one reviewed synthetic contract (loopback only; d4 holds every other site), and
- * the run's own fence and init proof (d68).
+ * A test-mode run's synthetic studio (100.6 live checks): only a host started in test mode registers the one
+ * synthetic contract, and only for the loopback origin the run names, so no real loopback app inherits it.
  */
-export function shippedQaAccounts(cliPath: string, changed: (sessionId: string) => void): NonNullable<QaSessionsOptions['accounts']> {
+export function testQaContractOrigin(argv: readonly string[], env: NodeJS.ProcessEnv): string | null {
+  const origin = env.BMN_TEST_QA_CONTRACT_ORIGIN
+  if (!argv.includes('--bmn-test-host') || origin === undefined) return null
+  return /^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(origin) ? origin : null
+}
+
+/**
+ * Production account checks, loaded from the shipped CLI folder like the report checker: the owner's stored
+ * accounts and test marks, the reviewed site contracts the host registered (none outside a test-mode run, so
+ * every site is unreviewed: audited reads only, d71), and the run's own fence and init proof (d68).
+ */
+export function shippedQaAccounts(cliPath: string, changed: (sessionId: string) => void, contractOrigin: string | null = null): NonNullable<QaSessionsOptions['accounts']> {
   const load = <T>(name: string): T => createRequire(import.meta.url)(join(dirname(cliPath), name)) as T
   return {
     account: idOrName => {
@@ -39,7 +50,8 @@ export function shippedQaAccounts(cliPath: string, changed: (sessionId: string) 
       const store = new BrowserAccountsStore(), meta = store.metadata(store.find(idOrName))
       return { id: meta.id, name: meta.name, origins: [...meta.origins], test: meta.test === true, qaRevision: meta.qaRevision ?? 1 }
     },
-    contract: origin => { try { return syntheticPaidContract(origin) } catch { return null } },
+    contract: origin => contractOrigin !== null && origin === contractOrigin ? syntheticPaidContract(origin) : null,
+    contracts: contractOrigin === null ? [] : [contractOrigin],
     qualified: run => load<typeof import('../../bin/qa-claude-fence.mjs')>('qa-claude-fence.mjs').qualifiedQaRun(run.folder, run.agent),
     changed
   }
@@ -125,7 +137,7 @@ export class QaSessions {
       // Aliases only name what the brief allows; each pick is decided by the broker, which requires the run's own qualification.
       // Only a version 2 run seals and reconciles its host audit, so a version 1 run is never offered an account.
       const aliases = run.brief.version !== 2 ? [] : ((run.brief.accounts ?? []) as Array<{ alias: string; intent: string }>).map(item => ({ alias: item.alias, intent: item.intent }))
-      return { qaId: run.id, target: run.brief.target, accounts: this.options.accounts && aliases.length ? aliases : false }
+      return { qaId: run.id, target: run.brief.target, accounts: this.options.accounts && aliases.length ? aliases : false, contracts: [...this.options.accounts?.contracts ?? []] }
     }
     const run = await db.companion('getQaRun', params.id as string)
     if (!run) return fail('QA_NOT_FOUND')

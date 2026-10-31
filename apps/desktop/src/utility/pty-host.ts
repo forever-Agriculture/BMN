@@ -68,6 +68,7 @@ import { openCodeHistoryAdapter } from './agent-history-opencode'
 import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
 import { testTelegramOrigin } from './telegram-connector'
+import { testQaContractOrigin } from './qa-sessions'
 import { testAwayWakeTimes } from './away-wake'
 import { TurnChangesClient } from './turn-changes-client'
 import { TurnRetention } from './turn-changes-retention'
@@ -358,6 +359,8 @@ async function start(): Promise<void> {
     historyAdapters: historyAdapters(),
     // A test-mode run (Story 90.6): the Away wake-up's times, shortened only in a test-mode host.
     awayWake: testAwayWakeTimes(process.argv, process.env),
+    // A test-mode run (100.6): its synthetic studio is the only site with a reviewed QA contract.
+    qaContractOrigin: testQaContractOrigin(process.argv, process.env),
     // Electron self-test only (Story 62.2): the health watch reads a fixture tree and starts no nvidia-smi.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_SYSFS_ROOT
       ? { health: { root: process.env.BMN_SELF_TEST_SYSFS_ROOT, run: () => Promise.reject(new Error('no nvidia-smi in the self-test')) } }

@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { askCommand, executableIdentity } from '../../bin/agents-team-forms.mjs'
 import { checkQaInit, fenceBinding, qualifiedQaRun } from '../../bin/qa-claude-fence.mjs'
-import { qaToolAllowed } from '../../bin/qa-browser-relay.mjs'
+import { qaMode, qaToolAllowed, signedOutPasses, webAddressOnly } from '../../bin/qa-browser-relay.mjs'
 import { INTERACT_TOOLS, LOOK_TOOLS } from '../../bin/agents-team-browser.mjs'
+import { claudeQaTools } from '../../bin/agents-team-qa-prepare.mjs'
 
 const relay = { type: 'stdio' as const, command: 'node', args: ['/synthetic/bin/qa-browser-relay.mjs', '/synthetic/qa'], env: {} }
 const tools = ['browser_snapshot', 'browser_click', 'browser_accounts', 'browser_account_pick', 'browser_qa_seal']
@@ -84,4 +85,33 @@ it('test accounts interact fully except unsafe code; ordinary accounts never eva
     expect(qaToolAllowed('ordinary-granted', tool)).toBe(!['browser_evaluate', 'browser_run_code_unsafe', 'browser_network_requests'].includes(tool))
   }
   expect(qaToolAllowed(null, 'browser_click')).toBe(true)
+})
+
+it('a run that names no account proves no account tools, as its relay lists none (Opus F3)', () => {
+  for (const brief of [{ version: 1 }, { version: 2, accounts: [] }]) {
+    const listed = claudeQaTools(brief)
+    expect(listed).not.toContain('browser_accounts'); expect(listed).not.toContain('browser_account_pick'); expect(listed.at(-1)).toBe('browser_qa_seal')
+  }
+  expect(claudeQaTools({ accounts: [{ alias: 'Synthetic test' }] })).toEqual(expect.arrayContaining(['browser_accounts', 'browser_account_pick', 'browser_qa_seal']))
+})
+
+it('a grant opens interaction only on the site it names; elsewhere the account is look-only (Opus F5)', () => {
+  const account = { mode: 'ordinary-granted' as const, grantedOrigins: ['https://shop.example'] }
+  expect(qaMode(account, 'https://shop.example/cart')).toBe('ordinary-granted')
+  for (const page of ['https://other.example/', 'about:blank', undefined]) expect(qaMode(account, page)).toBe('look-only')
+  expect(qaMode({ mode: 'test-full' }, 'https://other.example/')).toBe('test-full')
+})
+it('signed out, only a loopback app takes writes; any other site only loads pages, and nothing leaves the target (Opus F4)', () => {
+  expect(signedOutPasses('http://127.0.0.1:4173', 'POST', 'http://127.0.0.1:4173/cart')).toBe(true)
+  expect(signedOutPasses('http://localhost:4173', 'POST', 'http://localhost:4173/cart')).toBe(true)
+  expect(signedOutPasses('https://shop.example', 'GET', 'https://shop.example/page?q=1')).toBe(true)
+  for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) expect(signedOutPasses('https://shop.example', method, 'https://shop.example/cart')).toBe(false)
+  expect(signedOutPasses('http://127.0.0.1:4173', 'GET', 'https://tracker.example/')).toBe(false)
+})
+it('QA browsers open only http and https addresses', () => {
+  for (const url of ['file:///etc/passwd', 'chrome://settings', 'javascript:alert(1)', 'data:text/html,x']) {
+    expect(webAddressOnly('browser_navigate', { url })).toBe(false); expect(webAddressOnly('browser_tabs', { action: 'new', url })).toBe(false)
+  }
+  expect(webAddressOnly('browser_navigate', { url: 'https://shop.example/' })).toBe(true)
+  expect(webAddressOnly('browser_tabs', { action: 'list' })).toBe(true); expect(webAddressOnly('browser_click', { ref: 'e1' })).toBe(true)
 })

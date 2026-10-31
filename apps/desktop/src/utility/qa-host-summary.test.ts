@@ -150,7 +150,7 @@ it.each([false, true])('the coordinator reconciles the submitted receipt with fr
   const client = { companion: async (name: string, ...args: unknown[]) => operations[name]!(database, ...args) } as unknown as DatabaseWorkerClient
   const service = new QaSessions({ database: client, data: root, cliPath: join(process.cwd(), 'apps/desktop/bin/bmn'), session: () => undefined,
     live: () => live ? 'qa-inc' : undefined, processId: () => undefined, launch: async () => { throw Error('not used') }, stop: async () => {}, now: () => now,
-    accounts: { account: () => ({ id: 'account-a', name: 'Synthetic', origins: [origin], test: false, qaRevision: 1 }), contract: () => syntheticPaidContract(origin), qualified: () => true, changed: () => {} } })
+    accounts: { account: () => ({ id: 'account-a', name: 'Synthetic', origins: [origin], test: false, qaRevision: 1 }), contract: () => syntheticPaidContract(origin), contracts: [origin], qualified: () => true, changed: () => {} } })
   const ref = await service.request({ kind: 'session', sessionId: 'qa', incarnationId: 'qa-inc' }, 'qa.summary', {})
   const summary = qaHostSummary(database, 'run-a'), r = report(summary)
   expect(ref).toEqual(r.host_summary)

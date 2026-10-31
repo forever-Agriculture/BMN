@@ -38,7 +38,9 @@ export async function runBrowserCommand(argv) {
     if (!name) throw new Error('Name an account.')
     if (command === 'test' || command === 'untest') {
       if (rest.length) throw new Error('Use only the account name with test or untest.')
-      await store.setTest(store.find(name), command === 'test'); return 0
+      // A test account gets full QA interaction: only the owner turns it on, in BMN's window (d72). Anyone may turn it off.
+      if (command === 'test') throw Object.assign(new Error('Only the owner makes a test account: BMN, Preferences, Browser accounts, Test account.'), { code: 'TEST_MARK_OWNER_ONLY' })
+      await store.setTest(store.find(name), false); return 0
     }
     if (command === 'remove') { await store.remove(store.find(name)); return 0 }
     if (command === 'unmark') { await store.unmark(store.find(name)); return 0 }

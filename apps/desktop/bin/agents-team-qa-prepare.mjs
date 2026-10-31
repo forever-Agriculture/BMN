@@ -17,6 +17,11 @@ const QA_SCOPE_ENV = ['BMN_TOKEN', 'BMN_CONTROL_SOCKET', 'BMN_SESSION_ID', 'BMN_
 const write = (path, value) => writeWhole(path, JSON.stringify(value, null, 2) + '\n')
 
 /** Main alone reads the approved team. No launch or disk writes precede input and provider checks. */
+/** The Claude form's proven tools: the relay lists account tools only when the brief names an account, so a run without one proves none (Opus F3). */
+export function claudeQaTools(brief) {
+  return [...browserTools(true, true), ...((brief.accounts?.length ?? 0) > 0 ? ['browser_accounts', 'browser_account_pick'] : []), 'browser_qa_seal']
+}
+
 export function prepareQaPane(request, environment = process.env, cliScript = join(here, 'bmn')) {
   const bin = dirname(cliScript)
   const skill = [resolve(bin, '../skills/manual-qa'), resolve(bin, '../../../skills/manual-qa'), QA_SKILL].find(path => path && existsSync(join(path, 'schema.json')))
@@ -69,7 +74,7 @@ export function prepareQaPane(request, environment = process.env, cliScript = jo
   writeWhole(join(request.folder, 'inputs/prompt.md'), prompt)
   const { program, version } = programFor(choice.agent.harness)
   const tools = [...browserTools(true, true), 'browser_accounts', 'browser_account_pick']
-  const claudeTools = [...tools, 'browser_qa_seal']
+  const claudeTools = claudeQaTools(request.brief)
   const identity = { qaId: request.qaId, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, effort: choice.effort, program, identity: executableIdentity(program), version }
   if (claudeForm) {
     // A pane's environment does not carry BMN's data folder; the relay must open the same account store the host checks.

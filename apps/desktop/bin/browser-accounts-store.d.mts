@@ -2,7 +2,7 @@
 import type { BrowserAccountRow } from '@bmn/protocol'
 export interface AccountMetadata extends Omit<BrowserAccountRow, 'sites'> { origins: string[]; signInPages?: string[]; noticePending?: boolean; occurrence?: string; noticeDelivered?: string; credentialRevision?: string }
 export declare class BrowserAccountsStore {
-  constructor(options?: { environment?: NodeJS.ProcessEnv; onNotice?: (notice: { id: string; name: string; state: string }) => void })
+  constructor(options?: { environment?: NodeJS.ProcessEnv; onNotice?: (notice: { id: string; name: string; state: string }) => void; keyring?: (op: string, id: string, kind: string, value?: unknown) => Promise<unknown> })
   list(): BrowserAccountRow[]
   metadata(id: string): AccountMetadata
   writeMeta(meta: AccountMetadata): AccountMetadata

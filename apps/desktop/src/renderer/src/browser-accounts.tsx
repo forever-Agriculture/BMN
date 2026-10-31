@@ -48,7 +48,7 @@ export function BrowserAccountsHealth({ accounts }: { accounts: BrowserAccountRo
 export function BrowserAccounts(props: { team: TeamState; tools: ToolsView; applying?: boolean; onApplyBrowser?(): void }): React.JSX.Element {
   const [view, setView] = useState<BrowserAccountsView>({ accounts: [], signingIn: [] })
   const [adding, setAdding] = useState(false), [name, setName] = useState(''), [url, setUrl] = useState('')
-  const [marking, setMarking] = useState<string | null>(null), [removing, setRemoving] = useState<string | null>(null)
+  const [marking, setMarking] = useState<string | null>(null), [removing, setRemoving] = useState<string | null>(null), [testing, setTesting] = useState<string | null>(null)
   const [username, setUsername] = useState(''), [password, setPassword] = useState(''), [authenticator, setAuthenticator] = useState('')
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   useEffect(() => {
@@ -63,7 +63,7 @@ export function BrowserAccounts(props: { team: TeamState; tools: ToolsView; appl
       const result = await window.aiTerminal.browserAccountAction(params)
       setView(result.view)
       if (!result.ok) setError(result.message || 'Account action failed.')
-      else { setAdding(false); setRemoving(null); setMarking(null); setName(''); setUrl('') }
+      else { setAdding(false); setRemoving(null); setMarking(null); setTesting(null); setName(''); setUrl('') }
     } catch { setError('Account action failed.') }
     finally { setBusy(false); setUsername(''); setPassword(''); setAuthenticator('') }
   }
@@ -95,6 +95,7 @@ export function BrowserAccounts(props: { team: TeamState; tools: ToolsView; appl
           </div> : <div className="inline browser-account-actions">
             <button type="button" className="small" disabled={busy} onClick={() => void act({ action: 'sign-in', id: row.id })}>Sign in again</button>
             <button type="button" className="small" aria-pressed={row.marked} disabled={busy} onClick={() => { if (row.marked) void act({ action: 'unmark', id: row.id }); else { clearMark(); setMarking(row.id) } }}>Agents may sign in</button>
+            <button type="button" className="small" aria-pressed={row.test === true} disabled={busy} onClick={() => { if (row.test) void act({ action: 'untest', id: row.id }); else setTesting(row.id) }}>Test account</button>
             <button type="button" className="small" disabled={busy} onClick={() => setRemoving(row.id)}>Remove</button>
           </div>}
         </div>
@@ -105,6 +106,7 @@ export function BrowserAccounts(props: { team: TeamState; tools: ToolsView; appl
           <label>Authenticator key <span className="muted">optional</span><input type="password" autoComplete="off" value={authenticator} onChange={e => setAuthenticator(e.target.value)} /></label>
           <div className="inline"><button className="primary small" type="submit" disabled={busy || !password || row.signInOrigins.length === 0}>Allow agents to sign in</button><button type="button" className="small" disabled={busy} onClick={clearMark}>Cancel</button></div>
         </form> : null}
+        {testing === row.id ? <div className="inline browser-account-confirm"><span>Let QA click, type, submit forms and run page scripts on {row.name}? Only for a disposable test account.</span><button type="button" className="small" disabled={busy} onClick={() => void act({ action: 'test', id: row.id })}>Make test account</button><button type="button" className="small" disabled={busy} onClick={() => setTesting(null)}>Keep look-only</button></div> : null}
         {removing === row.id ? <div className="inline browser-account-confirm"><span>Remove {row.name} and its saved sign-in?</span><button type="button" className="small" disabled={busy} onClick={() => void act({ action: 'remove', id: row.id })}>Remove account</button><button type="button" className="small" disabled={busy} onClick={() => setRemoving(null)}>Keep</button></div> : null}
       </div>)}
     </div>

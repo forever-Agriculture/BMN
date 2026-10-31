@@ -16,6 +16,6 @@ export interface BrowserAccountRow {
 export interface BrowserAccountsView { accounts: BrowserAccountRow[]; signingIn: string[] }
 export type BrowserAccountAction =
   | { action: 'add'; name: string; url: string }
-  | { action: 'sign-in' | 'done' | 'cancel' | 'remove' | 'unmark'; id: string }
+  | { action: 'sign-in' | 'done' | 'cancel' | 'remove' | 'unmark' | 'test' | 'untest'; id: string }
   | { action: 'mark'; id: string; username: string; password: string; authenticator?: string }
 export interface BrowserAccountOutcome { ok: boolean; message?: string; view: BrowserAccountsView }

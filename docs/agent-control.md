@@ -1552,8 +1552,10 @@ read an active RAM profile or ask your unlocked keyring, as they can your gh and
 this feature does not isolate agents behind a separate OS user.
 
 The owner CLI is `bmn browser accounts list`, `add NAME --url URL`, `sign-in NAME`, `mark NAME`,
-`unmark NAME`, `test NAME`, `untest NAME` and `remove NAME`. Test and untest run only on the owner's
-word and change QA interaction classification, separately from permission to sign in. List shows the
+`unmark NAME`, `untest NAME` and `remove NAME`. Only the owner makes a test account, with the **Test
+account** switch in Browser accounts and its confirm step; `bmn browser accounts test NAME` refuses
+(`TEST_MARK_OWNER_ONLY`), while anyone may run `untest`, which only takes full QA interaction away.
+The mark changes QA interaction classification, separately from permission to sign in. List shows the
 test mark and permission revision; changes to test status, sign-in permissions, sites or account state
 invalidate the old revision. List output contains no credential values. Google sign-in may be
 refused by Google in automated browsers; it is supported only when the owner's installed check succeeds.
@@ -2190,16 +2192,22 @@ its one `StructuredOutput` tool only after that tool refuses an empty report.
 The agent sees aliases only, and `browser_account_pick` asks the host for the mode. A `test-full`
 alias on an account marked as a test account interacts fully except unsafe browser code; its own
 sites pass and are audited, other sites are held. Any other alias is look-only: snapshots and
-screenshots, with each refused interaction recorded by tool name. On an account site with no
-reviewed site contract, an ordinary account's GET requests (page loads and their resources) are
-audited reads that pass, recorded with the method, origin and query key names only; every other
-method, and every request to a site the account does not list, is held. A site that loads assets
-from another origin needs that origin among the account's sites. An `ordinary-granted` alias
-interacts once the owner approved a grant for that account; each activity request then spends one
-approved count, and anything else is held on a card. The lead asks for a planning grant with
+screenshots, with each refused interaction recorded by tool name. A reviewed site contract names a
+site's read paths and paid activities; the host registers contracts, and the relay classifies only
+by those (the one synthetic contract exists only for a test-mode BMN's studio origin, so today every
+real site, loopback apps included, is unreviewed). On an unreviewed account site an ordinary
+account's GET requests (page loads and their resources) are audited reads that pass, recorded with
+the method, origin and query key names only; every other method, and every request to a site the
+account does not list, is held without a card. A site that loads assets from another origin needs
+that origin among the account's sites. An `ordinary-granted` alias interacts once the owner approved
+a grant for that account, and only on the sites its approved grants name (elsewhere it is
+look-only); each activity request then spends one approved count, and other requests on a reviewed
+site are held on a card. The lead asks for a planning grant with
 `bmn qa grant`, whose card names the account, site, activities, counts and expiry. Saved sign-in
 secrets are never typed in a QA session. `browser_qa_seal` ends account use and returns the host
-receipt the report must cite. Only version 2 briefs may name accounts. A QA pick never opens the
+receipt the report must cite. Only version 2 briefs may name accounts; a run that names none lists
+no account tools. Signed out, a session's requests stay on its target: a loopback app takes any
+method, any other site only page loads (GET). QA browsers open only http and https addresses. A QA pick never opens the
 separate sign-in check or write-back browsers, whose requests would bypass the QA routes: sign-in is
 judged on the routed page, and a QA session never saves an account back, so a site that rotates
 its sign-in tokens may ask to sign in again afterwards. QA browsers keep a saved account's session cookies but never reopen
@@ -3049,7 +3057,7 @@ QA activity permission cards are BMN-owned records linked to immutable account/s
 Their dedicated Approve and Deny controls record that decision without terminal input. Agent socket
 calls cannot open or resolve their reserved `bmn:qa-grant:` keys or answer a grant, even with the CLI
 owner token. Mark answered, Dismiss and typed replies grant nothing. Telegram offers approval only
-when it can show the complete terms. Account execution remains disabled pending native verification.
+when it can show the complete terms. Account QA sessions run as described under QA panes.
 
 Live question ownership is scoped to the foreground agent and current PTY incarnation,
 separate from durable Resume binding. Native Codex Default cards without observed

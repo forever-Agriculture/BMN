@@ -49,14 +49,14 @@ beforeEach(() => {
 afterEach(() => database.close())
 
 it('a marked test account under a test-full alias is the only full-interaction pick', async () => {
-  expect(await broker.pick(run, 'Synthetic test')).toEqual({ accountId: 'account-test', alias: 'Synthetic test', mode: 'test-full', origins: [origin] })
+  expect(await broker.pick(run, 'Synthetic test')).toEqual({ accountId: 'account-test', alias: 'Synthetic test', mode: 'test-full', origins: [origin], grantedOrigins: [] })
   expect((await broker.pick(run, 'Synthetic marked but look')).mode).toBe('look-only')
   expect((await broker.pick(run, 'Synthetic look')).mode).toBe('look-only')
 })
 it('an ordinary-granted alias stays look-only until an approved grant exists, then interacts', async () => {
   expect((await broker.pick(run, 'Synthetic granted')).mode).toBe('look-only')
   await grantFor('planning', 'Synthetic granted')
-  expect((await broker.pick(run, 'Synthetic granted')).mode).toBe('ordinary-granted')
+  expect(await broker.pick(run, 'Synthetic granted')).toMatchObject({ mode: 'ordinary-granted', grantedOrigins: [origin] })
 })
 it('names outside the brief, and runs without their own qualification, are refused', async () => {
   await expect(broker.pick(run, 'Outside the brief')).rejects.toThrow('QA_ACCOUNT_OUT_OF_SCOPE')
