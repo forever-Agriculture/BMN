@@ -212,6 +212,9 @@ export function SessionTerminal(props: {
       // agterm uses minimum-contrast = 1.1, but xterm.js 6.0.0 checks default-colored reverse-video cells against the
       // normal foreground and repaints them near their own background, hiding text bash highlights (pasted input).
       minimumContrastRatio: 1,
+      // A clicked web link (OSC 8) opens once in the owner's browser; xterm's own handler asked "could potentially be dangerous"
+      // and opened a bare app window (owner, 2026-10-31). xterm passes only http and https addresses here.
+      linkHandler: { activate: (_event, address) => { void window.aiTerminal.openTerminalLink(address).catch(() => undefined) } },
       ...liveTerminalOptions(),
       theme: TERMINAL_THEMES[props.colorMode]
     })

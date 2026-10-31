@@ -713,6 +713,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   openPort(sessionId: string, port: number): Promise<{ url: string }> {
     return invokeBridge('aiterm:ports:open', { sessionId, port })
   },
+  /** A web link the owner clicked in a terminal; BMN opens it in his default browser. */
+  openTerminalLink(address: string): Promise<{ opened: true }> {
+    return invokeBridge('aiterm:link:open', { address })
+  },
   reportTerminalNotice(params: {
     sessionId: string
     incarnationId: string

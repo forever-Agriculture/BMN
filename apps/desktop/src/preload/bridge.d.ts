@@ -344,6 +344,8 @@ export interface AiTerminalBridge {
    * for that session and builds the address itself; nothing is sent to the process.
    */
   openPort(sessionId: string, port: number): Promise<{ url: string }>
+  /** A web link the owner clicked in a terminal; BMN opens it in his default browser. */
+  openTerminalLink(address: string): Promise<{ opened: true }>
   /**
    * A terminal notification (OSC 9, 99 or 777) the view read out of this session's own output.
    * Only the window can see it, so only the window reports it; it opens a notice and nothing else.

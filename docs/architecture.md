@@ -185,6 +185,9 @@ preview is a snapshot that refreshes only on request; it is never copied into th
 adds nothing to the agent control socket. Show in folder reveals only a file that window was shown.
 Terminal links are found only in the line xterm.js asks about, without touching the filesystem, are
 checked against the printed text again when clicked, and are off while a program reads the mouse.
+A web link (an OSC 8 hyperlink with an http or https address) opens once in the owner's default
+browser through main (`aiterm:link:open`), never in an app window; the window opens no windows of
+its own.
 
 **Sending a file reference is an owner-confirmed input append.** The renderer shows an explicit
 destination and the exact absolute reference before sending. Main accepts a paste only from the

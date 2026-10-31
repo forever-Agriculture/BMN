@@ -951,6 +951,8 @@ function createWindow(
     }
   })
   trackAllowedSender(allowedSenders, window.webContents)
+  // BMN's window opens no windows: links go to the owner's browser through aiterm:link:open (owner, 2026-10-31).
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   const contentsId = window.webContents.id
   window.webContents.once('destroyed', () => selectedSessions.delete(contentsId))
   window.on('focus', () => appEvents.watchChanged())

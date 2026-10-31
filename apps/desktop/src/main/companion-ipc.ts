@@ -124,6 +124,20 @@ export function listedPortUrl(listed: readonly SessionPorts[], sessionId: string
   return listeningPortUrl(found)
 }
 
+/**
+ * A terminal link the owner clicked: only a whole http or https address opens, in his default browser (owner, 2026-10-31).
+ * Terminal text comes from agents, so anything else (files, scripts, data, mail or other schemes) is refused.
+ */
+export function terminalLinkUrl(address: unknown): string {
+  if (typeof address !== 'string' || address.length === 0 || address.length > 4096 || /[\s\p{Cc}]/u.test(address)) {
+    throw new MainIpcError(ERROR_CODES.invalidArgument, 'The link is not a web address')
+  }
+  let url: URL
+  try { url = new URL(address) } catch { throw new MainIpcError(ERROR_CODES.invalidArgument, 'The link is not a web address') }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new MainIpcError(ERROR_CODES.invalidArgument, 'Only web links open')
+  return url.href
+}
+
 export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions: CompanionIpcActions): void {
   const handle = (
     channel: string,
@@ -239,6 +253,11 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
     const url = listedPortUrl(listed, sessionId, params.port)
     await shell.openExternal(url)
     return { url }
+  })
+
+  handle('aiterm:link:open', async (_event, params) => {
+    await shell.openExternal(terminalLinkUrl(params.address))
+    return { opened: true }
   })
 
   handle('aiterm:artifact:show', async (_event, params) => {
