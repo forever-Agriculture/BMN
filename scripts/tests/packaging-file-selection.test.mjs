@@ -1,6 +1,6 @@
 // MODULE: packaging-file-selection.test.mjs - staged builds never include older releases or source files, and carry the whole bmn CLI
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -67,6 +67,32 @@ it('packages every module a separately started bin program or a runtime load nee
   expect([...started]).toEqual(expect.arrayContaining(['qa-pane-run.mjs', 'qa-browser-relay.mjs', 'qa-claude-fence.mjs', 'agents-team-qa.mjs', 'doctor-inspection-worker.mjs']))
   const needed = new Set([...started].flatMap(name => [name, ...cliModules(bin, name)]))
   expect([...needed].filter(name => !packaged.has(name)).sort()).toEqual([])
+})
+
+it('a packaged build starts the QA browser relay on its own runtime, with the argv the host checks (Story 100.8)', async () => {
+  // Playwright sits inside app.asar, which a system node cannot read: on node the installed relay failed every QA start.
+  const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../apps/desktop')
+  const { load } = createRequire(createRequire(createRequire(join(appDir, 'package.json')).resolve('electron-builder')).resolve('app-builder-lib'))('js-yaml')
+  const resources = load(readFileSync(join(appDir, 'electron-builder.yml'), 'utf8')).extraResources
+  expect(resources).toContainEqual({ from: 'resources/cli/qa-browser-relay', to: 'bin/qa-browser-relay' })
+  expect(statSync(join(appDir, 'resources/cli/qa-browser-relay')).mode & 0o111).toBe(0o111)
+  const { qaRelayCommand } = await import('../../apps/desktop/bin/agents-team-qa-prepare.mjs')
+  const root = mkdtempSync(join(tmpdir(), 'bmn-qa-relay-launcher-'))
+  try {
+    const bin = join(root, 'resources/bin'), folder = join(root, 'qa/run')
+    mkdirSync(bin, { recursive: true })
+    // A source checkout has no launcher beside its scripts and keeps node.
+    expect(qaRelayCommand(bin, folder)).toEqual({ command: 'node', args: [join(bin, 'qa-browser-relay.mjs'), folder] })
+    copyFileSync(join(appDir, 'resources/cli/qa-browser-relay'), join(bin, 'qa-browser-relay'))
+    chmodSync(join(bin, 'qa-browser-relay'), 0o755)
+    // A stand-in runtime at the executable's place prints what the relay process would carry.
+    writeFileSync(join(root, 'bmn'), '#!/bin/sh\nprintf \'%s\\n\' "$ELECTRON_RUN_AS_NODE" "$#" "$@"\n', { mode: 0o755 })
+    const command = qaRelayCommand(bin, folder)
+    expect(command).toEqual({ command: join(bin, 'qa-browser-relay'), args: [folder] })
+    const result = spawnSync(command.command, command.args, { encoding: 'utf8', env: { PATH: process.env.PATH } })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.split('\n').slice(0, 4)).toEqual(['1', '2', join(bin, 'qa-browser-relay.mjs'), folder])
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 it('loads every CLI module without starting a child program, as the packaged smoke does', () => {

@@ -1,0 +1,6 @@
+#!/bin/sh
+# MODULE: qa-browser-relay - packaged launcher that runs the QA browser relay on BMN's own runtime, where its Playwright lives (Story 100.8)
+# The host's identity check reads the relay's argv: keep $0's own folder, so argv[1] is the packaged relay path it expects.
+here=$(dirname -- "$0")
+# The executable sits two levels above resources/bin.
+ELECTRON_RUN_AS_NODE=1 exec "$here/../../bmn" "$here/qa-browser-relay.mjs" "$@"

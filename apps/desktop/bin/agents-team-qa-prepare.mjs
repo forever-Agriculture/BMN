@@ -22,6 +22,16 @@ export function claudeQaTools(brief) {
   return [...browserTools(true, true), ...((brief.accounts?.length ?? 0) > 0 ? ['browser_accounts', 'browser_account_pick'] : []), 'browser_qa_seal']
 }
 
+/**
+ * The relay's program. A packaged build keeps Playwright inside app.asar, which only BMN's own runtime reads, so it starts the
+ * relay through the launcher beside bmn.mjs; a source checkout runs it on node beside its node_modules (Story 100.8). Either
+ * way the relay's argv is [runtime, bin/qa-browser-relay.mjs, folder], which the host's identity check expects.
+ */
+export function qaRelayCommand(bin, folder) {
+  const launcher = join(bin, 'qa-browser-relay')
+  return existsSync(launcher) ? { command: launcher, args: [folder] } : { command: 'node', args: [join(bin, 'qa-browser-relay.mjs'), folder] }
+}
+
 export function prepareQaPane(request, environment = process.env, cliScript = join(here, 'bmn')) {
   const bin = dirname(cliScript)
   const skill = [resolve(bin, '../skills/manual-qa'), resolve(bin, '../../../skills/manual-qa'), QA_SKILL].find(path => path && existsSync(join(path, 'schema.json')))
@@ -79,7 +89,7 @@ export function prepareQaPane(request, environment = process.env, cliScript = jo
   if (claudeForm) {
     // A pane's environment does not carry BMN's data folder; the relay must open the same account store the host checks.
     // The relay opens saved accounts where browser-accounts-store.mjs keeps them, without that store in this module's closed graph.
-    const server = { type: 'stdio', command: 'node', args: [join(bin, 'qa-browser-relay.mjs'), request.folder], env: { BMN_DATA_HOME: environment.BMN_DATA_HOME || join(environment.XDG_DATA_HOME || join(environment.HOME, '.local/share'), 'bmn') } }
+    const server = { type: 'stdio', ...qaRelayCommand(bin, request.folder), env: { BMN_DATA_HOME: environment.BMN_DATA_HOME || join(environment.XDG_DATA_HOME || join(environment.HOME, '.local/share'), 'bmn') } }
     const built = askCommand('claude', program, { form: 'claude-qa', model: choice.agent.model, provider: choice.agent.provider,
       effort: choice.effort, cwd: request.folder, folder: request.folder, environment, qaRelay: server, qaTools: claudeTools,
       qaSchema: { ...checker.$defs[request.brief.version === 2 ? 'reportV2' : 'report'], $defs: checker.$defs } })
@@ -88,7 +98,7 @@ export function prepareQaPane(request, environment = process.env, cliScript = jo
     const inherited = codexMcpServers(program, request.folder, environment)
     const built = askCommand('codex', program, { form: 'codex-qa', model: choice.agent.model, provider: choice.agent.provider,
       effort: choice.effort, cwd: request.folder, folder: request.folder, environment, inherited })
-    const server = { command: 'node', args: [join(bin, 'qa-browser-relay.mjs'), request.folder], cwd: request.folder, env_vars: QA_SCOPE_ENV }
+    const server = { ...qaRelayCommand(bin, request.folder), cwd: request.folder, env_vars: QA_SCOPE_ENV }
     const list = value => `[${value.map(item => JSON.stringify(item)).join(',')}]`
     const codexTools = [...tools, 'browser_account_code', 'browser_account_signed_out']
     const config = `mcp_servers.playwright={command=${JSON.stringify(server.command)},args=${list(server.args)},cwd=${JSON.stringify(request.folder)},env={},env_vars=${list(server.env_vars)},enabled=true,enabled_tools=${list(codexTools)},default_tools_approval_mode="approve",startup_timeout_sec=60,tool_timeout_sec=240}`
