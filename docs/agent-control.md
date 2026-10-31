@@ -2232,7 +2232,7 @@ On a bound contract's origins the contract alone decides, ahead of the unreviewe
 - **API origin:** only `POST /graphql` with no URL query passes, in a closed envelope:
   `application/json` (optionally `; charset=utf-8`), at most 16 KiB of UTF-8, one JSON object with
   only `query`, `variables` (an object) and `operationName`, and no repeated keys, so no
-  `extensions` and no batches. graphql-js parses the query (at most 4000 tokens). It must be
+  `extensions` and no batches. A byte-order mark is held, never stripped. graphql-js parses the query (at most 4000 tokens). It must be
   exactly one `query` operation named after a reviewed template: the 18 Q Automations reads,
   `UserInfo` and `MyFeatureFlags` (whose resolver also records flag exposure, counted as a read
   by the owner on 31 October 2026). It may have only that template's one root field (an alias is
@@ -2240,13 +2240,17 @@ On a bound contract's origins the contract alone decides, ahead of the unreviewe
   field other than `__typename`. A given `operationName` must equal the operation's name.
 - **Sign-in origin:** only the renewal passes: `POST /realms/piche/protocol/openid-connect/token`,
   form-encoded, with no URL query and exactly the fields `grant_type=refresh_token`,
-  `refresh_token` and `client_id=piche`, each once. Another realm, client or grant, an extra or
-  repeated field, the logout path and every other sign-in path are held.
+  `refresh_token` and `client_id=piche`, each once, written as the sign-in client writes them:
+  literal keys and values, the token in URL-safe characters only. A byte-order mark, an empty
+  pair, a percent escape or a plus is held, so a server cannot decode the form differently from
+  BMN. Another realm, client or grant, an extra or repeated field, the logout path and every other
+  sign-in path are held.
 
 Everything else on those origins is refused before it is sent. Modes:
 
-- **Look-only and ordinary accounts:** the contract has no paid activities, so a held request
-  opens no card and no grant can let it through.
+- **Look-only and ordinary accounts:** the contract has no counted activities. A held request
+  opens no card, and `bmn qa grant` refuses every activity on its three origins
+  (`QA_SITE_UNSUPPORTED`), so no grant can let a request through.
 - **`test-full` on an account marked as a test account:** every request to the three origins
   passes and is audited as on its own sites.
 
@@ -2256,11 +2260,14 @@ other sites keep their rules.
 The audit keeps the method, the origin, a literal path (`/graphql`, the token path,
 `/[unreviewed]` or `/[unclassified]`), query key names and a closed body detail. For GraphQL that
 is `{kind: "graphql", operation, name, sha256}`: the operation type, the template name for a
-reviewed read only (held requests have none) and the SHA-256 of the query text. For the renewal it
+passed reviewed read only, and the SHA-256 of the query text. The host itself clears the name
+on every other record, held, test-full or forged. For the renewal it
 is `{kind: "form", grant: "refresh_token"}`, plus a second record holding its response status
 (`succeeded` for 2xx, `failed` otherwise). Status appears on no other record. Variables, bodies,
 tokens and replies are never recorded. The host re-checks every record against the contract from
-this metadata alone and refuses a record that does not match.
+this metadata alone and refuses a record that does not match. It never sees the body, so it
+relies on the relay, which BMN starts and checks against the QA pane, to have classified the
+request it describes.
 
 V2 account reports reference a host-owned sealed ledger receipt. The host binds its run, brief,
 revision, immutable grants/cards, cumulative reservation/send counts, terminal outcomes and durable

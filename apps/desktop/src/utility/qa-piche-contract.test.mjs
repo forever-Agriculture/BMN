@@ -1,7 +1,7 @@
 // MODULE: qa-piche-contract.test.mjs - Epic 101.2: the Piche TEST read contract passes only reviewed query templates and the exact sign-in renewal
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { PICHE_TEST_ORIGINS, classifyQaMeta, classifyQaRequest, gateQaRequest, picheReadContract, qaOwnOrigin } from '../../bin/qa-request-gate.mjs'
+import { PICHE_TEST_ORIGINS, classifyQaMeta, classifyQaRequest, gateQaRequest, picheReadContract, qaContractActivities, qaOwnOrigin, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
 
 const contract = picheReadContract(), { page, api, signIn } = PICHE_TEST_ORIGINS
 const bound = [page, signIn], unbound = [signIn]
@@ -16,6 +16,7 @@ const renewal = (text, { path = '/realms/piche/protocol/openid-connect/token', t
   classifyQaRequest(contract, method, signIn + path, bound, { contentType: type, data: Buffer.from(text) })
 const goodRenewal = `grant_type=refresh_token&refresh_token=${TOKEN}&client_id=piche`
 const secretFree = result => expect(JSON.stringify(result)).not.toMatch(new RegExp(`${CANARY}|${TOKEN}`))
+const BOM = String.fromCharCode(0xfeff)
 
 describe('reviewed reads (101.2 AC1)', () => {
   it.each([
@@ -102,6 +103,22 @@ describe('everything else on the API is held before send, without a name (101.2 
   })
 })
 
+describe('strict envelope bytes (D8)', () => {
+  it('a byte-order mark before the JSON is held, never stripped', () => {
+    const result = graphql(json(BOM + JSON.stringify({ query: RUN, variables: { tenantId: CANARY } })))
+    expect(result.classification).toBe('unknown'); secretFree(result)
+  })
+})
+
+describe('no counted activities on the Piche contract (D4)', () => {
+  it('names no activity, while the synthetic contract keeps its two', () => {
+    expect(qaContractActivities(contract)).toEqual([])
+    expect(qaContractActivities(picheReadContract({ page: 'http://127.0.0.1:5101', api: 'http://127.0.0.1:5102', signIn: 'http://127.0.0.1:5103' }))).toEqual([])
+    expect(qaContractActivities(syntheticPaidContract('http://127.0.0.1:5104')).sort()).toEqual(['brainstorm.start', 'report.generate'])
+    expect(qaContractActivities(null)).toEqual([])
+  })
+})
+
 describe('the page origin and binding (D2, D4, D7)', () => {
   it('page GETs are reads with key names only; other methods are held', () => {
     expect(classifyQaRequest(contract, 'GET', `${page}/automations/run?id=${CANARY}`, bound)).toMatchObject({ classification: 'read', request: { path: '/[unreviewed]', queryKeys: ['id'] } })
@@ -143,7 +160,18 @@ describe('the sign-in renewal, exactly (101.2 AC4, D6)', () => {
     ['an extra field', `grant_type=refresh_token&refresh_token=${TOKEN}&client_id=piche&scope=offline_access`],
     ['a repeated field', `grant_type=refresh_token&grant_type=password&refresh_token=${TOKEN}&client_id=piche`],
     ['a missing client', `grant_type=refresh_token&refresh_token=${TOKEN}`],
-    ['an empty token', 'grant_type=refresh_token&refresh_token=&client_id=piche']
+    ['an empty token', 'grant_type=refresh_token&refresh_token=&client_id=piche'],
+    // Strict form (Astra review 2026-10-31): nothing a server could decode differently from the gate.
+    ['a byte-order mark', BOM + goodRenewal],
+    ['an empty pair', `grant_type=refresh_token&&refresh_token=${TOKEN}&client_id=piche`],
+    ['a trailing separator', `${goodRenewal}&`],
+    ['a semicolon separator', `grant_type=refresh_token;refresh_token=${TOKEN}&client_id=piche`],
+    ['an encoded key', `grant%5Ftype=refresh_token&refresh_token=${TOKEN}&client_id=piche`],
+    ['an encoded grant', `grant_type=refresh%5Ftoken&refresh_token=${TOKEN}&client_id=piche`],
+    ['a malformed escape in the token', `grant_type=refresh_token&refresh_token=${TOKEN}%zz&client_id=piche`],
+    ['an escaped byte in the token', `grant_type=refresh_token&refresh_token=${TOKEN}%FF&client_id=piche`],
+    ['a plus in the token', `grant_type=refresh_token&refresh_token=${TOKEN}+x&client_id=piche`],
+    ['a non-ASCII token', `grant_type=refresh_token&refresh_token=${TOKEN}${String.fromCharCode(0xe9)}&client_id=piche`]
   ])('%s is held', (label, text) => {
     const result = renewal(text)
     expect(result.classification).toBe('unknown'); expect(result.request.body).toBeUndefined()

@@ -75,6 +75,30 @@ it('seals records that carry body details', async () => {
   expect(summary.audit.observedTraffic).toEqual(expect.arrayContaining([expect.objectContaining({ origin: api, classification: 'read', result: 'observed', count: 1 }),
     expect.objectContaining({ origin: signIn, classification: 'read', result: 'succeeded', count: 1 })]))
 })
+it('takes no grant and opens no card on any Piche origin, so a look-only alias stays look-only (D4)', async () => {
+  for (const origin of [page, api, signIn]) for (const activity of ['report.generate', 'brainstorm.start'] as const) {
+    await expect(broker.ask(run, { key: `grant-${activity}-${origin}`, accountId: account.id, origin, limits: [{ activity, count: 1 }], expiresAt: '2026-10-31T22:00:00.000Z' }, 'caller-inc'))
+      .rejects.toThrow('QA_SITE_UNSUPPORTED')
+  }
+  expect(store.qaGrantsForRun(database, 'run-a')).toEqual([])
+  expect(await broker.pick(run, 'Synthetic Piche')).toMatchObject({ mode: 'look-only', grantedOrigins: [] })
+})
+it('records an operation name only for a passed reviewed read, through every audit entry point (D9)', async () => {
+  const forged = (operation: 'query' | 'mutation'): QaRequestMeta => ({ ...read(), body: { kind: 'graphql', operation, name: operation === 'query' ? 'UnreviewedNameCanary' : null, sha256: sha } })
+  await broker.observe(run, account.id, forged('query'), true)
+  await broker.hold(run, account.id, forged('query'), 'unsupported-request')
+  await broker.observe(run, account.id, { ...read(), body: { kind: 'graphql', operation: 'query', name: 'AutomationRun', sha256: sha } }, true)
+  await broker.observe(run, account.id, read())
+  account = { ...account, id: 'synthetic-piche-test', name: 'Synthetic Piche test', test: true }
+  await broker.observe(run, account.id, forged('query'))
+  await broker.observe(run, account.id, read('UserInfo'))
+  expect(records().map(row => [row.accountAlias, row.result, row.body && 'name' in row.body ? row.body.name : undefined])).toEqual([
+    ['Synthetic Piche', 'held', null], ['Synthetic Piche', 'held', null], ['Synthetic Piche', 'held', null], ['Synthetic Piche', 'observed', 'AutomationRun'],
+    ['Synthetic Piche test', 'observed', null], ['Synthetic Piche test', 'observed', 'UserInfo']])
+  const summary = await broker.summary(run)
+  expect(summary.audit.complete).toBe(true)
+  expect(JSON.stringify([records(), summary])).not.toContain('UnreviewedNameCanary')
+})
 it('the host always registers the Piche contract and adds a loopback twin only in a test host', () => {
   const shipped = shippedQaAccounts('/synthetic/cli/bmn.mjs', () => {})
   expect(shipped.reviewed).toEqual([{ id: 'piche-test-read@1', origins: { ...PICHE_TEST_ORIGINS } }])

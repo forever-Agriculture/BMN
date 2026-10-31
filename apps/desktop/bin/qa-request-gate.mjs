@@ -18,6 +18,10 @@ export function syntheticPaidContract(origin) {
   if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.origin !== origin) throw new Error('QA_SYNTHETIC_ORIGIN_INVALID')
   return Object.freeze({ id, sha256, origin })
 }
+/** The counted activities a registered contract defines; the Piche read contract has none (D4), so no grant or card can name it. */
+export function qaContractActivities(contract) {
+  return contract?.id === id && contract.sha256 === sha256 ? [...new Set(rules.map(rule => rule[2]).filter(kind => kind !== 'read'))] : []
+}
 
 /*
  * Epic 101: Piche TEST read contract. Its rules (reviewed query templates, the sign-in renewal, the body limit) are fixed
@@ -114,7 +118,8 @@ function picheGraphql(method, url, payload) {
   const data = payload?.data
   if (!/^application\/json(\s*;\s*charset=utf-8)?$/i.test(payload?.contentType ?? '') || !Buffer.isBuffer(data) || data.length === 0 || data.length > PICHE_BODY_LIMIT) return held()
   let text, envelope
-  try { text = new TextDecoder('utf-8', { fatal: true }).decode(data); envelope = JSON.parse(text) } catch { return held() }
+  // A byte-order mark stays in the text, so JSON.parse refuses it rather than reading what a server might not.
+  try { text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data); envelope = JSON.parse(text) } catch { return held() }
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || typeof envelope.query !== 'string') return held()
   const body = { kind: 'graphql', operation: null, name: null, sha256: createHash('sha256').update(envelope.query).digest('hex') }
   if (repeatsKeys(text) || Object.keys(envelope).some(key => !['query', 'variables', 'operationName'].includes(key)) ||
@@ -125,16 +130,21 @@ function picheGraphql(method, url, payload) {
   if (!template.reviewed || envelope.operationName !== undefined && envelope.operationName !== template.name) return held(body)
   return { reviewed: true, body: { ...body, name: template.name } }
 }
-/** The sign-in renewal, exactly: the refresh grant with its token and client, each once, as a form (D6). */
+/** One renewal field as the sign-in client writes it: a literal key and a value of URL-safe token characters, never an escape or a plus. */
+const RENEWAL_FIELD = /^(grant_type|refresh_token|client_id)=([A-Za-z0-9._~-]+)$/
+/** The sign-in renewal, exactly: the refresh grant with its token and client, each once, as a plain form (D6); no byte-order mark, empty pair, encoded key or malformed escape. */
 function picheRenewal(method, url, payload) {
   if (method !== 'POST' || url.pathname !== PICHE_RENEWAL.path || url.search || url.hash) return false
   payload = readPayload(payload)
   const data = payload?.data
   if (!/^application\/x-www-form-urlencoded(\s*;\s*charset=utf-8)?$/i.test(payload?.contentType ?? '') || !Buffer.isBuffer(data) || data.length === 0 || data.length > PICHE_BODY_LIMIT) return false
-  let entries
-  try { entries = [...new URLSearchParams(new TextDecoder('utf-8', { fatal: true }).decode(data)).entries()] } catch { return false }
-  const fields = new Map(entries)
-  return entries.length === 3 && fields.size === 3 && fields.get('grant_type') === 'refresh_token' && fields.get('client_id') === PICHE_RENEWAL.client && Boolean(fields.get('refresh_token'))
+  const fields = new Map()
+  for (const pair of data.toString('latin1').split('&')) {
+    const field = RENEWAL_FIELD.exec(pair)
+    if (!field || fields.has(field[1])) return false
+    fields.set(field[1], field[2])
+  }
+  return fields.size === 3 && fields.get('grant_type') === 'refresh_token' && fields.get('client_id') === PICHE_RENEWAL.client
 }
 const queryKeys = url => [...new Set([...url.searchParams.keys()].filter(key => /^[A-Za-z0-9_-]{1,80}$/.test(key)))].sort().slice(0, 40)
 /** On a bound Piche origin the contract alone decides (D4): page GETs, reviewed queries on the API, the renewal on sign-in; all else held. */

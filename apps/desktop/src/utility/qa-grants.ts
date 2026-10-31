@@ -1,7 +1,7 @@
 // MODULE: qa-grants.ts - authoritative account/contract checks in front of the SQLite activity ledger
 import { createHash, randomUUID } from 'node:crypto'
 import { ERROR_CODES, isQaGrantTerms, isQaRequestMeta, type QaActivity, type QaAuditEvent, type QaAuditGap, type QaGrant, type QaGrantTerms, type QaRequestMeta, type QaRun, type QaUseDecision } from '@bmn/protocol'
-import { classifyQaMeta, classifyQaRequest, qaOwnOrigin, type QaSiteContract } from '../../bin/qa-request-gate.mjs'
+import { classifyQaMeta, classifyQaRequest, qaContractActivities, qaOwnOrigin, type QaSiteContract } from '../../bin/qa-request-gate.mjs'
 import type { DatabaseWorkerClient } from './database-client'
 import { ControlError } from './control-server'
 
@@ -23,6 +23,9 @@ export interface QaGrantBrokerOptions {
 }
 const fail = (code: string): never => { throw new ControlError(ERROR_CODES.invalidArgument, code) }
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+/** A GraphQL operation name is recorded only for a passed reviewed read (Epic 101 D9); every other record keeps its operation type and hash only. */
+const auditMeta = (meta: QaRequestMeta, reviewed: boolean): QaRequestMeta =>
+  meta.body?.kind === 'graphql' && meta.body.name !== null && !reviewed ? { ...meta, body: { ...meta.body, name: null } } : meta
 
 /** The production caller must establish native qualification; this broker never mints that proof. */
 export class QaGrantBroker {
@@ -71,15 +74,16 @@ export class QaGrantBroker {
       accountAlias: account.name, classification: 'unknown', result: 'held', grantId: null, useId: null, cardId: null, status: null }, this.options.now())
     if (!result.recorded) fail('QA_AUDIT_INCOMPLETE')
   }
-  private contract(origin: string): QaSiteContract {
-    const contract = this.options.contract(origin)
-    if (!contract || contract.origin !== origin) return fail('QA_SITE_UNSUPPORTED')
+  /** A grant names a contract's counted activities on its own origin; a contract without them (the Piche read contract, D4) takes no grant. */
+  private contract(origin: string, activities: readonly QaActivity[] = []): QaSiteContract {
+    const contract = this.options.contract(origin), counted = qaContractActivities(contract ?? null)
+    if (!contract || contract.origin !== origin || !counted.length || activities.some(activity => !counted.includes(activity))) return fail('QA_SITE_UNSUPPORTED')
     return contract
   }
   async ask(run: QaRun, request: { key: string; accountId: string; origin: string; limits: QaGrantTerms['limits']; expiresAt: string }, callerIncarnation: string | null, held = false): Promise<QaGrant> {
     if (!['preparing', 'running'].includes(run.state)) return fail('QA_RUN_UNAVAILABLE')
     // A lead names the account as the brief does; its stored identity is bound into the terms.
-    const account = this.account(run, this.options.account(request.accountId).id), contract = this.contract(request.origin)
+    const account = this.account(run, this.options.account(request.accountId).id), contract = this.contract(request.origin, request.limits.map(limit => limit.activity))
     if (!account.origins.includes(request.origin)) return fail('QA_ACCOUNT_SITE_MISMATCH')
     const terms: QaGrantTerms = { version: 1, qaId: run.id, account: { id: account.id, alias: account.name, revision: account.qaRevision },
       origin: contract.origin, contract: { id: contract.id, sha256: contract.sha256 }, limits: request.limits, expiresAt: request.expiresAt }
@@ -145,7 +149,7 @@ export class QaGrantBroker {
     if (!held && !account.test && (classified.classification !== 'read' || classified.reviewed && meta.queryKeys.length)) return fail('QA_ACTIVITY_RESERVATION_REQUIRED')
     if (!held && !qaOwnOrigin(contract, account.origins, meta.origin)) return fail('QA_ACCOUNT_SITE_MISMATCH')
     if (status !== null && (held || account.test || meta.body?.kind !== 'form' || !Number.isInteger(status) || status < 100 || status > 599)) return fail('QA_REQUEST_INVALID')
-    const event: QaAuditEvent = { ...meta, path: classified.request.path, accountAlias: account.name, classification: held ? 'unknown' : account.test ? 'test-full' : 'read',
+    const event: QaAuditEvent = { ...auditMeta(meta, !held && classified.reviewed), path: classified.request.path, accountAlias: account.name, classification: held ? 'unknown' : account.test ? 'test-full' : 'read',
       result: held ? 'held' : status === null ? 'observed' : status >= 200 && status < 300 ? 'succeeded' : 'failed', grantId: null, cardId: null, useId: null, status }
     const result = await this.options.database.companion('appendQaAudit', run.id, event, this.options.now())
     if (!result.recorded) fail('QA_AUDIT_INCOMPLETE')
@@ -164,7 +168,7 @@ export class QaGrantBroker {
       if (!grant) grant = await this.ask(run, { key, accountId, origin: meta.origin,
         limits: [{ activity: classified.activity, count: 1 }], expiresAt: new Date(Date.parse(this.options.now()) + 60 * 60 * 1000).toISOString() }, this.options.live(run.callerSessionId) ?? null, true)
     }
-    const result = await this.options.database.companion('appendQaAudit', run.id, { ...meta, path: classified.request.path,
+    const result = await this.options.database.companion('appendQaAudit', run.id, { ...auditMeta(meta, false), path: classified.request.path,
       accountAlias: account.name, classification: classified.classification, result: 'held', grantId: grant?.id ?? null,
       cardId: grant?.card?.id ?? null, useId: null, status: null }, this.options.now())
     if (!result.recorded) fail('QA_AUDIT_INCOMPLETE')
