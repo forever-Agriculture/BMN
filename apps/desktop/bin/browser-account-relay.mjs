@@ -19,7 +19,7 @@ export const ACCOUNT_TOOLS = [
   { name: 'browser_account_signed_out', description: 'Report that this account reached a sign-in page. A marked account may sign in using BMN_USERNAME, BMN_PASSWORD and browser_account_code.', inputSchema: { type: 'object', properties: {} } }
 ]
 export const agentAccountRows = rows => rows.map(({ name, sites, state }) => ({ name, sites, state }))
-const LIMITED = new Set(['browser_navigate', 'browser_navigate_back', 'browser_snapshot', 'browser_take_screenshot', 'browser_click', 'browser_type', 'browser_press_key', 'browser_wait_for', 'browser_account_code', 'browser_account_signed_out', 'browser_accounts', 'browser_account_pick'])
+const LIMITED = new Set(['browser_navigate', 'browser_navigate_back', 'browser_snapshot', 'browser_take_screenshot', 'browser_click', 'browser_type', 'browser_press_key', 'browser_handle_dialog', 'browser_wait_for', 'browser_account_code', 'browser_account_signed_out', 'browser_accounts', 'browser_account_pick'])
 const HIDDEN_HEADERS = new Set(['cookie', 'set-cookie', 'authorization', 'proxy-authorization'])
 export function safeHeaders(headers) { return Object.fromEntries(Object.entries(headers).filter(([name]) => !HIDDEN_HEADERS.has(name.toLowerCase()))) }
 export function authenticatorCode(secret, now = Date.now()) {
@@ -95,7 +95,7 @@ export class AccountBrowserRelay {
     if (this.secretTyped && (name === 'browser_console_messages' || name.startsWith('browser_network_request')))
       throw new Error('Sign-in history is private until the browser restarts.')
     if (this.signInOrigins().includes(pageOrigin(page.url())) && !LIMITED.has(name))
-      throw new Error('On sign-in origins only navigation, snapshots, screenshots, clicking, typing, key presses and waiting are available.')
+      throw new Error('On sign-in origins only navigation, snapshots, screenshots, clicking, typing, key presses, answering dialogs and waiting are available.')
   }
   async pick(name) {
     if (!this.allowed) throw new Error('This browser has no account access.')

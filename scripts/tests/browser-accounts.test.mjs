@@ -360,6 +360,8 @@ describe('agent privacy boundaries', () => {
     const relay = new AccountBrowserRelay({ allowed: true, store: { metadata: () => ({ marked: true, signInOrigins: ['https://login.test'] }) } })
     relay.id = 'synthetic'; relay.protectedOrigins = new Set()
     for (const name of ['browser_run_code_unsafe', 'browser_evaluate', 'browser_network_request', 'browser_console_messages']) expect(() => relay.authorize(name, { url: () => 'https://login.test' })).toThrow(/sign-in origins/)
+    // A sign-in page's alert or confirm blocks every tool until answered; answering reads nothing a click could not (2026-10-31).
+    for (const name of ['browser_click', 'browser_type', 'browser_handle_dialog']) expect(() => relay.authorize(name, { url: () => 'https://login.test' })).not.toThrow()
     relay.secretTyped = true; relay.protectedOrigins = new Set(['https://login.test'])
     relay.store.metadata = () => ({ marked: false })
     expect(() => relay.authorize('browser_evaluate', { url: () => 'https://login.test' })).toThrow(/sign-in origins/)

@@ -1539,7 +1539,7 @@ password and optional authenticator key, with the password and key hidden. Those
 keyring. A marked account offers `BMN_USERNAME` and `BMN_PASSWORD` as names to `browser_type` and
 `browser_account_code` to type the current code. The relay checks the account, keyring, top-page origin
 and target frame before each secret use. It allows only navigation, snapshots, screenshots, clicks,
-typing, key presses and waiting on marked sign-in origins. After sign-in, it restarts on the refreshed
+typing, key presses, answering dialogs and waiting on marked sign-in origins. After sign-in, it restarts on the refreshed
 profile before exposing browser history. SMS and push approval remain yours. Unmarking revokes the
 next secret use; **Remove** deletes the profile and keyring entries and closes its active browsers.
 
