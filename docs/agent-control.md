@@ -2120,7 +2120,7 @@ bmn team asks export <id> --output PATH
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--origin URL` | A browser for the web app you started at this loopback address, `http://127.0.0.1:PORT` (or `localhost`, `[::1]`) (A browser for your local app, below). |
 | `--disposable` | Required with `--origin`: your statement that the app and its services are disposable test instances with synthetic data and no production backend or credentials. |
-| `--interact` | With `--origin`: the teammate may also click, type, fill in, select, press keys and hover. |
+| `--interact` | With `--origin`: the teammate may also click, type, fill in, select, press keys, hover and answer the page's alert, confirm and prompt dialogs. |
 | `--time-limit MINUTES` | 1 to 120; default 30. |
 | `--key K` | The retry key: the UTC day it was issued and a name of yours, `20261015-review-1` (letters, digits, `.`, `_`, `-`; at most 64 after the day). Required in a BMN session, which every agent runs in; a plain shell may leave it out and BMN makes one. (Keys, below.) |
 | `--background` | Prints the run id at once and leaves the run going. |
@@ -2362,11 +2362,12 @@ else of MCP:
 
 A look may navigate, go back, read the page (snapshot), wait, take screenshots, read the console and
 the network requests, use tabs, resize and close. `--interact` adds click, type, fill in a form,
-select, press a key, hover, page evaluation (`browser_evaluate`) and complete Playwright callbacks
-(`browser_run_code_unsafe`). Use `browser_run_code_unsafe` with `{ code: "async (page) => { ... }" }`;
+select, press a key, hover, answering the page's alert, confirm and prompt dialogs
+(`browser_handle_dialog`: such a dialog blocks every other tool until answered), page evaluation
+(`browser_evaluate`) and complete Playwright callbacks (`browser_run_code_unsafe`). Use `browser_run_code_unsafe` with `{ code: "async (page) => { ... }" }`;
 the older name `browser_run_code` is not the pinned server's tool name. Use the native
 `browser_take_screenshot` tool for screenshots retained in the ask record. Look-only asks do not
-offer script execution. File upload, drag and drop, dialogs and one request's body remain unlisted.
+offer script execution. File upload, drag and drop and one request's body remain unlisted.
 
 Interactive scripts execute JavaScript in the MCP server process as your user. They can read/write
 files and make network requests outside the app's read-only mode. BMN accounts for that computer-wide

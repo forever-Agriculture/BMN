@@ -143,9 +143,11 @@ describe('the app\'s address and the tools a browser ask offers (74.3 AC1, AC4)'
 
   it('retains every browser tool and adds native callback execution and evaluation with --interact (74.5)', () => {
     expect(browserTools(false)).toEqual(['browser_navigate', 'browser_navigate_back', 'browser_snapshot', 'browser_wait_for', 'browser_take_screenshot', 'browser_console_messages', 'browser_network_requests', 'browser_tabs', 'browser_resize', 'browser_close'])
-    expect(browserTools(true)).toEqual([...LOOK_TOOLS, 'browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_hover', 'browser_run_code_unsafe', 'browser_evaluate'])
-    for (const script of ['browser_evaluate', 'browser_run_code_unsafe']) expect(LOOK_TOOLS).not.toContain(script)
-    for (const never of ['browser_file_upload', 'browser_drag', 'browser_drop', 'browser_handle_dialog', 'browser_network_request']) {
+    expect(browserTools(true)).toEqual([...LOOK_TOOLS, 'browser_click', 'browser_type', 'browser_fill_form', 'browser_select_option', 'browser_press_key', 'browser_hover', 'browser_handle_dialog', 'browser_run_code_unsafe', 'browser_evaluate'])
+    // A page's alert/confirm/prompt blocks every other tool until answered, so whoever may click may answer it; a look may not (QA model comparison, 2026-10-31).
+    expect(browserTools(true, true)).toContain('browser_handle_dialog')
+    for (const script of ['browser_evaluate', 'browser_run_code_unsafe', 'browser_handle_dialog']) expect(LOOK_TOOLS).not.toContain(script)
+    for (const never of ['browser_file_upload', 'browser_drag', 'browser_drop', 'browser_network_request']) {
       expect([...LOOK_TOOLS, ...INTERACT_TOOLS]).not.toContain(never)
     }
   })
@@ -206,7 +208,9 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     const interact = ask({ role: 'designer', browser: { origin: ORIGIN, disposable: true, interact: true } })
     expect(interact.argv).toEqual(expect.arrayContaining(INTERACT_TOOLS.map((tool) => `mcp__playwright__${tool}`)))
     expect(interact.argv).toEqual(expect.arrayContaining(['mcp__playwright__browser_run_code_unsafe', 'mcp__playwright__browser_evaluate']))
-    expect(interact.argv.join(' ')).not.toMatch(/browser_(file_upload|drag|drop|handle_dialog)/u)
+    expect(interact.argv.join(' ')).not.toMatch(/browser_(file_upload|drag|drop)/u)
+    expect(interact.argv).toContain('mcp__playwright__browser_handle_dialog')
+    expect(look.argv.join(' ')).not.toMatch(/browser_handle_dialog/u)
   })
 
   it('accounts for script server access in consent, manifests, receipts and displayed scope (74.5)', () => {

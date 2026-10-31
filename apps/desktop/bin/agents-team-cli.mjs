@@ -42,7 +42,7 @@ or WebP pictures as images, their metadata taken out, to the designer unless --r
 role. --origin gives the teammate (the browser role unless --role names another) a browser for your
 web app at that loopback address: Playwright's tools in its own app, only that origin loading; it may
 navigate, read, take screenshots and read the console and network requests, and with --interact also
-click, type, fill in, select, press keys, hover, evaluate page JavaScript and execute full Playwright
+click, type, fill in, select, press keys, hover, answer dialogs, evaluate page JavaScript and execute full Playwright
 callbacks with browser_run_code_unsafe. Interactive scripts run in the MCP server process as your
 user, outside the app's read-only mode, and can read/write files and make network requests.
 The pages it visited and native screenshots stay in the record. Playwright's limit does not stop

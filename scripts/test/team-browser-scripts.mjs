@@ -17,7 +17,7 @@ assert(!browserTools(false).includes('browser_run_code_unsafe'), 'look-only scop
 recordProcess(process.pid, '74.5 isolated synthetic browser callback driver')
 const site = createServer((request, response) => {
   response.setHeader('content-type', 'text/html')
-  response.end('<!doctype html><html><head><title>Synthetic scripted check</title></head><body><main><h1>Script check</h1><label>Name<input id="name"></label><button onclick="document.querySelector(\'output\').value=String(Number(document.querySelector(\'output\').value)+1)">Add</button><output>0</output></main></body></html>')
+  response.end('<!doctype html><html><head><title>Synthetic scripted check</title></head><body><main><h1>Script check</h1><label>Name<input id="name"></label><button onclick="document.querySelector(\'output\').value=String(Number(document.querySelector(\'output\').value)+1)">Add</button><output>0</output><button onclick="document.querySelector(\'#answer\').textContent=confirm(\'Remove the synthetic row?\')?\'removed\':\'kept\'">Remove row</button><p id="answer">untouched</p></main></body></html>')
 })
 await new Promise(ok => site.listen(0, '127.0.0.1', ok))
 const origin = `http://127.0.0.1:${site.address().port}`
@@ -60,7 +60,7 @@ const value = result => {
   return JSON.parse(block[1])
 }
 const cases = []
-let failure, assertionFailure
+let failure, assertionFailure, dialog
 try {
   await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'bmn-synthetic-script-check', version: '1' } })
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
@@ -90,6 +90,18 @@ try {
     await call('browser_take_screenshot', { filename: screenshot, type: 'png', fullPage: true })
     cases.push({ width, theme, assertions: 4, screenshot, result })
   }
+  // A page's confirm() blocks every other tool until browser_handle_dialog answers it (QA model comparison, 2026-10-31).
+  await call('browser_navigate', { url: origin })
+  const button = /button "Remove row" \[ref=([^\]]+)\]/u.exec(text(await call('browser_snapshot', {})))
+  assert(button, 'snapshot names the Remove row button')
+  const asked = await call('browser_click', { element: 'Remove row button', target: button[1] })
+  assert(/confirm.*Remove the synthetic row\?/u.test(text(asked)), `the click reports the confirm dialog: ${text(asked)}`)
+  const blocked = await rpc('tools/call', { name: 'browser_snapshot', arguments: {} })
+  assert.equal(blocked.isError, true, 'an open dialog blocks other tools')
+  await call('browser_handle_dialog', { accept: true })
+  const answered = value(await call('browser_evaluate', { function: '() => document.querySelector("#answer").textContent' }))
+  assert.equal(answered, 'removed')
+  dialog = { blocked: text(blocked).slice(0, 300), answered }
   const rejected = await rpc('tools/call', { name: 'browser_run_code_unsafe', arguments: {
     code: 'async page => { if (await page.title() !== "intentionally impossible") throw new Error("synthetic assertion fence"); }'
   } })
@@ -119,10 +131,11 @@ assert.equal(cases.length, 6)
 assert.equal(calls.filter(call => call.tool === 'browser_run_code_unsafe').length, 6, 'six successful callbacks are in the native session log')
 assert.equal(record.screenshots.length, 6, 'real server screenshots retained by BMN')
 writeFileSync(join(out, 'browser.json'), JSON.stringify(record, null, 2))
-writeFileSync(join(out, 'result.json'), JSON.stringify({ result: 'PASS', cases, calls: record.calls, assertionFailure,
+writeFileSync(join(out, 'result.json'), JSON.stringify({ result: 'PASS', cases, dialog, calls: record.calls, assertionFailure,
   checks: ['existing tools retained; native callback and evaluate offered only with --interact',
     'candidate browserServer/relay and pinned MCP execute six complete callbacks with assertions',
-    'real screenshot artifacts and completed calls retained through browserRecord/sessionCalls'],
+    'real screenshot artifacts and completed calls retained through browserRecord/sessionCalls',
+    'a confirm() dialog blocks other tools and browser_handle_dialog accepts it'],
   limits: ['native session log records successful calls; assertion failure is retained separately',
     'no provider/installed-helper claim; native client argv tested separately; no real accounts or Q-Automations retry'] }, null, 2))
-console.log('PASS: six real Playwright callbacks, evaluation and retained screenshots through the candidate relay')
+console.log('PASS: six real Playwright callbacks, evaluation, a confirm dialog answered and retained screenshots through the candidate relay')
