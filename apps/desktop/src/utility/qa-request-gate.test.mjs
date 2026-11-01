@@ -1,15 +1,17 @@
 // MODULE: qa-request-gate.test.mjs - no network request can outrun its durable activity commitment
+import { runInNewContext } from 'node:vm'
 import { expect, it, vi } from 'vitest'
-import { classifyQaRequest, gateQaRequest, passQaRequest, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
+import { QA_WORKER_POLICY, classifyQaRequest, gateQaRequest, passQaRequest, qaNoWorkers, syntheticPaidContract } from '../../bin/qa-request-gate.mjs'
 
 const origin = 'http://127.0.0.1:4173', contract = syntheticPaidContract(origin)
 function fixture({ path = '/paid/report', method = 'POST', status = 200, navigation = false, headers = [], site = origin } = {}) {
-  const events = [], route = {
+  const events = [], responses = [], route = {
     request: () => ({ url: () => site + path, method: () => method, isNavigationRequest: () => navigation }),
     abort: vi.fn(async () => { events.push('abort') }),
     continue: vi.fn(async () => { events.push('continue') }),
     fetch: vi.fn(async options => { events.push('network'); expect(options).toEqual({ maxRedirects: 0, maxRetries: 0 })
-      return { status: () => status, headersArray: () => headers, headers: () => Object.fromEntries(headers.map(header => [header.name.toLowerCase(), header.value])) } }),
+      const response = { status: () => status, headersArray: () => headers, headers: () => Object.fromEntries(headers.map(header => [header.name.toLowerCase(), header.value])), dispose: vi.fn(async () => {}) }
+      responses.push(response); return response }),
     fulfill: vi.fn(async () => { events.push('fulfill') })
   }
   const broker = {
@@ -20,7 +22,7 @@ function fixture({ path = '/paid/report', method = 'POST', status = 200, navigat
     observe: vi.fn(async () => { events.push('observe') }), hold: vi.fn(async () => {}), gap: vi.fn(async () => {})
   }
   const close = vi.fn(async () => { events.push('close') })
-  return { events, route, broker, close }
+  return { events, responses, route, broker, close }
 }
 
 it('an activity is reserved and committed before its single network send', async () => {
@@ -55,6 +57,13 @@ it('a failed network call remains uncertain and closes the context', async () =>
   await gateQaRequest(f.route, f.broker, f.close)
   expect(f.broker.settle).toHaveBeenCalledWith('use-a', 'uncertain', null)
   expect(f.close).toHaveBeenCalledOnce()
+})
+it('a recorded read that fails on the network fails in the page only; the account stays open and its audit has no gap', async () => {
+  const f = fixture({ path: '/read', method: 'GET' }); f.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [origin] })
+  f.route.fetch.mockRejectedValue(new Error('connection reset'))
+  await gateQaRequest(f.route, f.broker, f.close)
+  expect(f.events).toEqual(['observe', 'abort']); expect(f.route.fetch).toHaveBeenCalledOnce(); expect(f.route.abort).toHaveBeenCalledWith('failed')
+  expect(f.broker.gap).not.toHaveBeenCalled(); expect(f.close).not.toHaveBeenCalled()
 })
 
 it('a reviewed read POST is audited before sending without spending an activity', async () => {
@@ -139,4 +148,42 @@ it('an unreviewed account site is read with audited GETs only; its writes and ot
   hop.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [shop] })
   await gateQaRequest(hop.route, hop.broker, hop.close)
   expect(hop.route.fulfill.mock.calls[0][0].body).toContain(`url=${shop}/signin`)
+})
+
+// Owner-requested review, 2026-11-01: a SharedWorker's requests never reach the routes, so no QA document may start a worker.
+it('every page or frame a QA route fulfills forbids workers beside its own policy; other replies pass unchanged', async () => {
+  const csp = [{ name: 'Content-Security-Policy', value: "default-src 'self'" }]
+  for (const handle of [f => passQaRequest(f.route), f => gateQaRequest(f.route, f.broker, f.close)]) {
+    const own = fixture({ path: '/', method: 'GET', navigation: true, headers: csp }); own.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [origin] })
+    await handle(own); expect(own.route.fulfill.mock.calls[0][0].headers['content-security-policy']).toBe(`default-src 'self', ${QA_WORKER_POLICY}`)
+    const bare = fixture({ path: '/app', method: 'GET', navigation: true }); bare.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [origin] })
+    await handle(bare); expect(bare.route.fulfill.mock.calls[0][0]).toMatchObject({ response: bare.responses[0], headers: { 'content-security-policy': QA_WORKER_POLICY } })
+    const asset = fixture({ path: '/app.js', method: 'GET', headers: csp }); asset.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [origin] })
+    await handle(asset); expect(asset.route.fulfill.mock.calls[0][0]).toEqual({ response: asset.responses[0] })
+  }
+  expect(QA_WORKER_POLICY).toBe("worker-src 'none'")
+})
+it('the init script leaves a QA document no worker constructor, and a page cannot put one back', () => {
+  const left = runInNewContext(`(${qaNoWorkers})(); Worker = function Again() {}; [typeof Worker, typeof SharedWorker, typeof fetch]`, { Worker: class {}, SharedWorker: class {}, fetch: () => {} })
+  expect(left).toEqual(['undefined', 'undefined', 'function'])
+  expect(() => runInNewContext(`(${qaNoWorkers})()`, {})).not.toThrow()
+})
+it('every fetched reply is released after its use, whether fulfilled, redirected, refused or broken', async () => {
+  const cases = [
+    ['pass fulfill', fixture({ path: '/state', method: 'GET' }), f => passQaRequest(f.route)],
+    ['pass redirect', fixture({ path: '/', method: 'GET', status: 302, navigation: true, headers: redirect('/next') }), f => passQaRequest(f.route)],
+    ['pass blocked hop', fixture({ path: '/asset', method: 'GET', status: 302, headers: redirect('/next') }), f => passQaRequest(f.route)],
+    ['gate activity', fixture(), f => gateQaRequest(f.route, f.broker, f.close)],
+    ['gate read', fixture({ path: '/read', method: 'GET' }), f => { f.broker.policy.mockResolvedValue({ active: true, contract: null, origins: [origin] }); return gateQaRequest(f.route, f.broker, f.close) }],
+    ['gate broken settle', fixture(), f => { f.broker.settle.mockRejectedValueOnce(new Error('lost')); return gateQaRequest(f.route, f.broker, f.close) }]
+  ]
+  for (const [name, f, handle] of cases) {
+    await handle(f)
+    expect(f.responses, name).toHaveLength(1); expect(f.responses[0].dispose, name).toHaveBeenCalledOnce()
+    const used = [...f.route.fulfill.mock.invocationCallOrder, ...f.route.abort.mock.invocationCallOrder]
+    expect(Math.max(...used), name).toBeLessThan(f.responses[0].dispose.mock.invocationCallOrder[0])
+  }
+  // A reply the context already dropped never turns a finished request into a failure.
+  const gone = fixture({ path: '/state', method: 'GET' }); gone.route.fetch.mockResolvedValueOnce({ status: () => 200, headers: () => ({}), headersArray: () => [], dispose: async () => { throw new Error('Target closed') } })
+  await expect(passQaRequest(gone.route)).resolves.toBeUndefined(); expect(gone.route.fulfill).toHaveBeenCalledOnce()
 })

@@ -208,19 +208,40 @@ export async function fulfillRedirect(route, response) {
     body: `<!doctype html><meta http-equiv="refresh" content="0;url=${escapeHtml(target.href)}">` })
   return true
 }
+/** No worker may start in a QA browser: a SharedWorker's requests and any worker's WebSocket bypass Playwright's routes, so the gate and its audit
+ * would never see them (owner-requested review, 2026-11-01). Every page and frame gets this policy beside the site's own, which it can only narrow. */
+export const QA_WORKER_POLICY = "worker-src 'none'"
+/** The same rule a second way, in every document before its scripts run: no worker constructor exists, should a document ever lack the policy. */
+export function qaNoWorkers() {
+  for (const name of ['Worker', 'SharedWorker']) {
+    try { delete globalThis[name] } catch { /* a missing constructor needs nothing */ }
+    try { Object.defineProperty(globalThis, name, { value: undefined, writable: false, configurable: false }) } catch { /* already fixed */ }
+  }
+}
+/** Fulfills a fetched reply; a page or frame document also carries the no-worker policy. */
+export async function fulfillQaResponse(route, response) {
+  if (!route.request().isNavigationRequest()) { await route.fulfill({ response }); return }
+  const headers = { ...response.headers() }, policy = headers['content-security-policy']
+  headers['content-security-policy'] = policy ? `${policy}, ${QA_WORKER_POLICY}` : QA_WORKER_POLICY
+  await route.fulfill({ response, headers })
+}
+/** A fetched reply's buffer lives until its context closes unless it is disposed, so a long session would keep every response (review, 2026-11-01). */
+const release = async response => { try { await response?.dispose() } catch { /* already gone with its context */ } }
 /** Route.continue() lets the browser follow redirects unseen, so every request is fetched here: a page redirect is routed again, any other redirect is blocked. */
 export async function passQaRequest(route) {
   let response
   // An unreachable site is the page's own failure, as under continue(); it is not an audit gap.
   try { response = await route.fetch({ maxRedirects: 0, maxRetries: 0 }) } catch { await route.abort('failed'); return }
-  const status = response.status()
-  if (status >= 300 && status < 400) { if (!await fulfillRedirect(route, response)) await route.abort('blockedbyclient'); return }
-  await route.fulfill({ response })
+  try {
+    const status = response.status()
+    if (status >= 300 && status < 400) { if (!await fulfillRedirect(route, response)) await route.abort('blockedbyclient'); return }
+    await fulfillQaResponse(route, response)
+  } finally { await release(response) }
 }
 
 /** Broker methods are bound to one registered relay/run/account, never taken from page content. */
 export async function gateQaRequest(route, broker, closeContext) {
-  let use = null, sent = false
+  let use = null, sent = false, response = null
   try {
     const request = route.request(), policy = await broker.policy()
     if (!policy.active) { await route.abort('blockedbyclient'); await closeContext(); return }
@@ -243,19 +264,23 @@ export async function gateQaRequest(route, broker, closeContext) {
       sent = true
     } else await broker.observe(classified.request)
     // No automatic retries or redirect hops may duplicate a committed activity.
-    const response = await route.fetch({ maxRedirects: 0, maxRetries: 0 })
+    try { response = await route.fetch({ maxRedirects: 0, maxRetries: 0 }) } catch (error) {
+      // A read the audit already holds that fails on the network is the page's own failure, as in passQaRequest: no gap, no closed account.
+      if (use) throw error
+      await route.abort('failed'); return
+    }
     const status = response.status()
     if (use) await broker.settle(use, status >= 300 && status < 400 ? 'uncertain' : status >= 200 && status < 300 ? 'succeeded' : 'failed', status)
     // A sign-in renewal's outcome is part of its audit (D6): its status only, never the reply.
     else if (classified.request.body?.kind === 'form') await broker.observe(classified.request, status)
     // An activity's redirect stays uncertain; a read's page redirect is routed again as a new request.
     if (status >= 300 && status < 400) { if (use || !await fulfillRedirect(route, response)) await route.abort('blockedbyclient'); return }
-    await route.fulfill({ response })
+    await fulfillQaResponse(route, response)
   } catch {
     if (use && sent) await broker.settle(use, 'uncertain', null).catch(() => {})
     // A lost reserve/send reply never authorizes a send; it stays spent in the host ledger.
     await route.abort('blockedbyclient').catch(() => {})
     await broker.gap('broker-unreachable').catch(() => {})
     await closeContext()
-  }
+  } finally { await release(response) }
 }

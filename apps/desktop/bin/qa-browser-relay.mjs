@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { AccountBrowserRelay, agentAccountRows } from './browser-account-relay.mjs'
 import { BrowserAccountsStore } from './browser-accounts-store.mjs'
-import { classifyQaRequest, gateQaRequest, passQaRequest, picheReadContract, qaOwnOrigin, qaRequestPayload, syntheticPaidContract } from './qa-request-gate.mjs'
+import { classifyQaRequest, gateQaRequest, passQaRequest, picheReadContract, qaNoWorkers, qaOwnOrigin, qaRequestPayload, syntheticPaidContract } from './qa-request-gate.mjs'
 import { readBrowserPng } from './browser-accounts-engine.mjs'
 import { processIdentity } from './browser-process.mjs'
 import { BROWSER_LIMITS, LOOK_TOOLS, browserTools } from './agents-team-browser.mjs'
@@ -144,6 +144,8 @@ export async function runQaBrowser(folder) {
   const relay = new AccountBrowserRelay({ store, qa: true, allowed: aliases.length > 0, beforeReady: async context => {
     const account = relay.id ? current : null
     if (relay.id && account?.accountId !== relay.id) throw new Error('QA_ACCOUNT_CHANGED')
+    // Before any route or page: worker traffic would bypass both (see QA_WORKER_POLICY).
+    await context.addInitScript(qaNoWorkers)
     if (!account) {
       await context.route('**/*', async route => {
         try { if (signedOutPasses(policy.target, route.request().method(), route.request().url())) await passQaRequest(route); else await route.abort('blockedbyclient') }
