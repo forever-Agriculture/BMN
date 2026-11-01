@@ -119,6 +119,12 @@ it('audit overflow is durable, never silently short and never repaired by a clea
   expect(closeQaAudit(database, 'run-a')).toMatchObject({ complete: false, gaps: ['overflow'] })
   expect(qaAuditSummary(database, 'run-a').entries).toBe(QA_AUDIT_LIMIT)
 })
+// Owner, 2026-11-01: a look-only session polling Piche (about 53 requests a minute) filled 10,000 records in 3-4 hours and closed.
+it('the record cap holds every request of a long polling session, each with its own sequence and time', () => {
+  expect(QA_AUDIT_LIMIT).toBeGreaterThanOrEqual(53 * 60 * 15)
+  for (let index = 0; index < 3; index++) appendQaAudit(database, 'run-a', audit(), index ? later : now)
+  expect(qaAuditRecords(database, 'run-a').map(record => [record.sequence, record.at])).toEqual([[1, now], [2, later], [3, later]])
+})
 it('outer scope, contract revisions and closed term shapes cannot be forged', () => {
   approve()
   for (const changed of [{ qaId: 'another-run' }, { accountRevision: 2 }, { contractSha256: 'c'.repeat(64) }, { request: { ...request().request, origin: 'http://127.0.0.1:4174' } }]) expect(reserveQaGrantUse(database, { ...request(), ...changed }, now).allowed).toBe(false)

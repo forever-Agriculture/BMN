@@ -12,7 +12,8 @@ function receiptValid(value) {
   const exact = (v, keys) => object(v) && Object.keys(v).length === keys.length && keys.every(key => Object.hasOwn(v, key))
   const text = v => typeof v === 'string' && v.length > 0 && v.length <= 2048 && !/[\p{Cc}\p{Cf}]/u.test(v)
   const sha = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
-  const count = v => Number.isSafeInteger(v) && v >= 0 && v <= 10000
+  // At most QA_AUDIT_LIMIT (shared/protocol/src/qa-grants.ts) records per session.
+  const count = v => Number.isSafeInteger(v) && v >= 0 && v <= 50000
   const ordered = (rows, key) => rows.every((row, i) => i === 0 || rows[i - 1][key] < row[key])
   if (!exact(value, ['version', 'receiptId', 'qaId', 'briefSha256', 'revision', 'grants', 'audit']) || value.version !== 1 ||
     !text(value.qaId) || !text(value.receiptId) || !text(value.revision) || !sha(value.briefSha256) || !Array.isArray(value.grants)) return false

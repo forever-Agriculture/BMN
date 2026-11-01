@@ -55,13 +55,13 @@ export class PlaywrightBridge {
   async close() { await this.server?.close(); for (const { no } of this.pending?.values() || []) no(new Error('Browser closed')); this.pending?.clear() }
 }
 export class AccountBrowserRelay {
-  constructor({ store = new BrowserAccountsStore(), allowed = false, qa = false, beforeReady = null } = {}) { this.store = store; this.allowed = allowed; this.qa = qa; this.beforeReady = beforeReady; this.requests = []; this.redactions = new Set(); this.revoked = false }
+  constructor({ store = new BrowserAccountsStore(), allowed = false, qa = false, beforeReady = null } = {}) { this.store = store; this.allowed = allowed; this.qa = qa; this.beforeReady = beforeReady; this.requests = []; this.requestBase = 0; this.redactions = new Set(); this.revoked = false }
   async start(id = null) {
     await this.store.cleanup()
     if (id) this.lease = await this.store.checkout(id)
     else this.lease = this.store.anonymous()
     mkdirSync(this.lease.profile, { recursive: true, mode: 0o700 })
-    this.id = id; this.requests = []; this.secretTyped = false; this.secretPage = null
+    this.id = id; this.requests = []; this.requestBase = 0; this.secretTyped = false; this.secretPage = null
     this.protectedOrigins = new Set()
     this.context = await openProfile(this.lease.profile, { environment: this.store.environment, qa: this.qa })
     if (this.beforeReady) await this.beforeReady(this.context)
@@ -73,7 +73,7 @@ export class AccountBrowserRelay {
       }
       this.context[Symbol.for('bmn.mcpPolicy')] = this.policy
     } else this.policy = null
-    this.context.on('request', request => { if (this.requests.length < 10_000) this.requests.push(request) })
+    this.context.on('request', request => this.remember(request))
     const output = join(this.lease.folder, 'output'); mkdirSync(output, { mode: 0o700 })
     // No credentials are loaded into Playwright. Secret typing below uses the checked element handle directly.
     this.bridge = await new PlaywrightBridge().start({ browser: { isolated: false }, outputDir: output, saveSession: false, outputMode: 'stdout' }, this.context)
@@ -153,11 +153,16 @@ export class AccountBrowserRelay {
       return textResult(`${name} typed.`)
     } finally { await element.dispose() }
   }
+  /** The newest 10,000 requests stay listed under stable numbers, so a long session still finds its latest ones (owner, 2026-11-01). */
+  remember(request) {
+    this.requests.push(request)
+    if (this.requests.length > 10_000) { this.requests.shift(); this.requestBase++ }
+  }
   async network(name, args) {
     // All network tools in an account session are handled here, before Playwright can write any file.
     if (args.filename) return refusal('Account network data is returned inline only; filenames are refused.')
-    if (name === 'browser_network_requests') return textResult(this.requests.map((r, i) => `${i + 1}. [${r.method()}] ${r.url()}`).join('\n'))
-    const request = this.requests[Number(args.index) - 1]
+    if (name === 'browser_network_requests') return textResult(this.requests.map((r, i) => `${this.requestBase + i + 1}. [${r.method()}] ${r.url()}`).join('\n'))
+    const request = this.requests[Number(args.index) - 1 - this.requestBase]
     if (!request) return refusal('Network request not found.')
     const signin = this.store.metadata(this.id).signInOrigins.includes(pageOrigin(request.url()))
     if (signin && ['request-body', 'response-body'].includes(args.part)) return refusal('Bodies from sign-in origins are private.')

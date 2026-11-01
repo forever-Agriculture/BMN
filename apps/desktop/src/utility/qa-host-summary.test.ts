@@ -68,6 +68,15 @@ it('sealing is durable and idempotent; a new observer or approval cannot mutate 
   database.close(); database = new Sqlite(join(root, 'state.sqlite')); recoverQaGrantUses(database, now)
   expect(sealQaHostSummary(database, 'run-a', '2026-10-29T16:30:00.000Z')).toEqual(summary)
 })
+// Owner, 2026-11-01: a page polling for hours passed the old 10,000 records; the receipt check follows the larger cap.
+it('a long polling session seals a receipt the report check accepts, its counts past 10,000', () => {
+  const read = { method: 'GET', origin, path: '/[unreviewed]', queryKeys: [], accountAlias: 'Synthetic', classification: 'read' as const, result: 'observed' as const, grantId: null, cardId: null, useId: null, status: null }
+  database.transaction(() => { for (let index = 0; index < 10_050; index++) appendQaAudit(database, 'run-a', read, now) })()
+  closeQaAudit(database, 'run-a')
+  const summary = publish()
+  expect(summary.audit).toMatchObject({ complete: true, entries: 10_050, observedTraffic: [{ accountAlias: 'Synthetic', origin, classification: 'read', result: 'observed', count: 10_050 }] })
+  expect(finishQa(root, JSON.stringify(report(summary)), { hostSummary: summary })).toMatchObject({ valid: true, verdict: 'GO' })
+}, 60_000)
 it('counts distinct reservations and send commitments separately from terminal outcomes', () => {
   approve(); reserve(); sendQaGrantUse(database, 'run-a', 'use-a', 1, now); settleQaGrantUse(database, 'run-a', 'use-a', 'failed', 503, now)
   const summary = sealQaHostSummary(database, 'run-a', now)

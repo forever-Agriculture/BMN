@@ -356,6 +356,16 @@ describe('agent privacy boundaries', () => {
     await expect(relay.secret('input', 'BMN_PASSWORD')).rejects.toThrow(/origins/)
     expect(fills).toBe(0)
   })
+  it('keeps the newest 10,000 network requests under stable numbers so a long session still lists its latest', async () => {
+    const relay = new AccountBrowserRelay({ allowed: true, store: { metadata: () => ({ signInOrigins: [] }) } })
+    const made = index => ({ method: () => 'GET', url: () => `https://app.test/poll/${index}`, response: async () => null, postData: () => `body-${index}` })
+    for (let index = 1; index <= 10_005; index++) relay.remember(made(index))
+    const listed = (await relay.network('browser_network_requests', {})).content[0].text.split('\n')
+    expect(listed).toHaveLength(10_000)
+    expect([listed[0], listed.at(-1)]).toEqual(['6. [GET] https://app.test/poll/6', '10005. [GET] https://app.test/poll/10005'])
+    expect((await relay.network('browser_network_request', { index: 10_005, part: 'request-body' })).content[0].text).toBe('body-10005')
+    expect((await relay.network('browser_network_request', { index: 5, part: 'request-body' })).isError).toBe(true)
+  })
   it('refuses tools on marked sign-in origins and keeps secret-bearing history private after unmark', () => {
     const relay = new AccountBrowserRelay({ allowed: true, store: { metadata: () => ({ marked: true, signInOrigins: ['https://login.test'] }) } })
     relay.id = 'synthetic'; relay.protectedOrigins = new Set()

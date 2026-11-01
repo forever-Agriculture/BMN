@@ -2208,7 +2208,10 @@ site are held on a card. The lead asks for a planning grant with
 secrets are never typed in a QA session. `browser_qa_seal` ends account use and returns the host
 receipt the report must cite. Only version 2 briefs may name accounts; a run that names none lists
 no account tools. Signed out, a session's requests stay on its target: a loopback app takes any
-method, any other site only page loads (GET). QA browsers open only http and https addresses. A QA pick never opens the
+method, any other site only page loads (GET). QA browsers open only http and https addresses. They start
+no web workers: a SharedWorker's requests never reach the routes, so every page and frame a QA route
+fulfills carries `worker-src 'none'` beside its own policy, and an init script removes the `Worker` and
+`SharedWorker` constructors in every QA context; service workers are blocked too. A QA pick never opens the
 separate sign-in check or write-back browsers, whose requests would bypass the QA routes: sign-in is
 judged on the routed page, and a QA session never saves an account back, so a site that rotates
 its sign-in tokens may ask to sign in again afterwards. QA browsers keep a saved account's session cookies but never reopen
@@ -2268,6 +2271,10 @@ tokens and replies are never recorded. The host re-checks every record against t
 this metadata alone and refuses a record that does not match. It never sees the body, so it
 relies on the relay, which BMN starts and checks against the QA pane, to have classified the
 request it describes.
+
+Every request keeps its own record, up to 50,000 per session: about 15 hours of a page polling at
+the rate seen on Piche TEST. A request past that leaves the `overflow` gap, and the session's audit
+is incomplete.
 
 V2 account reports reference a host-owned sealed ledger receipt. The host binds its run, brief,
 revision, immutable grants/cards, cumulative reservation/send counts, terminal outcomes and durable

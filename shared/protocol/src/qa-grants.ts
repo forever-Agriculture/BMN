@@ -4,7 +4,8 @@ import { isRecord } from './shared-helpers'
 
 export const QA_ACTIVITIES = ['report.generate', 'brainstorm.start'] as const
 export type QaActivity = typeof QA_ACTIVITIES[number]
-export const QA_AUDIT_LIMIT = 10_000
+/** One record per request (Epic 100.6 AC4). A page polling Piche TEST sent about 53 a minute, so this holds about 15 hours; 10,000 closed a session in 3-4 (owner, 2026-11-01). */
+export const QA_AUDIT_LIMIT = 50_000
 export interface QaGrantTerms {
   version: 1
   qaId: string
