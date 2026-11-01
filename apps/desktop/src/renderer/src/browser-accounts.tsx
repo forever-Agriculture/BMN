@@ -3,6 +3,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import type { BrowserAccountAction, BrowserAccountRow, BrowserAccountsView, RulesSnapshot, ToolsView } from '@bmn/protocol'
 import type { TeamState } from './team-state'
 import { Dot } from './roster-marks'
+import { Switch } from './team-preferences'
 import { toolForApp } from './tools-view'
 
 export function browserAccountNeeds(row: BrowserAccountRow): boolean { return row.state === 'Keyring locked' || row.state === 'Sign in again' && !row.marked }
@@ -97,7 +98,12 @@ export function BrowserAccounts(props: { team: TeamState; tools: ToolsView; appl
           </div> : <div className="inline browser-account-actions">
             <button type="button" className="small" disabled={busy} onClick={() => void act({ action: 'sign-in', id: row.id })}>Sign in again</button>
             <button type="button" className="small" aria-pressed={row.marked} disabled={busy} onClick={() => { if (row.marked) void act({ action: 'unmark', id: row.id }); else { clearMark(); setMarking(row.id) } }}>Agents may sign in</button>
-            <button type="button" className="small" aria-pressed={row.test === true} disabled={busy} onClick={() => { if (row.test) void act({ action: 'untest', id: row.id }); else setTesting(row.id) }}>Test account</button>
+            {/* The owner's test mark as a labelled switch: on asks the confirm step below, off clears it at once (d72). */}
+            <span className="browser-account-test">
+              <Switch id={`browser-account-test-${row.id}`} on={row.test === true} disabled={busy}
+                onChange={() => { if (row.test) void act({ action: 'untest', id: row.id }); else setTesting(testing === row.id ? null : row.id) }} />
+              <label htmlFor={`browser-account-test-${row.id}`}>Test account</label>
+            </span>
             <button type="button" className="small" disabled={busy} onClick={() => setRemoving(row.id)}>Remove</button>
           </div>}
         </div>
