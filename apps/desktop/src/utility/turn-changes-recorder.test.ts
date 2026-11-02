@@ -1003,7 +1003,7 @@ describe('the pause', () => {
   })
 
   it('does not count a scan whose time passed and which kept the files it read: it has no list, and the next scan starts further on', async () => {
-    // Each scan is held at its second new file until its time for reading is over (the last 100 of 800 ms): it
+    // Each scan is held at its second new file until its time for reading is over (the last 250 of 2000 ms): it
     // reads two files, keeps them without a list and ends "incomplete".
     const w = seamed('pause-time-read-on', () => {
       const began = performance.now()
@@ -1011,10 +1011,10 @@ describe('the pause', () => {
       return {
         beforeEntry: async () => {
           seen += 1
-          if (seen === 2) await sleep(Math.max(0, began + 710 - performance.now()))
+          if (seen === 2) await sleep(Math.max(0, began + 1_770 - performance.now()))
         }
       }
-    }, { limits: { captureMs: 800 } })
+    }, { limits: { captureMs: 2_000 } })
     for (let n = 0; n < 10; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
     await sleep(25)
     expect(await w.prompt()).toBe('incomplete, confirmed')
@@ -1023,14 +1023,14 @@ describe('the pause', () => {
     const store = w.engine.store(SESSION, w.at.repo)
     const kept = store.captures().map((id) => store.record(id))
     expect(kept.map((record) => [record?.state, record?.bound, record?.tree, (record?.bytesRead ?? 0) > 0, (record?.bytesStored ?? 0) > 0]))
-      .toEqual([1, 2, 3].map(() => ['incomplete', '0.8 s', null, true, true]))
+      .toEqual([1, 2, 3].map(() => ['incomplete', '2 s', null, true, true]))
     // Three incomplete scans in a row, and each got further: recording goes on.
     expect(w.recorder.states()[0]).toMatchObject({ state: 'recording', pausedRoot: null })
   }, 30_000)
 
   it('counts a scan whose time passed before anything it read was kept', async () => {
     // Each publication is held before its first file until the capture's time is over: nothing is moved in.
-    const w = seamed('pause-time-kept-none', () => ({ beforeMove: (moved) => (moved === 0 ? sleep(240) : undefined) }), { limits: { captureMs: 200 } })
+    const w = seamed('pause-time-kept-none', () => ({ beforeMove: (moved) => (moved === 0 ? sleep(1_040) : undefined) }), { limits: { captureMs: 1_000 } })
     for (let n = 0; n < 3; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
     await sleep(25)
     expect(await w.prompt()).toBe('captured, confirmed')

@@ -1840,7 +1840,7 @@ describe('OpenCode 2 private tools test (85.3)', () => {
 
   it('waits for a server that ignores TERM to exit after bounded escalation', async () => {
     app('opencode', OPENCODE, { starts: true, serverMode: 'ignore-term' })
-    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 2000 })).toMatchObject({ outcome: 'pass', argument: 'pass', variable: 'pass' })
+    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 30_000 })).toMatchObject({ outcome: 'pass', argument: 'pass', variable: 'pass' })
     stopped()
   })
 

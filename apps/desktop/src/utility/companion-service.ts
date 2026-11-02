@@ -221,6 +221,8 @@ interface CompanionServiceOptions {
   turnVersion?: (identity: string, app: string) => string | null | Promise<string | null>
   /** Epic 69: the folder Linux reports for a foreground process; a test gives its own. */
   turnForegroundFolder?: (identity: string) => string | null
+  /** Epic 69: how long a turn's mark waits; a test on a busy machine gives itself room. */
+  turnMarkLimitMs?: number
   /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
   pageAfterMs?: number
   now?: () => Date
@@ -784,6 +786,7 @@ export class CompanionService {
     this.turns = options.turnChanges === undefined ? null : new TurnRecorder({
       port: options.turnChanges,
       keeper: options.turnChanges,
+      ...(options.turnMarkLimitMs === undefined ? {} : { markLimitMs: options.turnMarkLimitMs }),
       foreground: {
         identity: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
         folder: options.turnForegroundFolder ?? foregroundProcessFolder

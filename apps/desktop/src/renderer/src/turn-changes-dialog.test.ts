@@ -5,10 +5,13 @@ import {
 } from '@bmn/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { TurnPauseCard } from './turn-changes-card'
 import { TurnChangesView, TurnDifference, type TurnFileBody, type TurnOpened } from './turn-changes-dialog'
 import { TurnPlate } from './turn-changes-plate'
+
+// Rendering every page of a long list takes seconds on a busy machine.
+vi.setConfig({ testTimeout: 60_000 })
 
 const at = (day: number, hour: number, minute: number): string => new Date(2026, 9, day, hour, minute, 2).toISOString()
 const NOW = new Date(2026, 9, 13, 15, 0, 0).getTime()

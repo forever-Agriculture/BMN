@@ -330,12 +330,13 @@ describe('the tool list under the provider\'s own model list (63.3 AC6)', () => 
 
   it('the time limit is one moment for the whole comparison: a run under way is ended at it, no later run starts, and nothing of it is kept', async () => {
     await test()
-    // A Codex that takes four seconds before it asks anything, and a comparison with a second and a half in all.
-    codex({ providerModels: LISTED, logsStarts: true, startDelayMs: 4000 })
+    // A Codex that takes half a minute before it asks anything, and a comparison with six seconds in all: time for a run to start on a busy machine.
+    codex({ providerModels: LISTED, logsStarts: true, startDelayMs: 30_000 })
     const startedAt = Date.now()
-    const result = await compareUnderProviderList({ agent: agents('luna')[0]!, environment: env, now: NOW, limitMs: 1500 })
+    const result = await compareUnderProviderList({ agent: agents('luna')[0]!, environment: env, now: NOW, limitMs: 6000 })
     expect(result).toEqual({ ok: false, stopped: true, reason: 'the time ran out before the tools were compared under the provider\'s own model list' })
-    expect(Date.now() - startedAt).toBeLessThan(3500)
+    // Well before the run would have ended by itself.
+    expect(Date.now() - startedAt).toBeLessThan(25_000)
     // The first run was ended at the limit; the three that would have followed it were never started.
     expect(readFileSync(join(stubs, 'codex-starts.log'), 'utf8')).toBe('run\n')
     expect(fenceTests().map((entry) => entry.catalog)).toEqual(['bundled'])

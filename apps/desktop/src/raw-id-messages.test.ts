@@ -47,9 +47,10 @@ describe('owner-facing errors (Story 38.1 FR73)', () => {
     expect(rawSessionIdMessages('probe.ts', 'console.error(`session ${id} restored`)')).toEqual([])
   })
 
+  // Reads every source file: seconds on a busy machine.
   it('never names a session by its raw id in any error the desktop app throws', () => {
     const found = sourceFiles(sourceRoot).flatMap((path) =>
       rawSessionIdMessages(path, readFileSync(path, 'utf8')).map((line) => `${relative(sourceRoot, path)}:${line}`))
     expect(found).toEqual([])
-  })
+  }, 60_000)
 })

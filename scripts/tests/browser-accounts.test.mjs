@@ -260,8 +260,9 @@ describe('encrypted account profile versions', () => {
     const { store, runtime } = fixture(), meta = await store.create('Example', 'https://example.test'), lease = await store.checkout(meta.id)
     seed(lease); await store.publish(lease, { state: 'Signed in' }); store.discard(lease)
     const space = statfsSync(runtime)
-    // A sparse encrypted file exercises the capacity guard without consuming shared RAM.
-    truncateSync(join(store.folder(meta.id), store.current(meta.id)), Math.floor(space.bavail * space.bsize / 12) + 1)
+    // A sparse encrypted file exercises the capacity guard without consuming shared RAM. Twice the size the guard needs:
+    // other programs free space in this shared folder between this reading and the guard's own.
+    truncateSync(join(store.folder(meta.id), store.current(meta.id)), Math.floor(space.bavail * space.bsize / 6) + 1)
     await expect(store.checkout(meta.id)).rejects.toMatchObject({ code: 'RUNTIME_FULL' })
     expect(readdirSync(store.runtime()).filter(name => name.startsWith('s-'))).toEqual([])
     expect(store.claims()).toEqual([])

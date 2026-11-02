@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest'
 import { parseBmnDoctor } from '../../bin/doctor-results.mjs'
 import { OPENCODE_PLUGIN } from '../../bin/bmn-opencode-plugin.mjs'
 import { doctorVersions } from '../../bin/doctor-adapters.mjs'
+import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
+import { withOpenCodeFloor } from '../../bin/opencode-floor.mjs'
 import { doctorWorker, loadDoctorState, readDoctorView } from '../../bin/doctor.mjs'
 
 const REQUIRED = {
@@ -98,22 +100,27 @@ describe('Doctor hooks producer contract', () => {
       for (const app of ['claude', 'codex'] as const) {
         const path = join(home, `.${app}`, app === 'claude' ? 'settings.json' : 'hooks.json')
         mkdirSync(dirname(path), { recursive: true })
-        writeFileSync(path, JSON.stringify({ hooks: Object.fromEntries(REQUIRED[app].map(event => [event,
+        writeFileSync(path, JSON.stringify({ ...(app === 'claude' ? { permissions: { deny: claudeDenyRows(home) } } : {}), hooks: Object.fromEntries(REQUIRED[app].map(event => [event,
           [{ hooks: [{ type: 'command', command: `bmn hook ${app}`, timeout: 3600 }] }]])) }))
       }
+      // The floor as BMN's start leaves it: the app's own rules, and the command a session outside BMN finds (Stories 102.3, 102.4, 102.15).
+      mkdirSync(join(home, '.codex/rules'), { recursive: true }); writeFileSync(join(home, '.codex/rules/bmn-guard.rules'), CODEX_RULES)
+      mkdirSync(join(home, '.local/bin'), { recursive: true })
+      writeFileSync(join(home, '.local/bin/bmn'), `#!/bin/sh\nexec '${process.execPath}' '${fileURLToPath(new URL('../../bin/bmn', import.meta.url))}' "$@"\n`, { mode: 0o755 })
       const plugin = join(home, '.config/opencode/bmn/tui.ts')
       mkdirSync(dirname(plugin), { recursive: true }); writeFileSync(plugin, OPENCODE_PLUGIN)
       writeFileSync(join(home, '.config/opencode/cli.json'), JSON.stringify({ plugins: [dirname(plugin)] }))
+      writeFileSync(join(home, '.config/opencode/opencode.json'), withOpenCodeFloor('{\n}\n', home)!)
       const cli = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
-      const text = execFileSync(process.execPath, [cli, 'hooks', 'check', '--json'], { encoding: 'utf8', timeout: 10000,
-        env: { HOME: home, PATH: '/usr/bin:/bin', XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'),
+      const text = execFileSync(process.execPath, [cli, 'hooks', 'check', '--json'], { encoding: 'utf8', timeout: 120_000,
+        env: { HOME: home, PATH: `${join(home, '.local/bin')}:/usr/bin:/bin`, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'),
           XDG_STATE_HOME: join(home, '.local/state'), XDG_CACHE_HOME: join(home, '.cache') } })
       const actual = JSON.parse(text)
       expect(actual.ok).toBe(true)
       expect(actual.agents.map((row: { events: unknown[] }) => row.events.length)).toEqual([9, 9, 2])
       expect(parseBmnDoctor('hooks', text, 0)).toEqual({ state: 'passed', problems: [] })
     } finally { rmSync(home, { recursive: true, force: true }) }
-  })
+  }, 150_000)
 
   it('invalidates the old parser identity even when all three app programs are missing', async () => {
     const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-parser-identity-'))

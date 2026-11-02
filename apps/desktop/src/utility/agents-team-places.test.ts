@@ -14,7 +14,7 @@ import { askOutcome, startAsk, stopAsk, waitAsk, watchAsk } from '../../bin/agen
 import { startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { SCOPES, TOKEN_MAC, leftovers, ownSystemd, settle, standInControl, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
-vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 60_000 })
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const savedHome = process.env.HOME

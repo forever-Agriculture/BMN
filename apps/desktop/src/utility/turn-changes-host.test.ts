@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  ERROR_CODES, METHOD_REGISTRY, TURN_FILES_LIMIT, TURN_LABELS, TURN_LIST_LIMIT, TURN_RETRY_AFTER_MS, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
+  ERROR_CODES, METHOD_REGISTRY, TURN_FILES_LIMIT, TURN_LABELS, TURN_LIST_LIMIT, TURN_MARK_LIMIT_MS, TURN_RETRY_AFTER_MS, TURN_SECRET_PLATE, TURN_SWITCH_FOLDER, TURN_WORDINGS,
   type AppEventMessage, type TurnDetail, type TurnDetailAnswer, type TurnDifferenceAnswer, type TurnSessionView, type TurnShownLine, type TurnSummary
 } from '@bmn/protocol'
 import { CompanionService } from './companion-service'
@@ -109,9 +109,11 @@ interface Host {
   window: <Result>(method: string, params: Record<string, unknown>) => Promise<Result>
 }
 
+/** Room for a mark on a busy machine; only the test of the deadline itself runs at the product's limit. */
+const ROOMY_MARK_MS = 5_000
 const hosts: Host[] = []
 let requests = 0
-async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port, version: string | null = '0.162.1'): Promise<Host> {
+async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port, version: string | null = '0.162.1', markLimitMs = ROOMY_MARK_MS): Promise<Host> {
   const at = scratch(name)
   const root = mkdtempSync(join(tmpdir(), 'bmn-th-'))
   const database = new BetterSqlite3(':memory:')
@@ -152,6 +154,7 @@ async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPo
     now: () => new Date(),
     turnChanges: { ...wrap(inProcessPort(engine)), removeCaptures: inProcessKeeper(engine).removeCaptures },
     turnVersion: () => Promise.resolve(version),
+    turnMarkLimitMs: markLimitMs,
     turnForegroundFolder: (identity) => identity === '34817:7001:555:1:2' ? foreground.folder : null
   })
   await service.start()
@@ -701,7 +704,7 @@ describe('real hook diagnostic (Epic 99)', () => {
           note('discard', { id })
           await port.discard(id)
         }
-      }), null)
+      }), null, scenario === 'capture-expiry' ? TURN_MARK_LIMIT_MS : ROOMY_MARK_MS)
       const made = h
       const recorder = made.service['turns']!
       const foreground = recorder['options'].foreground

@@ -5182,7 +5182,7 @@ describe('the command guard runs everywhere and says when it does not (Story 102
   const held = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'docker system prune -af' } }
 
   it('holds in a session outside BMN, with no socket to send anything to, through the entry as installed', async () => {
-    for (const [agent, entry, decision] of [['claude', GUARD_CLAUDE, 'ask'], ['codex', GUARD_CODEX, 'deny']] as const) {
+    for (const [, entry, decision] of [['claude', GUARD_CLAUDE, 'ask'], ['codex', GUARD_CODEX, 'deny']] as const) {
       const { home } = await homeWithBmn()
       const run = spawnSync('/bin/sh', ['-c', entry], { input: JSON.stringify(held), encoding: 'utf8', env: { HOME: home, PATH: '/usr/bin:/bin' } })
       expect(run.status).toBe(0)

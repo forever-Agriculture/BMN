@@ -16,13 +16,14 @@ const shortReason = (text) => text.trim().split('\n').pop()?.slice(0, 200) ?? ''
  * outside BMN: no socket, and no PATH entry that only a BMN session has. The caller never passes a changed entry: an edited
  * entry could run anything.
  */
-export function probeCommandGuard(agent, entry, { env = process.env, ownFolder = OWN_FOLDER } = {}) {
+export function probeCommandGuard(agent, entry, { env = process.env, ownFolder = OWN_FOLDER, spawn = spawnSync } = {}) {
   const outside = Object.fromEntries(Object.entries(env).filter(([name]) => !['BMN_CONTROL_SOCKET', 'BMN_TOKEN', 'AITERM_CONTROL_SOCKET', 'AITERM_TOKEN'].includes(name)))
   outside.PATH = (env.PATH ?? '').split(':').filter((folder) => folder !== ownFolder).join(':')
   const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: PROBE_COMMAND } })
-  const run = spawnSync('/bin/sh', ['-c', entry], { input, env: outside, encoding: 'utf8', timeout: PROBE_LIMIT_MS, maxBuffer: 1024 * 1024 })
+  const run = spawn('/bin/sh', ['-c', entry], { input, env: outside, encoding: 'utf8', timeout: PROBE_LIMIT_MS, maxBuffer: 1024 * 1024 })
   if (run.error?.code === 'ETIMEDOUT') return { state: 'does-not-answer', reason: `no answer in ${PROBE_LIMIT_MS / 1000} s` }
-  if (run.error) return { state: 'does-not-answer', reason: run.error.code ?? run.error.message }
+  // An entry that ends before reading the event leaves it unwritten (EPIPE); what it printed and why it ended still say the rest.
+  if (run.error && run.error.code !== 'EPIPE') return { state: 'does-not-answer', reason: run.error.code ?? run.error.message }
   try {
     const answer = JSON.parse(run.stdout)
     if (answer?.hookSpecificOutput?.permissionDecision === (agent === 'claude' ? 'ask' : 'deny')) return { state: 'holds' }

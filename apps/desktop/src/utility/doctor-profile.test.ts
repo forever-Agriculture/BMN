@@ -137,7 +137,7 @@ it('prints show-only items in the actual text command as well as JSON without th
     leftoversCheck: async () => ({ state: 'passed', problems: [], leftovers: [{ kind: 'plugins', app: 'claude', reason: 'disabled', item: 1, identity: 'withheld',
       locator: observeFile(item, locationRoots(selectedProfile(environment))).locator }] }) })
   const output: string[] = []
-  await runDoctorCommand([], { environment, out: (line) => output.push(line) })
+  await runDoctorCommand(['--details'], { environment, out: (line) => output.push(line) })
   expect(output.join('\n')).toContain('Show-only: Stale location')
   expect(output.join('\n')).toContain('The plugin is disabled')
   expect(output.join('\n')).not.toContain('password')

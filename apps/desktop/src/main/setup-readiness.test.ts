@@ -67,7 +67,7 @@ if(args[0]==='--version'){console.log('9.0.0 (Claude Code)');process.exit(0)}
 if(args[0]==='mcp'){
  const config=JSON.parse(fs.readFileSync(path.join(home,'.claude.json'),'utf8'));
  const server=config.mcpServers.bmn_setup_probe;
- try{cp.execFileSync(server.command,server.args,{timeout:250,stdio:'ignore'})}catch{}
+ try{cp.execFileSync(server.command,server.args,{timeout:5000,stdio:'ignore'})}catch{}
  process.exit(0);
 }
 const credential=path.join(home,'.claude/.credentials.json');
