@@ -19,7 +19,7 @@ import { profileFingerprint, selectedProfile } from '../../bin/doctor-profile.mj
 import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { judgeProposal } from '../../bin/agents-roster.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
-import { fenceEndedWords, fileToApproved, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
+import { fenceEndedWords, fileToApproved, hooksFrom, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -2350,5 +2350,25 @@ describe('fresh setup Team approval', () => {
     await expect(call('agents:approve', { shown: { ...shownOf(outside), setupRevision: outside.setupTeam!.revision } })).rejects.toThrow('keep it proposed and off')
     expect(readFileSync(rosterFile(), 'utf8')).toBe(before)
     expect((await snapshot()).approved).toEqual(outside.approved)
+  })
+})
+
+describe('the hook report at BMN\'s start (102.4)', () => {
+  const report = (row: Record<string, unknown>) => ({ stdout: JSON.stringify({ agents: [{ agent: 'codex', file: 'f', state: 'checked', placed: [], older: [], installed: [], left: [], ...row }] }), stderr: '' }) as Parameters<typeof hooksFrom>[0]
+  const app = (row: Record<string, unknown>) => {
+    const read = hooksFrom(report(row), '2026-11-02T00:00:00.000Z')
+    return read.state === 'checked' ? read.apps[0]! : null
+  }
+
+  it('carries the guard\'s standing and the app\'s rules as printed, its reason cut short', () => {
+    expect(app({ commandGuard: { state: 'holds' }, nativeRules: 'present' })).toMatchObject({ commandGuard: { state: 'holds' }, nativeRules: 'present' })
+    expect(app({ commandGuard: { state: 'does-not-answer', reason: `r${'x'.repeat(400)}` }, nativeRules: 'missing' })?.commandGuard?.reason).toHaveLength(200)
+    expect(app({ nativeRules: 'unusable' })).toMatchObject({ nativeRules: 'unusable' })
+  })
+
+  it('says nothing of a standing it cannot read', () => {
+    const row = app({ commandGuard: { state: 'whatever' }, nativeRules: 'whatever' })
+    expect(row).not.toHaveProperty('commandGuard')
+    expect(row).not.toHaveProperty('nativeRules')
   })
 })

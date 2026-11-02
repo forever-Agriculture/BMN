@@ -4,7 +4,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { launcherScript } from '../lib/desktop-launcher.mjs'
+import { commandLinkIsOurs, commandLinkPath, commandLinkScript, launcherScript } from '../lib/desktop-launcher.mjs'
 
 const roots = []
 
@@ -245,5 +245,16 @@ describe('desktop launcher', { timeout: 2 * LAUNCHER_LIMIT + 10_000 }, () => {
   it('quotes paths that contain shell syntax', () => {
     const script = launcherScript({ binary: "/opt/it's $HOME/bmn", statusPath: '/state/latest.json' })
     expect(script).toContain(`binary='/opt/it'\\''s $HOME/bmn'`)
+  })
+})
+
+describe('the bmn command for a session outside BMN (102.4)', () => {
+  it('runs the packaged launcher and never takes the place of a command of his', () => {
+    expect(commandLinkPath({ HOME: '/home/someone' })).toBe('/home/someone/.local/bin/bmn')
+    const script = commandLinkScript('/opt/a b/bmn')
+    expect(script).toContain(`exec '/opt/a b/resources/bin/bmn' "$@"`)
+    expect(commandLinkIsOurs(null)).toBe(true)
+    expect(commandLinkIsOurs(script)).toBe(true)
+    expect(commandLinkIsOurs('#!/bin/sh\necho his own\n')).toBe(false)
   })
 })

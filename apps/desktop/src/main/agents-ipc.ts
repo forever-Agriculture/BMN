@@ -842,7 +842,7 @@ function commandGuardFrom(value: unknown): Pick<HookAppAtStart, 'commandGuard'> 
 }
 
 /** What `hooks install --absent --json` printed, as Health › Hooks shows it; a report BMN cannot read is a failed check. */
-function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
+export function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
   const report = parseJson(result.stdout)
   const failed = (reason: string): HooksAtStart => ({ state: 'failed', checkedAt, reason })
   if (result.failed) return failed(`The hook install ${result.failed}`)

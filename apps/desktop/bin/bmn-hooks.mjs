@@ -1795,7 +1795,7 @@ async function installAbsentCommand(agents, pathFor, asJson) {
         continue
       }
       try {
-        results.push({ agent, file: path, ...(agent === 'opencode' ? absentOpenCode(path) : absentClaudeOrCodex(agent, path)) })
+        results.push({ agent, file: path, ...(agent === 'opencode' ? { ...absentOpenCode(path), nativeRules: openCodeFloor(path).state } : absentClaudeOrCodex(agent, path)) })
       } catch (error) {
         const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
         results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail, ...(error.earlier ? { earlier: error.earlier } : {}) })

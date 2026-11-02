@@ -79,7 +79,9 @@ function auditSnapshot(real, now, { dropGroup = null, codexHooksLeft = false, do
     hooks: { state: 'checked', checkedAt: new Date(now - 60_000).toISOString(), apps: [
       { harness: 'claude', file: join(real.home ?? '/home/synthetic', '.claude/settings.json'), state: 'checked', placed: ['Notification', 'PreToolUse', 'Stop'], older: [], installed: [], left: [] },
       { harness: 'codex', file: join(real.home ?? '/home/synthetic', '.codex/hooks.json'), state: 'checked', placed: ['PreToolUse', 'Stop'], older: [], installed: [],
-        left: codexHooksLeft ? [{ event: 'SessionEnd', why: 'changed' }] : [] },
+        left: codexHooksLeft ? [{ event: 'SessionEnd', why: 'changed' }] : [],
+        // Story 102.4: the row in its Needs you state, a guard that does not answer and the app's own rules missing.
+        ...(codexHooksLeft ? { commandGuard: { state: 'does-not-answer', reason: 'command guard cannot load' }, nativeRules: 'missing' } : { commandGuard: { state: 'holds' }, nativeRules: 'present' }) },
       codexHooksLeft ? { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'checked', placed: ['plugin', 'cli.json'], older: [], installed: [], left: [] }
         : { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
     ] },

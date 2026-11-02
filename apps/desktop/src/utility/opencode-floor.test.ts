@@ -3,8 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { parseJsonc } from '../../bin/agents-check-routes.mjs'
-import { openCodeConfigFile, openCodeFloorPlan, openCodeFloorRows, withOpenCodeFloor, withoutOpenCodeFloor } from '../../bin/opencode-floor.mjs'
+import { openCodeConfigFile, openCodeFloorPlan, openCodeFloorRows, parseJsonc, withOpenCodeFloor, withoutOpenCodeFloor } from '../../bin/opencode-floor.mjs'
 
 const HIS = `{
   "$schema": "https://opencode.ai/config.json",

@@ -48,6 +48,7 @@ import {
 import { needsFirst } from './health-order'
 import { DoctorHealth, doctorNeedsCount, doctorPlace } from './doctor-health'
 import { hookRowWords } from './hooks-health'
+import type { HookAppAtStart } from '@bmn/protocol'
 import {
   Chain, TeamLedger, TeamPreferences, TeamToast, compactHint, compactRefusal, contextLimitHint, firstApprovalWords, researcherWords, hostKind, limitRefusal, nothingInEffectWords, outsideCountWords,
   retiredAppClause, shortDate, teamProposals, type TeamPage
@@ -869,6 +870,16 @@ describe('Integrations › Health (60.6 AC4)', () => {
     // Within each section those rows come first, the rest in their order.
     expect([...markup.matchAll(/data-skills="([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Missing', 'Exposed', 'Reads the source'])
     expect(needsFirst([1, 2, 3, 4], (row) => row % 2 === 0)).toEqual([2, 4, 1, 3])
+  })
+
+  it('shows a guard that does not answer and the app\'s own rules missing in the row\'s Needs you state, one line each (102.4 AC3)', () => {
+    const row = { harness: 'codex', file: 'f', state: 'checked', placed: ['PreToolUse'], older: [], installed: [], left: [] } as HookAppAtStart
+    expect(hookRowWords({ ...row, commandGuard: { state: 'holds' }, nativeRules: 'present' })).toMatchObject({ needs: false, lines: [] })
+    const broken = hookRowWords({ ...row, commandGuard: { state: 'does-not-answer', reason: 'command guard cannot load' }, nativeRules: 'missing' })
+    expect(broken.needs).toBe(true)
+    expect(broken.lines).toEqual(['Command guard does not answer · command guard cannot load', 'The app\'s own rules · missing'])
+    expect(hookRowWords({ ...row, commandGuard: { state: 'changed' } })).toMatchObject({ needs: true, lines: ['Command guard · its entry is not one BMN wrote, so BMN did not run it'] })
+    expect(hookRowWords({ ...row, nativeRules: 'unusable' })).toMatchObject({ needs: true, lines: ['The app\'s own rules · its settings cannot take them'] })
   })
 
   it('says what BMN found and did in each app\'s hook file at start, failure first, with no button (Story 75.9)', () => {

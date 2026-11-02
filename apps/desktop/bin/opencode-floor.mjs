@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { parseJsonc } from './agents-check-routes.mjs'
 import { NEVER_COMMANDS, secretPaths } from './native-rules.mjs'
 
+export { parseJsonc }
+
 const BEGIN = '// BMN floor begin'
 /** A block comment: whatever of his follows on that line stays live. */
 const END = '/* BMN floor end */'
