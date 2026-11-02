@@ -149,6 +149,7 @@ describe('a page dense with hidden values', () => {
     expect(text.length).toBeGreaterThan(448 * 1024)
     const ranges = quickLookSecretRanges('/p/plan.md', '/p/plan.md', text)
     expect(ranges.length).toBeGreaterThan(5_000)
+    const { process } = globalThis as unknown as { process: { threadCpuUsage: (from?: { user: number; system: number }) => { user: number; system: number } } }
     const used = process.threadCpuUsage()
     for (const run of runs) {
       runPieces(run, tokens, ranges, null, matches)

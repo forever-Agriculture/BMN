@@ -23,7 +23,7 @@ describe('Claude\'s deny rows (Story 102.3)', () => {
     expect(NEVER_COMMANDS).toContain('sudo podman buildx prune')
     expect(NEVER_COMMANDS).toContain('prime-select nvidia')
     expect(NEVER_COMMANDS).toContain('sudo prime-select nvidia')
-    expect(NEVER_COMMANDS.filter((command) => !/ prune$|prime-select nvidia$/.test(command))).toEqual([])
+    expect(NEVER_COMMANDS.filter((command: string) => !/ prune$|prime-select nvidia$/.test(command))).toEqual([])
     expect(NEVER_COMMANDS).toHaveLength(30)
   })
 
@@ -33,7 +33,7 @@ describe('Claude\'s deny rows (Story 102.3)', () => {
     const rows = claudeDenyRows(home)
     expect(rows).toContain('Read(~/.ssh/id_ed25519)')
     expect(rows).toContain('Read(~/.ssh/work_key)')
-    expect(rows.filter((row) => /\.pub|config\)|known_hosts/.test(row))).toEqual([])
+    expect(rows.filter((row: string) => /\.pub|config\)|known_hosts/.test(row))).toEqual([])
     writeFileSync(join(home, '.ssh/id_new'), 'synthetic\n')
     expect(claudeDenyRows(home)).toContain('Read(~/.ssh/id_new)')
   })

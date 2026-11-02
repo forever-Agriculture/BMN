@@ -1,10 +1,12 @@
 // MODULE: doctor.mjs - One cross-process doctor run, durable publication and the local doctor command
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { cpus, homedir, loadavg } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { acquireLeftoversDoctor, boundedProcess, doctorEnvironment, doctorVersions, qualifyDoctor, revalidateLeftoversDoctor, runAppDoctor, runBmnDoctor } from './doctor-adapters.mjs'
 import { CHECKS, projectedResult } from './doctor-results.mjs'
+import { doctorText } from './doctor-text.mjs'
+import { riskyAllowLines } from './risky-allow.mjs'
 import { beginDoctorAttempt, doctorPlan, doctorView, emptyDoctorState, recoverDoctorAttempt, validateDoctorState } from './doctor-state.mjs'
 import { profileFingerprint, selectedProfile } from './doctor-profile.mjs'
 import { observeRoute, routeUnchanged } from './doctor-locations.mjs'
@@ -12,12 +14,13 @@ import { deriveContinuityKeys, sealContinuity, validRowReceipts } from './doctor
 
 const WAIT_MS = 12 * 60 * 1000
 const UUID = /^[a-f0-9-]{36}$/
-const HELP = `Usage: bmn doctor [--json]
+const HELP = `Usage: bmn doctor [--details] [--json]
 
 Reports BMN's read-only hooks, skills, tools and rules checks and the qualified Claude/Codex doctors.
 Runs when never started, strictly after 24 hours or when an app version changes; joins a run in progress.
 BMN retries failed or problem checks once at its next startup. Reading from the CLI does not consume that retry.
 New doctor versions qualify on a disposable profile before a read-only real-profile run. Leftovers are show-only.
+By default it names each problem and what to do; --details adds every leftover's identity and route. --json gives all of it.
 Works with BMN closed. No cleanup command.
 Exit: 0 all applicable checks fresh and passed; 1 problems; 2 usage; 3 incomplete, unavailable or stale checks.`
 
@@ -354,28 +357,21 @@ export async function runDoctorCommand(args, { environment = process.env, out = 
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) { out(HELP); return 0 }
   let startupId = null
   let json = false
+  let details = false
   const seen = new Set()
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
     if (seen.has(arg)) { out(HELP); return 2 }
     seen.add(arg)
     if (arg === '--json') json = true
+    else if (arg === '--details') details = true
     else if (arg === '--startup' && UUID.test(args[index + 1] ?? '')) startupId = args[++index]
     else { out(HELP); return 2 }
   }
   const view = await runDoctor({ environment, startupId })
   if (json) out(JSON.stringify(view))
   else {
-    const lines = [view.running ? 'Checking now' : view.allWell ? `All well · ${CHECKS.length} checks passed` : 'Doctor needs attention']
-    for (const row of view.rows) {
-      if (row.state === 'passed' && !row.stale && row.leftovers.length === 0) continue
-      lines.push(`${row.check}: ${row.state}${row.stale ? ' · stale' : ''}`)
-      for (const problem of row.problems) lines.push(`  ${problem.reason}. ${problem.fix}`)
-      for (const item of row.leftovers) lines.push(`  Show-only: ${item.location}. ${item.reasonText}`)
-    }
-    if (view.rows.some((row) => row.leftovers.length > 0)) lines.push(view.locationHelp)
-    if (view.error) lines.push('The doctor could not complete. Inspect the app doctor yourself.')
-    out(lines.join('\n'))
+    out(doctorText(view, { details, allowLines: riskyAllowLines({ home: environment.HOME ?? homedir(), ...(environment.CODEX_HOME ? { codexHome: environment.CODEX_HOME } : {}), ...(environment.CLAUDE_CONFIG_DIR ? { claudeConfig: environment.CLAUDE_CONFIG_DIR } : {}) }), load: loadavg()[0], cores: cpus().length }))
   }
   return view.exitCode
 }

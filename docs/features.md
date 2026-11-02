@@ -369,7 +369,8 @@ Leftover memory, skills, plugins and MCP entries are show-only, with a reason; t
 Names stay withheld. Each item has structural source coordinates and a checked revision; the existing disclosure
 explains manual resolution. Changed or unverifiable sources become stale. Selected custom profiles are kept apart.
 There is no cleanup control or switch. The **What is checked** disclosure explains timing and limits.
-Agents see the same projected results with [`bmn doctor --json`](agent-control.md#read-only-app-health-bmn-doctor).
+Agents see the same projected results with [`bmn doctor --json`](agent-control.md#read-only-app-health-bmn-doctor); plain `bmn doctor` names
+each problem and what to do on one screen, and `--details` adds the identities and routes.
 
 BMN wires its hooks itself: at every start it adds, for Claude Code, Codex and OpenCode where each
 is set up, the entries an event has none of, after backing the file up, and leaves an entry it did

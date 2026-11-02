@@ -235,7 +235,7 @@ describe('what the owner said never to run (Story 102.2)', () => {
   })
 
   it('reads the folder the event names, and a cd over it', () => {
-    const event = (cwd: string, command: string): unknown => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd, tool_input: { command } })
+    const event = (cwd: string, command: string): Record<string, unknown> & { tool_input?: Record<string, unknown> } => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd, tool_input: { command } })
     expect(guardAnswer('claude', event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'git reset --hard'))).toBeNull()
     expect(guardAnswer('claude', event('/tmp/fixture', 'git stash clear'))).toBeNull()
     expect(guardAnswer('claude', event('/home/someone/code/BMN', 'git reset --hard'))).not.toBeNull()

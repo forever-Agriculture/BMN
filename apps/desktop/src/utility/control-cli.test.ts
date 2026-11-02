@@ -1,5 +1,5 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
-import { execFile, spawn as spawnChild, spawnSync } from 'node:child_process'
+import { execFile, spawn as spawnChild, spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -5193,7 +5193,7 @@ describe('the command guard runs everywhere and says when it does not (Story 102
   it('still holds inside a teammate\'s run, where every other command stays refused', async () => {
     const { home } = await homeWithBmn()
     // The same place a real ask runs: a systemd user scope of that name, told from the process's own cgroup.
-    const inAsk = (program: string, args: string[], input = ''): ReturnType<typeof spawnSync<string>> => spawnSync('systemd-run',
+    const inAsk = (program: string, args: string[], input = ''): SpawnSyncReturns<string> => spawnSync('systemd-run',
       ['--user', '--scope', '--quiet', `--unit=bmn-ask-test-${randomUUID()}`, `--setenv=HOME=${home}`, '--setenv=PATH=/usr/bin:/bin', '--', program, ...args],
       { input, encoding: 'utf8', env: { ...process.env, HOME: home } })
     const hook = inAsk('/bin/sh', ['-c', GUARD_CLAUDE], JSON.stringify(held))

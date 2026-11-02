@@ -2740,7 +2740,12 @@ by the owner.
 
 ## Read-only app health: `bmn doctor`
 
-`bmn doctor [--json]` shares Health's automatic doctor and works with BMN closed, without a socket or token.
+`bmn doctor [--details] [--json]` shares Health's automatic doctor and works with BMN closed, without a socket or token.
+By default it names each problem and what to do, fits one screen and gives leftovers as a count per kind and reason;
+`--details` adds each leftover's identity and route, and `--json` holds everything. A `claude` or `codex` line says what was
+checked, what could not be and whether it needs you; a check out of time on a busy machine says it was not judged. It also
+names an allow row that can run any program (Codex's rules or Claude Code's `permissions.allow`; fixed list: `sed`, `awk`,
+`find`, `xargs`, `env`, `bash`, `sh`, `python3`, `node`, `perl`, `pnpm run`) when only flags or a script path follow it.
 It reads BMN's hooks, skills, tools and rules checks, qualified Claude/Codex doctors, and show-only leftovers.
 There is no cleanup command. It never installs, removes or changes the inspected files.
 
