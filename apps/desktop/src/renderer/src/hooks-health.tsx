@@ -31,7 +31,7 @@ export function hookRowWords(app: HookAppAtStart): { needs: boolean; head: strin
   const leftWords = (entry: HookAppAtStart['left'][number]): string => app.harness === 'opencode' && entry.event === 'plugin' && (entry.why === 'changed' || entry.why === 'foreign')
     ? `plugin · ${HOOK_LEFT_WORDS[entry.why]} · Not BMN's · BMN leaves it` : `${entry.event} · ${HOOK_LEFT_WORDS[entry.why]}`
   // Story 102.4: a guard that does not answer lets the commands it holds through, leaving only the app's own rules (D3).
-  // What Codex says about BMN's entries has its own line below; the guard's standing then repeats it, or nothing needs him.
+  // What Codex says about BMN's entries has its own line below; the guard's standing would only repeat it.
   const guardBroken = app.commandGuard !== undefined && !['holds', 'not-approved', 'unverified', 'no-codex'].includes(app.commandGuard.state)
   const guardLine = guardBroken ? [app.commandGuard!.state === 'does-not-answer'
     ? `Command guard does not answer · ${app.commandGuard!.reason ?? 'no reason given'}`
@@ -41,7 +41,8 @@ export function hookRowWords(app: HookAppAtStart): { needs: boolean; head: strin
   const approval = app.approval
   const approvalLine = approval?.state === 'not-approved'
     ? [`Codex does not run ${approval.entries} of BMN's entries until you approve them · run /hooks in Codex`]
-    : approval?.state === 'unverified' ? [`BMN could not ask Codex whether it runs BMN's entries · ${approval.reason}`] : []
+    : approval?.state === 'unverified' ? [`BMN could not ask Codex whether it runs BMN's entries · ${approval.reason}`]
+      : approval?.state === 'no-codex' ? ['BMN cannot find Codex, so it cannot say whether it runs BMN\'s entries · check that it is on your PATH'] : []
   const floor = [...approvalLine, ...guardLine, ...rulesLine]
   if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: [...upgraded, ...older] }
   if (app.left.length === 0) return { needs: obsolete || floor.length > 0, head: inPlace, lines: [...floor, ...added, ...upgraded, ...older] }

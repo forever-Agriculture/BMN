@@ -68,6 +68,9 @@ describe('bmn doctor by default (102.12)', () => {
     const words = doctorText(view)
     expect(words).toContain('Codex does not run some of BMN\'s hook entries. It runs a new or changed entry only once you approve it, so its guard and BMN\'s view of its sessions are off. Run /hooks in Codex.')
     expect(words).toContain('BMN could not ask Codex whether it runs BMN\'s hook entries. Run `bmn hooks check`; it says why.')
+    const missing = doctorText({ ...VIEW, rows: [{ check: 'hooks', state: 'problems', stale: false, leftovers: [], problems: [
+      { code: 'hook-check', item: 1, app: 'codex', cause: 'approval:no-codex', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }] }] })
+    expect(missing).toContain('BMN cannot find Codex, whose hook file holds BMN\'s entries. Check that it is on your PATH')
   })
 
   it('says the wider line for a clean run', () => {

@@ -2769,7 +2769,7 @@ describe('bmn hooks check', () => {
     expect(result.stdout).toContain('apart from space, tab and newline')
     expect(result.stdout).toContain('inside a matcher')
     expect(result.stdout).toContain('is not a positive number')
-    expect(result.stdout).toContain('does not check that the harness will load the file')
+    expect(result.stdout).toContain('asks\n        real Codex')
   })
 
   it('names an entry whose only difference is whitespace', async () => {
@@ -3245,7 +3245,8 @@ it('ends every Codex report with the limit of what it checked', async () => {
     expect(install.stdout).toContain(join(codexHome, 'hooks.json'))
     expect(Object.keys(JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8')).hooks))
       .toEqual(expect.arrayContaining(CODEX_EVENTS))
-    expect(check.code).toBe(0)
+    // Not its exit: this new file's entries wait for his approval, or no Codex is here to ask (102.4).
+    expect(check.stdout).toContain('Every hook BMN expects is wired')
     // Nothing was read or written outside the temporary home (AC5).
     expect(install.stdout).not.toContain(homedir())
   })

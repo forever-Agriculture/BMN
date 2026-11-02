@@ -757,8 +757,8 @@ BMN can ask: it runs an entry only while it is enabled and approved, and it keep
 event, matcher, command and timeout, so **any change to an entry turns it off in Codex until he approves it again**. So
 `check` and BMN's start ask real Codex (`codex app-server`, `hooks/list`, read-only) about BMN's entries in its own file:
 an entry it will not run gives `not-approved` and Needs you, with the guard, prompt guard, messages and turn changes that
-need it said to be off; a missing list, no answer in 10 s or an answer BMN cannot read gives `unverified`, also Needs you,
-never "holds". BMN never writes that approval itself and never passes `--dangerously-bypass-hook-trust`. A test pins each
+need it said to be off; a missing list, no answer in 10 s or an answer BMN cannot read gives `unverified`, and no Codex
+on the PATH gives `no-codex` (its file holds BMN's entries, so that may be a PATH problem): both Needs you, never "holds". BMN never writes that approval itself and never passes `--dangerously-bypass-hook-trust`. A test pins each
 entry's full declaration, so a change to one is a decision. Codex loads its hook file strictly, so a mistake anywhere in
 it can stop every hook; `check` then finds BMN's entries unlisted. Session details shows the run's latest event (**Observed
 by BMN**, or **Not observed in this run**), and its **Hooks in Integrations › Health** opens this section; one received

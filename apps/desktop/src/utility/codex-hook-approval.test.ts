@@ -40,7 +40,8 @@ describe('asking Codex (102.4)', { timeout: 60_000 }, () => {
   it.each([
     ['a Codex with no such method', JSON.stringify({ id: 2, error: { code: -32601, message: 'method not found' } }), 'this Codex cannot list its hooks'],
     ['a shape it cannot read', JSON.stringify({ id: 2, result: { data: 'x' } }), 'an answer BMN cannot read'],
-    ['text that is not JSON', 'not json', 'an answer BMN cannot read']
+    ['text that is not JSON', 'not json', 'an answer BMN cannot read'],
+    ['JSON that is no message', 'null', 'an answer BMN cannot read']
   ])('says it could not read %s', async (_name, answer, reason) => {
     writeFileSync(join(root, 'answer'), answer)
     await expect(askCodexHooks(program(FAKE_CODEX), { env: env(), cwd: root })).resolves.toEqual({ state: 'unread', reason })
@@ -189,12 +190,16 @@ describe('the reports, through the real command (102.4)', () => {
     expect(cli(['hooks', 'check', 'codex'], place.env).stdout).toContain('run only once trusted')
   }, 90_000)
 
-  it('with no Codex, says so without asking him for anything', () => {
+  it('with no Codex to ask, never says holds and needs him: its file holds BMN\'s entries, so that may be a PATH problem', () => {
     const place = home(false)
     install(place)
     const asJson = cli(['hooks', 'check', 'codex', '--json'], place.env)
-    expect(asJson.status).toBe(0)
+    expect(asJson.status).toBe(1)
     expect(row(asJson.stdout)).toMatchObject({ commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' } })
+    const text = cli(['hooks', 'check', 'codex'], place.env).stdout
+    expect(text).toContain('command guard not verified: BMN cannot find Codex')
+    expect(text).not.toContain('command guard holds')
+    expect(text).not.toMatch(/prompt guard: active/u)
   }, 90_000)
 
   it('at BMN\'s start, reports it on the app\'s row after the install, whose own exit stays about the install', () => {

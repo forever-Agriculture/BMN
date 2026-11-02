@@ -34,7 +34,7 @@ export const PROBLEMS = Object.freeze({
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const HOOK_FLOOR_CAUSES = Object.freeze(['guard:does-not-answer', 'rules:missing'])
 /** Story 102.4: what Codex said about BMN's entries; no other app has this. */
-const HOOK_APPROVAL_CAUSES = Object.freeze(['approval:not-approved', 'approval:unverified'])
+const HOOK_APPROVAL_CAUSES = Object.freeze(['approval:not-approved', 'approval:unverified', 'approval:no-codex'])
 /** A guard's standing that another finding, or no finding, already says. */
 const GUARD_SAID_ELSEWHERE = Object.freeze(['holds', 'not-approved', 'unverified', 'no-codex'])
 /**
@@ -213,7 +213,7 @@ export function parseBmnDoctor(check, text, exitCode) {
       if (required.some(event => !seen.has(event))) partial = true
       // Stories 102.3 and 102.4: a guard that does not answer, or the app's own rules gone. A report from before them says nothing.
       if (object(app.commandGuard) && !GUARD_SAID_ELSEWHERE.includes(app.commandGuard.state)) add('hook-check', 'guard:does-not-answer')
-      if (object(app.approval) && ['not-approved', 'unverified'].includes(app.approval.state)) add('hook-check', `approval:${app.approval.state}`)
+      if (object(app.approval) && ['not-approved', 'unverified', 'no-codex'].includes(app.approval.state)) add('hook-check', `approval:${app.approval.state}`)
       if (typeof app.nativeRules === 'string' && app.nativeRules !== 'present') add('hook-check', 'rules:missing')
     }
   } else if (['skills', 'tools'].includes(check) && object(data) && Array.isArray(data.apps) && data.apps.length > 0) {

@@ -39,6 +39,7 @@ export function askCodexHooks(program, { env = process.env, cwd = homedir(), lim
     const unread = (reason) => finish({ state: 'unread', reason })
     const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`)
     const received = (message) => {
+      if (!isObject(message)) return unread('an answer BMN cannot read')
       if (message.id === 1) {
         if (!isObject(message.result)) return unread('Codex refused the question')
         send({ method: 'initialized' })
@@ -113,7 +114,7 @@ export function approvalWords(approval) {
   if (approval.state === 'approved') return 'Codex says it runs these entries; that does not prove one fired'
   if (approval.state === 'not-approved') return `Codex does not run ${approval.entries} of these entries (${approval.events.join(', ')}) until you approve them: run /hooks in Codex`
   if (approval.state === 'unverified') return `BMN could not ask Codex whether it runs these entries: ${approval.reason}`
-  return 'Codex is not installed, so nothing runs these entries'
+  return 'BMN cannot find Codex, so it cannot say whether it runs these entries: check that it is on your PATH'
 }
 
 /** What a report may still claim about a feature that needs `event`'s entry to run. */
@@ -122,7 +123,7 @@ export function claimWithApproval(line, approval, event) {
   const name = line.split(':')[0]
   if (approval.state === 'not-approved' && approval.events.includes(event)) return `${name}: off, Codex has not approved its entry`
   if (approval.state === 'unverified') return `${name}: not verified, BMN could not ask Codex whether it runs its entry`
-  if (approval.state === 'no-codex') return `${name}: off, Codex is not installed`
+  if (approval.state === 'no-codex') return `${name}: not verified, BMN cannot find Codex`
   return line
 }
 
@@ -135,5 +136,8 @@ export function guardWithApproval(standing, approval) {
   return standing
 }
 
-/** Whether a report's reader has something to do. */
-export const approvalNeedsHim = (approval) => approval?.state === 'not-approved' || approval?.state === 'unverified'
+/**
+ * Whether a report's reader has something to do. Every state but approved: BMN's entries are in Codex's own file, so "no Codex"
+ * is as likely a PATH problem as a removal, and neither says its guard runs.
+ */
+export const approvalNeedsHim = (approval) => approval !== null && approval !== undefined && approval.state !== 'approved'

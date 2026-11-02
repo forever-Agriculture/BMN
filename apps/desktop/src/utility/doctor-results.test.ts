@@ -66,7 +66,7 @@ describe('doctor result projection', () => {
     expect(causes({ commandGuard: { state: 'unverified', reason: 'r' }, approval: { state: 'unverified', reason: 'r' } })).toEqual(['approval:unverified'])
     expect(causes({ commandGuard: { state: 'holds' }, approval: { state: 'not-approved', entries: 1, events: ['Stop'] } })).toEqual(['approval:not-approved'])
     expect(causes({ commandGuard: { state: 'holds' }, approval: { state: 'approved' } })).toEqual([])
-    expect(causes({ commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' } })).toEqual([])
+    expect(causes({ commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' } })).toEqual(['approval:no-codex'])
     expect(causes({ commandGuard: { state: 'does-not-answer', reason: 'r' } })).toEqual(['guard:does-not-answer'])
   })
 
@@ -106,7 +106,7 @@ describe('doctor result projection', () => {
     }
     expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }] })).not.toBeNull()
     // Story 102.4: only Codex answers for its approvals.
-    for (const cause of ['approval:not-approved', 'approval:unverified']) {
+    for (const cause of ['approval:not-approved', 'approval:unverified', 'approval:no-codex']) {
       expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'codex', cause }] }), cause).not.toBeNull()
       expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'claude', cause }] }), cause).toBeNull()
     }

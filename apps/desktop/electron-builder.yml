@@ -178,6 +178,8 @@ extraResources:
     to: bin/native-rules.mjs
   - from: bin/hooks-floor.mjs
     to: bin/hooks-floor.mjs
+  - from: bin/codex-hook-approval.mjs
+    to: bin/codex-hook-approval.mjs
   - from: bin/policy-cli.mjs
     to: bin/policy-cli.mjs
   # Epic 84: `bmn grant`.
