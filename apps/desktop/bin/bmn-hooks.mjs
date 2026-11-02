@@ -1,7 +1,7 @@
 // MODULE: bmn-hooks.mjs - the bmn command line behind bin/bmn: hook events as attention calls, the agents' hook files and `bmn hooks` check, install and install --absent
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { createHash } from 'node:crypto'
-import { closeSync, constants, copyFileSync, existsSync, fstatSync, openSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, constants, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -12,6 +12,8 @@ import { CONVERSATION_REFERENCE, CONVERSATION_SOURCES, HOOKS_USAGE, OPENCODE_REF
 import { CliError, UsageError, parseArguments } from './bmn-commands.mjs'
 import { EARLIER_OPENCODE_PLUGINS, HOOK_AGENTS, OPENCODE_PLUGIN } from './bmn-opencode-plugin.mjs'
 import { usageFailure } from './bmn-results.mjs'
+import { CODEX_RULES, codexRulesPath, missingClaudeRows, withClaudeRows } from './native-rules.mjs'
+import { guardWords, probeCommandGuard } from './hooks-floor.mjs'
 
 export { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, holdAtTestGate, hookEventName, hookRequests, openCodeSubagent, phoneAnswerable, retiredOr, runHooks, userInputTool }
 
@@ -448,7 +450,7 @@ function otherPermissionHook(event, launch = { pid: 0, procRoot: '/proc' }) {
     try { return new RegExp(matcher).test(event.tool_name) } catch { return true }
   }
   return groups.some((group) => !isObject(group) || !Array.isArray(group.hooks) || (matches(group.matcher) &&
-    group.hooks.some((entry) => !isObject(entry) || entry.type !== 'command' || !['wired', 'older'].includes(hookEntryState(entry.command, 'claude')))))
+    group.hooks.some((entry) => !isObject(entry) || entry.type !== 'command' || !['wired', 'older'].includes(hookEntryState(entry.command, 'claude', 'PermissionRequest')))))
 }
 
 /** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
@@ -699,12 +701,24 @@ function hookFilePath(agent) {
   return `${absoluteUncollapsed(moved || `${homedir()}/${directory}`)}/${rest.join('/')}`
 }
 
-function hookEntryCommand(agent) {
+/** The entry for every event but a guarded app's PreToolUse: it does nothing while BMN is not running. */
+function gatedEntryCommand(agent) {
   return `[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
 }
 
+/**
+ * Story 102.4: PreToolUse carries the command guard, which needs nothing of a running BMN, so its entry runs in every session.
+ * Outside BMN the command is the link the desktop install keeps in `~/.local/bin`.
+ */
+function hookEntryCommand(agent, event) {
+  if (event === 'PreToolUse' && (agent === 'claude' || agent === 'codex')) {
+    return `PATH="$PATH:$HOME/.local/bin"; command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
+  }
+  return gatedEntryCommand(agent)
+}
+
 function hookEntry(agent, event) {
-  return { type: 'command', timeout: hookEntryTimeout(agent, event), command: hookEntryCommand(agent) }
+  return { type: 'command', timeout: hookEntryTimeout(agent, event), command: hookEntryCommand(agent, event) }
 }
 
 /**
@@ -720,7 +734,7 @@ function shortTimeouts(agent, data) {
     // Only a timeout above the ordinary one is raised; Codex's shorter caps never touch an existing entry.
     if (wanted <= HOOK_ENTRY_TIMEOUT || !Array.isArray(data.hooks[event])) continue
     const ours = data.hooks[event].flatMap((group) => isObject(group) && !gatesEvent(group.matcher, agent, event) && Array.isArray(group.hooks) ? group.hooks : [])
-      .filter((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)))
+      .filter((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent, event)))
     if (ours.some((entry) => typeof entry.timeout === 'number' && entry.timeout > 0 && entry.timeout < wanted)) short.push(event)
   }
   return short
@@ -734,7 +748,7 @@ function raiseTimeouts(agent, data, events) {
     const wanted = hookEntryTimeout(agent, event)
     hooks[event] = hooks[event].map((group) => !isObject(group) || gatesEvent(group.matcher, agent, event) || !Array.isArray(group.hooks) ? group : {
       ...group,
-      hooks: group.hooks.map((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)) &&
+      hooks: group.hooks.map((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent, event)) &&
         typeof entry.timeout === 'number' && entry.timeout > 0 && entry.timeout < wanted ? { ...entry, timeout: wanted } : entry)
     })
   }
@@ -747,16 +761,16 @@ function olderMatcher(matcher, agent, event) {
 }
 
 /** A group holding only BMN's own recognised entries, so changing its matcher changes no one else's hook. */
-function onlyOurs(group, agent) {
+function onlyOurs(group, agent, event) {
   return Array.isArray(group.hooks) && group.hooks.length > 0 &&
-    group.hooks.every((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent)))
+    group.hooks.every((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent, event)))
 }
 
 /** The events whose BMN-only group still carries an older matcher (Story 83.4: Claude's PreToolUse before Bash). */
 function olderMatchers(agent, data) {
   if (!isObject(data) || !isObject(data.hooks)) return []
   return Object.keys(HOOK_FILES[agent]?.olderMatchers ?? {}).filter((event) => Array.isArray(data.hooks[event]) &&
-    data.hooks[event].some((group) => isObject(group) && olderMatcher(group.matcher, agent, event) && onlyOurs(group, agent)))
+    data.hooks[event].some((group) => isObject(group) && olderMatcher(group.matcher, agent, event) && onlyOurs(group, agent, event)))
 }
 
 /** `data` with those groups given the matcher BMN writes now; every other group and byte of meaning kept. */
@@ -764,7 +778,7 @@ function widenMatchers(agent, data, events) {
   if (events.length === 0) return data
   const hooks = { ...data.hooks }
   for (const event of events) {
-    hooks[event] = hooks[event].map((group) => isObject(group) && olderMatcher(group.matcher, agent, event) && onlyOurs(group, agent)
+    hooks[event] = hooks[event].map((group) => isObject(group) && olderMatcher(group.matcher, agent, event) && onlyOurs(group, agent, event)
       ? { ...group, matcher: HOOK_FILES[agent].matchers[event] } : group)
   }
   return { ...data, hooks }
@@ -792,12 +806,14 @@ function hookEntryTimeout(agent, event) {
  * It reports what is *configured*, which is not the same as what will run: the entry BMN writes is
  * itself guarded and does nothing while BMN is not running. That distinction is in the docs.
  */
-function recognisedEntries(agent) {
-  const documented = hookEntryCommand(agent)
+function recognisedEntries(agent, event) {
+  const gated = gatedEntryCommand(agent)
   return [
-    documented,
+    hookEntryCommand(agent, event),
+    // A guarded app's PreToolUse before Story 102.4, which held only inside a BMN session.
+    gated,
     // The owner's own files predate Epic 13's rename, and `bmn hook` still reads the older name.
-    documented.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET'),
+    gated.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET'),
     // The call with nothing around it, which is what someone writes who wants it to run always.
     `bmn hook ${agent}`
   ]
@@ -809,12 +825,12 @@ function recognisedEntries(agent) {
  * `bmn hook <agent>`. A `named` entry counts as missing - BMN will not say a command it does not
  * read works - but `check` shows it, because it is the one the owner needs to look at.
  */
-function hookEntryState(command, agent) {
+function hookEntryState(command, agent, event) {
   // Reachable for a lenient harness, whose file is read rather than refused over a bad entry.
   if (typeof command !== 'string') return 'missing'
   const text = command.replace(SHELL_BLANKS, '')
-  if (text === hookEntryCommand(agent)) return 'wired'
-  if (recognisedEntries(agent).includes(text)) return 'older'
+  if (text === hookEntryCommand(agent, event)) return 'wired'
+  if (recognisedEntries(agent, event).includes(text)) return 'older'
   // The note is for the owner to read, not a verdict, so it may look past any whitespace at all.
   return namesHook(command, agent) ? 'named' : 'missing'
 }
@@ -870,7 +886,7 @@ function hookEventState(listed, agent, event) {
       if (!isObject(entry) || entry.type !== 'command') continue
       // An entry the harness will not run is not an entry BMN can answer for. It still names the
       // hook, so the owner is shown it rather than left with an unexplained duplicate.
-      const recognition = hookEntryState(entry.command, agent)
+      const recognition = hookEntryState(entry.command, agent, event)
       const runnable = runnableEntry(entry, agent)
       const read = runnable ? recognition : (namesHook(entry.command, agent) ? 'named' : 'missing')
       if (gated && olderMatcher(group.matcher, agent, event) && (read === 'wired' || read === 'older')) {
@@ -996,6 +1012,87 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
   const missing = events.filter((row) => !row.optional && row.state === 'missing').map((row) => row.event)
   return { agent, file: path, state: file.state, ...(file.detail === undefined ? {} : { detail: file.detail }), events, missing }
 }
+
+/** BMN's own wordings that the current entry replaces: the older socket name, and a PreToolUse that held only inside BMN. The bare call is the owner's. */
+function replacedWordings(agent, event) {
+  const current = hookEntryCommand(agent, event)
+  const gated = gatedEntryCommand(agent)
+  return [gated, gated.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET')].filter((wording) => wording !== current)
+}
+
+/** The events holding one of BMN's replaced wordings; his entries beside them are never read further. */
+function olderWordings(agent, data) {
+  if (!isObject(data) || !isObject(data.hooks)) return []
+  return [...HOOK_FILES[agent].events, ...HOOK_FILES[agent].optional].filter((event) => {
+    const replaced = replacedWordings(agent, event)
+    return Array.isArray(data.hooks[event]) && data.hooks[event].some((group) => isObject(group) && Array.isArray(group.hooks) &&
+      group.hooks.some((entry) => isObject(entry) && entry.type === 'command' && typeof entry.command === 'string' && replaced.includes(entry.command.replace(SHELL_BLANKS, ''))))
+  })
+}
+
+/** The file with BMN's own entries reading the one current form (Story 102.4 AC4); every other entry and key stays. */
+function upgradeWordings(agent, data, events) {
+  if (events.length === 0) return data
+  const hooks = { ...data.hooks }
+  for (const event of events) {
+    const replaced = replacedWordings(agent, event)
+    hooks[event] = hooks[event].map((group) => (isObject(group) && Array.isArray(group.hooks) ? {
+      ...group,
+      hooks: group.hooks.map((entry) => (isObject(entry) && entry.type === 'command' && typeof entry.command === 'string' && replaced.includes(entry.command.replace(SHELL_BLANKS, ''))
+        ? { ...entry, command: hookEntryCommand(agent, event) } : entry))
+    } : group))
+  }
+  return { ...data, hooks }
+}
+
+/** The file's PreToolUse guard entry as `hookEventState` reads it: the entry to run, or why BMN does not run one. */
+function guardEntry(agent, file) {
+  const groups = isObject(file.data?.hooks) ? file.data.hooks.PreToolUse : undefined
+  let changed = false
+  for (const group of Array.isArray(groups) ? groups : []) {
+    if (!isObject(group)) continue
+    const gated = gatesEvent(group.matcher, agent, 'PreToolUse') && !olderMatcher(group.matcher, agent, 'PreToolUse')
+    for (const entry of Array.isArray(group.hooks) ? group.hooks : []) {
+      if (!isObject(entry) || entry.type !== 'command') continue
+      const state = hookEntryState(entry.command, agent, 'PreToolUse')
+      if (state === 'wired' || state === 'older') {
+        if (!gated && runnableEntry(entry, agent)) return { command: entry.command.replace(SHELL_BLANKS, '') }
+        changed = true
+      } else if (state === 'named') changed = true
+    }
+  }
+  return { command: null, changed }
+}
+
+/** Story 102.4 AC2: whether the guard answers, run only from an entry whose text BMN recognises. */
+function commandGuardStanding(agent, file) {
+  const found = guardEntry(agent, file)
+  if (found.command !== null) return probeCommandGuard(agent, found.command)
+  return { state: found.changed ? 'changed' : 'missing' }
+}
+
+const CLAUDE_RULES_UNUSABLE = 'unusable'
+
+/** Whether the app's own rules are in place (Story 102.3); `path` is the app's hook file, read as `file`. */
+function nativeRules(agent, path, file) {
+  if (agent === 'claude') {
+    const missing = missingClaudeRows(file.data ?? {}, homedir())
+    return missing === null ? CLAUDE_RULES_UNUSABLE : missing.length === 0 ? 'present' : 'missing'
+  }
+  return currentText(codexRulesPath(dirname(path))) === CODEX_RULES ? 'present' : 'missing'
+}
+
+/** Writes Codex's rules file when it differs: a file BMN owns whole. Whether it wrote. */
+function writeCodexRules(path) {
+  const rules = codexRulesPath(dirname(path))
+  if (currentText(rules) === CODEX_RULES) return false
+  mkdirSync(dirname(rules), { recursive: true })
+  writeAtomically(rules, CODEX_RULES, () => assertDefaultsAdmission())
+  return true
+}
+
+/** The rows `file` lacks, for Claude; Codex's rules are a file of their own. */
+const claudeRowsToAdd = (agent, file) => (agent === 'claude' ? missingClaudeRows(file.data ?? {}, homedir()) ?? [] : [])
 
 /** The documented entry added for each missing event, beside the hooks already registered for it. */
 function installHooks(agent, data, missing) {
@@ -1135,14 +1232,23 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   // Epic 69: whether this app's turns are recorded, and on which version waiting for the prompt hook was measured.
   const marks = await import('./turn-marks.mjs').catch(() => null)
   const turns = new Map(marks === null ? [] : reports.map((report) => [report.agent, marks.turnStanding(report.agent)]))
+  // Stories 102.3 and 102.4: the app's own rules, and whether the command guard answers when asked.
+  const floor = new Map(reports.filter((report) => report.agent !== 'opencode').map((report) => {
+    const file = readHookFile(report.file, report.agent)
+    return [report.agent, { commandGuard: commandGuardStanding(report.agent, file), nativeRules: nativeRules(report.agent, report.file, file) }]
+  }))
   const more = (report) => ({ ...(standing.has(report.agent) ? { guard: standing.get(report.agent), messages: messages.get(report.agent) } : {}), ...(turns.has(report.agent) ? { turnChanges: turns.get(report.agent) } : {}) })
   if (asJson) {
     // This owner command finishes synchronously; a pipe can lose an asynchronous stdout write
     // before the CLI exits. The desktop checker reads that pipe, so finish the report first.
-    writeSync(1, `${JSON.stringify({ ok, agents: reports.map((report) => ({ ...report, ...more(report) })) }, null, 2)}\n`)
+    writeSync(1, `${JSON.stringify({ ok, agents: reports.map((report) => ({ ...report, ...more(report), ...floor.get(report.agent) })) }, null, 2)}\n`)
     return ok ? 0 : 1
   }
-  const lines = reports.map((report) => `${describeHookCheck(report)}${Object.values(more(report)).map((line) => `\n  ${line}`).join('')}`)
+  const floorLines = (report) => {
+    const held = floor.get(report.agent)
+    return held === undefined ? [] : [guardWords(held.commandGuard), `native rules ${held.nativeRules}`]
+  }
+  const lines = reports.map((report) => `${describeHookCheck(report)}${[...Object.values(more(report)), ...floorLines(report)].map((line) => `\n  ${line}`).join('')}`)
   lines.push(ok
     ? 'Every hook BMN expects is wired. This is what is configured, not proof that a hook fired.'
     : 'Run `bmn hooks install <agent>` to add the missing entries. This reports configuration, not that a hook fired.')
@@ -1384,9 +1490,12 @@ async function installHooksCommand(agent, path, asJson, yes) {
   const report = checkHooks(agent, path, file)
   const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
   const widened = file.state === 'read' ? olderMatchers(agent, file.data) : []
-  if (report.missing.length === 0 && raised.length === 0 && widened.length === 0) {
+  const reworded = file.state === 'read' ? olderWordings(agent, file.data) : []
+  const rows = claudeRowsToAdd(agent, file)
+  if (report.missing.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0) {
+    const wroteRules = agent === 'codex' ? await withDefaultsAdmission(async () => writeCodexRules(path)) : false
     const message = `Nothing to do: every hook BMN expects is already in ${path}.`
-    process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path }, null, 2) : message}\n`)
+    process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path, rules: wroteRules }, null, 2) : `${message}${wroteRules ? ` Wrote ${codexRulesPath(dirname(path))}.` : ''}`}\n`)
     return 0
   }
   // Only now, when there is a write to do. AC2 gives an already-wired file a successful no-op, and
@@ -1400,7 +1509,7 @@ async function installHooksCommand(agent, path, asJson, yes) {
     return 1
   }
   const indent = jsonIndent(file.text)
-  const nextText = `${JSON.stringify(installHooks(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), report.missing), null, indent)}\n`
+  const nextText = `${JSON.stringify(withClaudeRows(installHooks(agent, upgradeWordings(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), reworded), report.missing), rows), null, indent)}\n`
   let target
   try { target = linkTarget(path) } catch (error) {
     process.stderr.write(`bmn: ${error.message}\n`)
@@ -1408,7 +1517,8 @@ async function installHooksCommand(agent, path, asJson, yes) {
   }
   const diff = unifiedDiff(file.text, nextText, path)
   const changes = [...report.missing, ...raised.map((event) => `${event} timeout ${hookEntryTimeout(agent, event)} s`),
-    ...widened.map((event) => `${event} matcher ${HOOK_FILES[agent].matchers[event]}`)]
+    ...widened.map((event) => `${event} matcher ${HOOK_FILES[agent].matchers[event]}`),
+    ...reworded.map((event) => `${event} current wording`), ...(rows.length === 0 ? [] : [`${rows.length} deny rules`])]
   if (!await confirmHookWrite(path, target, changes, diff, yes, asJson)) return confirmationResult(path, asJson)
   return withDefaultsAdmission(async () => {
     const unchanged = () => {
@@ -1433,6 +1543,7 @@ async function installHooksCommand(agent, path, asJson, yes) {
       }
       // Checked once more with the replacement already staged, so the window is as small as a rename.
       writeAtomically(path, nextText, unchanged)
+      if (agent === 'codex') writeCodexRules(path)
     } catch (error) {
       if (error instanceof CliError) {
         process.stderr.write(`bmn: ${error.code}: ${error.message}\n`)
@@ -1445,12 +1556,14 @@ async function installHooksCommand(agent, path, asJson, yes) {
       ? 'Codex must trust the hooks once: run /hooks in Codex. `bmn hooks check` reports configuration, not that a hook fired.'
       : '`bmn hooks check` reports configuration, not that a hook fired.'
     if (asJson) {
-      process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), backup, file: path, diff, note: trust }, null, 2)}\n`)
+      process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(reworded.length === 0 ? {} : { reworded }), backup, file: path, diff, note: trust }, null, 2)}\n`)
       return 0
     }
     const lines = report.missing.length === 0 ? [] : [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]
     if (raised.length > 0) lines.push(`Raised BMN's own entry timeout in ${path}: ${raised.map((event) => `${event} to ${hookEntryTimeout(agent, event)} s`).join(', ')}`)
     if (widened.length > 0) lines.push(`Widened BMN's own matcher in ${path}: ${widened.map((event) => `${event} to ${HOOK_FILES[agent].matchers[event]}`).join(', ')}`)
+    if (reworded.length > 0) lines.push(`Brought BMN's own entries in ${path} to the current wording: ${reworded.join(', ')}`)
+    if (rows.length > 0) lines.push(`Added ${rows.length} deny rules to ${path}`)
     if (backup !== null) lines.push(`Backup: ${backup}`)
     lines.push('', diff, '', trust)
     process.stdout.write(`${lines.join('\n')}\n`)
@@ -1487,7 +1600,7 @@ function absentVerdicts(agent, report) {
     } else if ((row.gated ?? []).length > 0) {
       left.push({ event: row.event, why: 'gated' })
     } else if ((row.unrecognised ?? []).length > 0) {
-      const ours = row.unrecognised.some((command) => ['wired', 'older'].includes(hookEntryState(command, agent)))
+      const ours = row.unrecognised.some((command) => ['wired', 'older'].includes(hookEntryState(command, agent, row.event)))
       left.push({ event: row.event, why: ours ? 'changed' : 'foreign' })
     } else if (!row.optional) {
       absent.push(row.event)
@@ -1525,24 +1638,37 @@ function writeHookFile(path, before, target, nextText) {
   return backup
 }
 
+/** Stories 102.3 and 102.4, as the start-up install reports them, once the file holds what it will hold. */
+function floorAtStart(agent, path) {
+  const file = readHookFile(path, agent)
+  return { commandGuard: commandGuardStanding(agent, file), nativeRules: nativeRules(agent, path, file) }
+}
+
 function absentClaudeOrCodex(agent, path) {
   const file = readHookFile(path, agent)
   if (file.state !== 'read' && file.state !== 'missing') return { state: 'left', placed: [], older: [], installed: [], left: [], ...unusableFile(file, path) }
   const verdicts = absentVerdicts(agent, checkHooks(agent, path, file))
-  const done = { placed: verdicts.placed, older: verdicts.older, left: verdicts.left }
+  const reworded = file.state === 'read' ? olderWordings(agent, file.data) : []
+  // Only what is not being brought to the current wording stays "older" in the report.
+  const done = { placed: verdicts.placed, older: verdicts.older.filter((event) => !reworded.includes(event)), left: verdicts.left }
+  const rows = claudeRowsToAdd(agent, file)
+  const wroteRules = agent === 'codex' && writeCodexRules(path)
   // Epic 78: BMN's own entry with a timeout too short for what it now does is BMN's to raise.
   const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
   // Story 83.4: BMN's own group with the matcher from before the guard is BMN's to widen.
   const widened = file.state === 'read' ? olderMatchers(agent, file.data) : []
-  if (verdicts.absent.length === 0 && raised.length === 0 && widened.length === 0) return { state: 'checked', ...done, installed: [] }
+  if (verdicts.absent.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0) {
+    return { state: wroteRules ? 'installed' : 'checked', ...done, installed: [], ...(wroteRules ? { rules: 'written' } : {}), ...floorAtStart(agent, path) }
+  }
   if (rewrittenNumbers(file.text).length > 0) {
     return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${path} holds a number BMN cannot write back unchanged` }
   }
-  const nextText = `${JSON.stringify(installHooks(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), verdicts.absent), null, jsonIndent(file.text))}\n`
+  const nextText = `${JSON.stringify(withClaudeRows(installHooks(agent, upgradeWordings(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), reworded), verdicts.absent), rows), null, jsonIndent(file.text))}\n`
   const backup = writeHookFile(path, file.state === 'missing' ? null : file.text, linkTarget(path), nextText)
   return {
     state: 'installed', ...done, placed: [...verdicts.placed, ...verdicts.absent], installed: verdicts.absent,
-    ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(backup === null ? {} : { backups: [backup] })
+    ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(reworded.length === 0 ? {} : { reworded }),
+    ...(rows.length === 0 && !wroteRules ? {} : { rules: 'written' }), ...(backup === null ? {} : { backups: [backup] }), ...floorAtStart(agent, path)
   }
 }
 
@@ -1667,10 +1793,13 @@ async function installAbsentCommand(agents, pathFor, asJson) {
         ...((result.upgraded ?? []).length > 0 ? [`  upgraded from an earlier BMN release: ${result.upgraded.join(', ')}`] : []),
         ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
         ...((result.widened ?? []).length > 0 ? [`  matcher widened: ${result.widened.join(', ')}`] : []),
+        ...((result.reworded ?? []).length > 0 ? [`  brought to the current wording: ${result.reworded.join(', ')}`] : []),
+        ...(result.rules ? ['  native rules written'] : []),
         `  in place: ${result.placed.length}${result.older.length > 0 ? ` (${result.older.join(', ')} in an older wording)` : ''}`,
         ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
         ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
-        ...(result.backups ?? []).map((backup) => `  backup: ${backup}`)
+        ...(result.backups ?? []).map((backup) => `  backup: ${backup}`),
+        ...(result.commandGuard ? [`  ${guardWords(result.commandGuard)}`, `  native rules ${result.nativeRules}`] : [])
       ]
       return [head, ...body].join('\n')
     })

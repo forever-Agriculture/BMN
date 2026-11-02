@@ -6,14 +6,15 @@ import { AGENT_BRIEF, GLOBAL_OPTIONS, HANDOFF_OUTLINE, TERMINAL_BRIEF, USAGE } f
 import { COMMANDS, CliError, UsageError, call, commandUsage, parseArguments, readCredentials, requireNonEmpty } from './bmn-commands.mjs'
 import { describeResult, resumeCommandRequest, takePipedField, tellRequest, usageFailure } from './bmn-results.mjs'
 import { runHooks } from './bmn-hooks.mjs'
-import { runHook } from './bmn-hook-runtime.mjs'
+import { runGuardOnly, runHook } from './bmn-hook-runtime.mjs'
 
 async function main(argv) {
   // Epic 72: inside a teammate's run no BMN command launches, controls or reads anything: not asks,
-  // research, the judge, the roster or the app (R72-NFR4). A hook there does nothing, as it fails nowhere.
+  // research, the judge, the roster or the app (R72-NFR4). A hook there runs only the stateless command guard.
   const nested = nestedAsk()
   if (nested !== null) {
-    if (argv[0] === 'hook' || (argv[0] === 'statusline' && argv[1] === 'report')) return 0
+    if (argv[0] === 'hook') return runGuardOnly(argv.slice(1))
+    if (argv[0] === 'statusline' && argv[1] === 'report') return 0
     writeSync(2, `${nestedWords(nested)}\n`)
     return 10
   }

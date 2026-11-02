@@ -126,7 +126,9 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
   }
   const measured = guard.MESSAGE_HANDOVER[agent]
   if (measured === undefined || measured.event !== event.hook_event_name) return
-  const left = () => guard.MESSAGE_LIMIT_MS - (Date.now() - reported)
+  // A test seam, like BMN_PROC_ROOT: the 300 ms are a real-time promise this process cannot keep on a loaded machine, where the message waits for the next event.
+  const limit = Number(process.env.BMN_HOOK_MESSAGE_LIMIT_MS) || guard.MESSAGE_LIMIT_MS
+  const left = () => limit - (Date.now() - reported)
   if (left() <= 0) return
   const destination = await guard.messageDestinationWithin({
     agent, pid: agentPid, procRoot,
@@ -167,6 +169,33 @@ async function markTurnStart(marks, mark, socketPath, token) {
 }
 
 /**
+ * Story 83.4: the command guard's answer for one event, printed; whether it held. It fails open by the owner's choice (Epic 102,
+ * D3), so the reason a guard cannot load goes to the error stream, for `bmn hooks check` to say.
+ */
+async function answerFromGuard(agent, event) {
+  const guard = await import('./command-guard.mjs').catch((error) => {
+    process.stderr.write(`bmn: the command guard cannot load (${error.code ?? error.message})\n`)
+    return null
+  })
+  const answer = guard?.guardAnswer(agent, event) ?? null
+  if (answer !== null) writeSync(1, answer)
+  return answer !== null
+}
+
+/** A hook inside a teammate's run (Epic 72): the stateless guard still answers (Story 102.4), and nothing else runs. */
+export async function runGuardOnly(args) {
+  const [agent] = args
+  if (args.length !== 1 || !Object.hasOwn(HOOK_AGENTS, agent) || process.stdin.isTTY) return 0
+  try {
+    const event = JSON.parse(readFileSync(0, 'utf8'))
+    if (isObject(event) && event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash') await answerFromGuard(agent, event)
+  } catch {
+    // An event it cannot read gets nothing, as everywhere in a hook.
+  }
+  return 0
+}
+
+/**
  * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with these
  * exceptions: the answer that stops a prompt the guard refused, the refusal of a blocking question while the
  * owner said away (Story 76.4), and BMN's start brief, the away state and a message for its own agent, which
@@ -191,11 +220,7 @@ async function runHook(args) {
   // Story 83.4: the command guard decides first, from the command text alone, for every agent this entry runs for (a
   // dispatched one too), before any process, file or socket is read. It only ever holds; a command it does not hold goes on.
   if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash') {
-    const answer = (await import('./command-guard.mjs').catch(() => null))?.guardAnswer(agent, event) ?? null
-    if (answer !== null) {
-      writeSync(1, answer)
-      return 0
-    }
+    if (await answerFromGuard(agent, event)) return 0
     // Claude's Bash reaches this hook only for the guard (its matcher), so nothing else is delivered for it.
     if (agent === 'claude') return 0
   }

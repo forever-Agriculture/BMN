@@ -1,10 +1,10 @@
 // MODULE: desktop-entry.mjs - installs the packaged app where this desktop looks for applications; --pin adds it to the GNOME dock
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
+import { commandLinkIsOurs, commandLinkPath, commandLinkScript, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 
 // Must match "desktopName" in apps/desktop/package.json: Electron derives the Wayland app_id from it.
@@ -42,6 +42,11 @@ function installDesktopEntry() {
   // The launcher is replaced by rename, so a launcher already waiting on an update keeps reading its own copy.
   const launcher = launcherPath()
   writeAtomically(launcher, launcherScript({ binary, statusPath: join(updateStateDirectory(), 'latest.json') }), 0o755)
+
+  const commandLink = commandLinkPath()
+  const standing = existsSync(commandLink) ? readFileSync(commandLink, 'utf8') : null
+  if (commandLinkIsOurs(standing)) writeAtomically(commandLink, commandLinkScript(binary), 0o755)
+  else console.error(`Left ${commandLink}: not BMN's. The command guard reaches only sessions that have bmn on their PATH.`)
 
   const entryPath = join(dataHome, 'applications', DESKTOP_ID)
   writeAtomically(entryPath, [

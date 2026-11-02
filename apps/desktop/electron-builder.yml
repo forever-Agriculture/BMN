@@ -166,6 +166,12 @@ extraResources:
   # Epic 83: the hook's command guard and `bmn policy`.
   - from: bin/command-guard.mjs
     to: bin/command-guard.mjs
+  - from: bin/secret-list.mjs
+    to: bin/secret-list.mjs
+  - from: bin/native-rules.mjs
+    to: bin/native-rules.mjs
+  - from: bin/hooks-floor.mjs
+    to: bin/hooks-floor.mjs
   - from: bin/policy-cli.mjs
     to: bin/policy-cli.mjs
   # Epic 84: `bmn grant`.

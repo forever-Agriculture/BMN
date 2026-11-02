@@ -30,11 +30,19 @@ export function hookRowWords(app: HookAppAtStart): { needs: boolean; head: strin
   ]
   const leftWords = (entry: HookAppAtStart['left'][number]): string => app.harness === 'opencode' && entry.event === 'plugin' && (entry.why === 'changed' || entry.why === 'foreign')
     ? `plugin · ${HOOK_LEFT_WORDS[entry.why]} · Not BMN's · BMN leaves it` : `${entry.event} · ${HOOK_LEFT_WORDS[entry.why]}`
+  // Story 102.4: a guard that does not answer lets the commands it holds through, leaving only the app's own rules (D3).
+  const guardBroken = app.commandGuard !== undefined && app.commandGuard.state !== 'holds'
+  const guardLine = guardBroken ? [app.commandGuard!.state === 'does-not-answer'
+    ? `Command guard does not answer · ${app.commandGuard!.reason ?? 'no reason given'}`
+    : app.commandGuard!.state === 'changed' ? 'Command guard · its entry is not one BMN wrote, so BMN did not run it' : 'Command guard · no entry'] : []
+  const rulesMissing = app.nativeRules === 'missing' || app.nativeRules === 'unusable'
+  const rulesLine = rulesMissing ? [`The app's own rules · ${app.nativeRules === 'missing' ? 'missing' : 'its settings cannot take them'}`] : []
+  const floor = [...guardLine, ...rulesLine]
   if (app.why !== undefined) return { needs: true, head: `The file · ${HOOK_LEFT_WORDS[app.why]} · left as it is`, lines: [...upgraded, ...older] }
-  if (app.left.length === 0) return { needs: obsolete, head: inPlace, lines: [...added, ...upgraded, ...older] }
+  if (app.left.length === 0) return { needs: obsolete || floor.length > 0, head: inPlace, lines: [...floor, ...added, ...upgraded, ...older] }
   return {
     needs: true, head: `${inPlace} · ${app.left.length === 1 ? 'one left as it is' : `${app.left.length} left as they are`}`,
-    lines: [...app.left.map(leftWords), ...added, ...upgraded, ...older]
+    lines: [...floor, ...app.left.map(leftWords), ...added, ...upgraded, ...older]
   }
 }
 

@@ -9,7 +9,7 @@ import { BrowserAccountsStore } from '../../bin/browser-accounts-store.mjs'
 import type { AddressInfo } from 'node:net'
 import { LUNA_GO_PROPOSAL, type AutoTestKind, type AutoTestsView } from '@bmn/protocol'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSavePlan, RulesSnapshot, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, teamRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextTests } from '../../bin/agents-context.mjs'
 import { loadDoctorState, saveDoctorState } from '../../bin/doctor.mjs'
@@ -20,6 +20,8 @@ import { fetchPublicPage } from '../../bin/agents-research.mjs'
 import { judgeProposal } from '../../bin/agents-roster.mjs'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
 import { fenceEndedWords, fileToApproved, installAgentsIpcHandlers, researchEndedWords, type AgentsIpcHandle } from './agents-ipc'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 /** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */

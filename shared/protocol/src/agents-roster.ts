@@ -829,6 +829,10 @@ export interface HookAppAtStart {
   /** Events BMN left as they are, each with why; a whole file it could not add to has `why` on the app instead. */
   left: { event: string; why: HookLeftWhy }[]
   why?: HookLeftWhy
+  /** Whether the command guard answered when BMN asked it at start (Story 102.4); absent for an app it does not guard. */
+  commandGuard?: { state: 'holds' | 'does-not-answer' | 'changed' | 'missing'; reason?: string }
+  /** Whether the app's own rules are in place (Story 102.3). */
+  nativeRules?: 'present' | 'missing' | 'unusable'
 }
 
 export type HooksAtStart =

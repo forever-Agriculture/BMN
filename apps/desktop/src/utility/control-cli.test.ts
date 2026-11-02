@@ -1,9 +1,9 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
-import { execFile, spawn as spawnChild } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { execFile, spawn as spawnChild, spawnSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { homedir, tmpdir } from 'node:os'
@@ -12,12 +12,15 @@ import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
+import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
 import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE, pushPolicyStatus, readPushPolicy } from '@bmn/protocol'
 import { PUSH_POLICY_STILL_ASKS, type PushLevel, type PushPolicyStatus } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { shippedPluginText } from './test-fixtures/earlier-opencode-plugins'
 import { approveRoster } from '../main/agents-approval'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const AGENT_CONTROL_DOC = fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url))
@@ -26,6 +29,7 @@ const createdRoots = new Set<string>()
  * A home folder that never approved a team. `bmn hook` and `bmn hooks` read the approved team from
  * the home folder (Story 60.8), so a test that names none must not find the one of whoever runs the suite.
  */
+const BIN_FOLDER = fileURLToPath(new URL('../../bin', import.meta.url))
 const NO_TEAM_HOME = join(tmpdir(), 'bmn-cli-test-home-without-a-team')
 mkdirSync(NO_TEAM_HOME, { recursive: true })
 const servers = new Set<ControlServer>()
@@ -55,6 +59,8 @@ function runCli(
       key === 'ANTHROPIC_BASE_URL' || key === 'OPENAI_BASE_URL' || key === 'CLAUDE_CONFIG_DIR' || key === 'CLAUDE_PROJECT_DIR') delete env[key]
   }
   if (args[0] === 'hook' || args[0] === 'hooks') env.HOME = NO_TEAM_HOME
+  // The lead's own BMN stays out of `hooks check`'s probe of the command guard, unless a test puts a bmn on PATH.
+  if (process.env.BMN_CLI_BIN_DIR) env.PATH = (env.PATH ?? '').split(':').filter((folder) => folder !== process.env.BMN_CLI_BIN_DIR).join(':')
   return new Promise((resolve) => {
     const child = execFile(
       process.execPath,
@@ -125,7 +131,9 @@ async function cliFixture() {
   servers.add(server)
   const sessionEnv = {
     BMN_CONTROL_SOCKET: socketPath,
-    BMN_TOKEN: auth.sessionToken('session-1', 'incarnation-1')
+    BMN_TOKEN: auth.sessionToken('session-1', 'incarnation-1'),
+    // A hook may add 300 ms to an event, and starting its thread alone takes longer on a loaded machine (Story 102.1).
+    BMN_HOOK_MESSAGE_LIMIT_MS: '20000'
   }
   return { root, socketPath, auth, current, handlers, sessionEnv }
 }
@@ -1698,16 +1706,16 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       return new Promise((resolve) => { answer = resolve })
     })
 
-    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+    // The limit stands high enough for the question to be asked at any load; BMN never answers inside it.
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_HOOK_MESSAGE_LIMIT_MS: '2000', BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
     const gone = Date.now() - asked
     answer({ message: MESSAGE })
 
     expect(result).toEqual(QUIET)
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
-    // From its question to its exit the hook has at most the 300 ms it may add to an event; the rest is the
-    // process ending and this test noticing it.
-    expect(gone).toBeLessThan(300 + 400)
+    // The hook stops at the limit, whatever BMN does; the rest is the process ending and this test noticing it.
+    expect(gone).toBeLessThan(2000)
   })
 
   it('counts BMN\'s word that a message waits inside the limit: a slow answer to the report leaves less for the rest', async () => {
@@ -1721,12 +1729,11 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     // On a clock started after that answer, this hand-over would still fit and be printed.
     fixture.handlers.takeMessage.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ message: MESSAGE }), 110)))
 
-    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
-    const gone = Date.now() - reported
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_HOOK_MESSAGE_LIMIT_MS: '300', BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
 
     expect(result).toEqual(QUIET)
+    expect(reported).toBeGreaterThan(0)
     expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
-    expect(gone).toBeLessThan(300 + 400)
   })
 
   it('asks for nothing when BMN\'s answer to the report used the limit up', async () => {
@@ -1735,7 +1742,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     fixture.handlers.observeHookEvent.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve({ recorded: true, messageWaiting: true }), 350)))
     fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE })
 
-    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_HOOK_MESSAGE_LIMIT_MS: '300', BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
 
     expect(result).toEqual(QUIET)
     expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
@@ -2292,6 +2299,13 @@ const CLAUDE_EVENTS = [
 ]
 const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
 const DOCUMENTED_CODEX = DOCUMENTED_CLAUDE.replace('bmn hook claude', 'bmn hook codex')
+/** A guarded app's PreToolUse (Story 102.4): the command guard runs in every session, so its entry has no socket gate. */
+const GUARD_CLAUDE = 'PATH="$PATH:$HOME/.local/bin"; command -v bmn >/dev/null && bmn hook claude; exit 0'
+const GUARD_CODEX = GUARD_CLAUDE.replace('bmn hook claude', 'bmn hook codex')
+const ownClaude = (event: string): string => (event === 'PreToolUse' ? GUARD_CLAUDE : DOCUMENTED_CLAUDE)
+const ownCodex = (event: string): string => (event === 'PreToolUse' ? GUARD_CODEX : DOCUMENTED_CODEX)
+/** The deny rows BMN keeps in Claude's settings, for a home with no keys: what the hooks tests run in. */
+const CLAUDE_FLOOR = { deny: claudeDenyRows(NO_TEAM_HOME) }
 
 /** Every hook fixture lives under a fresh temporary folder, so a public clone carries no owner data. */
 async function hookFileFixture(contents?: unknown, name = 'settings.json'): Promise<string> {
@@ -2325,7 +2339,7 @@ function entryGroup(command: string, timeout = 5): unknown {
  */
 async function codexFixture(extra: Record<string, unknown> = {}, events: readonly string[] = CODEX_EVENTS): Promise<string> {
   const { hooks, beside, ...root } = extra as { hooks?: Record<string, unknown>; beside?: unknown }
-  const wired = Object.fromEntries(events.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]]))
+  const wired = Object.fromEntries(events.map((each) => [each, [entryGroup(ownCodex(each))]]))
   if (beside !== undefined) wired.Stop = [entryGroup(DOCUMENTED_CODEX), beside]
   return hookFileFixture({ ...root, hooks: { ...wired, ...(hooks ?? {}) } }, 'hooks.json')
 }
@@ -2419,7 +2433,7 @@ describe('bmn hooks check', () => {
   it('calls the documented command wired and the older AITERM wording wired (older wording)', async () => {
     const path = await hookFileFixture({
       hooks: {
-        ...Object.fromEntries(CLAUDE_EVENTS.slice(0, 3).map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE)]])),
+        ...Object.fromEntries(CLAUDE_EVENTS.slice(0, 3).map((event) => [event, [entryGroup(ownClaude(event))]])),
         ...Object.fromEntries(CLAUDE_EVENTS.slice(3).map((event) => [event, [entryGroup(OLDER_CLAUDE)]]))
       }
     })
@@ -3075,7 +3089,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
   it('does nothing, successfully, for a wired file holding a number it could not write back', async () => {
     const path = await hookFileFixture(
       `{ "keepMe": 1e400, "hooks": ${JSON.stringify(Object.fromEntries(
-        CODEX_EVENTS.map((each) => [each, [{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }]])
+        CODEX_EVENTS.map((each) => [each, [{ hooks: [{ type: 'command', timeout: 5, command: ownCodex(each) }] }]])
       ))} }`,
       'hooks.json'
     )
@@ -3416,7 +3430,7 @@ describe('bmn hooks install', () => {
     expect(await readFile(path, 'utf8')).toBe(before)
     expect(await backupsOf(path)).toEqual([])
   })
-  it('adds only the missing entries, keeps foreign hooks byte for byte and leaves an older wording alone', async () => {
+  it('adds only the missing entries, keeps foreign hooks byte for byte and brings BMN\'s own older wording to the current one (Story 102.4)', async () => {
     const foreign = entryGroup('echo foreign', 9)
     const path = await hookFileFixture({
       theme: 'dark',
@@ -3429,9 +3443,9 @@ describe('bmn hooks install', () => {
 
     expect(install.code).toBe(0)
     expect(after.theme).toBe('dark')
-    // The foreign entry and the older-wording entry are exactly what they were.
+    // The foreign entry is exactly what it was; BMN's own older wording reads the one current form.
     expect(after.hooks.PostToolUse[0]).toEqual(before.hooks.PostToolUse[0])
-    expect(after.hooks.Stop).toEqual(before.hooks.Stop)
+    expect(after.hooks.Stop).toEqual([entryGroup(DOCUMENTED_CLAUDE)])
     expect(after.hooks.PostToolUse[1]).toEqual({ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] })
     for (const event of ['Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
       expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
@@ -3440,12 +3454,13 @@ describe('bmn hooks install', () => {
     expect(after.hooks.PermissionRequest).toEqual([{ hooks: [{ type: 'command', timeout: 600, command: DOCUMENTED_CLAUDE }] }])
     // PreToolUse blocks every tool until it returns, so BMN's entry is gated to the two tools it needs (Story 83.4).
     expect(after.hooks.PreToolUse).toEqual([
-      { matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }
+      { matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: GUARD_CLAUDE }] }
     ])
     expect(install.stdout).toContain(
       'Notification, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd'
     )
-    expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
+    // The diff removes only that one older line.
+    expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toHaveLength(1)
   })
 
   it('keeps the bytes the owner wrote: their indent, their key order and their awkward values', async () => {
@@ -3462,7 +3477,7 @@ describe('bmn hooks install', () => {
       '                "hooks": [',
       '                    {',
       '                        "type": "command",',
-      `                        "command": ${JSON.stringify(OLDER_CLAUDE)}`,
+      `                        "command": ${JSON.stringify(DOCUMENTED_CLAUDE)}`,
       '                    }',
       '                ]',
       '            }',
@@ -3712,20 +3727,21 @@ describe('bmn hooks install', () => {
     expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
   })
 
-  it('creates a missing file with only the hooks object and no backup', async () => {
+  it('creates a missing file with only the hooks and the app\'s own rules, and no backup', async () => {
     const path = await hookFileFixture()
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const written = JSON.parse(await readFile(path, 'utf8'))
 
     expect(install.code).toBe(0)
-    expect(Object.keys(written)).toEqual(['hooks'])
+    expect(Object.keys(written)).toEqual(['hooks', 'permissions'])
+    expect(written.permissions).toEqual(CLAUDE_FLOOR)
     expect(Object.keys(written.hooks)).toEqual(CLAUDE_EVENTS)
     expect(await backupsOf(path)).toEqual([])
   })
 
   it('raises the timeout of BMN\'s own permission entry from 5 s, in install and at start, and leaves the owner\'s entries alone (Epic 78)', async () => {
-    const own = { ...Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE)]])) }
+    const own = { ...Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(ownClaude(event))]])) }
     const foreign = entryGroup('echo mine', 5)
     own.PermissionRequest = [entryGroup(DOCUMENTED_CLAUDE), foreign]
     for (const args of [['install', '--yes', 'claude'], ['install', '--absent', '--yes', '--json', 'claude']]) {
@@ -3744,7 +3760,8 @@ describe('bmn hooks install', () => {
 
   it('installs nothing when nothing is missing and says so', async () => {
     const path = await hookFileFixture({
-      hooks: Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE, event === 'PermissionRequest' ? 600 : 5)]]))
+      permissions: CLAUDE_FLOOR,
+      hooks: Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(ownClaude(event), event === 'PermissionRequest' ? 600 : 5)]]))
     })
     const before = await readFile(path, 'utf8')
 
@@ -4531,7 +4548,7 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     const gated = { matcher: 'Bash', hooks: [{ type: 'command', command: DOCUMENTED_CLAUDE, timeout: 5 }] }
     const path = await hookFileFixture({
       hooks: {
-        Notification: [entryGroup(OLDER_CLAUDE)],
+        Notification: [entryGroup('bmn hook claude')],
         PostToolUse: [gated],
         Stop: [entryGroup('bmn hook claude --verbose')],
         SessionEnd: [entryGroup(DOCUMENTED_CLAUDE, 0)]
@@ -4546,7 +4563,7 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
       left: [{ event: 'PostToolUse', why: 'gated' }, { event: 'Stop', why: 'foreign' }, { event: 'SessionEnd', why: 'changed' }]
     })
     const after = JSON.parse(await readFile(path, 'utf8')).hooks
-    expect(after.Notification).toEqual([entryGroup(OLDER_CLAUDE)])
+    expect(after.Notification).toEqual([entryGroup('bmn hook claude')])
     expect(after.PostToolUse).toEqual([gated])
     expect(after.Stop).toEqual([entryGroup('bmn hook claude --verbose')])
     expect(after.SessionEnd).toEqual([entryGroup(DOCUMENTED_CLAUDE, 0)])
@@ -4626,7 +4643,9 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(Object.keys(JSON.parse(await readFile(empty, 'utf8')).hooks)).toEqual(CODEX_EVENTS)
     const wired = await codexFixture()
     const text = await readFile(wired, 'utf8')
-    expect(await installAbsent('codex', wired)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
+    // Its rules file is new (Story 102.3), and only that is written; then nothing is.
+    expect(await installAbsent('codex', wired)).toMatchObject({ code: 0, report: { state: 'installed', installed: [], rules: 'written', nativeRules: 'present' } })
+    expect(await installAbsent('codex', wired)).toMatchObject({ code: 0, report: { state: 'checked', installed: [], nativeRules: 'present' } })
     expect(await readFile(wired, 'utf8')).toBe(text)
     const mixed = await codexFixture({
       hooks: {
@@ -5120,7 +5139,7 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
 describe('Claude PreToolUse gated to its question tool and Bash (Epic 30, Story 83.4)', () => {
   const preToolUse = async (file: string): Promise<{ state: string }> =>
     JSON.parse((await runHooks(['check', 'claude', '--file', file, '--json'])).stdout).agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
-  const own = (matcher: string): unknown => ({ matcher, hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] })
+  const own = (matcher: string): unknown => ({ matcher, hooks: [{ type: 'command', timeout: 5, command: GUARD_CLAUDE }] })
 
   it('counts BMN\'s own AskUserQuestion|Bash matcher as wired, its older AskUserQuestion one as an older wording, and any other as gated', async () => {
     expect((await preToolUse(await hookFileFixture({ hooks: { PreToolUse: [own('AskUserQuestion|Bash')] } }))).state).toBe('wired')
@@ -5141,11 +5160,111 @@ describe('Claude PreToolUse gated to its question tool and Bash (Epic 30, Story 
   })
 
   it('never widens a group that also holds the owner\'s own entry', async () => {
-    const mixed = { matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }, { type: 'command', command: 'mine' }] }
+    const mixed = { matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: GUARD_CLAUDE }, { type: 'command', command: 'mine' }] }
     const file = await hookFileFixture({ hooks: { PreToolUse: [mixed] } })
     await runHooks(['install', 'claude', '--file', file, '--yes', '--json'])
     expect(JSON.parse(await readFile(file, 'utf8')).hooks.PreToolUse[0]).toEqual(mixed)
   })
+})
+
+describe('the command guard runs everywhere and says when it does not (Story 102.4)', () => {
+  /** A home whose `~/.local/bin/bmn` starts a copy of bin/, with the given files left out. */
+  async function homeWithBmn(missing: string[] = []): Promise<{ home: string; bin: string }> {
+    const home = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-home-')))
+    createdRoots.add(home)
+    const bin = join(home, 'copy-of-bin')
+    await cp(BIN_FOLDER, bin, { recursive: true, filter: (from) => !missing.includes(basename(from)) })
+    await mkdir(join(home, '.local/bin'), { recursive: true })
+    await writeFile(join(home, '.local/bin/bmn'), `#!/bin/sh\nexec '${process.execPath}' '${join(bin, 'bmn')}' "$@"\n`)
+    await chmod(join(home, '.local/bin/bmn'), 0o755)
+    return { home, bin }
+  }
+  const held = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'docker system prune -af' } }
+
+  it('holds in a session outside BMN, with no socket to send anything to, through the entry as installed', async () => {
+    for (const [agent, entry, decision] of [['claude', GUARD_CLAUDE, 'ask'], ['codex', GUARD_CODEX, 'deny']] as const) {
+      const { home } = await homeWithBmn()
+      const run = spawnSync('/bin/sh', ['-c', entry], { input: JSON.stringify(held), encoding: 'utf8', env: { HOME: home, PATH: '/usr/bin:/bin' } })
+      expect(run.status).toBe(0)
+      expect(JSON.parse(run.stdout).hookSpecificOutput.permissionDecision).toBe(decision)
+    }
+  }, 60_000)
+
+  it('still holds inside a teammate\'s run, where every other command stays refused', async () => {
+    const { home } = await homeWithBmn()
+    // The same place a real ask runs: a systemd user scope of that name, told from the process's own cgroup.
+    const inAsk = (program: string, args: string[], input = ''): ReturnType<typeof spawnSync<string>> => spawnSync('systemd-run',
+      ['--user', '--scope', '--quiet', `--unit=bmn-ask-test-${randomUUID()}`, `--setenv=HOME=${home}`, '--setenv=PATH=/usr/bin:/bin', '--', program, ...args],
+      { input, encoding: 'utf8', env: { ...process.env, HOME: home } })
+    const hook = inAsk('/bin/sh', ['-c', GUARD_CLAUDE], JSON.stringify(held))
+    expect(JSON.parse(hook.stdout).hookSpecificOutput.permissionDecision).toBe('ask')
+    expect(inAsk('/bin/sh', ['-c', GUARD_CLAUDE], JSON.stringify({ ...held, tool_input: { command: 'ls' } })).stdout).toBe('')
+    expect(inAsk(join(home, '.local/bin/bmn'), ['team']).status).toBe(10)
+  }, 60_000)
+
+  it('reports `command guard holds` from a recognised entry, and why it does not answer with the guard\'s file gone', async () => {
+    const path = await hookFileFixture({ hooks: { PreToolUse: [{ matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: GUARD_CLAUDE }] }] } })
+    const good = await homeWithBmn()
+    const holds = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: good.home } })).stdout).agents[0]
+    expect(holds.commandGuard).toEqual({ state: 'holds' })
+    const text = await runCli(['hooks', 'check', 'claude', '--file', path], { env: { HOME: good.home } })
+    expect(text.stdout).toContain('command guard holds')
+    expect(text.stdout).toContain('native rules missing')
+    const broken = await homeWithBmn(['command-guard.mjs'])
+    const down = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: broken.home } })).stdout).agents[0]
+    expect(down.commandGuard).toEqual({ state: 'does-not-answer', reason: expect.stringContaining('command guard cannot load') })
+    const absent = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-home-')))
+    createdRoots.add(absent)
+    const none = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: absent } })).stdout).agents[0]
+    expect(none.commandGuard).toEqual({ state: 'does-not-answer', reason: 'bmn is not on the PATH of a session outside BMN' })
+  }, 90_000)
+
+  it('runs no entry it does not recognise: an edited one could run anything', async () => {
+    const { home } = await homeWithBmn()
+    const canary = join(home, 'ran')
+    const path = await hookFileFixture({ hooks: { PreToolUse: [{ matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: `touch '${canary}'; bmn hook claude` }] }] } })
+    const report = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: home } })).stdout).agents[0]
+    expect(report.commandGuard).toEqual({ state: 'changed' })
+    expect(existsSync(canary)).toBe(false)
+  }, 60_000)
+
+  it('brings $AITERM_ entries and the socket-gated PreToolUse to the one current form, at install and at start, leaving his entries', async () => {
+    for (const args of [['install', '--yes', 'claude'], ['install', '--absent', '--yes', '--json', 'claude']]) {
+      const path = await hookFileFixture({
+        hooks: {
+          ...Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(OLDER_CLAUDE, event === 'PermissionRequest' ? 600 : 5)]])),
+          PreToolUse: [{ matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }, { type: 'command', command: 'mine' }] }],
+          Stop: [{ hooks: [{ type: 'command', timeout: 5, command: OLDER_CLAUDE }, { type: 'command', command: 'also mine' }] }]
+        }
+      })
+      await runHooks([...args, '--file', path])
+      const after = JSON.parse(await readFile(path, 'utf8')).hooks
+      expect(after.Notification).toEqual([entryGroup(DOCUMENTED_CLAUDE)])
+      expect(after.PreToolUse[0].hooks).toEqual([{ type: 'command', timeout: 5, command: GUARD_CLAUDE }, { type: 'command', command: 'mine' }])
+      expect(after.Stop[0].hooks).toEqual([{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }, { type: 'command', command: 'also mine' }])
+      const check = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout).agents[0]
+      for (const row of check.events) expect(`${row.event} ${row.state}`).toBe(`${row.event} wired`)
+    }
+  }, 60_000)
+
+  it('says the rows and the rules file are there, and installs each once (Story 102.3)', async () => {
+    const claude = await hookFileFixture({ permissions: { deny: ['Read(./mine)'], allow: ['Bash(ls:*)'] } })
+    await runHooks(['install', '--yes', 'claude', '--file', claude])
+    const written = JSON.parse(await readFile(claude, 'utf8'))
+    expect(written.permissions.deny[0]).toBe('Read(./mine)')
+    expect(written.permissions.deny.slice(1)).toEqual(CLAUDE_FLOOR.deny)
+    expect(written.permissions.allow).toEqual(['Bash(ls:*)'])
+    const report = JSON.parse((await runHooks(['check', 'claude', '--file', claude, '--json'])).stdout).agents[0]
+    expect(report.nativeRules).toBe('present')
+    const text = await readFile(claude, 'utf8')
+    expect((await runHooks(['install', '--yes', 'claude', '--file', claude])).stdout).toContain('Nothing to do')
+    expect(await readFile(claude, 'utf8')).toBe(text)
+    const codex = await codexFixture()
+    expect(JSON.parse((await runHooks(['check', 'codex', '--file', codex, '--json'])).stdout).agents[0].nativeRules).toBe('missing')
+    await runHooks(['install', '--yes', 'codex', '--file', codex])
+    expect(await readFile(join(dirname(codex), 'rules/bmn-guard.rules'), 'utf8')).toBe(CODEX_RULES)
+    expect(JSON.parse((await runHooks(['check', 'codex', '--file', codex, '--json'])).stdout).agents[0].nativeRules).toBe('present')
+  }, 60_000)
 })
 
 describe('bmn policy (Story 83.3)', () => {

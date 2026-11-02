@@ -834,6 +834,13 @@ function savePlanFrom(result: SavePlan, text: string, generation: Generation | n
   }
 }
 
+/** The command guard's standing as the install printed it; anything else says nothing. */
+function commandGuardFrom(value: unknown): Pick<HookAppAtStart, 'commandGuard'> {
+  const standing = value as { state?: unknown; reason?: unknown } | null | undefined
+  if (standing?.state !== 'holds' && standing?.state !== 'does-not-answer' && standing?.state !== 'changed' && standing?.state !== 'missing') return {}
+  return { commandGuard: { state: standing.state, ...(typeof standing.reason === 'string' ? { reason: standing.reason.slice(0, 200) } : {}) } }
+}
+
 /** What `hooks install --absent --json` printed, as Health › Hooks shows it; a report BMN cannot read is a failed check. */
 function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
   const report = parseJson(result.stdout)
@@ -855,7 +862,9 @@ function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
       harness: row.agent as RosterHarness, file: String(row.file ?? ''), state: row.state as HookAppAtStart['state'],
       placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason }),
       ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) }),
-      ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) })
+      ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) }),
+      ...commandGuardFrom(row.commandGuard),
+      ...(row.nativeRules === 'present' || row.nativeRules === 'missing' || row.nativeRules === 'unusable' ? { nativeRules: row.nativeRules } : {})
     })
   }
   return { state: 'checked', checkedAt, apps }
