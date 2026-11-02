@@ -323,7 +323,8 @@ describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (ep
     // lock, the release below can only come after it. A retry started after the release would rightly start an ask of its own.
     let taken = (): void => undefined
     const reached = new Promise<void>((resolve) => { taken = resolve })
-    const watcher = watch(runs(), (_event, name) => { if (name?.startsWith('.reserve')) taken() })
+    // A numbered file is the lock itself; a draft beside it is only a taker on its way.
+    const watcher = watch(runs(), (_event, name) => { if (name !== null && /^\.reserve\.\d+$/.test(name)) taken() })
     const retry = bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', question, '--key', key('follow'), '--json'])
     await reached
     watcher.close()
