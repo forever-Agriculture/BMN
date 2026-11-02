@@ -1,10 +1,13 @@
 // MODULE: turn-changes-worker.ts - the worker thread that captures and compares work trees, so that no scan or comparison runs on the thread that keeps terminals flowing
 import { parentPort, workerData } from 'node:worker_threads'
+import type { TurnLimits } from './turn-changes-capture'
 import { TurnChangesEngine, type TurnCaptureRequest, type TurnPairRequest } from './turn-changes-engine'
 
 export interface TurnWorkerData {
   dataRoot: string
   home: string
+  /** The engine's limits; only a test on a busy machine gives others. */
+  limits?: Partial<TurnLimits>
 }
 
 export type TurnWorkerRequest =

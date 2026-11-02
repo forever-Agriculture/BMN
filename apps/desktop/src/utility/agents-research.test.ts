@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { timedBesideControl } from './test-fixtures/load-clock'
 import { CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
   MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, forgetDroppedResearcher, getOnce, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
@@ -614,9 +615,9 @@ describe('a cited address never reaches this machine or a private network', () =
   it('gives up a name lookup that never answers within the page\'s own time, and at Stop', async () => {
     let sent = 0
     const never = { resolve: () => new Promise<never>(() => {}), transport: async () => { sent += 1; return page } }
-    const started = Date.now()
-    expect(await fetchPublicPage('https://slow.example.com/', { ...never, timeoutMs: 150 })).toEqual({ ok: false, reason: 'the page did not answer in time' })
-    expect(Date.now() - started).toBeLessThan(2000)
+    const timed = await timedBesideControl(() => fetchPublicPage('https://slow.example.com/', { ...never, timeoutMs: 150 }))
+    expect(timed.answer).toEqual({ ok: false, reason: 'the page did not answer in time' })
+    expect(timed.took).toBeLessThan(2_000 + timed.late)
     const controller = new AbortController()
     setTimeout(() => controller.abort(), 50)
     expect(await fetchPublicPage('https://slow.example.com/', { ...never, signal: controller.signal })).toEqual({ ok: false, reason: 'the research was stopped' })

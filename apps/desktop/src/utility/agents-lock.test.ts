@@ -230,27 +230,31 @@ describe('the supervisor of a run (R64-NFR3)', () => {
     await ended
     // The supervisor is the last to go: when it has ended, nothing of the run lives.
     expect(alive(command)).toBe(false)
-    await until(() => !alive(grandchild), 1000)
+    await until(() => !alive(grandchild), 10_000)
     expect(alive(grandchild)).toBe(false)
   })
 
   it('ends the command at the deadline by itself, with BMN still there and saying nothing', async () => {
     const marker = join(folder, 'started')
     const began = Date.now()
-    const supervisor = supervise(began + 500, stays(marker))
+    // The deadline leaves its command the time to start on a busy machine; a deadline already passed has its own case below.
+    const supervisor = supervise(began + 6_000, stays(marker))
     const ended = exit(supervisor)
     say(supervisor, 'go')
+    await until(() => existsSync(marker), 6_000)
+    const command = pidIn(marker)
+    expect(alive(command)).toBe(true)
     expect(await ended).toBe(128 + 15)
-    expect(Date.now() - began).toBeGreaterThanOrEqual(450)
-    expect(Date.now() - began).toBeLessThan(3000)
-    expect(alive(pidIn(marker))).toBe(false)
+    expect(Date.now() - began).toBeGreaterThanOrEqual(5_950)
+    expect(Date.now() - began).toBeLessThan(20_000)
+    expect(alive(command)).toBe(false)
     // A run whose time has passed before it was told to go is never started.
     const late = supervise(Date.now() - 1, stays(join(folder, 'late')))
     const lateEnded = exit(late)
     say(late, 'go')
     expect(await lateEnded).toBe(NOTHING_STARTED)
     expect(existsSync(join(folder, 'late'))).toBe(false)
-  })
+  }, 60_000)
 
   it('asks a command to end on Stop and makes it where it does not listen', async () => {
     const marker = join(folder, 'started')

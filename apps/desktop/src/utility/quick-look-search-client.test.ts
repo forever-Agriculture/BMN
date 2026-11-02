@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
+import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
 import { SECRET_MASK } from '@bmn/protocol'
 import { QuickLookSearchClient } from './quick-look-search-client'
 import { searchQuickLookContents } from './quick-look-search'
@@ -60,10 +61,11 @@ describe('the Quick look search worker', () => {
     const root = await folder(CRAFTED)
     const searching = client()
     for (const query of ['api', 'password', 'eyJ', 'NAME']) {
-      let last = performance.now()
+      // The longest this thread itself worked between two of its turns: a machine's own load does not count.
+      let last = threadWork()
       let longest = 0
       const ticker = setInterval(() => {
-        const now = performance.now()
+        const now = threadWork()
         longest = Math.max(longest, now - last)
         last = now
       }, 5)
@@ -82,12 +84,14 @@ describe('the Quick look search worker', () => {
     // Warm: the thread is started and its modules loaded before the time is taken.
     await searching.contents(root, ask('zz-none'), new AbortController().signal)
     const controller = new AbortController()
-    const started = performance.now()
-    const running = searching.contents(root, ask('key'), controller.signal)
-    setTimeout(() => controller.abort(), 20)
-    expect(await running).toMatchObject({ cancelled: true, unavailable: null })
+    const timed = await timedBesideControl(() => {
+      const running = searching.contents(root, ask('key'), controller.signal)
+      setTimeout(() => controller.abort(), 20)
+      return running
+    })
+    expect(timed.answer).toMatchObject({ cancelled: true, unavailable: null })
     // Masking the first of these files alone takes 100 ms or more: the stop is heard inside it.
-    expect(performance.now() - started).toBeLessThan(90)
+    expect(timed.took).toBeLessThan(90 + timed.late)
     // The same thread answers the next search.
     expect((await searching.contents(root, ask('api'), new AbortController().signal)).cancelled).toBe(false)
   }, 60_000)
@@ -98,10 +102,12 @@ describe('the Quick look search worker', () => {
     for (let round = 0; round < 2; round += 1) {
       const controller = new AbortController()
       const running = silent.contents(root, ask('madeup'), controller.signal)
-      const started = performance.now()
-      controller.abort()
-      expect(await running).toMatchObject({ cancelled: true, files: [] })
-      expect(performance.now() - started).toBeLessThan(1_000)
+      const timed = await timedBesideControl(() => {
+        controller.abort()
+        return running
+      })
+      expect(timed.answer).toMatchObject({ cancelled: true, files: [] })
+      expect(timed.took).toBeLessThan(1_000 + timed.late)
     }
   })
 

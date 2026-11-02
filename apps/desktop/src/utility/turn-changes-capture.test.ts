@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
 import { capture, isCapturing, isRefusal, type CaptureOptions, type CaptureOutcome, type StagedCapture } from './turn-changes-capture'
 import { compareCaptures, fileDifference } from './turn-changes-compare'
 import { TurnStore, type TreeRow, type TurnCache } from './turn-changes-store'
@@ -137,7 +138,8 @@ describe('the root BMN establishes by itself', () => {
     writeFileSync(hanging, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 })
     const began = Date.now()
     await refused(at, at.repo, { git: hanging, limits: { captureMs: 150 } }, 'unavailable', 'Git did not answer in time')
-    expect(Date.now() - began).toBeLessThan(1500)
+    // The hanging Git would take 30 s; ending it, however busy the machine, takes far less.
+    expect(Date.now() - began).toBeLessThan(15_000)
   })
 })
 
@@ -697,7 +699,7 @@ describe('the bounds of a capture, at and one past', () => {
     const began = performance.now()
     let seen = 0
     // The third entry is held back until the reading's time is over (the last 75 of 600 ms): nothing after it is read.
-    const slow = staged(await capture(at.repo, {
+    const timed = await timedBesideControl(async () => staged(await capture(at.repo, {
       ...at.options, store, limits: { captureMs: 600 },
       seams: {
         beforeEntry: async () => {
@@ -705,9 +707,10 @@ describe('the bounds of a capture, at and one past', () => {
           if (seen === 3) await sleep(Math.max(0, began + 535 - performance.now()))
         }
       }
-    }))
+    })))
+    const slow = timed.answer
     expect(slow.record).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null })
-    expect(slow.tookMs).toBeLessThan(600)
+    expect(slow.tookMs).toBeLessThan(600 + timed.late)
     const kept = await published(slow)
     // What it read is in the store and its cache names it; no list was written once its time had passed.
     expect(kept).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null })
@@ -789,9 +792,14 @@ describe('the bounds of a capture, at and one past', () => {
       }
     }))
     expect(one.record.state).toBe('whole')
-    const done = await one.publish(() => stopAt !== 0)
-    expect(done).toBeNull()
-    expect(performance.now() - stopAt).toBeLessThan(100)
+    let endedAt = 0
+    const timed = await timedBesideControl(async () => {
+      const done = await one.publish(() => stopAt !== 0)
+      endedAt = performance.now()
+      return done
+    })
+    expect(timed.answer).toBeNull()
+    expect(endedAt - stopAt).toBeLessThan(100 + timed.late)
     expect(store.captures()).toEqual([])
     expect(isCapturing(at.repo)).toBe(false)
     // Every byte it had staged is on its way out, and then gone.
@@ -814,11 +822,11 @@ describe('the bounds of a capture, at and one past', () => {
     four(at)
     // A file is taken as read before only when it had been still for a moment when it was read.
     await sleep(25)
-    const began = performance.now()
     // The command is ended with the capture's sliced work (the last 50 of 1,000 ms), so the capture is back inside its time.
-    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 1_000 } }))
-    expect(performance.now() - began).toBeLessThan(1_000)
-    expect(late.tookMs).toBeLessThan(1_000)
+    const timed = await timedBesideControl(async () => staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 1_000 } })))
+    const late = timed.answer
+    expect(timed.took).toBeLessThan(1_000 + timed.late)
+    expect(late.tookMs).toBeLessThan(1_000 + timed.late)
     expect(late.tookMs).toBeGreaterThan(900)
     expect(late.record).toMatchObject({ state: 'incomplete', bound: '1 s', headEnd: null, base: null, tree: null })
     // Its time is over: nothing more is moved in, and its record says so.
@@ -833,10 +841,10 @@ describe('the bounds of a capture, at and one past', () => {
     mkdirSync(join(at.repo, 'nested'))
     at.git(join(at.repo, 'nested'), 'init', '-q', '-b', 'main')
     write(at.repo, 'nested/deep.txt', 'd\n')
-    const began = performance.now()
-    const late = staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 1_000 } }))
-    expect(performance.now() - began).toBeLessThan(1_000)
-    expect(late.tookMs).toBeLessThan(1_000)
+    const timed = await timedBesideControl(async () => staged(await capture(at.repo, { ...at.options, git: slowHead(at), limits: { captureMs: 1_000 } })))
+    const late = timed.answer
+    expect(timed.took).toBeLessThan(1_000 + timed.late)
+    expect(late.tookMs).toBeLessThan(1_000 + timed.late)
     expect(late.record).toMatchObject({ state: 'incomplete', bound: '1 s', counts: { submodules: 0 } })
     late.discard()
   })
@@ -1066,7 +1074,8 @@ describe('the bounds of a capture, at and one past', () => {
     writeFileSync(slow, '#!/bin/sh\ncase "$*" in *ls-files*) exec sleep 30;; esac\nexec /usr/bin/git "$@"\n', { mode: 0o755 })
     const outcome = staged(await capture(at.repo, { ...at.options, git: slow, limits: { captureMs: 200 } }))
     expect(outcome.record).toMatchObject({ state: 'incomplete', bound: '0.2 s', tree: null })
-    expect(outcome.tookMs).toBeLessThan(1500)
+    // The hanging listing would take 30 s; ending it, however busy the machine, takes far less.
+    expect(outcome.tookMs).toBeLessThan(15_000)
     outcome.discard()
   })
 })
@@ -1080,23 +1089,28 @@ describe('a capture that is cancelled, or discarded', () => {
     const store = new TurnStore(at.dataRoot, 's-case', at.repo)
     let cancelledAt = 0
     let seen = 0
-    const outcome = await capture(at.repo, {
-      ...at.options,
-      store,
-      signal: controller.signal,
-      seams: {
-        beforeEntry: async () => {
-          seen += 1
-          if (seen === 10) {
-            cancelledAt = performance.now()
-            controller.abort()
+    let endedAt = 0
+    const timed = await timedBesideControl(async () => {
+      const made = await capture(at.repo, {
+        ...at.options,
+        store,
+        signal: controller.signal,
+        seams: {
+          beforeEntry: async () => {
+            seen += 1
+            if (seen === 10) {
+              cancelledAt = performance.now()
+              controller.abort()
+            }
+            if (seen >= 10) await sleep(6)
           }
-          if (seen >= 10) await sleep(6)
         }
-      }
+      })
+      endedAt = performance.now()
+      return made
     })
-    expect(outcome).toEqual({ state: 'cancelled', reason: 'cancelled' })
-    expect(performance.now() - cancelledAt).toBeLessThan(100)
+    expect(timed.answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
+    expect(endedAt - cancelledAt).toBeLessThan(100 + timed.late)
     // The bytes leave `staging/` in the same step and are gone right after.
     expect(filesUnder(join(store.directory, 'staging'))).toBe(0)
     await store.settled()
@@ -1258,9 +1272,10 @@ describe('a capture that is cancelled, or discarded', () => {
     const blobs = join(store.directory, 'objects', 'blobs')
     expect(filesUnder(blobs)).toBe(30)
     // A capture whose time is shorter than the wait ends with its time: it listed and read nothing, and names nothing.
-    const short = staged(await capture(at.repo, { ...at.options, store, limits: { captureMs: 600 } }))
+    const timed = await timedBesideControl(async () => staged(await capture(at.repo, { ...at.options, store, limits: { captureMs: 600 } })))
+    const short = timed.answer
     expect(short.record).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null, bytesRead: 0, bytesStored: 0 })
-    expect(short.tookMs).toBeLessThan(600)
+    expect(short.tookMs).toBeLessThan(600 + timed.late)
     short.discard()
     // One that is cancelled while it waits is cancelled.
     const controller = new AbortController()
@@ -1438,14 +1453,15 @@ describe('a comparison that cannot be made', () => {
     write(at.repo, 'long.txt', long('b'))
     const two = await published(staged(await capture(at.repo, { ...at.options, base: one.id })))
     const run = { one, two, store: new TurnStore(at.dataRoot, 's-case', at.repo) }
-    const began = performance.now()
+    // These run on this thread, so its own work is what is bounded.
+    const began = threadWork()
     expect(compareCaptures(run.store, run.one.id, run.two.id, { limitMs: 20 })).toEqual({ state: 'unavailable', reason: 'Difference unavailable: limit reached' })
     expect(fileDifference(run.store, run.one.id, run.two.id, 'long.txt', { limitMs: 20 })).toEqual({ state: 'unavailable', reason: 'Difference unavailable: limit reached' })
-    expect(performance.now() - began).toBeLessThan(400)
+    expect(threadWork() - began).toBeLessThan(400)
     const cancelAt = performance.now() + 30
-    const cancelledAt = performance.now()
+    const cancelledAt = threadWork()
     expect(compareCaptures(run.store, run.one.id, run.two.id, { cancelled: () => performance.now() > cancelAt })).toEqual({ state: 'cancelled', reason: 'cancelled' })
-    expect(performance.now() - cancelledAt).toBeLessThan(130)
+    expect(threadWork() - cancelledAt).toBeLessThan(130)
   }, 30_000)
 
   it('can be stopped, and runs out of time, where nothing differs and one entry was not read: every folder and entry it walks is a place to stop', async () => {

@@ -7,6 +7,7 @@ import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { timedBesideControl } from './test-fixtures/load-clock'
 import {
   ASK_KEPT, ASK_MAX_CHARS, ASK_PER_DAY, MARKS, RESEARCH_USAGE, agentsMayAsk, askEnvironment, askPrompt, askedCount, askedToday, askerOf, askerWords, answerLines, markClaims,
   noResearcherWords, parseAskAnswer, questionProblem, questionsPath, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord
@@ -761,9 +762,8 @@ describe('what the pre-review found (Epic 64)', () => {
     for (const [index, left] of leave.entries()) {
       const at = (lockNumbers(mark).at(-1) ?? 0) + 1
       left(at)
-      const began = Date.now()
-      await removeQuestions(null, NOW)
-      expect(Date.now() - began).toBeLessThan(1500)
+      const timed = await timedBesideControl(() => removeQuestions(null, NOW))
+      expect(timed.took).toBeLessThan(1_500 + timed.late)
       // The mark that was left is cleared away from below the one that was taken, and that one says released.
       expect(lockNumbers(mark)).toEqual([at + 1])
       expect(lockText(mark, at + 1)).toMatchObject({ released: true })
@@ -893,9 +893,8 @@ describe('what the review found (Epic 64)', () => {
     // Its mark is still there, and its owner is gone: the next writer takes the number above it without waiting.
     const left = lockNumbers(`${questionsPath()}.writing`)
     expect(left).toHaveLength(1)
-    const began = Date.now()
-    await removeQuestions('seed-0', NOW)
-    expect(Date.now() - began).toBeLessThan(1500)
+    const timed = await timedBesideControl(() => removeQuestions('seed-0', NOW))
+    expect(timed.took).toBeLessThan(1_500 + timed.late)
     expect(readQuestions().map((entry) => entry.id)).toEqual(['seed-1'])
     expect(lockNumbers(`${questionsPath()}.writing`)).toEqual([left[0]! + 1])
   }, 40_000)

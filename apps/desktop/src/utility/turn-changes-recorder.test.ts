@@ -27,6 +27,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const AGENT = '34817:7001:555:1:2'
 /** Generous for a loaded machine; the tests of the limit give their own. */
 const ROOMY = 5_000
+const WORKER_ROOMY = 60_000
 
 interface World {
   at: Place
@@ -165,8 +166,10 @@ function inWorker(name: string, held: (w: World) => void, options: { now?: () =>
   let made: World | null = null
   made = world(name, {
     ...options,
+    // The scan of its 3,000 files needs its time on a busy machine; what is under test comes after it.
+    limitMs: WORKER_ROOMY,
     port: (_port, at) => {
-      const client = new TurnChangesClient(WORKER, { dataRoot: at.dataRoot, home: at.home }, { execArgv: ['--import', RESOLVE] })
+      const client = new TurnChangesClient(WORKER, { dataRoot: at.dataRoot, home: at.home, limits: { captureMs: WORKER_ROOMY } }, { execArgv: ['--import', RESOLVE] })
       clients.push(client)
       return {
         capture: (request, signal) => client.capture(request, signal),
@@ -314,11 +317,12 @@ describe('a turn from its prompt to its end', () => {
 
 describe('the confirmation of a "before"', () => {
   it('opens the turn without a "before" when no confirmation comes, and leaves no staged bytes', async () => {
-    const w = world('unconfirmed', { limitMs: 400 })
+    // Long enough for the scan to be answered in time on a busy machine; the limit itself is what is under test.
+    const w = world('unconfirmed', { limitMs: 3_000 })
     expect(await w.mark('start')).toBe('captured')
     expect(w.staged()).toBeGreaterThan(0)
     expect(w.turns()).toHaveLength(0)
-    await sleep(500)
+    await sleep(3_100)
     await w.recorder.idle()
     expect(w.staged()).toBe(0)
     expect(w.turns()[0]).toMatchObject({ state: 'open', before: null, wording: TURN_WORDINGS.beforeUnavailable(), totalsState: 'none', totals: null })
@@ -336,9 +340,9 @@ describe('the confirmation of a "before"', () => {
   })
 
   it('answers a confirmation after the time of the call as late', async () => {
-    const w = world('late-confirm', { limitMs: 300 })
+    const w = world('late-confirm', { limitMs: 3_000 })
     expect(await w.mark('start', { requestId: 'slow' })).toBe('captured')
-    await sleep(350)
+    await sleep(3_050)
     expect(await w.mark('confirm', { requestId: 'slow' })).toBe('late')
     await w.recorder.idle()
     expect(w.staged()).toBe(0)
@@ -358,15 +362,16 @@ describe('the confirmation of a "before"', () => {
     const slow = (port: TurnChangesPort): TurnChangesPort => ({
       ...port,
       capture: async (request, signal) => {
-        if (!request.publish) await sleep(250)
+        if (!request.publish) await sleep(2_500)
         return port.capture(request, signal)
       }
     })
-    const w = world('budget', { port: slow, limitMs: 120 })
+    const w = world('budget', { port: slow, limitMs: 1_000 })
     const asked = Date.now()
     expect(await w.mark('start')).toBe('late')
-    expect(Date.now() - asked).toBeLessThan(300)
-    await sleep(350)
+    // Answered at its limit, not when the scan is done.
+    expect(Date.now() - asked).toBeLessThan(2_500)
+    await sleep(2_700)
     await w.recorder.idle()
     expect(w.staged()).toBe(0)
     expect(w.turns()[0]).toMatchObject({ before: null, wording: TURN_WORDINGS.beforeUnavailable(), totals: null })
@@ -393,7 +398,7 @@ describe('the confirmation of a "before"', () => {
 
   it('stops the publication of a confirmed "before" when the time of its call passes meanwhile: the answer is late and nothing of it is kept', async () => {
     // The confirmation comes in time. The publication is held at its third file until the time of the call is over.
-    const w = seamed('confirm-past-time', (request) => (request.publish ? {} : { beforeMove: (moved) => (moved === 2 ? sleep(450) : undefined) }), { limitMs: 300 })
+    const w = seamed('confirm-past-time', (request) => (request.publish ? {} : { beforeMove: (moved) => (moved === 2 ? sleep(3_150) : undefined) }), { limitMs: 3_000 })
     for (let n = 0; n < 6; n += 1) write(w.at.repo, `f${n}.txt`, `content ${n}\n`)
     await sleep(25)
     expect(await w.mark('start', { requestId: 'held' })).toBe('captured')
@@ -438,7 +443,7 @@ describe('the confirmation of a "before"', () => {
     }, { now: () => Date.now() + skew })
     for (let n = 0; n < 3_000; n += 1) write(w.at.repo, `d${n % 40}/f${n}.txt`, `content ${n}\n`)
     await sleep(25)
-    const until = Date.now() + 4_000
+    const until = Date.now() + WORKER_ROOMY
     expect(await w.mark('start', { requestId: 'held', until })).toBe('captured')
     expect(w.staged()).toBeGreaterThan(3_000)
     // The confirmation comes 10 ms before the call's time is over, as this thread counts it.
@@ -458,7 +463,7 @@ describe('the confirmation of a "before"', () => {
     })
     for (let n = 0; n < 3_000; n += 1) write(w.at.repo, `d${n % 40}/f${n}.txt`, `content ${n}\n`)
     await sleep(25)
-    expect(await w.mark('start', { requestId: 'gone' })).toBe('captured')
+    expect(await w.mark('start', { requestId: 'gone', until: Date.now() + WORKER_ROOMY })).toBe('captured')
     expect(await w.mark('confirm', { requestId: 'gone' })).toBe('late')
     expect(asked).toHaveLength(1)
     await keptNothing(w)

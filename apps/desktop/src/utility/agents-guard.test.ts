@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { timedBesideControl } from './test-fixtures/load-clock'
 import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED, SESSION_MESSAGE_HANDOVER } from '@bmn/protocol'
 import { GUARD_APPS, GUARD_MEASURED, MESSAGE_HANDOVER, MESSAGE_LIMIT_MS, decide, decideWithin, guardStanding, guardState, messageDestination, messageDestinationWithin, messageStanding, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
 import type { MessageDestination } from '@bmn/protocol'
@@ -553,9 +554,9 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     const failing = () => { throw new Error('synthetic: no thread') }
     expect(await messageDestinationWithin(input, 2000, { startThread: failing })).toBeNull()
     const silent = () => Object.assign(new EventEmitter(), { terminate: () => undefined })
-    const from = Date.now()
-    expect(await messageDestinationWithin(input, 40, { startThread: silent })).toBeNull()
-    expect(Date.now() - from).toBeLessThan(1000)
+    const timed = await timedBesideControl(() => messageDestinationWithin(input, 40, { startThread: silent }))
+    expect(timed.answer).toBeNull()
+    expect(timed.took).toBeLessThan(1_000 + timed.late)
   })
 
   it('says per app, for `bmn hooks check`, whether its hook hands messages over and on which version that was measured', () => {

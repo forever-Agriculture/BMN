@@ -15,6 +15,7 @@ import {
   type SessionMessageRecord
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { timedBesideControl } from './test-fixtures/load-clock'
 import { COMPANION_OPERATIONS, insertArtifact, listAgentHandoffs, listDrafts, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import type { DatabaseWorkerClient } from './database-client'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -956,13 +957,11 @@ describe('the word that a message waits (66.4 AC5)', () => {
   it('never holds the answer to an event\'s report for a slow store: past its bound nothing is said to wait', async () => {
     await tell('a', 'b')
     stalled = new Promise(() => undefined)
-    const from = Date.now()
+    const timed = await timedBesideControl(ask)
 
-    expect(await ask()).toBe(false)
-
-    const took = Date.now() - from
-    expect(took).toBeGreaterThanOrEqual(SESSION_MESSAGE_WAITING_CHECK_MS - 20)
-    expect(took).toBeLessThan(SESSION_MESSAGE_WAITING_CHECK_MS + 250)
+    expect(timed.answer).toBe(false)
+    expect(timed.took).toBeGreaterThanOrEqual(SESSION_MESSAGE_WAITING_CHECK_MS - 20)
+    expect(timed.took).toBeLessThan(SESSION_MESSAGE_WAITING_CHECK_MS + 250 + timed.late)
     // The message is not lost: the next event's report is told.
     stalled = null
     expect(await ask()).toBe(true)

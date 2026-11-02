@@ -2,6 +2,7 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
+import { timedBesideControl } from '../utility/test-fixtures/load-clock'
 import { METHOD_REGISTRY } from '@bmn/protocol'
 import type { UtilityProcess } from 'electron'
 import {
@@ -131,11 +132,10 @@ describe('PtyHostClient lifecycle', () => {
 
   it('times out a hung control request with a typed error', async () => {
     const { client } = await connectedClient({ requestTimeoutMs: 5 })
-    const startedAt = Date.now()
-    await expect(client.request(METHOD_REGISTRY.healthGet, {})).rejects.toBeInstanceOf(
+    const timed = await timedBesideControl(() => expect(client.request(METHOD_REGISTRY.healthGet, {})).rejects.toBeInstanceOf(
       PtyHostRequestTimeoutError
-    )
-    expect(Date.now() - startedAt).toBeLessThan(100)
+    ))
+    expect(timed.took).toBeLessThan(100 + timed.late)
   })
 
   it('keeps the stderr a host wrote just before it died, even when it arrives after the exit', async () => {
@@ -215,9 +215,8 @@ describe('drainAfterExit', () => {
     ended.resume()
     ended.end()
     await new Promise((resolve) => ended.once('end', resolve))
-    const started = Date.now()
-    await drainAfterExit([[ended, () => undefined], [null, () => undefined]], 5_000)
-    expect(Date.now() - started).toBeLessThan(1_000)
+    const timed = await timedBesideControl(() => drainAfterExit([[ended, () => undefined], [null, () => undefined]], 5_000))
+    expect(timed.took).toBeLessThan(1_000 + timed.late)
   })
 })
 

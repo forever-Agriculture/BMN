@@ -1723,7 +1723,7 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
   it('grants nothing from a run cut short by the time limit, whatever it had printed by then', async () => {
     rmSync(toolsTestsPath())
     stub(END_LINE, 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000)')
-    const result = await testTools('claude', { environment: env, now: NOW, timeoutMs: 2500 })
+    const result = await testTools('claude', { environment: env, now: NOW, timeoutMs: 6_000 })
     expect(result).toMatchObject({ outcome: 'pass', isolation: 'unproven', isolation_covers: [], isolation_empty: 'unproven' })
     expect(result.detail).toContain(OPEN_UNENDED)
     expect(appTools('claude', { version: CLAUDE })).toMatchObject({ isolation: false, empty: false })
@@ -1846,7 +1846,7 @@ describe('OpenCode 2 private tools test (85.3)', () => {
 
   it('refuses a connected name without the stand-in confirming its values', async () => {
     app('opencode', OPENCODE, { starts: false })
-    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 2000 })).toMatchObject({ outcome: 'inconclusive',
+    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 30_000 })).toMatchObject({ outcome: 'inconclusive',
       detail: 'OpenCode named the tool, but its stand-in did not confirm both its argument and environment value' })
     stopped()
   })

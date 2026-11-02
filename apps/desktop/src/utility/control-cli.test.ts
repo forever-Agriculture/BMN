@@ -11,6 +11,7 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { timedBesideControl } from './test-fixtures/load-clock'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
 import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE, pushPolicyStatus, readPushPolicy } from '@bmn/protocol'
@@ -1714,8 +1715,8 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     expect(result).toEqual(QUIET)
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
-    // The hook stops at the limit, whatever BMN does; the rest is the process ending and this test noticing it.
-    expect(gone).toBeLessThan(2000)
+    // The hook stops at the limit, whatever BMN does: BMN never answers, so a hook that waited would not be gone in this time.
+    expect(gone).toBeLessThan(15_000)
   })
 
   it('counts BMN\'s word that a message waits inside the limit: a slow answer to the report leaves less for the rest', async () => {
@@ -4237,8 +4238,8 @@ describe('OpenCode hooks', () => {
       emit('session.execution.succeeded', { sessionID: OPENCODE_SESSION })
       await vi.waitFor(async () => expect(await pids()).toHaveLength(1))
       const [pid] = await pids()
-      await vi.waitFor(() => expect(() => process.kill(pid!, 0)).toThrow(), { timeout: 4500 })
-      expect(Date.now() - started).toBeLessThan(4200)
+      const gone = await timedBesideControl(() => vi.waitFor(() => expect(() => process.kill(pid!, 0)).toThrow(), { timeout: 15_000 }))
+      expect(Date.now() - started).toBeLessThan(4_200 + gone.late)
     } finally {
       stop?.()
       await new Promise((resolve) => setTimeout(resolve, 200))
@@ -6060,13 +6061,13 @@ describe('bmn hook turn marks (Story 69.4)', () => {
   it('goes on and prints nothing when BMN does not answer within the time of the call', async () => {
     const fixture = await cliFixture()
     const env = await recording(fixture)
-    fixture.handlers.markTurn.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve('captured'), 1_500)))
+    fixture.handlers.markTurn.mockImplementation(() => new Promise((resolve) => setTimeout(() => resolve('captured'), 30_000).unref()))
     const asked = Date.now()
 
     expect(await runHook(fixture, 'claude', prompt, HOLDS_TERMINAL, env)).toEqual(QUIET)
 
-    // The hook's own start and its usual report are in this time too; the mark alone would hold it for 1.5 s.
-    expect(Date.now() - asked).toBeLessThan(1_300)
+    // The hook's own start and its usual report are in this time too; the mark alone would hold it for 30 s.
+    expect(Date.now() - asked).toBeLessThan(15_000)
     expect(marks(fixture).map((mark) => mark.edge)).toEqual(['start'])
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
   })

@@ -21,7 +21,7 @@ import { listTurns, sweepTurns, type TurnRow } from './database-turn-store'
 import { createWorkspace, listSessions, listWorkspaces, selectWorkspace, updateWorkspace } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
-import { refusal, type CaptureSeams } from './turn-changes-capture'
+import { refusal, type CaptureSeams, type TurnLimits } from './turn-changes-capture'
 import { TurnChangesEngine, inProcessKeeper, inProcessPort, type TurnChangesPort } from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
 import { scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
@@ -113,7 +113,7 @@ interface Host {
 const ROOMY_MARK_MS = 5_000
 const hosts: Host[] = []
 let requests = 0
-async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port, version: string | null = '0.162.1', markLimitMs = ROOMY_MARK_MS): Promise<Host> {
+async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPort = (port) => port, version: string | null = '0.162.1', markLimitMs = ROOMY_MARK_MS, limits?: Partial<TurnLimits>): Promise<Host> {
   const at = scratch(name)
   const root = mkdtempSync(join(tmpdir(), 'bmn-th-'))
   const database = new BetterSqlite3(':memory:')
@@ -143,7 +143,7 @@ async function host(name: string, wrap: (port: TurnChangesPort) => TurnChangesPo
     stopScreenMirror: () => undefined,
     sessionWithCurrentProcessState: (session: unknown) => session
   } as unknown as SessionManager
-  const engine = new TurnChangesEngine({ dataRoot: join(root, 'data'), home: at.home })
+  const engine = new TurnChangesEngine({ dataRoot: join(root, 'data'), home: at.home, ...(limits ? { limits } : {}) })
   const emitted: AppEventMessage[] = []
   const foreground = { folder: at.repo }
   const service = new CompanionService({
@@ -510,7 +510,8 @@ describe('what the window reads (Story 69.5)', () => {
   })
 
   it('reaches every file of a turn a page at a time: the last of 2,001 changed files opens like the first', async () => {
-    const h = await host('pages')
+    // The scan of its 2,001 files needs its time on a busy machine; the pages are what is under test.
+    const h = await host('pages', undefined, undefined, undefined, { captureMs: 60_000 })
     await h.recordHere(true)
     const scan = async (job: string, base: string | null = null): Promise<TurnCaptureRecord> => {
       const answer = await h.engine.capture({ job, session: 's1', folder: h.at.repo, base, publish: true })

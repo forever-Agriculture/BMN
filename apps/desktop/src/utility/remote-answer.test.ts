@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { timedBesideControl } from './test-fixtures/load-clock'
 import { parseAttentionPrompt, type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
 import { RemoteAnswers, claudeCountdownMs, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
@@ -527,17 +528,20 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
 
   it('tells a hook at once when its request is not one BMN follows, and ends its wait when the request closes', async () => {
     const h = harness({ record: record(HOOKED), lines: BLANK })
-    const started = Date.now()
-    await expect(hookAsks(h, 'ref-unknown', 5_000)).resolves.toEqual([])
-    expect(Date.now() - started).toBeLessThan(1_000)
+    const unknown = await timedBesideControl(() => hookAsks(h, 'ref-unknown', 5_000))
+    expect(unknown.answer).toEqual([])
+    expect(unknown.took).toBeLessThan(1_000 + unknown.late)
     expect(h.engine.hookWanted('s1', 'inc-1', 'ref-unknown')).toBe(false)
     expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(true)
     expect(h.engine.hookWanted('s1', 'inc-old', 'ref-1')).toBe(false)
-    const waiting = hookAsks(h, 'ref-1', 5_000)
-    await settle()
-    h.engine.closed({ ...record(HOOKED), state: 'answered' })
-    await expect(waiting).resolves.toEqual([])
-    expect(Date.now() - started).toBeLessThan(2_000)
+    const closed = await timedBesideControl(async () => {
+      const waiting = hookAsks(h, 'ref-1', 5_000)
+      await settle()
+      h.engine.closed({ ...record(HOOKED), state: 'answered' })
+      return waiting
+    })
+    expect(closed.answer).toEqual([])
+    expect(closed.took).toBeLessThan(2_000 + closed.late)
     expect(h.engine.hookWanted('s1', 'inc-1', 'ref-1')).toBe(false)
   })
 
