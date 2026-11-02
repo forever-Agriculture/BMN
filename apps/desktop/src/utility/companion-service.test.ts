@@ -485,6 +485,8 @@ afterEach(async () => {
   service['pager'].close()
   service['cards'].dispose()
   await service['telegramDeliveryWrites']
+  // A log line on its way would bring the folder back after the removal (Story 102.10 AC2).
+  await Promise.all([service['refusalWrites'], service['awayWakeWrites'], service['repeatWrites']])
   // Its timer writes hook-events.json a moment later: close it first, or the folder comes back after the removal (Story 102.10).
   await service['retainedHooks'].close()
   database.close()

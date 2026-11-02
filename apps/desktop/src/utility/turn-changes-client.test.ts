@@ -2,13 +2,15 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { Worker } from 'node:worker_threads'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TURN_SECRET_PLATE, type TurnShownLine } from '@bmn/protocol'
 import { TurnChangesClient, TurnChangesUnavailable, turnJobId } from './turn-changes-client'
 import type { TurnCaptureAnswer } from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
-import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
+import { threadWork, timedBesideControl, workingControl } from './test-fixtures/load-clock'
+import type { TurnLimits } from './turn-changes-capture'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -19,10 +21,10 @@ const RESOLVE = pathToFileURL(join(here, 'test-fixtures/turn-changes/ts-resolve.
 
 const places: Place[] = []
 const clients: TurnChangesClient[] = []
-function setup(name: string): { at: Place; client: TurnChangesClient } {
+function setup(name: string, limits?: Partial<TurnLimits>): { at: Place; client: TurnChangesClient } {
   const at = scratch(name)
   places.push(at)
-  const client = new TurnChangesClient(WORKER, { dataRoot: at.dataRoot, home: at.home }, { execArgv: ['--import', RESOLVE] })
+  const client = new TurnChangesClient(WORKER, { dataRoot: at.dataRoot, home: at.home, ...(limits ? { limits } : {}) }, { execArgv: ['--import', RESOLVE] })
   clients.push(client)
   return { at, client }
 }
@@ -93,6 +95,7 @@ describe('the turn changes worker thread', () => {
 
   it('stops a comparison and one file\'s difference within 100 ms, while the host\'s own thread stays free', async () => {
     const { at, client } = setup('worker-stop')
+    const control = await workingControl()
     const long = (prefix: string): string => `${Array.from({ length: 60000 }, (_, n) => `${prefix}${n}`).join('\n')}\n`
     write(at.repo, 'long.txt', long('a'))
     const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
@@ -117,7 +120,7 @@ describe('the turn changes worker thread', () => {
         const controller = new AbortController()
         const answer = ask(controller.signal)
         await sleep(150)
-        const stopped = await timedBesideControl(async () => {
+        const stopped = await control.timed(async () => {
           controller.abort()
           return answer
         })
@@ -125,66 +128,87 @@ describe('the turn changes worker thread', () => {
         expect(stopped.answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
         expect(stopped.took).toBeLessThan(100 + stopped.late)
       }
-      const left = await timedBesideControl(() => client.compare(pair))
+      const left = await control.timed(() => client.compare(pair))
       expect(left.answer).toEqual({ state: 'unavailable', reason: 'Difference unavailable: limit reached' })
       // Its work ends a little before its 2 s, so that this answer is given inside them.
       expect(left.took).toBeLessThan(2_000 + left.late)
     } finally {
       clearInterval(ticking)
+      await control.end()
     }
     expect(longest).toBeLessThan(100)
   })
 
   it('stops within 100 ms where no line is compared: a file that is all new, millions of short lines, and text made to be slow to search for secrets', async () => {
-    const { at, client } = setup('worker-bounds')
-    const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
-    // About 9 MiB of short lines, all new; one line of 2 MiB that is secret-shaped from end to end; and one line
-    // of 9 MiB that opens a quote and never closes it, in a file whose names and brackets are read to its end.
-    write(at.repo, 'lines.txt', Array.from({ length: 1_500_000 }, (_value, n) => `r${n % 977}`).join('\n') + '\n')
-    write(at.repo, 'keys.txt', `${'sk-'.repeat(700_000)}\nplain\n`)
-    write(at.repo, 'config.yaml', `${'a-'.repeat(400_000)}\ntoken: "${'eyJ'.repeat(200_000)}\n`)
-    write(at.repo, 'huge.json', `{"note": "${'sk-eyJ '.repeat(1_300_000)}\n`)
-    const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
-    const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
-    const compared = await client.compare(pair)
-    expect(compared).toMatchObject({ state: 'compared', totals: { files: 4, partial: false } })
-    for (const path of ['lines.txt', 'keys.txt', 'config.yaml', 'huge.json']) {
-      // Left alone it answers inside its 2 s, with every bound of what is shown kept and no value in it.
-      const { answer: whole, took, late } = await timedBesideControl(() => client.difference({ ...pair, path }))
-      expect(took, path).toBeLessThan(2_000 + late)
-      expect(whole.state, path).toBe('text')
-      expect(JSON.stringify(whole).length, path).toBeLessThan(2_000_000)
-      expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ|sk-eyJ/)
-      // Stopped at once, and stopped a moment after it began: heard within 100 ms both times. The moment is a
-      // fifth of the time the read took when left alone, 20 ms at most, so that the stop comes while it is at work.
-      for (const wait of [0, Math.min(20, Math.floor(took / 5))]) {
-        const controller = new AbortController()
-        const answer = client.difference({ ...pair, path }, controller.signal)
-        // At once is in the same turn: waiting for a timer let a busy machine's worker finish first (Story 91.6).
-        if (wait > 0) await sleep(wait)
-        const stopped = await timedBesideControl(async () => {
-          controller.abort()
-          return answer
-        })
-        expect(stopped.answer, `${path} after ${wait} ms`).toEqual({ state: 'cancelled', reason: 'cancelled' })
-        expect(stopped.took, `${path} after ${wait} ms`).toBeLessThan(100 + stopped.late)
+    // Its own limit of 2 s stays out of this on a busy machine; the time it took is bounded below, and the limit by the case above.
+    const { at, client } = setup('worker-bounds', { compareMs: 60_000, captureMs: 60_000 })
+    const control = await workingControl()
+    try {
+      const one = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true }))
+      // About 9 MiB of short lines, all new; one line of 2 MiB that is secret-shaped from end to end; and one line
+      // of 9 MiB that opens a quote and never closes it, in a file whose names and brackets are read to its end.
+      write(at.repo, 'lines.txt', Array.from({ length: 1_500_000 }, (_value, n) => `r${n % 977}`).join('\n') + '\n')
+      write(at.repo, 'keys.txt', `${'sk-'.repeat(700_000)}\nplain\n`)
+      write(at.repo, 'config.yaml', `${'a-'.repeat(400_000)}\ntoken: "${'eyJ'.repeat(200_000)}\n`)
+      write(at.repo, 'huge.json', `{"note": "${'sk-eyJ '.repeat(1_300_000)}\n`)
+      const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
+      const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
+      const compared = await client.compare(pair)
+      expect(compared).toMatchObject({ state: 'compared', totals: { files: 4, partial: false } })
+      for (const path of ['lines.txt', 'keys.txt', 'config.yaml', 'huge.json']) {
+        // Left alone it answers inside its 2 s, with every bound of what is shown kept and no value in it.
+        const { answer: whole, took, late } = await control.timed(() => client.difference({ ...pair, path }))
+        expect(took, path).toBeLessThan(2_000 + late)
+        expect(whole.state, path).toBe('text')
+        expect(JSON.stringify(whole).length, path).toBeLessThan(2_000_000)
+        expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ|sk-eyJ/)
+        // Stopped at once, and stopped a moment after it began: heard within 100 ms both times. The moment is a
+        // fifth of the time the read took when left alone, 20 ms at most, so that the stop comes while it is at work.
+        for (const wait of [0, Math.min(20, Math.floor(took / 5))]) {
+          const controller = new AbortController()
+          const answer = client.difference({ ...pair, path }, controller.signal)
+          // At once is in the same turn: waiting for a timer let a busy machine's worker finish first (Story 91.6).
+          if (wait > 0) await sleep(wait)
+          const stopped = await control.timed(async () => {
+            controller.abort()
+            return answer
+          })
+          expect(stopped.answer, `${path} after ${wait} ms`).toEqual({ state: 'cancelled', reason: 'cancelled' })
+          expect(stopped.took, `${path} after ${wait} ms`).toBeLessThan(100 + stopped.late)
+        }
       }
+      const controller = new AbortController()
+      const answer = client.compare(pair, controller.signal)
+      await sleep(10)
+      const stopped = await control.timed(async () => {
+        controller.abort()
+        return answer
+      })
+      expect(stopped.answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
+      expect(stopped.took).toBeLessThan(100 + stopped.late)
+    } finally {
+      await control.end()
     }
-    const controller = new AbortController()
-    const answer = client.compare(pair, controller.signal)
-    await sleep(10)
-    const stopped = await timedBesideControl(async () => {
-      controller.abort()
-      return answer
-    })
-    expect(stopped.answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
-    expect(stopped.took).toBeLessThan(100 + stopped.late)
-  }, 60_000)
+  }, 120_000)
 
   it('still fails a slow stop beside the control timer, whatever the machine is doing', async () => {
     const { took, late } = await timedBesideControl(() => sleep(1_000))
     expect(took).toBeGreaterThanOrEqual(100 + late)
   })
+
+  it('still fails a stop slow by its own work beside a working control, whatever the machine is doing', async () => {
+    const control = await workingControl()
+    try {
+      // 400 ms of a thread's own work, as a worker that went on past the stop would do.
+      const worker = 'const s=()=>{const u=process.threadCpuUsage();return (u.user+u.system)/1000};const b=s();while(s()-b<400);'
+      const { took, late } = await control.timed(() => new Promise((resolve, reject) => {
+        new Worker(worker, { eval: true }).once('exit', resolve).once('error', reject)
+      }))
+      expect(took).toBeGreaterThanOrEqual(100 + late)
+    } finally {
+      await control.end()
+    }
+  }, 60_000)
 
   it('hands back no named secret value of a config file, in removed, added or unchanged lines, however the file writes it, with the counts of the original texts', async () => {
     const { at, client } = setup('worker-masks')

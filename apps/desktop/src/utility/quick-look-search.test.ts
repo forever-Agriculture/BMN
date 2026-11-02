@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
+import { threadWork, workingControl } from './test-fixtures/load-clock'
 import { QUICK_LOOK_SEARCH_MAX_FILE_BYTES, SECRET_MASK } from '@bmn/protocol'
 import { QuickLookSearches, contentsPattern, contentsQueryProblem, matchingLines, searchQuickLookContents } from './quick-look-search'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
@@ -228,13 +228,18 @@ describe('running searches', () => {
       expect((await search(root, query)).cancelled).toBe(false)
     }
     const controller = new AbortController()
-    const stopped = await timedBesideControl(async () => {
-      const searching = search(root, 'NAME', {}, controller.signal)
-      setTimeout(() => controller.abort(), 5)
-      return searching
-    })
-    expect(stopped.answer.cancelled).toBe(true)
-    expect(stopped.took).toBeLessThan(300 + stopped.late)
+    const control = await workingControl()
+    try {
+      const stopped = await control.timed(async () => {
+        const searching = search(root, 'NAME', {}, controller.signal)
+        setTimeout(() => controller.abort(), 5)
+        return searching
+      })
+      expect(stopped.answer.cancelled).toBe(true)
+      expect(stopped.took).toBeLessThan(300 + stopped.late)
+    } finally {
+      await control.end()
+    }
   }, 60_000)
 
   it('leaves the terminals\' process a turn at least every 100 ms while it searches 20,000 made-up files', async () => {

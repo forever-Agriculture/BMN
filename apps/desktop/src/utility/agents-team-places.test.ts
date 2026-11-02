@@ -1,6 +1,6 @@
 // MODULE: agents-team-places.test.ts - Stories 72.4, 72.9: many asks, safely: a key, the request's hash and a capacity place reserved together across processes, crashes on either side of the start, capacity edges, nesting told from an ask's own systemd scope with a cleared environment and forged labels, sessions kept apart, credentials refused before anything starts, retention and the key window, the token ceiling and the features list; BMN's real systemd user scope, stand-in apps, a synthetic team, no provider reached
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -137,7 +137,7 @@ describe('keys and the request\'s hash (72.4 AC2)', () => {
   })
 })
 
-describe.skipIf(!SCOPES)('crashes on either side of the start (72.4 AC2)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('crashes on either side of the start (72.4 AC2)', { timeout: 120_000 }, () => {
   it('before the start: the run is recorded interrupted, never launched, and its supervisor, should it come, starts nothing', async () => {
     const question = 'Is the loop bounded?'
     const reserved = await reserveAsk(runs(), { scope: 'shell', key: key('crash-before'), hash: shellHash(question), id: '20261015T010000-0000000a' }, { holder: DEAD })
@@ -175,7 +175,7 @@ describe.skipIf(!SCOPES)('crashes on either side of the start (72.4 AC2)', { tim
   })
 })
 
-describe.skipIf(!SCOPES)('many asks at once (72.4 AC1, AC3)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('many asks at once (72.4 AC1, AC3)', { timeout: 120_000 }, () => {
   it('separate commands submitting together never exceed the capacity; one more is busy (exit 14), and a freed place is taken again', async () => {
     settings('{"capacity": 3}\n')
     const results = await Promise.all([1, 2, 3, 4, 5].map((n) => bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', `Bounded ${n}? SLEEP`, '--key', key(`load-${n}`), '--background', '--json'])))
@@ -204,7 +204,7 @@ describe.skipIf(!SCOPES)('many asks at once (72.4 AC1, AC3)', { timeout: 30_000 
   })
 })
 
-describe.skipIf(!SCOPES)('who sees and controls an ask (72.4 AC2, AC4)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('who sees and controls an ask (72.4 AC2, AC4)', { timeout: 120_000 }, () => {
   it('a session must pass --key; it sees and stops only its own asks, and a forged session label sees nothing', async () => {
     const a = session('sess-a')
     const required = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'x', '--json'], a)
@@ -267,7 +267,7 @@ describe.skipIf(!SCOPES)('who sees and controls an ask (72.4 AC2, AC4)', { timeo
   })
 })
 
-describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (epic review)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (epic review)', { timeout: 120_000 }, () => {
   it('a credential in the question or a named file is refused before anything is written, and the key is given back; a crash after the outcome leaves nothing the next reservation does not take away (72.9 AC6)', async () => {
     const root = join(home, 'code/app')
     mkdirSync(root, { recursive: true })
@@ -319,8 +319,14 @@ describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (ep
     const question = 'Followed? SLEEP'
     // The first command holds the key while it prepares (this test is its living holder) ...
     await reserveAsk(runs(), { scope: 'shell', key: key('follow'), hash: shellHash(question), id: '20261015T070000-00000010' })
+    // The retry's own reservation goes through this lock, and it finds the key while holding it: from the moment it takes the
+    // lock, the release below can only come after it. A retry started after the release would rightly start an ask of its own.
+    let taken = (): void => undefined
+    const reached = new Promise<void>((resolve) => { taken = resolve })
+    const watcher = watch(runs(), (_event, name) => { if (name?.startsWith('.reserve')) taken() })
     const retry = bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', question, '--key', key('follow'), '--json'])
-    await new Promise((resolve) => setTimeout(resolve, 600))
+    await reached
+    watcher.close()
     // ... and is refused before the start, giving the key back.
     await releaseReservation(runs(), { scope: 'shell', key: key('follow'), id: '20261015T070000-00000010' })
     const followed = await retry
@@ -330,7 +336,7 @@ describe.skipIf(!SCOPES)('refusals, crashes and retries leave nothing behind (ep
   })
 })
 
-describe.skipIf(!SCOPES)('retention and the key window (72.4 AC2)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('retention and the key window (72.4 AC2)', { timeout: 120_000 }, () => {
   it('a removed run keeps a content-free entry, and a retry is GONE, during the window and after it', async () => {
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Remove me?', '--key', key('removed')])
     expect(asked.code, asked.stderr).toBe(0)
@@ -367,7 +373,7 @@ describe.skipIf(!SCOPES)('retention and the key window (72.4 AC2)', { timeout: 3
   })
 })
 
-describe.skipIf(!SCOPES)('the owner\'s token ceiling (72.4 AC3)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('the owner\'s token ceiling (72.4 AC3)', { timeout: 120_000 }, () => {
   it('a Claude Code run reaching it is stopped with that reason (exit 16)', async () => {
     settings('{"token_ceiling": 2500}\n')
     const asked = await bmn(['team', 'ask', '--role', 'designer', '--question', 'Look closely. CEILING', '--key', key('ceiling'), '--json'])
@@ -404,7 +410,7 @@ describe('telling an ask\'s scope (72.4 AC4, 72.9 AC4)', () => {
   })
 })
 
-describe.skipIf(!SCOPES)('nesting (72.4 AC4)', { timeout: 30_000 }, () => {
+describe.skipIf(!SCOPES)('nesting (72.4 AC4)', { timeout: 120_000 }, () => {
   it('inside an ask\'s scope every BMN command is refused, its environment cleared or its labels forged; a hook does nothing', async () => {
     // A child in a scope named as an ask's runs every BMN path and reports what each said.
     const id = '20261015T040000-0000000d'
