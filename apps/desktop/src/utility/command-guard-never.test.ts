@@ -303,7 +303,7 @@ describe('what the owner said never to run (Story 102.2)', () => {
       [worktree, 'cd apps/desktop && git checkout -- .'],
       ['/home/someone', 'cat ~/.ssh/id_ed25519.pub'],
       ['/home/someone', 'podman --remote ps']
-    ]) expect(answer(cwd, command), command).toBeNull()
+    ] as const) expect(answer(cwd, command), command).toBeNull()
     for (const [cwd, command] of [
       [real, 'git reset --hard'],
       [real, 'git restore .'],
@@ -321,7 +321,7 @@ describe('what the owner said never to run (Story 102.2)', () => {
       ['/tmp/fixture', 'git stash clear'],
       ['/home/someone', 'cat 3< ~/.codex/auth.json <&3'],
       ['/home/someone', 'podman --remote system prune -af']
-    ]) expect(answer(cwd, command), command).not.toBeNull()
+    ] as const) expect(answer(cwd, command), command).not.toBeNull()
   })
 
   it.each(['claude', 'codex'] as const)('reaches %s as a hold naming the command', (agent) => {

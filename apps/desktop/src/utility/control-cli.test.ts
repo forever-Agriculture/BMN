@@ -5205,19 +5205,21 @@ describe('the command guard runs everywhere and says when it does not (Story 102
 
   it('reports `command guard holds` from a recognised entry, and why it does not answer with the guard\'s file gone', async () => {
     // Room for Electron's runtime to start on a busy machine; an entry's own time is tested with the probe.
+    // Whichever bmn this machine has installed stays out: only the one in each home answers.
+    const outsideBmn = (home: string): Record<string, string> => ({ HOME: home, PATH: '/usr/bin:/bin' })
     const path = await hookFileFixture({ hooks: { PreToolUse: [{ matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 60, command: GUARD_CLAUDE }] }] } })
     const good = await homeWithBmn()
-    const holds = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: good.home } })).stdout).agents[0]
+    const holds = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: outsideBmn(good.home) })).stdout).agents[0]
     expect(holds.commandGuard).toEqual({ state: 'holds' })
-    const text = await runCli(['hooks', 'check', 'claude', '--file', path], { env: { HOME: good.home } })
+    const text = await runCli(['hooks', 'check', 'claude', '--file', path], { env: outsideBmn(good.home) })
     expect(text.stdout).toContain('command guard holds')
     expect(text.stdout).toContain('native rules missing')
     const broken = await homeWithBmn(['command-guard.mjs'])
-    const down = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: broken.home } })).stdout).agents[0]
+    const down = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: outsideBmn(broken.home) })).stdout).agents[0]
     expect(down.commandGuard).toEqual({ state: 'does-not-answer', reason: expect.stringContaining('command guard cannot load') })
     const absent = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-home-')))
     createdRoots.add(absent)
-    const none = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: { HOME: absent } })).stdout).agents[0]
+    const none = JSON.parse((await runCli(['hooks', 'check', 'claude', '--file', path, '--json'], { env: outsideBmn(absent) })).stdout).agents[0]
     expect(none.commandGuard).toEqual({ state: 'does-not-answer', reason: 'bmn is not on the PATH of a session outside BMN' })
   }, 90_000)
 

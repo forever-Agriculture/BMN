@@ -933,10 +933,10 @@ What it holds, in the shell commands of the text:
   folder, or one absolute `git -C` with no variable in it, `..` worked out. Anything else says nothing about the folder and is
   held: a `cd`, a variable, a relative or second `-C`, another Git option, `GIT_DIR`, an option on a wrapper, more text on the
   line. Links are not followed: nothing is read from the disk;
-- except that `git reset --hard`, `git checkout -- .` and `git restore .` are left to the app in a command that changes folder
-  itself (`cd`, `pushd`, `popd`), wherever that goes: replaying 30 days of commands put them over 3 prompts a week, nearly all
-  of those after a `cd`, and working out where a `cd` lands is more than a text reader can do reliably. So
-  `cd ~/code/x && git reset --hard` is **not** held; `git clean -f` still is;
+- except that `git reset --hard`, `git checkout -- .` and `git restore .` are left to the app in a command that contains
+  `cd`, `pushd` or `popd`, wherever that goes and even in a subshell: replaying 30 days of commands put them over 3 prompts a
+  week, nearly all of those after a `cd`, and working out where a `cd` lands is more than a text reader can do reliably. So
+  `cd ~/code/x && git reset --hard` is **not** held; `cd ~/code/x && git clean -f` still is;
 - `git stash drop` or `clear`, in any folder: a worktree shares its repository's stash with every other;
 - a reader or sender (`cat head tail less more base64 xxd od strings cp mv scp rsync curl wget nc tar zip gpg`) naming a
   file of BMN's secret list (`bin/secret-list.mjs`) as an argument, and any program reading one through a redirect, whichever

@@ -427,8 +427,8 @@ function gitInThrowaway(words, wrappers, cwd) {
 
 /**
  * What `git` holds besides pushes: the commands that throw uncommitted work away, outside a throwaway folder. `git reset --hard` and a
- * whole folder's discard are not judged in a command that changes folder itself: Story 102.2's replay put them past 3 a week, nearly
- * all of those after a `cd`, and where a `cd` lands is not worked out here. So `cd ~/code/x && git reset --hard` is left to the app.
+ * whole folder's discard are not judged in a command that contains `cd`, `pushd` or `popd`: Story 102.2's replay put them past 3 a week,
+ * nearly all of those after a `cd`, and where a `cd` lands is not worked out here. So `cd ~/code/x && git reset --hard` is left to the app.
  */
 function discardHold(verb, after, throwaway, movesFolder) {
   // A worktree shares its repository's stash with every other, and no path says a temporary one is its own.
