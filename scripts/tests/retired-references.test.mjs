@@ -7,8 +7,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, it } from 'vitest'
+import { describe, it, vi } from 'vitest'
 import { ALLOWED, CLASSES, NAMED, compareWithAllowed, findReferences } from '../lib/retired-references.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 // Built from parts, so this file names nothing the check looks for.

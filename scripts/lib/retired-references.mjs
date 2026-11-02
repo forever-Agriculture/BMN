@@ -86,6 +86,7 @@ const rosterFixture = { class: CURRENT, reason: `a test fixture: ${Z} as the tea
 const hookTest = { class: CURRENT, reason: `a test of a hook from \`claude ${z}\`: its config folder, its model or its origin through api.z.ai` }
 const folderTest = { class: CURRENT, reason: `a test of the \`.claude-${z}\` folder BMN learns and writes` }
 const configFolder = { class: CURRENT, reason: `\`claude ${z}\`: a Claude Code config folder of its own (history label "${Z}"; context use only, no plan windows)` }
+const secretFile = { class: CURRENT, reason: `the secret list: \`.claude-${z}/secret.env\` keeps that app's key while it is off (Epic 102 D4)` }
 const originTable = (flag) => ({ class: CURRENT, reason: `the model origin table: such a model reads ${flag}` })
 
 /** Each further name: its pattern, why it is still named, and where: file -> its class and its reason. */
@@ -95,6 +96,10 @@ export const NAMED = {
     patterns: [standalone(z, '(?:chat)?')],
     allowed: {
       'apps/desktop/bin/bmn-hooks.mjs': configFolder,
+      'apps/desktop/bin/native-rules.mjs': secretFile,
+      'apps/desktop/bin/secret-list.mjs': secretFile,
+      'apps/desktop/src/utility/command-guard-never.test.ts': secretFile,
+      'apps/desktop/src/utility/native-rules.test.ts': secretFile,
       'apps/desktop/src/renderer/src/plan-use-view.tsx': configFolder,
       'apps/desktop/src/renderer/src/session-presentation.ts': configFolder,
       'apps/desktop/src/utility/agent-history.ts': configFolder,

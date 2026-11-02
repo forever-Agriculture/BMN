@@ -1,12 +1,13 @@
 // MODULE: command-guard.mjs - Story 83.4: the deny-only guard that holds the clearly critical shell commands for the owner
 //
-// It decides from the command text alone, inside the hook process: no socket, no file, no state, so it holds while BMN is
-// closed. Its only outputs are nothing, Claude Code's `ask` (Claude's own permission prompt, measured in Story 83.1 to show in
+// It decides from the command text alone, inside the hook process: no socket, no file, no state, so it needs nothing of a
+// running BMN. Its only outputs are nothing, Claude Code's `ask` (Claude's own permission prompt, measured in Story 83.1 to show in
 // default and auto mode, for an allow-listed command too, and to leave a deny standing) and Codex's block with a reason that
 // tells the agent to ask him. It never allows. The pattern list reads shell commands, not comments, string arguments or
 // heredoc data. Expansions, explicit shell code and the listed wrappers and package runners are inspected too. This is not
 // a shell interpreter or a sandbox: launchers outside that list, encoded code, arbitrary program languages and scripts read
 // from disk are outside it; GitHub's rules are the hard guard there.
+import { namesFolderOfSecret, namesSecretFile, underHome } from './secret-list.mjs'
 
 /** The shell tool each app's PreToolUse names, as Story 83.1 measured it (Claude Code 2.1.302, codex-cli 0.162.1). */
 export const GUARDED_TOOLS = { claude: 'Bash', codex: 'Bash' }
@@ -20,7 +21,7 @@ function shellCommands(source, expansionsOnly = false) {
   let index = 0
   const commands = []
   const scan = (end = null, onlyExpansions = false) => {
-    let command = { words: [], input: [] }
+    let command = { words: [], input: [], reads: [], writes: [] }
     let word = ''
     let started = false
     let quoted = false
@@ -37,15 +38,17 @@ function shellCommands(source, expansionsOnly = false) {
       } else if (redirect?.fd === 0) {
         command.inputFrom = redirect
         command.input = redirect.hereString ? [word] : []
+        if (!redirect.hereString) command.reads.push(word)
       }
       else if (redirect === null) command.words.push(word)
+      else if (!redirect.document && !redirect.hereString) command.writes.push(word)
       word = ''; started = false; quoted = false; redirect = null
     }
     const finishCommand = () => {
       finishWord()
       const finished = command
       if (command.words.length > 0) commands.push(command)
-      command = { words: [], input: [] }
+      command = { words: [], input: [], reads: [], writes: [] }
       return finished
     }
     const expansion = (processSubstitution) => {
@@ -357,21 +360,124 @@ function mergeHold(list) {
     ? 'a pull request merge with --admin, --auto or --delete-branch' : null
 }
 
+/** docker's and podman's options that take a separate value before the subcommand. */
+const DOCKER_VALUES = ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
+  '--url', '--identity', '--connection', '--root', '--runroot', '--storage-driver', '--remote']
+/** Their subcommands whose later words belong to a program inside a container, so a `prune` there is not theirs. */
+const DOCKER_RUNS = /^(run|exec|create|cp|commit|build)$/
+
+/** What a `docker`, `podman` or `docker-compose` command holds: a prune in any form, a volume removed, volumes taken down. */
+function dockerHold(name, words) {
+  const [verb, action, ...after] = subcommand(name === 'docker-compose' ? [words[0], 'compose', ...words.slice(1)] : words, DOCKER_VALUES)
+  if (verb === 'volume' && /^(rm|remove)$/.test(action)) return 'removing a Docker volume, which holds real databases'
+  if (verb === 'compose') {
+    const down = after.indexOf('down')
+    const options = action === 'down' ? after : down >= 0 ? after.slice(down + 1) : []
+    if (options.some((word) => /^--volumes(=|$)/.test(word) || shortFlags(word, 'v'))) return 'taking Docker volumes down with their containers, which hold real databases'
+    return null
+  }
+  return !DOCKER_RUNS.test(verb ?? '') && [action, ...after].includes('prune') ? 'a Docker or Podman prune' : null
+}
+
+/** A forced recursive `rm` of the root, the home folder, or a folder he keeps. */
+const KEPT_FOLDERS = ['', 'brain', 'code', 'projects', 'Documents', '.config', '.ssh', '.codex', '.claude', '*']
+
+function removeHold(args) {
+  const options = args.slice(0, args.includes('--') ? args.indexOf('--') : args.length).filter((word) => word.startsWith('-'))
+  const recursive = options.some((word) => word === '--recursive' || shortFlags(word, 'rR'))
+  const forced = options.some((word) => word === '--force' || shortFlags(word, 'f'))
+  if (!recursive || !forced) return null
+  const targets = args.filter((word) => !word.startsWith('-') || word === '--')
+  return targets.some((word) => /^\/+\*?$/.test(word) || KEPT_FOLDERS.includes(underHome(word)))
+    ? 'a forced recursive removal of a home or system folder' : null
+}
+
+/**
+ * A folder the guard treats as throwaway: a temporary folder or a run's own worktree, where these commands are everyday work
+ * (Story 102.2's replay put them past its limit of 3 a week per pattern). It is told only from text the command
+ * or its event gives: `-C`, the last `cd`, or the event's folder.
+ */
+const THROWAWAY = /^(\/tmp|\/var\/tmp|\/run\/user\/\d+|\$\{?TMPDIR\}?)(\/|$)|\/\.claude\/worktrees\//
+
+/**
+ * A folder named by a variable the same command sets (`D=/tmp/x; cd "$D"`, `D=$(mktemp -d)`), as far as its text says: the last
+ * assignment wins, and a variable it does not set stays unknown, so it is held.
+ */
+function placeInText(place, command, depth = 0) {
+  const variable = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?(.*)$/s.exec(place ?? '')
+  if (variable === null || depth > 2) return place
+  const [, name, rest] = variable
+  const assigned = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${name}=("[^"]*"|'[^']*'|\\$\\([^)]*\\)|[^\\s;&|)]*)`, 'g'))].at(-1)?.[1]
+  if (assigned === undefined) return place
+  if (/^"?\$\(mktemp\b/.test(assigned)) return `/tmp/mktemp${rest}`
+  return placeInText(`${assigned.replace(/^["']|["']$/g, '')}${rest}`, command, depth + 1)
+}
+
+/** What `git` holds besides pushes: the commands that throw uncommitted work away, outside a throwaway folder. */
+function discardHold(verb, after, place) {
+  if (place !== null && THROWAWAY.test(place)) return null
+  if (verb === 'reset' && after.includes('--hard')) return 'a git reset --hard, which discards uncommitted work'
+  if (verb === 'clean' && !after.some((word) => word === '--dry-run' || shortFlags(word, 'n')) && after.some((word) => word === '--force' || shortFlags(word, 'f'))) {
+    return 'a git clean, which deletes untracked files'
+  }
+  if (verb === 'stash' && /^(drop|clear)$/.test(after[0] ?? '')) return 'dropping a git stash'
+  const onlyStaged = verb === 'restore' && after.some((word) => word === '--staged' || shortFlags(word, 'S')) && !after.some((word) => word === '--worktree' || shortFlags(word, 'W'))
+  if (/^(checkout|restore)$/.test(verb ?? '') && !onlyStaged && after.includes('.')) return 'discarding uncommitted changes in the whole folder'
+  return null
+}
+
+/** Programs that read a file out or send it elsewhere, and of them those that also take a whole folder. */
+const READERS = /^(cat|head|tail|less|more|base64|xxd|od|strings|cp|mv|scp|rsync|curl|wget|nc|tar|zip|gpg)$/
+const FOLDER_READERS = /^(cp|mv|scp|rsync|tar|zip)$/
+
+/** A command that reads out or sends a file of BMN's secret list, named as an argument or a redirect. */
+function secretHold(name, args, reads) {
+  if (!READERS.test(name)) return null
+  const named = [...args, ...reads].some((word) => namesSecretFile(word) || (FOLDER_READERS.test(name) && namesFolderOfSecret(word)))
+  return named ? 'reading or sending a credential file' : null
+}
+
+/** Whether an `iommu=soft` this command names, or the text piped or redirected into it, goes into a file: never `echo` or `grep` by themselves. */
+function iommuHold({ words, input, pipe, writes }, name, args) {
+  const writer = /^(tee|grubby|kernelstub)$/.test(name) || (name === 'sed' && args.some((word) => /^--in-place(=|$)/.test(word) || shortFlags(word, 'i'))) ||
+    writes.some((word) => word.startsWith('/etc/') || word.startsWith('/boot/') || /grub/.test(word))
+  if (!writer) return null
+  const texts = [...words, ...input]
+  for (let entry = pipe; entry !== undefined; entry = entry.pipe) texts.push(...entry.words, ...entry.input)
+  return texts.some((word) => word.includes('iommu=soft')) ? 'writing iommu=soft, which breaks this laptop\'s graphics' : null
+}
+
+/** Destroying infrastructure or deploying to the cloud, from the words after the program. */
+function cloudHold(name, args) {
+  if (/^(terraform|pulumi|terragrunt)$/.test(name) && (args.includes('destroy') || (args.includes('apply') && args.includes('-destroy')))) {
+    return `a ${name} destroy`
+  }
+  if (name === 'gcloud' && args.some((word, index) => /^(run|app)$/.test(word) && args[index + 1] === 'deploy')) return 'a gcloud deploy'
+  return null
+}
+
 /**
  * What the guard holds in executable shell text, or null. A process selector can supply BMN's PID to a kill through a
  * pipeline or substitution; mentions in unrelated string arguments do not supply a target.
  */
-export function heldCommand(command, depth = 0, inheritedSelector = false) {
+export function heldCommand(command, depth = 0, inheritedSelector = false, cwd = null) {
   if (typeof command !== 'string' || command === '') return null
+  // Where the next command runs, as far as the text says: the event's folder until a `cd` names another.
+  let place = cwd
   const commands = shellCommands(command).flatMap((entry) => executables(entry.words).map((words) => ({ ...entry, words })))
   const selectsBmn = inheritedSelector || commands.some(({ words }) => /^(pgrep|pidof|ps|grep|rg|awk|cat)$/.test(nameOf(words[0])) && words.slice(1).some((word) => /\bbmn\b/i.test(word)))
-  for (const { words, input, pipe, inputFrom } of commands) {
+  for (const entry of commands) {
+    const { words, input, pipe, inputFrom, reads } = entry
     const [program, ...args] = words
     const name = nameOf(program)
+    if (name === 'cd') place = args.find((word) => !word.startsWith('-')) ?? null
     if (/^(kill|pkill|killall)$/.test(name) && (selectsBmn || args.some((word) => /\bbmn\b/i.test(word)))) return 'stopping BMN, which only the owner does'
     if (name === 'git') {
       const [verb, ...after] = subcommand(words, ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'])
       if (verb === 'push') { const held = pushHold(after); if (held !== null) return held }
+      const at = words.indexOf('-C')
+      const held = discardHold(verb, after, placeInText(at >= 0 ? words[at + 1] ?? null : place, command))
+      if (held !== null) return held
     }
     if (name === 'gh') {
       const [verb, action, ...after] = subcommand(words, ['-R', '--repo', '--hostname'])
@@ -379,19 +485,25 @@ export function heldCommand(command, depth = 0, inheritedSelector = false) {
       if (held !== null) return held
       if (verb === 'repo' && /^(delete|edit|rename|archive|transfer)$/.test(action)) return 'a repository change (delete, edit, rename, archive or transfer)'
       if (verb === 'release' && /^(create|edit|delete)$/.test(action)) return 'a release'
+      if (/^(secret|variable)$/.test(verb ?? '') && /^(set|delete)$/.test(action ?? '')) return `a change to a repository's ${verb}`
     }
+    if (/^(docker|podman|docker-compose)$/.test(name)) { const held = dockerHold(name, words); if (held !== null) return held }
+    if (name === 'prime-select' && args.includes('nvidia')) return 'prime-select nvidia, which must stay on-demand on this laptop'
+    if (name === 'rm') { const held = removeHold(args); if (held !== null) return held }
+    const held = secretHold(name, args, reads) ?? iommuHold(entry, name, args) ?? cloudHold(name, args)
+    if (held !== null) return held
     if (['npm', 'pnpm', 'yarn'].includes(name)) {
       const [verb, action] = subcommand(words, PACKAGE_VALUES)
       if (verb === 'publish' || (name === 'yarn' && verb === 'npm' && action === 'publish')) return 'publishing a package'
       if (depth < 16 && name === 'yarn' && (verb === 'workspace' || (verb === 'workspaces' && action === 'foreach'))) {
         const nested = verb === 'workspace' ? args.slice(2) : subcommand(['foreach', ...args.slice(2)], ['--from', '--include', '--exclude', '-j', '--jobs'])
-        const held = heldCommand(nested.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(' '), depth + 1, selectsBmn)
+        const held = heldCommand(nested.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(' '), depth + 1, selectsBmn, place)
         if (held !== null) return held
       }
     }
     if (depth < 16 && (name === 'eval' || SHELLS.test(name))) {
       const code = name === 'eval' ? (args[0] === '--' ? args.slice(1) : args).join(' ') : shellCode(args, inputFrom !== undefined ? input : [pipedInput(pipe)])
-      const held = heldCommand(code, depth + 1, selectsBmn)
+      const held = heldCommand(code, depth + 1, selectsBmn, place)
       if (held !== null) return held
     }
   }
@@ -401,7 +513,7 @@ export function heldCommand(command, depth = 0, inheritedSelector = false) {
 /** The guard's answer for one hook event, as printed to the app, or null for nothing: never an allow. */
 export function guardAnswer(agent, event) {
   if (event?.hook_event_name !== 'PreToolUse' || GUARDED_TOOLS[agent] === undefined || event.tool_name !== GUARDED_TOOLS[agent]) return null
-  const held = heldCommand(event.tool_input?.command)
+  const held = heldCommand(event.tool_input?.command, 0, false, typeof event.cwd === 'string' ? event.cwd : null)
   if (held === null) return null
   if (agent === 'claude') {
     const reason = `BMN holds ${held} for the owner (his policy: \`bmn policy\`).`
