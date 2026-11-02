@@ -45,7 +45,7 @@ export const STATE_WORDS = Object.freeze({
 })
 /** Whether a finding of BMN's own area checks may name this cause: a closed vocabulary per check, and per app for hooks. */
 export function causeAllowed(code, app, cause) {
-  if (code === 'hook-check' && HOOK_FLOOR_CAUSES.includes(cause)) return ['claude', 'codex'].includes(app)
+  if (code === 'hook-check' && HOOK_FLOOR_CAUSES.includes(cause)) return ['claude', 'codex'].includes(app) || (app === 'opencode' && cause === 'rules:missing')
   if (code === 'hook-check') return Object.hasOwn(HOOK_EVENTS, app) && (cause === 'older-wording:plugin' ? app === 'opencode'
     : cause.startsWith('missing:') && [...HOOK_EVENTS[app], ...(app === 'codex' ? CODEX_OPTIONAL_HOOKS : [])].includes(cause.slice(8)))
   if (code === 'tool-check' && ['unlisted-exposed', 'unlisted-managed'].includes(cause)) return true

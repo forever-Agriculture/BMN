@@ -1116,6 +1116,25 @@ const LOADING_SKILL = (name, token) => `---\nname: ${name}\ndescription: BMN tes
  * prompt is sent. The prompt goes to the app's provider, so the test runs only where the approved
  * destination may receive private work; it is bound like a listing test.
  */
+/**
+ * A test killed midway leaves its skill where the app reads skills (Story 102.10). The next one removes any older than a test's
+ * own limit twice over, which has ended whatever became of it; only folders of that name and shape, never anything else there.
+ */
+export function removeEndedLoadingTests(location, timeoutMs, now = Date.now()) {
+  let names
+  try { names = readdirSync(location) } catch { return }
+  for (const name of names) {
+    if (!/^bmn-loading-test-[0-9a-f]{8}$/.test(name)) continue
+    const path = `${location}/${name}`
+    try {
+      const entry = lstatSync(path)
+      if (entry.isDirectory() && now - entry.mtimeMs > timeoutMs * 2) rmSync(path, { recursive: true, force: true })
+    } catch {
+      // Gone already, or not ours to read: the next test looks again.
+    }
+  }
+}
+
 export async function testSkillsLoading(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000, by } = {}) {
   const spec = SKILL_APPS[harness]
   const generation = approvedIfAny()
@@ -1133,6 +1152,7 @@ export async function testSkillsLoading(harness, { environment = process.env, no
   if (!route.ok) return done('unavailable', `refused: ${route.reason}; ${route.remedy}`)
   if (!spec.prompt) return done('inconclusive', `BMN cannot yet tell, in a run of ${APP_NAMES[harness]}, the app handing a skill to the model from the model reading the file itself; no prompt was sent`)
   const location = app.location ?? source.path
+  removeEndedLoadingTests(location, timeoutMs)
   const name = `bmn-loading-test-${randomBytes(4).toString('hex')}`
   const token = `BMN-${randomBytes(12).toString('hex')}`
   const path = `${location}/${name}`

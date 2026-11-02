@@ -494,7 +494,7 @@ function openCodeReference(named) {
  * OpenCode's JSONC as a value: JSON plus comments and trailing commas, both only outside strings. Anything
  * else, a key twice in one map (OpenCode's own reader would keep one of them) and a `__proto__` key throw.
  */
-function parseJsonc(text) {
+export function parseJsonc(text) {
   let index = text.charCodeAt(0) === 0xfeff ? 1 : 0
   const fail = (what) => { throw new SyntaxError(`${what} at character ${index}`) }
   // eslint-disable-next-line no-control-regex -- JSON refuses a raw control character inside a string

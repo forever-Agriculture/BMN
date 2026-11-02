@@ -898,8 +898,10 @@ ruleset at all, so there only the agents' rule and the guard below hold) and the
 
 A small, deny-only guard in `bmn hook` holds the clearly critical shell commands for the owner, in Claude Code and
 Codex, in the main conversation and in sub-agents, and in an agent another agent started. It decides inside the
-hook process from the command text alone: it reads no socket and no file, so it holds while BMN is closed. It never
-allows anything and never loosens a hold or deny the app makes itself:
+hook process from the command text alone: it reads no socket and no file, in every session of those two apps, started
+in BMN or not, BMN open or closed: the `PreToolUse` entry no longer depends on BMN's socket, and `bmn` is reachable at
+`~/.local/bin/bmn` outside BMN (`install:desktop` writes that launcher). In a teammate's run the guard answers first and
+every other command stays refused there. It never allows anything and never loosens a hold or deny the app makes itself:
 
 - **Claude Code** gets `permissionDecision: "ask"` with a reason naming what is held, so Claude's own permission
   prompt reaches the owner, in default and auto mode and for a command its allow list allows. A command Claude's
@@ -921,6 +923,22 @@ What it holds, in the shell commands of the text:
 - `gh pr merge` with `--admin`, `--auto` or `--delete-branch` (`-d`);
 - `npm`, `pnpm` and `yarn` `publish`;
 - `kill`, `pkill` or `killall` in a command that names `bmn`, packaged BMN's executable.
+- `docker` or `podman` with `prune` in any form, `docker volume rm`, `docker compose down -v` or `--volumes`;
+- `prime-select nvidia`, and `iommu=soft` in a pipeline or command that also writes it (`sed -i`, `tee`, `grubby`,
+  `kernelstub`, a redirect into `/etc`, `/boot` or a grub file);
+- `rm` recursive and forced on `/`, `~`, `$HOME`, the home folder, or `~/brain`, `~/code`, `~/projects`, `~/Documents`,
+  `~/.config`, `~/.ssh`, `~/.codex`, `~/.claude`;
+- `git reset --hard`, `git clean -f` (not `-n`), `git checkout -- .`, `git restore .` and `git stash drop` or `clear`, unless
+  the text puts them in a throwaway folder (a temporary folder or a run's worktree, by `-C`, `cd`, a variable the same
+  command sets, or the event's folder): there they are everyday work, and replaying 30 days of commands put them over
+  3 prompts a week;
+- a reader or sender (`cat head tail less more base64 xxd od strings cp mv scp rsync curl wget nc tar zip gpg`) naming a
+  file of BMN's secret list (`bin/secret-list.mjs`) as an argument or a redirect;
+- `terraform`, `pulumi` or `terragrunt` `destroy`, `gcloud run deploy`, `gcloud app deploy`, `gh secret` and `gh variable`
+  `set` or `delete`.
+
+Not held: a plain `git push` (BMN's policy decides what merges), `pnpm run package` (the script refuses it, Story 102.9),
+`kubectl`, `helm` and `aws`.
 
 It reads shell commands, not data: string arguments, comments and heredoc bodies pass, so a commit message that
 merely mentions `git push --force` is not held. It looks through pipes, `$(…)` and backtick substitutions, `sh -c`,
@@ -931,8 +949,38 @@ their options before or after the subcommand and their shell-string forms (`-c`,
 runner option's arity is unknown, the guard reads the next word both as its value and as the command, and holds when
 either reading holds; it reads at most 16 places a command may start, the likeliest first. A launcher outside that
 list passes untouched, and the guard does not stop an agent that hides a command on purpose (encoded text, a script it
-writes first); GitHub's own repository rules are the hard guard there. It runs only where BMN's hook entry runs, which is in agents started inside a BMN
-session; deploys in general, CI changes and secrets stay the agents' own rule.
+writes first); GitHub's own repository rules are the hard guard there. Deploys in general and CI changes stay the agents'
+own rule.
+
+**A broken guard is loud, not blocking.** The hook still exits 0 when it fails, and the command proceeds: failing closed
+would stop every agent on every Bash call whenever an update swaps the build. While it is broken its holds are missed and
+only the native floor below applies. `bmn hooks check` and BMN's start run an entry that equals a form BMN recognises with a
+synthetic held-command event (it only names a command; nothing is executed) and report `command guard holds`, or that it
+does not answer and why; a changed entry is reported and never run, because an edited entry could run anything. Health ›
+Hooks shows the app's row as Needs you with one line, and `bmn doctor` lists it under hooks.
+
+### The native floor
+
+The apps' own rules refuse the worst with BMN's hook absent or broken. `bmn hooks install` and BMN's start keep them, beside
+his own, by exact text; `bmn hooks check` reports `native rules present` or `missing` per app. They hold the usual forms
+only: `docker --context x system prune` and a full path are the guard's.
+
+- **Claude Code:** `permissions.deny` rows for `docker` and `podman` `system|image|container|volume|network|builder|buildx
+  prune` and `prime-select nvidia`, each also after `sudo`, and `Read(...)` rows for each file of the secret list, private
+  keys by name from `~/.ssh` at each install, so `.pub`, `config` and `known_hosts` stay readable. Deny rows refuse in every
+  mode, and Read rows cover `cat` and the like (measured on 2.1.x with a stub `docker` and a synthetic key).
+- **Codex:** the same commands as `forbidden` prefix rules in `~/.codex/rules/bmn-guard.rules`, a file BMN owns whole; Codex
+  reads it beside `default.rules` (measured on 0.166.0). `iommu=soft` and credential reads stay the guard's, because a Codex
+  rule cannot name a file inside any command; a Codex teammate's reads are limited by its permission profile.
+- **OpenCode:** `permission.bash` and `permission.read` `deny` rows for the same commands and the secret list, inside the
+  `permission` object of its global config, last in each map because the last match wins, between `BMN floor` comment marks;
+  every other byte stays his, and taking the marked lines out gives back his exact file. This is a floor with no parser, for
+  the forms proven on 2.0.29: plain, `sudo` and a `&&` chain are refused, with his `plugin/guardrails.ts` absent. **A project's
+  `opencode.json` or an agent's own `permission` allowing the same command overrides it** (measured). `permission.asked`
+  already reaches Needs you.
+
+BMN also names, in `bmn doctor`, an allow row that can run any program (Story 102.14), because an allow row runs outside the
+app's limits with no prompt.
 
 ### The Away grant
 

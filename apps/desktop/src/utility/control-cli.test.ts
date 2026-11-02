@@ -4413,7 +4413,7 @@ describe('OpenCode hooks', () => {
     expect(before.stdout).toMatch(/plugin\s+missing\s+OpenCode 1's plugin is still at .*plugin\/bmn\.ts; install removes it/)
     expect(before.stdout).toMatch(/cli\.json\s+missing/)
     const install = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
-    expect(install).toMatchObject({ installed: ['plugin', 'cli.json'], removed: [join(config, 'plugin', 'bmn.ts')], file: path })
+    expect(install).toMatchObject({ installed: ['plugin', 'cli.json', 'permission'], removed: [join(config, 'plugin', 'bmn.ts')], file: path })
     expect(await readFile(path, 'utf8')).toBe(printed.stdout)
     expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', entry] })
     expect((await readFile(cli, 'utf8')).split('\n')[1]).toBe('    "$schema": "https://opencode.ai/v2/cli.json",')

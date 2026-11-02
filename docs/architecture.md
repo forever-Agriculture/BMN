@@ -107,8 +107,13 @@ QA-owned folder. Main persists its exact session/incarnation binding before answ
 uses read-only mode with one scoped Playwright relay; the utility checks the relay's process ancestry
 and start ticks. Reports belong to the caller and owner. Restart recovery never starts another QA.
 An isolated signed-out desktop rehearsal exercised the visible pane, repeated key, actual native
-agent/relay connection, retained screenshots and valid report. Native tool confinement and the
-production account path remain unverified, so account access stays disabled.
+agent/relay connection, retained screenshots and valid report. Account access is wired: a session may
+use the owner's saved browser accounts through the host-owned grant and relay (Epics 97 and 100,
+`shippedQaAccounts` in `companion-service.ts`). A look-only account sends only reads: on Piche TEST,
+reviewed GraphQL query operations that BMN parses, matches to reviewed templates and audits before
+sending, proven on real Piche TEST with his saved accounts (Epic 101); an account he marked as a test
+account uses its origins fully. The sealed host receipt records what was asked. It does not prove a
+native app's tool confinement, which stays unverified.
 
 The QA permission ledger stores immutable grants, first-writer card links, non-refundable activity
 reservations and ordered redacted audit metadata in SQLite. Owner answers close the actual unchanged

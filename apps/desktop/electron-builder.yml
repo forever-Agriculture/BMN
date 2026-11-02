@@ -60,6 +60,8 @@ extraResources:
     to: bin/doctor-profile.mjs
   - from: bin/doctor-locations.mjs
     to: bin/doctor-locations.mjs
+  - from: bin/opencode-floor.mjs
+    to: bin/opencode-floor.mjs
   - from: bin/doctor-text.mjs
     to: bin/doctor-text.mjs
   - from: bin/risky-allow.mjs

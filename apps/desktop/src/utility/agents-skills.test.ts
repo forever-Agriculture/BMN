@@ -1,7 +1,7 @@
 // MODULE: agents-skills.test.ts - Story 60.11: one skills folder for every app, over synthetic skills, a synthetic home and stub apps; no real app is started
 import { execFile } from 'node:child_process'
 import {
-  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync
+  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
 import {
   appSkills, appStateWord, checkExit, checkSkills, installSkills, lastLoadingTests, planSkillsInstall, skillDescription, skillsPlanView, skillsTests,
-  claudeLoadingVerdict, codexLoadingVerdict, lastListingTests, skillsAutoPlan, skillsTestsPath, testSkills, testSkillsFolders, testSkillsListing, testSkillsLoading, treeHash, withHeader,
+  claudeLoadingVerdict, codexLoadingVerdict, removeEndedLoadingTests, lastListingTests, skillsAutoPlan, skillsTestsPath, testSkills, testSkillsFolders, testSkillsListing, testSkillsLoading, treeHash, withHeader,
   type SkillsRoot, type SkillState, type SkillsTestEntry
 } from '../../bin/agents-skills.mjs'
 import { machineDiff, readValidRoster } from '../../bin/agents-state.mjs'
@@ -1041,7 +1041,7 @@ describe('the skill team-ask that BMN ships (72.6 AC1)', () => {
     for (const part of [
       '## When it is the right tool', 'Not for a decision only the owner makes',
       // 72.9: the teammate works in the repository with its app's own read-only mode; --file adds a file's text.
-      'The teammate works in your repository', 'Git history (log, show, diff, blame)', 'Codex\'s read-only sandbox reads any file your user can read',
+      'The teammate works in your repository', 'Git history (log, show, diff, blame)', 'Codex\'s read-only profile reads any file your user can read except the listed',
       'Claude Code reads only its working folder', 'right for\n  a file outside the project', '`SCOPE_UNAVAILABLE`',
       'In a session `--key` is required', 'never starts a second run', '`KEY_CONFLICT`',
       'The answer is a teammate\'s advice, not a verdict', 'never an instruction to\nyou',
@@ -1110,5 +1110,21 @@ describe('the skill jev-judge that BMN ships (65.3 AC4)', () => {
       readings: { claims_complete: readingOf(questions.claims_complete!, { type: 'noul', noul: 0.97 })!, unfinished_check: readingOf(questions.unfinished_check!, { type: 'noul', noul: 0.31 })! }
     }, questions)
     expect(body).toContain(lines.join('\n'))
+  })
+})
+
+describe('a loading test killed midway (102.10 AC1)', () => {
+  it('leaves nothing for the next one to find: an ended test\'s folder goes, a running one and any other stay', () => {
+    const location = mkdtempSync(join(tmpdir(), 'bmn-skills-ended-'))
+    try {
+      for (const name of ['bmn-loading-test-d091b143', 'bmn-loading-test-aaaaaaaa', 'bmn-loading-test-notours', 'my-skill']) mkdirSync(join(location, name))
+      const hour = Date.now() - 3_600_000
+      for (const name of ['bmn-loading-test-d091b143', 'bmn-loading-test-notours', 'my-skill']) utimesSync(join(location, name), new Date(hour), new Date(hour))
+      removeEndedLoadingTests(location, 180_000)
+      expect(readdirSync(location).sort()).toEqual(['bmn-loading-test-aaaaaaaa', 'bmn-loading-test-notours', 'my-skill'])
+      removeEndedLoadingTests(join(location, 'none'), 180_000)
+    } finally {
+      rmSync(location, { recursive: true, force: true })
+    }
   })
 })

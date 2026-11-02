@@ -13,6 +13,7 @@ import { CliError, UsageError, parseArguments } from './bmn-commands.mjs'
 import { EARLIER_OPENCODE_PLUGINS, HOOK_AGENTS, OPENCODE_PLUGIN } from './bmn-opencode-plugin.mjs'
 import { usageFailure } from './bmn-results.mjs'
 import { CODEX_RULES, codexRulesPath, missingClaudeRows, withClaudeRows } from './native-rules.mjs'
+import { openCodeFloorPlan } from './opencode-floor.mjs'
 import { guardWords, probeCommandGuard } from './hooks-floor.mjs'
 
 export { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, holdAtTestGate, hookEventName, hookRequests, openCodeSubagent, phoneAnswerable, retiredOr, runHooks, userInputTool }
@@ -1091,6 +1092,9 @@ function writeCodexRules(path) {
   return true
 }
 
+/** OpenCode's refusal rows for the config beside its plugin (Story 102.15): BMN's plugin lives at `<config>/bmn/tui.ts`. */
+const openCodeFloor = (path) => openCodeFloorPlan(dirname(dirname(path)), homedir())
+
 /** The rows `file` lacks, for Claude; Codex's rules are a file of their own. */
 const claudeRowsToAdd = (agent, file) => (agent === 'claude' ? missingClaudeRows(file.data ?? {}, homedir()) ?? [] : [])
 
@@ -1233,7 +1237,8 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   const marks = await import('./turn-marks.mjs').catch(() => null)
   const turns = new Map(marks === null ? [] : reports.map((report) => [report.agent, marks.turnStanding(report.agent)]))
   // Stories 102.3 and 102.4: the app's own rules, and whether the command guard answers when asked.
-  const floor = new Map(reports.filter((report) => report.agent !== 'opencode').map((report) => {
+  const floor = new Map(reports.map((report) => {
+    if (report.agent === 'opencode') return [report.agent, { nativeRules: openCodeFloor(report.file).state }]
     const file = readHookFile(report.file, report.agent)
     return [report.agent, { commandGuard: commandGuardStanding(report.agent, file), nativeRules: nativeRules(report.agent, report.file, file) }]
   }))
@@ -1246,7 +1251,8 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   }
   const floorLines = (report) => {
     const held = floor.get(report.agent)
-    return held === undefined ? [] : [guardWords(held.commandGuard), `native rules ${held.nativeRules}`]
+    if (held === undefined) return []
+    return [...(held.commandGuard === undefined ? [] : [guardWords(held.commandGuard)]), `native rules ${held.nativeRules}`]
   }
   const lines = reports.map((report) => `${describeHookCheck(report)}${[...Object.values(more(report)), ...floorLines(report)].map((line) => `\n  ${line}`).join('')}`)
   lines.push(ok
@@ -1409,7 +1415,10 @@ async function installOpenCodePlugin(path, asJson, yes) {
   const writePlugin = before !== OPENCODE_PLUGIN
   const cliNext = cli.plugins.includes(entry) ? null
     : `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
-  const installed = [...(writePlugin ? ['plugin'] : []), ...(cliNext === null ? [] : ['cli.json'])]
+  const floorPlan = openCodeFloor(path)
+  const writeFloor = floorPlan.state === 'missing'
+  if (writeFloor) targets.set(floorPlan.file, linkTarget(floorPlan.file))
+  const installed = [...(writePlugin ? ['plugin'] : []), ...(cliNext === null ? [] : ['cli.json']), ...(writeFloor ? ['permission'] : [])]
   if (installed.length === 0 && older.length === 0) {
     const result = { installed: [], backups: [], removed: [], file: path }
     process.stdout.write(`${asJson ? JSON.stringify(result, null, 2) : `Already wired OpenCode plugin: ${path}`}\n`)
@@ -1422,6 +1431,7 @@ async function installOpenCodePlugin(path, asJson, yes) {
   const diff = [
     ...(writePlugin ? [unifiedDiff(before ?? '', OPENCODE_PLUGIN, path)] : []),
     ...(cliNext === null ? [] : [unifiedDiff(cli.text ?? '', cliNext, cliPath)]),
+    ...(writeFloor ? [unifiedDiff(floorPlan.text ?? '', floorPlan.next, floorPlan.file)] : []),
     ...older.map((old) => unifiedDiff(old.text, '', old.file))
   ].join('\n')
   const entries = [...installed, ...older.map((old) => `remove ${old.file}`)]
@@ -1454,6 +1464,11 @@ async function installOpenCodePlugin(path, asJson, yes) {
         if (cli.text !== null) copy(cliPath, `${cliPath}.bmn-backup-${stamp}`)
         writeAtomically(cliPath, cliNext, unchanged(cliPath, cli.text))
       }
+      if (writeFloor) {
+        unchanged(floorPlan.file, floorPlan.text)()
+        if (floorPlan.text !== null) copy(floorPlan.file, `${floorPlan.file}.bmn-backup-${stamp}`)
+        writeAtomically(floorPlan.file, floorPlan.next, unchanged(floorPlan.file, floorPlan.text))
+      }
       for (const old of older) {
         unchanged(old.file, old.text)()
         // Kept in BMN's own folder, outside plugin/ and plugins/, where OpenCode would try to load it.
@@ -1467,6 +1482,7 @@ async function installOpenCodePlugin(path, asJson, yes) {
     }
     const result = { installed, backups, removed, file: path }
     const lines = [`Installed OpenCode plugin: ${path}`, ...(installed.includes('cli.json') ? [`Named in: ${cliPath}`] : []),
+      ...(writeFloor ? [`OpenCode's own refusal rows in: ${floorPlan.file}`] : []),
       ...removed.map((file) => `Removed OpenCode 1's plugin: ${file}`), ...backups.map((file) => `Backup: ${file}`),
       'Restart OpenCode to load it. `bmn hooks check` reports configuration, not that a hook fired.']
     process.stdout.write(`${asJson ? JSON.stringify(result, null, 2) : lines.join('\n')}\n`)
@@ -1735,6 +1751,12 @@ function absentOpenCode(path) {
       if (error instanceof CliError) error.earlier = ['plugin']
       throw error
     }
+  }
+  // OpenCode's own refusal rows: BMN's start keeps them, with a backup, and leaves a file it cannot merge into (Story 102.15).
+  const floorPlan = openCodeFloor(path)
+  if (floorPlan.state === 'missing') {
+    const backup = writeHookFile(floorPlan.file, floorPlan.text, linkTarget(floorPlan.file), floorPlan.next)
+    if (backup !== null) backups.push(backup)
   }
   const upgraded = upgrade ? { upgraded: ['plugin'], backups } : {}
   if (cli.state !== 'read' && cli.state !== 'missing') {

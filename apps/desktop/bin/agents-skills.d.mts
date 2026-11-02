@@ -100,6 +100,7 @@ export declare function testSkillsListing(harness: string, options?: SkillsTestO
 export declare function claudeLoadingVerdict(stdout: string, token: string): [SkillsOutcome, string]
 export declare function codexLoadingVerdict(rollout: string, token: string): [SkillsOutcome, string]
 export declare function testSkillsLoading(harness: string, options?: SkillsTestOptions): Promise<SkillsTestEntry>
+export declare function removeEndedLoadingTests(location: string, timeoutMs: number, now?: number): void
 export declare function lastLoadingTests(options?: LastSkillsOptions): LastSkillsTests
 export declare function lastListingTests(options?: LastSkillsOptions): LastSkillsTests
 export declare function testSkills(harness: string, options?: SkillsTestOptions): Promise<{ harness: string; version: string | null; outcome: SkillsOutcome; detail: string; folders: SkillsTestEntry; listing: SkillsTestEntry | null }>
