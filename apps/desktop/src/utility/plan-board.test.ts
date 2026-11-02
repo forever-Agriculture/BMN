@@ -337,6 +337,39 @@ describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', 
   }
   const reasons = async (main: string): Promise<string[]> => (await checkPlan(await resolvePlan(main))).findings.map((finding) => `${finding.where.replace(/^.*\/|:\d+$/gu, '')}: ${finding.reason}`)
 
+  describe('**Prepared:** in Run needs, from Epic 103 on (Story 103.4 AC1)', () => {
+    const withPrepared = (number: number, line: string | null): string => owned(number, ['none'])
+      .replace('- Extra repair rounds: 0.\n', `- Extra repair rounds: 0.\n${line === null ? '' : `${line}\n`}`)
+
+    it.each([
+      ['a kind, a target, its check and date', '- **Prepared:** service: the staging host, check: `curl -fsS https://staging.test/health`, checked 2026-11-02.'],
+      ['none with its reason', '- **Prepared:** none, because every proof uses a disposable repository.'],
+      ['an owner step, which needs no check', '- **Prepared:** owner step: close BMN at the end.'],
+      ['a line without its list mark', '**Prepared:** none, because nothing leaves the machine.']
+    ])('passes %s', async (_name, line) => {
+      expect(await reasons(project(103, withPrepared(103, line)))).toEqual([])
+    })
+
+    it.each([
+      ['no line', null],
+      ['a bare none', '- **Prepared:** none'],
+      ['a bare none with a stop', '- **Prepared:** None.'],
+      ['none with no reason after because', '- **Prepared:** none, because'],
+      ['an empty line', '- **Prepared:**']
+    ])('reports %s, naming the file', async (_name, line) => {
+      const found = await reasons(project(104, withPrepared(104, line)))
+      expect(found).toHaveLength(1)
+      expect(found[0]).toMatch(/^104-owned\.md(:\d+)?: .*\*\*Prepared:\*\*/u)
+    })
+
+    it('reads the line in Run needs only, and reports nothing on an epic before 103', async () => {
+      const elsewhere = owned(105, ['none']).replace('## Truth impact', '## Truth impact\n\n**Prepared:** none, because this is the wrong section.\n')
+      expect(await reasons(project(105, elsewhere))).toHaveLength(1)
+      expect(await reasons(project(102, withPrepared(102, null)))).toEqual([])
+      expect(await reasons(project(102, withPrepared(102, '- **Prepared:** none')))).toEqual([])
+    })
+  })
+
   it('passes an epic with Run needs and owner steps only before the go or at the end', async () => {
     expect(await reasons(project(90, owned(90, ['before the go', 'none', 'none', 'at the end', 'at the end'])))).toEqual([])
   })

@@ -222,6 +222,12 @@ describe('what cannot be recorded is refused and leaves everything as it was (St
     expect(snapshot(plan)).toEqual(before)
   })
 
+  it('a changed **Prepared:** line asks a new go: it is inside the approved text (Story 103.4 AC5)', () => {
+    const prepared = (need: string) => `${NEEDS}- **Prepared:** ${need}\n`
+    expect(approvalText(epicText(prepared('service: the host, check: `curl -fsS host`, checked 2026-11-02.'))))
+      .not.toBe(approvalText(epicText(prepared('service: another host, check: `curl -fsS host`, checked 2026-11-02.'))))
+  })
+
   it('a failed commit, an unreadable history, a plan without history and a BMAD board record nothing', () => {
     const { main, plan, home } = project()
     const before = snapshot(plan)

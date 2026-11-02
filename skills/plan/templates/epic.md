@@ -20,7 +20,8 @@ What his go on this epic approves for its runs, as his instruction (read from th
 - **Extra repair rounds:** <0–4> per boundary, beyond dev-auto's own allowance.
 - **Deferrable:** <a criterion or story, with the condition under which it may be deferred>, or `none`.
 - **Money cap:** <amount and what it covers>, or `none` (no paid launches).
-- **Named actions for an Away card:** <action and target>, or `none`.
+- **Named actions for an Away card:** <action and target>, including an exact command or message, or `none`.
+- **Prepared:** <kind>: <target>, check: <how>, checked <date>; one for each need, or `none, because <reason>`. The kinds are account, credential, service, command, message, owner step; `check:` is optional only for an owner step.
 
 ## Truth impact
 

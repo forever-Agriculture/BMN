@@ -31,6 +31,11 @@ const VISION_SECTIONS = ['Vision', 'Principles']
 const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
 /** Epics from 90 on are planned to run without asking (Epic 90, 90.2 AC5): Run needs, and each story's Owner line in order. */
 const RUN_NEEDS_FROM = 90
+/** Epics from 103 on list what their run will need from outside itself before his go (Story 103.4, R103-FR1). */
+const PREPARED_FROM = 103
+const PREPARED_LINE = /^(?:[-*]\s+)?\*\*Prepared:\*\*(.*)$/u
+/** Bare `none`, or `none, because` with nothing after it: says nothing was checked and not why. */
+const PREPARED_EMPTY = /^(?:none(?:\s*,?\s*because)?)?\s*[.:;,]?\s*$/iu
 const OWNER_LINE = /^\*\*Owner:\*\*\s*(?:(none|before the go|at the end)(?=[\s.,;:]|$))?/iu
 const OWNER_ORDER = ['before the go', 'none', 'at the end']
 const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
@@ -264,6 +269,17 @@ export function boardProblems(board, boardName) {
 }
 
 /** Epic files: `epics/NNN-slug.md`, read with their headings, stories and criteria. */
+/** The `**Prepared:**` line of `## Run needs`, with its line number, or null. */
+function preparedLine(lines) {
+  const start = lines.findIndex((line) => /^## Run needs\s*$/u.test(line))
+  if (start < 0) return null
+  for (let index = start + 1; index < lines.length && !/^#{1,4} /u.test(lines[index]); index += 1) {
+    const found = PREPARED_LINE.exec(lines[index].trim())
+    if (found) return { line: index + 1, text: found[1].trim() }
+  }
+  return null
+}
+
 export function readEpicFile(path) {
   const text = readFileSync(path, 'utf8')
   const lines = text.split(/\r?\n/u)
@@ -293,7 +309,7 @@ export function readEpicFile(path) {
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
     if (criterion) current.criteria.push({ id: Number(criterion[1]), line: index + 1 })
   })
-  return { path, bytes: Buffer.byteLength(text), legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories }
+  return { path, bytes: Buffer.byteLength(text), legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines) }
 }
 
 function epicFiles(planRoot) {
@@ -422,6 +438,10 @@ export async function checkPlan(resolved) {
 /** The owner's steps sit only before the go or at the end (Epic 90, D1): never between unattended stories. */
 function runNeedsProblems(epic, at, add) {
   if (!epic.sections.includes('Run needs')) add(at, `missing section ## Run needs (epics from ${RUN_NEEDS_FROM} on)`)
+  if (epic.epic >= PREPARED_FROM && epic.sections.includes('Run needs')) {
+    if (epic.prepared === null) add(at, 'Run needs has no **Prepared:** line (what the run will need, each with its check; or none, because <reason>)')
+    else if (PREPARED_EMPTY.test(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** says "${epic.prepared.text}": name each need with its check, or say none, because <reason>`)
+  }
   let latest = null
   for (const story of epic.stories) {
     const owner = story.owner
