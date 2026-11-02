@@ -623,6 +623,10 @@ describe('bmn help agents', () => {
     expect(lines.length).toBeLessThanOrEqual(42 + 7 + 2 + 2 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
     expect(lines.filter((line) => line.length > 100)).toEqual([])
     expect(brief.stdout.replace(/\s+/g, ' ')).toContain(AWAY_AGENT_TEXT)
+    // Story 103.3 AC6: inside what Story 76.2 measured a hook's answer carrying whole (`size-9000`, plan/references/reference-76-away).
+    expect(AWAY_AGENT_TEXT.length).toBeLessThan(9000)
+    expect(AWAY_AGENT_TEXT).toContain('goes as a draft on one such card')
+    expect(AWAY_AGENT_TEXT).toContain('A design choice takes the plan\'s default, else the existing pattern, and is recorded')
     for (const rule of [
       'BMN_CONTROL_SOCKET',
       '`bmn help`',
@@ -5391,6 +5395,11 @@ esac
       '- for each: read bmn grant --run <run> and record the use first; no admin bypass; a PR that changes CI or workflows, or deploys, still asks'
     ])
     expect(result.stdout).not.toContain('octo/gadgets')
+    // Story 103.3 AC4: a command or a message belongs to no repository, so every repository's output lists it for Codex's review.
+    const exact = [{ runId: 'run-80', title: 'Epic 80', item: 'check-1', kind: 'command', repository: null, words: 'run exactly `./check.sh`, in /work/app; another text, folder or changed file waits', left: 1, count: 2 }]
+    fixture.handlers.policyStatus.mockImplementation(async () => ({ ...status, granted: [...granted, ...exact] }))
+    expect((await runCli(['policy', '--repo', 'octo/widgets'], { env })).stdout).toContain('- run run-80 (Epic 80), item check-1: run exactly `./check.sh`, in /work/app; another text, folder or changed file waits; 1 of 2 left')
+    fixture.handlers.policyStatus.mockImplementation(async () => ({ ...status, granted }))
     // It raises no level and changes no guard list.
     expect(result.stdout).toContain('Repository octo/widgets: Merge when green (default branch trunk).')
     expect(result.stdout).not.toContain('- push trunk, never forced')
@@ -6298,6 +6307,17 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
     const used = await runCli(['grant', 'use', '--run', 'dev-auto-80', '--use-id', 'u1', '--boundary', '80.3-review'], { env: fixture.sessionEnv })
     expect(used.stdout).toBe('Recorded one extra round at 80.3-review for run dev-auto-80 in period p-1; 2 left. Report its outcome with --period p-1.\n')
     expect(fixture.handlers.useGrant).toHaveBeenLastCalledWith({ sessionId: 'session-1', runId: 'dev-auto-80', useId: 'u1', boundary: '80.3-review' })
+  })
+
+  it('prints the exact text to run or send with a recorded use of a command or a message (Story 103.3 AC3)', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.useGrant.mockImplementationOnce(async () => ({ outcome: 'recorded', left: 1, periodId: 'p-1', exact: { kind: 'command', command: './check.sh --all', folder: '/work/app' } }))
+    const ran = await runCli(['grant', 'use', '--run', 'r', '--use-id', 'u1', '--item', 'check-1'], { env: fixture.sessionEnv })
+    expect(ran.stdout).toContain('Run exactly this, in /work/app; anything else waits:\n./check.sh --all\n')
+    fixture.handlers.useGrant.mockImplementationOnce(async () => ({ outcome: 'repeated', left: 0, periodId: 'p-1', exact: { kind: 'message', tool: 'send_message', target: 'the team chat', text: 'One.\nTwo.' } }))
+    const sent = await runCli(['grant', 'use', '--run', 'r', '--use-id', 'u2', '--item', 'tell-1'], { env: fixture.sessionEnv })
+    expect(sent.stdout).toContain('already recorded under this use id')
+    expect(sent.stdout).toContain('Send exactly this with send_message to the team chat; anything else waits:\nOne.\nTwo.\n')
   })
 
   it('keeps an outcome, a step back and a refused step as the agent\'s report, and says so (Story 84.7)', async () => {

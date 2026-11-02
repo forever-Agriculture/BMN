@@ -64,6 +64,7 @@ import {
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
 import { OPENCODE_REFERENCE_PATTERN } from './conversation-binding'
+import { grantCommandProblem } from '../../bin/grant-command.mjs'
 
 export class ControlError extends Error {
   constructor(readonly code: ProtocolErrorCode, message: string, readonly retryable = false) {
@@ -1664,6 +1665,11 @@ export class ControlServer {
         if (runId === null) throw invalidError(`runId must be your run's id: letters, digits and . _ : / - (at most ${GRANT_LIMITS.runId})`)
         const parsed = parseGrantCardInput(params.card)
         if ('problem' in parsed) throw invalidError(`Nothing was asked: ${parsed.problem}`)
+        for (const [index, term] of parsed.card.terms.entries()) {
+          if (term.kind !== 'command') continue
+          const problem = grantCommandProblem(term)
+          if (problem !== null) throw invalidError(`Nothing was asked: term ${index + 1} (${term.command}): ${problem}`)
+        }
         const operationKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         return handlers.askGrant({ scope, runId, card: parsed.card, ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` }) })
       }

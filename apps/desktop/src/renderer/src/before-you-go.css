@@ -16,6 +16,8 @@
 .grant-card .grant-term { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; }
 .grant-card .grant-term-words { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .grant-card .grant-term-label { font-size: 13px; color: var(--text); }
+/* Story 103.3: a command or a message is what he says yes to, so it shows whole, wrapped where it must. */
+.grant-card .grant-term-label.exact { white-space: pre-wrap; overflow-wrap: anywhere; }
 .grant-card .grant-term-reason {
   display: -webkit-box;
   overflow: hidden;

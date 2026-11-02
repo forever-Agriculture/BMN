@@ -15,6 +15,7 @@ import {
   type TelegramQuietHours
 } from '@bmn/protocol'
 import { GRANT_TOKEN_PREFIX, TelegramGrantCards } from './telegram-grant-cards'
+import { TELEGRAM_TEXT_LIMIT } from './telegram-cards'
 import type { InboundTap } from './telegram-connector'
 
 const T0 = '2026-10-19T19:31:00.000Z'
@@ -150,6 +151,43 @@ describe('TelegramGrantCards (Story 84.3, the notes 84.2 §1 On Telegram)', () =
     await h.tap(h.button('● Yes'))
     expect(h.answers).toEqual([expect.objectContaining({ choices: { rounds: 4, 'merge-12': 'no', 'push-81': 'yes' } })])
     expect(h.last().text).toContain('✓ Granted until you are back: 4 rounds per boundary · push to the default branch in tools. Not granted: merge PR 12 at 3f2a9c1.')
+  })
+
+  describe('a command and a message (Story 103.3 AC1)', () => {
+    const COMMAND = { kind: 'command', id: 'check-1', command: `./scripts/check.sh ${'c'.repeat(980)}`, folder: '/work/app', count: 3, proposed: 'yes', reason: 'r'.repeat(300) }
+    const MESSAGE = { kind: 'message', id: 'tell-1', tool: 'send_message', target: 'the team chat', text: `The <build> & the page\n${'m'.repeat(970)}`, proposed: 'yes', reason: 'r'.repeat(300) }
+    const FULL = [
+      COMMAND, MESSAGE,
+      { kind: 'rounds', proposed: 3, reason: 'r'.repeat(300) },
+      ...[1, 2, 3, 4, 5].map((pr) => ({ kind: 'merge', id: `merge-${pr}`, repository: `octo/widgets-with-a-rather-long-name-${pr}`, pr, headSha: '3f2a9c1', upTo: 2, proposed: 'pr', reason: 'r'.repeat(300) }))
+    ]
+
+    it('shows both whole, on the overview and on each step, within what Telegram takes, and offers no and yes', async () => {
+      const h = harness(away(ask(leaving(), FULL)))
+      await h.cards.reconcile()
+      const overview = h.sent[0]!.text
+      expect(overview).toContain(COMMAND.command)
+      expect(overview).toContain('The &lt;build&gt; &amp; the page\n')
+      expect(overview).toContain('m'.repeat(970))
+      expect(overview.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      await h.tap(h.button('Choose…'))
+      expect(h.last().text).toContain(COMMAND.command)
+      expect(h.last().text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      expect(h.last().keyboard!.flat().map((one) => one.text)).toEqual(expect.arrayContaining(['No', expect.stringContaining('Up to 3')]))
+      await h.tap(h.button('● Up to 3'))
+      expect(h.last().text).toContain(COMMAND.command)
+      expect(h.last().text).toContain('m'.repeat(970))
+      expect(h.last().text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      expect(h.last().keyboard!.flat().map((one) => one.text)).toEqual(expect.arrayContaining(['No', expect.stringContaining('Yes')]))
+    })
+
+    it('fits the largest card a parser takes, in the most escaped text', async () => {
+      const worst = [{ ...MESSAGE, text: '&'.repeat(200) }, { ...MESSAGE, id: 'tell-2', text: 'x'.repeat(1000) }]
+      const h = harness(away(ask(leaving(), worst)))
+      await h.cards.reconcile()
+      expect(h.sent[0]!.text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      expect(h.sent[0]!.text).toContain('&amp;'.repeat(200))
+    })
   })
 
   it('a one-term card answers in one tap', async () => {

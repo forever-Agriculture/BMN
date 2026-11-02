@@ -21,6 +21,7 @@ import {
   grantTermLabel,
   grantReportText,
   grantedRepositoryActions,
+  grantPinnedFile,
   markDepartureTold,
   openGrantPeriod,
   parseGrantCardInput,
@@ -656,5 +657,123 @@ describe('the agent\'s report (Story 84.7)', () => {
     expect(refused).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('the owner is back since') })
     expect(refused.record.periods.at(-1)!.refusals.at(-1)).toMatchObject({ runId: 'run-80', kind: 'round', boundary: '80.3-review', at: T2 })
     expect(useGrant(read(record), BACK, { runId: 'run-77', sessionId: 's', id: 'x', kind: 'round', boundary: 'b' }, T2).record).toBe(record)
+  })
+})
+
+describe('a command and a message on a card (Story 103.3; D5, D7)', () => {
+  const SHA = 'a'.repeat(64)
+  const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+  const COMMAND = { kind: 'command', id: 'check-1', command: './check.sh --all', folder: '/work/app', count: 2, proposed: 'yes', reason: 'the night check', script: { path: 'check.sh', sha256: SHA } }
+  const MESSAGE = { kind: 'message', id: 'tell-1', tool: 'send_message', target: 'the team chat', text: 'The build is out.\nSee the page.', proposed: 'yes', reason: 'they wait for it' }
+  const EXACT = { title: 'Epic 80', scope: 'all', terms: [COMMAND, MESSAGE] }
+  const yes = { 'check-1': 'yes', 'tell-1': 'yes' }
+  const read = (record: GrantRecord) => ({ state: 'read' as const, record })
+  const live = (choices: Record<string, unknown> = yes) => granted(away(asked(leaving(), EXACT)), choices)
+  const action = (item: string, id: string, fileSha?: string | null) => ({ runId: 'run-80', sessionId: 's-builder', id, kind: 'action' as const, item, ...(fileSha === undefined ? {} : { fileSha }) })
+
+  it('takes both kinds and keeps their text exactly', () => {
+    const [command, message] = card(EXACT).terms as [Extract<GrantTerm, { kind: 'command' }>, Extract<GrantTerm, { kind: 'message' }>]
+    expect(command).toMatchObject({ command: './check.sh --all', folder: '/work/app', count: 2, script: { path: 'check.sh', sha256: SHA } })
+    expect(message).toMatchObject({ tool: 'send_message', target: 'the team chat', text: 'The build is out.\nSee the page.', count: 1 })
+    expect(grantTermLabel(command)).toBe('Run in /work/app: ./check.sh --all')
+    expect(grantTermLabel(message)).toBe('Send with send_message to the team chat: The build is out.\nSee the page.')
+    expect(grantTermChoices(command)).toEqual(['no', 'yes'])
+    expect(grantChoiceLabel(command, 'yes')).toBe('Up to 2')
+    expect(grantChoiceLabel(message, 'yes')).toBe('Yes')
+  })
+
+  it.each([
+    ['a command with a line end', { ...COMMAND, command: 'a\nb' }],
+    ['a command over its limit', { ...COMMAND, command: 'x'.repeat(1001) }],
+    ['a relative folder', { ...COMMAND, folder: 'work/app' }],
+    ['a folder stepping up', { ...COMMAND, folder: '/work/../etc' }],
+    ['a pin without a real hash', { ...COMMAND, script: { path: 'check.sh', sha256: 'nope' } }],
+    ['a command over ten uses', { ...COMMAND, count: 11 }],
+    ['a message without a target', { ...MESSAGE, target: ' ' }],
+    ['a message over its limit', { ...MESSAGE, text: 'x'.repeat(1001) }],
+    ['a message given a count', { ...MESSAGE, count: 2 }]
+  ])('refuses %s', (_name, term) => {
+    expect(parseGrantCardInput({ ...EXACT, terms: [term] })).toHaveProperty('problem')
+  })
+
+  it('bounds what one card shows whole, counting what escaping adds', () => {
+    const big = (id: string, text = 'x'.repeat(1000)) => ({ ...MESSAGE, id, text })
+    expect(parseGrantCardInput({ ...EXACT, terms: [big('a'), big('b')] })).not.toHaveProperty('problem')
+    expect(parseGrantCardInput({ ...EXACT, terms: [big('a'), big('b'), big('c')] })).toMatchObject({ problem: expect.stringContaining('whole') })
+    expect(parseGrantCardInput({ ...EXACT, terms: [big('a', '&'.repeat(400))] })).not.toHaveProperty('problem')
+    expect(parseGrantCardInput({ ...EXACT, terms: [big('a', '&'.repeat(500))] })).toMatchObject({ problem: expect.stringContaining('whole') })
+  })
+
+  it.each([
+    ['a command', { ...COMMAND, script: null, command: `deploy --token ${SECRET}` }],
+    ['a message', { ...MESSAGE, text: `the key is ${SECRET}` }],
+    ['a target', { ...MESSAGE, target: SECRET }]
+  ])('refuses a credential shape in %s when asked', (_name, term) => {
+    expect(parseGrantCardInput({ ...EXACT, terms: [term] })).toMatchObject({ problem: expect.stringContaining('credential') })
+  })
+
+  it('still reads a stored term today\'s shapes would refuse, so a new shape never unreads a record', () => {
+    const stored = JSON.parse(JSON.stringify(asked(leaving(), EXACT))) as GrantRecord
+    const term = stored.periods[0]!.runs[0]!.card.terms[1] as Extract<GrantTerm, { kind: 'message' }>
+    term.text = `the key is ${SECRET}`
+    expect(readGrantRecord(JSON.stringify(stored))).toMatchObject({ state: 'read' })
+  })
+
+  it('hands back the exact step with each recorded use, and again on a retry', () => {
+    const first = useGrant(read(live()), AWAY, action('check-1', 'u1', SHA), T1)
+    expect(first).toMatchObject({ outcome: 'recorded', left: 1, exact: { kind: 'command', command: './check.sh --all', folder: '/work/app' } })
+    expect(useGrant(read(first.record), AWAY, action('check-1', 'u1', SHA), T1)).toMatchObject({ outcome: 'repeated', exact: { kind: 'command', command: './check.sh --all' } })
+    expect(useGrant(read(live()), AWAY, action('tell-1', 'u2'), T1)).toMatchObject({ outcome: 'recorded', left: 0, exact: { kind: 'message', tool: 'send_message', target: 'the team chat', text: 'The build is out.\nSee the page.' } })
+  })
+
+  it('counts a command up to its grant and a message once', () => {
+    let record = live()
+    for (const id of ['u1', 'u2']) record = useGrant(read(record), AWAY, action('check-1', id, SHA), T1).record
+    expect(useGrant(read(record), AWAY, action('check-1', 'u3', SHA), T1)).toMatchObject({ outcome: 'refused' })
+    record = useGrant(read(record), AWAY, action('tell-1', 'u4'), T1).record
+    expect(useGrant(read(record), AWAY, action('tell-1', 'u5'), T1)).toMatchObject({ outcome: 'refused' })
+  })
+
+  it('refuses a use when the pinned file changed or cannot be read, and records nothing against the count', () => {
+    const record = live()
+    const changed = useGrant(read(record), AWAY, action('check-1', 'u1', 'b'.repeat(64)), T1)
+    expect(changed).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('changed since the card named it') })
+    expect(useGrant(read(record), AWAY, action('check-1', 'u2', null), T1)).toMatchObject({ outcome: 'refused' })
+    expect(useGrant(read(record), AWAY, action('check-1', 'u3'), T1)).toMatchObject({ outcome: 'refused' })
+    expect(useGrant(read(changed.record), AWAY, action('check-1', 'u4', SHA), T1)).toMatchObject({ outcome: 'recorded', left: 1 })
+  })
+
+  it('refuses a retry of a recorded use once the file changed: the use stands, the step waits', () => {
+    const first = useGrant(read(live()), AWAY, action('check-1', 'u1', SHA), T1)
+    expect(useGrant(read(first.record), AWAY, action('check-1', 'u1', 'b'.repeat(64)), T1)).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('changed since') })
+  })
+
+  it('finds a pin only for an item granted in this run', () => {
+    expect(grantPinnedFile(read(live()), AWAY, 'run-80', 'check-1')).toEqual({ pin: { path: 'check.sh', sha256: SHA }, folder: '/work/app' })
+    expect(grantPinnedFile(read(live()), AWAY, 'run-80', 'tell-1')).toBeNull()
+    expect(grantPinnedFile(read(live()), AWAY, 'run-99', 'check-1')).toBeNull()
+    expect(grantPinnedFile(read(live({ 'check-1': 'no', 'tell-1': 'yes' })), AWAY, 'run-80', 'check-1')).toBeNull()
+  })
+
+  it('lists both in the policy output under no repository, with the exact text', () => {
+    const listed = grantedRepositoryActions(read(live()), AWAY)
+    expect(listed.map((entry) => [entry.kind, entry.repository])).toEqual([['command', null], ['message', null]])
+    expect(listed[0]!.words).toContain('run exactly `./check.sh --all`, in /work/app')
+    expect(listed[0]!.words).toContain(SHA)
+    expect(listed[1]!.words).toContain('exactly: The build is out.\nSee the page.')
+    expect(grantedRepositoryActions(read(live({ 'check-1': 'no', 'tell-1': 'no' })), AWAY)).toEqual([])
+  })
+
+  it('names them in the morning section as ran and sent', () => {
+    let record = useGrant(read(live()), AWAY, action('check-1', 'u1', SHA), T1).record
+    record = useGrant(read(record), AWAY, action('tell-1', 'u2'), T1).record
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', periodId: 'p-1', useId: 'u1', result: 'done', text: null }, T2).record
+    record = reportGrant(read(record), { runId: 'run-80', sessionId: 's-builder', kind: 'outcome', periodId: 'p-1', useId: 'u2', result: 'done', text: null }, T2).record
+    const lines = JSON.stringify(awayGrantSection(record.periods, 'p-1', new Date(T2)))
+    expect(lines).toContain('./check.sh --all')
+    expect(lines).toContain('the team chat')
+    expect(lines).toContain('Command ./check.sh --all')
+    expect(lines).toContain('Ran')
+    expect(lines).toContain('Sent')
   })
 })

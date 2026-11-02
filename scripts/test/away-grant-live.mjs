@@ -1,11 +1,12 @@
 /* global document, getComputedStyle, window */
-// MODULE: away-grant-live.mjs - Stories 84.3 and 84.7 on the running build: a departure said with `bmn away --leaving`, two runs' cards and one "needs nothing", the gold count in the head, Before you go at both widths, an answer with the keyboard, a re-ask while open, Not leaving withdrawing the rest; then a night whose session records uses and reports, and the morning's Granted section at both widths
+// MODULE: away-grant-live.mjs - Stories 84.3 and 84.7 on the running build: a departure said with `bmn away --leaving`, two runs' cards and one "needs nothing", the gold count in the head, Before you go at both widths, an answer with the keyboard, a re-ask while open, Not leaving withdrawing the rest; then a night whose session records uses and reports, and the morning's Granted section at both widths; Story 103.3: a card with a stub command and a stub message, shown whole, used exactly, a changed script refused
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end) and stand-in `claude`, `codex` and
 // `opencode` programs. The cards are asked with the owner's CLI token over the app's own socket; no agent runs, nothing leaves
 // the machine, Telegram is off and no file of the owner's is read. Prints one JSON report, PASS or FAIL per check.
 // Usage: node scripts/test/away-grant-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
@@ -259,6 +260,83 @@ touch '${seeded}'
       narrow.scroll <= narrow.client + 1 && narrow.under, narrow)
     await shot('morning-granted-540.png')
     await resize(1280)
+
+    phase('a command and a message (Story 103.3)')
+    await page.keyboard.press('Escape')
+    await summary.waitFor({ state: 'hidden' })
+    const script = join(folder, 'night-check.sh')
+    const marker = join(root, 'night-check-ran')
+    writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`)
+    chmodSync(script, 0o755)
+    const pin = { path: 'night-check.sh', sha256: createHash('sha256').update(readFileSync(script)).digest('hex') }
+    const longFlags = Array.from({ length: 30 }, (_unused, index) => `--flag-${index}`).join(' ')
+    const COMMAND_TERM = { kind: 'command', id: 'check-1', command: `./night-check.sh ${longFlags}`, folder, count: 2, script: pin, proposed: 'yes', reason: 'The night check of 103.3, twice at most.' }
+    const MESSAGE_TERM = { kind: 'message', id: 'tell-1', tool: 'stub_send', target: 'the team chat', text: 'The stub build is out.\nThe page says what changed & why.', proposed: 'yes', reason: 'They wait for it in the morning.' }
+    bmn(['away', '--leaving'])
+    const chained = ask('run-103', 'Epic 103', [{ ...COMMAND_TERM, script: null, command: 'one && two' }], 'Story 103.3')
+    const heldByGuard = ask('run-103', 'Epic 103', [{ ...COMMAND_TERM, script: null, command: 'docker system prune -af' }], 'Story 103.3')
+    const unpinned = ask('run-103', 'Epic 103', [{ ...COMMAND_TERM, script: null }], 'Story 103.3')
+    check('`grant ask` refuses a chain, what the guard holds and an unpinned writable script, each naming why (103.3 AC2)',
+      chained.includes('chains commands') && heldByGuard.includes('command guard holds') && unpinned.includes('name that script on the card'), { chained: chained.trim(), heldByGuard: heldByGuard.trim(), unpinned: unpinned.trim() })
+    const exactAsked = ask('run-103', 'Epic 103', [COMMAND_TERM, MESSAGE_TERM], 'Story 103.3')
+    await until(async () => (await head.innerText()) === '1 card', 'the one card')
+    await head.click()
+    await dialog.waitFor()
+    const exactCard = dialog.locator('article.grant-card.request[data-run-id="run-103"]')
+    const shown = await exactCard.locator('.grant-term-label').evaluateAll((labels) => labels.map((label) => ({ text: label.textContent, whole: label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1, lines: getComputedStyle(label).whiteSpace })))
+    const offered = await exactCard.locator('.segmented').evaluateAll((groups) => groups.map((group) => [...group.querySelectorAll('[role="radio"]')].map((radio) => radio.textContent)))
+    check('the window shows the whole command and message, line ends kept, and offers no and yes (103.3 AC1)',
+      exactAsked.startsWith('Card revision 1') && shown[0]?.text === `Run in ${folder}: ${COMMAND_TERM.command}` && shown[1]?.text === `Send with stub_send to the team chat: ${MESSAGE_TERM.text}`
+        && shown.every((one) => one.whole && one.lines === 'pre-wrap') && JSON.stringify(offered) === JSON.stringify([['No', 'Up to 2'], ['No', 'Yes']]), { shown, offered })
+    await shot('before-you-go-exact-1280.png')
+    await resize(540)
+    await sleep(300)
+    const exactNarrow = await dialog.evaluate((node) => ({ scroll: node.scrollWidth, client: node.clientWidth }))
+    check('at 540 px the whole command wraps without sideways scrolling (103.3 AC1)', exactNarrow.scroll <= exactNarrow.client + 1, exactNarrow)
+    await shot('before-you-go-exact-540.png')
+    await resize(1280)
+    await exactCard.locator('.actions button.primary').click()
+    await until(async () => (await dialog.locator('article.grant-card.request').count()) === 0, 'the card answered')
+    const exactStatus = bmn(['grant', '--run', 'run-103'])
+    await page.evaluate(() => window.aiTerminal.setAway('away'))
+    await page.keyboard.press('Escape').catch(() => undefined)
+    // The night's agent: what `grant use` prints is what it runs and sends; the second use meets a changed script.
+    const usedOutput = join(root, 'exact-uses.txt')
+    const exactSeeded = join(root, 'exact-seeded')
+    const exactNight = join(root, 'exact-night.sh')
+    writeFileSync(exactNight, `B() { '${process.execPath}' '${cli}' "$@"; }
+{ B grant use --run run-103 --use-id c1 --item check-1
+  B grant use --run run-103 --use-id m1 --item tell-1
+  B grant use --run run-103 --use-id m2 --item tell-1
+  echo '# changed' >> '${script}'
+  B grant use --run run-103 --use-id c2 --item check-1
+} > '${usedOutput}' 2>&1
+P=$(sed -n 's/.* in period \\([^;]*\\);.*/\\1/p' '${usedOutput}' | head -n 1)
+B grant report --run run-103 --period "$P" --use-id c1 --result done > /dev/null
+B grant report --run run-103 --period "$P" --use-id m1 --result done > /dev/null
+touch '${exactSeeded}'
+`)
+    await page.evaluate(async ({ cwd, argv }) => {
+      const [workspace] = await window.aiTerminal.listWorkspaces(false)
+      await window.aiTerminal.createSession({ workspaceId: workspace.workspaceId, name: 'Exact', cwd, executable: '/bin/bash', argv, cols: 100, rows: 24, backgroundChoice: 'stop' })
+    }, { cwd: folder, argv: ['--noprofile', '--norc', '-c', `bash '${exactNight}'; exec bash --noprofile --norc -i`] })
+    await until(async () => existsSync(exactSeeded), 'the exact uses recorded', 30_000)
+    const uses = readFileSync(usedOutput, 'utf8')
+    check('`grant use` prints the exact text to run and to send, counts one each, and refuses a spent message and a changed script (103.3 AC3)',
+      exactStatus.includes('run exactly `./night-check.sh') && uses.includes(`Run exactly this, in ${folder}; anything else waits:\n${COMMAND_TERM.command}\n`)
+        && uses.includes(`Send exactly this with stub_send to the team chat; anything else waits:\n${MESSAGE_TERM.text}\n`)
+        && uses.includes('Not recorded') && uses.includes('night-check.sh changed since the card named it'), { uses, exactStatus: exactStatus.trim() })
+    await page.evaluate(() => window.aiTerminal.setAway('back'))
+    await summary.waitFor()
+    const exactRow = granted.locator('button.away-run-row', { hasText: 'Epic 103' })
+    await exactRow.waitFor()
+    await exactRow.click()
+    await detail.waitFor()
+    const exactLines = await detail.locator('.away-kv-row').evaluateAll((rowsShown) => rowsShown.map((row) => [...row.children].map((cell) => cell.textContent)))
+    const exactWords = JSON.stringify(exactLines)
+    check('the morning names the command and the message with its target and report, and the refusal (103.3 AC5)',
+      exactWords.includes('./night-check.sh') && exactWords.includes('the team chat') && exactWords.includes('Ran') && exactWords.includes('Sent') && exactWords.includes('changed since the card named it'), { exactLines })
+    await shot('morning-exact-1280.png')
   } catch (error) {
     check('the run completed', false, { error: error instanceof Error ? error.message : String(error) })
     await shot('failure.png').catch(() => undefined)

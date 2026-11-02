@@ -57,6 +57,7 @@ import {
   grantStatus,
   grantStatusLines,
   grantedRepositoryActions,
+  grantPinnedFile,
   openGrantPeriod,
   ownerGrantView,
   type GrantAnswerResult,
@@ -152,6 +153,7 @@ import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
+import { pinnedFileSha } from '../../bin/grant-command.mjs'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -912,13 +914,16 @@ export class CompanionService {
         }),
         grantStatus: (p) => this.controlCall(async () => this.grantStatusFor(p.scope, p.runId)),
         useGrant: (p) => this.controlCall(async () => {
+          // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded; the store decides.
+          const { read, away } = p.item === undefined ? { read: null, away: null } : await this.options.database.companion('getGrants')
+          const pinned = read === null || away === null || p.item === undefined ? null : grantPinnedFile(read, away, p.runId, p.item)
           const use = p.boundary !== undefined
             ? { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'round' as const, boundary: p.boundary }
-            : { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'action' as const, item: p.item ?? '' }
+            : { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'action' as const, item: p.item ?? '', ...(pinned === null ? {} : { fileSha: pinnedFileSha(pinned.pin, pinned.folder) }) }
           const result = await this.options.database.companion('useGrantRecord', use, this.iso())
           if (result.outcome !== 'repeated') this.grantChanged({ state: 'read', record: result.record })
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
-          return { outcome: result.outcome, left: result.left, periodId: result.periodId }
+          return { outcome: result.outcome, left: result.left, periodId: result.periodId, ...(result.exact === null ? {} : { exact: result.exact }) }
         }),
         reportGrant: (p) => this.controlCall(async () => {
           const result = await this.options.database.companion('reportGrantRecord', p, this.iso())

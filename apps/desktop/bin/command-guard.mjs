@@ -528,6 +528,40 @@ export function heldCommand(command, depth = 0, inheritedSelector = false, cwd =
   return null
 }
 
+/**
+ * Story 103.3 (Epic 103, D7): the words of one simple command, exactly as it will run, or why it is not one: no chain, pipe,
+ * redirect, substitution, variable, wildcard, wrapper, shell code or assignment. What a card may grant, and nothing the guard
+ * would otherwise judge: a command read here still meets `heldCommand` and the app's own rules.
+ */
+export function simpleCommandWords(source) {
+  if (typeof source !== 'string' || source.trim() === '') return { problem: 'it is empty' }
+  let quote = null
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]
+    if (quote === "'") { if (char === "'") quote = null; continue }
+    if (char === '\\') { index += 1; continue }
+    if (char === '$' || char === '`') return { problem: 'it holds a substitution or a variable, so its text is not what runs' }
+    if (quote === '"') { if (char === '"') quote = null; continue }
+    if (char === "'" || char === '"') { quote = char; continue }
+    if (/[;|&\n]/.test(char)) return { problem: 'it chains commands; a card grants one simple command' }
+    if (/[<>()]/.test(char)) return { problem: 'it holds a redirect or a subshell; a card grants one simple command' }
+    if (/[*?[\]{}!#]/.test(char)) return { problem: 'it holds a wildcard or shell syntax, so its text is not what runs' }
+  }
+  if (quote !== null) return { problem: 'its quotes do not close' }
+  const lexed = shellCommands(source)
+  if (lexed.length !== 1) return { problem: 'it is not one command' }
+  const { words } = lexed[0]
+  if (assignments(words[0])) return { problem: 'it sets a variable first, so its text is not all that runs' }
+  const name = nameOf(words[0])
+  if (name === 'eval' || name === 'source' || name === '.' || name === 'exec') return { problem: `${name} runs other code; a card grants one simple command` }
+  if (SHELLS.test(name) && (words.length === 1 || words.slice(1).some((word) => /^-[a-z]*c/.test(word)))) return { problem: 'it runs shell code; a card grants one simple command' }
+  const [reading, ...others] = executables(words)
+  if (others.length > 0 || reading === undefined || reading.length !== words.length || reading.some((word, index) => word !== words[index])) {
+    return { problem: `${name} wraps another program; name the program itself` }
+  }
+  return { words }
+}
+
 /** The guard's answer for one hook event, as printed to the app, or null for nothing: never an allow. */
 export function guardAnswer(agent, event) {
   if (event?.hook_event_name !== 'PreToolUse' || GUARDED_TOOLS[agent] === undefined || event.tool_name !== GUARDED_TOOLS[agent]) return null

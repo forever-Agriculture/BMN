@@ -1753,6 +1753,28 @@ describe('Away grant (Story 84.3)', () => {
     expect(fixture.handlers.askGrant).toHaveBeenCalledTimes(2)
   })
 
+  it('refuses a command term the guard holds, or that is no simple command, naming the term and why (Story 103.3 AC2)', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const term = (command: string) => ({ kind: 'command', id: 'c', command, folder: tmpdir(), proposed: 'yes', reason: 'r' })
+    for (const [command, words] of [
+      ['a && b', 'chains'],
+      ['sh -c a', 'shell code'],
+      ['docker system prune -af', 'command guard holds'],
+      ['rm build/out', 'never on a card'],
+      ['gh auth token', 'never on a card'],
+      ['bmn plan set a done', 'never on a card']
+    ] as const) {
+      const refused = await agent.request('grant.ask', { runId: 'r', card: { ...CARD, terms: [term(command)] } })
+      expectError(refused, ERROR_CODES.invalidArgument)
+      expect(refused.error?.message).toContain(`term 1 (${command})`)
+      expect(refused.error?.message).toContain(words)
+    }
+    expect(fixture.handlers.askGrant).not.toHaveBeenCalled()
+    expect((await agent.request('grant.ask', { runId: 'r', card: { ...CARD, terms: [term('pnpm run lint')] } })).error).toBeUndefined()
+    expect(fixture.handlers.askGrant).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses every token an answer, the owner\'s CLI token included (AC3)', async () => {
     const fixture = await serverFixture()
     const owner = await authenticated(fixture, fixture.auth.ownerToken)

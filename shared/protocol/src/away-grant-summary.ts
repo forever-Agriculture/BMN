@@ -49,6 +49,7 @@ function grantedWords(term: GrantTerm, choice: GrantChoice): string {
       : `Merge PR ${term.pr} in ${term.repository}${term.headSha === null ? '' : ` at ${term.headSha.slice(0, 7)}`}`
   }
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}${term.count > 1 ? `, up to ${term.count}` : ''}`
+  if (term.kind === 'command' || term.kind === 'message') return grantTermLabel(term)
   return `${grantTermLabel(term)}${term.count > 1 ? `, up to ${term.count}` : ''}`
 }
 
@@ -57,6 +58,9 @@ function itemLabel(term: GrantActionTerm | undefined, id: string | null, choice?
   if (term === undefined) return `Item ${id ?? 'unnamed'}`
   if (term.kind === 'merge') return choice === 'green' ? 'Merge when green' : `Merge PR ${term.pr}`
   if (term.kind === 'push-default') return 'Push to the default branch'
+  // Two commands on one card stay two rows; the Granted lines above hold each whole.
+  if (term.kind === 'command') return `Command ${[...term.command].length > 40 ? `${[...term.command].slice(0, 39).join('')}…` : term.command}`
+  if (term.kind === 'message') return `Message to ${term.target}`
   return `PR in ${term.repository.split('/')[1] ?? term.repository}`
 }
 
@@ -64,6 +68,8 @@ function itemLabel(term: GrantActionTerm | undefined, id: string | null, choice?
 function doneWords(term: GrantActionTerm | undefined): string {
   if (term?.kind === 'merge') return 'Merged'
   if (term?.kind === 'push-default') return 'Pushed'
+  if (term?.kind === 'command') return 'Ran'
+  if (term?.kind === 'message') return 'Sent'
   return 'Done'
 }
 

@@ -1,6 +1,7 @@
 // MODULE: grant.ts - the Away grant: one versioned record of each departure's cards, the owner's answers and their uses, and its change rules (Epic 84)
 import { awayMomentWords, type AwayRecord, type AwaySource } from './away'
 import { pushPolicyRepository } from './push-policy'
+import { secretShapeRanges } from './secret-ranges'
 import { isIso, isTextOrEmpty } from './shared-helpers'
 
 /**
@@ -13,6 +14,8 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 export const GRANT_LIMITS = Object.freeze({
   runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
   boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, periodId: 64,
+  /** Story 103.3: a command or a message is shown whole on the card, so what it holds is bounded, and a card's sum too: Telegram draws at most 4,096 characters. */
+  command: 1000, message: 1000, folder: 500, target: 200, tool: 120, exactOnCard: 2300,
   /** A step-back or outcome report's words (Story 84.9: a consult's option did not fit in 300). */
   report: 1000
 })
@@ -24,8 +27,8 @@ const GRANT_ROUND_CHOICES: readonly number[] = Object.freeze([0, 2, 3, 4])
  * The fixed list of actions a card may name (R84-FR8). Anything else is never on a card: what Epic 83's guard holds
  * (force pushes, deletions, releases, publishes, killing BMN), credentials and acceptance changes wait always.
  */
-type GrantActionKind = 'merge' | 'push-default' | 'pr-elsewhere'
-const GRANT_ACTION_KINDS: readonly GrantActionKind[] = Object.freeze(['merge', 'push-default', 'pr-elsewhere'])
+type GrantActionKind = 'merge' | 'push-default' | 'pr-elsewhere' | 'command' | 'message'
+const GRANT_ACTION_KINDS: readonly GrantActionKind[] = Object.freeze(['merge', 'push-default', 'pr-elsewhere', 'command', 'message'])
 const GRANT_NEVER_ON_A_CARD = 'force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance changes'
 
 interface GrantRoundsTerm { id: 'rounds'; kind: 'rounds'; proposed: number; reason: string }
@@ -38,7 +41,13 @@ interface GrantMergeTerm {
 interface GrantPushTerm { id: string; kind: 'push-default'; repository: string; branch: string; count: number; proposed: 'no' | 'yes'; reason: string }
 /** Its target is the PR's branch, the PR, or both (R84-FR8: "repository and PR or branch"). */
 interface GrantPrTerm { id: string; kind: 'pr-elsewhere'; repository: string; branch: string | null; pr: number | null; count: number; proposed: 'no' | 'yes'; reason: string }
-export type GrantTerm = GrantRoundsTerm | GrantMergeTerm | GrantPushTerm | GrantPrTerm
+/** A file a command runs, by its hash at the time of the card (Epic 103, D7): `bmn grant use` refuses once it has changed. */
+export interface GrantPinnedFile { path: string; sha256: string }
+/** Story 103.3: one simple command, exactly as it will run, in one folder. BMN checks its form when it is asked (the guard's parser); the app's own rules still apply when it runs. */
+export interface GrantCommandTerm { id: string; kind: 'command'; command: string; folder: string; script: GrantPinnedFile | null; count: number; proposed: 'no' | 'yes'; reason: string }
+/** Story 103.3: one message in his voice: the tool that sends it, to whom, and the whole text (Epic 103, D5). Sent once. */
+export interface GrantMessageTerm { id: string; kind: 'message'; tool: string; target: string; text: string; count: 1; proposed: 'no' | 'yes'; reason: string }
+export type GrantTerm = GrantRoundsTerm | GrantMergeTerm | GrantPushTerm | GrantPrTerm | GrantCommandTerm | GrantMessageTerm
 export type GrantActionTerm = Exclude<GrantTerm, GrantRoundsTerm>
 
 /** What the owner picked for one term: a round count, or a merge's 'no' | 'pr' | 'green', or 'no' | 'yes'. */
@@ -174,6 +183,7 @@ export type GrantRead = { state: 'read'; record: GrantRecord } | { state: 'unkno
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/
 const SHA = /^[0-9a-f]{7,40}$/
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/
+const SHA256 = /^[0-9a-f]{64}$/
 // eslint-disable-next-line no-control-regex
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/
 const isCount = (value: unknown, max: number): value is number => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= max
@@ -198,6 +208,56 @@ export interface GrantCardInput {
   terms?: unknown[]
 }
 
+/** Exact text kept exactly: never trimmed, within its limit, with line ends only where it may span lines. */
+function grantExactText(value: unknown, limit: number, lines: boolean): string | null {
+  if (!isTextOrEmpty(value) || value.trim() === '' || [...value].length > limit) return null
+  return CONTROLS.test(lines ? value.replace(/[\n\t]/g, ' ') : value) ? null : value
+}
+
+/** An absolute folder with no step up, within its limit, or null. */
+function grantFolder(value: unknown): string | null {
+  const folder = grantExactText(value, GRANT_LIMITS.folder, false)
+  return folder !== null && folder.startsWith('/') && !folder.split('/').includes('..') ? folder : null
+}
+
+/** What a term's exact words take on the phone, its markup included. */
+function exactCharacters(term: GrantTerm): number {
+  const fields = term.kind === 'command' ? [term.command, term.folder] : term.kind === 'message' ? [term.text, term.target, term.tool] : []
+  return fields.reduce((sum, field) => sum + field.replace(/[&<>]/g, '&amp;').length, 0)
+}
+
+/** A command term's own fields, or why not (D7's form is read by the host: bin/grant-command.mjs). */
+function parseCommandTerm(term: Record<string, unknown>, where: string, id: string, reason: string): GrantCommandTerm | { problem: string } {
+  const command = grantExactText(term.command, GRANT_LIMITS.command, false)
+  if (command === null) return { problem: `${where}: command must be one line of plain text of at most ${GRANT_LIMITS.command} characters` }
+  const folder = grantFolder(term.folder)
+  if (folder === null) return { problem: `${where}: folder must be the absolute folder it runs in, at most ${GRANT_LIMITS.folder} characters` }
+  const count = term.count === undefined ? 1 : isCount(term.count, GRANT_LIMITS.count) ? term.count : null
+  if (count === null) return { problem: `${where}: count must be 1 to ${GRANT_LIMITS.count}` }
+  if (term.proposed !== 'no' && term.proposed !== 'yes') return { problem: `${where}: proposed must be no or yes` }
+  let script: GrantPinnedFile | null = null
+  if (term.script !== undefined && term.script !== null) {
+    const pin = term.script as { path?: unknown; sha256?: unknown }
+    const path = typeof pin !== 'object' ? null : grantExactText(pin.path, GRANT_LIMITS.folder, false)
+    if (path === null || typeof pin.sha256 !== 'string' || !SHA256.test(pin.sha256.toLowerCase())) return { problem: `${where}: script names its path and its SHA-256` }
+    script = { path, sha256: pin.sha256.toLowerCase() }
+  }
+  return { id, kind: 'command', command, folder, script, count, proposed: term.proposed, reason }
+}
+
+/** A message term's own fields, or why not. */
+function parseMessageTerm(term: Record<string, unknown>, where: string, id: string, reason: string): GrantMessageTerm | { problem: string } {
+  const tool = grantIdentifier(term.tool, GRANT_LIMITS.tool)
+  if (tool === null) return { problem: `${where}: tool must be the name of the tool that sends it, at most ${GRANT_LIMITS.tool} characters` }
+  const target = grantWords(term.target, GRANT_LIMITS.target)
+  if (target === null) return { problem: `${where}: target must say who gets it, plain text of at most ${GRANT_LIMITS.target} characters` }
+  const text = grantExactText(term.text, GRANT_LIMITS.message, true)
+  if (text === null) return { problem: `${where}: text must be the exact message, plain text of at most ${GRANT_LIMITS.message} characters` }
+  if (term.count !== undefined && term.count !== 1) return { problem: `${where}: a message is sent once` }
+  if (term.proposed !== 'no' && term.proposed !== 'yes') return { problem: `${where}: proposed must be no or yes` }
+  return { id, kind: 'message', tool, target, text, count: 1, proposed: term.proposed, reason }
+}
+
 /** The terms an agent proposed, checked against the fixed list, or why not. Never-on-a-card kinds are refused by name. */
 function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: string } {
   if (!Array.isArray(raw)) return { problem: 'terms must be a list' }
@@ -220,6 +280,12 @@ function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: stri
     }
     const id = term.id === undefined ? `item-${terms.filter((other) => other.kind !== 'rounds').length + 1}` : grantIdentifier(term.id, GRANT_LIMITS.itemId)
     if (id === null || id === 'rounds' || terms.some((other) => other.id === id)) return { problem: `${where}: id must be a unique identifier of at most ${GRANT_LIMITS.itemId} characters` }
+    if (term.kind === 'command' || term.kind === 'message') {
+      const parsed = term.kind === 'command' ? parseCommandTerm(term, where, id, reason) : parseMessageTerm(term, where, id, reason)
+      if ('problem' in parsed) return parsed
+      terms.push(parsed)
+      continue
+    }
     const repository = pushPolicyRepository(term.repository)
     if (repository === null) return { problem: `${where}: repository must be OWNER/NAME on GitHub` }
     if (term.kind === 'merge') {
@@ -252,6 +318,9 @@ function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: stri
       terms.push({ id, kind: 'pr-elsewhere', repository, branch, pr, count, proposed: term.proposed, reason })
     }
   }
+  if (terms.reduce((sum, term) => sum + exactCharacters(term), 0) > GRANT_LIMITS.exactOnCard) {
+    return { problem: `a card shows its commands and messages whole, at most ${GRANT_LIMITS.exactOnCard} characters together; send the rest as a draft on a bmn ask card` }
+  }
   return { terms }
 }
 
@@ -274,6 +343,11 @@ export function parseGrantCardInput(raw: unknown): { card: { title: string; scop
   const parsed = parseGrantTerms(input.terms ?? [])
   if ('problem' in parsed) return parsed
   if (parsed.terms.length === 0) return { problem: 'a card asks at least one term; a run that needs nothing says nothing: true' }
+  // Asked, not stored: a shape found tomorrow must not make today's record unreadable.
+  for (const [index, term] of parsed.terms.entries()) {
+    const exact = term.kind === 'command' ? term.command : term.kind === 'message' ? `${term.target}\n${term.text}` : ''
+    if (secretShapeRanges(exact).length > 0) return { problem: `term ${index + 1}: this text looks like a credential, and ${GRANT_NEVER_ON_A_CARD} are never on a card` }
+  }
   return { card: { title, scope, nothing, terms: parsed.terms } }
 }
 
@@ -723,9 +797,30 @@ export function grantStatus(read: GrantRead, away: Pick<AwayRecord, 'state' | 'p
   }
 }
 
+/** What `bmn grant use` hands back for a command or a message: the exact step, and nothing else is authorised (Story 103.3 AC3). */
+export type GrantExactStep =
+  | { kind: 'command'; command: string; folder: string }
+  | { kind: 'message'; tool: string; target: string; text: string }
+
+function exactStep(term: GrantActionTerm | undefined): GrantExactStep | null {
+  if (term?.kind === 'command') return { kind: 'command', command: term.command, folder: term.folder }
+  if (term?.kind === 'message') return { kind: 'message', tool: term.tool, target: term.target, text: term.text }
+  return null
+}
+
 export type GrantUseResult =
-  | { outcome: 'recorded' | 'repeated'; record: GrantRecord; left: number; periodId: string }
+  | { outcome: 'recorded' | 'repeated'; record: GrantRecord; left: number; periodId: string; exact: GrantExactStep | null }
   | { outcome: 'refused'; record: GrantRecord; reason: string }
+
+/**
+ * The file a granted command is pinned to, for the host to hash before it records a use (Story 103.3 AC3); null when the item
+ * has none. Read from the answer in force, as the use will be.
+ */
+export function grantPinnedFile(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>, runId: string, item: string): { pin: GrantPinnedFile; folder: string } | null {
+  const status = grantStatus(read, away, runId)
+  const term = status.active ? status.grant.items.find((entry) => entry.term.id === item)?.term : undefined
+  return term?.kind === 'command' && term.script !== null ? { pin: term.script, folder: term.folder } : null
+}
 
 /**
  * `bmn grant use` (R84-FR3, FR8): one round at a boundary or one use of an item, recorded before the step it pays for.
@@ -733,7 +828,7 @@ export type GrantUseResult =
  * morning.
  */
 export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>, use: {
-  runId: string; sessionId: string; id: string; kind: 'round'; boundary: string } | { runId: string; sessionId: string; id: string; kind: 'action'; item: string }, now: string): GrantUseResult {
+  runId: string; sessionId: string; id: string; kind: 'round'; boundary: string } | { runId: string; sessionId: string; id: string; kind: 'action'; item: string; fileSha?: string | null }, now: string): GrantUseResult {
   if (read.state === 'unknown') return { outcome: 'refused', record: EMPTY_GRANT_RECORD, reason: `${read.reason}, so nothing is granted` }
   const record = read.record
   const status = grantStatus(read, away, use.runId)
@@ -749,6 +844,14 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
     const refusal: GrantRefusal = { runId: use.runId, kind: use.kind, boundary: use.kind === 'round' ? use.boundary : null, item: use.kind === 'action' ? use.item : null, reason, via: null, at: now }
     return { outcome: 'refused', record: withPeriod(record, { ...holder, refusals: [...holder.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason }
   }
+  const stepOf = (grant: ActiveGrant): GrantExactStep | null => use.kind === 'action' ? exactStep(grant.items.find((item) => item.term.id === use.item)?.term) : null
+  // Story 103.3 AC3 (D7): the card names a script by its hash; a changed or unreadable one waits, a retry too.
+  if (use.kind === 'action' && status.active) {
+    const term = status.grant.items.find((item) => item.term.id === use.item)?.term
+    if (term?.kind === 'command' && term.script !== null && use.fileSha !== term.script.sha256) {
+      return refuse(`${term.script.path} changed since the card named it, or cannot be read`)
+    }
+  }
   if (previous !== undefined) {
     if (previous.runId !== use.runId || previous.kind !== use.kind || (use.kind === 'round' ? previous.boundary !== use.boundary : previous.item !== use.item)) {
       return { outcome: 'refused', record, reason: 'that use id was recorded for another use' }
@@ -760,7 +863,7 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
     if (use.kind === 'action' && status.active && (status.grant.cardRevision !== previous.cardRevision || !status.grant.items.some((item) => item.term.id === use.item))) {
       return refuse('his answer changed since this use; a retry waits')
     }
-    return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0, periodId: holder!.periodId }
+    return { outcome: 'repeated', record, left: status.active ? leftFor(status.grant, use) : 0, periodId: holder!.periodId, exact: status.active ? stepOf(status.grant) : null }
   }
   if (!status.active || open === null) return refuse(status.active ? 'no open period' : status.reason)
   if (open.uses.length >= GRANT_LIMITS.uses) return refuse('this period holds as many uses as BMN keeps')
@@ -772,7 +875,7 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   }
   const next = withPeriod(record, { ...open, uses: [...open.uses, recorded] })
   const after = grantStatus({ state: 'read', record: next }, away, use.runId)
-  return { outcome: 'recorded', record: next, left: after.active ? leftFor(after.grant, use) : 0, periodId: open.periodId }
+  return { outcome: 'recorded', record: next, left: after.active ? leftFor(after.grant, use) : 0, periodId: open.periodId, exact: stepOf(status.grant) }
 }
 
 export type GrantReportInput =
@@ -848,6 +951,8 @@ export function grantTermLabel(term: GrantTerm): string {
   if (term.kind === 'rounds') return 'Extra repair rounds per boundary'
   if (term.kind === 'merge') return `Merge in ${term.repository}`
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}`
+  if (term.kind === 'command') return `Run in ${term.folder}: ${term.command}`
+  if (term.kind === 'message') return `Send with ${term.tool} to ${term.target}: ${term.text}`
   const words = prElsewhereWords(term, term.repository)
   return `${words[0]!.toUpperCase()}${words.slice(1)}`
 }
@@ -868,6 +973,8 @@ export function grantChoiceLabel(term: GrantTerm, choice: GrantChoice): string {
 /** A granted term's short name for answer lines and the morning: "3 rounds per boundary", "merge PR 12 at 3f2a9c1". */
 export function grantShortName(term: GrantTerm, choice: GrantChoice): string {
   if (term.kind === 'rounds') return `${choice} rounds per boundary`
+  if (term.kind === 'command') return `run ${[...term.command].length > 60 ? `${[...term.command].slice(0, 59).join('')}…` : term.command}`
+  if (term.kind === 'message') return `a message to ${term.target}`
   const repository = term.repository.split('/')[1] ?? term.repository
   if (term.kind === 'merge') {
     return choice === 'green' ? `merge up to ${term.upTo ?? 1} of this run's PRs when green` : `merge PR ${term.pr}${term.headSha === null ? '' : ` at ${term.headSha.slice(0, 7)}`}`
@@ -931,7 +1038,7 @@ export function grantRefusalWords(reason: GrantRefusalReason, detail: { at?: str
  * What an agent is handed once per conversation and departure (84.3 AC1, R84-FR1): he is leaving, and a run may ask on
  * one card for what its remaining night needs, or say it needs nothing.
  */
-const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
+const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository, one exact command, one exact message). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
 
 /** The departure notice's first line, like the away stamp. */
 function grantDepartureStamp(state: 'leaving' | 'away', at: string, now: Date = new Date()): string {
@@ -969,16 +1076,19 @@ function grantItemWords(term: GrantActionTerm, choice: GrantChoice): string {
       : `merge PR ${term.pr} in ${term.repository}, only at head ${term.headSha ?? '(none)'}; another head waits`
   }
   if (term.kind === 'push-default') return `push ${term.branch} to the default branch of ${term.repository}, never forced`
+  if (term.kind === 'command') return `run exactly \`${term.command}\`, in ${term.folder}${term.script === null ? '' : `, while ${term.script.path} has SHA-256 ${term.script.sha256}`}; another text, folder or changed file waits`
+  if (term.kind === 'message') return `send with ${term.tool} to ${term.target}, exactly: ${term.text}; another target or text waits`
   return `${prElsewhereWords(term, term.repository)}; another PR or branch waits`
 }
 
-/** A merge or push granted to one run, in force now, as `bmn policy --repo` lists it after the level's lines (84.9 AC1). */
+/** A merge, push, command or message granted to one run, in force now, as `bmn policy --repo` lists it after the level's lines (84.9 AC1, 103.3 AC4). */
 export interface GrantedRepositoryAction {
   runId: string
   title: string
   item: string
-  kind: 'merge' | 'push-default'
-  repository: string
+  kind: 'merge' | 'push-default' | 'command' | 'message'
+  /** A command or a message belongs to no repository, so every repository's output lists it. */
+  repository: string | null
   /** Its target and condition, as `bmn grant` words it. */
   words: string
   left: number
@@ -996,8 +1106,9 @@ export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord,
     const status = grantStatus(read, away, run.runId)
     if (!status.active) continue
     for (const { term, choice, left, count } of status.grant.items) {
-      if (term.kind !== 'merge' && term.kind !== 'push-default') continue
-      actions.push({ runId: run.runId, title: run.title, item: term.id, kind: term.kind, repository: term.repository, words: grantItemWords(term, choice), left, count })
+      if (term.kind === 'pr-elsewhere') continue
+      const repository = term.kind === 'merge' || term.kind === 'push-default' ? term.repository : null
+      actions.push({ runId: run.runId, title: run.title, item: term.id, kind: term.kind, repository, words: grantItemWords(term, choice), left, count })
     }
   }
   return actions
@@ -1014,6 +1125,7 @@ export function grantStatusLines(runId: string, status: GrantStatus): string[] {
   }
   for (const item of grant.items) lines.push(`  Item ${item.term.id}: ${grantItemWords(item.term, item.choice)}; ${item.left} of ${item.count} left.`)
   if (grant.items.length > 0) lines.push(`  Every item: no admin bypass; a PR that changes CI or workflows, or deploys, still asks; a different target, run or condition waits.`)
+  if (grant.items.some((item) => item.term.kind === 'command' || item.term.kind === 'message')) lines.push('  A command or a message runs exactly as `bmn grant use` prints it; the app\'s own rules still apply.')
   for (const term of grant.notGranted) lines.push(`  Not granted: item ${term.id} (${grantTermLabel(term)}).`)
   if (grant.newerOpen !== null) lines.push(`  Card revision ${grant.newerOpen} is open; this answer holds until he answers it.`)
   return lines

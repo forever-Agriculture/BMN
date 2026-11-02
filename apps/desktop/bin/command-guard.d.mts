@@ -2,3 +2,4 @@
 export declare const GUARDED_TOOLS: Record<'claude' | 'codex', string>
 export declare function heldCommand(command: unknown, depth?: number, inheritedSelector?: boolean, cwd?: string | null): string | null
 export declare function guardAnswer(agent: string, event: Record<string, unknown> & { tool_input?: Record<string, unknown> }): string | null
+export declare function simpleCommandWords(source: unknown): { words: string[] } | { problem: string }

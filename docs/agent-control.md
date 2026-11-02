@@ -1019,6 +1019,24 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   asks and uses under that id. A second ask for the same run is a new revision, and his earlier answer holds until he answers
   it. Never on a card: force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance
   changes.
+- **A command and a message (Epic 103).** A `command` term is one simple command exactly as it will run, with its
+  absolute folder and a count of 1-10; a `message` term is the tool that sends it, who gets it and the whole text,
+  up to 1,000 characters, sent once. The window and Telegram show both whole and offer no and yes; a card holds at
+  most 2,300 characters of them, so a longer one goes as a draft on a `bmn ask` card. `grant ask` refuses, naming
+  why: a chain, pipe, redirect, substitution, variable, wildcard, wrapper, assignment or `sh -c`; whatever the
+  command guard holds; a deletion, release, publish, stopping a process, a credential, `bmn` itself; a folder that
+  is not there; a text shaped like a credential. A script the command runs from a folder the agent can write to is
+  named with its SHA-256, and `grant use` hashes it right before recording and refuses when it changed. For each
+  use `grant use` prints the exact text to run or send; anything else waits. `bmn policy --repo` lists both for
+  every repository, because they belong to none, which is what Codex's Auto Review reads
+  ([app-measures.md](../plan/references/103/app-measures.md)).
+  The limits: this is authority, not a lock. BMN answers no native prompt (D4), so an app that prompts on a granted
+  item holds the step, and the morning report says so. The list helps a reviewer say yes, and a reviewer can say yes
+  without it (2 of 5 measured), so the record that holds is `bmn grant use`. A program that reads its own files
+  (`make`, `pnpm run`) is not pinned unless the card names one of those files, and a command's word check reads
+  words, not what a program then does (`ssh host rm x`), so he reads the whole text before saying yes. Between the
+  hash and the run a file can still change. `bmn grant ask`'s checks run when a card is asked, never on a stored one,
+  so a rule added later never unreads a record.
 - **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token, the
   owner's CLI token included. An answer is bound to the period, the run, the terms shown and the card's revision;
   a changed, withdrawn, already answered or earlier-period card is refused and no grant changes (his refused
@@ -3005,7 +3023,9 @@ While the owner is away
   refusal is not permission. Do not ask the absent owner in conversation to run a command: keep an
   existing native permission request as it is; otherwise, where your workflow permits questions,
   leave one non-blocking `bmn ask` card saying what is needed and why; where it says to record
-  instead, record it there. When evidence cannot settle a consequential technical choice, consult
+  instead, record it there. A message to a person whose exact text is not on his card is not sent:
+  it goes as a draft on one such card. A design choice takes the plan's default, else the existing
+  pattern, and is recorded. When evidence cannot settle a consequential technical choice, consult
   only if existing dispatch consent, provider and data rules and remaining spend and retry
   allowances permit: one `bmn team ask --role consultant` with one stable key and a bounded time
   limit, no recursion, no other provider; on a refusal, timeout or uncertain completion read the

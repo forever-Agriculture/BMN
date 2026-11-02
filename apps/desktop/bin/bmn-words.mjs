@@ -319,7 +319,9 @@ While the owner is away
   refusal is not permission. Do not ask the absent owner in conversation to run a command: keep an
   existing native permission request as it is; otherwise, where your workflow permits questions,
   leave one non-blocking \`bmn ask\` card saying what is needed and why; where it says to record
-  instead, record it there. When evidence cannot settle a consequential technical choice, consult
+  instead, record it there. A message to a person whose exact text is not on his card is not sent:
+  it goes as a draft on one such card. A design choice takes the plan's default, else the existing
+  pattern, and is recorded. When evidence cannot settle a consequential technical choice, consult
   only if existing dispatch consent, provider and data rules and remaining spend and retry
   allowances permit: one \`bmn team ask --role consultant\` with one stable key and a bounded time
   limit, no recursion, no other provider; on a refusal, timeout or uncertain completion read the

@@ -18,8 +18,8 @@ The owner's push and merge policy (Epic 83), read before each push, merge and pu
 Without --repo it reads the checkout's GitHub remote (origin), if there is one. It prints whether the
 policy authorizes anything and why not, the repository's level and default branch, what that level
 lets you do without asking, and what still asks. The owner changes it only in BMN Health. While he
-is away, the merges and pushes he granted for the night in that repository follow the level's lines
-(bmn grant --help); they raise no level.`
+is away, the merges and pushes he granted for the night in that repository, and each exact command and
+message he granted, follow the level's lines (bmn grant --help); they raise no level.`
 
 const LOGIN = /^[a-z0-9](?:[a-z0-9-]{0,38})$/
 const REPOSITORY = /^([a-z0-9](?:[a-z0-9-]{0,38}))\/([a-z0-9._-]{1,100})$/
@@ -111,7 +111,8 @@ function repositoryVerdict(status, asked, facts) {
 /** The night's granted merges and pushes in the repository asked about (Story 84.9); none without a grant. */
 function grantedHere(status, verdict) {
   if (verdict === null || !Array.isArray(status.granted)) return []
-  return status.granted.filter((entry) => entry.repository === verdict.repository)
+  // A command or a message belongs to no repository (Story 103.3 AC4), so every repository's output lists it.
+  return status.granted.filter((entry) => entry.repository === verdict.repository || entry.repository === null)
 }
 
 function describePolicy(status, verdict) {

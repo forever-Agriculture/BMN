@@ -25,17 +25,29 @@ grant ask    The run's card for this departure, as JSON on standard input, for e
                  {"kind": "push-default", "repository": "OWNER/NAME", "branch": "dev-auto/epic-81",
                   "proposed": "yes", "reason": "this repository takes no PRs"},
                  {"kind": "pr-elsewhere", "repository": "OWNER/NAME", "branch": "fix/skill",
-                  "proposed": "yes", "reason": "..."}]}
+                  "proposed": "yes", "reason": "..."},
+                 {"kind": "command", "id": "check-1", "command": "./scripts/check.sh --all",
+                  "folder": "/abs/project", "count": 2, "proposed": "yes", "reason": "...",
+                  "script": {"path": "scripts/check.sh", "sha256": "<its SHA-256>"}},
+                 {"kind": "message", "id": "tell-1", "tool": "send_message", "target": "the team's chat",
+                  "text": "The exact words, up to 1,000 characters.", "proposed": "yes", "reason": "..."}]}
              rounds: 2, 3 or 4 extra repair rounds per boundary, when a boundary is ahead. merge
              offers "pr" (this PR at headSha) and/or "green" (up to upTo of this run's PRs, each when
              its required checks are green); "no" is always offered. pr-elsewhere names its PR's
-             branch, its pr number, or both. count (1-10, default 1) bounds a push or a PR. Ask only what the remaining work needs, each term with its reason. Asking
+             branch, its pr number, or both. count (1-10, default 1) bounds a push, a PR or a command.
+             command: one simple command exactly as it will run, with its folder: no chain, pipe, redirect,
+             substitution, variable, wildcard, wrapper or sh -c; a script it runs from a folder you can
+             write to is named with its SHA-256, and any other file it depends on may be. message: the tool,
+             who gets it and the whole text, sent once; text you do not know yet goes as a draft on a
+             bmn ask card. The card shows both whole. Ask only what the remaining work needs, each term with its reason. Asking
              again with other terms makes a new revision; his earlier answer holds until he answers
              it. --nothing says the run needs nothing. Never on a card: force pushes, deletions,
              releases, publishes, killing BMN, credentials and acceptance changes.
 grant use    Records one extra round at a boundary (--boundary) or one use of a granted item
              (--item), before the step runs, and prints the period it is recorded in: keep it with
-             the use for its report. The same --use-id returns the first record, so a retry after an
+             the use for its report. For a command or a message it prints the exact text to run or
+             send; anything else waits. A pinned script that changed is refused. The same --use-id
+             returns the first record, so a retry after an
              uncertain outcome reuses it; once his answer has changed, or after he is back, a retried
              action waits. A refused use means the step waits.
 grant report Tells BMN what happened, for his morning summary; it grants nothing. --period with
@@ -99,7 +111,11 @@ function describeStatus(result, runId) {
 
 function describeUse(result, use) {
   const what = use.boundary !== undefined ? `one extra round at ${use.boundary}` : `one use of item ${use.item}`
-  return `Recorded ${what} for run ${use.runId} in period ${result?.periodId}${result?.outcome === 'repeated' ? ' (already recorded under this use id; not repeated)' : ''}; ${result?.left ?? 0} left. Report its outcome with --period ${result?.periodId}.`
+  const line = `Recorded ${what} for run ${use.runId} in period ${result?.periodId}${result?.outcome === 'repeated' ? ' (already recorded under this use id; not repeated)' : ''}; ${result?.left ?? 0} left. Report its outcome with --period ${result?.periodId}.`
+  const exact = result?.exact
+  if (exact?.kind === 'command') return `${line}\nRun exactly this, in ${exact.folder}; anything else waits:\n${exact.command}`
+  if (exact?.kind === 'message') return `${line}\nSend exactly this with ${exact.tool} to ${exact.target}; anything else waits:\n${exact.text}`
+  return line
 }
 
 function describeReport(result, runId) {

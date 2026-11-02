@@ -103,7 +103,7 @@ function GrantCard(props: {
           return (
             <div className="grant-term" key={term.id}>
               <div className="grant-term-words">
-                <span id={id} className="grant-term-label">{grantTermLabel(term)}</span>
+                <span id={id} className={`grant-term-label${term.kind === 'command' || term.kind === 'message' ? ' exact' : ''}`}>{grantTermLabel(term)}</span>
                 <span className="grant-term-reason" title={reason}>{reason}</span>
               </div>
               <Segmented labelledBy={id} fit options={grantTermChoices(term)} value={choices[term.id] ?? term.proposed}
