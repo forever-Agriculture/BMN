@@ -2115,7 +2115,7 @@ bmn team asks export <id> --output PATH
 | `--small-work` | The role's small-work candidate. |
 | `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort; refused (`PROJECT_CHOICE_CONFLICT`) where the owner's choice for the role there names another teammate. |
 | `--project P` | The folder the teammate works in (default: the asking session's repository root; with none, an empty folder of the run's own). Not `/`, the home folder, or a folder that holds or lies in a credential or app configuration location (`PROJECT_INVALID`). |
-| `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash. |
+| `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash. Not a link, a key store or a file in a credential or app configuration location; the one exception there is an installed plugin's instruction file, Markdown under `skills/`, `agents/` or `commands/` of a version in `~/.codex/plugins/cache` or `~/.claude/plugins/cache`, judged by its real path and scanned like any other. The teammate gets its text only, never access to that folder. |
 | `--image PATH` | A PNG, JPEG or WebP picture given to the teammate as image input, never as a file it can open, its metadata taken out first (Pictures, below). |
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--origin URL` | A browser for the web app you started at this loopback address, `http://127.0.0.1:PORT` (or `localhost`, `[::1]`) (A browser for your local app, below). |

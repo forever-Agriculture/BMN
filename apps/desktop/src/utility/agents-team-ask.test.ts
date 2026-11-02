@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../bin/agents-check.mjs'
 import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS, askFormName } from '../../bin/agents-team-forms.mjs'
-import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, textFile } from '../../bin/agents-team-inputs.mjs'
+import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -251,6 +251,81 @@ describe('the question and the files (72.2 AC3, AC4)', () => {
     const leak = refusal(() => textFile(join(home, 'leak.env'), { home }))
     expect(leak).toMatchObject({ code: 'CREDENTIAL_FOUND' })
     expect(leak.message).not.toContain(SECRETS.env.slice(10))
+  })
+
+  describe('an installed plugin\'s instructions', () => {
+    const CACHES = ['.codex/plugins/cache', '.claude/plugins/cache']
+    const place = (path: string, text = 'instructions\n') => {
+      const full = join(home, path)
+      mkdirSync(join(full, '..'), { recursive: true })
+      writeFileSync(full, text)
+      return full
+    }
+
+    it('Markdown in a version\'s skills, agents or commands is given, in either app\'s cache', () => {
+      for (const cache of CACHES) {
+        for (const file of ['skills/review/SKILL.md', 'skills/review/references/lenses/bugs.md', 'agents/reviewer.md', 'commands/review.md']) {
+          const path = place(`${cache}/market/tools/1.2.3/${file}`)
+          expect(textFile(path, { home }).bytes.toString()).toBe('instructions\n')
+        }
+      }
+    })
+
+    it('everything else in the app\'s folder stays refused as a configuration location', () => {
+      const refused = [...CACHES.flatMap((cache) => [
+        '.mcp.json', 'lib/creds.py', 'README.md', 'templates/page.md', 'skills/review/settings.json', 'skills/review/run.sh',
+        'skills/.private/notes.md', '.codex-plugin/skills/notes.md', 'skills/review/.notes.md'
+      ].map((file) => `${cache}/market/tools/1.2.3/${file}`)),
+      ...CACHES.flatMap((cache) => [`${cache}/notes.md`, `${cache}/market/notes.md`, `${cache}/market/tools/skills/notes.md`, `${cache}/market/tools/1.2.3/notes.md`]),
+      '.codex/plugins/.remote-plugin-install-staging/skills/notes.md', '.codex/skills/mine/SKILL.md', '.codex/sessions/notes.md',
+      '.claude/plugins/data/tools/skills/notes.md', '.claude/plugins/marketplaces/market/tools/1.2.3/skills/notes.md', '.claude/projects/notes.md']
+      for (const path of refused) {
+        const refused_ = refusal(() => textFile(place(path), { home }))
+        expect(refused_, path).toMatchObject({ code: 'INPUT_INVALID' })
+        expect(refused_.message, path).toContain('holds credentials or an app\'s configuration')
+      }
+      for (const path of ['.codex/auth.json', '.claude/.credentials.json']) expect(refusal(() => textFile(join(home, path), { home })).message).toContain('holds credentials or an app\'s configuration')
+    })
+
+    it('the real path decides: no link leads out of the cache and no file itself may be a link', () => {
+      const version = join(home, '.codex/plugins/cache/market/tools/1.2.3')
+      const secrets = place('.codex/sessions/notes.md')
+      mkdirSync(join(version, 'skills'), { recursive: true })
+      symlinkSync(join(secrets, '..'), join(version, 'skills/linked'))
+      expect(refusal(() => textFile(join(version, 'skills/linked/notes.md'), { home })).message).toBe(`${join(version, 'skills/linked/notes.md')}: ${join(home, '.codex')} holds credentials or an app's configuration`)
+      symlinkSync(secrets, join(version, 'skills/link.md'))
+      expect(refusal(() => textFile(join(version, 'skills/link.md'), { home })).message).toContain('is a link; name the file itself')
+    })
+
+    it('a credential in one is refused without its value, and a picture stays refused there', () => {
+      const leak = refusal(() => textFile(place('.claude/plugins/cache/market/tools/1.2.3/skills/leak.md', `${SECRETS.env}\n`), { home }))
+      expect(leak).toMatchObject({ code: 'CREDENTIAL_FOUND' })
+      expect(leak.message).not.toContain(SECRETS.env.slice(10))
+      const picture = place('.codex/plugins/cache/market/tools/1.2.3/skills/shot.png')
+      expect(refusal(() => readInputFile(picture, { kind: 'image', home })).message).toContain('holds credentials or an app\'s configuration')
+    })
+
+    it('its text reaches the prompt and the teammate reaches nothing more than with any other file', () => {
+      const plugin = place('.codex/plugins/cache/market/tools/1.2.3/skills/review/references/rules.md', 'the review rules\n')
+      const asked = ask({ files: [plugin] }, { id: 'plugin-file' })
+      expect(readFileSync(join(asked.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain(`BEGIN FILE 1/1: ${plugin} `)
+      expect(readFileSync(join(asked.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain('the review rules\n')
+      const ordinary = ask({ files: [place('ordinary.md', 'the review rules\n')] }, { id: 'ordinary-file' })
+      const form = (result: typeof asked) => JSON.stringify(result.argv).replaceAll(result.folder, '<run>')
+      expect(form(asked)).toBe(form(ordinary))
+      expect(form(asked)).not.toContain('plugins/cache')
+    })
+
+    it('a home reached through a link is judged by its real place', () => {
+      const linked = `${home}-link`
+      symlinkSync(home, linked)
+      try {
+        expect(refusal(() => textFile(place('.codex/notes.md'), { home: linked })).message).toContain('holds credentials or an app\'s configuration')
+        expect(textFile(place('.codex/plugins/cache/market/tools/1.2.3/skills/SKILL.md'), { home: linked }).real).toBe(join(home, '.codex/plugins/cache/market/tools/1.2.3/skills/SKILL.md'))
+      } finally {
+        rmSync(linked)
+      }
+    })
   })
 
   it('a file\'s text goes into the prompt whole, with its path and hash', () => {

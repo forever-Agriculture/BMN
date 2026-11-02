@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** The numeric limits of the contract (docs/agent-control.md, "Limits"); over one an ask is refused, never cut. */
 export const LIMITS = Object.freeze({
@@ -189,9 +189,30 @@ function credentialLocations(home = homedir()) {
 
 const within = (path, folder) => path === folder || path.startsWith(`${folder}${sep}`)
 
-/** Why a real path is a credential or configuration location, or null. */
+/** Where each app keeps its installed plugins, and the folders of a plugin's version that hold its instructions. */
+const PLUGIN_CACHES = ['.codex/plugins/cache', '.claude/plugins/cache']
+const PLUGIN_INSTRUCTION_FOLDERS = new Set(['skills', 'agents', 'commands'])
+
+/**
+ * An installed plugin's instruction file: Markdown in the skills, agents or commands of a version in
+ * an app's plugin cache (<cache>/<marketplace>/<plugin>/<version>/skills/...), by its real path, in no
+ * hidden folder. It is text the plugin ships for agents to read, and it is scanned like any other file;
+ * the plugin's settings, scripts and libraries and the rest of the app's folder stay refused.
+ */
+function pluginInstructionFile(real, home) {
+  return real.endsWith('.md') && PLUGIN_CACHES.some((cache) => {
+    const folder = join(home, cache)
+    if (!within(real, folder)) return false
+    const parts = relative(folder, real).split(sep)
+    return parts.length >= 5 && PLUGIN_INSTRUCTION_FOLDERS.has(parts[3]) && !parts.some((part) => part.startsWith('.'))
+  })
+}
+
+/** Why a real path is a credential or configuration location, or null. A real path is judged against the real home. */
 function credentialLocation(real, home = homedir()) {
-  const location = credentialLocations(home).find((folder) => within(real, folder))
+  const realHome = realpathSafe(home)
+  if (pluginInstructionFile(real, realHome)) return null
+  const location = credentialLocations(realHome).find((folder) => within(real, folder))
   if (location !== undefined) return `${location} holds credentials or an app's configuration`
   if (secretName(real)) return `${basename(real)} is a key store or sign-in file`
   return null
