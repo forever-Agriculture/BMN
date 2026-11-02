@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const seam = vi.hoisted(() => ({ hook: null as null | ((path: string) => void), descriptors: new Map<number, string>() }))
 vi.mock('node:fs', async original => {

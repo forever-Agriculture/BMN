@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ASK_KEPT, ASK_MAX_CHARS, ASK_PER_DAY, MARKS, RESEARCH_USAGE, agentsMayAsk, askEnvironment, askPrompt, askedCount, askedToday, askerOf, askerWords, answerLines, markClaims,
   noResearcherWords, parseAskAnswer, questionProblem, questionsPath, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord
@@ -15,6 +15,8 @@ import { CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, typ
 import { RESEARCH_RUNNING, chooseResearcher, fetchPublicPage, getOnce, researchArgv, researchLockHolder, researchLockPath, runResearch, takeLock, takeResearchLock, type PageRead } from '../../bin/agents-research.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const BIN = fileURLToPath(new URL('../../bin/', import.meta.url))

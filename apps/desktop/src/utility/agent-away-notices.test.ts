@@ -3,6 +3,8 @@ import { AWAY_AGENT_TEXT, AWAY_BACK_AGENT_TEXT, type AwayRecord } from '@bmn/pro
 import { describe, expect, it, vi } from 'vitest'
 import { AWAY_CLAIM_SAVE_LIMIT_MS, AWAY_NOTICES_REMEMBERED, AwayNotices, type AwayNoticeAnswer, type AwayTold } from './agent-away-notices'
 import type { AgentBriefEvent } from './agent-briefs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const NOW = new Date(2026, 9, 17, 1, 0)
 const SINCE = new Date(2026, 9, 16, 22, 10).toISOString()

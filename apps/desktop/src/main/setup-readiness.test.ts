@@ -2,11 +2,13 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { SETUP_APPS, SETUP_INSTALL_COMMANDS, SETUP_LOGIN_ARGUMENTS, type AgentsSnapshot } from '@bmn/protocol'
 import { parseRoster, sha256, starterRoster } from '../../bin/agents-roster.mjs'
 import { findSetupProgram, projectSetupSignIn, SetupReadinessReader } from './setup-readiness'
 import { buildSetupTeamProposals } from './setup-team-draft'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const roots = new Set<string>()
 const root = (): string => { const dir = mkdtempSync(join(tmpdir(), 'bmn-setup-reader-')); roots.add(dir); return dir }

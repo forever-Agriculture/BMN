@@ -6,7 +6,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LINE, NEAR, judgeLines, questionsProblem, readingOf } from '../../bin/agents-judge.mjs'
 import { ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, MARKS } from '../../bin/agents-ask.mjs'
 import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
@@ -19,6 +19,8 @@ import {
 import { machineDiff, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
 import { installOwnSkills } from '../../bin/agents-own-skills.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')

@@ -1,7 +1,10 @@
 // MODULE: turn-changes-diff.test.ts - the line comparison against a brute-force longest common subsequence, against known texts and a plain layout of every row, and its stop in every long step
 import { PerformanceObserver } from 'node:perf_hooks'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { threadWork } from './test-fixtures/load-clock'
 import { DiffStopped, countLines, decodeText, diffLines, splitLines, unified, type Hunk, type HunkLine, type SplitText } from './turn-changes-diff'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 /**
  * The longest stretch of this thread's own work between two calls of `ask` in `run`, in ms: its CPU time over each
@@ -222,9 +225,11 @@ describe('the lines of two texts', () => {
   it('stops when told to, and inside a time limit', () => {
     const long = (prefix: string): string => `${Array.from({ length: 60000 }, (_, n) => `${prefix}${n}`).join('\n')}\n`
     expect(() => diffLines(long('a'), long('b'), () => true)).toThrow(DiffStopped)
-    const began = Date.now()
-    expect(() => diffLines(long('a'), long('b'), () => Date.now() - began > 150)).toThrow(DiffStopped)
-    expect(Date.now() - began).toBeLessThan(250)
+    const a = long('a')
+    const b = long('b')
+    const began = threadWork()
+    expect(() => diffLines(a, b, () => threadWork() - began > 150)).toThrow(DiffStopped)
+    expect(threadWork() - began).toBeLessThan(250)
   })
 
   it('stops a text that is all new, all gone or unchanged, where no line is compared', () => {
@@ -247,10 +252,10 @@ describe('the lines of two texts', () => {
     expect(patch.hunks[0]?.lines).toHaveLength(7)
     // A cancel is heard within 100 ms: no stretch of the comparison's own work between two questions comes near it.
     expect(longest).toBeLessThan(90)
-    // And a real stop, on the wall clock, collector and all.
-    const began = performance.now()
-    expect(() => unified(`${before}\n`, after, { stop: () => performance.now() - began > 100 })).toThrow(DiffStopped)
-    expect(performance.now() - began).toBeLessThan(190)
+    // And a real stop, in this thread's work, collector and all.
+    const began = threadWork()
+    expect(() => unified(`${before}\n`, after, { stop: () => threadWork() - began > 100 })).toThrow(DiffStopped)
+    expect(threadWork() - began).toBeLessThan(190)
     // Waiting for the collector's entries made the test asynchronous, so the runner's 5 s for a test now applies to
     // building and comparing these texts twice, seconds on a busy machine; the limits that matter are the ones above.
   }, 60_000)
@@ -276,9 +281,9 @@ describe('the lines of two texts', () => {
     edited[1000] = 'changed'
     edited.splice(150000, 2)
     edited.push('tail')
-    const began = Date.now()
+    const began = threadWork()
     const big = diffLines(`${base.join('\n')}\n`, `${edited.join('\n')}\n`)
     expect([big.addedCount, big.removedCount]).toEqual([2, 3])
-    expect(Date.now() - began).toBeLessThan(1500)
+    expect(threadWork() - began).toBeLessThan(1500)
   })
 })

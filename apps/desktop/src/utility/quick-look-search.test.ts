@@ -3,9 +3,12 @@ import { execFileSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
 import { QUICK_LOOK_SEARCH_MAX_FILE_BYTES, SECRET_MASK } from '@bmn/protocol'
 import { QuickLookSearches, contentsPattern, contentsQueryProblem, matchingLines, searchQuickLookContents } from './quick-look-search'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const folders: string[] = []
 afterEach(async () => {
@@ -205,9 +208,9 @@ describe('running searches', () => {
       ['/p/a.md', `${'sk-'}${'a'.repeat(24)} `.repeat(30_000), 'sk']
     ]
     for (const [path, text, query] of cases) {
-      const started = performance.now()
+      const started = threadWork()
       matchingLines(path, text, contentsPattern(query, false, false), 2_001)
-      expect(performance.now() - started).toBeLessThan(600)
+      expect(threadWork() - started).toBeLessThan(600)
     }
   })
 
@@ -225,11 +228,13 @@ describe('running searches', () => {
       expect((await search(root, query)).cancelled).toBe(false)
     }
     const controller = new AbortController()
-    const started = performance.now()
-    const stopped = search(root, 'NAME', {}, controller.signal)
-    setTimeout(() => controller.abort(), 5)
-    expect((await stopped).cancelled).toBe(true)
-    expect(performance.now() - started).toBeLessThan(300)
+    const stopped = await timedBesideControl(async () => {
+      const searching = search(root, 'NAME', {}, controller.signal)
+      setTimeout(() => controller.abort(), 5)
+      return searching
+    })
+    expect(stopped.answer.cancelled).toBe(true)
+    expect(stopped.took).toBeLessThan(300 + stopped.late)
   }, 60_000)
 
   it('leaves the terminals\' process a turn at least every 100 ms while it searches 20,000 made-up files', async () => {
@@ -242,10 +247,10 @@ describe('running searches', () => {
     git(root, 'init', '-q')
     // Both scopes: the walk, and Git's list of 20,000 untracked files it does not ignore.
     for (const [scope, gitRoot] of [['walk', async () => null], ['git', async () => root]] as const) {
-      let last = performance.now()
+      let last = threadWork()
       let longest = 0
       const ticker = setInterval(() => {
-        const now = performance.now()
+        const now = threadWork()
         longest = Math.max(longest, now - last)
         last = now
       }, 10)

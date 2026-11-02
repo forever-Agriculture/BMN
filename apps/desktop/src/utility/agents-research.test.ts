@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
   MAX_LISTED, answerText, chooseResearcher, chosenResearcher, fetchPublicPage, forgetDroppedResearcher, getOnce, isPublicAddress, mergeResearch, ownNames, pageText, parseAnswer, priceShown, readResearch,
@@ -15,6 +15,8 @@ import {
 import { namedResearchers, parseRoster, researcherProposal } from '../../bin/agents-roster.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const NOW = new Date('2026-10-10T12:00:00.000Z')

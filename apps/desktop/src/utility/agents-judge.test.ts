@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CALLS_KEPT, EXIT, LINE, MAX_CHOICES, MAX_LEVELS, NO_ANSWER, STATE_MAX_BYTES, SYSTEM_ONE_PATH, TEST_KEY_START, agreed, judgeDirectory, judgeLimit, judgeLines, judgeRecordPath, judgeTotals, limitWords,
   questionsProblem, readBody, readJudgeRecord, readingOf, runJudge as candidateJudge, setJudgeLimit, sizeProblem, type JudgeQuestions, type JudgeRequest, type JudgeResult
@@ -16,6 +16,8 @@ import { visibilityPath } from '../../bin/agents-check.mjs'
 import { parseRoster } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const BIN = fileURLToPath(new URL('../../bin/', import.meta.url))

@@ -86,6 +86,11 @@ All commands run from the repository root.
   guards. A timing test kept on purpose that fails only under that load is listed in
   `plan/references/091/kept-on-purpose.md` (planning, not committed here) with its pass counts; it
   is not a gate failure.
+- The load proof of `test:unit` is `node scripts/test/unit-under-load.mjs`: busy loops at twice the
+  logical core count while the suite runs three times, printing PASS or FAIL with the failures per
+  run (`--runs N`, `--loops N`, `-- files` for one file). A process-heavy test file sets its own
+  limit with `vi.setConfig`, a timing bound reads thread CPU or a control timer
+  (`test-fixtures/load-clock.ts`), and the suite's default limit stays 5 s.
 - `BMN_SMOKE_FORCE_FAILURE=1` makes `smoke:packaged` fail at once, for proving what a failed update
   leaves behind; nothing else reads it.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox

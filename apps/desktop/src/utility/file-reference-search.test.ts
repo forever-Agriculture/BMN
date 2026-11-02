@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { searchFileReferences } from './file-reference-search'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 vi.mock('node:fs/promises', async importOriginal => {
   const original = await importOriginal<typeof filesystem>()
@@ -42,7 +44,7 @@ describe('searchFileReferences', () => {
     expect(found.files.map(row => row.path)).toEqual([join(root, 'src', 'target-source.ts')])
     expect(found.scanned).toBe(3)
     expect(found.capped).toBe(false)
-  }, 15_000)
+  }, 60_000)
   it('reaches source without spending the entry budget inside generated directories', async () => {
     const root = await fixture()
     // Every sibling tree has a source target, so directory enumeration order cannot decide the result.

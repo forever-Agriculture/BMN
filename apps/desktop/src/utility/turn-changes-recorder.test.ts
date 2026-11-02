@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TURN_LABELS, TURN_PAUSE_REASONS, TURN_RETRY_AFTER_MS, TURN_RETRY_MAX_MS, TURN_WORDINGS } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { listTurns, listUnclosedTurns, nextTurnNumber, putTurn, type TurnRow } from './database-turn-store'
@@ -15,6 +15,8 @@ import { TurnRecorder, turnLabelTime, turnPausesFile, type TurnMarkCall, type Tu
 import { TURN_STORE_FOLDER } from './turn-changes-store'
 import { readAppVersion, type VersionPlaces } from './turn-changes-version'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string) => DatabaseConnection

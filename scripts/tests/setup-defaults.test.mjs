@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, it } from 'vitest'
+import { afterEach, beforeEach, describe, it, vi } from 'vitest'
 import { approveRoster } from '../../apps/desktop/src/main/agents-approval.ts'
 import { readValidRoster } from '../../apps/desktop/bin/agents-state.mjs'
 import { masterPath, restoreTransaction, targetPath } from '../../apps/desktop/bin/agents-rules.mjs'
@@ -14,6 +14,8 @@ import { defaultsOwnershipPath, readDefaultsOwnership } from '../../apps/desktop
 import { skillsTestsPath } from '../../apps/desktop/bin/agents-skills.mjs'
 import { toolsTestsPath } from '../../apps/desktop/bin/agents-tools.mjs'
 import { coordinateSetupDefaults, setupSkillsSource, validSetupDefaultsRequest } from '../../apps/desktop/bin/setup-defaults.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const setupId = 'synthetic-coordinator-79'
 const versions = { claude: '2.1.303', codex: '0.163.0', opencode: '2.0.32' }

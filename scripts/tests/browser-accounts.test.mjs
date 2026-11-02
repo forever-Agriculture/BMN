@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'node:child_process'
 import { keyringCall } from '../../apps/desktop/bin/browser-keyring.mjs'
 import { browserLaunchHelper, processIdentity } from '../../apps/desktop/bin/browser-process.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 vi.mock('node:child_process', async importOriginal => { const actual = await importOriginal(); return { ...actual, spawn: vi.fn(actual.spawn) } })
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statfsSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

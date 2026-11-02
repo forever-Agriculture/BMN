@@ -2,9 +2,11 @@
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { locationRoots, observeTree, unchangedSince } from '../../bin/doctor-locations.mjs'
 import { selectedProfile } from '../../bin/doctor-profile.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const folders: string[] = []
 afterEach(() => { for (const p of folders.splice(0)) rmSync(p, { recursive: true, force: true }) })

@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolvePlan, rowToken } from '../../bin/plan-board.mjs'
 import { addToQueue, approvalText, recordGo } from '../../bin/plan-cli.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const BMN = resolve(__dirname, '../../bin/bmn')
 const TEMPLATES = resolve(__dirname, '../../../../skills/plan/templates')

@@ -9,6 +9,8 @@ import { acquireLeftoversDoctor } from '../../bin/doctor-adapters.mjs'
 import { matchContinuity } from '../../bin/doctor-continuity.mjs'
 import type { ContinuityRow } from '../../bin/doctor-continuity.mjs'
 import type { ProjectedDoctorResult } from '../../bin/doctor-results.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const folders: string[] = [], keys = { item: 'a'.repeat(64), context: 'b'.repeat(64) }
 let home: string

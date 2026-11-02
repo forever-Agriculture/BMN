@@ -1,6 +1,8 @@
 // MODULE: secret-ranges.test.ts - where secret values are found in a text, by shape and by the rule that goes by a file's name (R67-NFR7): a value under a name that says so is hidden whole, an uncertain file hides more, and the work is bounded and can be stopped; on made-up values
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { secretFileKind, secretRanges, secretShapeRanges, sortedByStart, type SecretRange } from './secret-ranges'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 /** The stretches a rule hides, as text. */
 const hidden = (path: string, text: string): string[] => secretRanges(path, text).map(([start, end]) => text.slice(start, end))
@@ -580,7 +582,7 @@ describe('bounded work', () => {
         const work = (): number => { const used = process.threadCpuUsage(); return (used.user + used.system) / 1000 }
         let last = work()
         let longest = 0
-        const began = performance.now()
+        const began = work()
         secretRanges(path, text, { shown: 2_000, check: () => {
           const now = work()
           longest = Math.max(longest, now - last)
@@ -589,7 +591,7 @@ describe('bounded work', () => {
         longest = Math.max(longest, work() - last)
         // A cancel is heard within 100 ms: no stretch between two calls comes near it, and the whole search is short.
         expect(longest).toBeLessThan(90)
-        expect(performance.now() - began).toBeLessThan(1_500)
+        expect(work() - began).toBeLessThan(1_500)
       }
     }
   }, 60_000)
@@ -630,10 +632,11 @@ describe('one long line, read once', () => {
     for (const unit of ['"password":"x",', 'token=', `sk-${'a'.repeat(24)}`, `ghp_${'a'.repeat(36)}`, `xoxb-${'a'.repeat(10)}`, 'eyJaa', 'eyJaa.aa.bb']) {
       const text = megabyte(unit)
       for (const path of ['/p/notes.md', '/p/settings.json']) {
-        const started = performance.now()
+        const used = process.threadCpuUsage()
         secretRanges(path, text)
+        const spent = process.threadCpuUsage(used)
         // Read a character at a time once more per name, as before, this took from seconds to minutes.
-        expect(performance.now() - started, `${unit} in ${path}`).toBeLessThan(1_500)
+        expect((spent.user + spent.system) / 1000, `${unit} in ${path}`).toBeLessThan(1_500)
       }
     }
   })

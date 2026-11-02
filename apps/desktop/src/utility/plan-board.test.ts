@@ -3,9 +3,11 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkPlan, readBoard, readEpicFile, resolvePlan, rowToken } from '../../bin/plan-board.mjs'
 import { KEPT_VERSIONS, keepVersion, lockBoard, replaceRow, setRow, versionsDirectory } from '../../bin/plan-cli.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const BMN = resolve(__dirname, '../../bin/bmn')
 const TEMPLATES = resolve(__dirname, '../../../../skills/plan/templates')

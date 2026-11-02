@@ -73,10 +73,14 @@ exit ${exit}
 `
 }
 
-describe('desktop launcher', () => {
+// The launcher ends by itself; these limits only stop a hung one. Its `running()` forks a `readlink` for each process
+// on the machine, about 800 on his laptop, so on a loaded machine each of its checks takes seconds.
+const LAUNCHER_LIMIT = 60_000
+
+describe('desktop launcher', { timeout: 2 * LAUNCHER_LIMIT + 10_000 }, () => {
   it('starts BMN at once when no update is queued', () => {
     const run = fixture({ phase: 'complete', activeChecks: 0, zenity: fakeZenity() })
-    const result = spawnSync(run.launcher, ['--flag'], { env: run.env, encoding: 'utf8', timeout: 5_000 })
+    const result = spawnSync(run.launcher, ['--flag'], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('started')).toBe('started --flag after 1 checks\n')
@@ -86,13 +90,13 @@ describe('desktop launcher', () => {
 
   it.each(['waiting-for-exit', 'building'])('holds a start while the update is %s and BMN is closed', (phase) => {
     const run = fixture({ phase, activeChecks: 3, zenity: fakeZenity() })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('started')).toMatch(/^started {2}after \d+ checks\n$/u)
     expect(run.read('zenity-args')).toContain('--progress')
     expect(run.read('zenity-args')).toContain('BMN is updating')
-  }, 15_000)
+  })
 
   it('shows the build step the owner is waiting on, and closes the window when the update ends', () => {
     const run = fixture({
@@ -101,23 +105,23 @@ describe('desktop launcher', () => {
       zenity: fakeZenity(),
       log: '2026-09-20T14:00:00.000Z START package: pnpm run package\n2026-09-20T14:02:00.000Z PASS package\n2026-09-20T14:02:01.000Z START packaged smoke test: pnpm run smoke:packaged\n'
     })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('zenity-input')).toContain('#Checking the new build…')
     // The closing 100 is what ends an --auto-close window once the unit goes inactive.
     expect(run.read('zenity-input').trimEnd().split('\n').at(-1)).toBe('100')
     expect(run.read('started')).not.toBeNull()
-  }, 15_000)
+  })
 
   it('does not start a half-replaced build when the owner dismisses the window', () => {
     const run = fixture({ phase: 'building', activeChecks: 1_000, zenity: fakeZenity({ exit: 1, drain: false }) })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('started')).toBeNull()
     expect(run.read('zenity-args')).toContain("Don't wait")
-  }, 15_000)
+  })
 
   // Story 38.2: the words match what the launcher opens - the unchanged previous build, the new build
   // that passed its checks, or nothing when the swap stopped half way.
@@ -127,7 +131,7 @@ describe('desktop launcher', () => {
     ['new', 'The new build passed its checks, but the update did not finish. Open BMN starts the new build.']
   ])('after a failed update with liveBuild %s, says so and opens BMN, or opens the log instead when asked', (liveBuild, text) => {
     const accept = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity(), liveBuild })
-    const accepted = spawnSync(accept.launcher, [], { env: accept.env, encoding: 'utf8', timeout: 10_000 })
+    const accepted = spawnSync(accept.launcher, [], { env: accept.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(accepted.status).toBe(0)
     const args = accept.read('zenity-args').split('\n')
@@ -139,32 +143,32 @@ describe('desktop launcher', () => {
     expect(accept.read('started')).not.toBeNull()
 
     const showLog = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity({ exit: 1 }), liveBuild })
-    const declined = spawnSync(showLog.launcher, [], { env: showLog.env, encoding: 'utf8', timeout: 10_000 })
+    const declined = spawnSync(showLog.launcher, [], { env: showLog.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(declined.status).toBe(0)
     expect(showLog.read('opened')).toBe(`${join(showLog.root, 'latest.log')}\n`)
     expect(showLog.read('started')).toBeNull()
-  }, 20_000)
+  })
 
   it('opens nothing when the failed update left no build in place, and says so', () => {
     const run = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity(), liveBuild: 'none' })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(1)
     expect(run.read('zenity-args')).toContain('The update stopped while replacing the build, so there is no build to open. Nothing was started.')
     expect(run.read('zenity-args')).not.toContain('Open BMN')
     expect(run.read('started')).toBeNull()
     expect(run.read('opened')).toBe(`${join(run.root, 'latest.log')}\n`)
-  }, 15_000)
+  })
 
   it('says the same in the notification when zenity is not installed', () => {
     const run = fixture({ phase: 'failed', activeChecks: 1, liveBuild: 'previous' })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('notified')).toContain('The update failed its checks. Your previous build is unchanged.')
     expect(run.read('started')).not.toBeNull()
-  }, 15_000)
+  })
 
   it('opens nothing from the previous folder when an update stopped between its renames', () => {
     const root = mkdtempSync(join(tmpdir(), 'bmn-launcher-half-'))
@@ -173,16 +177,16 @@ describe('desktop launcher', () => {
     mkdirSync(join(root, 'linux-unpacked.prev'))
     executable(join(root, 'linux-unpacked.prev', 'bmn'), `#!/bin/sh\necho ran > '${join(root, 'prev-ran')}'\n`)
     const run = fixture({ phase: 'building', activeChecks: 0, binary, zenity: fakeZenity({ exit: 1 }) })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(1)
     expect(run.read('zenity-args')).toContain(`An update stopped while replacing the build; the previous build is in ${join(root, 'linux-unpacked.prev')}. Nothing was started.`)
     expect(existsSync(join(root, 'prev-ran'))).toBe(false)
-  }, 15_000)
+  })
 
   it('never reports an older failed update to a start that did not wait for one', () => {
     const run = fixture({ phase: 'failed', activeChecks: 0, zenity: fakeZenity() })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 5_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('zenity-args')).toBeNull()
@@ -191,12 +195,12 @@ describe('desktop launcher', () => {
 
   it('falls back to a notification where zenity is not installed', () => {
     const run = fixture({ phase: 'building', activeChecks: 3 })
-    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
     expect(result.status).toBe(0)
     expect(run.read('notified')).toMatch(/^BMN is updating/u)
     expect(run.read('started')).not.toBeNull()
-  }, 15_000)
+  })
 
   it('forwards a start to the running BMN while the update waits for it to exit', async () => {
     const root = mkdtempSync(join(tmpdir(), 'bmn-launcher-running-'))
@@ -209,7 +213,7 @@ describe('desktop launcher', () => {
     const running = spawn(binary, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
     try {
       const run = fixture({ phase: 'waiting-for-exit', activeChecks: 1_000, binary, zenity: fakeZenity() })
-      const result = spawnSync(run.launcher, ['-e', ''], { env: run.env, encoding: 'utf8', timeout: 5_000 })
+      const result = spawnSync(run.launcher, ['-e', ''], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
       expect(result.status).toBe(0)
       expect(run.read('notified')).toBeNull()
@@ -229,14 +233,14 @@ describe('desktop launcher', () => {
     const helper = spawn(binary, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
     try {
       const run = fixture({ phase: 'waiting-for-exit', activeChecks: 3, binary, zenity: fakeZenity() })
-      const result = spawnSync(run.launcher, ['-e', ''], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+      const result = spawnSync(run.launcher, ['-e', ''], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 
       expect(result.status).toBe(0)
       expect(run.read('zenity-args')).toContain('BMN is updating')
     } finally {
       helper.kill()
     }
-  }, 15_000)
+  })
 
   it('quotes paths that contain shell syntax', () => {
     const script = launcherScript({ binary: "/opt/it's $HOME/bmn", statusPath: '/state/latest.json' })

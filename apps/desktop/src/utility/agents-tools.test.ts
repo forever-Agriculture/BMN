@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, closeSync, existsSync, linkSync, mkdirSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { evaluate } from '../../bin/agents-check.mjs'
 import { parseRoster, rewriteRoster, type RosterTool } from '../../bin/agents-roster.mjs'
 import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs'
@@ -18,6 +18,8 @@ import { replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { editJsonEntry } from '../../bin/agents-tool-files.mjs'
 import { approveRoster } from '../main/agents-approval'
 import { autoTestId, createAutoTests, type AutoTestTry } from '../main/auto-tests'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -1812,7 +1814,7 @@ describe('OpenCode 2 private tools test (85.3)', () => {
   it('uses only its announced private server and confirms arguments, variables and teardown', async () => {
     app('opencode', OPENCODE, { starts: true, emptyPolls: 2 })
     const result = await testTools('opencode', { environment: { ...env, OPENCODE_SERVER: 'http://127.0.0.1:1',
-      OPENCODE_PASSWORD: SECRET, BMN_TOKEN: SECRET, OPENAI_API_KEY: SECRET }, now: NOW, timeoutMs: 4000 })
+      OPENCODE_PASSWORD: SECRET, BMN_TOKEN: SECRET, OPENAI_API_KEY: SECRET }, now: NOW, timeoutMs: 30_000 })
     expect(result).toMatchObject({ outcome: 'pass', variable: 'pass', variable_basis: 'started', argument: 'pass', entry_layout: 'mcp.servers' })
     const commands = calls()
     expect(commands[0]?.argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', '0'])

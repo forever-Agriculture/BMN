@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { consequences } from '../../bin/agents-check.mjs'
 import { RETIRED_APPS, parseRoster, projectChoiceCollisions, projectChoiceFor, projectChoiceProblem, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -12,6 +12,8 @@ import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
 import { allowWorkspace, approveRoster, approveSections, restoreGeneration, saveAndApprove } from '../main/agents-approval'
 import { previewApproval } from '../main/agents-ipc'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))

@@ -5,7 +5,7 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindSession, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun,
   readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry,
@@ -19,6 +19,8 @@ import { OPENCODE_FOLDERS } from './test-fixtures/opencode-destinations'
 import { startStandin, type Standin } from './test-fixtures/opencode-standin'
 import { OPENCODE_HELPER_AGENT_SHA256, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeConfigFiles, openCodeEnvironment, openCodeFolder, openCodeFolderProblem } from '../../bin/agents-opencode.mjs'
 import { OPENCODE_NEXT_STEP } from '../../bin/agents-check.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')

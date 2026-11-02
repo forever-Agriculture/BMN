@@ -2,12 +2,15 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TURN_SECRET_PLATE, type TurnShownLine } from '@bmn/protocol'
 import { TurnChangesClient, TurnChangesUnavailable, turnJobId } from './turn-changes-client'
 import type { TurnCaptureAnswer } from './turn-changes-engine'
 import type { TurnCaptureRecord } from './turn-changes-store'
 import { filesUnder, scratch, sleep, write, type Place } from './test-fixtures/turn-changes/fixtures'
+import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const here = dirname(fileURLToPath(import.meta.url))
 // The worker is the product's own file, run by plain Node: the app's build is not needed to test the thread.
@@ -98,11 +101,11 @@ describe('the turn changes worker thread', () => {
     const two = record(await client.capture({ job: turnJobId(), session: 's-one', folder: at.repo, publish: true, base: one.id }))
     const pair = { session: 's-one', root: at.repo, a: one.id, b: two.id }
 
-    // The host's thread: a timer every 5 ms, and the longest wait between two of its turns while the worker compares.
-    let last = performance.now()
+    // The host's thread: a timer every 5 ms, and the longest it worked between two of its turns while the worker compares.
+    let last = threadWork()
     let longest = 0
     const ticking = setInterval(() => {
-      const now = performance.now()
+      const now = threadWork()
       longest = Math.max(longest, now - last)
       last = now
     }, 5)
@@ -114,16 +117,18 @@ describe('the turn changes worker thread', () => {
         const controller = new AbortController()
         const answer = ask(controller.signal)
         await sleep(150)
-        const stoppedAt = performance.now()
-        controller.abort()
+        const stopped = await timedBesideControl(async () => {
+          controller.abort()
+          return answer
+        })
         // It was still comparing when it was stopped: left alone it runs to its limit of 2 s and says so, as below.
-        expect(await answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
-        expect(performance.now() - stoppedAt).toBeLessThan(100)
+        expect(stopped.answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
+        expect(stopped.took).toBeLessThan(100 + stopped.late)
       }
-      const started = performance.now()
-      expect(await client.compare(pair)).toEqual({ state: 'unavailable', reason: 'Difference unavailable: limit reached' })
+      const left = await timedBesideControl(() => client.compare(pair))
+      expect(left.answer).toEqual({ state: 'unavailable', reason: 'Difference unavailable: limit reached' })
       // Its work ends a little before its 2 s, so that this answer is given inside them.
-      expect(performance.now() - started).toBeLessThan(2_000)
+      expect(left.took).toBeLessThan(2_000 + left.late)
     } finally {
       clearInterval(ticking)
     }
@@ -145,10 +150,8 @@ describe('the turn changes worker thread', () => {
     expect(compared).toMatchObject({ state: 'compared', totals: { files: 4, partial: false } })
     for (const path of ['lines.txt', 'keys.txt', 'config.yaml', 'huge.json']) {
       // Left alone it answers inside its 2 s, with every bound of what is shown kept and no value in it.
-      const began = performance.now()
-      const whole = await client.difference({ ...pair, path })
-      const took = performance.now() - began
-      expect(took, path).toBeLessThan(2_000)
+      const { answer: whole, took, late } = await timedBesideControl(() => client.difference({ ...pair, path }))
+      expect(took, path).toBeLessThan(2_000 + late)
       expect(whole.state, path).toBe('text')
       expect(JSON.stringify(whole).length, path).toBeLessThan(2_000_000)
       expect(JSON.stringify(whole), path).not.toMatch(/sk-sk-|eyJeyJ|sk-eyJ/)
@@ -159,20 +162,29 @@ describe('the turn changes worker thread', () => {
         const answer = client.difference({ ...pair, path }, controller.signal)
         // At once is in the same turn: waiting for a timer let a busy machine's worker finish first (Story 91.6).
         if (wait > 0) await sleep(wait)
-        const stoppedAt = performance.now()
-        controller.abort()
-        expect(await answer, `${path} after ${wait} ms`).toEqual({ state: 'cancelled', reason: 'cancelled' })
-        expect(performance.now() - stoppedAt, `${path} after ${wait} ms`).toBeLessThan(100)
+        const stopped = await timedBesideControl(async () => {
+          controller.abort()
+          return answer
+        })
+        expect(stopped.answer, `${path} after ${wait} ms`).toEqual({ state: 'cancelled', reason: 'cancelled' })
+        expect(stopped.took, `${path} after ${wait} ms`).toBeLessThan(100 + stopped.late)
       }
     }
     const controller = new AbortController()
     const answer = client.compare(pair, controller.signal)
     await sleep(10)
-    const stoppedAt = performance.now()
-    controller.abort()
-    expect(await answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
-    expect(performance.now() - stoppedAt).toBeLessThan(100)
+    const stopped = await timedBesideControl(async () => {
+      controller.abort()
+      return answer
+    })
+    expect(stopped.answer).toEqual({ state: 'cancelled', reason: 'cancelled' })
+    expect(stopped.took).toBeLessThan(100 + stopped.late)
   }, 60_000)
+
+  it('still fails a slow stop beside the control timer, whatever the machine is doing', async () => {
+    const { took, late } = await timedBesideControl(() => sleep(1_000))
+    expect(took).toBeGreaterThanOrEqual(100 + late)
+  })
 
   it('hands back no named secret value of a config file, in removed, added or unchanged lines, however the file writes it, with the counts of the original texts', async () => {
     const { at, client } = setup('worker-masks')

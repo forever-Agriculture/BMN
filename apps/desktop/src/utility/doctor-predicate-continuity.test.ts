@@ -3,11 +3,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, expect, it } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { acquireLeftoversDoctor } from '../../bin/doctor-adapters.mjs'
 import { matchContinuity } from '../../bin/doctor-continuity.mjs'
 import type { ContinuityRow } from '../../bin/doctor-continuity.mjs'
 import { canonicalJson, sha256 } from '../../bin/agents-roster.mjs'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const folders: string[] = [], keys = { item: 'c'.repeat(64), context: 'd'.repeat(64) }
 let home: string

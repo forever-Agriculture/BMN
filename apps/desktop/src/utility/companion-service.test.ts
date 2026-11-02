@@ -52,6 +52,8 @@ import { TelegramConnectorError, type TelegramConnector, type InboundReply } fro
 import { TELEGRAM_HELP_TEXT } from './telegram-away'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { startFakeBotApi } from '../main/fake-bot-api'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection

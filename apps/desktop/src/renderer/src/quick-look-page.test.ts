@@ -1,11 +1,13 @@
 // MODULE: quick-look-page.test.ts - the Markdown page as drawn, on made-up secrets: an image's words and source, a code block's label and a link's address are masked as text is, the address leaves only masked, no entity breaks the page, and a page dense with values is cut into pieces in one pass (Story 67.3, 67.4)
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SECRET_MASK } from '@bmn/protocol'
 import { markdownPage, runPieces, type MarkdownRun, type RunPiece } from './quick-look-markdown'
 import { MarkdownPageView, holdingLine, maskedSource } from './quick-look-page'
 import { quickLookSecretRanges } from './quick-look-secrets'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const KEY = 'sk-madeupPAGEmadeup0123456789abcdef'
 const DOCUMENT = [
@@ -147,12 +149,13 @@ describe('a page dense with hidden values', () => {
     expect(text.length).toBeGreaterThan(448 * 1024)
     const ranges = quickLookSecretRanges('/p/plan.md', '/p/plan.md', text)
     expect(ranges.length).toBeGreaterThan(5_000)
-    const started = performance.now()
+    const used = process.threadCpuUsage()
     for (const run of runs) {
       runPieces(run, tokens, ranges, null, matches)
       maskedSource(run.text, run.from, ranges)
     }
     // Every range, token and match looked at for every run and piece, as before: 154 s here (measured once).
-    expect(performance.now() - started).toBeLessThan(400)
+    const spent = process.threadCpuUsage(used)
+    expect((spent.user + spent.system) / 1000).toBeLessThan(400)
   })
 })

@@ -2,11 +2,13 @@
 import { randomBytes } from 'node:crypto'
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { capture, isCapturing, isRefusal, type CaptureOptions, type CaptureOutcome, type StagedCapture } from './turn-changes-capture'
 import { compareCaptures, fileDifference } from './turn-changes-compare'
 import { TurnStore, type TreeRow, type TurnCache } from './turn-changes-store'
 import { around, filesUnder, holds, published, rows, scratch, sleep, snapshot, unequal, write, type Place } from './test-fixtures/turn-changes/fixtures'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const places: Place[] = []
 const place = (name: string, options?: { commit?: boolean; init?: string[] }): Place => {
