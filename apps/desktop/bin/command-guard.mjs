@@ -318,7 +318,7 @@ function shellCode(args, input) {
 }
 
 /** Skip options before git/gh's subcommand, including the options with a separate value. */
-function subcommand(list, values) {
+export function subcommand(list, values) {
   let index = 1
   while (list[index]?.startsWith('-')) {
     const option = list[index++]

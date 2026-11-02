@@ -1604,7 +1604,6 @@ export class CompanionService {
     }
   }
 
-  /** A blocking question tool of an app whose refusal Story 76.2 measured clean, reported by that app's own PreToolUse. */
   /**
    * Whether this question goes back to its agent (103.6 AC1-AC5). Only while he is here: away or leaving, any card is taken, since a
    * draft or a card for the morning needs no word. A prompt BMN could not read opens as it always did. The count holds no text and
@@ -1616,13 +1615,14 @@ export class CompanionService {
     const texts = p.prompt !== undefined && 'questions' in p.prompt ? p.prompt.questions.map((question) => question.text) : p.origin === 'cli' ? [p.title] : null
     if (texts === null || !questionsNeedingReason(texts)) return false
     const producer = p.incarnationId === undefined || p.incarnationId === null ? null : this.producers.stamp(p.sessionId, p.incarnationId)
-    const repeat = this.questionRepeats.seen(`${p.sessionId}|${p.incarnationId ?? ''}|${producer?.conversationReference ?? ''}`, texts)
+    const repeat = this.questionRepeats.seen(`${p.sessionId}|${producer?.conversationReference ?? p.incarnationId ?? ''}`, texts)
     await this.options.database.companion('recordQuestionHandBack', {
       at: this.iso(), sessionId: p.sessionId, conversation: producer?.conversationReference ?? null, agentCli: producer?.agentCli ?? null, outcome: repeat ? 'repeat' : 'handed-back'
     }).catch(() => undefined)
     return !repeat
   }
 
+  /** A blocking question tool of an app whose refusal Story 76.2 measured clean, reported by that app's own PreToolUse. */
   private refusableQuestion(origin: string | undefined): boolean {
     return Object.keys(AWAY_REFUSED_QUESTION_TOOLS).some((agent) => origin === `hook:${agent}:PreToolUse`)
   }

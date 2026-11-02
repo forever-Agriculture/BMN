@@ -21,7 +21,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const fixture = join(root, 'notice-fixture.mjs')
   writeFileSync(fixture, `import {spawnSync} from 'node:child_process';
 process.stdin.setRawMode(true);process.stdin.resume();
-setTimeout(()=>spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(join(repo, 'apps/desktop/bin/bmn'))},'ask','notice-probe','Synthetic response'],{stdio:'ignore'}),200);
+setTimeout(()=>spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(join(repo, 'apps/desktop/bin/bmn'))},'ask','notice-probe','Scope: Synthetic response'],{stdio:'ignore'}),200);
 setInterval(()=>{},1000);`)
   const app = await _electron.launch({ chromiumSandbox: true,
     executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,

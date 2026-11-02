@@ -165,9 +165,9 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
       throw new Error(`Fixture did not publish ${key}`)
     }
     const choices = JSON.stringify({ options: [{ label: 'First', description: null }, { label: 'Second', description: null }] })
-    for (let i = 0; i < 12; i++) await emit(i % 2 ? 'south' : 'north', `manual-${i}`, ['ask', `manual-${i}`, `Synthetic decision ${i}`, '--choices-json', choices])
+    for (let i = 0; i < 12; i++) await emit(i % 2 ? 'south' : 'north', `manual-${i}`, ['ask', `manual-${i}`, `Scope: Synthetic decision ${i}`, '--choices-json', choices])
     await emit('north', 'native', ['hook', 'codex'], JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'functions.request_user_input_async', tool_use_id: 'synthetic-native',
-      tool_input: { questions: [{ title: 'Synthetic native choice', options: ['First', 'Second'] }] } }))
+      tool_input: { questions: [{ title: 'Scope: Synthetic native choice', options: ['First', 'Second'] }] } }))
     // Produce a fresh real confirmation, then prove it leaves the response actions readable.
     await openPalette(); await search.fill('edit launch'); await search.press('Enter')
     await page.getByRole('button', { name: 'Save session', exact: true }).click()
@@ -185,7 +185,7 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
     assert.equal(await nav.count(), 7) // six north manual requests and its native question
     await nav.nth(4).focus()
     const identity = await nav.nth(4).evaluate(button => button.closest('article').dataset.requestId)
-    await emit('north', 'incoming', ['ask', 'incoming', 'New synthetic request'])
+    await emit('north', 'incoming', ['ask', 'incoming', 'Scope: New synthetic request'])
     assert.equal(await page.evaluate(() => document.activeElement.closest('article').dataset.requestId), identity, 'Arrival stole focus')
     await page.keyboard.press('Tab')
     assert.ok(await page.evaluate(() => document.activeElement.textContent === 'Mark answered'))
@@ -195,7 +195,7 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
     const revisable = (await page.evaluate(() => window.aiTerminal.listAttention())).find(row => row.requestKey === 'manual-4')
     const revised = card.locator(`article[data-request-id="${revisable.requestId}"]`)
     await revised.getByRole('button', { name: 'Dismiss', exact: true }).focus()
-    await emit('north', 'revised', ['ask', 'manual-4', 'Revised synthetic decision', '--choices-json', choices])
+    await emit('north', 'revised', ['ask', 'manual-4', 'Scope: Revised synthetic decision', '--choices-json', choices])
     await page.waitForFunction(({id,revision}) => document.querySelector(`article[data-request-id="${id}"]`)?.dataset.requestRevision !== String(revision), { id: revisable.requestId, revision: revisable.revision })
     assert.ok(await page.evaluate(() => !!document.activeElement.closest('.session-request-card')))
     assert.equal(await card.locator('input,textarea').count(), 0)

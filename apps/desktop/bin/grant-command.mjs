@@ -1,13 +1,13 @@
 // MODULE: grant-command.mjs - Story 103.3: what `bmn grant ask` refuses of a `command` term, read with the command guard's parser, and the hash of a file a card pins
 //
 // Run in BMN when a card is asked, never when a stored card is read: a guard that holds more tomorrow must not make today's
-// record unreadable. It reads the words only and runs nothing. What it cannot see, a program that reads its own files
-// (`make`, `pnpm run`), is named on the card by the agent's own pin or not at all (docs/agent-control.md).
+// record unreadable. It reads the words only and runs nothing. A runner's own file (a Makefile, a package.json) is pinned like a
+// script; what that file then runs is the limit docs/agent-control.md names.
 import { createHash } from 'node:crypto'
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, resolve } from 'node:path'
-import { heldCommand, simpleCommandWords } from './command-guard.mjs'
+import { dirname, join, resolve } from 'node:path'
+import { heldCommand, simpleCommandWords, subcommand } from './command-guard.mjs'
 import { namesSecretFile } from './secret-list.mjs'
 
 /** Programs that take a script as their first argument. */
@@ -15,6 +15,16 @@ const INTERPRETERS = /^((ba|da|z|k)?sh|python[\d.]*|node|ruby|perl|php|lua|deno|
 /** An option of those that runs the code it is given. */
 const INLINE_CODE = /^-(c|e|p|-eval|-print|-command)$/
 const PIN_LIMIT_BYTES = 16 * 1024 * 1024
+/** Options of a tool that take the next word as their value, before its verb. */
+const GLOBAL_OPTIONS = {
+  git: ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env'],
+  docker: ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level'],
+  podman: ['-c', '--connection', '--url', '--root', '--runroot']
+}
+/** A runner's own file decides what it runs, so a writable one is pinned like a script (D7; the epic pre-review). */
+const RUNNER_FILES = { make: ['GNUmakefile', 'makefile', 'Makefile'], just: ['justfile', 'Justfile', '.justfile'], npm: ['package.json'], pnpm: ['package.json'], yarn: ['package.json'] }
+const RUNNER_FILE_OPTIONS = ['-f', '--file', '--makefile', '--justfile']
+const RUNNER_FOLDER_OPTIONS = ['-C', '--directory', '--dir', '--prefix', '--cwd']
 
 /** A project's own secrets, beyond his machine's list: `.env` and `.env.production`, not the examples checked in beside them. */
 const PROJECT_SECRET = /(^|\/)\.env(\.(?!example$|sample$|template$)[^/]*)?$/
@@ -29,8 +39,10 @@ function resolved(path, folder) {
 
 /** Which of GRANT_NEVER_ON_A_CARD this command is, beyond what the guard holds; null when it is none. */
 function neverOnACard(words) {
-  const [program, ...args] = words
+  const [program] = words
   const name = nameOf(program)
+  // `git -C x clean`, `docker --context y rm`: the verb comes after the tool's own options (the guard's own reading).
+  const args = name in GLOBAL_OPTIONS ? subcommand(words, GLOBAL_OPTIONS[name]) : words.slice(1)
   const has = (...flags) => args.some((word) => flags.includes(word))
   const [first, second] = args
   if (/^(rm|rmdir|unlink|shred|truncate|wipefs|dd)$/.test(name) || /^mkfs(\.|$)/.test(name)) return 'a deletion'
@@ -74,6 +86,29 @@ function scriptOf(words, folder) {
   try { return statSync(path).isFile() ? path : program.includes('/') ? undefined : null } catch { return program.includes('/') ? undefined : null }
 }
 
+/** A word's value after an option, as `-f x`, `--file x` or `--file=x`, or undefined. */
+function optionValue(words, options) {
+  for (const [index, word] of words.entries()) {
+    if (options.includes(word)) return words[index + 1]
+    const joined = options.find((option) => option.startsWith('--') && word.startsWith(`${option}=`))
+    if (joined !== undefined) return word.slice(joined.length + 1)
+  }
+  return undefined
+}
+
+/** The file that decides what this runner runs, when it is there, or null: `make` a Makefile, `pnpm run` a package.json. */
+function runnerFileOf(words, folder) {
+  const names = RUNNER_FILES[nameOf(words[0])]
+  const rest = words.slice(1)
+  if (names === undefined || rest.includes('--version') || rest.includes('-v')) return null
+  const base = resolved(optionValue(rest, RUNNER_FOLDER_OPTIONS) ?? '.', folder)
+  const named = optionValue(rest, RUNNER_FILE_OPTIONS)
+  for (const path of (named !== undefined ? [resolved(named, base)] : names.map((name) => join(base, name)))) {
+    try { if (statSync(path).isFile()) return path } catch { /* the next one */ }
+  }
+  return null
+}
+
 const isWritable = (path) => {
   for (const target of [path, dirname(path)]) {
     try { accessSync(target, constants.W_OK); return true } catch { /* the next one */ }
@@ -108,7 +143,8 @@ export function grantCommandProblem(term) {
   } catch {
     return `${term.folder} is not a folder`
   }
-  const script = scriptOf(words, term.folder)
+  const named = scriptOf(words, term.folder)
+  const script = named === null ? runnerFileOf(words, term.folder) : named
   if (script === undefined) return `${words[0]} does not exist yet, so it cannot be pinned`
   const pin = term.script ?? null
   if (pin !== null) {

@@ -60,7 +60,7 @@ start = subprocess.run(['bmn', 'hook', 'codex'], input=json.dumps({'hook_event_n
 assert 'BMN brief:' in json.loads(start.stdout)['hookSpecificOutput']['additionalContext']
 choices=json.dumps({'options':[{'label':'Wait','description':None},{'label':'Proceed','description':None}]})
 for key in ['positive','retained']:
-    subprocess.run(['bmn','ask',key,'Synthetic decision','--kind','question','--choices-json',choices], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['bmn','ask',key,'Scope: synthetic decision','--kind','question','--choices-json',choices], check=True, stdout=subprocess.DEVNULL)
 print('STUB_READY', flush=True)
 for line in sys.stdin:
     if 'TRANSITION_NOW' in line:

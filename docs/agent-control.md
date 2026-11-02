@@ -1055,9 +1055,10 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   ([app-measures.md](../plan/references/103/app-measures.md)).
   The limits: this is authority, not a lock. BMN answers no native prompt (D4), so an app that prompts on a granted
   item holds the step, and the morning report says so. The list helps a reviewer say yes, and a reviewer can say yes
-  without it (2 of 5 measured), so the record that holds is `bmn grant use`. A program that reads its own files
-  (`make`, `pnpm run`) is not pinned unless the card names one of those files, and a command's word check reads
-  words, not what a program then does (`ssh host rm x`), so he reads the whole text before saying yes. Between the
+  without it (2 of 5 measured), so the record that holds is `bmn grant use`. A runner's own file (`make`'s Makefile,
+  `pnpm run`'s package.json, `just`'s justfile) is pinned like a script, but what that file or a pinned script then
+  runs is not, and a command's word check reads words, not what a program then does (`ssh host rm x`), so he reads
+  the whole text before saying yes. Between the
   hash and the run a file can still change. `bmn grant ask`'s checks run when a card is asked, never on a stored one,
   so a rule added later never unreads a record.
 - **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token, the

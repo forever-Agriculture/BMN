@@ -214,7 +214,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await until(() => page.evaluate(() => document.querySelectorAll('.session-row').length >= 6), 'six rows')
     // Typing into a session answers its own requests, so each session gets one thing only.
     await runControlCli(roots, watcher, 'send', "printf '\\033]9;Nightly build finished on the watcher\\007'", '--submit')
-    await runControlCli(roots, codex, 'ask', 'e40-question', 'Which migration order should I use?', '--kind', 'question')
+    await runControlCli(roots, codex, 'ask', 'e40-question', 'Scope: Which migration order should I use?', '--kind', 'question')
     await runControlCli(roots, late, 'send', "(sleep 4; printf 'LATE-OUTPUT\\n') &", '--submit')
     await until(() => page.evaluate(() => document.querySelector('.origin-flag') !== null), 'the origin flag', 30_000)
     await until(() => page.evaluate(async () => (await window.aiTerminal.listAttention())

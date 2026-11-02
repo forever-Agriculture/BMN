@@ -541,7 +541,7 @@ const evidence = await withTemporaryRoot(
         fixture.selectedSessionId,
         'ask',
         'epic5-visual',
-        'Review visual hierarchy?',
+        'Scope: Review visual hierarchy?',
         '--kind',
         'question'
       )
@@ -1457,7 +1457,7 @@ const evidence = await withTemporaryRoot(
 
       // AC3: an open request still outranks activity, in all three places at once.
       await runControlCli(
-        roots, fixture.selectedSessionId, 'ask', 'epic14-precedence', 'Which branch?', '--kind', 'question'
+        roots, fixture.selectedSessionId, 'ask', 'epic14-precedence', 'Scope: Which branch?', '--kind', 'question'
       )
       await page.waitForFunction(() =>
         document.querySelector('.session-row .status-dot.needs-you') !== null)
@@ -1612,7 +1612,7 @@ const evidence = await withTemporaryRoot(
       // AC3 wants selection, keyboard focus and Needs you overlapping a marker, so the marked row that
       // the loop selects and focuses also carries a real open request for the whole loop.
       await runControlCli(
-        roots, fixture.selectedSessionId, 'ask', 'epic11-marker', 'Review the workspace marker?',
+        roots, fixture.selectedSessionId, 'ask', 'epic11-marker', 'Scope: Review the workspace marker?',
         '--kind', 'question'
       )
       await page.waitForFunction(() =>
@@ -2011,7 +2011,7 @@ const evidence = await withTemporaryRoot(
         glanceFixture.attentionSessionId,
         'ask',
         'epic20-visual',
-        'Review the visual states?',
+        'Scope: Review the visual states?',
         '--kind',
         'question'
       )
@@ -2380,7 +2380,7 @@ const interruptedGlance = await withTemporaryRoot(
       await page.reload({ waitUntil: 'domcontentloaded' })
       await page.waitForSelector(`.session-row button[data-session-id="${fixture.question}"]`)
       await runControlCli(roots, fixture.question, 'ask', 'epic20-interrupted-question',
-        'Review the interrupted fixture?', '--kind', 'question')
+        'Scope: Review the interrupted fixture?', '--kind', 'question')
       await page.waitForFunction((id) => document.querySelector(
         `.session-row button[data-session-id="${id}"] .status-dot.needs-you`
       ), fixture.question)

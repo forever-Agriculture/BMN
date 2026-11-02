@@ -86,7 +86,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
       const valid = cli(['publish', png, '--name', 'Valid fixture.png', '--key', 'valid-png', '--json']);
       cli(['progress', 'running', 'Synthetic media evidence', '--source', 'fixture', '--evidence-id', valid.artifactId, '--evidence-id', broken.artifactId, '--json']);
-      const long = 'Long synthetic attention ' + 'folder-name/'.repeat(9);
+      const long = 'Scope: Long synthetic attention ' + 'folder-name/'.repeat(9);
       cli(['ask', 'long-question', long, '--body', 'long/path/'.repeat(60), '--json']);
       cli(['ask', 'recent-long', long, '--json']); cli(['resolve', 'recent-long', 'Synthetic answered fixture', '--json']);
       writeFileSync(${JSON.stringify(preparedFile)}, JSON.stringify({ ready: true })); setInterval(() => {}, 1000);`)

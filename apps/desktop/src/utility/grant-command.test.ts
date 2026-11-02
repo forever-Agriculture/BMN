@@ -101,6 +101,10 @@ describe('grantCommandProblem (R103-NFR2: what is never on a card)', () => {
     ['git tag v1', 'release'],
     ['git worktree remove old', 'deletion'],
     ['git clean -fd', 'deletion'],
+    ['git -C /tmp/elsewhere clean -fd', 'deletion'],
+    ['git -c core.editor=true branch -D old', 'deletion'],
+    ['git --git-dir /tmp/x tag v1', 'release'],
+    ['docker --context other rm one', 'deletion'],
     ['git update-ref -d refs/heads/old', 'deletion'],
     ['git reset --hard', 'deletion'],
     ['git restore src/a.ts', 'deletion'],
@@ -167,11 +171,22 @@ describe('grantCommandProblem (R103-NFR2: what is never on a card)', () => {
     expect(grantCommandProblem(term('pnpm run lint', { script: { path: '.env', sha256: 'b'.repeat(64) } }))).toContain('credential')
   })
 
-  it('lets a program that reads its own files name one, and says nothing when it does not', () => {
-    writeFileSync(join(folder, 'Makefile'), 'all:\n')
-    const sha = createHash('sha256').update('all:\n').digest('hex')
-    expect(grantCommandProblem(term('make all'))).toBeNull()
-    expect(grantCommandProblem(term('make all', { script: { path: 'Makefile', sha256: sha } }))).toBeNull()
+  it('treats a runner\'s own file as what it runs: writable, it is pinned; absent, there is nothing to pin (the pre-review)', () => {
+    const runners = mkdtempSync(join(folder, 'runners-'))
+    const pin = (path: string, text: string) => ({ path, sha256: createHash('sha256').update(text).digest('hex') })
+    expect(grantCommandProblem(term('make all', { folder: runners }))).toBeNull()
+    expect(grantCommandProblem(term('pnpm run lint', { folder: runners }))).toBeNull()
+    writeFileSync(join(runners, 'Makefile'), 'all:\n')
+    writeFileSync(join(runners, 'package.json'), '{}\n')
+    mkdirSync(join(runners, 'sub'))
+    writeFileSync(join(runners, 'sub', 'other.mk'), 'x:\n')
+    expect(grantCommandProblem(term('make all', { folder: runners }))).toContain('Makefile')
+    expect(grantCommandProblem(term('make -f sub/other.mk x', { folder: runners }))).toContain('other.mk')
+    expect(grantCommandProblem(term('pnpm run lint', { folder: runners }))).toContain('package.json')
+    expect(grantCommandProblem(term('pnpm --version', { folder: runners }))).toBeNull()
+    expect(grantCommandProblem(term('make all', { folder: runners, script: pin('Makefile', 'all:\n') }))).toBeNull()
+    expect(grantCommandProblem(term('pnpm run lint', { folder: runners, script: pin('package.json', '{}\n') }))).toBeNull()
+    expect(grantCommandProblem(term('make all', { folder: runners, script: pin('package.json', '{}\n') }))).toContain('that is the file to pin')
   })
 })
 

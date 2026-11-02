@@ -37,7 +37,7 @@ grant ask    The run's card for this departure, as JSON on standard input, for e
              branch, its pr number, or both. count (1-10, default 1) bounds a push, a PR or a command.
              command: one simple command exactly as it will run, with its folder: no chain, pipe, redirect,
              substitution, variable, wildcard, wrapper or sh -c; a script it runs from a folder you can
-             write to is named with its SHA-256, and any other file it depends on may be. message: the tool,
+             write to, or a runner's own file (Makefile, package.json), is named with its SHA-256. message: the tool,
              who gets it and the whole text, sent once; text you do not know yet goes as a draft on a
              bmn ask card. The card shows both whole. Ask only what the remaining work needs, each term with its reason. Asking
              again with other terms makes a new revision; his earlier answer holds until he answers

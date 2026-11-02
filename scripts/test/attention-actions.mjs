@@ -112,7 +112,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       setInterval(()=>{if(!existsSync(${JSON.stringify(command)}))return;const c=JSON.parse(readFileSync(${JSON.stringify(command)},'utf8'));unlinkSync(${JSON.stringify(command)});
         if(c.kind==='focus'){process.stdout.write(c.enabled?'\\x1b[?1004h':'\\x1b[?1004l');atomic(${JSON.stringify(join(root, 'response.json'))},JSON.stringify({key:c.key}));return;}
         const response=c.kind==='handoff'?(r=>({status:r.status,stderr:r.stderr}))(spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(cli)},'handoff',${JSON.stringify(target.session.sessionId)},'--text','Please review this short synthetic handoff.','--key',c.key,'--json'],{encoding:'utf8'})):
-          ['manual','notice','review'].includes(c.kind)?call(['ask',c.key,c.title??'Manual question','--kind',c.kind==='manual'?'question':c.kind,'--body',c.body??'Synthetic request body','--json']):
+          ['manual','notice','review'].includes(c.kind)?call(['ask',c.key,(c.kind==='manual'?'Scope: ':'')+(c.title??'Manual question'),'--kind',c.kind==='manual'?'question':c.kind,'--body',c.body??'Synthetic request body','--json']):
           c.kind==='restricted'?call(['hook','opencode'],JSON.stringify({hook_event_name:'question.asked',id:c.key,questions:c.questions})):
           call(['hook','codex'],JSON.stringify({hook_event_name:'PreToolUse',tool_name:'functions.request_user_input_async',tool_use_id:c.key,tool_input:{questions:c.questions}}));
         atomic(${JSON.stringify(join(root, 'response.json'))},JSON.stringify({key:c.key,response}));},25);`)
@@ -132,7 +132,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       throw new Error('Synthetic source did not publish '+payload.key)
     }
     const question = (key) => ({ kind: 'question', key, questions: [
-      { title: 'Which color?', options: ['Gold', 'Black'] }, { title: 'Which shape?', options: ['Circle', 'Square'] }
+      { title: 'Scope: Which color?', options: ['Gold', 'Black'] }, { title: 'Scope: Which shape?', options: ['Circle', 'Square'] }
     ] })
     const resize = async (width, height) => app.evaluate(({ BrowserWindow }, size) => {
       const win = BrowserWindow.getAllWindows()[0]; win.setMinimumSize(0, 0); win.setContentSize(...size)
