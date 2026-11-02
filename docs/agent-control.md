@@ -928,14 +928,16 @@ What it holds, in the shell commands of the text:
   `kernelstub`, a redirect into `/etc`, `/boot` or a grub file);
 - `rm` recursive and forced on `/`, `~`, `$HOME`, the home folder, or `~/brain`, `~/code`, `~/projects`, `~/Documents`,
   `~/.config`, `~/.ssh`, `~/.codex`, `~/.claude`;
-- `git reset --hard`, `git clean -f` (not `-n`), `git checkout -- .` and `git restore .`, unless the text puts them in a
-  throwaway folder (a temporary folder or a run's worktree): there they are everyday work, and replaying 30 days of commands
-  put them over 3 prompts a week. The folder is read in order from the event's folder: `cd` joined by `&&` (one that may have
-  failed leaves the place it was, one in a subshell ends with it, one in a pipeline or behind `&` or `||` moves nothing that
-  follows), each `-C`, a variable set before its first use with one value, `..` worked out. A substitution still open,
-  `--git-dir`, `--work-tree`, `GIT_DIR`, a wrapper's own change of folder or another user's `~name` cannot be told, so they
-  are held. Links are not followed: nothing is read from the disk;
-- `git stash drop` or `clear`, unless the folder is a temporary one: a worktree shares its repository's stash with every other;
+- `git clean -f` (not `-n`), `git reset --hard`, `git checkout -- .` and `git restore .`, unless the whole command is one plain
+  `git` working in a throwaway folder (a temporary folder or a run's worktree), where they are everyday work: the event's
+  folder, or one absolute `git -C` with no variable in it, `..` worked out. Anything else says nothing about the folder and is
+  held: a `cd`, a variable, a relative or second `-C`, another Git option, `GIT_DIR`, an option on a wrapper, more text on the
+  line. Links are not followed: nothing is read from the disk;
+- except that `git reset --hard`, `git checkout -- .` and `git restore .` are left to the app in a command that changes folder
+  itself (`cd`, `pushd`, `popd`), wherever that goes: replaying 30 days of commands put them over 3 prompts a week, nearly all
+  of those after a `cd`, and working out where a `cd` lands is more than a text reader can do reliably. So
+  `cd ~/code/x && git reset --hard` is **not** held; `git clean -f` still is;
+- `git stash drop` or `clear`, in any folder: a worktree shares its repository's stash with every other;
 - a reader or sender (`cat head tail less more base64 xxd od strings cp mv scp rsync curl wget nc tar zip gpg`) naming a
   file of BMN's secret list (`bin/secret-list.mjs`) as an argument, and any program reading one through a redirect, whichever
   descriptor it opens (a `.pub` is left only in `~/.ssh`);

@@ -211,51 +211,59 @@ describe('what the owner said never to run (Story 102.2)', () => {
     expect(heldCommand(command)).toBeNull()
   })
 
-  // The replay of 30 days' commands put these past 3 a week, nearly all in throwaway folders (epic Log).
+  // Story 102.2's replay put reset and the whole folder's discard past 3 a week: nearly all after a `cd`, which is not worked out (epic Log).
   it.each([
-    ['cd /tmp/fixture && git reset --hard', null],
-    ['D=/run/user/1000/dar; cd "$D" && git reset --hard', null],
-    ['S=/tmp/fixture; git -C "$S/red" checkout -- .', null],
-    ['D=$(mktemp -d); cd "$D" && git restore .', null],
-    ['cd "$D" && git reset --hard', 'git reset'],
-    ['D=/tmp/fixture; D=~/code/BMN; cd "$D" && git reset --hard', 'git reset'],
-    ['D=~/code/BMN; cd "$D" && git checkout -- .', 'discarding'],
     ['git -C /tmp/fixture reset --hard HEAD', null],
-    ['cd "$TMPDIR/x" && git checkout -- .', null],
-    ['cd ~/code/BMN/.claude/worktrees/epic-1 && git restore .', null],
-    ['cd /tmp/fixture && cd ~/code/BMN && git reset --hard', 'git reset'],
+    ['git -C /tmp/fixture/../other clean -fd', null],
+    ['git -C /home/someone/code/BMN/.claude/worktrees/epic-1 restore .', null],
+    ['git -C /run/user/1000/dar checkout -- .', null],
+    ['(git -C /tmp/fixture clean -fd)', null],
+    // Only one plain `git` with a literal absolute folder says where it works.
     ['git -C ~/code/BMN reset --hard', 'git reset'],
-    ['cd ~/code/BMN && git clean -fd', 'git clean'],
-    ['cd /tmp/fixture && docker system prune -af', 'prune'],
-    ['cd /tmp/fixture && rm -rf ~/brain', 'home or system'],
-    // The order of a command, the scope of its `cd` and the folder its `..` end in (epic review).
-    ['(cd /tmp/fixture && git reset --hard)', null],
-    ['(cd /tmp); git reset --hard', 'git reset'],
-    ['$(cd /tmp); git reset --hard', 'git reset'],
-    ['`cd /tmp`; git reset --hard', 'git reset'],
-    ['cd /tmp | git reset --hard', 'git reset'],
-    ['cd /tmp & git reset --hard', 'git reset'],
-    ['cd /tmp || git reset --hard', 'git reset'],
-    ['cd /tmp/fixture; git reset --hard', 'git reset'],
-    ['cd /tmp/fixture && (cd /tmp/other); git reset --hard', null],
-    ['git -C /tmp/fixture -C ~/code/BMN reset --hard', 'git reset'],
-    ['git -C ~/code/BMN -C /tmp/fixture reset --hard', null],
+    ['git -C ~/code/BMN/.claude/worktrees/epic-1 clean -fd', 'git clean'],
     ['git -C /tmp/../home/someone/code/BMN reset --hard', 'git reset'],
-    ['cd /tmp/../home/someone/code/BMN && git clean -fd', 'git clean'],
-    ['cd /tmp/fixture/../other && git reset --hard', null],
-    ['cd /tmp/$(echo x)/.. && git reset --hard', 'git reset'],
-    ['cd ~/code/BMN/.claude/worktrees/epic-1/../.. && git reset --hard', 'git reset'],
-    ['cd "$D" && git reset --hard; D=/tmp/fixture', 'git reset'],
-    ['D=/tmp/fixture; if x; then D=~/code/BMN; fi; cd "$D" && git reset --hard', 'git reset'],
+    ['git -C "$D" reset --hard', 'git reset'],
+    ['git -C /tmp/$(echo x)/.. clean -fd', 'git clean'],
+    ['git -C sub reset --hard', 'git reset'],
+    ['git -C /tmp/fixture -C ~/code/BMN reset --hard', 'git reset'],
+    ['git -C ~/code/BMN -C /tmp/fixture reset --hard', 'git reset'],
     ['GIT_DIR=~/code/BMN/.git git -C /tmp/fixture reset --hard', 'git reset'],
+    ['GIT_WORK_TREE=~/code/BMN git -C /tmp/fixture clean -fd', 'git clean'],
+    ['env GIT_DIR=~/code/BMN/.git git -C /tmp/fixture reset --hard', 'git reset'],
     ['git --git-dir=~/code/BMN/.git --work-tree=~/code/BMN -C /tmp/fixture reset --hard', 'git reset'],
-    ['cd /tmp/fixture && env -C ~/code/BMN git reset --hard', 'git reset'],
-    ['cd ~root && git reset --hard', 'git reset'],
-    // The stash is the repository's, whichever worktree asks.
+    ['git -C /tmp/fixture --work-tree=~/code/BMN clean -fd', 'git clean'],
+    ['git -c core.worktree=/home/someone/code/BMN -C /tmp/fixture clean -fd', 'git clean'],
+    ['env -C ~/code/BMN git -C /tmp/fixture clean -fd', 'git clean'],
+    ['sudo -D ~/code/BMN git -C /tmp/fixture clean -fd', 'git clean'],
+    ['sudo --chdir=~/code/BMN git reset --hard', 'git reset'],
+    ['sudo --chdir ~/code/BMN git reset --hard', 'git reset'],
+    ['systemd-run --user git -C /tmp/fixture clean -fd', 'git clean'],
+    ['git -C /tmp/fixture reset --hard; git reset --hard', 'git reset'],
+    ['git -C /tmp/fixture clean -fd; git clean -fd', 'git clean'],
+    ['bash -c "git -C /tmp/fixture clean -fd"', 'git clean'],
+    ['git fetch && git reset --hard origin/main', 'git reset'],
+    ['git fetch; git checkout -- .', 'discarding'],
+    // A `git clean` is not narrowed: it counted under the limit, so every shape that says no more than a `cd` stays held.
+    ['cd /tmp/fixture && git clean -fd', 'git clean'],
+    ['cd /tmp/does-not-exist && true; git clean -fd', 'git clean'],
+    ['D=/tmp; echo "$D"; D=/home/someone/code/BMN; cd "$D" && git clean -fd', 'git clean'],
+    ['false || cd /home/someone/code/BMN; git clean -fd', 'git clean'],
+    ['D=$(mktemp -d /home/someone/x); cd "$D" && git clean -fd', 'git clean'],
+    ['(cd /tmp/fixture && git clean -fd)', 'git clean'],
+    // The narrowing: in a command that changes folder itself, these two are the app's.
+    ['cd ~/code/BMN && git reset --hard', null],
+    ['cd ~/code/BMN && git checkout -- .', null],
+    ['pushd ~/code/BMN && git restore .', null],
+    ['D=/tmp; echo "$D"; D=/home/someone/code/BMN; cd "$D" && git reset --hard', null],
+    // The stash is the repository's, whichever folder asks.
     ['cd ~/code/BMN/.claude/worktrees/epic-1 && git stash clear', 'stash'],
     ['git -C ~/code/BMN/.claude/worktrees/epic-1 stash drop', 'stash'],
-    ['cd /tmp/fixture && git stash drop', null],
-    ['git stash list', null]
+    ['git -C /tmp/fixture stash clear', 'stash'],
+    ['cd /tmp/fixture && git stash drop', 'stash'],
+    ['git stash list', null],
+    // What no folder excuses.
+    ['cd /tmp/fixture && docker system prune -af', 'prune'],
+    ['cd /tmp/fixture && rm -rf ~/brain', 'home or system']
   ])('reads where %s runs', (command, what) => {
     const held = heldCommand(command)
     if (what === null) expect(held).toBeNull()
@@ -282,19 +290,38 @@ describe('what the owner said never to run (Story 102.2)', () => {
     else expect(held).toContain(what)
   })
 
-  it('reads the folder the event names, and a cd over it', () => {
-    const event = (cwd: string, command: string): Record<string, unknown> & { tool_input?: Record<string, unknown> } => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd, tool_input: { command } })
-    expect(guardAnswer('claude', event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'git reset --hard'))).toBeNull()
-    expect(guardAnswer('claude', event('/tmp/fixture', 'git stash clear'))).toBeNull()
-    for (const agent of ['claude', 'codex'] as const) {
-      expect(guardAnswer(agent, event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'git stash clear'))).not.toBeNull()
-      expect(guardAnswer(agent, event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'cd apps/desktop && git checkout -- .'))).toBeNull()
-      expect(guardAnswer(agent, event('/tmp/fixture', '(cd /tmp); cd /home/someone/code/BMN && git reset --hard'))).not.toBeNull()
-      for (const command of ['cat 3< ~/.codex/auth.json <&3', 'podman --remote system prune -af']) expect(guardAnswer(agent, event('/home/someone', command))).not.toBeNull()
-      for (const command of ['cat ~/.ssh/id_ed25519.pub', 'podman --remote ps']) expect(guardAnswer(agent, event('/home/someone', command))).toBeNull()
-    }
-    expect(guardAnswer('claude', event('/home/someone/code/BMN', 'git reset --hard'))).not.toBeNull()
-    expect(guardAnswer('claude', event('/tmp/fixture', 'cd /home/someone/code/BMN && git reset --hard'))).not.toBeNull()
+  it.each(['claude', 'codex'] as const)('reads the folder the event names for %s, for one plain git only', (agent) => {
+    const worktree = '/home/someone/code/BMN/.claude/worktrees/epic-1'
+    const real = '/home/someone/code/BMN'
+    const answer = (cwd: string, command: string): string | null => guardAnswer(agent, { hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd, tool_input: { command } })
+    for (const [cwd, command] of [
+      [worktree, 'git reset --hard'],
+      [`${worktree}/apps`, 'git clean -fd'],
+      ['/tmp/fixture', 'git reset --hard'],
+      ['/tmp/fixture', 'git restore .'],
+      [real, 'git -C /tmp/fixture clean -fd'],
+      [worktree, 'cd apps/desktop && git checkout -- .'],
+      ['/home/someone', 'cat ~/.ssh/id_ed25519.pub'],
+      ['/home/someone', 'podman --remote ps']
+    ]) expect(answer(cwd, command), command).toBeNull()
+    for (const [cwd, command] of [
+      [real, 'git reset --hard'],
+      [real, 'git restore .'],
+      [real, 'git clean -fd'],
+      ['/tmp/fixture', 'git fetch && git reset --hard'],
+      ['/tmp/fixture', 'git clean -fd; true'],
+      ['/tmp/fixture', 'cd /home/someone/code/BMN && git clean -fd'],
+      ['/tmp/fixture', 'false || cd /home/someone/code/BMN; git clean -fd'],
+      ['/tmp/fixture', 'git -C /home/someone/code/BMN clean -fd'],
+      ['/tmp/fixture', 'git -C sub clean -fd'],
+      ['/tmp/../home/someone/code/BMN', 'git clean -fd'],
+      ['relative/tmp', 'git reset --hard'],
+      [worktree, 'cd apps/desktop && git clean -fd'],
+      [worktree, 'git stash clear'],
+      ['/tmp/fixture', 'git stash clear'],
+      ['/home/someone', 'cat 3< ~/.codex/auth.json <&3'],
+      ['/home/someone', 'podman --remote system prune -af']
+    ]) expect(answer(cwd, command), command).not.toBeNull()
   })
 
   it.each(['claude', 'codex'] as const)('reaches %s as a hold naming the command', (agent) => {

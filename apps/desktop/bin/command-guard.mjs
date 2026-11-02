@@ -20,19 +20,6 @@ export const GUARDED_TOOLS = { claude: 'Bash', codex: 'Bash' }
 function shellCommands(source, expansionsOnly = false) {
   let index = 0
   const commands = []
-  // A subshell or a substitution: a `cd` there ends with it. Each has its own name, under the one around it.
-  let scope = ''
-  let scopes = 0
-  const inSubshell = (read) => {
-    const around = scope
-    scope = `${around}/${scopes += 1}`
-    read()
-    scope = around
-  }
-  const fromOtherText = (found) => {
-    scopes += 1
-    return found.map((entry) => ({ ...entry, scope: `${scope}/${scopes}${entry.scope}` }))
-  }
   const scan = (end = null, onlyExpansions = false) => {
     let command = { words: [], input: [], reads: [], writes: [] }
     let word = ''
@@ -61,7 +48,6 @@ function shellCommands(source, expansionsOnly = false) {
     const finishCommand = () => {
       finishWord()
       const finished = command
-      finished.scope = scope
       if (command.words.length > 0) commands.push(command)
       command = { words: [], input: [], reads: [], writes: [] }
       return finished
@@ -69,7 +55,7 @@ function shellCommands(source, expansionsOnly = false) {
     const expansion = (processSubstitution) => {
       if (source.startsWith('$(', index) || (processSubstitution && /^[<>]\(/.test(source.slice(index, index + 2)))) {
         index += 2
-        inSubshell(() => scan(')'))
+        scan(')')
         return true
       }
       if (source[index] !== '`') return false
@@ -80,7 +66,7 @@ function shellCommands(source, expansionsOnly = false) {
         body += source[index++]
       }
       if (source[index] === '`') index += 1
-      commands.push(...fromOtherText(shellCommands(body)))
+      commands.push(...shellCommands(body))
       return true
     }
     const hereDocuments = () => {
@@ -98,7 +84,7 @@ function shellCommands(source, expansionsOnly = false) {
         if (document.command.inputFrom === document) document.command.input = [body]
         if (document.quoted) continue
         // Quotes in an expanding heredoc are literal; only backslash and substitutions affect execution.
-        commands.push(...fromOtherText(shellCommands(body, true)))
+        commands.push(...shellCommands(body, true))
       }
     }
     while (index < source.length) {
@@ -133,11 +119,10 @@ function shellCommands(source, expansionsOnly = false) {
       } else if (char === end) {
         finishCommand(); index += 1; return
       } else if (char === '(') {
-        finishCommand(); index += 1; inSubshell(() => scan(')'))
+        finishCommand(); index += 1; scan(')')
       } else if (/[;|&\n)]/.test(char)) {
         const previous = finishCommand()
         index += 1
-        previous.then = (char === '|' || char === '&') && source[index] === char ? `${char}${char}` : char
         if (char === '|' && source[index] !== '|') {
           command.pipe = previous
           if (source[index] === '&') index += 1
@@ -168,7 +153,7 @@ const assignments = (word) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)
 const SHELLS = /^(ba|da|z|k)?sh$/
 const WRAPPER_VALUES = {
   env: ['-u', '--unset', '-C', '--chdir', '--argv0'],
-  sudo: ['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-C', '--close-from', '-T', '--command-timeout', '-r', '--role', '-t', '--type'],
+  sudo: ['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-C', '--close-from', '-D', '--chdir', '-R', '--chroot', '-T', '--command-timeout', '-r', '--role', '-t', '--type'],
   command: [], builtin: [], exec: ['-a'], nohup: [], nice: ['-n', '--adjustment'], setsid: [],
   time: ['-f', '--format', '-o', '--output'], doas: ['-u', '-C'],
   timeout: ['-s', '--signal', '-k', '--kill-after'],
@@ -411,76 +396,49 @@ function removeHold(args) {
 }
 
 /**
- * A folder the guard treats as throwaway: a temporary folder or a run's own worktree, where these commands are everyday work
- * (Story 102.2's replay put them past its limit of 3 a week per pattern). It is told only from text the command
- * or its event gives: `-C`, the last `cd`, or the event's folder.
+ * A folder where discarding is everyday work: a temporary folder or a run's own worktree (Story 102.2's replay put these commands past
+ * its limit of 3 a week per pattern). Told only from a literal absolute path, with its `..` worked out; a symbolic link is not
+ * followed, since nothing here reads the disk.
  */
-const TEMPORARY = /^(\/tmp|\/var\/tmp|\/run\/user\/\d+|\$\{?TMPDIR\}?)(\/|$)/
-const THROWAWAY = new RegExp(`${TEMPORARY.source}|/\\.claude/worktrees/[^/]+(/|$)`)
-const isThrowaway = (place) => place !== null && THROWAWAY.test(place)
-
-/**
- * A folder named by a variable the same command sets (`D=/tmp/x; cd "$D"`, `D=$(mktemp -d)`), as far as its text says. Only what is
- * set before the variable's first use counts, and two different values say nothing: a variable it does not set stays unknown, so it is held.
- */
-function placeInText(place, command, depth = 0) {
-  const variable = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?(.*)$/s.exec(place ?? '')
-  if (variable === null || depth > 2) return place
-  const [, name, rest] = variable
-  const firstUse = command.search(new RegExp(`\\$\\{?${name}\\b`))
-  const set = [...command.slice(0, firstUse < 0 ? command.length : firstUse).matchAll(new RegExp(`(?:^|[\\s;&|(])${name}=("[^"]*"|'[^']*'|\\$\\([^)]*\\)|[^\\s;&|)]*)`, 'g'))].map((match) => match[1])
-  if (set.length === 0) return place
-  if (new Set(set).size > 1) return null
-  if (/^"?\$\(mktemp\b/.test(set[0])) return `/tmp/mktemp${rest}`
-  return placeInText(`${set[0].replace(/^["']|["']$/g, '')}${rest}`, command, depth + 1)
-}
-
-/**
- * The folder `target` names from `base`, with its `..` worked out; null when the text cannot say (no target, a relative one from an
- * unknown place, or a substitution or variable that is still open). A symbolic link is not followed: nothing here reads the disk.
- */
-function folderFrom(base, target, command) {
-  const named = target === null ? null : placeInText(target, command)
-  // Another user's home (`~root`) cannot be told from here.
-  if (named === null || /^~[^/]/.test(named)) return null
-  const start = /^(\/|~(?=\/|$)|\$\{?TMPDIR\}?(?=\/|$)|\$\{?HOME\}?(?=\/|$))/.exec(named)?.[0]
-  if (start === undefined && base === null) return null
-  const whole = start === undefined ? `${base}/${named}` : named
-  const root = /^(\/|~|\$\{?TMPDIR\}?|\$\{?HOME\}?)/.exec(whole)?.[0]
-  if (root === undefined) return null
-  if (/[$`]/.test(whole.slice(root.length))) return null
+const THROWAWAY = /^(\/tmp|\/var\/tmp|\/run\/user\/\d+)(\/|$)|\/\.claude\/worktrees\/[^/]+(\/|$)/
+function isThrowaway(path) {
+  if (typeof path !== 'string' || !path.startsWith('/') || /[$`*?[\]]/.test(path)) return false
   const parts = []
-  for (const part of whole.slice(root.length).split('/')) {
-    if (part === '' || part === '.') continue
+  for (const part of path.split('/')) {
     if (part === '..') parts.pop()
-    else parts.push(part)
+    else if (part !== '' && part !== '.') parts.push(part)
   }
-  return root === '/' ? `/${parts.join('/')}` : [root, ...parts].join('/')
+  return THROWAWAY.test(`/${parts.join('/')}`)
 }
 
-/** Where a `git` command works: each `-C` in turn from `base`. Another work tree or Git folder, or a wrapper's own change of folder, cannot be told. */
-function gitPlace(words, base, wrappers, command) {
-  if (/(^|[\s;&|(])GIT_(DIR|WORK_TREE)=/.test(command) || wrappers.some((word) => /^(-C|--chdir|-D|--working-directory)(=|$)|^-[a-zA-Z]*C/.test(word))) return null
-  let place = base
-  for (let index = 1; words[index]?.startsWith('-'); index += 1) {
-    const option = words[index]
-    if (/^--(git-dir|work-tree)(=|$)/.test(option)) return null
-    if (option === '-C') place = folderFrom(place, words[++index] ?? null, command)
-    else if (['-c', '--namespace', '--config-env'].includes(option)) index += 1
-    else if (option === '--') break
-  }
-  return place
+/** Wrappers that run the next word where they stand, as plain words: an option, or a change of Git's folder in the environment, may move it. */
+const inPlace = (word) => /^(sudo|env|command|nohup|time|timeout|nice)$/.test(nameOf(word)) || /^\d+[smhd]?$/.test(word) || (assignments(word) && !word.startsWith('GIT_'))
+
+/**
+ * Whether a command that is a single plain `git`, and nothing else, works in a throwaway folder: the event's, or one absolute `-C`.
+ * Any other shape says nothing: a `cd`, a variable, a second `-C`, another Git option or more text on the line is not worked out.
+ */
+function gitInThrowaway(words, wrappers, cwd) {
+  if (!wrappers.every(inPlace)) return false
+  const named = words[1] === '-C'
+  if (words[named ? 3 : 1]?.startsWith('-')) return false
+  return isThrowaway(named ? words[2] : cwd)
 }
 
-/** What `git` holds besides pushes: the commands that throw uncommitted work away, outside a throwaway folder. */
-function discardHold(verb, after, place) {
-  // A worktree shares its repository's stash with every other, so only a temporary folder's own repository is left to itself.
-  if (verb === 'stash' && /^(drop|clear)$/.test(after[0] ?? '') && (place === null || !TEMPORARY.test(place))) return 'dropping a git stash, which every worktree shares'
-  if (isThrowaway(place)) return null
-  if (verb === 'reset' && after.includes('--hard')) return 'a git reset --hard, which discards uncommitted work'
+/**
+ * What `git` holds besides pushes: the commands that throw uncommitted work away, outside a throwaway folder. `git reset --hard` and a
+ * whole folder's discard are not judged in a command that changes folder itself: Story 102.2's replay put them past 3 a week, nearly
+ * all of those after a `cd`, and where a `cd` lands is not worked out here. So `cd ~/code/x && git reset --hard` is left to the app.
+ */
+function discardHold(verb, after, throwaway, movesFolder) {
+  // A worktree shares its repository's stash with every other, and no path says a temporary one is its own.
+  if (verb === 'stash' && /^(drop|clear)$/.test(after[0] ?? '')) return 'dropping a git stash, which every worktree shares'
+  if (throwaway) return null
   if (verb === 'clean' && !after.some((word) => word === '--dry-run' || shortFlags(word, 'n')) && after.some((word) => word === '--force' || shortFlags(word, 'f'))) {
     return 'a git clean, which deletes untracked files'
   }
+  if (movesFolder) return null
+  if (verb === 'reset' && after.includes('--hard')) return 'a git reset --hard, which discards uncommitted work'
   const onlyStaged = verb === 'restore' && after.some((word) => word === '--staged' || shortFlags(word, 'S')) && !after.some((word) => word === '--worktree' || shortFlags(word, 'W'))
   if (/^(checkout|restore)$/.test(verb ?? '') && !onlyStaged && after.includes('.')) return 'discarding uncommitted changes in the whole folder'
   return null
@@ -522,32 +480,21 @@ function cloudHold(name, args) {
  */
 export function heldCommand(command, depth = 0, inheritedSelector = false, cwd = null) {
   if (typeof command !== 'string' || command === '') return null
-  // Where the next command runs, as far as the text says: the event's folder until a `cd` names another. A `cd` in a subshell ends
-  // with it, one in a pipeline or behind `&` or `||` moves nothing that follows, and one not joined by `&&` may have failed.
-  const places = new Map([['', folderFrom(null, cwd, '')]])
-  const placeIn = (scope) => {
-    if (!places.has(scope)) places.set(scope, placeIn(scope.slice(0, scope.lastIndexOf('/'))))
-    return places.get(scope)
-  }
   const lexed = shellCommands(command)
   // A listed file read through a redirect, by whatever program: nothing ordinary does that.
   if (lexed.some((entry) => entry.reads.some((word) => namesSecretFile(word)))) return 'reading or sending a credential file'
   const commands = lexed.flatMap((entry) => executables(entry.words).map((words) => ({ ...entry, raw: entry.words, words })))
   const selectsBmn = inheritedSelector || commands.some(({ words }) => /^(pgrep|pidof|ps|grep|rg|awk|cat)$/.test(nameOf(words[0])) && words.slice(1).some((word) => /\bbmn\b/i.test(word)))
   for (const entry of commands) {
-    const { words, input, pipe, inputFrom, reads, raw, scope, then } = entry
+    const { words, input, pipe, inputFrom, reads, raw } = entry
     const [program, ...args] = words
     const name = nameOf(program)
-    const place = placeIn(scope)
-    if (name === 'cd' && !['|', '&', '||'].includes(then)) {
-      const to = folderFrom(place, args.find((word) => !word.startsWith('-')) ?? null, command)
-      places.set(scope, then !== '&&' && isThrowaway(to) && !isThrowaway(place) ? place : to)
-    }
     if (/^(kill|pkill|killall)$/.test(name) && (selectsBmn || args.some((word) => /\bbmn\b/i.test(word)))) return 'stopping BMN, which only the owner does'
     if (name === 'git') {
       const [verb, ...after] = subcommand(words, ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'])
       if (verb === 'push') { const held = pushHold(after); if (held !== null) return held }
-      const held = discardHold(verb, after, gitPlace(words, place, raw.slice(0, raw.indexOf(program)), command))
+      const alone = lexed.length === 1 && commands.length === 1 && depth === 0 && raw.includes(program)
+      const held = discardHold(verb, after, alone && gitInThrowaway(words, raw.slice(0, raw.indexOf(program)), cwd), commands.some((other) => /^(cd|pushd|popd)$/.test(nameOf(other.words[0]))))
       if (held !== null) return held
     }
     if (name === 'gh') {
@@ -568,13 +515,13 @@ export function heldCommand(command, depth = 0, inheritedSelector = false, cwd =
       if (verb === 'publish' || (name === 'yarn' && verb === 'npm' && action === 'publish')) return 'publishing a package'
       if (depth < 16 && name === 'yarn' && (verb === 'workspace' || (verb === 'workspaces' && action === 'foreach'))) {
         const nested = verb === 'workspace' ? args.slice(2) : subcommand(['foreach', ...args.slice(2)], ['--from', '--include', '--exclude', '-j', '--jobs'])
-        const held = heldCommand(nested.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(' '), depth + 1, selectsBmn, placeIn(scope))
+        const held = heldCommand(nested.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(' '), depth + 1, selectsBmn)
         if (held !== null) return held
       }
     }
     if (depth < 16 && (name === 'eval' || SHELLS.test(name))) {
       const code = name === 'eval' ? (args[0] === '--' ? args.slice(1) : args).join(' ') : shellCode(args, inputFrom !== undefined ? input : [pipedInput(pipe)])
-      const held = heldCommand(code, depth + 1, selectsBmn, placeIn(scope))
+      const held = heldCommand(code, depth + 1, selectsBmn)
       if (held !== null) return held
     }
   }
