@@ -1916,12 +1916,33 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       expect(await runCli(['hook', app], { env, input: asks(session, tool) })).toEqual(QUIET)
     })
 
-    it("never offers to refuse Codex's asynchronous question or a sub-agent's", async () => {
+    it('offers to hand back each app\'s own question while he is here, Codex\'s asynchronous one too, and prints that refusal (Story 103.6 AC6)', async () => {
+      for (const [app, tool, away] of [['claude', 'AskUserQuestion', true], ['codex', 'request_user_input', true], ['codex', 'request_user_input_async', false]] as const) {
+        const fixture = await cliFixture()
+        const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+        fixture.handlers.openAttention.mockResolvedValueOnce({ refused: true, changed: false, reason: REASON })
+        expect(await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: asks(session, tool) })).toEqual({ code: 0, stderr: '', stdout: JSON.stringify(refusal) })
+        const call = fixture.handlers.openAttention.mock.calls[0]?.[0]
+        expect(call).toMatchObject({ kind: 'question', reasonRefusable: true })
+        expect(call?.awayRefusable === true).toBe(away)
+      }
+    })
+
+    it('offers nothing for a sub-agent\'s question, so nothing changes there (Story 103.6 AC5)', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      fixture.handlers.openAttention.mockResolvedValue({ refused: true, changed: false, reason: REASON })
+      expect(await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: asks(session, 'AskUserQuestion', { agent_id: 'a1b2c3' }) })).toEqual(QUIET)
+      for (const [call] of fixture.handlers.openAttention.mock.calls) expect(call).not.toHaveProperty('reasonRefusable')
+    })
+
+    it("never offers to refuse Codex's asynchronous question or a sub-agent's while he is away", async () => {
       const cases: Array<['codex' | 'claude', string, Record<string, unknown>]> = [['codex', 'request_user_input_async', {}], ['claude', 'AskUserQuestion', { agent_id: 'a1b2c3' }]]
       for (const [app, tool, more] of cases) {
         const fixture = await cliFixture()
         const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
         fixture.handlers.openAttention.mockResolvedValue({ refused: true, changed: false, reason: REASON })
+        fixture.handlers.openAttention.mockResolvedValue({ state: 'open' })
         expect(await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: asks(session, tool, more) })).toEqual(QUIET)
         for (const [call] of fixture.handlers.openAttention.mock.calls) expect(call).not.toHaveProperty('awayRefusable')
       }

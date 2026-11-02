@@ -185,6 +185,8 @@ extraResources:
   # Epic 84: `bmn grant`.
   - from: bin/grant-cli.mjs
     to: bin/grant-cli.mjs
+  - from: bin/grant-command.mjs
+    to: bin/grant-command.mjs
   # Epic 69: which hook events mark a turn's start and end; `bmn hook` and `bmn hooks check` load it.
   - from: bin/turn-marks.mjs
     to: bin/turn-marks.mjs

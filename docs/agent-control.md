@@ -185,7 +185,7 @@ get read by the shell. Six options read their field from standard input instead,
 pipe it or use a quoted heredoc:
 
 ```bash
-bmn ask review-plan "Review the migration plan?" --body-file - <<'EOF'
+bmn ask review-plan "Scope: review the migration plan?" --body-file - <<'EOF'
 Plan: copy `users` in batches of 500, then swap the table.
 Risk: the "legacy" column keeps $(old) values.
 EOF
@@ -247,7 +247,7 @@ unavailable reference rather than quietly disappearing from the report.
 Ask the owner a question and clear it later:
 
 ```bash
-bmn ask deploy-approval "Deploy build 142 to staging?" --kind permission
+bmn ask deploy-approval "Go: deploy build 142 to staging?" --kind permission
 # after the answer arrives, or if it is no longer needed:
 bmn withdraw deploy-approval
 ```
@@ -996,6 +996,29 @@ ends, so its `.pub` beside it stays readable. This is a floor with no parser, fo
 
 BMN also names, in `bmn doctor`, an allow row that can run any program (Story 102.14), because an allow row runs outside the
 app's limits with no prompt.
+
+### A question says why only he can decide
+
+While the owner is here, an agent's own question must start with the reason only he can decide (Epic 103, D6):
+`Go:`, `Money:`, `Scope:`, `Privacy:`, `Interface:`, `Irreversible:`, `Access:` (it needs his hands, a login or a
+device), `Taste:` (a design or wording he would want to weigh in on) or `Asked:` (he asked to be asked). A call
+with several questions needs the word on each.
+
+- **A bare question goes back once.** The app's question tool in a main conversation (Claude Code's
+  `AskUserQuestion`, Codex's `request_user_input` and `request_user_input_async`) is refused by the hook before it
+  opens, and `bmn ask` from a session (`--kind question` or `permission`) exits 1; no card opens, and the agent gets
+  fixed words: if it is his to decide, add the word and ask again; otherwise decide on the recommendation within
+  existing authority and say so in one line; the refusal authorizes nothing.
+- **Asked again unchanged, it reaches him**, as today, so a legitimate card is never lost and no loop forms. BMN
+  remembers a hash of the questions per conversation, in memory only; after a restart a question goes back once more.
+- **Away or leaving, nothing changes here:** the Away refusal comes first for the blocking tools, and `bmn ask` takes
+  any card, because a draft or a card for the morning needs no word.
+- **Where it does not reach:** a sub-agent's question, a teammate, a shell outside BMN, a BMN that cannot be reached,
+  a prompt BMN could not read, OpenCode, `review` and `notice` cards and the owner's own `bmn ask`. A `bmn ask` from an
+  in-process sub-agent cannot be told from its parent's, so it gets the same treatment.
+- **The limit:** an agent can pick a word falsely. A word is a claim, not a check; the counts and his reading of them
+  are the check, not a classifier. `interruptions.py` prints questions by word, hand-backs and repeats per run. The
+  count (`question-hand-backs-v1`, the newest 2,000) holds who and when, never a question's text.
 
 ### The Away grant
 
@@ -3192,7 +3215,7 @@ Manual checkpoint cards need explicit choices; BMN does not infer buttons from p
 (`'["Continue","Wait"]'`) or of `{label, description}` objects is the same as the full form (Story 76.8):
 
 ```sh
-bmn ask synthetic-checkpoint "Continue the synthetic check?" --choices-json \
+bmn ask synthetic-checkpoint "Go: continue the synthetic check?" --choices-json \
   '{"options":[{"label":"Continue","description":null},{"label":"Wait","description":"Keep it pending"}]}'
 ```
 

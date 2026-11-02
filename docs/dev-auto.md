@@ -49,7 +49,10 @@ without his explicit approval for that worktree; needed evidence is preserved fi
 
 An epic planned from Epic 90 on lists its **Run needs** ([planning.md](planning.md)): extra repair rounds
 per boundary, the criteria or stories that may be deferred and when, a money cap, and named actions for an
-Away card. Your go on the epic approves them as your instruction for its runs, day or night. The planner
+Away card, an exact command or message included. From Epic 103 on it also lists **Prepared**: what the run
+will need from outside itself, each with how and when it was checked. The run runs each check itself at its
+start and at your departure, as its own tool call (BMN never runs one); a failed need or an owner step not
+done parks only the stories that name it, and everything else continues. Your go on the epic approves them as your instruction for its runs, day or night. The planner
 records it the moment you give it, before any run, with `bmn plan go` ([planning.md](planning.md), "Recording
 his go"): one plan commit moving the epic's row to `ready` with `go YYYY-MM-DD`, naming your answer and the
 SHA-256 of the Run needs and Decisions you were shown. A run reads them with the skill's `scripts/run_needs.py`

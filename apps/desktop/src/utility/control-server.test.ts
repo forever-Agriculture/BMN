@@ -1881,6 +1881,16 @@ describe('away snapshot and refusal (Story 76.4)', () => {
     expectError(await agent.request('attention.open', { ...question, requestKey: 'mine', origin: 'cli', prompt: undefined, awayRefusable: true }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('attention.open', { ...question, sessionId: 'session-1', awayRefusable: true }), ERROR_CODES.invalidArgument)
     expectError(await agent.request('attention.open', { ...question, awayRefusable: 'yes' }), ERROR_CODES.invalidArgument)
+    // Story 103.6: the reason check is a session's own, by the hook's word or by `bmn ask`'s origin; the owner's card is never checked.
+    expect((await agent.request('attention.open', { ...question, requestKey: 'hooked', reasonRefusable: true })).error).toBeUndefined()
+    expect((fixture.handlers.openAttention.mock.calls.at(-1) as unknown[] | undefined)?.[0]).toMatchObject({ reasonRefusable: true })
+    expectError(await agent.request('attention.open', { ...question, requestKey: 'mine-2', origin: 'cli', prompt: undefined, reasonRefusable: true }), ERROR_CODES.invalidArgument)
+    expect((await agent.request('attention.open', { requestKey: 'mine-3', kind: 'permission', title: 'Deploy?', origin: 'cli' })).error).toBeUndefined()
+    expect((fixture.handlers.openAttention.mock.calls.at(-1) as unknown[] | undefined)?.[0]).toMatchObject({ reasonRefusable: true })
+    expect((await agent.request('attention.open', { requestKey: 'mine-4', kind: 'notice', title: 'FYI', origin: 'cli' })).error).toBeUndefined()
+    expect((fixture.handlers.openAttention.mock.calls.at(-1) as unknown[] | undefined)?.[0]).not.toHaveProperty('reasonRefusable')
+    expect((await owner.request('attention.open', { sessionId: 'session-1', requestKey: 'his', kind: 'question', title: 'Yours?', origin: 'cli' })).error).toBeUndefined()
+    expect((fixture.handlers.openAttention.mock.calls.at(-1) as unknown[] | undefined)?.[0]).not.toHaveProperty('reasonRefusable')
   })
 
   it('takes a printed report from a session only, for a named conversation and revision', async () => {
