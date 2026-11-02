@@ -12,6 +12,8 @@ function problemWords(problem) {
     if (cause === 'unlisted-managed') return `${app} has a tool from its managed settings that BMN does not list`
     if (cause === 'guard:does-not-answer') return `${app}'s command guard does not answer`
     if (cause === 'rules:missing') return `${app}'s own refusal rules are missing`
+    if (cause === 'approval:not-approved') return `${app} does not run some of BMN's hook entries`
+    if (cause === 'approval:unverified') return `BMN could not ask ${app} whether it runs BMN's hook entries`
     if (cause.startsWith('missing:')) return `${app}'s ${cause.slice(8)} hook is missing`
     if (cause === 'older-wording:plugin') return `${app}'s plugin is an older wording`
     return `${problem.reason} in ${app}: ${cause}`
@@ -21,7 +23,9 @@ function problemWords(problem) {
 
 const FIXES = {
   'guard:does-not-answer': 'Its holds are missed while the app\'s own rules still refuse the worst. Run `bmn hooks check`, then `bmn hooks install`.',
-  'rules:missing': 'Run `bmn hooks install`.'
+  'rules:missing': 'Run `bmn hooks install`.',
+  'approval:not-approved': 'It runs a new or changed entry only once you approve it, so its guard and BMN\'s view of its sessions are off. Run /hooks in Codex.',
+  'approval:unverified': 'Run `bmn hooks check`; it says why. If Codex still cannot answer, treat its guard as off.'
 }
 
 /** An app's own doctor says what BMN could tell from it: what was checked, what could not be, and whether it needs him. */

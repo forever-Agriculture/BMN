@@ -61,6 +61,15 @@ describe('bmn doctor by default (102.12)', () => {
     expect(words).toContain('Claude Code\'s own refusal rules are missing. Run `bmn hooks install`.')
   })
 
+  it('says what Codex said about BMN\'s entries with what to do (102.4)', () => {
+    const view = { ...VIEW, rows: [{ check: 'hooks', state: 'problems', stale: false, leftovers: [], problems: [
+      { code: 'hook-check', item: 1, app: 'codex', cause: 'approval:not-approved', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' },
+      { code: 'hook-check', item: 2, app: 'codex', cause: 'approval:unverified', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }] }] }
+    const words = doctorText(view)
+    expect(words).toContain('Codex does not run some of BMN\'s hook entries. It runs a new or changed entry only once you approve it, so its guard and BMN\'s view of its sessions are off. Run /hooks in Codex.')
+    expect(words).toContain('BMN could not ask Codex whether it runs BMN\'s hook entries. Run `bmn hooks check`; it says why.')
+  })
+
   it('says the wider line for a clean run', () => {
     expect(doctorText({ ...VIEW, allWell: true, rows: VIEW.rows.slice(0, 1) })).toBe('All well · 1 checks passed')
   })

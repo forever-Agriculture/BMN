@@ -33,6 +33,10 @@ export const PROBLEMS = Object.freeze({
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const HOOK_FLOOR_CAUSES = Object.freeze(['guard:does-not-answer', 'rules:missing'])
+/** Story 102.4: what Codex said about BMN's entries; no other app has this. */
+const HOOK_APPROVAL_CAUSES = Object.freeze(['approval:not-approved', 'approval:unverified'])
+/** A guard's standing that another finding, or no finding, already says. */
+const GUARD_SAID_ELSEWHERE = Object.freeze(['holds', 'not-approved', 'unverified', 'no-codex'])
 /**
  * The state words of BMN's rules, skills and tools checks: the fine ones and those a finding names as its cause, never an
  * entry's name or path (96 Astra review and recheck). Together they are the protocol's `RULES_TARGET_STATES`,
@@ -45,6 +49,7 @@ export const STATE_WORDS = Object.freeze({
 })
 /** Whether a finding of BMN's own area checks may name this cause: a closed vocabulary per check, and per app for hooks. */
 export function causeAllowed(code, app, cause) {
+  if (code === 'hook-check' && HOOK_APPROVAL_CAUSES.includes(cause)) return app === 'codex'
   if (code === 'hook-check' && HOOK_FLOOR_CAUSES.includes(cause)) return ['claude', 'codex'].includes(app) || (app === 'opencode' && cause === 'rules:missing')
   if (code === 'hook-check') return Object.hasOwn(HOOK_EVENTS, app) && (cause === 'older-wording:plugin' ? app === 'opencode'
     : cause.startsWith('missing:') && [...HOOK_EVENTS[app], ...(app === 'codex' ? CODEX_OPTIONAL_HOOKS : [])].includes(cause.slice(8)))
@@ -207,7 +212,8 @@ export function parseBmnDoctor(check, text, exitCode) {
       }
       if (required.some(event => !seen.has(event))) partial = true
       // Stories 102.3 and 102.4: a guard that does not answer, or the app's own rules gone. A report from before them says nothing.
-      if (object(app.commandGuard) && app.commandGuard.state !== 'holds') add('hook-check', 'guard:does-not-answer')
+      if (object(app.commandGuard) && !GUARD_SAID_ELSEWHERE.includes(app.commandGuard.state)) add('hook-check', 'guard:does-not-answer')
+      if (object(app.approval) && ['not-approved', 'unverified'].includes(app.approval.state)) add('hook-check', `approval:${app.approval.state}`)
       if (typeof app.nativeRules === 'string' && app.nativeRules !== 'present') add('hook-check', 'rules:missing')
     }
   } else if (['skills', 'tools'].includes(check) && object(data) && Array.isArray(data.apps) && data.apps.length > 0) {

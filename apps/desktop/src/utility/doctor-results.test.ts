@@ -59,6 +59,17 @@ describe('doctor result projection', () => {
     expect(parseClaudeDoctor('Claude Code doctor\nRunning: native (2.1.303)\nNo issues found', 0)).toEqual({ state: 'passed', problems: [] })
   })
 
+  it('names what Codex said about BMN\'s entries as its own finding, and a guard that does not answer as before (102.4)', () => {
+    const causes = (app: Record<string, unknown>): unknown[] => parseBmnDoctor('hooks', JSON.stringify({ ok: false, agents: [
+      { agent: 'codex', events: [{ event: 'Stop', state: 'wired', optional: false }], ...app }] }), 1).problems.filter((row) => row.code === 'hook-check').map((row) => row.cause)
+    expect(causes({ commandGuard: { state: 'not-approved' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse'] } })).toEqual(['approval:not-approved'])
+    expect(causes({ commandGuard: { state: 'unverified', reason: 'r' }, approval: { state: 'unverified', reason: 'r' } })).toEqual(['approval:unverified'])
+    expect(causes({ commandGuard: { state: 'holds' }, approval: { state: 'not-approved', entries: 1, events: ['Stop'] } })).toEqual(['approval:not-approved'])
+    expect(causes({ commandGuard: { state: 'holds' }, approval: { state: 'approved' } })).toEqual([])
+    expect(causes({ commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' } })).toEqual([])
+    expect(causes({ commandGuard: { state: 'does-not-answer', reason: 'r' } })).toEqual(['guard:does-not-answer'])
+  })
+
   it('projects BMN checks, including names and failures, before the same sinks', () => {
     expect(parseBmnDoctor('rules', JSON.stringify({ ok: false, targets: [{ harness: 'claude', state: 'missing', path: SECRET, detail: SECRET }, { harness: 'codex', state: 'current' }, { harness: 'opencode', state: 'current' }] }), 1)).toEqual({ state: 'problems', problems: [{ code: 'rules-check', item: 1, app: 'claude', cause: 'missing' }] })
     const hooks = parseBmnDoctor('hooks', JSON.stringify({ agents: [{ events: [{ state: SECRET, name: SECRET }] }] }), 1)
@@ -94,6 +105,11 @@ describe('doctor result projection', () => {
       expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app, cause }] }), `${app} ${cause}`).toBeNull()
     }
     expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }] })).not.toBeNull()
+    // Story 102.4: only Codex answers for its approvals.
+    for (const cause of ['approval:not-approved', 'approval:unverified']) {
+      expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'codex', cause }] }), cause).not.toBeNull()
+      expect(projectedResult({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'claude', cause }] }), cause).toBeNull()
+    }
     // An older stored result without a cause stays valid; Health counts it by itself.
     expect(projectedResult({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex' }] })).toEqual({ state: 'problems', problems: [{ code: 'tool-check', item: 1, app: 'codex' }] })
   })

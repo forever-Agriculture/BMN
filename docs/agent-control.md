@@ -731,8 +731,8 @@ written as `install` writes it and checked once more against the bytes and the l
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
 added and left, with why. Integrations › Health › **Hooks** shows what the start found, an app with an entry left first,
-without the files' contents and without a button. Codex still asks once, in `/hooks`, before it runs entries it has not
-seen.
+without the files' contents and without a button. Codex still asks, in `/hooks`, before it runs an entry it has not seen
+or whose text, matcher or timeout changed; the row shows Needs you until it does (below).
 
 **By hand**, also with BMN closed:
 
@@ -752,9 +752,15 @@ Codex both commands read the file the app reads, `~/.claude/settings.json` and `
 under `CLAUDE_CONFIG_DIR` or `CODEX_HOME`; `--file PATH` replaces it, for tests.
 
 Both commands say what is **configured**: never that a hook fired (the session's **Hook events…** list shows that), nor
-that it will run (BMN's entry does nothing while BMN is not running). Codex loads its hook file strictly, so a mistake
-anywhere in it can stop every hook; BMN does not check that, and every Codex report ends by saying so: run `/hooks` in
-Codex once, then confirm the event shows under Hook events. Session details shows the run's latest event (**Observed
+that it will run (BMN's entry does nothing while BMN is not running, the command guard's excepted). Codex is the one thing
+BMN can ask: it runs an entry only while it is enabled and approved, and it keeps the approval against a hash of the
+event, matcher, command and timeout, so **any change to an entry turns it off in Codex until he approves it again**. So
+`check` and BMN's start ask real Codex (`codex app-server`, `hooks/list`, read-only) about BMN's entries in its own file:
+an entry it will not run gives `not-approved` and Needs you, with the guard, prompt guard, messages and turn changes that
+need it said to be off; a missing list, no answer in 10 s or an answer BMN cannot read gives `unverified`, also Needs you,
+never "holds". BMN never writes that approval itself and never passes `--dangerously-bypass-hook-trust`. A test pins each
+entry's full declaration, so a change to one is a decision. Codex loads its hook file strictly, so a mistake anywhere in
+it can stop every hook; `check` then finds BMN's entries unlisted. Session details shows the run's latest event (**Observed
 by BMN**, or **Not observed in this run**), and its **Hooks in Integrations › Health** opens this section; one received
 event proves only that event reached BMN.
 
@@ -848,8 +854,8 @@ already there:
   it in place when its group holds only BMN's entry. Any other matcher on BMN's entry gates it.
 - For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`, `PostToolUse`,
   `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`, the last two with `"timeout": 3`, the
-  most Codex 0.163.0 allows there (a longer one is clamped with a warning at every start); Codex must then trust them once with
-  `/hooks`, which no command can do for you. `PreToolUse` carries queued `request_user_input_async` questions, as Codex
+  most Codex 0.163.0 allows there (a longer one is clamped with a warning at every start); Codex must then trust them with
+  `/hooks`, once and again after any change to an entry. `PreToolUse` carries queued `request_user_input_async` questions, as Codex
   has no `Notification` event. `PermissionRequest` is optional and `install` never adds it: Codex fires it before Auto
   Review decides whether you must approve, so add it only without Auto Review.
 

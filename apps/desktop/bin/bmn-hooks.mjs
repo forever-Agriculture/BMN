@@ -15,6 +15,7 @@ import { usageFailure } from './bmn-results.mjs'
 import { CODEX_RULES, codexRulesPath, missingClaudeRows, withClaudeRows } from './native-rules.mjs'
 import { openCodeFloorPlan } from './opencode-floor.mjs'
 import { guardWords, probeCommandGuard } from './hooks-floor.mjs'
+import { approvalFrom, approvalNeedsHim, approvalWords, askCodexHooks, claimWithApproval, codexHookKey, guardWithApproval } from './codex-hook-approval.mjs'
 
 export { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, holdAtTestGate, hookEventName, hookRequests, openCodeSubagent, phoneAnswerable, retiredOr, runHooks, userInputTool }
 
@@ -1072,6 +1073,41 @@ function commandGuardStanding(agent, file) {
   return { state: found.changed ? 'changed' : 'missing' }
 }
 
+/** Story 102.4: BMN's own entries in Codex's file, named as Codex names them, so its answer is read for these and no others. */
+function ownCodexEntries(path, file) {
+  const entries = []
+  for (const [event, groups] of Object.entries(isObject(file.data?.hooks) ? file.data.hooks : {})) {
+    (Array.isArray(groups) ? groups : []).forEach((group, groupAt) => {
+      (Array.isArray(group?.hooks) ? group.hooks : []).forEach((entry, entryAt) => {
+        if (!isObject(entry) || entry.type !== 'command') return
+        const state = hookEntryState(entry.command, 'codex', event)
+        if (state === 'wired' || state === 'older') entries.push({ event, key: codexHookKey(path, event, groupAt, entryAt), command: entry.command })
+      })
+    })
+  }
+  return entries
+}
+
+/**
+ * Story 102.4: whether real Codex runs BMN's entries: it runs a new or changed one only once he approves it, so the file alone
+ * cannot say. Null for a file Codex does not read (`--file`), and where the file holds none of BMN's, which the report says already.
+ */
+async function codexApproval(path) {
+  if (path !== hookFilePath('codex')) return null
+  const file = readHookFile(path, 'codex')
+  const entries = file.state === 'read' ? ownCodexEntries(path, file) : []
+  if (entries.length === 0) return null
+  const { appSearchPath, askProgram } = await import('./agents-team-forms.mjs')
+  const found = askProgram('codex')
+  if (found === null) return { state: 'no-codex' }
+  const env = { HOME: process.env.HOME ?? homedir(), PATH: appSearchPath(process.env), ...(process.env.CODEX_HOME ? { CODEX_HOME: process.env.CODEX_HOME } : {}) }
+  return approvalFrom(await askCodexHooks(found.payload, { env, cwd: env.HOME }), entries)
+}
+
+/** A report's row with what Codex said; a guard that holds proves only the entry's own text. */
+const withCodexApproval = (row, approval) => approval === null ? row
+  : { ...row, commandGuard: guardWithApproval(row.commandGuard, approval), approval }
+
 const CLAUDE_RULES_UNUSABLE = 'unusable'
 
 /** Whether the app's own rules are in place (Story 102.3); `path` is the app's hook file, read as `file`. */
@@ -1136,7 +1172,7 @@ async function hookAgentsFor(agent) {
   return [agent]
 }
 
-function describeHookCheck(report) {
+function describeHookCheck(report, asked = false) {
   const lines = [`${HOOK_AGENTS[report.agent]}  ${report.file}`]
   if (report.state === 'missing') lines.push('  the file does not exist; every event is missing')
   if (report.state === 'unreadable') lines.push(`  cannot read the file (${report.detail})`)
@@ -1162,8 +1198,8 @@ function describeHookCheck(report) {
   }
   // The limit is the same whatever the file said, so it is printed unconditionally rather than as
   // a verdict BMN has no evidence for: Codex loads its hook file strictly and BMN does not check
-  // that it will, and a hook it has never trusted does not run however it is written.
-  if (report.agent === 'codex') {
+  // that it will, and a hook it has never trusted does not run however it is written. Where Codex answered, its answer says.
+  if (report.agent === 'codex' && !asked) {
     lines.push('  Codex loads this file strictly and BMN does not check that it will, and hooks')
     lines.push('  run only once trusted: run /hooks in Codex, then confirm the event appears.')
   }
@@ -1222,7 +1258,7 @@ async function runHooks(argv) {
 
 async function checkHooksCommand(agents, pathFor, asJson) {
   const reports = agents.map((name) => checkHooks(name, pathFor(name)))
-  const ok = reports.every((report) => report.state === 'read' && report.missing.length === 0)
+  const wired = reports.every((report) => report.state === 'read' && report.missing.length === 0)
   // Story 60.8: what the prompt guard does in each app right now, read from the approved team on disk.
   let guard = null
   try {
@@ -1245,7 +1281,16 @@ async function checkHooksCommand(agents, pathFor, asJson) {
     const file = readHookFile(report.file, report.agent)
     return [report.agent, { commandGuard: commandGuardStanding(report.agent, file), nativeRules: nativeRules(report.agent, report.file, file) }]
   }))
-  const more = (report) => ({ ...(standing.has(report.agent) ? { guard: standing.get(report.agent), messages: messages.get(report.agent) } : {}), ...(turns.has(report.agent) ? { turnChanges: turns.get(report.agent) } : {}) })
+  // Story 102.4: what Codex says about BMN's entries, and what each line below may then claim.
+  let approval = null
+  for (const report of reports) {
+    if (report.agent !== 'codex') continue
+    approval = await codexApproval(report.file)
+    if (approval !== null) floor.set('codex', withCodexApproval(floor.get('codex'), approval))
+  }
+  const ok = wired && !approvalNeedsHim(approval)
+  const claim = (report, line, event) => report.agent === 'codex' ? claimWithApproval(line, approval, event) : line
+  const more = (report) => ({ ...(standing.has(report.agent) ? { guard: claim(report, standing.get(report.agent), 'UserPromptSubmit'), messages: claim(report, messages.get(report.agent), 'PostToolUse') } : {}), ...(turns.has(report.agent) ? { turnChanges: claim(report, turns.get(report.agent), 'UserPromptSubmit') } : {}) })
   if (asJson) {
     // This owner command finishes synchronously; a pipe can lose an asynchronous stdout write
     // before the CLI exits. The desktop checker reads that pipe, so finish the report first.
@@ -1258,14 +1303,16 @@ async function checkHooksCommand(agents, pathFor, asJson) {
     return [
       ...(held.commandGuard === undefined ? [] : [guardWords(held.commandGuard)]),
       `native rules ${held.nativeRules}`,
+      ...(held.approval === undefined ? [] : [approvalWords(held.approval)]),
       // His own word on a row stays his; a floor row he allows is not refused, and he should see that.
       ...(held.hisRows ?? []).map((own) => `your own rule keeps ${own.map}: ${own.row} at ${String(own.word)}, not refused`)
     ]
   }
-  const lines = reports.map((report) => `${describeHookCheck(report)}${[...Object.values(more(report)), ...floorLines(report)].map((line) => `\n  ${line}`).join('')}`)
-  lines.push(ok
+  const lines = reports.map((report) => `${describeHookCheck(report, approval !== null && approval.state !== 'unverified')}${[...Object.values(more(report)), ...floorLines(report)].map((line) => `\n  ${line}`).join('')}`)
+  lines.push(wired
     ? 'Every hook BMN expects is wired. This is what is configured, not proof that a hook fired.'
     : 'Run `bmn hooks install <agent>` to add the missing entries. This reports configuration, not that a hook fired.')
+  if (approval?.state === 'not-approved') lines.push('Codex runs a new or changed entry only once you approve it: run /hooks in Codex, then `bmn hooks check`.')
   process.stdout.write(`${lines.join('\n\n')}\n`)
   return ok ? 0 : 1
 }
@@ -1803,7 +1850,9 @@ async function installAbsentCommand(agents, pathFor, asJson) {
         continue
       }
       try {
-        results.push({ agent, file: path, ...(agent === 'opencode' ? { ...absentOpenCode(path), nativeRules: openCodeFloor(path).state } : absentClaudeOrCodex(agent, path)) })
+        const row = { agent, file: path, ...(agent === 'opencode' ? { ...absentOpenCode(path), nativeRules: openCodeFloor(path).state } : absentClaudeOrCodex(agent, path)) }
+        // Story 102.4: once the file holds what it will hold, what Codex says about it. It answers for the start's report, after the install.
+        results.push(agent === 'codex' && row.commandGuard !== undefined ? withCodexApproval(row, await codexApproval(path)) : row)
       } catch (error) {
         const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
         results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail, ...(error.earlier ? { earlier: error.earlier } : {}) })
@@ -1829,7 +1878,8 @@ async function installAbsentCommand(agents, pathFor, asJson) {
         ...result.left.map((row) => `  ${row.event}: ${LEFT_WHY[row.why] ?? row.why}, left as it is${row.detail ? ` (${row.detail})` : ''}`),
         ...(result.detail ? [`  ${result.detail}; left as it is`] : []),
         ...(result.backups ?? []).map((backup) => `  backup: ${backup}`),
-        ...(result.commandGuard ? [`  ${guardWords(result.commandGuard)}`, `  native rules ${result.nativeRules}`] : [])
+        ...(result.commandGuard ? [`  ${guardWords(result.commandGuard)}`, `  native rules ${result.nativeRules}`] : []),
+        ...(result.approval ? [`  ${approvalWords(result.approval)}`] : [])
       ]
       return [head, ...body].join('\n')
     })

@@ -2366,6 +2366,17 @@ describe('the hook report at BMN\'s start (102.4)', () => {
     expect(app({ nativeRules: 'unusable' })).toMatchObject({ nativeRules: 'unusable' })
   })
 
+  it('carries what Codex said about BMN\'s entries, its reason cut short (102.4)', () => {
+    expect(app({ commandGuard: { state: 'not-approved' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse', 7] } })).toMatchObject({
+      commandGuard: { state: 'not-approved' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse'] } })
+    expect(app({ commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' } })).toMatchObject({ commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' } })
+    const unverified = app({ commandGuard: { state: 'unverified', reason: 'r' }, approval: { state: 'unverified', reason: `r${'x'.repeat(400)}` } })?.approval
+    expect(unverified).toMatchObject({ state: 'unverified' })
+    expect(unverified?.state === 'unverified' ? unverified.reason : '').toHaveLength(200)
+    expect(app({ approval: { state: 'not-approved', entries: 'many' } })).not.toHaveProperty('approval')
+    expect(app({ approval: { state: 'whatever' } })).not.toHaveProperty('approval')
+  })
+
   it('says nothing of a standing it cannot read', () => {
     const row = app({ commandGuard: { state: 'whatever' }, nativeRules: 'whatever' })
     expect(row).not.toHaveProperty('commandGuard')

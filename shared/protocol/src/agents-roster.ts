@@ -830,7 +830,9 @@ export interface HookAppAtStart {
   left: { event: string; why: HookLeftWhy }[]
   why?: HookLeftWhy
   /** Whether the command guard answered when BMN asked it at start (Story 102.4); absent for an app it does not guard. */
-  commandGuard?: { state: 'holds' | 'does-not-answer' | 'changed' | 'missing'; reason?: string }
+  commandGuard?: { state: 'holds' | 'does-not-answer' | 'changed' | 'missing' | 'not-approved' | 'unverified' | 'no-codex'; reason?: string }
+  /** What Codex itself says about BMN's entries (Story 102.4): it runs a new or changed one only once he approves it. */
+  approval?: { state: 'approved' | 'no-codex' } | { state: 'not-approved'; entries: number; events: string[] } | { state: 'unverified'; reason: string }
   /** Whether the app's own rules are in place (Story 102.3). */
   nativeRules?: 'present' | 'missing' | 'unusable'
 }

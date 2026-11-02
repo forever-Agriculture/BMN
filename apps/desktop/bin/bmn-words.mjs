@@ -210,9 +210,9 @@ check   reads each agent's own hook file and prints one line per event BMN expec
         one of the three is printed under the event, and so is one inside a matcher.
         An entry this harness would not run - under Claude Code, one whose timeout
         is not a positive number - is never counted wired, whatever its command.
-        BMN does not check that the harness will load the file: every Codex report
-        says so, and says to trust the hooks once with /hooks.
-        Exit 0 when nothing is missing, 1 otherwise.
+        Codex runs a new or changed entry only once approved with /hooks, so check asks
+        real Codex and says which of BMN's entries it does not run, or that it could not ask.
+        Exit 0 when nothing is missing or waits for approval, 1 otherwise.
 install previews the exact target and diff on stderr and asks Yes (default No) before
         writing. A non-interactive install needs --yes; --json alone does not approve.
         It adds only the missing entries, next to the hooks already registered for that

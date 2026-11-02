@@ -880,6 +880,13 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(broken.lines).toEqual(['Command guard does not answer · command guard cannot load', 'The app\'s own rules · missing'])
     expect(hookRowWords({ ...row, commandGuard: { state: 'changed' } })).toMatchObject({ needs: true, lines: ['Command guard · its entry is not one BMN wrote, so BMN did not run it'] })
     expect(hookRowWords({ ...row, nativeRules: 'unusable' })).toMatchObject({ needs: true, lines: ['The app\'s own rules · its settings cannot take them'] })
+    // What Codex itself says: one line, with the guard's standing not repeated; no Codex and approved entries need nothing.
+    expect(hookRowWords({ ...row, commandGuard: { state: 'not-approved' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse'] } })).toMatchObject({
+      needs: true, lines: ['Codex does not run 8 of BMN\'s entries until you approve them · run /hooks in Codex'] })
+    expect(hookRowWords({ ...row, commandGuard: { state: 'unverified', reason: 'no answer in 10 s' }, approval: { state: 'unverified', reason: 'no answer in 10 s' } })).toMatchObject({
+      needs: true, lines: ['BMN could not ask Codex whether it runs BMN\'s entries · no answer in 10 s'] })
+    expect(hookRowWords({ ...row, commandGuard: { state: 'holds' }, approval: { state: 'approved' }, nativeRules: 'present' })).toMatchObject({ needs: false, lines: [] })
+    expect(hookRowWords({ ...row, commandGuard: { state: 'no-codex' }, approval: { state: 'no-codex' }, nativeRules: 'present' })).toMatchObject({ needs: false, lines: [] })
   })
 
   it('says what BMN found and did in each app\'s hook file at start, failure first, with no button (Story 75.9)', () => {

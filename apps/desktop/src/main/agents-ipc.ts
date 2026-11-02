@@ -837,8 +837,18 @@ function savePlanFrom(result: SavePlan, text: string, generation: Generation | n
 /** The command guard's standing as the install printed it; anything else says nothing. */
 function commandGuardFrom(value: unknown): Pick<HookAppAtStart, 'commandGuard'> {
   const standing = value as { state?: unknown; reason?: unknown } | null | undefined
-  if (standing?.state !== 'holds' && standing?.state !== 'does-not-answer' && standing?.state !== 'changed' && standing?.state !== 'missing') return {}
+  if (standing?.state !== 'holds' && standing?.state !== 'does-not-answer' && standing?.state !== 'changed' && standing?.state !== 'missing' &&
+    standing?.state !== 'not-approved' && standing?.state !== 'unverified' && standing?.state !== 'no-codex') return {}
   return { commandGuard: { state: standing.state, ...(typeof standing.reason === 'string' ? { reason: standing.reason.slice(0, 200) } : {}) } }
+}
+
+/** What Codex said about BMN's entries as the install printed it; anything else says nothing. */
+function approvalFrom(value: unknown): Pick<HookAppAtStart, 'approval'> {
+  const said = value as { state?: unknown; entries?: unknown; events?: unknown; reason?: unknown } | null | undefined
+  if (said?.state === 'approved' || said?.state === 'no-codex') return { approval: { state: said.state } }
+  if (said?.state === 'unverified') return { approval: { state: 'unverified', reason: typeof said.reason === 'string' ? said.reason.slice(0, 200) : 'no reason given' } }
+  if (said?.state !== 'not-approved' || typeof said.entries !== 'number' || !Array.isArray(said.events)) return {}
+  return { approval: { state: 'not-approved', entries: said.entries, events: said.events.filter((event): event is string => typeof event === 'string' && event.length <= 64) } }
 }
 
 /** What `hooks install --absent --json` printed, as Health › Hooks shows it; a report BMN cannot read is a failed check. */
@@ -864,6 +874,7 @@ export function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
       ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) }),
       ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) }),
       ...commandGuardFrom(row.commandGuard),
+      ...approvalFrom(row.approval),
       ...(row.nativeRules === 'present' || row.nativeRules === 'missing' || row.nativeRules === 'unusable' ? { nativeRules: row.nativeRules } : {})
     })
   }
