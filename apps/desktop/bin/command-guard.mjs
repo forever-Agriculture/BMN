@@ -366,7 +366,7 @@ function mergeHold(list) {
 }
 
 /** docker's and podman's options that take a separate value before the subcommand. */
-export const DOCKER_VALUES = ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
+const DOCKER_VALUES = ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
   '--url', '--identity', '--connection', '--root', '--runroot', '--storage-driver', '--cgroup-manager', '--conmon', '--events-backend',
   '--hooks-dir', '--imagestore', '--network-cmd-path', '--network-config-dir', '--out', '--runtime', '--runtime-flag', '--ssh', '--storage-opt',
   '--tmpdir', '--volumepath', '--cdi-spec-dir', '--db-backend', '--module']

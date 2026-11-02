@@ -1049,15 +1049,17 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   most 2,300 characters of them, so a longer one goes as a draft on a `bmn ask` card. `grant ask` refuses, naming
   why: a chain, pipe, redirect, substitution, variable, wildcard, wrapper, assignment or `sh -c`; whatever the
   command guard holds; a deletion, release, publish, stopping a process, a credential, `bmn` itself; a folder that
-  is not there; a text shaped like a credential. It reads each of those through a tool's own options and aliases
-  (`git -C x rm`, `docker container remove`, `curl -sXDELETE`), and refuses a one-command git config (`git -c`), since
-  that can name what runs. A script the command runs from a folder the agent can write to is
+  is not there; a text shaped like a credential. It reads git's and gh's verb past the few options a card may use
+  (`git -C x`, `-P`, `--no-pager`, `gh -R o/r`), and refuses any other option before it, since `git -c` can name what
+  runs and an option's value can hide the verb. Docker, Podman and Compose are not read as words at all: a publish needs
+  no such verb (`docker buildx build --output=type=registry`), so a step of theirs goes in a script the card pins. A script the command runs from a folder the agent can write to is
   named with its SHA-256, shown whole on the card, and `grant use` hashes it right before recording and refuses when it
   changed or when the words now select another file (a GNUmakefile put beside the pinned Makefile). The store compares
   the hash with the answer in force when it records, so a card answered in between refuses the use. Where the words do
   not say for sure which file runs, `grant ask` refuses rather than guesses: an interpreter's options before its
-  script, a runner told to pick among several files (`pnpm -r`, `--filter`, two `-f`), a writable interpreter by its
-  path. A program found on the PATH is taken as installed, even in a folder he can write to. For each
+  script, a writable interpreter by its path, `make` or `just` with any option but its file, folder and a few plain
+  flags, or with a variable (`make SHELL=./x`). npm, pnpm and yarn read only as `NAME run SCRIPT -- ARGS`, from one
+  folder, for a script their package.json has. A refusal costs little: the step goes in a pinned script or waits. A program found on the PATH is taken as installed, even in a folder he can write to. For each
   use `grant use` prints the exact text to run or send; anything else waits. `bmn policy --repo` lists both for
   every repository, because they belong to none, which is what Codex's Auto Review reads
   ([app-measures.md](../plan/references/103/app-measures.md)).

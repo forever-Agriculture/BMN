@@ -1771,7 +1771,7 @@ describe('Away grant (Story 84.3)', () => {
       expect(refused.error?.message).toContain(words)
     }
     expect(fixture.handlers.askGrant).not.toHaveBeenCalled()
-    expect((await agent.request('grant.ask', { runId: 'r', card: { ...CARD, terms: [term('pnpm run lint')] } })).error).toBeUndefined()
+    expect((await agent.request('grant.ask', { runId: 'r', card: { ...CARD, terms: [term('git status')] } })).error).toBeUndefined()
     expect(fixture.handlers.askGrant).toHaveBeenCalledTimes(1)
   })
 

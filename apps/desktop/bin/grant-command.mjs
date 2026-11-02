@@ -3,12 +3,14 @@
 // Run in BMN when a card is asked, never when a stored card is read: a guard that holds more tomorrow must not make today's
 // record unreadable. It reads the words only and runs nothing. A runner's own file (a Makefile, a package.json) is pinned like a
 // script; what that file then runs, and an alias in his own config, are the limits docs/agent-control.md names. Where the words
-// do not say for sure which file runs, it refuses rather than guesses (the full review, finding 2).
+// do not say for sure which file runs, it refuses rather than guesses: a runner is read by a short grammar and any other option
+// refuses, and Docker is not read as words at all (the epic's consultant, after a table of options failed twice). A refusal costs
+// little: the agent puts the step in a script the card pins, or it waits for the morning.
 import { createHash } from 'node:crypto'
 import { accessSync, constants, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { DOCKER_VALUES, GH_VALUES, GIT_VALUES, heldCommand, simpleCommandWords, subcommand } from './command-guard.mjs'
+import { GH_VALUES, GIT_VALUES, heldCommand, simpleCommandWords, subcommand } from './command-guard.mjs'
 import { namesSecretFile } from './secret-list.mjs'
 
 /** Programs that take a script as their first argument. */
@@ -18,23 +20,20 @@ const INLINE_CODE = /^-(c|e|p|-eval|-print|-command)$/
 const VERSION_ONLY = /^(-v|-V|--version|-h|--help)$/
 const PIN_LIMIT_BYTES = 16 * 1024 * 1024
 /** The guard's own tables: each tool's options that take the next word as their value, before its verb. */
-const GLOBAL_OPTIONS = { git: GIT_VALUES, gh: GH_VALUES, docker: DOCKER_VALUES, podman: DOCKER_VALUES }
+const GLOBAL_OPTIONS = { git: GIT_VALUES, gh: GH_VALUES }
+/** Those a card may use: anything else before the verb can change what runs, or hide the verb behind an option's value. */
+const GIT_OWN = { values: ['-C'], flags: ['-P', '--no-pager'] }
+const GH_OWN = { values: ['-R', '--repo'], flags: [] }
 /**
- * A runner's own file decides what it runs, so a writable one is pinned like a script (D7; the epic pre-review). Each says how
- * it is told which file and which folder, and which options make it pick among several; `above` walks up to find it, as npm and
- * just do; `stop` are short options that take a value, so a later letter in that word is not an option.
+ * A runner's own file decides what it runs, so a writable one is pinned like a script (D7; the epic pre-review). What make and
+ * just read: how each is told its file and folder, flags that take no value; `above` walks up to find it, as just does.
  */
-const NPM_FAMILY = {
-  names: ['package.json'], above: true, fileLong: [], fileShort: '', folderLong: ['--prefix', '--dir', '--cwd'], folderShort: 'C', stop: '',
-  several: ['-w', '--workspace', '--workspaces', '-ws', '--filter', '-F', '-r', '--recursive', '-g', '--global', 'workspace', 'workspaces']
+const FILE_RUNNERS = {
+  make: { names: ['GNUmakefile', 'makefile', 'Makefile'], above: false, fileLong: ['--file', '--makefile'], fileShort: 'f', folderLong: ['--directory'], folderShort: 'C', flags: 'sknBw', longFlags: ['--silent', '--keep-going', '--dry-run', '--always-make'], jobs: true },
+  just: { names: ['justfile', 'Justfile', '.justfile'], above: true, fileLong: ['--justfile'], fileShort: 'f', folderLong: ['--working-directory'], folderShort: 'd', flags: '', longFlags: [], jobs: false }
 }
-const RUNNERS = {
-  make: { names: ['GNUmakefile', 'makefile', 'Makefile'], above: false, fileLong: ['--file', '--makefile'], fileShort: 'f', folderLong: ['--directory'], folderShort: 'C', stop: 'IjloOW', several: [] },
-  just: { names: ['justfile', 'Justfile', '.justfile'], above: true, fileLong: ['--justfile'], fileShort: 'f', folderLong: ['--working-directory'], folderShort: 'd', stop: '', several: [] },
-  npm: NPM_FAMILY,
-  pnpm: NPM_FAMILY,
-  yarn: NPM_FAMILY
-}
+/** The one folder option each package manager is read with, exactly; `run SCRIPT` is all else, with arguments after `--`. */
+const PACKAGE_FOLDER = { npm: ['--prefix'], pnpm: ['-C', '--dir'], yarn: ['--cwd'] }
 
 /** A project's own secrets, beyond his machine's list: `.env` and `.env.production`, not the examples checked in beside them. */
 const PROJECT_SECRET = /(^|\/)\.env(\.(?!example$|sample$|template$)[^/]*)?$/
@@ -52,21 +51,18 @@ function resolved(path, folder) {
 const isFile = (path) => { try { return statSync(path).isFile() } catch { return false } }
 
 const GIT_DELETING = /^(rm|clean|prune|gc|filter-branch|filter-repo)$/
-const DOCKER_DELETING = /^(rm|rmi|remove|prune|down)$/
-/** Their subcommands whose later words belong to a program inside a container (the guard's own reading). */
-const DOCKER_RUNS = /^(run|exec|create|cp|commit)$/
 const PUBLISHERS = /^(cargo|poetry|vsce|ovsx|uv|hatch|flit|deno)$/
 
 /** What git's own words delete or discard, whatever option comes first. */
 function gitNever(args, has, folder) {
-  const [first, second] = args
+  const [first] = args
   if (GIT_DELETING.test(first ?? '')) return 'a deletion'
   if (first === 'credential') return 'a credential'
   if (first === 'branch' && args.some((word) => /^(-[a-zA-Z]*[dD][a-zA-Z]*|--delete)$/.test(word))) return 'a deletion'
   if (first === 'tag' && args.length > 1 && !has('-l', '--list')) return 'a release tag'
-  if (first === 'worktree' && (second === 'remove' || second === 'prune')) return 'a deletion'
-  if (first === 'reflog' && (second === 'expire' || second === 'delete')) return 'a deletion'
-  if (first === 'remote' && (second === 'remove' || second === 'rm')) return 'a deletion'
+  if (first === 'worktree' && has('remove', 'prune')) return 'a deletion'
+  if (first === 'reflog' && has('expire', 'delete')) return 'a deletion'
+  if (first === 'remote' && has('remove', 'rm')) return 'a deletion'
   if ((first === 'update-ref' || first === 'symbolic-ref') && has('-d', '--delete')) return 'a deletion'
   if (first === 'reset' && has('--hard', '--merge', '--keep')) return 'a deletion of uncommitted work'
   if (first === 'restore') return 'a deletion of uncommitted work'
@@ -76,8 +72,17 @@ function gitNever(args, has, folder) {
     if (has('--', '.', '-f', '--force')) return 'a deletion of uncommitted work'
     if (args.slice(1).some((word) => !word.startsWith('-') && isFile(resolved(word, folder)))) return 'a deletion of uncommitted work'
   }
-  if (first === 'stash' && (second === 'drop' || second === 'clear')) return 'a deletion'
+  if (first === 'stash' && has('drop', 'clear')) return 'a deletion'
   return null
+}
+
+/** Whether a tool's own words before its verb are only what a card may use. */
+function ownOptionsRead(own, { values, flags }) {
+  for (let index = 0; index < own.length; index += 1) {
+    if (values.includes(own[index])) index += 1
+    else if (!flags.includes(own[index]) && !values.some((option) => option.startsWith('--') && own[index].startsWith(`${option}=`))) return false
+  }
+  return true
 }
 
 /** Which of GRANT_NEVER_ON_A_CARD this command is, beyond what the guard holds; null when it is none. */
@@ -88,6 +93,7 @@ function neverOnACard(words, folder) {
   const args = Object.hasOwn(GLOBAL_OPTIONS, name) ? subcommand(words, GLOBAL_OPTIONS[name]) : words.slice(1)
   const has = (...flags) => args.some((word) => flags.includes(word))
   const [first, second] = args
+  const own = words.slice(1, words.length - args.length)
   if (/^(rm|rmdir|unlink|shred|truncate|wipefs|dd|trash|trash-put)$/.test(name) || /^mkfs(\.|$)/.test(name)) return 'a deletion'
   if (name === 'gio' && (first === 'trash' || first === 'remove')) return 'a deletion'
   if (name === 'find' && has('-delete')) return 'a deletion'
@@ -96,28 +102,24 @@ function neverOnACard(words, folder) {
   if (name === 'git') {
     const never = gitNever(args, has, folder)
     if (never !== null) return never
-    // One command's own config can name what runs: an alias, an ssh command, a pager. Read past, it would be any program.
-    const own = words.slice(1, words.length - args.length)
-    if (own.some((word) => /^(-c$|--config-env(=|$)|--exec-path=)/.test(word))) return 'a config setting for one command, which can change what runs,'
+    // One command's own config can name what runs: an alias, an ssh command, a pager. Past it, an option's value can hide the verb.
+    if (!ownOptionsRead(own, GIT_OWN)) return 'a git config or option before its verb, which can change what runs,'
   }
   if (name === 'gh') {
     if (first === 'release') return 'a release'
     if (first === 'auth' && (['token', 'login', 'refresh', 'setup-git'].includes(second) || has('--show-token', '-t'))) return 'a credential'
     if (first === 'pr' && has('--delete-branch', '-d')) return 'a deletion'
-    if (first !== 'api' && second === 'delete') return 'a deletion'
+    if (first !== 'api' && has('delete')) return 'a deletion'
+    if (!ownOptionsRead(own, GH_OWN)) return 'an option before gh\'s verb, which can hide it,'
   }
   // A request's own method: `gh api -X DELETE`, `curl --request=delete`, `curl -XDELETE`, `curl -sX DELETE`.
   if ((name === 'gh' && first === 'api') || name === 'curl' || name === 'wget') {
     const deleting = args.some((word, index) => /^(-[a-zA-Z]*X|--request|--method)=?delete$/i.test(word) || (/^(-[a-zA-Z]*X|--request|--method)$/.test(word) && /^delete$/i.test(args[index + 1] ?? '')))
     if (deleting) return 'a deletion'
   }
-  if (name === 'docker' || name === 'podman' || name === 'docker-compose') {
-    // Any spelling (`docker rm`, `docker container remove`, an option whose value it cannot tell): its words before a program inside a container.
-    const at = args.findIndex((word) => DOCKER_RUNS.test(word))
-    const verbs = (at < 0 ? args : args.slice(0, at)).filter((word) => !word.startsWith('-'))
-    if (verbs.some((word) => DOCKER_DELETING.test(word))) return 'a deletion'
-    if (verbs.includes('push') || (at < 0 && has('--push'))) return 'a publish'
-  }
+  // Not read as words: a publish needs no such verb (`docker buildx build --output=type=registry`), and an option's value can be
+  // any word. A step of theirs goes in a script the card pins, whose whole text is then the agent's to show.
+  if (/^(docker|podman|docker-compose)$/.test(name)) return `${name}, whose words can hide a deletion or a publish, goes in a script the card pins; as words it`
   if (PUBLISHERS.test(name) && has('publish')) return 'a publish'
   if ((name === 'twine' && has('upload')) || (name === 'gem' && has('push')) || (name === 'nuget' && has('push')) || (name === 'dotnet' && has('nuget') && has('push'))) return 'a publish'
   if (['npm', 'pnpm', 'yarn'].includes(name) && has('unpublish', 'publish')) return 'a publish'
@@ -140,50 +142,84 @@ function interpreterFile(name, words, folder) {
   return isFile(path) ? { file: path } : { problem: `${script} is not a file BMN can pin; name the script ${name} runs` }
 }
 
-/** The value of each option of a runner in these words, in `-f x`, `-fx`, `-sfx`, `--file x` or `--file=x`; words after `--` are the script's. */
-function runnerOptions(rest, runner) {
-  const words = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
-  const found = { files: [], folders: [], several: false }
-  for (let index = 0; index < words.length; index += 1) {
-    const word = words[index]
-    if (runner.several.includes(word) || runner.several.some((option) => option.startsWith('--') && word.startsWith(`${option}=`))) found.several = true
-    const long = (options, into) => {
-      if (options.includes(word)) { into.push(words[index += 1]); return true }
-      const joined = options.find((option) => word.startsWith(`${option}=`))
-      if (joined === undefined) return false
-      into.push(word.slice(joined.length + 1))
-      return true
+/** What make or just is told, or why BMN cannot read it for sure: only the runner's known options, no variable, no path to a recipe. */
+function fileRunnerOptions(rest, runner, name) {
+  const found = { files: [], folders: [] }
+  const unsure = (word) => ({ problem: `${word} is not what BMN reads for sure on ${name}; put the step in a script the card pins` })
+  let options = true
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index]
+    if (word === '--' && options) { options = false; continue }
+    if (!options || !word.startsWith('-')) {
+      // `make SHELL=./x`, `just A=1`, `just sub/recipe`: each changes what runs.
+      if (word.includes('=') || (name === 'just' && word.includes('/'))) return unsure(word)
+      continue
     }
-    if (long(runner.fileLong, found.files) || long(runner.folderLong, found.folders)) continue
-    if (!/^-[^-]/.test(word)) continue
+    if (runner.longFlags.includes(word)) continue
+    if (word.startsWith('--')) {
+      const long = (list, into) => {
+        if (list.includes(word)) { into.push(rest[index += 1]); return true }
+        const joined = list.find((option) => word.startsWith(`${option}=`))
+        if (joined === undefined) return false
+        into.push(word.slice(joined.length + 1))
+        return true
+      }
+      if (long(runner.fileLong, found.files) || long(runner.folderLong, found.folders)) continue
+      return unsure(word)
+    }
     for (let at = 1; at < word.length; at += 1) {
       const letter = word[at]
-      if (runner.stop.includes(letter)) break
+      if (runner.flags.includes(letter)) continue
+      if (runner.jobs && letter === 'j' && /^\d+$/.test(word.slice(at + 1))) break
       const into = runner.fileShort === letter ? found.files : runner.folderShort === letter ? found.folders : null
-      if (into === null) continue
-      into.push(at + 1 < word.length ? word.slice(at + 1) : words[index += 1])
+      if (into === null) return unsure(word)
+      into.push(at + 1 < word.length ? word.slice(at + 1) : rest[index += 1])
       break
     }
   }
   return found
 }
 
-/** The file that decides what this runner runs, when it is there, or why the words do not say which one. */
-function runnerFile(words, folder) {
-  const runner = RUNNERS[nameOf(words[0])]
-  const rest = words.slice(1)
-  const { files, folders, several } = runnerOptions(rest, runner)
-  if (several || files.length > 1 || folders.length > 1) return { problem: `${words[0]} picks among more than one file here, so no one pin says what runs; run it from the one package or file` }
-  if (folders[0] === undefined && folders.length === 1) return { problem: `${words[0]}'s folder option has no value, so it is not a file BMN can pin` }
+/** The file that decides what make or just runs, when it is there, or why the words do not say which one. */
+function fileRunnerFile(words, folder) {
+  const name = nameOf(words[0])
+  const runner = FILE_RUNNERS[name]
+  const read = fileRunnerOptions(words.slice(1), runner, name)
+  if ('problem' in read) return read
+  const { files, folders } = read
+  if (files.length > 1 || folders.length > 1) return { problem: `${words[0]} is told more than one file or folder here, so no one pin says what runs` }
+  if (folders.length === 1 && folders[0] === undefined) return { problem: `${words[0]}'s folder option has no value, so it is not a file BMN can pin` }
   const base = resolved(folders[0] ?? '.', folder)
   if (files.length === 1) {
     const path = files[0] === undefined ? null : resolved(files[0], base)
     return path !== null && isFile(path) ? { file: path } : { problem: `${files[0] ?? 'the file it names'} is not a file BMN can pin` }
   }
   for (let at = base; ; at = dirname(at)) {
-    const path = runner.names.map((name) => join(at, name)).find(isFile)
+    const path = runner.names.map((one) => join(at, one)).find(isFile)
     if (path !== undefined) return { file: path }
     if (!runner.above || dirname(at) === at) return { file: null }
+  }
+}
+
+/** A package manager's file: `NAME [one folder option] run SCRIPT [-- ARGS]`, for a script that file has. Bare names can be its built-ins. */
+function packageFile(words, folder) {
+  const name = nameOf(words[0])
+  const rest = words.slice(1)
+  const options = PACKAGE_FOLDER[name]
+  const joined = options.find((option) => option.startsWith('--') && rest[0]?.startsWith(`${option}=`))
+  const given = options.includes(rest[0]) ? rest[1] : joined === undefined ? null : rest[0].slice(joined.length + 1)
+  const [verb, script, after] = rest.slice(options.includes(rest[0]) ? 2 : joined === undefined ? 0 : 1)
+  if (given === undefined || (verb !== 'run' && verb !== 'run-script') || script === undefined || script.startsWith('-') || (after !== undefined && after !== '--')) {
+    return { problem: `${name} reads only as \`${name} run SCRIPT -- ARGS\`, from one folder; anything else goes in a script the card pins` }
+  }
+  for (let at = resolved(given ?? '.', folder); ; at = dirname(at)) {
+    const path = join(at, 'package.json')
+    if (isFile(path)) {
+      let scripts = null
+      try { scripts = JSON.parse(readFileSync(path, 'utf8')).scripts } catch { /* below */ }
+      return scripts !== null && typeof scripts === 'object' && Object.hasOwn(scripts, script) ? { file: path } : { problem: `${script} is not a script in ${path}` }
+    }
+    if (dirname(at) === at) return { problem: `${name} finds no package.json from there, so there is no script to run` }
   }
 }
 
@@ -198,13 +234,14 @@ function selectedFile(words, folder) {
   const path = named ? resolved(program, folder) : null
   if (path !== null && !isFile(path)) return { problem: `${program} does not exist yet, so it cannot be pinned` }
   const writable = path !== null && isWritable(path)
-  const reads = INTERPRETERS.test(name) || Object.hasOwn(RUNNERS, name)
+  const reads = INTERPRETERS.test(name) || Object.hasOwn(FILE_RUNNERS, name) || Object.hasOwn(PACKAGE_FOLDER, name)
   if (args.length === 1 && VERSION_ONLY.test(args[0]) && !writable) return { file: null }
   if (writable && !reads) return { file: path }
   // A writable interpreter or runner and the file it reads would both decide what runs; a pin holds one.
   if (writable) return { problem: `${program} can change and so can what it reads, and a card pins one file; name it without its path` }
   if (INTERPRETERS.test(name)) return interpreterFile(name, words, folder)
-  if (Object.hasOwn(RUNNERS, name)) return runnerFile(words, folder)
+  if (Object.hasOwn(FILE_RUNNERS, name)) return fileRunnerFile(words, folder)
+  if (Object.hasOwn(PACKAGE_FOLDER, name)) return packageFile(words, folder)
   return { file: path }
 }
 

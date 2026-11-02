@@ -80,7 +80,6 @@ describe('simpleCommandWords (D7: one simple command, exactly as it will run)', 
 
 describe('grantCommandProblem (R103-NFR2: what is never on a card)', () => {
   it.each([
-    'pnpm run lint',
     'git status',
     'git push origin main',
     'gh pr view 12',
@@ -167,16 +166,17 @@ describe('grantCommandProblem (R103-NFR2: what is never on a card)', () => {
   it('refuses a pin with another hash, on another file, or on a secret', () => {
     expect(grantCommandProblem(term('./scripts/check.sh', { script: { path: 'scripts/check.sh', sha256: 'b'.repeat(64) } }))).toContain('does not have the SHA-256')
     expect(grantCommandProblem(term('./scripts/check.sh', { script: { path: 'other.sh', sha256: createHash('sha256').update('#!/bin/sh\n').digest('hex') } }))).toContain('that is the file to pin')
-    expect(grantCommandProblem(term('pnpm run lint', { script: { path: '.env', sha256: 'b'.repeat(64) } }))).toContain('credential')
+    expect(grantCommandProblem(term('make all', { script: { path: '.env', sha256: 'b'.repeat(64) } }))).toContain('credential')
   })
 
-  it('treats a runner\'s own file as what it runs: writable, it is pinned; absent, there is nothing to pin (the pre-review)', () => {
+  it('treats a runner\'s own file as what it runs: writable, it is pinned (the pre-review)', () => {
     const runners = mkdtempSync(join(folder, 'runners-'))
     const pin = (path: string, text: string) => ({ path, sha256: createHash('sha256').update(text).digest('hex') })
+    const scripts = '{"scripts":{"lint":"x"}}\n'
     expect(grantCommandProblem(term('make all', { folder: runners }))).toBeNull()
-    expect(grantCommandProblem(term('pnpm run lint', { folder: runners }))).toBeNull()
+    expect(grantCommandProblem(term('pnpm run lint', { folder: runners }))).toContain('no package.json')
     writeFileSync(join(runners, 'Makefile'), 'all:\n')
-    writeFileSync(join(runners, 'package.json'), '{}\n')
+    writeFileSync(join(runners, 'package.json'), scripts)
     mkdirSync(join(runners, 'sub'))
     writeFileSync(join(runners, 'sub', 'other.mk'), 'x:\n')
     expect(grantCommandProblem(term('make all', { folder: runners }))).toContain('Makefile')
@@ -184,8 +184,8 @@ describe('grantCommandProblem (R103-NFR2: what is never on a card)', () => {
     expect(grantCommandProblem(term('pnpm run lint', { folder: runners }))).toContain('package.json')
     expect(grantCommandProblem(term('pnpm --version', { folder: runners }))).toBeNull()
     expect(grantCommandProblem(term('make all', { folder: runners, script: pin('Makefile', 'all:\n') }))).toBeNull()
-    expect(grantCommandProblem(term('pnpm run lint', { folder: runners, script: pin('package.json', '{}\n') }))).toBeNull()
-    expect(grantCommandProblem(term('make all', { folder: runners, script: pin('package.json', '{}\n') }))).toContain('that is the file to pin')
+    expect(grantCommandProblem(term('pnpm run lint', { folder: runners, script: pin('package.json', scripts) }))).toBeNull()
+    expect(grantCommandProblem(term('make all', { folder: runners, script: pin('package.json', scripts) }))).toContain('that is the file to pin')
   })
 })
 
@@ -220,6 +220,23 @@ describe('every spelling of what is never on a card (the full review, finding 1)
     ['docker image push example/test', 'publish'],
     ['docker compose push', 'publish'],
     ['docker buildx build --push .', 'publish'],
+    ['docker buildx build --output=type=registry -t one .', 'publish'],
+    ['docker compose --project-name run down', 'deletion'],
+    ['docker compose -p run down', 'deletion'],
+    ['docker exec one rm x', 'deletion'],
+    ['docker ps', 'pins'],
+    ['podman ps', 'pins'],
+    ['docker-compose ps', 'pins'],
+    ['/usr/bin/docker ps', 'pins'],
+    ['git --made-up value rm a', 'config'],
+    ['git --git-dir /tmp/x status', 'config'],
+    ['git --work-tree=/tmp/x status', 'config'],
+    ['git stash -q drop', 'deletion'],
+    ['git worktree --made-up remove old', 'deletion'],
+    ['gh --made-up value issue delete 1', 'deletion'],
+    ['gh --made-up value issue list', 'option'],
+    ['gh --hostname example.test issue list', 'option'],
+    ['gh issue --made-up delete 1', 'deletion'],
     ['docker build --push .', 'publish'],
     ['gh issue delete 1', 'deletion'],
     ['gh -R o/r release view v1', 'release'],
@@ -244,15 +261,12 @@ describe('every spelling of what is never on a card (the full review, finding 1)
     'git checkout main',
     'git switch main',
     'git rev-parse HEAD',
-    'docker ps',
-    'docker logs one',
-    'docker container ls',
-    'docker image ls',
-    'docker compose ps',
-    'docker build .',
     'curl -s https://example.test/one',
     'cargo test',
     'gh issue list',
+    'gh -R o/r issue list',
+    'git -P log',
+    'git --no-pager log',
     'rsync -a a b',
     'find . -name x'
   ])('still takes %s', (command) => {
@@ -295,27 +309,29 @@ describe('the file a command really runs (the full review, finding 2)', () => {
     expect(grantCommandProblem(term(`${own}/make all`))).toContain('one file')
   })
 
+  const SCRIPTS = '{"scripts":{"check":"x","lint":"y"}}\n'
+
   it('does not take a version word as a version unless it is the only word', () => {
     const runners = mkdtempSync(join(folder, 'version-'))
-    writeFileSync(join(runners, 'package.json'), '{}\n')
+    writeFileSync(join(runners, 'package.json'), SCRIPTS)
     writeFileSync(join(runners, 'Makefile'), 'all:\n')
     expect(grantCommandProblem(term('pnpm run lint -- --version', { folder: runners }))).toContain('package.json')
     expect(grantCommandProblem(term('pnpm run lint -- --version', { folder: runners, script: pin('Makefile', 'all:\n') }))).toContain('that is the file to pin')
-    expect(grantCommandProblem(term('make -v all', { folder: runners }))).toContain('Makefile')
+    expect(grantCommandProblem(term('make -v all', { folder: runners }))).toContain('reads for sure')
     expect(grantCommandProblem(term('./scripts/check.sh --version'))).toContain('name that script on the card')
     expect(grantCommandProblem(term('make --version', { folder: runners }))).toBeNull()
   })
 
-  it('reads how a runner names its file, each spelling; options after -- belong to the script', () => {
+  it('reads how make and just name their file, each spelling; every other option refuses', () => {
     const runners = mkdtempSync(join(folder, 'named-'))
     writeFileSync(join(runners, 'Makefile'), 'all:\n')
     writeFileSync(join(runners, 'other.mk'), 'x:\n')
     mkdirSync(join(runners, 'sub'))
     writeFileSync(join(runners, 'sub', 'inner.mk'), 'y:\n')
-    writeFileSync(join(runners, 'package.json'), '{}\n')
-    writeFileSync(join(runners, 'sub', 'package.json'), '{"name":"sub"}\n')
+    writeFileSync(join(runners, 'justfile'), 'a:\n')
+    writeFileSync(join(runners, 'other.just'), 'b:\n')
     const at = { folder: runners }
-    for (const command of ['make -fother.mk x', 'make -sfother.mk x', 'make -f other.mk x', 'make --file=other.mk x', 'make --makefile other.mk x']) {
+    for (const command of ['make -fother.mk x', 'make -sfother.mk x', 'make -f other.mk x', 'make --file=other.mk x', 'make --makefile other.mk x', 'make -j4 -f other.mk x', 'make -s -k --dry-run -f other.mk x']) {
       expect(grantCommandProblem(term(command, at))).toContain('other.mk')
       expect(grantCommandProblem(term(command, { ...at, script: pin('Makefile', 'all:\n') }))).toContain('that is the file to pin')
       expect(grantCommandProblem(term(command, { ...at, script: pin('other.mk', 'x:\n') }))).toBeNull()
@@ -324,25 +340,55 @@ describe('the file a command really runs (the full review, finding 2)', () => {
     expect(grantCommandProblem(term('make -f other.mk -f Makefile', at))).toContain('more than one')
     expect(grantCommandProblem(term('make -f', at))).toContain('not a file')
     expect(grantCommandProblem(term('make -f missing.mk', at))).toContain('not a file')
-    expect(grantCommandProblem(term('npm --prefix=sub run x', at))).toContain('sub/package.json')
-    expect(grantCommandProblem(term('pnpm -C sub run x', at))).toContain('sub/package.json')
-    expect(grantCommandProblem(term('pnpm run x -- -C sub', { ...at, script: pin('package.json', '{}\n') }))).toBeNull()
+    expect(grantCommandProblem(term('just -f other.just b', { ...at, script: pin('other.just', 'b:\n') }))).toBeNull()
+    expect(grantCommandProblem(term('just a', { ...at, script: pin('justfile', 'a:\n') }))).toBeNull()
+    for (const [command, why] of [
+      ['make -I lib all', 'reads for sure'],
+      ['make --eval=x all', 'reads for sure'],
+      ['make -sI lib all', 'reads for sure'],
+      ['make SHELL=./other.sh all', 'reads for sure'],
+      ['make all SHELL=./other.sh', 'reads for sure'],
+      ['make -- SHELL=./other.sh', 'reads for sure'],
+      ['just --set a b c', 'reads for sure'],
+      ['just sub/recipe', 'reads for sure'],
+      ['just A=1 a', 'reads for sure']
+    ] as const) expect(grantCommandProblem(term(command, at))).toContain(why)
   })
 
-  it('refuses a runner that picks among several files', () => {
-    const runners = mkdtempSync(join(folder, 'several-'))
-    writeFileSync(join(runners, 'package.json'), '{}\n')
-    for (const command of ['pnpm --filter one run x', 'pnpm --filter=one run x', 'pnpm -r run x', 'npm --workspaces run x', 'npm -w one run x']) {
-      expect(grantCommandProblem(term(command, { folder: runners }))).toContain('more than one')
+  it('reads a package manager only as `run SCRIPT`, from one folder, with arguments after --, for a script its file has', () => {
+    const runners = mkdtempSync(join(folder, 'package-'))
+    writeFileSync(join(runners, 'package.json'), SCRIPTS)
+    mkdirSync(join(runners, 'sub'))
+    writeFileSync(join(runners, 'sub', 'package.json'), '{"scripts":{"inner":"z"}}\n')
+    const at = { folder: runners }
+    const root = pin('package.json', SCRIPTS)
+    for (const command of ['pnpm run check', 'npm run check', 'yarn run check', 'npm run-script check', 'pnpm run check -- -C sub', 'pnpm run check -- --filter x']) {
+      expect(grantCommandProblem(term(command, { ...at, script: root }))).toBeNull()
     }
+    expect(grantCommandProblem(term('npm --prefix=sub run inner', at))).toContain('sub/package.json')
+    expect(grantCommandProblem(term('npm --prefix sub run inner', at))).toContain('sub/package.json')
+    expect(grantCommandProblem(term('pnpm -C sub run inner', at))).toContain('sub/package.json')
+    expect(grantCommandProblem(term('pnpm --dir sub run inner', at))).toContain('sub/package.json')
+    expect(grantCommandProblem(term('yarn --cwd sub run inner', at))).toContain('sub/package.json')
+    expect(grantCommandProblem(term('pnpm run missing', { ...at, script: root }))).toContain('not a script')
+    for (const command of [
+      'pnpm -rC . run check', 'pnpm -rc run check', 'npm -wfoo run check', 'pnpm -Ffoo run check', 'pnpm -Csub run inner', 'pnpm -r run check', 'pnpm --recursive run check',
+      'pnpm --filter one run check', 'pnpm --filter=one run check', 'npm --workspaces run check', 'npm -ws run check', 'npm -w one run check',
+      'pnpm run check --filter x', 'pnpm run check extra', 'pnpm check', 'pnpm -r check', 'npm -ws check', 'pnpm test', 'pnpm install', 'yarn check', 'yarn workspace one run check',
+      'pnpm -C sub -C . run check', 'pnpm --dir', 'pnpm run'
+    ]) expect(grantCommandProblem(term(command, { ...at, script: root })), command).toContain('reads only as')
+    writeFileSync(join(runners, 'broken.json'), '')
+    const broken = mkdtempSync(join(folder, 'broken-'))
+    writeFileSync(join(broken, 'package.json'), '{not json')
+    expect(grantCommandProblem(term('pnpm run check', { folder: broken }))).toContain('not a script')
   })
 
   it('finds a package manager\'s file in a folder above, as it does', () => {
     const runners = mkdtempSync(join(folder, 'above-'))
-    writeFileSync(join(runners, 'package.json'), '{}\n')
+    writeFileSync(join(runners, 'package.json'), SCRIPTS)
     mkdirSync(join(runners, 'deep'))
     writeFileSync(join(runners, 'Makefile'), 'all:\n')
-    expect(grantCommandProblem(term('pnpm run x', { folder: join(runners, 'deep') }))).toContain('package.json')
+    expect(grantCommandProblem(term('pnpm run check', { folder: join(runners, 'deep') }))).toContain(`it runs ${join(runners, 'package.json')}`)
     expect(grantCommandProblem(term('make all', { folder: join(runners, 'deep') }))).toBeNull()
   })
 
@@ -363,6 +409,16 @@ describe('commandPinSha: the hash a use is recorded under (the full review, find
     expect(commandPinSha(held)).toBe(sha('all: other\n'))
     writeFileSync(join(runners, 'Makefile'), 'all:\n')
     writeFileSync(join(runners, 'GNUmakefile'), 'all:\n\techo another\n')
+    expect(commandPinSha(held)).toBeNull()
+  })
+
+  it('reads a script taken out of the package file as another answer', () => {
+    const runners = mkdtempSync(join(folder, 'gone-'))
+    const text = '{"scripts":{"check":"x"}}\n'
+    writeFileSync(join(runners, 'package.json'), text)
+    const held = { command: 'pnpm run check', folder: runners, script: { path: 'package.json', sha256: sha(text) } }
+    expect(commandPinSha(held)).toBe(sha(text))
+    writeFileSync(join(runners, 'package.json'), '{"scripts":{}}\n')
     expect(commandPinSha(held)).toBeNull()
   })
 
