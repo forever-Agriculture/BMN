@@ -283,6 +283,12 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await page.waitForFunction(() => document.querySelector('[data-hooks="left"] span')?.textContent === 'Codex')
     await sleep(300)
+    // Story 102.4: the row in its Needs you state says why the guard does not answer and that the app's own rules are missing.
+    const brokenRow = page.locator('[data-hooks="left"]').first()
+    const brokenWords = await brokenRow.innerText()
+    check('Hooks: a broken guard and missing rules are said on the row', brokenWords.includes('Command guard does not answer') && brokenWords.includes('command guard cannot load') && brokenWords.includes("The app's own rules") && brokenWords.includes('missing'))
+    await brokenRow.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(outDirectory, `health-${SIZES[0][0]}x${SIZES[0][1]}-hooks-broken.png`) })
     const under = await hookOrder()
     await page.mouse.move(60, 300)
     await sleep(200)

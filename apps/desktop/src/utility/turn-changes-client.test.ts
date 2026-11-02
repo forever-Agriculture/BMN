@@ -196,6 +196,17 @@ describe('the turn changes worker thread', () => {
     expect(took).toBeGreaterThanOrEqual(100 + late)
   })
 
+  it('still fails a stop that blocks this thread with its own work, whatever the machine is doing', async () => {
+    const { took, late } = await timedBesideControl(async () => {
+      await sleep(10)
+      const began = threadWork()
+      while (threadWork() - began < 300) {
+        // A cancellation that does its work here instead of letting go.
+      }
+    })
+    expect(took).toBeGreaterThanOrEqual(100 + late)
+  }, 60_000)
+
   it('still fails a stop slow by its own work beside a working control, whatever the machine is doing', async () => {
     const control = await workingControl()
     try {

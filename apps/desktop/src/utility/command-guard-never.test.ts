@@ -227,8 +227,56 @@ describe('what the owner said never to run (Story 102.2)', () => {
     ['git -C ~/code/BMN reset --hard', 'git reset'],
     ['cd ~/code/BMN && git clean -fd', 'git clean'],
     ['cd /tmp/fixture && docker system prune -af', 'prune'],
-    ['cd /tmp/fixture && rm -rf ~/brain', 'home or system']
+    ['cd /tmp/fixture && rm -rf ~/brain', 'home or system'],
+    // The order of a command, the scope of its `cd` and the folder its `..` end in (epic review).
+    ['(cd /tmp/fixture && git reset --hard)', null],
+    ['(cd /tmp); git reset --hard', 'git reset'],
+    ['$(cd /tmp); git reset --hard', 'git reset'],
+    ['`cd /tmp`; git reset --hard', 'git reset'],
+    ['cd /tmp | git reset --hard', 'git reset'],
+    ['cd /tmp & git reset --hard', 'git reset'],
+    ['cd /tmp || git reset --hard', 'git reset'],
+    ['cd /tmp/fixture; git reset --hard', 'git reset'],
+    ['cd /tmp/fixture && (cd /tmp/other); git reset --hard', null],
+    ['git -C /tmp/fixture -C ~/code/BMN reset --hard', 'git reset'],
+    ['git -C ~/code/BMN -C /tmp/fixture reset --hard', null],
+    ['git -C /tmp/../home/someone/code/BMN reset --hard', 'git reset'],
+    ['cd /tmp/../home/someone/code/BMN && git clean -fd', 'git clean'],
+    ['cd /tmp/fixture/../other && git reset --hard', null],
+    ['cd /tmp/$(echo x)/.. && git reset --hard', 'git reset'],
+    ['cd ~/code/BMN/.claude/worktrees/epic-1/../.. && git reset --hard', 'git reset'],
+    ['cd "$D" && git reset --hard; D=/tmp/fixture', 'git reset'],
+    ['D=/tmp/fixture; if x; then D=~/code/BMN; fi; cd "$D" && git reset --hard', 'git reset'],
+    ['GIT_DIR=~/code/BMN/.git git -C /tmp/fixture reset --hard', 'git reset'],
+    ['git --git-dir=~/code/BMN/.git --work-tree=~/code/BMN -C /tmp/fixture reset --hard', 'git reset'],
+    ['cd /tmp/fixture && env -C ~/code/BMN git reset --hard', 'git reset'],
+    ['cd ~root && git reset --hard', 'git reset'],
+    // The stash is the repository's, whichever worktree asks.
+    ['cd ~/code/BMN/.claude/worktrees/epic-1 && git stash clear', 'stash'],
+    ['git -C ~/code/BMN/.claude/worktrees/epic-1 stash drop', 'stash'],
+    ['cd /tmp/fixture && git stash drop', null],
+    ['git stash list', null]
   ])('reads where %s runs', (command, what) => {
+    const held = heldCommand(command)
+    if (what === null) expect(held).toBeNull()
+    else expect(held).toContain(what)
+  })
+
+  it.each([
+    ['cat 3< ~/.codex/auth.json <&3', 'credential'],
+    ['exec 3< ~/.codex/auth.json', 'credential'],
+    ['grep token < ~/.ssh/id_rsa', 'credential'],
+    ['while read -r line; do echo "$line"; done < ~/.claude/.credentials.json', 'credential'],
+    ['cat ~/Documents/KeePass/backup.pub', 'credential'],
+    ['cat ~/.ssh/id_ed25519.pub', null],
+    ['sort < ~/notes.txt', null],
+    ['podman --remote system prune -af', 'prune'],
+    ['podman --remote=true volume prune -f', 'prune'],
+    ['podman --remote volume rm data', 'volume'],
+    ['podman --runtime crun volume rm data', 'volume'],
+    ['podman --remote ps', null],
+    ['podman --remote run --rm alpine true', null]
+  ])('reads what %s does', (command, what) => {
     const held = heldCommand(command)
     if (what === null) expect(held).toBeNull()
     else expect(held).toContain(what)
@@ -238,6 +286,13 @@ describe('what the owner said never to run (Story 102.2)', () => {
     const event = (cwd: string, command: string): Record<string, unknown> & { tool_input?: Record<string, unknown> } => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', cwd, tool_input: { command } })
     expect(guardAnswer('claude', event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'git reset --hard'))).toBeNull()
     expect(guardAnswer('claude', event('/tmp/fixture', 'git stash clear'))).toBeNull()
+    for (const agent of ['claude', 'codex'] as const) {
+      expect(guardAnswer(agent, event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'git stash clear'))).not.toBeNull()
+      expect(guardAnswer(agent, event('/home/someone/code/BMN/.claude/worktrees/epic-1', 'cd apps/desktop && git checkout -- .'))).toBeNull()
+      expect(guardAnswer(agent, event('/tmp/fixture', '(cd /tmp); cd /home/someone/code/BMN && git reset --hard'))).not.toBeNull()
+      for (const command of ['cat 3< ~/.codex/auth.json <&3', 'podman --remote system prune -af']) expect(guardAnswer(agent, event('/home/someone', command))).not.toBeNull()
+      for (const command of ['cat ~/.ssh/id_ed25519.pub', 'podman --remote ps']) expect(guardAnswer(agent, event('/home/someone', command))).toBeNull()
+    }
     expect(guardAnswer('claude', event('/home/someone/code/BMN', 'git reset --hard'))).not.toBeNull()
     expect(guardAnswer('claude', event('/tmp/fixture', 'cd /home/someone/code/BMN && git reset --hard'))).not.toBeNull()
   })

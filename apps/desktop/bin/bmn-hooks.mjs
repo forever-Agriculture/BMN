@@ -1057,7 +1057,7 @@ function guardEntry(agent, file) {
       if (!isObject(entry) || entry.type !== 'command') continue
       const state = hookEntryState(entry.command, agent, 'PreToolUse')
       if (state === 'wired' || state === 'older') {
-        if (!gated && runnableEntry(entry, agent)) return { command: entry.command.replace(SHELL_BLANKS, '') }
+        if (!gated && runnableEntry(entry, agent)) return { command: entry.command.replace(SHELL_BLANKS, ''), seconds: typeof entry.timeout === 'number' && entry.timeout > 0 ? entry.timeout : null }
         changed = true
       } else if (state === 'named') changed = true
     }
@@ -1068,7 +1068,7 @@ function guardEntry(agent, file) {
 /** Story 102.4 AC2: whether the guard answers, run only from an entry whose text BMN recognises. */
 function commandGuardStanding(agent, file) {
   const found = guardEntry(agent, file)
-  if (found.command !== null) return probeCommandGuard(agent, found.command)
+  if (found.command !== null) return probeCommandGuard(agent, found.command, { entrySeconds: found.seconds })
   return { state: found.changed ? 'changed' : 'missing' }
 }
 
@@ -1238,7 +1238,10 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   const turns = new Map(marks === null ? [] : reports.map((report) => [report.agent, marks.turnStanding(report.agent)]))
   // Stories 102.3 and 102.4: the app's own rules, and whether the command guard answers when asked.
   const floor = new Map(reports.map((report) => {
-    if (report.agent === 'opencode') return [report.agent, { nativeRules: openCodeFloor(report.file).state }]
+    if (report.agent === 'opencode') {
+      const plan = openCodeFloor(report.file)
+      return [report.agent, { nativeRules: plan.state, ...(plan.hisRows?.length ? { hisRows: plan.hisRows } : {}) }]
+    }
     const file = readHookFile(report.file, report.agent)
     return [report.agent, { commandGuard: commandGuardStanding(report.agent, file), nativeRules: nativeRules(report.agent, report.file, file) }]
   }))
@@ -1252,7 +1255,12 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   const floorLines = (report) => {
     const held = floor.get(report.agent)
     if (held === undefined) return []
-    return [...(held.commandGuard === undefined ? [] : [guardWords(held.commandGuard)]), `native rules ${held.nativeRules}`]
+    return [
+      ...(held.commandGuard === undefined ? [] : [guardWords(held.commandGuard)]),
+      `native rules ${held.nativeRules}`,
+      // His own word on a row stays his; a floor row he allows is not refused, and he should see that.
+      ...(held.hisRows ?? []).map((own) => `your own rule keeps ${own.map}: ${own.row} at ${String(own.word)}, not refused`)
+    ]
   }
   const lines = reports.map((report) => `${describeHookCheck(report)}${[...Object.values(more(report)), ...floorLines(report)].map((line) => `\n  ${line}`).join('')}`)
   lines.push(ok

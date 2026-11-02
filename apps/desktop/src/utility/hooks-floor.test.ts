@@ -45,6 +45,11 @@ describe('a guard the entry cannot reach (102.4 AC2)', () => {
     expect(probeCommandGuard('claude', ENTRY, { env: env(null), spawn })).toEqual(expected)
   })
 
+  it('gives an entry no longer than the app does: an answer past the entry\'s own time is no answer', () => {
+    bmn(join(root, '.local/bin'), `sleep 3; ${HOLDS}`)
+    expect(probeCommandGuard('claude', ENTRY, { env: env(null), entrySeconds: 1 })).toEqual({ state: 'does-not-answer', reason: 'no answer in 1 s' })
+  }, 30_000)
+
   it('says bmn cannot be found', () => {
     expect(probeCommandGuard('claude', ENTRY, { env: env(null) })).toEqual({ state: 'does-not-answer', reason: 'bmn is not on the PATH of a session outside BMN' })
   })

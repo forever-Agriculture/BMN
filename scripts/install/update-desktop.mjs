@@ -1,9 +1,11 @@
 // MODULE: update-desktop.mjs - queues a source build that installs only after packaged BMN exits
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -82,7 +84,25 @@ export function repositoryReadiness({ branch, head, originHead, status }) {
 /** Why the source is no longer what the build started from, or null. */
 export function sourceChangeSince(started, now) {
   if (now.head !== started.head) return `HEAD moved from ${started.head} to ${now.head}`
+  if (now.touched !== started.touched) return 'a tracked file was written during the build, so the build may hold what it held then'
   return repositoryReadiness(now)
+}
+
+/** When and how large each tracked file last was: a file changed for the compiler and put back has the same bytes, not the same time. */
+export function trackedFilesStamp(root = repoRoot) {
+  const names = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 }).stdout.split('\0').filter(Boolean)
+  const stamp = createHash('sha256')
+  for (const name of names) {
+    let seen = 'gone'
+    try {
+      const { mtimeNs, size } = lstatSync(join(root, name), { bigint: true })
+      seen = `${mtimeNs}:${size}`
+    } catch {
+      // A file that went away is part of the stamp as that.
+    }
+    stamp.update(`${name}\0${seen}\0`)
+  }
+  return stamp.digest('hex')
 }
 
 export function desktopEntryRunsLauncher(entry, launcherFile) {
@@ -103,7 +123,8 @@ function gitState() {
     branch: capture('git', ['branch', '--show-current']),
     head: capture('git', ['rev-parse', 'HEAD']),
     originHead: capture('git', ['rev-parse', 'origin/main']),
-    status: capture('git', ['status', '--porcelain'])
+    status: capture('git', ['status', '--porcelain']),
+    touched: trackedFilesStamp()
   }
 }
 

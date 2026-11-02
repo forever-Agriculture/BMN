@@ -21,7 +21,7 @@ const wildcard = (pattern) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g
 const LISTED = SECRET_FILES.map(wildcard)
 
 /** Whether a path under the home folder is on the list. */
-export const isSecretFile = (relative) => !relative.endsWith('.pub') && LISTED.some((pattern) => pattern.test(relative))
+export const isSecretFile = (relative) => !(relative.startsWith('.ssh/') && relative.endsWith('.pub')) && LISTED.some((pattern) => pattern.test(relative))
 
 /** `~`, `$HOME`, `${HOME}`, `/home/NAME` or `/root` at the start of a path, however the word goes on (`@~/x`, `--file=~/x`, `file:///home/n/x`). */
 const HOME = /(?<![\w.~/-])(?:~|\$HOME|\$\{HOME\}|\/+home\/[^/\s:=@'"]+|\/+root)(?=\/|$)/

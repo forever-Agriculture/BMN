@@ -11,13 +11,20 @@ const BEGIN = '// BMN floor begin'
 const END = '/* BMN floor end */'
 const NOTE = ' (bmn hooks install keeps these rows; taking out these lines between the two marks gives back your file)'
 
+/**
+ * A private key's name ends where a shell word does, so its `.pub` beside it stays readable; OpenCode's patterns have only `*` and `?`,
+ * so each way a word can end is a row. Any other path of the list has no such neighbour.
+ */
+const KEY_ENDS = ['', ' *', '"*', "'*", '|*', ';*', '&*', ')*']
+const pathRows = (path) => (/\/\.ssh\/[^/*]+$/.test(path) ? KEY_ENDS.map((end) => `*${path}${end}`) : [`*${path}*`])
+
 /** `permission.bash` patterns and `permission.read` paths, all `deny`. Last match wins in OpenCode, so they go last in each map. */
 export function openCodeFloorRows(home) {
   const paths = secretPaths(home)
   return {
     bash: [
       ...NEVER_COMMANDS.flatMap((command) => [command, `${command} *`]),
-      ...paths.flatMap((path) => [`*~/${path}*`, `*$HOME/${path}*`, `*${home}/${path}*`])
+      ...paths.flatMap((path) => ['~', '$HOME', home].flatMap((root) => pathRows(`${root}/${path}`)))
     ],
     read: paths.flatMap((path) => [`~/${path}`, `${home}/${path}`])
   }
@@ -39,8 +46,12 @@ function scanObject(text, open) {
   }
   const string = () => {
     const from = index
+    if (text[index] !== '"') throw new Error('not a string')
     index += 1
-    while (text[index] !== '"') index += text[index] === '\\' ? 2 : 1
+    while (text[index] !== '"') {
+      if (index >= text.length) throw new Error('a string that does not end')
+      index += text[index] === '\\' ? 2 : 1
+    }
     index += 1
     return JSON.parse(text.slice(from, index))
   }
@@ -49,6 +60,7 @@ function scanObject(text, open) {
     let depth = 0
     for (;;) {
       skip()
+      if (index >= text.length) throw new Error('a value that does not end')
       const char = text[index]
       if (char === '"') string()
       else if (char === '{' || char === '[') { depth += 1; index += 1 }
@@ -63,6 +75,7 @@ function scanObject(text, open) {
   }
   for (;;) {
     skip()
+    if (index >= text.length) throw new Error('an object that does not end')
     if (text[index] === '}') return { members, close: index, lastEnd, comma }
     const key = string()
     skip()
@@ -117,7 +130,8 @@ function region(object, body, indent) {
 export function withOpenCodeFloor(text, home) {
   const rows = openCodeFloorRows(home)
   const clean = withoutOpenCodeFloor(text)
-  parseJsonc(clean)
+  const parsed = parseJsonc(clean)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const root = scanObject(clean, rootOpen(clean))
   const permission = root.members.find((member) => member.key === 'permission')
   const insertions = []
@@ -133,7 +147,10 @@ export function withOpenCodeFloor(text, home) {
       if (member === undefined) added.push([key, list])
       else {
         if (clean[member.start] !== '{') return null
-        insertions.push([scanObject(clean, member.start).lastEnd, region(scanObject(clean, member.start), rowLines(list, '      '), '      ')])
+        // A row he already has stays his, with his word, where he put it: a second one of the name could not be read.
+        const his = scanObject(clean, member.start)
+        const mine = list.filter((row) => !his.members.some((entry) => entry.key === row))
+        if (mine.length > 0) insertions.push([his.lastEnd, region(his, rowLines(mine, '      '), '      ')])
       }
     }
     if (added.length > 0) {
@@ -154,6 +171,16 @@ export function openCodeConfigFile(folder) {
   return existsSync(jsonc) ? jsonc : json
 }
 
+/** Rows of BMN's that he has given another word than `deny`: they stay his, and `hooks check` says so. */
+export function openCodeRowsHeNamed(text, home) {
+  const parsed = parseJsonc(withoutOpenCodeFloor(text))
+  const rows = openCodeFloorRows(home)
+  return Object.entries(rows).flatMap(([map, list]) => {
+    const his = parsed?.permission?.[map]
+    return his !== null && typeof his === 'object' ? list.filter((row) => row in his && his[row] !== 'deny').map((row) => ({ map, row, word: his[row] })) : []
+  })
+}
+
 /** What the file holds and what it should: `state` is `present`, `missing` or `unusable`. */
 export function openCodeFloorPlan(folder, home) {
   const file = openCodeConfigFile(folder)
@@ -162,7 +189,7 @@ export function openCodeFloorPlan(folder, home) {
   try {
     const next = withOpenCodeFloor(text ?? '{\n}\n', home)
     if (next === null) return { file, text, next: null, state: 'unusable' }
-    return { file, text, next, state: next === text ? 'present' : 'missing' }
+    return { file, text, next, state: next === text ? 'present' : 'missing', hisRows: text === null ? [] : openCodeRowsHeNamed(text, home) }
   } catch {
     return { file, text, next: null, state: 'unusable' }
   }

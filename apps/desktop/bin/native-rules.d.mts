@@ -9,7 +9,6 @@ export declare function secretPaths(home: string): string[]
 export declare function claudeDenyRows(home: string): string[]
 export declare function missingClaudeRows(data: unknown, home: string): string[]
 export declare function withClaudeRows<T>(data: T, rows: string[]): T
-export declare function withoutClaudeRows<T>(data: T, home: string): T
 export declare function codexRulesPath(codexHome: string): string
 export declare function codexDeniedPaths(home: string): string[]
 export declare function codexAskProfile(home: string): string[]

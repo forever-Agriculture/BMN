@@ -20,6 +20,19 @@ export const GUARDED_TOOLS = { claude: 'Bash', codex: 'Bash' }
 function shellCommands(source, expansionsOnly = false) {
   let index = 0
   const commands = []
+  // A subshell or a substitution: a `cd` there ends with it. Each has its own name, under the one around it.
+  let scope = ''
+  let scopes = 0
+  const inSubshell = (read) => {
+    const around = scope
+    scope = `${around}/${scopes += 1}`
+    read()
+    scope = around
+  }
+  const fromOtherText = (found) => {
+    scopes += 1
+    return found.map((entry) => ({ ...entry, scope: `${scope}/${scopes}${entry.scope}` }))
+  }
   const scan = (end = null, onlyExpansions = false) => {
     let command = { words: [], input: [], reads: [], writes: [] }
     let word = ''
@@ -40,6 +53,7 @@ function shellCommands(source, expansionsOnly = false) {
         command.input = redirect.hereString ? [word] : []
         if (!redirect.hereString) command.reads.push(word)
       }
+      else if (redirect?.reading) command.reads.push(word)
       else if (redirect === null) command.words.push(word)
       else if (!redirect.document && !redirect.hereString) command.writes.push(word)
       word = ''; started = false; quoted = false; redirect = null
@@ -47,6 +61,7 @@ function shellCommands(source, expansionsOnly = false) {
     const finishCommand = () => {
       finishWord()
       const finished = command
+      finished.scope = scope
       if (command.words.length > 0) commands.push(command)
       command = { words: [], input: [], reads: [], writes: [] }
       return finished
@@ -54,7 +69,7 @@ function shellCommands(source, expansionsOnly = false) {
     const expansion = (processSubstitution) => {
       if (source.startsWith('$(', index) || (processSubstitution && /^[<>]\(/.test(source.slice(index, index + 2)))) {
         index += 2
-        scan(')')
+        inSubshell(() => scan(')'))
         return true
       }
       if (source[index] !== '`') return false
@@ -65,7 +80,7 @@ function shellCommands(source, expansionsOnly = false) {
         body += source[index++]
       }
       if (source[index] === '`') index += 1
-      commands.push(...shellCommands(body))
+      commands.push(...fromOtherText(shellCommands(body)))
       return true
     }
     const hereDocuments = () => {
@@ -83,7 +98,7 @@ function shellCommands(source, expansionsOnly = false) {
         if (document.command.inputFrom === document) document.command.input = [body]
         if (document.quoted) continue
         // Quotes in an expanding heredoc are literal; only backslash and substitutions affect execution.
-        commands.push(...shellCommands(body, true))
+        commands.push(...fromOtherText(shellCommands(body, true)))
       }
     }
     while (index < source.length) {
@@ -118,10 +133,11 @@ function shellCommands(source, expansionsOnly = false) {
       } else if (char === end) {
         finishCommand(); index += 1; return
       } else if (char === '(') {
-        finishCommand(); index += 1; scan(')')
+        finishCommand(); index += 1; inSubshell(() => scan(')'))
       } else if (/[;|&\n)]/.test(char)) {
         const previous = finishCommand()
         index += 1
+        previous.then = (char === '|' || char === '&') && source[index] === char ? `${char}${char}` : char
         if (char === '|' && source[index] !== '|') {
           command.pipe = previous
           if (source[index] === '&') index += 1
@@ -134,7 +150,7 @@ function shellCommands(source, expansionsOnly = false) {
         if (fd !== undefined) { word = ''; started = false }
         finishWord()
         const operator = /^(<<<|<<-?|[<>]&|>>?|<>|<)/.exec(source.slice(index))[0]
-        redirect = { fd: fd ?? (char === '<' ? 0 : 1), document: operator === '<<' || operator === '<<-', tabs: operator === '<<-', hereString: operator === '<<<' }
+        redirect = { fd: fd ?? (char === '<' ? 0 : 1), reading: operator === '<' || operator === '<>', document: operator === '<<' || operator === '<<-', tabs: operator === '<<-', hereString: operator === '<<<' }
         index += operator.length
       } else {
         word += char; started = true; index += 1
@@ -362,7 +378,9 @@ function mergeHold(list) {
 
 /** docker's and podman's options that take a separate value before the subcommand. */
 const DOCKER_VALUES = ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
-  '--url', '--identity', '--connection', '--root', '--runroot', '--storage-driver', '--remote']
+  '--url', '--identity', '--connection', '--root', '--runroot', '--storage-driver', '--cgroup-manager', '--conmon', '--events-backend',
+  '--hooks-dir', '--imagestore', '--network-cmd-path', '--network-config-dir', '--out', '--runtime', '--runtime-flag', '--ssh', '--storage-opt',
+  '--tmpdir', '--volumepath', '--cdi-spec-dir', '--db-backend', '--module']
 /** Their subcommands whose later words belong to a program inside a container, so a `prune` there is not theirs. */
 const DOCKER_RUNS = /^(run|exec|create|cp|commit|build)$/
 
@@ -397,30 +415,72 @@ function removeHold(args) {
  * (Story 102.2's replay put them past its limit of 3 a week per pattern). It is told only from text the command
  * or its event gives: `-C`, the last `cd`, or the event's folder.
  */
-const THROWAWAY = /^(\/tmp|\/var\/tmp|\/run\/user\/\d+|\$\{?TMPDIR\}?)(\/|$)|\/\.claude\/worktrees\//
+const TEMPORARY = /^(\/tmp|\/var\/tmp|\/run\/user\/\d+|\$\{?TMPDIR\}?)(\/|$)/
+const THROWAWAY = new RegExp(`${TEMPORARY.source}|/\\.claude/worktrees/[^/]+(/|$)`)
+const isThrowaway = (place) => place !== null && THROWAWAY.test(place)
 
 /**
- * A folder named by a variable the same command sets (`D=/tmp/x; cd "$D"`, `D=$(mktemp -d)`), as far as its text says: the last
- * assignment wins, and a variable it does not set stays unknown, so it is held.
+ * A folder named by a variable the same command sets (`D=/tmp/x; cd "$D"`, `D=$(mktemp -d)`), as far as its text says. Only what is
+ * set before the variable's first use counts, and two different values say nothing: a variable it does not set stays unknown, so it is held.
  */
 function placeInText(place, command, depth = 0) {
   const variable = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?(.*)$/s.exec(place ?? '')
   if (variable === null || depth > 2) return place
   const [, name, rest] = variable
-  const assigned = [...command.matchAll(new RegExp(`(?:^|[\\s;&|(])${name}=("[^"]*"|'[^']*'|\\$\\([^)]*\\)|[^\\s;&|)]*)`, 'g'))].at(-1)?.[1]
-  if (assigned === undefined) return place
-  if (/^"?\$\(mktemp\b/.test(assigned)) return `/tmp/mktemp${rest}`
-  return placeInText(`${assigned.replace(/^["']|["']$/g, '')}${rest}`, command, depth + 1)
+  const firstUse = command.search(new RegExp(`\\$\\{?${name}\\b`))
+  const set = [...command.slice(0, firstUse < 0 ? command.length : firstUse).matchAll(new RegExp(`(?:^|[\\s;&|(])${name}=("[^"]*"|'[^']*'|\\$\\([^)]*\\)|[^\\s;&|)]*)`, 'g'))].map((match) => match[1])
+  if (set.length === 0) return place
+  if (new Set(set).size > 1) return null
+  if (/^"?\$\(mktemp\b/.test(set[0])) return `/tmp/mktemp${rest}`
+  return placeInText(`${set[0].replace(/^["']|["']$/g, '')}${rest}`, command, depth + 1)
+}
+
+/**
+ * The folder `target` names from `base`, with its `..` worked out; null when the text cannot say (no target, a relative one from an
+ * unknown place, or a substitution or variable that is still open). A symbolic link is not followed: nothing here reads the disk.
+ */
+function folderFrom(base, target, command) {
+  const named = target === null ? null : placeInText(target, command)
+  // Another user's home (`~root`) cannot be told from here.
+  if (named === null || /^~[^/]/.test(named)) return null
+  const start = /^(\/|~(?=\/|$)|\$\{?TMPDIR\}?(?=\/|$)|\$\{?HOME\}?(?=\/|$))/.exec(named)?.[0]
+  if (start === undefined && base === null) return null
+  const whole = start === undefined ? `${base}/${named}` : named
+  const root = /^(\/|~|\$\{?TMPDIR\}?|\$\{?HOME\}?)/.exec(whole)?.[0]
+  if (root === undefined) return null
+  if (/[$`]/.test(whole.slice(root.length))) return null
+  const parts = []
+  for (const part of whole.slice(root.length).split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return root === '/' ? `/${parts.join('/')}` : [root, ...parts].join('/')
+}
+
+/** Where a `git` command works: each `-C` in turn from `base`. Another work tree or Git folder, or a wrapper's own change of folder, cannot be told. */
+function gitPlace(words, base, wrappers, command) {
+  if (/(^|[\s;&|(])GIT_(DIR|WORK_TREE)=/.test(command) || wrappers.some((word) => /^(-C|--chdir|-D|--working-directory)(=|$)|^-[a-zA-Z]*C/.test(word))) return null
+  let place = base
+  for (let index = 1; words[index]?.startsWith('-'); index += 1) {
+    const option = words[index]
+    if (/^--(git-dir|work-tree)(=|$)/.test(option)) return null
+    if (option === '-C') place = folderFrom(place, words[++index] ?? null, command)
+    else if (['-c', '--namespace', '--config-env'].includes(option)) index += 1
+    else if (option === '--') break
+  }
+  return place
 }
 
 /** What `git` holds besides pushes: the commands that throw uncommitted work away, outside a throwaway folder. */
 function discardHold(verb, after, place) {
-  if (place !== null && THROWAWAY.test(place)) return null
+  // A worktree shares its repository's stash with every other, so only a temporary folder's own repository is left to itself.
+  if (verb === 'stash' && /^(drop|clear)$/.test(after[0] ?? '') && (place === null || !TEMPORARY.test(place))) return 'dropping a git stash, which every worktree shares'
+  if (isThrowaway(place)) return null
   if (verb === 'reset' && after.includes('--hard')) return 'a git reset --hard, which discards uncommitted work'
   if (verb === 'clean' && !after.some((word) => word === '--dry-run' || shortFlags(word, 'n')) && after.some((word) => word === '--force' || shortFlags(word, 'f'))) {
     return 'a git clean, which deletes untracked files'
   }
-  if (verb === 'stash' && /^(drop|clear)$/.test(after[0] ?? '')) return 'dropping a git stash'
   const onlyStaged = verb === 'restore' && after.some((word) => word === '--staged' || shortFlags(word, 'S')) && !after.some((word) => word === '--worktree' || shortFlags(word, 'W'))
   if (/^(checkout|restore)$/.test(verb ?? '') && !onlyStaged && after.includes('.')) return 'discarding uncommitted changes in the whole folder'
   return null
@@ -462,21 +522,32 @@ function cloudHold(name, args) {
  */
 export function heldCommand(command, depth = 0, inheritedSelector = false, cwd = null) {
   if (typeof command !== 'string' || command === '') return null
-  // Where the next command runs, as far as the text says: the event's folder until a `cd` names another.
-  let place = cwd
-  const commands = shellCommands(command).flatMap((entry) => executables(entry.words).map((words) => ({ ...entry, words })))
+  // Where the next command runs, as far as the text says: the event's folder until a `cd` names another. A `cd` in a subshell ends
+  // with it, one in a pipeline or behind `&` or `||` moves nothing that follows, and one not joined by `&&` may have failed.
+  const places = new Map([['', folderFrom(null, cwd, '')]])
+  const placeIn = (scope) => {
+    if (!places.has(scope)) places.set(scope, placeIn(scope.slice(0, scope.lastIndexOf('/'))))
+    return places.get(scope)
+  }
+  const lexed = shellCommands(command)
+  // A listed file read through a redirect, by whatever program: nothing ordinary does that.
+  if (lexed.some((entry) => entry.reads.some((word) => namesSecretFile(word)))) return 'reading or sending a credential file'
+  const commands = lexed.flatMap((entry) => executables(entry.words).map((words) => ({ ...entry, raw: entry.words, words })))
   const selectsBmn = inheritedSelector || commands.some(({ words }) => /^(pgrep|pidof|ps|grep|rg|awk|cat)$/.test(nameOf(words[0])) && words.slice(1).some((word) => /\bbmn\b/i.test(word)))
   for (const entry of commands) {
-    const { words, input, pipe, inputFrom, reads } = entry
+    const { words, input, pipe, inputFrom, reads, raw, scope, then } = entry
     const [program, ...args] = words
     const name = nameOf(program)
-    if (name === 'cd') place = args.find((word) => !word.startsWith('-')) ?? null
+    const place = placeIn(scope)
+    if (name === 'cd' && !['|', '&', '||'].includes(then)) {
+      const to = folderFrom(place, args.find((word) => !word.startsWith('-')) ?? null, command)
+      places.set(scope, then !== '&&' && isThrowaway(to) && !isThrowaway(place) ? place : to)
+    }
     if (/^(kill|pkill|killall)$/.test(name) && (selectsBmn || args.some((word) => /\bbmn\b/i.test(word)))) return 'stopping BMN, which only the owner does'
     if (name === 'git') {
       const [verb, ...after] = subcommand(words, ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'])
       if (verb === 'push') { const held = pushHold(after); if (held !== null) return held }
-      const at = words.indexOf('-C')
-      const held = discardHold(verb, after, placeInText(at >= 0 ? words[at + 1] ?? null : place, command))
+      const held = discardHold(verb, after, gitPlace(words, place, raw.slice(0, raw.indexOf(program)), command))
       if (held !== null) return held
     }
     if (name === 'gh') {
@@ -497,13 +568,13 @@ export function heldCommand(command, depth = 0, inheritedSelector = false, cwd =
       if (verb === 'publish' || (name === 'yarn' && verb === 'npm' && action === 'publish')) return 'publishing a package'
       if (depth < 16 && name === 'yarn' && (verb === 'workspace' || (verb === 'workspaces' && action === 'foreach'))) {
         const nested = verb === 'workspace' ? args.slice(2) : subcommand(['foreach', ...args.slice(2)], ['--from', '--include', '--exclude', '-j', '--jobs'])
-        const held = heldCommand(nested.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(' '), depth + 1, selectsBmn, place)
+        const held = heldCommand(nested.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(' '), depth + 1, selectsBmn, placeIn(scope))
         if (held !== null) return held
       }
     }
     if (depth < 16 && (name === 'eval' || SHELLS.test(name))) {
       const code = name === 'eval' ? (args[0] === '--' ? args.slice(1) : args).join(' ') : shellCode(args, inputFrom !== undefined ? input : [pipedInput(pipe)])
-      const held = heldCommand(code, depth + 1, selectsBmn, place)
+      const held = heldCommand(code, depth + 1, selectsBmn, placeIn(scope))
       if (held !== null) return held
     }
   }

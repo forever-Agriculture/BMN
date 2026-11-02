@@ -29,17 +29,21 @@ export function handClock(): { clock: () => number; readingOver: () => void; pas
 
 /**
  * Something that happens elsewhere (a worker, a stop heard across threads), timed beside a control timer on this thread. `late`
- * is the longest that timer ran behind meanwhile: what the machine took from any thread here, near zero on a quiet one. So
- * `took` under a limit plus `late` keeps the limit where the machine has room, and does not fail what the machine imposed.
+ * is the longest that timer ran behind meanwhile, less what this thread itself worked in that time: what the machine took, near
+ * zero on a quiet one, and never this thread's own blocking work. So `took` under a limit plus `late` keeps the limit where the
+ * machine has room, does not fail what the machine imposed, and still fails work that blocks.
  */
 export async function timedBesideControl<T>(run: () => Promise<T>): Promise<{ answer: T; took: number; late: number }> {
   const every = 5
   let last = performance.now()
+  let lastWork = threadWork()
   let late = 0
   const control = setInterval(() => {
     const now = performance.now()
-    late = Math.max(late, now - last - every)
+    const work = threadWork()
+    late = Math.max(late, now - last - every - (work - lastWork))
     last = now
+    lastWork = work
   }, every)
   try {
     const began = performance.now()

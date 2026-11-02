@@ -57,17 +57,6 @@ export function withClaudeRows(data, rows) {
   return { ...data, permissions: { ...permissions, deny: [...(permissions.deny ?? []), ...rows] } }
 }
 
-/** The settings with exactly BMN's rows gone: his rows stay, and a `deny` or `permissions` BMN alone made goes too. */
-export function withoutClaudeRows(data, home) {
-  const ours = new Set(claudeDenyRows(home))
-  const deny = data.permissions?.deny
-  if (!Array.isArray(deny)) return data
-  const kept = deny.filter((row) => !ours.has(row))
-  const without = (object, name) => Object.fromEntries(Object.entries(object).filter(([key]) => key !== name))
-  const permissions = kept.length > 0 ? { ...data.permissions, deny: kept } : without(data.permissions, 'deny')
-  return Object.keys(permissions).length > 0 ? { ...data, permissions } : without(data, 'permissions')
-}
-
 /** Codex's rules file BMN owns whole: removing the file removes the rules. */
 export const CODEX_RULES_FILE = 'bmn-guard.rules'
 const list = (words) => `[${words.map((word) => JSON.stringify(word)).join(', ')}]`

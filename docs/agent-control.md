@@ -928,12 +928,17 @@ What it holds, in the shell commands of the text:
   `kernelstub`, a redirect into `/etc`, `/boot` or a grub file);
 - `rm` recursive and forced on `/`, `~`, `$HOME`, the home folder, or `~/brain`, `~/code`, `~/projects`, `~/Documents`,
   `~/.config`, `~/.ssh`, `~/.codex`, `~/.claude`;
-- `git reset --hard`, `git clean -f` (not `-n`), `git checkout -- .`, `git restore .` and `git stash drop` or `clear`, unless
-  the text puts them in a throwaway folder (a temporary folder or a run's worktree, by `-C`, `cd`, a variable the same
-  command sets, or the event's folder): there they are everyday work, and replaying 30 days of commands put them over
-  3 prompts a week;
+- `git reset --hard`, `git clean -f` (not `-n`), `git checkout -- .` and `git restore .`, unless the text puts them in a
+  throwaway folder (a temporary folder or a run's worktree): there they are everyday work, and replaying 30 days of commands
+  put them over 3 prompts a week. The folder is read in order from the event's folder: `cd` joined by `&&` (one that may have
+  failed leaves the place it was, one in a subshell ends with it, one in a pipeline or behind `&` or `||` moves nothing that
+  follows), each `-C`, a variable set before its first use with one value, `..` worked out. A substitution still open,
+  `--git-dir`, `--work-tree`, `GIT_DIR`, a wrapper's own change of folder or another user's `~name` cannot be told, so they
+  are held. Links are not followed: nothing is read from the disk;
+- `git stash drop` or `clear`, unless the folder is a temporary one: a worktree shares its repository's stash with every other;
 - a reader or sender (`cat head tail less more base64 xxd od strings cp mv scp rsync curl wget nc tar zip gpg`) naming a
-  file of BMN's secret list (`bin/secret-list.mjs`) as an argument or a redirect;
+  file of BMN's secret list (`bin/secret-list.mjs`) as an argument, and any program reading one through a redirect, whichever
+  descriptor it opens (a `.pub` is left only in `~/.ssh`);
 - `terraform`, `pulumi` or `terragrunt` `destroy`, `gcloud run deploy`, `gcloud app deploy`, `gh secret` and `gh variable`
   `set` or `delete`.
 
@@ -955,8 +960,8 @@ own rule.
 **A broken guard is loud, not blocking.** The hook still exits 0 when it fails, and the command proceeds: failing closed
 would stop every agent on every Bash call whenever an update swaps the build. While it is broken its holds are missed and
 only the native floor below applies. `bmn hooks check` and BMN's start run an entry that equals a form BMN recognises with a
-synthetic held-command event (it only names a command; nothing is executed) and report `command guard holds`, or that it
-does not answer and why; a changed entry is reported and never run, because an edited entry could run anything. Health ›
+synthetic held-command event (it only names a command; nothing is executed), within the entry's own time, since an answer
+later than that reaches the app too late, and report `command guard holds`, or that it does not answer and why; a changed entry is reported and never run, because an edited entry could run anything. Health ›
 Hooks shows the app's row as Needs you with one line, and `bmn doctor` lists it under hooks.
 
 ### The native floor
@@ -974,7 +979,9 @@ only: `docker --context x system prune` and a full path are the guard's.
   rule cannot name a file inside any command; a Codex teammate's reads are limited by its permission profile.
 - **OpenCode:** `permission.bash` and `permission.read` `deny` rows for the same commands and the secret list, inside the
   `permission` object of its global config, last in each map because the last match wins, between `BMN floor` comment marks;
-  every other byte stays his, and taking the marked lines out gives back his exact file. This is a floor with no parser, for
+  every other byte stays his, and taking the marked lines out gives back his exact file. A row he already has keeps his word and
+his place; `bmn hooks check` names one that is not `deny`. Commands naming a private key are matched up to where a shell word
+ends, so its `.pub` beside it stays readable. This is a floor with no parser, for
   the forms proven on 2.0.29: plain, `sudo` and a `&&` chain are refused, with his `plugin/guardrails.ts` absent. **A project's
   `opencode.json` or an agent's own `permission` allowing the same command overrides it** (measured). `permission.asked`
   already reaches Needs you.

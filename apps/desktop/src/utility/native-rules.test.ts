@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CODEX_RULES, NEVER_COMMANDS, claudeDenyRows, missingClaudeRows, privateKeyNames, secretPaths, withClaudeRows, withoutClaudeRows } from '../../bin/native-rules.mjs'
+import { CODEX_RULES, NEVER_COMMANDS, claudeDenyRows, missingClaudeRows, privateKeyNames, secretPaths, withClaudeRows } from '../../bin/native-rules.mjs'
 
 const homes: string[] = []
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
@@ -56,13 +56,6 @@ describe('Claude\'s deny rows (Story 102.3)', () => {
     expect(next.permissions.allow).toEqual(his.permissions.allow)
     expect(missingClaudeRows(next, home)).toEqual([])
     expect(withClaudeRows(next, [])).toBe(next)
-    expect(JSON.stringify(withoutClaudeRows(next, home))).toBe(JSON.stringify(his))
-  })
-
-  it('gives back a file that had no permissions at all', () => {
-    const home = homeWith()
-    const his = { model: 'x' }
-    expect(withoutClaudeRows(withClaudeRows(his, missingClaudeRows(his, home)!), home)).toEqual(his)
   })
 
   it.each([[{ permissions: [] }], [{ permissions: 'x' }], [{ permissions: { deny: 'x' } }], [{ permissions: null }]])('leaves %j alone: BMN cannot add to it', (data) => {
