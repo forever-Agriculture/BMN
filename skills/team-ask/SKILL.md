@@ -9,7 +9,8 @@ description: Ask one teammate of the owner's BMN team for a review, a design loo
 `bmn team ask` puts one question to one teammate of the owner's approved team: the teammate of a
 role (a reviewer, the designer, a consultant). BMN chooses it, judges the command, and runs that
 teammate's app in the app's own read-only mode with its tools (as dev-auto runs a helper), in a
-systemd user scope of its own that Stop and the time limit end. The teammate writes nothing.
+systemd user scope of its own that Stop and the time limit end. The teammate's app writes nothing;
+with `--interact` its browser scripts run as your user, and can read and write files and reach the network and local sockets.
 
 ## When it is the right tool
 
@@ -25,7 +26,9 @@ systemd user scope of its own that Stop and the time limit end. The teammate wri
   folder `--project` names; asked from outside any repository, in an empty folder of its own. It reads
   that tree and its Git history (log, show, diff, blame) itself, so name the change and the question;
   you need not paste the code.
-- **What its app's mode reaches.** Codex's read-only sandbox reads any file your user can read;
+- **What its app's mode reaches.** Codex's read-only profile reads any file your user can read except the listed
+  credential stores (SSH private keys, GnuPG private keys, the Codex and Claude Code sign-ins, the
+  KeePass stores and the `gh`, AWS, Git and `.netrc` credential files; `--features` gives each path);
   Claude Code reads only its working folder; OpenCode reads the project (and where its tracked links
   lead) for a private project ask, and nothing beyond your text otherwise. `bmn team ask --features`
   says what each app is asked with here, and the record says what the teammate's mode could read.
@@ -41,11 +44,12 @@ systemd user scope of its own that Stop and the time limit end. The teammate wri
   Playwright keeps its requests to that origin, but a redirect or a page's own request can leave it,
   and downloads are refused: `--disposable` states the app and its services are disposable test
   instances with synthetic data and no production backend or credentials; never use it otherwise.
-  Pages and screenshots go in the record.
+  Pages and screenshots go in the record. Scripts run with `--interact` run as your user, and can read and write files and reach the network and local sockets, outside
+  the app's read-only mode: the origin list and Chrome's sandbox do not contain them.
 
 Everything is private unless you declare `--data public` and BMN can verify it; only a teammate whose
 mode reads nothing beyond your text may get a public ask. Never put a credential in a question or a
-file: BMN refuses what it recognises. A credential in the answer is masked in the record and output.
+file: BMN refuses what it recognises. A credential in the answer is masked in the record and output, after the provider has seen it.
 `--access` and `--wide-read` are gone: they are refused with the new spelling.
 
 ## The key
@@ -56,6 +60,9 @@ never starts a second run. Another request needs another key; the same key with 
 is refused (`KEY_CONFLICT`).
 
 ## How to ask
+
+For a consult or a review, name where the owner's recorded decisions on that area live (the plan's
+Decisions, epic Logs, shared memory) and ask the teammate to check them before advising.
 
 ```sh
 bmn team ask --role epic-reviewer --key 20261015-review-1 \

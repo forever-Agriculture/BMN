@@ -1,4 +1,6 @@
 // MODULE: agents-team-cli.mjs - Epic 72: `bmn team ask` and `bmn team asks`, one bounded question to one approved teammate, its run listed, waited on, stopped and exported
+import { spawnSync } from 'node:child_process'
+import { CODEX_DENIED_WORDS, codexAskProfile } from './native-rules.mjs'
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { createConnection } from 'node:net'
@@ -33,10 +35,10 @@ const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --questi
        bmn team asks export <id> --output PATH      The allowlisted record, never a sign-in, a home or raw logs
 
 Asks one approved teammate in a role, in its own app's read-only mode with that mode's tools: Codex's
-read-only sandbox, Claude Code's read tools, Git history, web search and sub-agents, OpenCode's
+read-only profile, which holds back the listed credential stores, Claude Code's read tools, Git history, web search and sub-agents, OpenCode's
 read-only agent (docs/agent-control.md, "Asking a teammate"). It works in the project (--project;
 the default is your repository, else an empty folder of the run's own). Its app's own tools write
-nothing; interactive browser scripts have the access described below and in the record.
+nothing; interactive browser scripts run as your user, and can read and write files and reach the network and local sockets (below and in the record).
 --file gives whole text files in the prompt; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
 role. --origin gives the teammate (the browser role unless --role names another) a browser for your
@@ -328,6 +330,13 @@ function fileHash(path, limit = LIMITS.file) {
   }
 }
 
+/** Whether this Codex takes the read limit (Story 102.7), asked of its own sandbox command, with no model call. */
+function codexLimitStanding(launcher, environment) {
+  const home = environment.HOME ?? ''
+  const run = spawnSync(launcher, ['sandbox', ...codexAskProfile(home), '--', '/bin/true'], { env: { PATH: appSearchPath(environment), HOME: home }, stdio: 'ignore', timeout: 20_000 })
+  return run.status === 0 ? `its permission profile holds the listed credential stores back (${CODEX_DENIED_WORDS})` : 'refused: this Codex does not take the permission profile, and BMN does not ask it without one'
+}
+
 /** What `bmn team ask --features` says: per app its version, the form it is asked with and what that form reads, the version the form was last checked on, and whether a scope starts here. */
 export function askFeatures(environment = process.env) {
   const scope = scopeStarts({ environment })
@@ -340,6 +349,7 @@ export function askFeatures(environment = process.env) {
     }
     return {
       app: harness, installed: program !== null, version, form_checked_on: ASK_FORMS_CHECKED[harness],
+      ...(harness === 'codex' && program !== null ? { read_limit: codexLimitStanding(program.launcher, environment) } : {}),
       forms: { project: form('project', 'private'), 'no-project': form(null, 'private'), public: harness === 'opencode' ? form(null, 'public') : { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' } },
       pictures: ASK_UNSUPPORTED[harness]?.pictures === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].pictures}`,
       browser: ASK_UNSUPPORTED[harness]?.browser === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].browser}`, usage_while_running: harness === 'claude'
@@ -356,7 +366,7 @@ function printFeatures(asJson, environment) {
   }
   out([`Teammates' asks on ${shown.platform}; a run's systemd user scope ${shown.scope.ok ? 'starts here' : `cannot start here: ${shown.scope.reason}`}.`,
     ...shown.apps.map((app) => !app.installed ? `${APP_NAMES[app.app]}: not installed where BMN looks`
-      : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'} (form last checked on ${app.form_checked_on.version}, ${app.form_checked_on.on}): ${app.forms.project.reads}${app.forms.project.form === app.forms['no-project'].form ? '' : `; with no project, ${app.forms['no-project'].reads}`}; pictures ${app.pictures === 'offered' ? 'offered' : 'not offered'}; browser ${app.browser === 'offered' ? 'offered' : 'not offered'}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}`)].join('\n'))
+      : `${APP_NAMES[app.app]} ${app.version ?? '(version unreadable)'} (form last checked on ${app.form_checked_on.version}, ${app.form_checked_on.on}): ${app.forms.project.reads}${app.forms.project.form === app.forms['no-project'].form ? '' : `; with no project, ${app.forms['no-project'].reads}`}${app.read_limit === undefined ? '' : `; ${app.read_limit}`}; pictures ${app.pictures === 'offered' ? 'offered' : 'not offered'}; browser ${app.browser === 'offered' ? 'offered' : 'not offered'}; usage ${app.usage_while_running ? 'while it runs' : 'at the end only'}`)].join('\n'))
   return EXIT.ok
 }
 

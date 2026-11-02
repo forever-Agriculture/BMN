@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { askFeatures, teamAsker } from '../../bin/agents-team-cli.mjs'
 import type { Server } from 'node:net'
@@ -13,6 +13,8 @@ import { keyDay, keyExpired, keyFresh, keyPath, keyedRun, makeKey, recordInterru
 import { askOutcome, startAsk, stopAsk, waitAsk, watchAsk } from '../../bin/agents-team-run.mjs'
 import { startTeamSupervisor } from '../../bin/agents-team-supervisor.mjs'
 import { SCOPES, TOKEN_MAC, leftovers, ownSystemd, settle, standInControl, stubClaude, stubCodex, teamAskHome } from './test-fixtures/team-ask-harness'
+// Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const savedHome = process.env.HOME
@@ -474,7 +476,7 @@ describe('what may be asked here (72.4 AC5)', () => {
     const notPublic = { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' }
     expect(features).toMatchObject({ version: 2, platform: 'linux', scope: { ok: SCOPES } })
     expect(features.apps).toEqual([
-      { app: 'codex', installed: true, version: '0.162.1', form_checked_on: { version: '0.162.1', on: '2026-10-15' }, forms: { project: form('codex-read-only'), 'no-project': form('codex-read-only'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: false },
+      { app: 'codex', installed: true, version: '0.162.1', form_checked_on: { version: '0.166.0', on: '2026-11-02' }, read_limit: expect.any(String), forms: { project: form('codex-read-only'), 'no-project': form('codex-read-only'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: false },
       { app: 'claude', installed: true, version: '2.1.300', form_checked_on: { version: '2.1.300', on: '2026-10-15' }, forms: { project: form('claude-read-tools'), 'no-project': form('claude-read-tools'), public: notPublic }, pictures: 'offered', browser: 'offered', usage_while_running: true },
       { app: 'opencode', installed: false, version: null, form_checked_on: { version: '2.0.32', on: '2026-10-23' }, forms: { project: form('opencode-reader'), 'no-project': form('opencode-asker'), public: form('opencode-asker') },
         pictures: expect.stringMatching(/^not offered: /u), browser: expect.stringContaining('not offered: BMN adds a browser only to Codex and Claude Code'), usage_while_running: false }
@@ -483,14 +485,15 @@ describe('what may be asked here (72.4 AC5)', () => {
     stubCodex(stubs, '0.170.0')
     rmSync(join(stubs, 'claude'))
     const changed = askFeatures(env)
-    expect(changed.apps[0]).toMatchObject({ version: '0.170.0', form_checked_on: { version: '0.162.1' }, forms: { project: form('codex-read-only') } })
+    expect(changed.apps[0]).toMatchObject({ version: '0.170.0', form_checked_on: { version: '0.166.0' }, forms: { project: form('codex-read-only') } })
     expect(changed.apps[1]).toMatchObject({ installed: false })
     stubClaude(stubs)
     const shown = await bmn(['team', 'ask', '--features', '--json'])
     expect(shown.code).toBe(0)
     expect(JSON.parse(shown.stdout).apps[0]).toMatchObject({ version: '0.170.0' })
     const words = await bmn(['team', 'ask', '--features'])
-    expect(words.stdout).toContain(`Codex 0.170.0 (form last checked on 0.162.1, 2026-10-15): ${ASK_READS['codex-read-only'].words}; pictures offered; browser offered; usage at the end only`)
+    expect(words.stdout).toContain(`Codex 0.170.0 (form last checked on 0.166.0, 2026-11-02): ${ASK_READS['codex-read-only'].words}; `)
+    expect(words.stdout).toContain('pictures offered; browser offered; usage at the end only')
     expect((await bmn(['team', 'ask', '--features', '--role', 'designer'])).code).toBe(2)
     if (SCOPES) {
       const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Newer app?', '--key', key('newer')])

@@ -87,7 +87,7 @@ describe.skipIf(!SCOPES)('Agents › Asks reads his agents\' asks (73.1)', { tim
     const listed = appAsks()
     expect(listed.asks[0]).toMatchObject({
       id: prepared.id, question: 'Is the retry bounded?', by: SESSION, agent: 'astra', agentName: 'Astra', effort: 'medium', role: 'epic-reviewer', data: 'private',
-      reads: { form: 'codex-read-only', scope: 'computer', reach: 'any file your user can read', folder: join(prepared.folder, 'work'), files: 1, pictures: 0 }, state: 'answered',
+      reads: { form: 'codex-read-only', scope: 'computer', reach: 'any file your user can read except the listed credential stores', folder: join(prepared.folder, 'work'), files: 1, pictures: 0 }, state: 'answered',
       usage: { input: 100, cached: 10, output: 5, reasoning: 2, reportedCost: null, complete: true, incompleteReason: null }, timeLimitMinutes: 2
     })
     const line = listed.asks[0]!
@@ -98,7 +98,7 @@ describe.skipIf(!SCOPES)('Agents › Asks reads his agents\' asks (73.1)', { tim
       question: 'Is the retry bounded?\nIt loops on 503.', questionWhole: true, files: [{ path: retry, bytes: 25 }], pictures: [], project: null,
       teammate: { app: 'codex', appName: 'Codex', appVersion: '0.162.1', model: 'gpt-6-astra', sessionSource: 'thread.started' }, subagents: [], masked: []
     })
-    expect(listed.asks[0]!.reads.words).toMatch(/^Codex's read-only sandbox: any file your user can read/u)
+    expect(listed.asks[0]!.reads.words).toMatch(/^Codex's read-only permission profile: any file your user can read except the listed credential stores/u)
     // With no project, the teammate works in an empty folder of the run's own.
     expect(opened.answer).toBe(`codex answer ${opened.answer!.slice(13, 21)} in ${join(prepared.folder, 'work')}\n`)
     // Nothing of his sign-in is in what the app reads.

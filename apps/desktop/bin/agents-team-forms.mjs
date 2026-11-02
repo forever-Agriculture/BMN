@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { OPENCODE_FORM_TESTED, openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
 import { BROWSER_SERVER, browserServer, browserTools } from './agents-team-browser.mjs'
 import { realOrNull } from './shared-helpers.mjs'
+import { CODEX_DENIED_WORDS, codexAskProfile } from './native-rules.mjs'
 
 /**
  * A teammate's ask runs its app in that app's own read-only mode, with all the tools the mode keeps
@@ -21,7 +22,7 @@ export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
 
 /** The app version each form was last checked on with 72.9's measurement script, and when (R72-FR8). Never a gate. */
 export const ASK_FORMS_CHECKED = Object.freeze({
-  codex: { version: '0.162.1', on: '2026-10-15' },
+  codex: { version: '0.166.0', on: '2026-11-02' },
   claude: { version: '2.1.300', on: '2026-10-15' },
   opencode: OPENCODE_FORM_TESTED
 })
@@ -51,8 +52,8 @@ export const ASK_RUN_FILES = Object.freeze({
  * user can read, `folder` only its working folder, `text` nothing beyond the asker's text.
  */
 export const ASK_READS = Object.freeze({
-  'codex-read-only': { scope: 'computer', reach: 'any file your user can read', words: 'Codex\'s read-only sandbox: any file your user can read, with its shell, Git, web search and sub-agents; it writes nothing' },
-  'codex-qa': { scope: 'computer', reach: 'any file your user can read', words: 'Codex QA form: native command, web, app and collaboration tools switched off; read-only sandbox; tool closure remains unverified until its version-pinned fence passes' },
+  'codex-read-only': { scope: 'computer', reach: 'any file your user can read except the listed credential stores', words: `Codex's read-only permission profile: any file your user can read except the listed credential stores (${CODEX_DENIED_WORDS}), with its shell, Git, web search and sub-agents; it writes nothing` },
+  'codex-qa': { scope: 'computer', reach: 'any file your user can read except the listed credential stores', words: 'Codex QA form: native command, web, app and collaboration tools switched off; read-only permission profile without the listed credential stores; tool closure remains unverified until its version-pinned fence passes' },
   'claude-qa': { scope: 'text', reach: 'nothing beyond its QA brief and browser', words: 'Claude Code QA form: restricted, no built-in tools, only the QA relay\'s browser tools; a stand-in fence proves that closure for each run' },
   'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history through BMN\'s git, web search and sub-agents; it writes nothing' },
   'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
@@ -63,7 +64,7 @@ export const ASK_READS = Object.freeze({
 export function askReads(form, browser = null) {
   if (browser?.interact !== true || browser.qa === true) return ASK_READS[form]
   return { scope: 'computer', reach: 'any file your user can read',
-    words: 'Interactive Playwright scripts: any file your user can read; scripts run in the MCP server process as your user and can write files and make network requests, outside the app\'s read-only mode' }
+    words: 'Interactive Playwright scripts: any file your user can read; scripts run in the MCP server process as your user, and can read and write files and reach the network and local sockets, outside the app\'s read-only mode' }
 }
 
 /** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
@@ -223,7 +224,7 @@ export function askCommand(harness, program, request) {
     // a browser ask enables only its own stdio server in the override above.
     const mcp = codexServers(request.browser, request.folder, request.inherited)
     command = [program.launcher, 'exec', '--skip-git-repo-check', '-C', request.cwd, '-m', request.model, '-c', `model_reasoning_effort=${request.effort}`,
-      ...CODEX_ASK_MCP_OFF.flatMap((item) => ['-c', item]), ...(request.form === 'codex-qa' ? [...CODEX_QA_CONFIG.flatMap(item => ['-c', item]), ...CODEX_QA_DISABLED.flatMap(feature => ['--disable', feature])] : []), '-c', mcp, '-c', 'approval_policy="never"', '--sandbox', 'read-only', ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
+      ...CODEX_ASK_MCP_OFF.flatMap((item) => ['-c', item]), ...(request.form === 'codex-qa' ? [...CODEX_QA_CONFIG.flatMap(item => ['-c', item]), ...CODEX_QA_DISABLED.flatMap(feature => ['--disable', feature])] : []), '-c', mcp, '-c', 'approval_policy="never"', ...codexAskProfile(home), ...pictures.flatMap((picture) => ['-i', picture]), ...context.argv,
       '--json', '-o', join(request.folder, ASK_RUN_FILES.codexAnswer), '-']
   } else if (harness === 'claude' && request.form === 'claude-qa') {
     environment = { HOME: home, PATH: path, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ...(asker.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: asker.CLAUDE_CONFIG_DIR } : {}) }

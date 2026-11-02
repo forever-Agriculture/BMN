@@ -2299,7 +2299,7 @@ options, every shell redirection, a background shell) and every tool not given. 
 
 | App | Form | Command (after `env -i HOME PATH …`) | What it can read |
 | --- | --- | --- | --- |
-| Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c features.plugins=false -c features.apps=false -c mcp_servers=<isolated-map> -c approval_policy="never" --sandbox read-only [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read, with its shell, Git, web search and sub-agents; its sandbox writes nothing and keeps the shell off the network |
+| Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c features.plugins=false -c features.apps=false -c mcp_servers=<isolated-map> -c approval_policy="never" -c default_permissions="bmn_ask" -c permissions.bmn_ask=... [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read except the listed credential stores (`native-rules.mjs` `codexDeniedPaths`), with its shell, Git, web search and sub-agents; its profile extends `:read-only`, writes nothing and keeps the shell off the network. Codex's profiles are beta: a Codex that refuses this one fails the ask with a reason naming it and `--features` says so; BMN never runs it without the profile (Epic 102 D8) |
 | Claude Code | `claude-read-tools` | `claude -p --model <model> --effort <effort> --restricted --tools Read,Grep,Glob,Bash,WebSearch,Agent --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' WebSearch Agent --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose`, BMN's `git` first on `PATH` | its working folder only (`--restricted`), with Read, Grep, Glob, Git history, web search and sub-agents |
 | OpenCode, a private project ask to a teammate whose provider takes private work | `opencode-reader` | `opencode run --standalone --format json --agent bmn-ask-reader -m <provider>/<model>#<effort> --title 'BMN ask'` in BMN's own OpenCode folder (its Go sign-in, 70.4), the agents given in `OPENCODE_CONFIG_CONTENT`, BMN's `git` first on `PATH` | the project folder only, through BMN's read/glob/grep/Git broker, with web search and one bounded read-only sub-agent `bmn-reader`; outside and symlink escapes are refused |
 | OpenCode, any other ask | `opencode-asker` | the same with `--agent bmn-ask-asker`, every action denied (`"*": "deny"`) | nothing beyond the asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public work only, where the owner's folder exceptions can cover the question and files but never the project reader |
@@ -2342,6 +2342,7 @@ plugins and provider settings outside BMN's folder, so BMN cannot offer its conf
   (`CREDENTIAL_FOUND`, naming the file and pattern, never the value). A credential the answer or the
   app's output carries is masked as `[credential masked by BMN: <name>]` in `answer.md`, the record,
   the printed answer and the export, and the outcome lists what was masked (`credentials_masked`).
+  Masking happens only there, after the provider has seen the text.
   A value that says it is made up (`synthetic`, `example`, `placeholder` and the like) is not counted.
 - **The project's state.** A project ask records the project's commit and whether its tree is clean
   (by Git's own status, read without its locks), immediately before the app starts and once it has
@@ -2429,8 +2430,8 @@ the older name `browser_run_code` is not the pinned server's tool name. Use the 
 `browser_take_screenshot` tool for screenshots retained in the ask record. Look-only asks do not
 offer script execution. File upload, drag and drop and one request's body remain unlisted.
 
-Interactive scripts execute JavaScript in the MCP server process as your user. They can read/write
-files and make network requests outside the app's read-only mode. BMN accounts for that computer-wide
+Interactive scripts execute JavaScript in the MCP server process as your user. They can read and
+write files and reach the network and local sockets, outside the app's read-only mode. BMN accounts for that computer-wide
 read reach in provider consent, manifests, receipts and the Asks display; a project-folder exception
 does not cover it. The origin list, Chrome sandbox and artifact folder do not contain server scripts.
 
@@ -2554,7 +2555,7 @@ Every `--json` output is one object with a version. An ask, `show` and `wait` (`
   "version": 1, "id": "20261015T021500-1a2b3c4d", "state": "answered", "exit": 0,
   "role": "focused-reviewer", "chosen_by": "chain", "project": "/home/u/code/app", "data": "private",
   "teammate": { "agent": "astra", "app": "codex", "app_version": "0.162.1", "form": "codex-read-only",
-    "could_read": "Codex's read-only sandbox: any file your user can read, …", "works_in": "/home/u/code/app",
+    "could_read": "Codex's read-only permission profile: any file your user can read except the listed credential stores, …", "works_in": "/home/u/code/app",
     "requested": { "model": "gpt-6-astra", "effort": "medium" },
     "observed": { "session": "01a13c80-…", "session_source": "thread.started", "model": "gpt-6-astra", "model_source": "turn span",
       "effort": "medium", "effort_source": "turn span" } },

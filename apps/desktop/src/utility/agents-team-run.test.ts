@@ -79,10 +79,10 @@ describe.skipIf(!SCOPES)('an ask run in its app\'s own read-only mode, in a syst
     const prepared = ask({})
     expect(prepared.verdict.verdict).toBe('PASS')
     expect(prepared.cwd).toBe(join(prepared.folder, 'work'))
-    // Codex's own read-only sandbox in the owner's own home: no container, copy, home or sign-in of BMN's, and nothing of the asker's environment.
+    // Codex's own read-only permission profile in the owner's own home: no container, copy, home or sign-in of BMN's, and nothing of the asker's environment.
     expect(prepared.argv.slice(0, 2)).toEqual(['/usr/bin/env', '-i'])
     expect(prepared.argv).toContain(`HOME=${home}`)
-    expect(prepared.argv).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only', '-C', prepared.cwd, '--json']))
+    expect(prepared.argv).toEqual(expect.arrayContaining(['exec', '-C', prepared.cwd, 'default_permissions="bmn_ask"', '--json']))
     expect(prepared.argv.join(' ')).not.toContain(ENV_SENTINEL)
     const started = startAsk(prepared, { timeLimitMinutes: 2 })
     expect(started.pid).toBeGreaterThan(0)
@@ -177,6 +177,14 @@ describe.skipIf(!SCOPES)('an ask run in its app\'s own read-only mode, in a syst
     const hash = (text: string): string => execFileSync('md5sum', { input: text, encoding: 'utf8' }).slice(0, 8)
     expect(first.observed.session).toBe(`${hash('First question?')}-0000-7000-8000-000000000000`)
     expect(second.observed.session).toBe(`${hash('Second question?')}-0000-7000-8000-000000000000`)
+  })
+
+  it('a Codex that refuses the permission profile fails the ask with a reason naming it: it never runs without the profile (102.7 AC4)', async () => {
+    const refused = ask({ question: 'Is it bounded? NOPROFILE' })
+    expect(refused.argv.join(' ')).toContain('default_permissions="bmn_ask"')
+    expect(refused.argv).not.toContain('--sandbox')
+    startAsk(refused, { timeLimitMinutes: 2 })
+    expect(await waitAsk(refused.folder, { timeoutMs: 20_000 })).toMatchObject({ state: 'failed', reason: expect.stringContaining('refuses the permission profile') })
   })
 
   it('a failed app is "failed" with its words; the app\'s end, Stop and the time limit end every process it started, also one that left its group and ignores TERM (72.9 AC3, AC6)', async () => {
@@ -462,7 +470,7 @@ describe.skipIf(!SCOPES)('bmn team ask and bmn team asks (72.3 AC3, 72.9 AC4)', 
     const asked = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question-file', '-'], 'Is the loop bounded?\n')
     expect(asked.code, asked.stderr).toBe(0)
     expect(asked.stdout).toMatch(/^codex answer [0-9a-f]{8} in \S+\/work\n$/u)
-    expect(asked.stderr).toMatch(/^bmn: asked astra \(codex gpt-6-astra, medium; chosen by chain\) in \S+\/work; it can read any file your user can read, .*; run (\d{8}T\d{6}-[0-9a-f]{8}), key \d{8}-shell-[0-9a-f]{8}, supervisor \d+\n$/u)
+    expect(asked.stderr).toMatch(/^bmn: asked astra \(codex gpt-6-astra, medium; chosen by chain\) in \S+\/work; it can read any file your user can read except the listed credential stores \(.*; run (\d{8}T\d{6}-[0-9a-f]{8}), key \d{8}-shell-[0-9a-f]{8}, supervisor \d+\n$/u)
     const id = /run (\S+),/.exec(asked.stderr)![1]!
     const json = await bmn(['team', 'ask', '--role', 'designer', '--question', 'And the other loop?', '--json'])
     expect(JSON.parse(json.stdout)).toMatchObject({ version: 1, state: 'answered', exit: 0, role: 'designer', chosen_by: 'chain', data: 'private',
@@ -473,7 +481,7 @@ describe.skipIf(!SCOPES)('bmn team ask and bmn team asks (72.3 AC3, 72.9 AC4)', 
     expect(list.asks.map((entry: { id: string }) => entry.id)).toContain(id)
     const shown = (await bmn(['team', 'asks', 'show', id])).stdout
     expect(shown).toContain('epic-reviewer -> astra (codex 0.162.1 gpt-6-astra, medium), chosen by chain')
-    expect(shown).toMatch(/^Could read: Codex's read-only sandbox: any file your user can read, .*; worked in \S+\/work$/mu)
+    expect(shown).toMatch(/^Could read: Codex's read-only permission profile: any file your user can read except the listed credential stores .*; worked in \S+\/work$/mu)
     const exported = await bmn(['team', 'asks', 'export', id, '--output', join(home, 'bundle')])
     expect(exported.code).toBe(0)
     expect(existsSync(join(home, 'bundle/answer.md'))).toBe(true)

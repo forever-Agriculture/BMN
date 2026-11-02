@@ -124,6 +124,9 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
       }
     } else if (keys.length === 1 && CODEX_NEUTRAL_KEYS.includes(keys[0])) {
       continue
+    } else if (parsed.askProfile === true && (entry.startsWith('default_permissions=') || keys[0] === 'permissions')) {
+      // BMN's own built ask (102.7): the team-ask check compares its whole command, and the profile says what it reads, never where it goes.
+      continue
     } else if (entry === 'features.plugins=false' || entry === 'features.apps=false') {
       // Fixed ask/research tool isolation switches; no other feature setting becomes neutral.
       continue

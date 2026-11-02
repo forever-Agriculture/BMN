@@ -253,7 +253,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
 
     // Where it goes, read as `roster check` reads the same app's dispatch from the same folder: the same answers evaluate gives.
     const parsed = agent.harness === 'codex'
-      ? { harness: 'codex', command: program.launcher, envMode: 'clean', assignments: built.environment, config: built.command.filter((_, index) => built.command[index - 1] === '-c'), disable: [], model: agent.model, sandbox: 'read-only', resume: null, cd: cwd }
+      ? { harness: 'codex', command: program.launcher, envMode: 'clean', assignments: built.environment, config: built.command.filter((_, index) => built.command[index - 1] === '-c'), disable: [], model: agent.model, sandbox: 'read-only', askProfile: true, resume: null, cd: cwd }
       : agent.harness === 'claude'
         ? { harness: 'claude', command: program.launcher, envMode: 'clean', assignments: built.environment, addDir: [], model: agent.model, effort: inputs.effort }
         // OpenCode's command read by the same parser as every OpenCode dispatch.
@@ -283,7 +283,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
       form, reads: { scope: reads.scope, words: reads.words, folder: cwd }, project, cwd, ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
-      sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: '--sandbox read-only', approval_policy: 'never', tools: 'Codex\'s own: shell, Git, web search, sub-agents' }
+      sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: 'Codex\'s permission profile on :read-only', approval_policy: 'never', tools: 'Codex\'s own: shell, Git, web search, sub-agents' }
         : agent.harness === 'claude' ? { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'WebSearch', 'Agent'] }
           : { mode: 'read-only', source: '--agent', agent: own.agent, tools: form === 'opencode-reader' ? ['read', 'glob', 'grep', 'list', 'git log', 'git show', 'git diff', 'git blame', 'websearch', `subagent ${OPENCODE_ASK_AGENTS.subagent}`] : [] },
       run: basename(folder), data: label, consent,

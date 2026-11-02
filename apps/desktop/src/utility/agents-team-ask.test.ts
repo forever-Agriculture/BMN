@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../bin/agents-check.mjs'
+import { codexAskProfile } from '../../bin/native-rules.mjs'
 import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS, askFormName } from '../../bin/agents-team-forms.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
@@ -384,7 +385,7 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     writeFileSync(join(home, 'mcp-list.json'), JSON.stringify(servers))
     const result = ask({})
     expect(result.verdict.verdict).toBe('PASS')
-    expect(result.argv).toEqual(expect.arrayContaining(['mcp_servers={"other.read"={enabled=false},"playwright"={enabled=false}}', 'approval_policy="never"', '--sandbox', 'read-only']))
+    expect(result.argv).toEqual(expect.arrayContaining(['mcp_servers={"other.read"={enabled=false},"playwright"={enabled=false}}', 'approval_policy="never"', 'default_permissions="bmn_ask"']))
     const manifest = JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.manifest), 'utf8'))
     expect(manifest.codex_mcp_servers).toEqual([{ name: 'other.read', transport: 'streamable_http' }, { name: 'playwright', transport: 'stdio' }])
     writeFileSync(join(home, 'mcp-list.json'), JSON.stringify([...servers, { name: 'new', enabled: true, transport: { type: 'stdio' } }]))
@@ -413,13 +414,13 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(result.verdict).toMatchObject({
       verdict: 'PASS', receipt: {
         mode: 'ask', agent: 'astra', data: 'private', effort: 'medium', form: 'codex-read-only', reads: { scope: 'computer', words: ASK_READS['codex-read-only'].words }, project: null, cwd: work,
-        route: { host: 'default:openai' }, harness_version: { version: '0.162.1', form_checked_on: { version: '0.162.1', on: '2026-10-15' } }
+        route: { host: 'default:openai' }, harness_version: { version: '0.162.1', form_checked_on: { version: '0.166.0', on: '2026-11-02' } }
       }
     })
     // What its mode reads is an input of its own, judged as the question is.
     expect(result.verdict.receipt?.consent).toEqual([
       { kind: 'question', label: 'the question', root: null, basis: 'the provider may see private work' },
-      { kind: 'mode', label: 'what Codex\'s read-only mode can read (any file your user can read)', root: null, basis: 'the provider may see private work' }
+      { kind: 'mode', label: 'what Codex\'s read-only mode can read (any file your user can read except the listed credential stores)', root: null, basis: 'the provider may see private work' }
     ])
     expect(realpathSync(join(result.folder, '..'))).toBe(realpathSync(teamRunsDirectory()))
     expect(readFileSync(join(result.folder, ASK_RUN_FILES.prompt), 'utf8')).toBe(QUESTION)
@@ -430,7 +431,7 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(result.argv).toContain(`HOME=${home}`)
     const command = result.argv.slice(result.argv.indexOf(join(stubs, 'codex')))
     expect(command).toEqual([join(stubs, 'codex'), 'exec', '--skip-git-repo-check', '-C', work, '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort=medium', '-c', 'features.plugins=false', '-c', 'features.apps=false', '-c', 'mcp_servers={}', '-c', 'approval_policy="never"',
-      '--sandbox', 'read-only', '--json', '-o', join(result.folder, ASK_RUN_FILES.codexAnswer), '-'])
+      ...codexAskProfile(home), '--json', '-o', join(result.folder, ASK_RUN_FILES.codexAnswer), '-'])
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.manifest), 'utf8'))).toMatchObject({ version: 2, form: 'codex-read-only', reads: { scope: 'computer', folder: work }, project: null })
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.request), 'utf8'))).toMatchObject({ role: 'epic-reviewer', agent: 'astra', effort: 'medium', chosen_by: 'chain', form: 'codex-read-only', reads: ASK_READS['codex-read-only'].words, data: 'private', app_version: '0.162.1' })
     expect(JSON.parse(readFileSync(join(result.folder, ASK_RUN_FILES.request), 'utf8'))).not.toHaveProperty('access')
@@ -467,7 +468,7 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
       { kind: 'question', label: 'the question', root, basis: 'the provider may see private work' },
       { kind: 'file', label: join(root, 'src/retry.ts'), root, basis: 'the provider may see private work' },
       { kind: 'project', label: `the project ${root}`, root, basis: 'the provider may see private work' },
-      { kind: 'mode', label: 'what Codex\'s read-only mode can read (any file your user can read)', root: null, basis: 'the provider may see private work' }
+      { kind: 'mode', label: 'what Codex\'s read-only mode can read (any file your user can read except the listed credential stores)', root: null, basis: 'the provider may see private work' }
     ])
   })
 
@@ -504,7 +505,7 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(inside.verdict).toMatchObject({ verdict: 'PASS', receipt: { agent: 'fable', data: 'private', consent: [{ kind: 'question', basis: 'exception app' }, { kind: 'project', basis: 'exception app' }, { kind: 'mode', basis: 'exception app' }] } })
     // Codex's sandbox reads any file the owner's user can: no folder's exception covers that.
     const codex = refusal(() => ask({ agent: 'astra', project: root }, { cwd: root }))
-    expect(codex.message).toContain('what Codex\'s read-only mode can read (any file your user can read) is private work')
+    expect(codex.message).toContain('what Codex\'s read-only mode can read (any file your user can read except the listed credential stores) is private work')
     // A file from outside that folder is refused, before the run's folder is made.
     writeFileSync(join(home, 'outside.md'), 'outside\n')
     const runs = readdirSync(teamRunsDirectory()).length
@@ -559,7 +560,8 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     const inputs = { agent: 'astra', role: 'epic-reviewer', effort: 'medium', data: 'private' as const, run: result.folder, argv: result.argv, cwd: result.cwd }
     const options = { environment: env, now: NOW }
     expect(evaluateAsk(inputs, options).verdict).toBe('PASS')
-    const widened = result.argv.map((part) => (part === 'read-only' ? 'workspace-write' : part))
+    const widened = result.argv.map((part) => part.replace('extends=":read-only"', 'extends=":workspace"'))
+    expect(widened).not.toEqual(result.argv)
     expect(evaluateAsk({ ...inputs, argv: widened }, options)).toMatchObject({ verdict: 'REFUSED' })
     const environment = [...result.argv]
     environment.splice(3, 0, 'CODEX_HOME=/tmp/elsewhere')

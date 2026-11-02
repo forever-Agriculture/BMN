@@ -15,6 +15,14 @@ import { finishQa } from './agents-team-qa.mjs'
 import { askSettings } from './agents-team-places.mjs'
 import { RUN_FILES, requestStop, runState, startTeamSupervisor, writeWhole } from './agents-team-supervisor.mjs'
 import { readJson, readJsonOrNull } from './shared-helpers.mjs'
+/** A Codex that refuses the read limit it is asked with (Story 102.7) says so in its error stream; the ask fails naming it, and never runs without. */
+function codexRefusedLimit(harness, folder) {
+  if (harness !== 'codex') return null
+  let text = ''
+  try { text = readFileSync(join(folder, RUN_FILES.stderr), 'utf8') } catch { return null }
+  return /default_permissions|permissions\.bmn_ask|permission profile/iu.test(text)
+    ? 'this Codex refuses the permission profile that keeps a teammate from the listed credential stores; BMN does not ask it without one (see bmn team ask --features)' : null
+}
 
 /**
  * An ask starts only as it was judged (R72-FR3, 72.3 AC1): the approved team, the app's program and
@@ -712,11 +720,11 @@ export function finishRun(folder, { interrupted = null } = {}) {
     reason = exit.reason ?? 'the app could not be started'
   } else if (seen.answer === null || seen.answer.trim() === '') {
     outcome = 'failed'
-    reason = seen.failure ?? (exit.code === 0 ? 'the app ended without an answer' : `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`)
+    reason = codexRefusedLimit(harness, folder) ?? seen.failure ?? (exit.code === 0 ? 'the app ended without an answer' : `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`)
   } else if (seen.failure !== null || exit.code !== 0) {
     // Text before a failure is no answer: the app said it failed, or ended with an error code.
     outcome = 'failed'
-    reason = seen.failure ?? `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`
+    reason = codexRefusedLimit(harness, folder) ?? seen.failure ?? `the app ended with code ${exit.code ?? exit.signal ?? 'unknown'}`
   } else if (seen.problems.length > 0) {
     outcome = 'not-attributed'
     reason = seen.problems.join('; ')

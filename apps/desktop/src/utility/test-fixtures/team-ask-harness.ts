@@ -77,6 +77,7 @@ case $question in *STRAY*) setsid sh -c "trap '' TERM HUP; sleep 300 # stray of 
 case $question in *SLEEP*) sleep 60;; esac
 case $question in *NAP*) sleep 2;; esac
 case $question in *FAIL*) echo 'provider error' >&2; exit 3;; esac
+case $question in *NOPROFILE*) echo 'error: unknown configuration key default_permissions' >&2; exit 1;; esac
 `
 export function stubCodex(stubs: string, version = '0.162.1'): void {
   writeFileSync(join(stubs, 'codex'), `#!/bin/sh
