@@ -81,6 +81,8 @@ export const refusal = (state: TurnRefusalState, reason: TurnRefusalReason): Tur
 
 /** Hooks for tests: moments at which a test swaps something under the capture. Never set by the app. */
 export interface CaptureSeams {
+  /** The capture's own clock for its time limits; a test moves it by hand, so that what happens at a limit does not depend on a busy machine. */
+  clock?: () => number
   afterRootOpened?: (root: string) => void | Promise<void>
   afterList?: (root: string) => void | Promise<void>
   beforeEntry?: (path: string, root: string) => void | Promise<void>
@@ -476,9 +478,10 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   const gitProgram = options.git === undefined ? turnGitExecutable() : options.git
   if (!gitProgram) return refusal('unavailable', 'Git is not installed')
   const startedAt = Date.now()
-  const startedClock = performance.now()
+  const clock = options.seams?.clock ?? ((): number => performance.now())
+  const startedClock = clock()
   const phases: Record<string, number> = {}
-  let mark = startedClock
+  let mark = performance.now()
   const phase = (name: string): void => {
     const now = performance.now()
     phases[name] = Math.round((now - mark) * 10) / 10
@@ -490,15 +493,15 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
   // inside it. A capture is whole only when everything, its last Git command and its lists included, was
   // done in its time.
   const closing = Math.min(250, limits.captureMs / 8)
-  const readingOver = (): boolean => performance.now() - startedClock > limits.captureMs - closing
+  const readingOver = (): boolean => clock() - startedClock > limits.captureMs - closing
   // Everything done in slices after the reading (looking at an earlier capture's paths, the lists, moving
   // staged files in) ends this much before the capture's time. What is left for after it is not sliced and
   // is bounded by the limit of entries: making the record and the cache, writing them, the renames.
   const tail = Math.min(100, limits.captureMs / 20)
-  const slicedOver = (): boolean => performance.now() - startedClock > limits.captureMs - tail
+  const slicedOver = (): boolean => clock() - startedClock > limits.captureMs - tail
   /** The signal of one Git command: the caller's cancel, and what is left of the time for the capture's sliced work, so that what follows the command fits in the capture's time too. */
   const gitSignal = (): AbortSignal => {
-    const left = limits.captureMs - tail - (performance.now() - startedClock)
+    const left = limits.captureMs - tail - (clock() - startedClock)
     const timeout = AbortSignal.timeout(Math.max(1, Math.ceil(left)))
     return caller ? AbortSignal.any([caller, timeout]) : timeout
   }
@@ -573,7 +576,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     for (let going = takingOut.get(store.directory); going !== undefined && !waitedOut; going = takingOut.get(store.directory)) {
       let timer: NodeJS.Timeout | undefined
       const passed = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, Math.max(0, limits.captureMs - tail - (performance.now() - startedClock)))
+        timer = setTimeout(resolve, Math.max(0, limits.captureMs - tail - (clock() - startedClock)))
       })
       await Promise.race([going, stopped(caller), passed])
       clearTimeout(timer)
@@ -1037,7 +1040,7 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
     const written = most() <= room
     const adds = written ? bytesStored + beside() : 0
     phase('record')
-    const stagedTook = performance.now() - startedClock
+    const stagedTook = clock() - startedClock
     let settled = false
     return {
       state: record.state,
@@ -1049,8 +1052,8 @@ export async function capture(folder: string, options: CaptureOptions): Promise<
         if (settled) throw new Error('this capture was already published or discarded')
         settled = true
         // The capture's clock goes on from where staging left it; a wait between the two is nobody's work.
-        const began = performance.now()
-        const spent = (): number => stagedTook + (performance.now() - began)
+        const began = clock()
+        const spent = (): number => stagedTook + (clock() - began)
         const moved: string[] = []
         let movedBytes = 0
         let real = false

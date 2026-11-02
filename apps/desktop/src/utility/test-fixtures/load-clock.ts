@@ -9,6 +9,23 @@ export function threadWork(): number {
   return (used.user + used.system) / 1000
 }
 
+/** The limit of a capture whose clock the test moves by hand: its reading ends 250 ms before, its sliced work 100 ms before. */
+export const HAND_LIMIT_MS = 60_000
+
+/**
+ * A capture's clock that stands still until the test moves it, for what happens at a capture's limits: the margins there are
+ * capped at 250 and 100 ms of its time, which a busy machine can take from any real wait, however long the limit.
+ */
+export function handClock(): { clock: () => number; readingOver: () => void; passed: () => void } {
+  let now = 0
+  return {
+    clock: () => now,
+    /** Past the end of its reading, with time left to keep what it read. */
+    readingOver: () => { now = HAND_LIMIT_MS - 240 },
+    passed: () => { now = HAND_LIMIT_MS + 1 }
+  }
+}
+
 /**
  * Something that happens elsewhere (a worker, a stop heard across threads), timed beside a control timer on this thread. `late`
  * is the longest that timer ran behind meanwhile: what the machine took from any thread here, near zero on a quiet one. So

@@ -734,7 +734,7 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
   it('ends at its deadline, and reads nothing', async () => {
     respond = () => { /* never answers */ }
     const started = Date.now()
-    const result = await ask({ deadlineMs: 300 })
+    const result = await ask({ deadlineMs: 3_000 })
     // The server never answers; the command starts its own process in this time too.
     expect(Date.now() - started).toBeLessThan(15_000)
     expect(result).toMatchObject({ ok: false, outcome: 'timeout', readings: { claim: { reading: NO_ANSWER }, kind: { reading: NO_ANSWER }, quality: { reading: NO_ANSWER } } })
@@ -749,9 +749,9 @@ describe('one request to the approved host and path (65.2 AC3)', () => {
       setTimeout(() => {
         response.writeHead(503)
         response.end()
-      }, 250)
+      }, 2_500)
     }
-    const result = await ask({ deadlineMs: 300 })
+    const result = await ask({ deadlineMs: 3_000 })
     expect(result.ok).toBe(false)
     expect(['failed', 'timeout']).toContain(result.outcome)
     expect(requests.length).toBeLessThanOrEqual(2)

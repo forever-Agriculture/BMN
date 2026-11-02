@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { threadWork, timedBesideControl } from './test-fixtures/load-clock'
+import { HAND_LIMIT_MS, handClock, threadWork, timedBesideControl } from './test-fixtures/load-clock'
 import { capture, isCapturing, isRefusal, type CaptureOptions, type CaptureOutcome, type StagedCapture } from './turn-changes-capture'
 import { compareCaptures, fileDifference } from './turn-changes-compare'
 import { TurnStore, type TreeRow, type TurnCache } from './turn-changes-store'
@@ -696,24 +696,27 @@ describe('the bounds of a capture, at and one past', () => {
     // A file is taken as read before only when it had been still for a moment when it was read.
     await sleep(25)
     const store = new TurnStore(at.dataRoot, 's-case', at.repo)
-    const began = performance.now()
+    const hand = handClock()
     let seen = 0
-    // The third entry is held back until the reading's time is over (the last 75 of 600 ms): nothing after it is read.
-    const timed = await timedBesideControl(async () => staged(await capture(at.repo, {
-      ...at.options, store, limits: { captureMs: 600 },
+    // At the third entry the reading's time is over: nothing after it is read.
+    const slow = staged(await capture(at.repo, {
+      ...at.options, store, limits: { captureMs: HAND_LIMIT_MS },
       seams: {
+        clock: hand.clock,
         beforeEntry: async () => {
           seen += 1
-          if (seen === 3) await sleep(Math.max(0, began + 535 - performance.now()))
+          if (seen !== 3) return
+          hand.readingOver()
+          // It looks at its clock when it next gives the thread a turn, every 4 ms of its reading.
+          await sleep(5)
         }
       }
-    })))
-    const slow = timed.answer
-    expect(slow.record).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null })
-    expect(slow.tookMs).toBeLessThan(600 + timed.late)
+    }))
+    expect(slow.record).toMatchObject({ state: 'incomplete', bound: '60 s', tree: null })
+    expect(slow.tookMs).toBeLessThan(HAND_LIMIT_MS)
     const kept = await published(slow)
     // What it read is in the store and its cache names it; no list was written once its time had passed.
-    expect(kept).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null })
+    expect(kept).toMatchObject({ state: 'incomplete', bound: '60 s', tree: null })
     expect(kept.bytesStored).toBeGreaterThan(0)
     expect(filesUnder(join(store.directory, 'objects', 'trees'))).toBe(0)
     const next = staged(await capture(at.repo, { ...at.options, store }))
@@ -732,8 +735,9 @@ describe('the bounds of a capture, at and one past', () => {
     const first = place('time-record')
     four(first)
     await sleep(25)
-    const late = staged(await capture(first.repo, { ...first.options, limits: { captureMs: 300 }, seams: { beforeRecord: () => sleep(320) } }))
-    expect(late.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', tree: null })
+    const recordHand = handClock()
+    const late = staged(await capture(first.repo, { ...first.options, limits: { captureMs: HAND_LIMIT_MS }, seams: { clock: recordHand.clock, beforeRecord: recordHand.passed } }))
+    expect(late.record).toMatchObject({ state: 'incomplete', bound: '60 s', tree: null })
     late.discard()
 
     // 2. While files are moved in: what was moved stays and is named by the cache, the rest is dropped.
@@ -742,14 +746,15 @@ describe('the bounds of a capture, at and one past', () => {
     await sleep(25)
     const store = new TurnStore(second.dataRoot, 's-case', second.repo)
     const drops: number[] = []
+    const movesHand = handClock()
     const cut = staged(await capture(second.repo, {
-      ...second.options, store, limits: { captureMs: 400 }, dropped: (bytes) => drops.push(bytes),
-      seams: { beforeMove: (moved) => (moved === 5 ? sleep(420) : undefined) }
+      ...second.options, store, limits: { captureMs: HAND_LIMIT_MS }, dropped: (bytes) => drops.push(bytes),
+      seams: { clock: movesHand.clock, beforeMove: (moved) => { if (moved === 5) movesHand.passed() } }
     }))
     expect(cut.record.state).toBe('whole')
     const done = await cut.publish()
-    expect(done?.record).toMatchObject({ state: 'incomplete', bound: '0.4 s', tree: null, base: null })
-    expect(done?.tookMs).toBeGreaterThan(400)
+    expect(done?.record).toMatchObject({ state: 'incomplete', bound: '60 s', tree: null, base: null })
+    expect(done?.tookMs).toBeGreaterThan(HAND_LIMIT_MS)
     await store.settled()
     expect(filesUnder(join(store.directory, 'objects', 'blobs'))).toBe(5)
     expect(filesUnder(join(store.directory, 'objects', 'trees'))).toBe(0)
@@ -766,12 +771,13 @@ describe('the bounds of a capture, at and one past', () => {
     const third = place('time-last')
     four(third)
     await sleep(25)
-    const last = staged(await capture(third.repo, { ...third.options, limits: { captureMs: 300 }, seams: { beforeLastLook: () => sleep(320) } }))
+    const lastHand = handClock()
+    const last = staged(await capture(third.repo, { ...third.options, limits: { captureMs: HAND_LIMIT_MS }, seams: { clock: lastHand.clock, beforeLastLook: lastHand.passed } }))
     expect(last.record.state).toBe('whole')
     const ended = await last.publish()
-    expect(ended?.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', base: null })
+    expect(ended?.record).toMatchObject({ state: 'incomplete', bound: '60 s', base: null })
     expect(ended?.record.tree).not.toBeNull()
-    expect(ended?.tookMs).toBeGreaterThan(300)
+    expect(ended?.tookMs).toBeGreaterThan(HAND_LIMIT_MS)
     const after = staged(await capture(third.repo, third.options))
     expect(after.record).toMatchObject({ state: 'whole', bytesRead: 0 })
     after.discard()
@@ -784,7 +790,7 @@ describe('the bounds of a capture, at and one past', () => {
     const drops: Array<{ bytes: number; gone: Promise<boolean> }> = []
     let stopAt = 0
     const one = staged(await capture(at.repo, {
-      ...at.options, store, dropped: (bytes, gone) => drops.push({ bytes, gone }),
+      ...at.options, store, limits: { captureMs: 60_000 }, dropped: (bytes, gone) => drops.push({ bytes, gone }),
       seams: {
         beforeMove: (moved) => {
           if (moved === 1_000 && stopAt === 0) stopAt = performance.now()
@@ -856,8 +862,9 @@ describe('the bounds of a capture, at and one past', () => {
     const base = await published(staged(await capture(at.repo, { ...at.options, store })))
     unlinkSync(join(at.repo, 'a.txt'))
     for (const seam of ['beforeProbes', 'beforeLists'] as const) {
-      const late = staged(await capture(at.repo, { ...at.options, store, base: base.id, limits: { captureMs: 80 }, seams: { [seam]: () => sleep(120) } }))
-      expect(late.record, seam).toMatchObject({ state: 'incomplete', bound: '0.08 s', base: null, gone: [], left: [] })
+      const hand = handClock()
+      const late = staged(await capture(at.repo, { ...at.options, store, base: base.id, limits: { captureMs: HAND_LIMIT_MS }, seams: { clock: hand.clock, [seam]: hand.passed } }))
+      expect(late.record, seam).toMatchObject({ state: 'incomplete', bound: '60 s', base: null, gone: [], left: [] })
       late.discard()
       const controller = new AbortController()
       const cancelled = await capture(at.repo, { ...at.options, store, base: base.id, signal: controller.signal, seams: { [seam]: () => controller.abort() } })
@@ -951,7 +958,8 @@ describe('the bounds of a capture, at and one past', () => {
     const at = place('full-treeless')
     for (let n = 0; n < 4; n += 1) write(at.repo, `d${n}/f${n}.txt`, `content ${n}\n`)
     await sleep(25)
-    const limits = { captureMs: 300 }
+    const limits = { captureMs: HAND_LIMIT_MS }
+    let hand = handClock()
     let asked = 0
     let slowAt = 0
     let before = 0
@@ -961,8 +969,10 @@ describe('the bounds of a capture, at and one past', () => {
       override hasObject(kind: 'blobs' | 'trees', hash: string): boolean {
         if (kind === 'trees' && slowAt > 0 && (asked += 1) === slowAt) {
           // The capture's whole time goes on this list: it is staged, and the next folder finds the time passed.
-          const until = performance.now() + limits.captureMs
-          while (performance.now() < until) {
+          hand.passed()
+          // It looks at its clock when it next gives the thread a turn, every 4 ms of its work.
+          const turn = performance.now() + 5
+          while (performance.now() < turn) {
             // A list that takes that long.
           }
         }
@@ -989,8 +999,9 @@ describe('the bounds of a capture, at and one past', () => {
       before = store.diskBytes()
       asked = 0
       slowAt = 5
+      hand = handClock()
       try {
-        return staged(await capture(at.repo, { ...at.options, store, limits, room }))
+        return staged(await capture(at.repo, { ...at.options, store, limits, room, seams: { clock: hand.clock } }))
       } finally {
         slowAt = 0
       }
@@ -998,7 +1009,7 @@ describe('the bounds of a capture, at and one past', () => {
 
     // Room enough: five lists were staged, and none is kept.
     const roomy = await late(1_000_000_000)
-    expect(roomy.record).toMatchObject({ state: 'incomplete', bound: '0.3 s', tree: null, bytesStored: 0 })
+    expect(roomy.record).toMatchObject({ state: 'incomplete', bound: '60 s', tree: null, bytesStored: 0 })
     const lists = store.size('staging')
     expect(lists).toBeGreaterThan(0)
     holding = []
@@ -1037,24 +1048,25 @@ describe('the bounds of a capture, at and one past', () => {
         return super.adoptCache(cache)
       }
     })(at.dataRoot, 's-case', at.repo)
-    const limits = { captureMs: 400 }
+    const limits = { captureMs: HAND_LIMIT_MS }
     const probe = staged(await capture(at.repo, { ...at.options, store, limits }))
     expect(probe.record.state).toBe('whole')
     probe.discard()
     await store.settled()
     // Exactly the room it said it needs; everything is moved in, and then its time passes before the record.
     before = store.diskBytes()
-    const late = staged(await capture(at.repo, { ...at.options, store, limits, room: probe.adds, seams: { beforeLastLook: () => sleep(450) } }))
+    const hand = handClock()
+    const late = staged(await capture(at.repo, { ...at.options, store, limits, room: probe.adds, seams: { clock: hand.clock, beforeLastLook: hand.passed } }))
     expect(late.record.state).toBe('whole')
     expect(late.adds).toBe(probe.adds)
     const made = await published(late)
-    expect(made).toMatchObject({ state: 'incomplete', bound: '0.4 s' })
+    expect(made).toMatchObject({ state: 'incomplete', bound: '60 s' })
     expect(peaks).toHaveLength(1)
     expect(peaks[0]).toBeLessThanOrEqual(probe.adds)
     // What is kept is what was counted for it, to the byte, and the record reads as any other.
     await store.settled()
     expect(store.keptBytes()).toBeLessThanOrEqual(probe.adds)
-    expect(store.record(made.id)).toMatchObject({ state: 'incomplete', bound: '0.4 s' })
+    expect(store.record(made.id)).toMatchObject({ state: 'incomplete', bound: '60 s' })
   })
 
   it('does not let a capture of an unchanged work tree pass the bound with its record', async () => {
@@ -1303,18 +1315,22 @@ describe('a capture that is cancelled, or discarded', () => {
     await sleep(25)
     const store = new TurnStore(at.dataRoot, 's-case', at.repo)
     // A kept capture whose time passed: it keeps the three files it read without a list, and only its cache names them.
-    const began = performance.now()
+    const hand = handClock()
     let seen = 0
     const cut = await published(staged(await capture(at.repo, {
-      ...at.options, store, limits: { captureMs: 600 },
+      ...at.options, store, limits: { captureMs: HAND_LIMIT_MS },
       seams: {
+        clock: hand.clock,
         beforeEntry: async () => {
           seen += 1
-          if (seen === 3) await sleep(Math.max(0, began + 535 - performance.now()))
+          if (seen !== 3) return
+          hand.readingOver()
+          // It looks at its clock when it next gives the thread a turn, every 4 ms of its reading.
+          await sleep(5)
         }
       }
     })))
-    expect(cut).toMatchObject({ state: 'incomplete', bound: '0.6 s', tree: null })
+    expect(cut).toMatchObject({ state: 'incomplete', bound: '60 s', tree: null })
     const kept = filesUnder(join(store.directory, 'objects', 'blobs'))
     expect(kept).toBe(3)
     // The publication of a second capture ends after its first file was moved in.
@@ -1469,13 +1485,14 @@ describe('a comparison that cannot be made', () => {
     for (let n = 0; n < 2_000; n += 1) write(at.repo, `d${n % 50}/f${n}.txt`, `content ${n}\n`)
     write(at.repo, 'large.bin', 'x'.repeat(200))
     await sleep(25)
-    const limits = { fileBytes: 64 }
+    // The scans and the first comparison need their time on a busy machine; the stops below are what is under test.
+    const limits = { fileBytes: 64, captureMs: 60_000 }
     const store = new TurnStore(at.dataRoot, 's-case', at.repo)
     const one = await published(staged(await capture(at.repo, { ...at.options, store, limits })))
     const two = await published(staged(await capture(at.repo, { ...at.options, store, limits, base: one.id })))
     // Nothing changed: the two trees are one, and the one file over the limit reads the same in both.
     expect(two.tree).toBe(one.tree)
-    expect(compareCaptures(store, one.id, two.id)).toMatchObject({ state: 'compared', files: [{ path: 'large.bin', state: 'not read' }], totals: { partial: true } })
+    expect(compareCaptures(store, one.id, two.id, { limitMs: 60_000 })).toMatchObject({ state: 'compared', files: [{ path: 'large.bin', state: 'not read' }], totals: { partial: true } })
     // Stopped before it began.
     expect(compareCaptures(store, one.id, two.id, { cancelled: () => true })).toEqual({ state: 'cancelled', reason: 'cancelled' })
     // Its time passes while folder lists are read: it stops at the next folder and is never given as done.
