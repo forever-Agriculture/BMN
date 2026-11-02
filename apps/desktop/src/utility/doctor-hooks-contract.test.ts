@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parseBmnDoctor } from '../../bin/doctor-results.mjs'
+import { codexHookKey } from '../../bin/codex-hook-approval.mjs'
 import { OPENCODE_PLUGIN } from '../../bin/bmn-opencode-plugin.mjs'
 import { doctorVersions } from '../../bin/doctor-adapters.mjs'
 import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
@@ -107,6 +108,17 @@ describe('Doctor hooks producer contract', () => {
       mkdirSync(join(home, '.codex/rules'), { recursive: true }); writeFileSync(join(home, '.codex/rules/bmn-guard.rules'), CODEX_RULES)
       mkdirSync(join(home, '.local/bin'), { recursive: true })
       writeFileSync(join(home, '.local/bin/bmn'), `#!/bin/sh\nexec '${process.execPath}' '${fileURLToPath(new URL('../../bin/bmn', import.meta.url))}' "$@"\n`, { mode: 0o755 })
+      // A Codex that runs these entries, answering as its app server does (Story 102.4; its other answers are codex-hook-approval.test.ts).
+      const approved = REQUIRED.codex.map((event) => ({ key: codexHookKey(join(home, '.codex/hooks.json'), event, 0, 0), command: 'bmn hook codex', enabled: true, trustStatus: 'trusted' }))
+      writeFileSync(join(home, 'answer'), JSON.stringify({ id: 2, result: { data: [{ hooks: approved, warnings: [], errors: [] }] } }))
+      writeFileSync(join(home, '.local/bin/codex'), `#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"initialize"'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
+    *'hooks/list'*) cat "$HOME/answer"; printf '\\n' ;;
+  esac
+done
+`, { mode: 0o755 })
       const plugin = join(home, '.config/opencode/bmn/tui.ts')
       mkdirSync(dirname(plugin), { recursive: true }); writeFileSync(plugin, OPENCODE_PLUGIN)
       writeFileSync(join(home, '.config/opencode/cli.json'), JSON.stringify({ plugins: [dirname(plugin)] }))
