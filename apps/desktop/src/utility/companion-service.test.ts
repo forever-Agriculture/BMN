@@ -4513,6 +4513,13 @@ describe('Away (Story 76.3)', () => {
       expect(readHandBacks().entries).toEqual([])
     })
 
+    it('takes any card while he is only leaving, when no Away is set yet (AC4)', async () => {
+      await handlers().leaveAway({ scope: { kind: 'owner' } })
+      expect(await handlers().openAttention(open())).toMatchObject({ state: 'open' })
+      expect(await handlers().openAttention(open({ origin: 'cli', prompt: undefined, title: 'A draft for the morning' }))).toMatchObject({ state: 'open' })
+      expect(readHandBacks().entries).toEqual([])
+    })
+
     it('says the same to `bmn ask` while he is here, by refusing the call with the fixed words (AC4)', async () => {
       const ask = open({ origin: 'cli', prompt: undefined, title: 'Deploy now?', kind: 'permission' })
       await expect(handlers().openAttention(ask)).rejects.toThrow(QUESTION_HAND_BACK)
