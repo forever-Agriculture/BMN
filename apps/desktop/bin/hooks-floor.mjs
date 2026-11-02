@@ -17,8 +17,8 @@ const shortReason = (text) => text.trim().split('\n').pop()?.slice(0, 200) ?? ''
  * entry could run anything.
  */
 export function probeCommandGuard(agent, entry, { env = process.env, ownFolder = OWN_FOLDER } = {}) {
-  const { BMN_CONTROL_SOCKET: _a, BMN_TOKEN: _b, AITERM_CONTROL_SOCKET: _c, AITERM_TOKEN: _d, ...rest } = env
-  const outside = { ...rest, PATH: (env.PATH ?? '').split(':').filter((folder) => folder !== ownFolder).join(':') }
+  const outside = Object.fromEntries(Object.entries(env).filter(([name]) => !['BMN_CONTROL_SOCKET', 'BMN_TOKEN', 'AITERM_CONTROL_SOCKET', 'AITERM_TOKEN'].includes(name)))
+  outside.PATH = (env.PATH ?? '').split(':').filter((folder) => folder !== ownFolder).join(':')
   const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: PROBE_COMMAND } })
   const run = spawnSync('/bin/sh', ['-c', entry], { input, env: outside, encoding: 'utf8', timeout: PROBE_LIMIT_MS, maxBuffer: 1024 * 1024 })
   if (run.error?.code === 'ETIMEDOUT') return { state: 'does-not-answer', reason: `no answer in ${PROBE_LIMIT_MS / 1000} s` }

@@ -18,7 +18,7 @@ import { readJson, readJsonOrNull } from './shared-helpers.mjs'
 /** A Codex that refuses the read limit it is asked with (Story 102.7) says so in its error stream; the ask fails naming it, and never runs without. */
 function codexRefusedLimit(harness, folder) {
   if (harness !== 'codex') return null
-  let text = ''
+  let text
   try { text = readFileSync(join(folder, RUN_FILES.stderr), 'utf8') } catch { return null }
   return /default_permissions|permissions\.bmn_ask|permission profile/iu.test(text)
     ? 'this Codex refuses the permission profile that keeps a teammate from the listed credential stores; BMN does not ask it without one (see bmn team ask --features)' : null

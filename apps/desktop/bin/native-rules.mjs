@@ -63,10 +63,9 @@ export function withoutClaudeRows(data, home) {
   const deny = data.permissions?.deny
   if (!Array.isArray(deny)) return data
   const kept = deny.filter((row) => !ours.has(row))
-  const { deny: _deny, ...others } = data.permissions
-  const permissions = kept.length > 0 ? { ...data.permissions, deny: kept } : others
-  const { permissions: _permissions, ...rest } = data
-  return Object.keys(permissions).length > 0 ? { ...data, permissions } : rest
+  const without = (object, name) => Object.fromEntries(Object.entries(object).filter(([key]) => key !== name))
+  const permissions = kept.length > 0 ? { ...data.permissions, deny: kept } : without(data.permissions, 'deny')
+  return Object.keys(permissions).length > 0 ? { ...data, permissions } : without(data, 'permissions')
 }
 
 /** Codex's rules file BMN owns whole: removing the file removes the rules. */

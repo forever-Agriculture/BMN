@@ -67,8 +67,10 @@ export function swapInStagedBuild(folders, fs = defaultFs) {
  * The whole staged update: package into staging, move it to `next`, smoke `next`, wait until BMN is
  * closed, swap. `step(label, args)` runs one pnpm step and throws on failure; the live build is touched
  * only by the swap. `onLiveBuild` hears which build the live path holds as soon as that changes.
+ * `sourceChange()` says why the source is no longer what the build started from, or null: a build of
+ * changed source never goes live (Story 102.9).
  */
-export async function packageSmokeAndSwap({ folders, step, waitForExit, log, onLiveBuild, fs = defaultFs }) {
+export async function packageSmokeAndSwap({ folders, step, waitForExit, log, onLiveBuild, sourceChange = () => null, fs = defaultFs }) {
   if (prepareBuildFolders(folders, fs).restored) log(`RESTORED ${folders.live} from ${folders.prev}; an earlier update stopped between its renames`)
   step('package', ['run', 'package', `--config.directories.output=${folders.staging}`])
   stageBuiltFolder(folders, basename(folders.live), fs)
@@ -76,6 +78,8 @@ export async function packageSmokeAndSwap({ folders, step, waitForExit, log, onL
   step('packaged smoke test', ['run', 'smoke:packaged', '--root', folders.next])
   // BMN may have been started straight from its binary while the new build was checked.
   await waitForExit()
+  const changed = sourceChange()
+  if (changed !== null) throw new Error(`source changed during the build, so the old build stays live: ${changed}`)
   const swap = swapInStagedBuild(folders, fs)
   onLiveBuild(swap.liveBuild)
   if (swap.error) throw new Error(`could not put the new build in place: ${swap.error.message}`)

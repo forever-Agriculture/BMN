@@ -102,6 +102,29 @@ describe('staged desktop update', () => {
     expect(states).toEqual([])
   })
 
+  it('never puts a build live whose source changed while it was built, and swaps on unchanged source (102.9)', async () => {
+    const folders = release()
+    writeBuild(folders.live, 'old')
+    const oldBuild = fingerprint(folders.live)
+    const states = []
+    await expect(packageSmokeAndSwap({
+      folders, step: steps(folders, { smokePasses: true }).step, waitForExit: async () => undefined, log: () => undefined, onLiveBuild: (state) => states.push(state),
+      sourceChange: () => 'working tree is not clean'
+    })).rejects.toThrow('source changed during the build, so the old build stays live: working tree is not clean')
+    expect(fingerprint(folders.live)).toBe(oldBuild)
+    expect(states).toEqual([])
+    expect(existsSync(folders.prev)).toBe(false)
+
+    const clean = release()
+    writeBuild(clean.live, 'old')
+    await packageSmokeAndSwap({
+      folders: clean, step: steps(clean, { smokePasses: true }).step, waitForExit: async () => undefined, log: () => undefined, onLiveBuild: (state) => states.push(state),
+      sourceChange: () => null
+    })
+    expect(states).toEqual(['new'])
+    expect(readFileSync(join(clean.live, 'bmn'), 'utf8')).toContain('echo new')
+  })
+
   it('never swaps while BMN is still running from the live build', async () => {
     const folders = release()
     writeBuild(folders.live, 'old')

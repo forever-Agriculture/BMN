@@ -79,6 +79,12 @@ export function repositoryReadiness({ branch, head, originHead, status }) {
   return null
 }
 
+/** Why the source is no longer what the build started from, or null. */
+export function sourceChangeSince(started, now) {
+  if (now.head !== started.head) return `HEAD moved from ${started.head} to ${now.head}`
+  return repositoryReadiness(now)
+}
+
 export function desktopEntryRunsLauncher(entry, launcherFile) {
   return entry.split(/\r?\n/u).includes(`Exec="${launcherFile}"`)
 }
@@ -123,7 +129,8 @@ function runStep(label, args) {
   const output = openSync(logPath, 'a')
   const result = spawnSync('pnpm', args, {
     cwd: repoRoot,
-    env: process.env,
+    // The step builds into staging, never over the live build: `package-preflight.mjs` lets it run while BMN is open.
+    env: { ...process.env, BMN_PACKAGE_STAGED: '1' },
     stdio: ['ignore', output, output]
   })
   closeSync(output)
@@ -171,7 +178,8 @@ async function runWorker() {
     step: runStep,
     waitForExit: waitForPackagedAppToExit,
     log,
-    onLiveBuild: (state) => { liveBuild = state }
+    onLiveBuild: (state) => { liveBuild = state },
+    sourceChange: () => sourceChangeSince(buildingState, gitState())
   })
   runStep('desktop install', ['run', 'install:desktop'])
 

@@ -77,8 +77,10 @@ All commands run from the repository root.
   on: `scripts/lib/packaged-app.mjs` is the single place that knows where a packaged build lands.
 - The Electron self-test and the packaged smoke test run with temporary `XDG_*` folders. Your real
   BMN data is not touched.
-- Close a running BMN before `pnpm run package`, since packaging replaces the binary it
-  runs from. `update:desktop` packages beside it instead and swaps only after BMN has exited.
+- `pnpm run package` in the main checkout refuses while packaged BMN is open, since packaging replaces
+  the binary it runs from (a linked worktree and the updater run as usual). `update:desktop` packages
+  beside it instead and swaps only after BMN has exited, and never if a tracked file changed or HEAD
+  moved since the build started: the old build stays live, and `latest.json` and its log say why.
 - "Every test passes" means on a quiet machine: no load loops and no other test run (another
   checkout's vitest or pytest). Timing runs use a stated load instead: one Node busy loop per two
   logical cores (`node -e 'for (;;) {}'`) while `vitest run --maxWorkers=50% --sequence.shuffle`
