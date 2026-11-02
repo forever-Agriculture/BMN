@@ -154,6 +154,28 @@ describe('TelegramGrantCards (Story 84.3, the notes 84.2 §1 On Telegram)', () =
   })
 
   describe('a command and a message (Story 103.3 AC1)', () => {
+    it('names a pinned file and its whole SHA-256, at the most a card may hold, on the overview and each step (D7; the full review, finding 4)', async () => {
+      const sha256 = 'a'.repeat(64)
+      const path = `scripts/${'p'.repeat(480)}.sh`
+      const pinned = { kind: 'command', id: 'check-1', command: `./${path} ${'c'.repeat(500)}`, folder: `/work/${'f'.repeat(480)}`, count: 1, script: { path, sha256 }, proposed: 'yes', reason: 'r'.repeat(300) }
+      const message = { kind: 'message', id: 'tell-1', tool: 'send_message', target: 'the team', text: 'm'.repeat(150), proposed: 'yes', reason: 'r'.repeat(300) }
+      const rest = [
+        { kind: 'rounds', proposed: 3, reason: 'r'.repeat(300) },
+        ...[1, 2, 3, 4, 5].map((pr) => ({ kind: 'merge', id: `merge-${pr}`, repository: `octo/widgets-with-a-rather-long-name-${pr}`, pr, headSha: '3f2a9c1', upTo: 2, proposed: 'pr', reason: 'r'.repeat(300) }))
+      ]
+      const h = harness(away(ask(leaving(), [pinned, message, ...rest])))
+      await h.cards.reconcile()
+      const pinWords = `While ${path} has SHA-256 ${sha256}`
+      expect(h.sent[0]!.text).toContain(pinWords)
+      expect(h.sent[0]!.text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      await h.tap(h.button('Choose…'))
+      expect(h.last().text).toContain(pinWords)
+      expect(h.last().text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      await h.tap(h.button('● Yes'))
+      expect(h.last().text).toContain(pinWords)
+      expect(h.last().text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+    })
+
     const COMMAND = { kind: 'command', id: 'check-1', command: `./scripts/check.sh ${'c'.repeat(980)}`, folder: '/work/app', count: 3, proposed: 'yes', reason: 'r'.repeat(300) }
     const MESSAGE = { kind: 'message', id: 'tell-1', tool: 'send_message', target: 'the team chat', text: `The <build> & the page\n${'m'.repeat(970)}`, proposed: 'yes', reason: 'r'.repeat(300) }
     const FULL = [

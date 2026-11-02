@@ -337,6 +337,49 @@ describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', 
   }
   const reasons = async (main: string): Promise<string[]> => (await checkPlan(await resolvePlan(main))).findings.map((finding) => `${finding.where.replace(/^.*\/|:\d+$/gu, '')}: ${finding.reason}`)
 
+  describe('each need on **Prepared:**, from Epic 104 on (R103-FR1; the full review, finding 5)', () => {
+    const withPrepared = (number: number, line: string): string => owned(number, ['none']).replace('- Extra repair rounds: 0.\n', `- Extra repair rounds: 0.\n${line}\n`)
+    // The same table as dev-auto's tests/test_run_needs.py (GRAMMAR): BMN refuses what dev-auto could not read, and both read one form.
+    it.each([
+      ['* **Prepared:** none, because x.'],
+      ['**Prepared:** none, because x.'],
+      ['- **Prepared**: none, because x.'],
+      ['- **Prepared:** service: the host, check: `curl host`, checked 2026-11-02.'],
+      ['- **Prepared:** service, account: the host, check: `curl host`, checked 2026-11-02.'],
+      ['- **Prepared:** command: `a; b`, check: `which a`, checked 2026-11-02; message, credential: none, because a stub.'],
+      ['- **Prepared:** owner step: close BMN at the end.'],
+      ['- **Prepared:** owner step: close BMN at the end; account: none, because a stub.']
+    ])('takes %s', async (line) => {
+      expect(await reasons(project(104, withPrepared(104, line)))).toEqual([])
+    })
+    it.each([
+      ['- **Prepared:** service: staging', 'needs a check'],
+      ['- **Prepared:** service: staging, checked 2026-11-02', 'needs a check'],
+      ['- **Prepared:** service: staging, check: `curl staging`', 'needs a date'],
+      ['- **Prepared:** service: staging, check: `curl staging`, checked 2026-13-45', 'needs a date'],
+      ['- **Prepared:** service: staging, check: `curl staging`, checked yesterday', 'needs a date'],
+      ['- **Prepared:** check: `curl staging`, checked 2026-11-02', 'not <kind>'],
+      ['- **Prepared:** service: , check: `curl staging`, checked 2026-11-02', 'names no target'],
+      ['- **Prepared:** account: none', 'none, because'],
+      ['- **Prepared:** account: none, because', 'none, because'],
+      ['- **Prepared:** owner step: none', 'none, because'],
+      ['- **Prepared:** owner step:', 'names no target'],
+      ['- **Prepared:** ask Bob about it', 'not <kind>'],
+      ['- **Prepared:** service, owner step: staging', 'needs a check']
+    ])('reports %s', async (line, why) => {
+      const found = await reasons(project(104, withPrepared(104, line)))
+      expect(found).toHaveLength(1)
+      expect(found[0]).toContain(why)
+    })
+    it('leaves Epic 103 at AC1: its line is inside its approved text, so tightening it would ask a new go', async () => {
+      expect(await reasons(project(103, withPrepared(103, '- **Prepared:** service: staging, checked 2026-11-02; command: `a`, read by the first step; owner step: none, because no.')))).toEqual([])
+    })
+    it('reads the first line of the section, as dev-auto does', async () => {
+      const lines = '- **Prepared:** service: staging\n- **Prepared:** none, because x.'
+      expect(await reasons(project(104, withPrepared(104, lines)))).toHaveLength(1)
+    })
+  })
+
   describe('**Prepared:** in Run needs, from Epic 103 on (Story 103.4 AC1)', () => {
     const withPrepared = (number: number, line: string | null): string => owned(number, ['none'])
       .replace('- Extra repair rounds: 0.\n', `- Extra repair rounds: 0.\n${line === null ? '' : `${line}\n`}`)

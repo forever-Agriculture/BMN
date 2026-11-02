@@ -155,7 +155,7 @@ import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
-import { pinnedFileSha } from '../../bin/grant-command.mjs'
+import { commandPinSha } from '../../bin/grant-command.mjs'
 import { QuestionRepeats } from './question-repeats'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
@@ -923,12 +923,13 @@ export class CompanionService {
         }),
         grantStatus: (p) => this.controlCall(async () => this.grantStatusFor(p.scope, p.runId)),
         useGrant: (p) => this.controlCall(async () => {
-          // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded; the store decides.
+          // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded. The store decides, in its
+          // own transaction, against the answer in force then: another card may come between this read and that write.
           const { read, away } = p.item === undefined ? { read: null, away: null } : await this.options.database.companion('getGrants')
           const pinned = read === null || away === null || p.item === undefined ? null : grantPinnedFile(read, away, p.runId, p.item)
           const use = p.boundary !== undefined
             ? { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'round' as const, boundary: p.boundary }
-            : { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'action' as const, item: p.item ?? '', ...(pinned === null ? {} : { fileSha: pinnedFileSha(pinned.pin, pinned.folder) }) }
+            : { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'action' as const, item: p.item ?? '', ...(pinned === null ? {} : { file: { periodId: pinned.periodId, cardRevision: pinned.cardRevision, folder: pinned.folder, path: pinned.script.path, sha256: commandPinSha(pinned) } }) }
           const result = await this.options.database.companion('useGrantRecord', use, this.iso())
           if (result.outcome !== 'repeated') this.grantChanged({ state: 'read', record: result.record })
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)

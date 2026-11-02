@@ -1017,8 +1017,9 @@ with several questions needs the word on each.
   a prompt BMN could not read, OpenCode, `review` and `notice` cards and the owner's own `bmn ask`. A `bmn ask` from an
   in-process sub-agent cannot be told from its parent's, so it gets the same treatment.
 - **The limit:** an agent can pick a word falsely. A word is a claim, not a check; the counts and his reading of them
-  are the check, not a classifier. `interruptions.py` prints questions by word, hand-backs and repeats per run. The
-  count (`question-hand-backs-v1`, the newest 2,000) holds who and when, never a question's text.
+  are the check, not a classifier. `interruptions.py` prints each question by its word, hand-backs and repeats per run, says when older entries fell
+  off, and gives native prompts' hours as an upper bound: a row closes when the command has finished, and no app reports
+  when he answered. The count (`question-hand-backs-v1`, the newest 2,000) holds who and when, never a question's text.
 
 ### The Away grant
 
@@ -1048,8 +1049,15 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   most 2,300 characters of them, so a longer one goes as a draft on a `bmn ask` card. `grant ask` refuses, naming
   why: a chain, pipe, redirect, substitution, variable, wildcard, wrapper, assignment or `sh -c`; whatever the
   command guard holds; a deletion, release, publish, stopping a process, a credential, `bmn` itself; a folder that
-  is not there; a text shaped like a credential. A script the command runs from a folder the agent can write to is
-  named with its SHA-256, and `grant use` hashes it right before recording and refuses when it changed. For each
+  is not there; a text shaped like a credential. It reads each of those through a tool's own options and aliases
+  (`git -C x rm`, `docker container remove`, `curl -sXDELETE`), and refuses a one-command git config (`git -c`), since
+  that can name what runs. A script the command runs from a folder the agent can write to is
+  named with its SHA-256, shown whole on the card, and `grant use` hashes it right before recording and refuses when it
+  changed or when the words now select another file (a GNUmakefile put beside the pinned Makefile). The store compares
+  the hash with the answer in force when it records, so a card answered in between refuses the use. Where the words do
+  not say for sure which file runs, `grant ask` refuses rather than guesses: an interpreter's options before its
+  script, a runner told to pick among several files (`pnpm -r`, `--filter`, two `-f`), a writable interpreter by its
+  path. A program found on the PATH is taken as installed, even in a folder he can write to. For each
   use `grant use` prints the exact text to run or send; anything else waits. `bmn policy --repo` lists both for
   every repository, because they belong to none, which is what Codex's Auto Review reads
   ([app-measures.md](../plan/references/103/app-measures.md)).
@@ -1057,8 +1065,8 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   item holds the step, and the morning report says so. The list helps a reviewer say yes, and a reviewer can say yes
   without it (2 of 5 measured), so the record that holds is `bmn grant use`. A runner's own file (`make`'s Makefile,
   `pnpm run`'s package.json, `just`'s justfile) is pinned like a script, but what that file or a pinned script then
-  runs is not, and a command's word check reads words, not what a program then does (`ssh host rm x`), so he reads
-  the whole text before saying yes. Between the
+  runs is not, and a command's word check reads words, not what a program then does (`ssh host rm x`) or an alias in
+  his own git config, so he reads the whole text before saying yes. Between the
   hash and the run a file can still change. `bmn grant ask`'s checks run when a card is asked, never on a stored one,
   so a rule added later never unreads a record.
 - **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token, the

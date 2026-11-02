@@ -4632,6 +4632,40 @@ describe('Away (Story 76.3)', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('records a pinned use only against the answer it hashed: a card answered between the read and the write refuses it (the full review, finding 3)', async () => {
+    const handlers = service['control']['options'].handlers
+    const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    const folder = mkdtempSync(join(tmpdir(), 'bmn-pin-'))
+    const text = '#!/bin/sh\nexit 0\n'
+    writeFileSync(join(folder, 'a.sh'), text)
+    writeFileSync(join(folder, 'b.sh'), text)
+    const sha256 = createHash('sha256').update(text).digest('hex')
+    const card = (name: string) => ({ title: 'Epic 103', scope: 'the pin', nothing: false, terms: [{ kind: 'command' as const, id: 'check-1', command: `./${name}`, folder, count: 1, script: { path: name, sha256 }, proposed: 'yes' as const, reason: 'the check' }] })
+    await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+    await handlers.askGrant({ scope: agent, runId: 'run-103', card: card('a.sh') })
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    const periodId = service.grantForOwner().period!.periodId
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-103', cardRevision: 1, choices: { 'check-1': 'yes' }, operationKey: 'press-1' })
+    const database = service['options'].database
+    const real = database.companion.bind(database)
+    let between: (() => Promise<void>) | null = async () => {
+      await handlers.askGrant({ scope: agent, runId: 'run-103', card: card('b.sh') })
+      await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-103', cardRevision: 2, choices: { 'check-1': 'yes' }, operationKey: 'press-2' })
+    }
+    database.companion = (async (operation: string, ...args: unknown[]) => {
+      const result = await (real as (name: string, ...rest: unknown[]) => Promise<unknown>)(operation, ...args)
+      if (operation === 'getGrants' && between !== null) { const run = between; between = null; await run() }
+      return result
+    }) as typeof database.companion
+    try {
+      await expect(handlers.useGrant({ sessionId: 's1', runId: 'run-103', useId: 'u1', item: 'check-1' })).rejects.toThrow('his answer changed')
+      expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-103', useId: 'u2', item: 'check-1' })).toMatchObject({ outcome: 'recorded', exact: { kind: 'command', command: './b.sh' } })
+    } finally {
+      database.companion = real
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   it('lists the night\'s granted merges and pushes for bmn policy, and none without a grant (Story 84.9 AC1)', async () => {
     const handlers = service['control']['options'].handlers
     const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }

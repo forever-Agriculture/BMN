@@ -266,7 +266,8 @@ touch '${seeded}'
     await summary.waitFor({ state: 'hidden' })
     const script = join(folder, 'night-check.sh')
     const marker = join(root, 'night-check-ran')
-    writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\n`)
+    const ranLog = join(root, 'exact-ran.txt')
+    writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${ranLog}'\ntouch '${marker}'\n`)
     chmodSync(script, 0o755)
     const pin = { path: 'night-check.sh', sha256: createHash('sha256').update(readFileSync(script)).digest('hex') }
     const longFlags = Array.from({ length: 30 }, (_unused, index) => `--flag-${index}`).join(' ')
@@ -286,7 +287,7 @@ touch '${seeded}'
     const shown = await exactCard.locator('.grant-term-label').evaluateAll((labels) => labels.map((label) => ({ text: label.textContent, whole: label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1, lines: getComputedStyle(label).whiteSpace })))
     const offered = await exactCard.locator('.segmented').evaluateAll((groups) => groups.map((group) => [...group.querySelectorAll('[role="radio"]')].map((radio) => radio.textContent)))
     check('the window shows the whole command and message, line ends kept, and offers no and yes (103.3 AC1)',
-      exactAsked.startsWith('Card revision 1') && shown[0]?.text === `Run in ${folder}: ${COMMAND_TERM.command}` && shown[1]?.text === `Send with stub_send to the team chat: ${MESSAGE_TERM.text}`
+      exactAsked.startsWith('Card revision 1') && shown[0]?.text === `Run in ${folder}: ${COMMAND_TERM.command}\nWhile ${pin.path} has SHA-256 ${pin.sha256}` && shown[1]?.text === `Send with stub_send to the team chat: ${MESSAGE_TERM.text}`
         && shown.every((one) => one.whole && one.lines === 'pre-wrap') && JSON.stringify(offered) === JSON.stringify([['No', 'Up to 2'], ['No', 'Yes']]), { shown, offered })
     await shot('before-you-go-exact-1280.png')
     await resize(540)
@@ -300,17 +301,24 @@ touch '${seeded}'
     const exactStatus = bmn(['grant', '--run', 'run-103'])
     await page.evaluate(() => window.aiTerminal.setAway('away'))
     await page.keyboard.press('Escape').catch(() => undefined)
-    // The night's agent: what `grant use` prints is what it runs and sends; the second use meets a changed script.
+    // The night's agent: what `grant use` prints is what it runs and sends, read from that output; a refused use does neither.
     const usedOutput = join(root, 'exact-uses.txt')
     const exactSeeded = join(root, 'exact-seeded')
     const exactNight = join(root, 'exact-night.sh')
+    const sentLog = join(root, 'exact-sent.txt')
+    const stubSend = join(root, 'stub_send')
+    writeFileSync(stubSend, `#!/bin/sh\nprintf 'to %s:\\n%s\\n' "$1" "$2" >> '${sentLog}'\n`)
+    chmodSync(stubSend, 0o755)
     writeFileSync(exactNight, `B() { '${process.execPath}' '${cli}' "$@"; }
-{ B grant use --run run-103 --use-id c1 --item check-1
-  B grant use --run run-103 --use-id m1 --item tell-1
-  B grant use --run run-103 --use-id m2 --item tell-1
-  echo '# changed' >> '${script}'
-  B grant use --run run-103 --use-id c2 --item check-1
-} > '${usedOutput}' 2>&1
+use() { B grant use --run run-103 --use-id "$1" --item "$2" > "$1.out" 2>&1; S=$?; cat "$1.out" >> '${usedOutput}'; return $S; }
+cd '${root}'
+: > '${usedOutput}'
+# A use names the step on the lines after its header; the step is run only when the use was recorded.
+if use c1 check-1; then STEP=$(sed -n '/^Run exactly this/,$p' c1.out | sed -n 2p); (cd '${folder}' && sh -c "$STEP"); fi
+if use m1 tell-1; then '${stubSend}' 'the team chat' "$(sed -n '/^Send exactly this/,$p' m1.out | sed -n '2,$p')"; fi
+if use m2 tell-1; then '${stubSend}' 'the team chat' 'a spent message went out'; fi
+echo '# changed' >> '${script}'
+if use c2 check-1; then STEP=$(sed -n '/^Run exactly this/,$p' c2.out | sed -n 2p); (cd '${folder}' && sh -c "$STEP"); fi
 P=$(sed -n 's/.* in period \\([^;]*\\);.*/\\1/p' '${usedOutput}' | head -n 1)
 B grant report --run run-103 --period "$P" --use-id c1 --result done > /dev/null
 B grant report --run run-103 --period "$P" --use-id m1 --result done > /dev/null
@@ -326,6 +334,11 @@ touch '${exactSeeded}'
       exactStatus.includes('run exactly `./night-check.sh') && uses.includes(`Run exactly this, in ${folder}; anything else waits:\n${COMMAND_TERM.command}\n`)
         && uses.includes(`Send exactly this with stub_send to the team chat; anything else waits:\n${MESSAGE_TERM.text}\n`)
         && uses.includes('Not recorded') && uses.includes('night-check.sh changed since the card named it'), { uses, exactStatus: exactStatus.trim() })
+    // What really happened: the stub command ran once, with exactly the granted words; the stub tool got exactly the granted text, once.
+    const ran = existsSync(ranLog) ? readFileSync(ranLog, 'utf8') : ''
+    const sent = existsSync(sentLog) ? readFileSync(sentLog, 'utf8') : ''
+    check('the stub command ran once with exactly the granted words; the changed script did not run again (103.3 AC3)', ran === `${longFlags}\n`, { ran })
+    check('the stub tool sent exactly the granted text to the granted target, once; the spent use sent nothing (103.3 AC3)', sent === `to the team chat:\n${MESSAGE_TERM.text}\n`, { sent })
     await page.evaluate(() => window.aiTerminal.setAway('back'))
     await summary.waitFor()
     const exactRow = granted.locator('button.away-run-row', { hasText: 'Epic 103' })

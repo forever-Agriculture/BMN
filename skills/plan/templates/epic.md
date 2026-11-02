@@ -21,7 +21,7 @@ What his go on this epic approves for its runs, as his instruction (read from th
 - **Deferrable:** <a criterion or story, with the condition under which it may be deferred>, or `none`.
 - **Money cap:** <amount and what it covers>, or `none` (no paid launches).
 - **Named actions for an Away card:** <action and target>, including an exact command or message, or `none`.
-- **Prepared:** <kind>: <target>, check: <how>, checked <date>; one for each need, or `none, because <reason>`. The kinds are account, credential, service, command, message, owner step; `check:` is optional only for an owner step.
+- **Prepared:** <kind>: <target>, check: <how>, checked <date>; one for each need, or `none, because <reason>`. The kinds are account, credential, service, command, message, owner step; an owner step needs neither `check:` nor a date, and every other need needs both (`bmn plan check` reports it, from Epic 104 on).
 
 ## Truth impact
 

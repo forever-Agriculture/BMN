@@ -2,4 +2,5 @@
 import type { GrantCommandTerm, GrantPinnedFile } from '@bmn/protocol'
 
 export function pinnedFileSha(pin: GrantPinnedFile, folder: string): string | null
+export function commandPinSha(term: Pick<GrantCommandTerm, 'command' | 'folder' | 'script'>): string | null
 export function grantCommandProblem(term: GrantCommandTerm): string | null

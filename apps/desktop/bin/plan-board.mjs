@@ -33,7 +33,18 @@ const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth imp
 const RUN_NEEDS_FROM = 90
 /** Epics from 103 on list what their run will need from outside itself before his go (Story 103.4, R103-FR1). */
 const PREPARED_FROM = 103
-const PREPARED_LINE = /^(?:[-*]\s+)?\*\*Prepared:\*\*(.*)$/u
+/** One form with dev-auto's run_needs.py, which prints these needs for the run; tests on both sides read one table. */
+const PREPARED_LINE = /^(?:[-*]\s*)?\*\*Prepared:?\*\*:?(.*)$/iu
+/**
+ * Each need says how and when it was checked (R103-FR1), from the epic after 103: Epic 103's own line is inside the text he
+ * approved, and changing it would ask a new go (decision d6).
+ */
+const PREPARED_ITEMS_FROM = 104
+const PREPARED_KINDS = 'account|credential|service|command|message|owner step'
+const PREPARED_NEED = new RegExp(`^((?:${PREPARED_KINDS})(?:\\s*,\\s*(?:${PREPARED_KINDS}))*)\\s*:\\s*(.*)$`, 'isu')
+const PREPARED_NONE = /^none\s*,?\s*because\s+\S/isu
+const PREPARED_DATE = /\bchecked\s+\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b/u
+const PREPARED_CHECK = /(?:^|[,\s])check:\s*\S/u
 /** Bare `none`, or `none, because` with nothing after it: says nothing was checked and not why. */
 const PREPARED_EMPTY = /^(?:none(?:\s*,?\s*because)?)?\s*[.:;,]?\s*$/iu
 const OWNER_LINE = /^\*\*Owner:\*\*\s*(?:(none|before the go|at the end)(?=[\s.,;:]|$))?/iu
@@ -269,6 +280,42 @@ export function boardProblems(board, boardName) {
 }
 
 /** Epic files: `epics/NNN-slug.md`, read with their headings, stories and criteria. */
+/** A Prepared line's needs: split at each `;` outside backticks and parentheses, as dev-auto's split_needs does. */
+function preparedNeeds(value) {
+  const parts = []
+  let current = ''
+  let depth = 0
+  let quoted = false
+  for (const char of value) {
+    if (char === '`') quoted = !quoted
+    else if (!quoted && char === '(') depth += 1
+    else if (!quoted && char === ')') depth = Math.max(0, depth - 1)
+    if (char === ';' && !quoted && depth === 0) { parts.push(current); current = '' } else current += char
+  }
+  parts.push(current)
+  return parts.map((part) => part.trim()).filter((part) => part !== '')
+}
+
+/** What each need on a Prepared line lacks (R103-FR1): `<kind>: <target>, check: <how>, checked <date>`, or `none, because <reason>`. */
+function preparedProblems(value) {
+  if (PREPARED_NONE.test(value)) return []
+  return preparedNeeds(value).flatMap((part) => {
+    const named = PREPARED_NEED.exec(part)
+    if (!named) return [`"${part.slice(0, 60)}" is not <kind>: <target>, check: <how>, checked <date>`]
+    const kinds = named[1].split(',').map((kind) => kind.trim().toLowerCase())
+    const rest = named[2].trim().replace(/\.$/u, '')
+    if (PREPARED_NONE.test(rest)) return []
+    if (/^none\b/iu.test(rest)) return [`${named[1]} says "${rest}": say none, because <reason>`]
+    const target = rest.split(/,?\s*\bcheck:|,\s*checked\s/u)[0].trim()
+    if (target === '' || /^check:/u.test(rest)) return [`${named[1]} names no target`]
+    // An owner step is his to do, not the run's to check; a need named with one still needs its own check.
+    if (kinds.every((kind) => kind === 'owner step')) return []
+    if (!PREPARED_CHECK.test(rest)) return [`${named[1]}: ${target.slice(0, 40)} needs a check: how the run checks it`]
+    if (!PREPARED_DATE.test(rest)) return [`${named[1]}: ${target.slice(0, 40)} needs a date: checked YYYY-MM-DD`]
+    return []
+  })
+}
+
 /** The `**Prepared:**` line of `## Run needs`, with its line number, or null. */
 function preparedLine(lines) {
   const start = lines.findIndex((line) => /^## Run needs\s*$/u.test(line))
@@ -441,6 +488,7 @@ function runNeedsProblems(epic, at, add) {
   if (epic.epic >= PREPARED_FROM && epic.sections.includes('Run needs')) {
     if (epic.prepared === null) add(at, 'Run needs has no **Prepared:** line (what the run will need, each with its check; or none, because <reason>)')
     else if (PREPARED_EMPTY.test(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** says "${epic.prepared.text}": name each need with its check, or say none, because <reason>`)
+    else if (epic.epic >= PREPARED_ITEMS_FROM) for (const problem of preparedProblems(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** ${problem}`)
   }
   let latest = null
   for (const story of epic.stories) {

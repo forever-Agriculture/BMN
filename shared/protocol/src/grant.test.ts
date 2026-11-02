@@ -5,6 +5,7 @@ import { awayGrantSection } from './away-grant-summary'
 import {
   EMPTY_GRANT_RECORD,
   GRANT_RECORD_KEY,
+  type GrantUseFile,
   answerGrant,
   askGrant,
   departurePeriodId,
@@ -669,13 +670,23 @@ describe('a command and a message on a card (Story 103.3; D5, D7)', () => {
   const yes = { 'check-1': 'yes', 'tell-1': 'yes' }
   const read = (record: GrantRecord) => ({ state: 'read' as const, record })
   const live = (choices: Record<string, unknown> = yes) => granted(away(asked(leaving(), EXACT)), choices)
-  const action = (item: string, id: string, fileSha?: string | null) => ({ runId: 'run-80', sessionId: 's-builder', id, kind: 'action' as const, item, ...(fileSha === undefined ? {} : { fileSha }) })
+  const hashed = (sha256: string | null, over: Partial<GrantUseFile> = {}): GrantUseFile => ({ periodId: live().periods.at(-1)!.periodId, cardRevision: 1, folder: '/work/app', path: 'check.sh', sha256, ...over })
+  const action = (item: string, id: string, sha?: string | null, over: Partial<GrantUseFile> = {}) => ({ runId: 'run-80', sessionId: 's-builder', id, kind: 'action' as const, item, ...(sha === undefined ? {} : { file: hashed(sha, over) }) })
+
+  it('counts a pin in what a card may hold: Telegram shows it whole (the full review, finding 4)', () => {
+    const near = (pinned: boolean) => parseGrantCardInput({ title: 'Epic 80', scope: 'all', terms: [
+      { ...COMMAND, script: null, command: 'c'.repeat(1000), folder: `/${'f'.repeat(499)}` },
+      { ...COMMAND, id: 'check-2', command: 'c'.repeat(700), folder: `/${'f'.repeat(99)}`, script: pinned ? { path: 'p'.repeat(40), sha256: SHA } : null }
+    ] })
+    expect(near(false)).not.toHaveProperty('problem')
+    expect(near(true)).toEqual({ problem: expect.stringContaining('shows its commands and messages whole') })
+  })
 
   it('takes both kinds and keeps their text exactly', () => {
     const [command, message] = card(EXACT).terms as [Extract<GrantTerm, { kind: 'command' }>, Extract<GrantTerm, { kind: 'message' }>]
     expect(command).toMatchObject({ command: './check.sh --all', folder: '/work/app', count: 2, script: { path: 'check.sh', sha256: SHA } })
     expect(message).toMatchObject({ tool: 'send_message', target: 'the team chat', text: 'The build is out.\nSee the page.', count: 1 })
-    expect(grantTermLabel(command)).toBe('Run in /work/app: ./check.sh --all')
+    expect(grantTermLabel(command)).toBe(`Run in /work/app: ./check.sh --all\nWhile check.sh has SHA-256 ${SHA}`)
     expect(grantTermLabel(message)).toBe('Send with send_message to the team chat: The build is out.\nSee the page.')
     expect(grantTermChoices(command)).toEqual(['no', 'yes'])
     expect(grantChoiceLabel(command, 'yes')).toBe('Up to 2')
@@ -743,13 +754,22 @@ describe('a command and a message on a card (Story 103.3; D5, D7)', () => {
     expect(useGrant(read(changed.record), AWAY, action('check-1', 'u4', SHA), T1)).toMatchObject({ outcome: 'recorded', left: 1 })
   })
 
+  it.each([
+    ['a replaced card', { cardRevision: 2 }],
+    ['another file with the same hash', { path: 'other.sh' }],
+    ['another folder', { folder: '/work/other' }],
+    ['another period', { periodId: 'another-period' }]
+  ])('refuses a use that hashed %s: the hash says nothing of the answer in force (the full review, finding 3)', (_name, over) => {
+    expect(useGrant(read(live()), AWAY, action('check-1', 'u1', SHA, over), T1)).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('his answer changed') })
+  })
+
   it('refuses a retry of a recorded use once the file changed: the use stands, the step waits', () => {
     const first = useGrant(read(live()), AWAY, action('check-1', 'u1', SHA), T1)
     expect(useGrant(read(first.record), AWAY, action('check-1', 'u1', 'b'.repeat(64)), T1)).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('changed since') })
   })
 
   it('finds a pin only for an item granted in this run', () => {
-    expect(grantPinnedFile(read(live()), AWAY, 'run-80', 'check-1')).toEqual({ pin: { path: 'check.sh', sha256: SHA }, folder: '/work/app' })
+    expect(grantPinnedFile(read(live()), AWAY, 'run-80', 'check-1')).toEqual({ command: './check.sh --all', folder: '/work/app', script: { path: 'check.sh', sha256: SHA }, periodId: live().periods.at(-1)!.periodId, cardRevision: 1 })
     expect(grantPinnedFile(read(live()), AWAY, 'run-80', 'tell-1')).toBeNull()
     expect(grantPinnedFile(read(live()), AWAY, 'run-99', 'check-1')).toBeNull()
     expect(grantPinnedFile(read(live({ 'check-1': 'no', 'tell-1': 'yes' })), AWAY, 'run-80', 'check-1')).toBeNull()

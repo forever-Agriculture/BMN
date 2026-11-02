@@ -317,6 +317,10 @@ function shellCode(args, input) {
   return !noexec && (stdin || index === args.length) ? input.join('\n') : undefined
 }
 
+/** git's and gh's options that take a separate value before the subcommand. */
+export const GIT_VALUES = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env']
+export const GH_VALUES = ['-R', '--repo', '--hostname']
+
 /** Skip options before git/gh's subcommand, including the options with a separate value. */
 export function subcommand(list, values) {
   let index = 1
@@ -362,7 +366,7 @@ function mergeHold(list) {
 }
 
 /** docker's and podman's options that take a separate value before the subcommand. */
-const DOCKER_VALUES = ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
+export const DOCKER_VALUES = ['-c', '--context', '-H', '--host', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey',
   '--url', '--identity', '--connection', '--root', '--runroot', '--storage-driver', '--cgroup-manager', '--conmon', '--events-backend',
   '--hooks-dir', '--imagestore', '--network-cmd-path', '--network-config-dir', '--out', '--runtime', '--runtime-flag', '--ssh', '--storage-opt',
   '--tmpdir', '--volumepath', '--cdi-spec-dir', '--db-backend', '--module']
@@ -491,14 +495,14 @@ export function heldCommand(command, depth = 0, inheritedSelector = false, cwd =
     const name = nameOf(program)
     if (/^(kill|pkill|killall)$/.test(name) && (selectsBmn || args.some((word) => /\bbmn\b/i.test(word)))) return 'stopping BMN, which only the owner does'
     if (name === 'git') {
-      const [verb, ...after] = subcommand(words, ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'])
+      const [verb, ...after] = subcommand(words, GIT_VALUES)
       if (verb === 'push') { const held = pushHold(after); if (held !== null) return held }
       const alone = lexed.length === 1 && commands.length === 1 && depth === 0 && raw.includes(program)
       const held = discardHold(verb, after, alone && gitInThrowaway(words, raw.slice(0, raw.indexOf(program)), cwd), commands.some((other) => /^(cd|pushd|popd)$/.test(nameOf(other.words[0]))))
       if (held !== null) return held
     }
     if (name === 'gh') {
-      const [verb, action, ...after] = subcommand(words, ['-R', '--repo', '--hostname'])
+      const [verb, action, ...after] = subcommand(words, GH_VALUES)
       const held = verb === 'api' ? apiHold([action, ...after]) : verb === 'pr' && action === 'merge' ? mergeHold(after) : null
       if (held !== null) return held
       if (verb === 'repo' && /^(delete|edit|rename|archive|transfer)$/.test(action)) return 'a repository change (delete, edit, rename, archive or transfer)'

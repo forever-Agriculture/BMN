@@ -43,6 +43,8 @@ interface GrantPushTerm { id: string; kind: 'push-default'; repository: string; 
 interface GrantPrTerm { id: string; kind: 'pr-elsewhere'; repository: string; branch: string | null; pr: number | null; count: number; proposed: 'no' | 'yes'; reason: string }
 /** A file a command runs, by its hash at the time of the card (Epic 103, D7): `bmn grant use` refuses once it has changed. */
 export interface GrantPinnedFile { path: string; sha256: string }
+/** What `bmn grant use` needs to hash a pin: the term in force and the answer it stands on. */
+export interface GrantPinRead { command: string; folder: string; script: GrantPinnedFile; periodId: string; cardRevision: number }
 /** Story 103.3: one simple command, exactly as it will run, in one folder. BMN checks its form when it is asked (the guard's parser); the app's own rules still apply when it runs. */
 export interface GrantCommandTerm { id: string; kind: 'command'; command: string; folder: string; script: GrantPinnedFile | null; count: number; proposed: 'no' | 'yes'; reason: string }
 /** Story 103.3: one message in his voice: the tool that sends it, to whom, and the whole text (Epic 103, D5). Sent once. */
@@ -221,8 +223,13 @@ function grantFolder(value: unknown): string | null {
 }
 
 /** What a term's exact words take on the phone, its markup included. */
+/** D7: what a card says of a pinned file, whole, so he sees which file the grant stands on. */
+function grantPinWords(pin: GrantPinnedFile): string {
+  return `While ${pin.path} has SHA-256 ${pin.sha256}`
+}
+
 function exactCharacters(term: GrantTerm): number {
-  const fields = term.kind === 'command' ? [term.command, term.folder] : term.kind === 'message' ? [term.text, term.target, term.tool] : []
+  const fields = term.kind === 'command' ? [term.command, term.folder, term.script === null ? '' : grantPinWords(term.script)] : term.kind === 'message' ? [term.text, term.target, term.tool] : []
   return fields.reduce((sum, field) => sum + field.replace(/[&<>]/g, '&amp;').length, 0)
 }
 
@@ -816,10 +823,20 @@ export type GrantUseResult =
  * The file a granted command is pinned to, for the host to hash before it records a use (Story 103.3 AC3); null when the item
  * has none. Read from the answer in force, as the use will be.
  */
-export function grantPinnedFile(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>, runId: string, item: string): { pin: GrantPinnedFile; folder: string } | null {
+export function grantPinnedFile(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>, runId: string, item: string): GrantPinRead | null {
   const status = grantStatus(read, away, runId)
   const term = status.active ? status.grant.items.find((entry) => entry.term.id === item)?.term : undefined
-  return term?.kind === 'command' && term.script !== null ? { pin: term.script, folder: term.folder } : null
+  const periodId = read.state === 'read' ? openGrantPeriod(read.record)?.periodId : undefined
+  if (!status.active || periodId === undefined || term?.kind !== 'command' || term.script === null) return null
+  return { command: term.command, folder: term.folder, script: term.script, periodId, cardRevision: status.grant.cardRevision }
+}
+
+/** The file a use hashed and the answer it read: the store records the use only while these are what is in force. */
+export interface GrantUseFile { periodId: string; cardRevision: number; folder: string; path: string; sha256: string | null }
+
+/** Whether this use hashed the file of the answer in force (the full review, finding 3): another card may have come in between. */
+function useHashedThis(file: GrantUseFile | undefined, term: GrantCommandTerm, periodId: string | undefined, cardRevision: number): boolean {
+  return file !== undefined && file.periodId === periodId && file.cardRevision === cardRevision && file.folder === term.folder && file.path === term.script?.path
 }
 
 /**
@@ -828,7 +845,7 @@ export function grantPinnedFile(read: GrantRead, away: Pick<AwayRecord, 'state' 
  * morning.
  */
 export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>, use: {
-  runId: string; sessionId: string; id: string; kind: 'round'; boundary: string } | { runId: string; sessionId: string; id: string; kind: 'action'; item: string; fileSha?: string | null }, now: string): GrantUseResult {
+  runId: string; sessionId: string; id: string; kind: 'round'; boundary: string } | { runId: string; sessionId: string; id: string; kind: 'action'; item: string; file?: GrantUseFile }, now: string): GrantUseResult {
   if (read.state === 'unknown') return { outcome: 'refused', record: EMPTY_GRANT_RECORD, reason: `${read.reason}, so nothing is granted` }
   const record = read.record
   const status = grantStatus(read, away, use.runId)
@@ -848,8 +865,9 @@ export function useGrant(read: GrantRead, away: Pick<AwayRecord, 'state' | 'peri
   // Story 103.3 AC3 (D7): the card names a script by its hash; a changed or unreadable one waits, a retry too.
   if (use.kind === 'action' && status.active) {
     const term = status.grant.items.find((item) => item.term.id === use.item)?.term
-    if (term?.kind === 'command' && term.script !== null && use.fileSha !== term.script.sha256) {
-      return refuse(`${term.script.path} changed since the card named it, or cannot be read`)
+    if (term?.kind === 'command' && term.script !== null) {
+      if (!useHashedThis(use.file, term, open?.periodId, status.grant.cardRevision)) return refuse('his answer changed while this use read it; try the use again')
+      if (use.file?.sha256 !== term.script.sha256) return refuse(`${term.script.path} changed since the card named it, or cannot be read`)
     }
   }
   if (previous !== undefined) {
@@ -951,7 +969,7 @@ export function grantTermLabel(term: GrantTerm): string {
   if (term.kind === 'rounds') return 'Extra repair rounds per boundary'
   if (term.kind === 'merge') return `Merge in ${term.repository}`
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}`
-  if (term.kind === 'command') return `Run in ${term.folder}: ${term.command}`
+  if (term.kind === 'command') return `Run in ${term.folder}: ${term.command}${term.script === null ? '' : `\n${grantPinWords(term.script)}`}`
   if (term.kind === 'message') return `Send with ${term.tool} to ${term.target}: ${term.text}`
   const words = prElsewhereWords(term, term.repository)
   return `${words[0]!.toUpperCase()}${words.slice(1)}`
