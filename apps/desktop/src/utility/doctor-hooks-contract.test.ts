@@ -1,7 +1,7 @@
 // MODULE: doctor-hooks-contract.test.ts - Actual hooks producer semantics at the Doctor projection boundary
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import { parseBmnDoctor } from '../../bin/doctor-results.mjs'
 import { codexHookKey } from '../../bin/codex-hook-approval.mjs'
 import { OPENCODE_PLUGIN } from '../../bin/bmn-opencode-plugin.mjs'
-import { doctorVersions } from '../../bin/doctor-adapters.mjs'
+import { doctorVersions, runBmnDoctor } from '../../bin/doctor-adapters.mjs'
 import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
 import { withOpenCodeFloor } from '../../bin/opencode-floor.mjs'
 import { doctorWorker, loadDoctorState, readDoctorView } from '../../bin/doctor.mjs'
@@ -23,6 +23,34 @@ const report = () => ({ ok: true, agents: Object.entries(REQUIRED).map(([agent, 
   events: [...events.map(event => ({ event, optional: false, state: 'wired' })),
     ...(agent === 'codex' ? ['PermissionRequest', 'PostCompact'].map(event => ({ event, optional: true, state: 'missing' })) : [])], missing: [] })) })
 const parse = (value: ReturnType<typeof report>, exit = 0) => parseBmnDoctor('hooks', JSON.stringify(value), exit)
+
+function syntheticProfile(home: string, codexStart = ''): void {
+  for (const app of ['claude', 'codex'] as const) {
+    const path = join(home, `.${app}`, app === 'claude' ? 'settings.json' : 'hooks.json')
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify({ ...(app === 'claude' ? { permissions: { deny: claudeDenyRows(home) } } : {}), hooks: Object.fromEntries(REQUIRED[app].map(event => [event,
+      [{ hooks: [{ type: 'command', command: `bmn hook ${app}`, timeout: 3600 }] }]])) }))
+  }
+  // The floor as BMN's start leaves it: the app's own rules, and the command a session outside BMN finds (Stories 102.3, 102.4, 102.15).
+  mkdirSync(join(home, '.codex/rules'), { recursive: true }); writeFileSync(join(home, '.codex/rules/bmn-guard.rules'), CODEX_RULES)
+  mkdirSync(join(home, '.local/bin'), { recursive: true })
+  writeFileSync(join(home, '.local/bin/bmn'), `#!/bin/sh\nexec '${process.execPath}' '${fileURLToPath(new URL('../../bin/bmn', import.meta.url))}' "$@"\n`, { mode: 0o755 })
+  // A Codex that runs these entries, answering as its app server does (Story 102.4; its other answers are codex-hook-approval.test.ts).
+  const approved = REQUIRED.codex.map((event) => ({ key: codexHookKey(join(home, '.codex/hooks.json'), event, 0, 0), command: 'bmn hook codex', enabled: true, trustStatus: 'trusted' }))
+  writeFileSync(join(home, 'answer'), JSON.stringify({ id: 2, result: { data: [{ hooks: approved, warnings: [], errors: [] }] } }))
+  writeFileSync(join(home, '.local/bin/codex'), `#!/bin/sh
+${codexStart}while IFS= read -r line; do
+  case "$line" in
+*'"initialize"'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
+*'hooks/list'*) cat "$HOME/answer"; printf '\\n' ;;
+  esac
+done
+`, { mode: 0o755 })
+  const plugin = join(home, '.config/opencode/bmn/tui.ts')
+  mkdirSync(dirname(plugin), { recursive: true }); writeFileSync(plugin, OPENCODE_PLUGIN)
+  writeFileSync(join(home, '.config/opencode/cli.json'), JSON.stringify({ plugins: [dirname(plugin)] }))
+  writeFileSync(join(home, '.config/opencode/opencode.json'), withOpenCodeFloor('{\n}\n', home)!)
+}
 
 describe('Doctor hooks producer contract', () => {
   it('accepts current wiring and the two specifically optional Codex absences', () => {
@@ -98,31 +126,7 @@ describe('Doctor hooks producer contract', () => {
   it('projects the real producer against isolated synthetic files with older hooks and optional absences', () => {
     const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-hooks-contract-'))
     try {
-      for (const app of ['claude', 'codex'] as const) {
-        const path = join(home, `.${app}`, app === 'claude' ? 'settings.json' : 'hooks.json')
-        mkdirSync(dirname(path), { recursive: true })
-        writeFileSync(path, JSON.stringify({ ...(app === 'claude' ? { permissions: { deny: claudeDenyRows(home) } } : {}), hooks: Object.fromEntries(REQUIRED[app].map(event => [event,
-          [{ hooks: [{ type: 'command', command: `bmn hook ${app}`, timeout: 3600 }] }]])) }))
-      }
-      // The floor as BMN's start leaves it: the app's own rules, and the command a session outside BMN finds (Stories 102.3, 102.4, 102.15).
-      mkdirSync(join(home, '.codex/rules'), { recursive: true }); writeFileSync(join(home, '.codex/rules/bmn-guard.rules'), CODEX_RULES)
-      mkdirSync(join(home, '.local/bin'), { recursive: true })
-      writeFileSync(join(home, '.local/bin/bmn'), `#!/bin/sh\nexec '${process.execPath}' '${fileURLToPath(new URL('../../bin/bmn', import.meta.url))}' "$@"\n`, { mode: 0o755 })
-      // A Codex that runs these entries, answering as its app server does (Story 102.4; its other answers are codex-hook-approval.test.ts).
-      const approved = REQUIRED.codex.map((event) => ({ key: codexHookKey(join(home, '.codex/hooks.json'), event, 0, 0), command: 'bmn hook codex', enabled: true, trustStatus: 'trusted' }))
-      writeFileSync(join(home, 'answer'), JSON.stringify({ id: 2, result: { data: [{ hooks: approved, warnings: [], errors: [] }] } }))
-      writeFileSync(join(home, '.local/bin/codex'), `#!/bin/sh
-while IFS= read -r line; do
-  case "$line" in
-    *'"initialize"'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
-    *'hooks/list'*) cat "$HOME/answer"; printf '\\n' ;;
-  esac
-done
-`, { mode: 0o755 })
-      const plugin = join(home, '.config/opencode/bmn/tui.ts')
-      mkdirSync(dirname(plugin), { recursive: true }); writeFileSync(plugin, OPENCODE_PLUGIN)
-      writeFileSync(join(home, '.config/opencode/cli.json'), JSON.stringify({ plugins: [dirname(plugin)] }))
-      writeFileSync(join(home, '.config/opencode/opencode.json'), withOpenCodeFloor('{\n}\n', home)!)
+      syntheticProfile(home)
       const cli = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
       const text = execFileSync(process.execPath, [cli, 'hooks', 'check', '--json'], { encoding: 'utf8', timeout: 120_000,
         env: { HOME: home, PATH: `${join(home, '.local/bin')}:/usr/bin:/bin`, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local/share'),
@@ -131,6 +135,20 @@ done
       expect(actual.ok).toBe(true)
       expect(actual.agents.map((row: { events: unknown[] }) => row.events.length)).toEqual([9, 9, 2])
       expect(parseBmnDoctor('hooks', text, 0)).toEqual({ state: 'passed', problems: [] })
+    } finally { rmSync(home, { recursive: true, force: true }) }
+  }, 150_000)
+
+  it('asks a Codex that writes to its home as it starts, inside the doctor\'s own read-only sandbox (Story 102.4)', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-hooks-sandbox-'))
+    try {
+      // Real Codex exits on a read-only home (`Read-only file system`), measured on 0.166.0. This one also says if it can see his sign-in.
+      syntheticProfile(home, `touch "$HOME/.codex/logs_2.sqlite" || exit 1\n[ -e "$HOME/.codex/auth.json" ] && exit 2\n`)
+      writeFileSync(join(home, '.codex/auth.json'), 'synthetic')
+      const before = readFileSync(join(home, '.codex/hooks.json'), 'utf8')
+      const result = await runBmnDoctor('hooks', home, { HOME: home, PATH: `${join(home, '.local/bin')}:/usr/bin:/bin` }, { timeoutMs: 120_000 })
+      expect(result).toEqual({ state: 'passed', problems: [] })
+      expect(existsSync(join(home, '.codex/logs_2.sqlite'))).toBe(false)
+      expect(readFileSync(join(home, '.codex/hooks.json'), 'utf8')).toBe(before)
     } finally { rmSync(home, { recursive: true, force: true }) }
   }, 150_000)
 

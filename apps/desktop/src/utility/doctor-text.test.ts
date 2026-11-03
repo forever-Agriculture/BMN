@@ -71,6 +71,10 @@ describe('bmn doctor by default (102.12)', () => {
     const missing = doctorText({ ...VIEW, rows: [{ check: 'hooks', state: 'problems', stale: false, leftovers: [], problems: [
       { code: 'hook-check', item: 1, app: 'codex', cause: 'approval:no-codex', reason: 'Hook is not wired', fix: 'Review Hooks in Health.' }] }] })
     expect(missing).toContain('BMN cannot find Codex, whose hook file holds BMN\'s entries. Check that it is on your PATH')
+    // --details says the same: an entry Codex does not run is wired, so `Hook is not wired` was false there.
+    const details = doctorText(view, { details: true })
+    expect(details).toContain('Codex does not run some of BMN\'s hook entries.')
+    expect(details).not.toContain('Hook is not wired')
   })
 
   it('says the wider line for a clean run', () => {

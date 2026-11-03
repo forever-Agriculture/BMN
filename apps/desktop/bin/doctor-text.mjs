@@ -54,7 +54,7 @@ function detailsLines(view) {
   for (const row of view.rows) {
     if (row.state === 'passed' && !row.stale && row.leftovers.length === 0) continue
     lines.push(`${row.check}: ${row.state}${row.stale ? ' · stale' : ''}`)
-    for (const problem of row.problems) lines.push(`  ${problem.reason}. ${problem.fix}`)
+    for (const problem of row.problems) lines.push(`  ${problemWords(problem)}. ${FIXES[problem.cause] ?? problem.fix}`)
     for (const item of row.leftovers) lines.push(`  Show-only: ${item.location}. ${item.reasonText}`)
   }
   if (view.rows.some((row) => row.leftovers.length > 0)) lines.push(view.locationHelp)
