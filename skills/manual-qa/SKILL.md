@@ -112,7 +112,8 @@ and applicable standards or statutes. These are prompts, not a requirement to ex
 
 ## 9. UI and slop
 
-Inspect screenshots as well as snapshots; a snapshot cannot establish visual quality. Exercise
+Inspect screenshots as well as snapshots; a snapshot cannot establish visual quality. Take at most
+20 screenshots in a run: the host keeps only 20, and citing a dropped one invalidates the report. Exercise
 keyboard navigation and focus, and minimum and normal window sizes. Check clarity, hierarchy,
 empty/loading/error states and whether the user can see and use each required action.
 
