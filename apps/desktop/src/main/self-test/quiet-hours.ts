@@ -17,11 +17,11 @@ export async function runQuietHoursSelfTest(host: SelfTestHost, client: PtyHostC
   const original = (await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram
   const bot = await taps.telegram()
   const home = selfTestHistoryRoots()!.home
-  const title = `Quiet synthetic question ${home}/project`
+  const title = `Go: Quiet synthetic question ${home}/project`
   writeFileSync(fixture, `const fs=require('node:fs'),cp=require('node:child_process');
 fs.writeFileSync(${JSON.stringify(input)},'');process.stdin.setRawMode(true);
 process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(input)},b));
-for(const [key,kind,title] of ${JSON.stringify([['quiet-q', 'question', title], ['quiet-p', 'permission', 'Quiet synthetic permission']])}){
+for(const [key,kind,title] of ${JSON.stringify([['quiet-q', 'question', title], ['quiet-p', 'permission', 'Go: Quiet synthetic permission']])}){
  const result=cp.spawnSync('bmn',['ask',key,title,'--kind',kind],{encoding:'utf8'});
  fs.writeFileSync(${JSON.stringify(requestReceipt)},JSON.stringify({status:result.status,signal:result.signal,stderr:String(result.stderr||'').split(${JSON.stringify(home)}).join('~').slice(-500)}));
  if(result.status!==0)throw new Error('Synthetic request failed');

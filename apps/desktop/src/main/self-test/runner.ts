@@ -711,11 +711,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     writeFixtureCommand(
       session,
-      'bmn ask self-question "Choose the self-test answer" --kind question'
+      'bmn ask self-question "Go: choose the self-test answer" --kind question'
     )
     writeFixtureCommand(
       secondSession,
-      `bmn ask self-permission "Allow the self-test action" --kind permission --expires ${new Date(Date.now() + 10 * 60_000).toISOString()}; ` +
+      `bmn ask self-permission "Go: allow the self-test action" --kind permission --expires ${new Date(Date.now() + 10 * 60_000).toISOString()}; ` +
       'bmn ask self-review "Review the self-test result" --kind review; ' +
       'bmn ask self-update "Self-test turn finished" --kind notice; ' +
       'bmn progress failed "Observed self-test failure" --source self-test ' +
@@ -838,7 +838,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
 
     // Story 32.1: what holds an agent comes first, whatever order the requests arrived in.
-    const expectedResponseTitles = ['Allow the self-test action', 'Choose the self-test answer', 'Review the self-test result']
+    const expectedResponseTitles = ['Go: allow the self-test action', 'Go: choose the self-test answer', 'Review the self-test result']
     writeFixtureCommand(session, 'bmn ask self-race "A stale notice" --kind notice')
     const raceNotice = await (async (): Promise<AttentionRecord> => {
       const deadline = Date.now() + 5_000
@@ -850,7 +850,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       }
       throw new Error('the notice race fixture did not open')
     })()
-    writeFixtureCommand(session, 'bmn ask self-race "A revised question" --kind question')
+    writeFixtureCommand(session, 'bmn ask self-race "Go: a revised question" --kind question')
     const revisedPrompt = await (async (): Promise<AttentionRecord> => {
       const deadline = Date.now() + 5_000
       while (Date.now() < deadline) {
@@ -1326,7 +1326,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       // From the permission's own session, Ctrl+Shift+U stays in the top tier and moves to the question's session.
       preloadProbe.attentionTriage.keyboardTargetSessionId !== session.sessionId ||
       !/^\d+ (s|min) ago · expires in (9|10) min$/.test(preloadProbe.attentionTriage.firstResponseRow.age) ||
-      !preloadProbe.attentionTriage.firstResponseRow.label.startsWith('Permission · Allow the self-test action · ') ||
+      !preloadProbe.attentionTriage.firstResponseRow.label.startsWith('Permission · Go: allow the self-test action · ') ||
       !/ · expires in (9|10) min$/.test(preloadProbe.attentionTriage.firstResponseRow.label) ||
       !preloadProbe.attentionTriage.noticeResolved ||
       !preloadProbe.attentionTriage.focusReturned ||

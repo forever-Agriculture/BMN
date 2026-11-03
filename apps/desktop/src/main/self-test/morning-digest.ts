@@ -69,7 +69,7 @@ async function runUnwatchedMorningDigestSelfTest(host: SelfTestHost, client: Pty
     await client.request(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SELFTEST_fake_bot_token_not_real' }); await connected()
     await client.request(METHOD_REGISTRY.presenceSet, { away: false })
     for (const [index, cwd] of [root, side].entries()) {
-      const fixture = join(cwd, 'run-fixture.cjs'), title = `Run ${index === 0 ? 'A' : 'B'} owner item ${home}/request`
+      const fixture = join(cwd, 'run-fixture.cjs'), title = `Go: Run ${index === 0 ? 'A' : 'B'} owner item ${home}/request`
       writeFileSync(fixture, `const fs=require('node:fs'),cp=require('node:child_process');fs.writeFileSync(${JSON.stringify(inputs[index])},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(inputs[index])},b));const r=cp.spawnSync('bmn',['ask','digest-${index}',${JSON.stringify(title)}],{encoding:'utf8'});if(r.status!==0)throw new Error('Synthetic ask failed');setInterval(()=>{},1000);`)
       phase(`create-live-${index}`)
       const created = await host.createSessionRuntime({ workspaceId: workspace.workspaceId, name: `Digest live ${index}`, cwd, executable: process.env.BMN_SELF_TEST_NODE!, argv: [fixture], cols: 80, rows: 24 }, true)

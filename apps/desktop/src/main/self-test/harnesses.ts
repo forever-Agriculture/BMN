@@ -149,7 +149,11 @@ export function writeRemoteAnswerHarness(directory: string, fixtures: string): s
     "    foregroundAgent = agent; foregroundId = require('node:crypto').randomUUID()",
     "    spawnSync('bmn', ['hook', agent], { input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup', session_id: foregroundId }), encoding: 'utf8' })",
     "  }",
-    "  return spawnSync('bmn', ['hook', agent], { input: JSON.stringify({ ...read(name), ...patch, ...(native ? { session_id: foregroundId } : {}) }), encoding: 'utf8' }).status",
+    "  const input = JSON.stringify({ ...read(name), ...patch, ...(native ? { session_id: foregroundId } : {}) })",
+    "  const report = () => spawnSync('bmn', ['hook', agent], { input, encoding: 'utf8' })",
+    "  const first = report()",
+    // Story 103.6: the recorded questions name no reason, so each goes back once; asked again unchanged it opens, as for a real agent.
+    "  return (first.stdout.includes('was not shown to the owner') ? report() : first).status",
     "}",
     "const queue = []",
     "let waiter = null",
@@ -319,7 +323,7 @@ export function writeRemoteAnswerHarness(directory: string, fixtures: string): s
     // The owner's next prompt ends the turn notice that Stop opened, leaving no request open behind this case.
     "    hook('claude', 'claude/bash.post-tool-use.json', { hook_event_name: 'UserPromptSubmit', prompt: 'next' })",
     "  } else if (scenario === 'secret-ask') {",
-    "    cli(['ask', 'secret-ask', 'Commit the key I found?', '--body', 'Should I commit ' + 'sk-ant-api03-' + 'SelfTestSyntheticKey_0123456789 to the repo?'])",
+    "    cli(['ask', 'secret-ask', 'Go: Commit the key I found?', '--body', 'Should I commit ' + 'sk-ant-api03-' + 'SelfTestSyntheticKey_0123456789 to the repo?'])",
     "    writeFileSync(file('opened-' + scenario), '')",
     "    await wait('fire-secret-ask-close')",
     "    cli(['withdraw', 'secret-ask'])",
