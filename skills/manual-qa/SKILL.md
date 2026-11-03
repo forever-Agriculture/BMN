@@ -76,6 +76,22 @@ when cheap, isolated and already authorized. Record what you did and observed. I
 unclear or cannot be verified, use uncertain with an owner question and NO-GO; do not invent a
 defect. Goal steps may be empty only when execution could not start, with the reason recorded.
 
+### Judgment pass
+
+Run this on every pass except a narrow retest of named findings, unless the brief's decisions say
+to skip it. Never run it while using an account: there the brief's activities are the whole job.
+
+Explore briefly before the checks, as the person in the goal. On each screen ask: what is going
+on, what would I do next, do I trust this? Note what a screen promises or implies, then check
+whether other screens about the same thing bear it out, in meaning and not only in words. Try to
+disprove each suspicion; before claiming an action is unavailable, attempt it within this brief's
+permissions. Write grounded opinions as debrief notes starting `JUDGMENT:`, each naming the screen,
+what you saw, why it matters to the user and how you tried to disprove it; say when you are unsure.
+Zero is fine.
+
+This widens nothing: scope, permissions, time budget and verdict rules stay as they are. An opinion
+never decides a verdict; only a reproduced defect becomes a finding.
+
 ## 7. Criterion runs
 
 Give every criterion exactly one PASS, FAIL, BLOCKED or NOT RUN, with steps and observations.

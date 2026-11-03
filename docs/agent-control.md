@@ -2249,7 +2249,8 @@ only detaches it: the run's supervisor owns the run (below).
 ### Checking a manual QA report
 
 BMN ships `manual-qa` for Claude Code and Codex from the same source. It teaches testing the user's
-goal on a running candidate, risk-based cases, exploratory charters, UI/slop checks and retests.
+goal on a running candidate, a judgment pass, risk-based cases, exploratory charters, UI/slop checks
+and retests. A judgment pass adds opinions as debrief notes and changes no scope, permission or verdict.
 The lead supplies a curated brief rather than implementation claims or previous test evidence.
 
 For a signed-out pass on a disposable loopback web app:

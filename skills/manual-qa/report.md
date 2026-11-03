@@ -26,7 +26,7 @@ The report contains:
 | `criteria` | One entry per brief ID: `status`, `steps`, `observations`, `evidence`, `finding_ids`; PASS/FAIL require steps, every FAIL links an open finding |
 | `findings` | ID, category, severity, prerequisites, steps, expected, actual, impact, reproduction `{attempts, observed}`, evidence names and open/resolved status |
 | `findings[].retest` | Required for resolved findings: current steps, observations and `regression_gaps` |
-| `debrief` | Confidence high/medium/low, summary and notes (charters, questions, out-of-scope observations) |
+| `debrief` | Confidence high/medium/low, summary and notes (charters, questions, `JUDGMENT:` opinions, out-of-scope observations) |
 | `untested_areas` | Material gaps, including each BLOCKED/NOT RUN criterion as `ID: reason` |
 | `audit_summary` | Required if an account was used in session mode: `complete`, `observed_traffic`, `gaps`; an incomplete audit needs a gap explanation |
 | `verdict` | NO-GO for non-achieved/uncertain goal, mandatory non-PASS or open blocker/major; otherwise GO WITH ISSUES for open minor, otherwise GO |
