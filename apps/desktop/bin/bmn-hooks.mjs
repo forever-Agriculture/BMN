@@ -1222,7 +1222,7 @@ async function runHooks(argv) {
   const [action, agent, ...rest] = parsed.positionals
   try {
     for (const name of Object.keys(parsed.options)) {
-      if (!['json', 'file', 'help', 'yes', 'absent'].includes(name)) throw new UsageError(`hooks does not accept --${name}`)
+      if (!['json', 'file', 'help', 'yes', 'absent', 'no-codex-ask'].includes(name)) throw new UsageError(`hooks does not accept --${name}`)
     }
     if (parsed.options.help || action === undefined) {
       process.stdout.write(`${HOOKS_USAGE}\n`)
@@ -1233,7 +1233,13 @@ async function runHooks(argv) {
       writeSync(1, OPENCODE_PLUGIN)
       return 0
     }
+    if (action === 'approval') {
+      if (agent !== undefined || parsed.options.file !== undefined || parsed.options.yes || parsed.options.absent || parsed.options['no-codex-ask'] || parsed.options.json !== true) throw new UsageError('hooks approval takes only --json')
+      writeSync(1, `${JSON.stringify({ approval: await codexApproval(hookFilePath('codex')) })}\n`)
+      return 0
+    }
     if (!['check', 'install'].includes(action)) throw new UsageError(`hooks expects check or install, not ${action}`)
+    if (action !== 'check' && parsed.options['no-codex-ask']) throw new UsageError('--no-codex-ask is only for hooks check')
     if (action !== 'install' && parsed.options.yes) throw new UsageError('--yes is only for hooks install')
     if (action !== 'install' && parsed.options.absent) throw new UsageError('--absent is only for hooks install')
     if (parsed.options.absent && !parsed.options.yes) throw new UsageError('hooks install --absent writes without asking: it needs --yes')
@@ -1248,7 +1254,7 @@ async function runHooks(argv) {
       : absoluteUncollapsed(parsed.options.file)
     if (action === 'install' && parsed.options.absent) return await installAbsentCommand(agents, pathFor, parsed.options.json === true)
     return action === 'check'
-      ? await checkHooksCommand(agents, pathFor, parsed.options.json === true)
+      ? await checkHooksCommand(agents, pathFor, parsed.options.json === true, parsed.options['no-codex-ask'] !== true)
       : await installHooksCommand(agents[0], pathFor(agents[0]), parsed.options.json === true, parsed.options.yes === true)
   } catch (error) {
     if (error instanceof UsageError) return usageFailure(error.message)
@@ -1256,7 +1262,7 @@ async function runHooks(argv) {
   }
 }
 
-async function checkHooksCommand(agents, pathFor, asJson) {
+async function checkHooksCommand(agents, pathFor, asJson, askCodex = true) {
   const reports = agents.map((name) => checkHooks(name, pathFor(name)))
   const wired = reports.every((report) => report.state === 'read' && report.missing.length === 0)
   // Story 60.8: what the prompt guard does in each app right now, read from the approved team on disk.
@@ -1284,7 +1290,7 @@ async function checkHooksCommand(agents, pathFor, asJson) {
   // Story 102.4: what Codex says about BMN's entries, and what each line below may then claim.
   let approval = null
   for (const report of reports) {
-    if (report.agent !== 'codex') continue
+    if (report.agent !== 'codex' || !askCodex) continue
     approval = await codexApproval(report.file)
     if (approval !== null) floor.set('codex', withCodexApproval(floor.get('codex'), approval))
   }

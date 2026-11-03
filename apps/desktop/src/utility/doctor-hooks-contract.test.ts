@@ -138,19 +138,49 @@ describe('Doctor hooks producer contract', () => {
     } finally { rmSync(home, { recursive: true, force: true }) }
   }, 150_000)
 
-  it('asks a Codex that writes to its home as it starts, inside the doctor\'s own read-only sandbox (Story 102.4)', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-hooks-sandbox-'))
-    try {
-      // Real Codex exits on a read-only home (`Read-only file system`), measured on 0.166.0. This one also says if it can see his sign-in.
-      syntheticProfile(home, `touch "$HOME/.codex/logs_2.sqlite" || exit 1\n[ -e "$HOME/.codex/auth.json" ] && exit 2\n`)
-      writeFileSync(join(home, '.codex/auth.json'), 'synthetic')
-      const before = readFileSync(join(home, '.codex/hooks.json'), 'utf8')
-      const result = await runBmnDoctor('hooks', home, { HOME: home, PATH: `${join(home, '.local/bin')}:/usr/bin:/bin` }, { timeoutMs: 120_000 })
-      expect(result).toEqual({ state: 'passed', problems: [] })
+  describe('asks Codex outside the read-only run (Story 102.4)', () => {
+    // Real Codex exits on a read-only home (`Read-only file system`), measured on 0.166.0, so this one writes as it starts.
+    const WRITES = 'touch "$HOME/.codex/logs_2.sqlite" || exit 1\n'
+    const doctor = (home: string) => runBmnDoctor('hooks', home, { HOME: home, PATH: `${join(home, '.local/bin')}:/usr/bin:/bin` }, { timeoutMs: 120_000 })
+    const withHome = async (check: (home: string) => Promise<void>) => {
+      const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-hooks-outside-'))
+      try { await check(home) } finally { rmSync(home, { recursive: true, force: true }) }
+    }
+
+    it('says nothing when Codex runs the entries, however it writes to its home', () => withHome(async (home) => {
+      syntheticProfile(home, WRITES)
+      expect(await doctor(home)).toEqual({ state: 'passed', problems: [] })
+      expect(existsSync(join(home, '.codex/logs_2.sqlite'))).toBe(true)
+    }), 150_000)
+
+    it('names an entry Codex does not run, which the read-only run could not', () => withHome(async (home) => {
+      syntheticProfile(home, WRITES)
+      const answer = JSON.parse(readFileSync(join(home, 'answer'), 'utf8'))
+      answer.result.data[0].hooks[0].trustStatus = 'modified'
+      writeFileSync(join(home, 'answer'), JSON.stringify(answer))
+      const result = await doctor(home)
+      expect(result.state).toBe('problems')
+      expect(result.problems).toEqual([{ code: 'hook-check', item: 1, app: 'codex', cause: 'approval:not-approved' }])
+    }), 150_000)
+
+    it('says it could not ask when Codex ends without answering, never that the entries run', () => withHome(async (home) => {
+      syntheticProfile(home, 'exit 1\n')
+      const result = await doctor(home)
+      expect(result.state).toBe('problems')
+      expect(result.problems).toEqual([{ code: 'hook-check', item: 1, app: 'codex', cause: 'approval:unverified' }])
+    }), 150_000)
+
+    it('--no-codex-ask leaves Codex alone, and `approval` prints only its answer', () => withHome(async (home) => {
+      syntheticProfile(home, WRITES)
+      const cli = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
+      const env = { HOME: home, PATH: `${join(home, '.local/bin')}:/usr/bin:/bin` }
+      const checked = JSON.parse(execFileSync(process.execPath, [cli, 'hooks', 'check', '--json', '--no-codex-ask'], { encoding: 'utf8', timeout: 120_000, env }))
+      expect(checked.agents.find((row: { agent: string }) => row.agent === 'codex').approval).toBeUndefined()
       expect(existsSync(join(home, '.codex/logs_2.sqlite'))).toBe(false)
-      expect(readFileSync(join(home, '.codex/hooks.json'), 'utf8')).toBe(before)
-    } finally { rmSync(home, { recursive: true, force: true }) }
-  }, 150_000)
+      expect(JSON.parse(execFileSync(process.execPath, [cli, 'hooks', 'approval', '--json'], { encoding: 'utf8', timeout: 120_000, env }))).toEqual({ approval: { state: 'approved' } })
+      expect(existsSync(join(home, '.codex/logs_2.sqlite'))).toBe(true)
+    }), 150_000)
+  })
 
   it('invalidates the old parser identity even when all three app programs are missing', async () => {
     const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-parser-identity-'))

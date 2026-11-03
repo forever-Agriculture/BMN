@@ -33,7 +33,7 @@ const PIPED_FIELDS = {
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id', 'ref', 'depends'])
-const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status', 'leaving'])
+const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status', 'leaving', 'no-codex-ask'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 /**
  * Story 35.2: what `bmn handoff --outline` prints. bin/bmn runs unbundled, so this is a copy of HANDOFF_OUTLINE in
@@ -195,7 +195,8 @@ Exit status: 0 success, 1 remote or connection error, 2 usage error
              hooks uses 1 for "something is missing or unreadable"; it needs no socket and no token
              team, roster and rules need no socket either; their own codes are listed in their --help`
 
-const HOOKS_USAGE = `Usage: bmn hooks check [agent] [--file PATH] [--json]
+const HOOKS_USAGE = `Usage: bmn hooks check [agent] [--file PATH] [--json] [--no-codex-ask]
+       bmn hooks approval --json
        bmn hooks install <agent> [--file PATH] [--json] [--yes]
        bmn hooks install [agent] --absent --yes [--file PATH] [--json]
        bmn hooks print opencode
@@ -213,6 +214,9 @@ check   reads each agent's own hook file and prints one line per event BMN expec
         Codex runs a new or changed entry only once approved with /hooks, so check asks
         real Codex and says which of BMN's entries it does not run, or that it could not ask.
         Exit 0 when nothing is missing or waits for approval, 1 otherwise.
+        --no-codex-ask leaves that question out, for bmn doctor's read-only run, which
+        cannot ask: Codex exits on a read-only home. Then bmn doctor asks with approval,
+        which prints only Codex's answer as JSON.
 install previews the exact target and diff on stderr and asks Yes (default No) before
         writing. A non-interactive install needs --yes; --json alone does not approve.
         It adds only the missing entries, next to the hooks already registered for that

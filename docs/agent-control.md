@@ -2862,7 +2862,10 @@ checked, what could not be and whether it needs you; a check out of time on a bu
 names an allow row that can run any program (Codex's rules or Claude Code's `permissions.allow`; fixed list: `sed`, `awk`,
 `find`, `xargs`, `env`, `bash`, `sh`, `python3`, `node`, `perl`, `pnpm run`) when only flags or a script path follow it.
 It reads BMN's hooks, skills, tools and rules checks, qualified Claude/Codex doctors, and show-only leftovers.
-There is no cleanup command. It never installs, removes or changes the inspected files.
+There is no cleanup command. It never installs, removes or changes the inspected files. Its checks run read-only, with one
+step outside: it asks real Codex whether it runs BMN's hook entries, as `bmn hooks check` and BMN's start do, because Codex's
+app server exits on a read-only home and a copy without his sign-in would lose a cloud policy. Codex may write its usual logs
+or refresh its sign-in there, as at any start.
 
 A full cycle starts when never run, strictly more than 24 hours after the last cycle started, or after an app
 version/executable changes. A failed or partial cycle counts. Failed and problem checks get one retry at the

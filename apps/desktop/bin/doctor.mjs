@@ -17,6 +17,7 @@ const UUID = /^[a-f0-9-]{36}$/
 const HELP = `Usage: bmn doctor [--details] [--json]
 
 Reports BMN's read-only hooks, skills, tools and rules checks and the qualified Claude/Codex doctors.
+One step is outside the read-only run: BMN asks Codex whether it runs BMN's hook entries, and Codex may write as at any start.
 Runs when never started, strictly after 24 hours or when an app version changes; joins a run in progress.
 BMN retries failed or problem checks once at its next startup. Reading from the CLI does not consume that retry.
 New doctor versions qualify on a disposable profile before a read-only real-profile run. Leftovers are show-only.

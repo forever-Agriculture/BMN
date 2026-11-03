@@ -11,9 +11,11 @@ import { parseBmnDoctor, parseClaudeDoctor, parseCodexDoctor, projectedResult } 
 import { validRowReceipts, validWorkerKeys } from './doctor-continuity.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
 
-export const SANDBOX_POLICY = 'bwrap-selected-profile-runtime-scaffold-v5-codex-ask'
-export const PARSER_VERSION = 'doctor-projection-v6-codex-ask'
+export const SANDBOX_POLICY = 'bwrap-selected-profile-runtime-scaffold-v4'
+export const PARSER_VERSION = 'doctor-projection-v6-codex-asked-outside'
 export const LIMITS = Object.freeze({ timeoutMs: 60000, outputBytes: 1024 * 1024 })
+/** The ask's own ten seconds (codex-hook-approval.mjs), and starting the command that asks on a busy machine. */
+const CODEX_ANSWER_MS = 20000
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 const unavailable = (state) => ({ state, problems: [] })
 const appParser = (app) => app === 'claude' ? parseClaudeDoctor : parseCodexDoctor
@@ -132,21 +134,7 @@ function openCodeRuntimeMounts(profile, restored) {
   return mounts
 }
 
-/**
- * Story 102.4: Codex's app server writes to its home as it starts and exits on a read-only one, so the hooks check could never
- * ask it. It gets a throwaway home at the same path, holding only what decides whether it runs an entry: nothing reaches the
- * real folder, and the check does not see his sign-in.
- */
-function codexAskMounts(profile) {
-  let folder
-  try { folder = realpathSync(profile.paths.CODEX_HOME) } catch (error) {
-    if (['ENOENT', 'ENOTDIR'].includes(error.code)) return []
-    throw error
-  }
-  return ['--tmpfs', folder, ...['config.toml', 'hooks.json', 'rules'].flatMap((name) => ['--ro-bind-try', join(folder, name), join(folder, name)])]
-}
-
-export function sandboxArguments(home, command, args, environment = {}, { runtime = true, codexAsk = false } = {}) {
+export function sandboxArguments(home, command, args, environment = {}, { runtime = true } = {}) {
   const profile = selectedProfile({ ...environment, HOME: home })
   if (profile.invalid || profile.unavailable) throw new Error('selected profile unavailable')
   const mounts = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/var/tmp']
@@ -169,7 +157,6 @@ export function sandboxArguments(home, command, args, environment = {}, { runtim
   const openCodeLog = join(profile.paths.XDG_DATA_HOME, 'opencode/log')
   if (runtime) mounts.push(...openCodeRuntimeMounts(profile, restored))
   else try { if (lstatSync(openCodeLog).isDirectory()) mounts.push('--tmpfs', openCodeLog) } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error }
-  if (codexAsk) mounts.push(...codexAskMounts(profile))
   // The scratch directory must never be placed inside a selected read-only subtree.
   const scratch = '/tmp/bmn-doctor-work'
   if (Object.values(profile.paths).some((path) => scratch === path || scratch.startsWith(`${path}/`))) throw new Error('scratch overlaps selected profile')
@@ -178,10 +165,10 @@ export function sandboxArguments(home, command, args, environment = {}, { runtim
 
 export async function sandboxProcess(home, command, args, environment, limits = {}) {
   try {
-    const { inspection = false, inspectionLock, runtime = !inspection, codexAsk = false, ...bounds } = limits
+    const { inspection = false, inspectionLock, runtime = !inspection, ...bounds } = limits
     const fixed = doctorEnvironment(environment, home)
     if (inspection && environment.OPENCODE_CONFIG_CONTENT) fixed.OPENCODE_CONFIG_CONTENT = 'set'
-    const sandbox = sandboxArguments(home, command, args, environment, { runtime, codexAsk })
+    const sandbox = sandboxArguments(home, command, args, environment, { runtime })
     // Fresh readers share the acquisition lock, outside the read-only namespace.
     // Acquisition already runs as that lock's child and must not reacquire it.
     return inspectionLock
@@ -307,12 +294,43 @@ export async function runAppDoctor(app, entry, home, environment, limits) {
   return appParser(app)(run.stdout, run.code, { readOnlySandbox: true })
 }
 
+/**
+ * Story 102.4: Codex's app server exits on a read-only home, so the check in the sandbox cannot ask it, and a copy of the home
+ * without his sign-in would lose a cloud policy and could say a false approved. So this one step runs outside the sandbox, as
+ * `bmn hooks check` and BMN's start do: BMN only asks, and Codex may write its usual logs or refresh its sign-in, as at any start.
+ */
+async function codexAnswer(cli, home, environment) {
+  const run = await boundedProcess(process.execPath, [cli, 'hooks', 'approval', '--json'],
+    { environment: doctorEnvironment(environment, home), timeoutMs: CODEX_ANSWER_MS, outputBytes: 16384 })
+  if (run.failure !== null) return { state: 'unverified', reason: run.failure === 'timeout' ? 'no answer in time' : 'the question could not run' }
+  try {
+    const { approval } = JSON.parse(run.stdout)
+    if (run.code === 0 && approval !== undefined) return approval
+  } catch { /* said below */ }
+  return { state: 'unverified', reason: 'an answer BMN cannot read' }
+}
+
+/** The hooks report with what Codex said about BMN's entries, its exit following. A report BMN cannot read stays as it was, for the parser to call. */
+async function hooksReportWithAnswer(cli, home, environment, text, code) {
+  let report
+  try { report = JSON.parse(text) } catch { return { text, code } }
+  const row = Array.isArray(report?.agents) ? report.agents.find((agent) => agent?.agent === 'codex') : undefined
+  if (row === undefined) return { text, code }
+  const approval = await codexAnswer(cli, home, environment)
+  if (approval === null) return { text, code }
+  row.approval = approval
+  if (approval.state === 'approved') return { text: JSON.stringify(report), code }
+  return { text: JSON.stringify({ ...report, ok: false }), code: 1 }
+}
+
 export async function runBmnDoctor(check, home, environment, limits) {
   const packaged = new URL('./bmn.mjs', import.meta.url)
   const cli = fileURLToPath(existsSync(packaged) ? packaged : new URL('./bmn', import.meta.url))
-  const run = await sandboxProcess(home, process.execPath, [cli, check, 'check', '--json'], environment, { ...limits, inspection: true, codexAsk: check === 'hooks' })
+  const run = await sandboxProcess(home, process.execPath, [cli, check, 'check', '--json', ...(check === 'hooks' ? ['--no-codex-ask'] : [])], environment, { ...limits, inspection: true })
   if (run.failure !== null) return unavailable(run.failure === 'timeout' ? 'timeout' : 'failed')
-  return parseBmnDoctor(check, run.stdout, run.code)
+  if (check !== 'hooks') return parseBmnDoctor(check, run.stdout, run.code)
+  const answered = await hooksReportWithAnswer(cli, home, environment, run.stdout, run.code)
+  return parseBmnDoctor(check, answered.text, answered.code)
 }
 
 const incompleteInspection = () => ({ state: 'partial', problems: [{ code: 'leftover-step', item: 1, count: 1 }], leftovers: [] })
