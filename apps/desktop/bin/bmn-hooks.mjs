@@ -768,6 +768,40 @@ function onlyOurs(group, agent, event) {
     group.hooks.every((entry) => isObject(entry) && entry.type === 'command' && ['wired', 'older'].includes(hookEntryState(entry.command, agent, event)))
 }
 
+/**
+ * BMN's own groups another BMN group already covers: an ungated one covers every matcher, and the same matcher twice is one.
+ * The same tool call would run the hook twice and open two cards (Story 106.9: 16 of 18 Codex questions, 2026-11-04). Only groups
+ * holding nothing but BMN's entries; a matcher is never read as a pattern.
+ */
+function overlappingGroups(agent, data) {
+  const found = []
+  for (const [event, groups] of Object.entries(isObject(data.hooks) ? data.hooks : {})) {
+    if (!Array.isArray(groups)) continue
+    const ours = groups.map((group, index) => ({ group, index })).filter(({ group }) => isObject(group) && onlyOurs(group, agent, event))
+    const open = (matcher) => matcher === undefined || matcher === null || matcher === ''
+    const ungated = ours.find(({ group }) => open(group.matcher))
+    const kept = new Set(ungated ? [ungated.index] : [])
+    const matchers = new Set()
+    for (const { group, index } of ours) {
+      if (index === ungated?.index) continue
+      if (ungated || open(group.matcher) || matchers.has(group.matcher)) found.push({ event, index })
+      else { matchers.add(group.matcher); kept.add(index) }
+    }
+  }
+  return found
+}
+
+/** `data` without those groups; every other group kept as it was, in its order. */
+function dropOverlaps(data, overlaps) {
+  if (overlaps.length === 0) return data
+  const hooks = { ...data.hooks }
+  for (const event of new Set(overlaps.map((one) => one.event))) {
+    const gone = new Set(overlaps.filter((one) => one.event === event).map((one) => one.index))
+    hooks[event] = hooks[event].filter((_, index) => !gone.has(index))
+  }
+  return { ...data, hooks }
+}
+
 /** The events whose BMN-only group still carries an older matcher (Story 83.4: Claude's PreToolUse before Bash). */
 function olderMatchers(agent, data) {
   if (!isObject(data) || !isObject(data.hooks)) return []
@@ -1012,7 +1046,8 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
     }
   })
   const missing = events.filter((row) => !row.optional && row.state === 'missing').map((row) => row.event)
-  return { agent, file: path, state: file.state, ...(file.detail === undefined ? {} : { detail: file.detail }), events, missing }
+  const overlaps = file.state === 'read' ? [...new Set(overlappingGroups(agent, file.data).map((one) => one.event))] : []
+  return { agent, file: path, state: file.state, ...(file.detail === undefined ? {} : { detail: file.detail }), events, missing, ...(overlaps.length === 0 ? {} : { overlaps }) }
 }
 
 /** BMN's own wordings that the current entry replaces: the older socket name, and a PreToolUse that held only inside BMN. The bare call is the owner's. */
@@ -1196,6 +1231,7 @@ function describeHookCheck(report, asked = false) {
       lines.push(`      ${JSON.stringify(command)}`)
     }
   }
+  for (const event of report.overlaps ?? []) lines.push(`  ${event}: BMN's entry is here twice, so one question opens two cards; \`bmn hooks install\` removes the extra one, and Codex then asks for one /hooks approval.`)
   // The limit is the same whatever the file said, so it is printed unconditionally rather than as
   // a verdict BMN has no evidence for: Codex loads its hook file strictly and BMN does not check
   // that it will, and a hook it has never trusted does not run however it is written. Where Codex answered, its answer says.
@@ -1570,7 +1606,8 @@ async function installHooksCommand(agent, path, asJson, yes) {
   const widened = file.state === 'read' ? olderMatchers(agent, file.data) : []
   const reworded = file.state === 'read' ? olderWordings(agent, file.data) : []
   const rows = claudeRowsToAdd(agent, file)
-  if (report.missing.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0) {
+  const overlaps = file.state === 'read' ? overlappingGroups(agent, file.data) : []
+  if (report.missing.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0 && overlaps.length === 0) {
     const wroteRules = agent === 'codex' ? await withDefaultsAdmission(async () => writeCodexRules(path)) : false
     const message = `Nothing to do: every hook BMN expects is already in ${path}.`
     const approval = agent === 'codex' ? await codexApproval(path) : null
@@ -1589,7 +1626,7 @@ async function installHooksCommand(agent, path, asJson, yes) {
     return 1
   }
   const indent = jsonIndent(file.text)
-  const nextText = `${JSON.stringify(withClaudeRows(installHooks(agent, upgradeWordings(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), reworded), report.missing), rows), null, indent)}\n`
+  const nextText = `${JSON.stringify(withClaudeRows(installHooks(agent, upgradeWordings(agent, widenMatchers(agent, raiseTimeouts(agent, dropOverlaps(file.data, overlaps), raised), widened), reworded), report.missing), rows), null, indent)}\n`
   let target
   try { target = linkTarget(path) } catch (error) {
     process.stderr.write(`bmn: ${error.message}\n`)
@@ -1598,7 +1635,7 @@ async function installHooksCommand(agent, path, asJson, yes) {
   const diff = unifiedDiff(file.text, nextText, path)
   const changes = [...report.missing, ...raised.map((event) => `${event} timeout ${hookEntryTimeout(agent, event)} s`),
     ...widened.map((event) => `${event} matcher ${HOOK_FILES[agent].matchers[event]}`),
-    ...reworded.map((event) => `${event} current wording`), ...(rows.length === 0 ? [] : [`${rows.length} deny rules`])]
+    ...reworded.map((event) => `${event} current wording`), ...overlaps.map((one) => `${one.event} duplicate entry removed`), ...(rows.length === 0 ? [] : [`${rows.length} deny rules`])]
   if (!await confirmHookWrite(path, target, changes, diff, yes, asJson)) return confirmationResult(path, asJson)
   return withDefaultsAdmission(async () => {
     const unchanged = () => {
@@ -1738,17 +1775,20 @@ function absentClaudeOrCodex(agent, path) {
   const raised = file.state === 'read' ? shortTimeouts(agent, file.data) : []
   // Story 83.4: BMN's own group with the matcher from before the guard is BMN's to widen.
   const widened = file.state === 'read' ? olderMatchers(agent, file.data) : []
-  if (verdicts.absent.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0) {
+  // Story 106.9: BMN's own duplicate of an entry that already covers the same tool runs the hook twice for one question.
+  const overlaps = file.state === 'read' ? overlappingGroups(agent, file.data) : []
+  if (verdicts.absent.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0 && overlaps.length === 0) {
     return { state: wroteRules ? 'installed' : 'checked', ...done, installed: [], ...(wroteRules ? { rules: 'written' } : {}), ...floorAtStart(agent, path) }
   }
   if (rewrittenNumbers(file.text).length > 0) {
     return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${path} holds a number BMN cannot write back unchanged` }
   }
-  const nextText = `${JSON.stringify(withClaudeRows(installHooks(agent, upgradeWordings(agent, widenMatchers(agent, raiseTimeouts(agent, file.data, raised), widened), reworded), verdicts.absent), rows), null, jsonIndent(file.text))}\n`
+  const nextText = `${JSON.stringify(withClaudeRows(installHooks(agent, upgradeWordings(agent, widenMatchers(agent, raiseTimeouts(agent, dropOverlaps(file.data, overlaps), raised), widened), reworded), verdicts.absent), rows), null, jsonIndent(file.text))}\n`
   const backup = writeHookFile(path, file.state === 'missing' ? null : file.text, linkTarget(path), nextText)
   return {
     state: 'installed', ...done, placed: [...verdicts.placed, ...verdicts.absent], installed: verdicts.absent,
     ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(reworded.length === 0 ? {} : { reworded }),
+    ...(overlaps.length === 0 ? {} : { overlaps: overlaps.map((one) => one.event) }),
     ...(rows.length === 0 && !wroteRules ? {} : { rules: 'written' }), ...(backup === null ? {} : { backups: [backup] }), ...floorAtStart(agent, path)
   }
 }

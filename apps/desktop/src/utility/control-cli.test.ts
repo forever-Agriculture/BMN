@@ -3057,6 +3057,35 @@ it('ends every Codex report with the limit of what it checked', async () => {
     }
   })
 
+  it('removes BMN\'s own duplicate entry for one tool and keeps every other entry (Story 106.9)', async () => {
+    const fresh = await hookFileFixture('{}', 'hooks.json')
+    await runHooks(['install', '--yes', 'codex', '--file', fresh])
+    const bmnEntry = JSON.parse(await readFile(fresh, 'utf8')).hooks.PreToolUse[0].hooks[0]
+    const foreign = { type: 'command', command: 'python3 ~/.claude/hooks/check-conventional-commits.py', timeout: 10 }
+    const before = {
+      hooks: {
+        PreToolUse: [
+          { matcher: 'request_user_input|request_user_input_async', hooks: [bmnEntry] },
+          { hooks: [bmnEntry] },
+          { hooks: [foreign] },
+          { matcher: 'something_else', hooks: [foreign, bmnEntry] }
+        ],
+        SessionStart: [{ matcher: 'compact|resume', hooks: [{ type: 'command', command: 'python3 other.py', timeout: 10 }] }]
+      }
+    }
+    const path = await hookFileFixture(JSON.stringify(before, null, 2), 'hooks.json')
+    const checked = await runHooks(['check', 'codex', '--file', path])
+    expect(checked.stdout).toContain('PreToolUse: BMN\'s entry is here twice')
+    const install = await runHooks(['install', '--yes', 'codex', '--file', path])
+    expect(install.code).toBe(0)
+    const after = JSON.parse(await readFile(path, 'utf8')).hooks
+    expect(after.PreToolUse).toEqual([{ hooks: [bmnEntry] }, { hooks: [foreign] }, { matcher: 'something_else', hooks: [foreign, bmnEntry] }])
+    expect(after.SessionStart.filter((group: { matcher?: string }) => group.matcher === 'compact|resume')).toEqual(before.hooks.SessionStart)
+    const again = await readFile(path, 'utf8')
+    await runHooks(['install', '--yes', 'codex', '--file', path])
+    expect(await readFile(path, 'utf8')).toBe(again)
+  })
+
   it('does not call a Claude entry wired when its timeout is zero', async () => {
     const path = await hookFileFixture({
       hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 0, command: DOCUMENTED_CLAUDE }] }] }
