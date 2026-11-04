@@ -3098,16 +3098,20 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const entry = working.PreToolUse[0].hooks[0]
     const { timeout, ...group } = dead as { timeout?: number; matcher?: unknown }
     const deadGroup = { ...group, hooks: [{ ...entry, ...(timeout === undefined ? {} : { timeout }) }] }
-    const path = await hookFileFixture(JSON.stringify({ hooks: { ...working, PreToolUse: [deadGroup, working.PreToolUse[0]] } }, null, 2))
-    expect((await runHooks(['check', 'claude', '--file', path])).stdout).not.toContain('is here twice')
-    expect((await runHooks(['install', '--yes', 'claude', '--file', path])).code).toBe(0)
-    const after = JSON.parse(await readFile(path, 'utf8')).hooks.PreToolUse
-    expect(after).toContainEqual(working.PreToolUse[0])
-    const again = await readFile(path, 'utf8')
-    await runHooks(['install', '--yes', 'claude', '--file', path])
-    expect(await readFile(path, 'utf8')).toBe(again)
-    const report = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout)
-    expect(JSON.stringify(report)).not.toContain('"overlaps"')
+    // By hand, and the way the app does at every start.
+    for (const command of [['install', '--yes', 'claude'], ['install', '--absent', '--yes', 'claude']]) {
+      const path = await hookFileFixture(JSON.stringify({ hooks: { ...working, PreToolUse: [deadGroup, working.PreToolUse[0]] } }, null, 2))
+      expect((await runHooks(['check', 'claude', '--file', path])).stdout).not.toContain('is here twice')
+      expect((await runHooks([...command, '--file', path])).code).toBe(0)
+      const after = JSON.parse(await readFile(path, 'utf8')).hooks.PreToolUse
+      expect(after).toContainEqual(working.PreToolUse[0])
+      const again = await readFile(path, 'utf8')
+      await runHooks([...command, '--file', path])
+      expect(await readFile(path, 'utf8')).toBe(again)
+      const report = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout)
+      expect(JSON.stringify(report)).not.toContain('"overlaps"')
+      expect(report.agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse').state).toBe('wired')
+    }
   })
 
   it('treats a null matcher as no matcher for Codex, whose parser reads it so, and keeps one working entry (Story 106.9)', async () => {
