@@ -771,21 +771,22 @@ function onlyOurs(group, agent, event) {
 /**
  * BMN's own groups another BMN group already covers: an ungated one covers every matcher, and the same matcher twice is one.
  * The same tool call would run the hook twice and open two cards (Story 106.9: 16 of 18 Codex questions, 2026-11-04). Only groups
- * holding nothing but BMN's entries; a matcher is never read as a pattern.
+ * holding nothing but BMN's entries, and only groups the harness runs: a dead group covers nothing and runs nothing, so it is
+ * neither a reason to remove a working one nor one to remove. A matcher is never read as a pattern.
  */
 function overlappingGroups(agent, data) {
   const found = []
   for (const [event, groups] of Object.entries(isObject(data.hooks) ? data.hooks : {})) {
     if (!Array.isArray(groups)) continue
-    const ours = groups.map((group, index) => ({ group, index })).filter(({ group }) => isObject(group) && onlyOurs(group, agent, event))
-    const open = (matcher) => matcher === undefined || matcher === null || matcher === ''
-    const ungated = ours.find(({ group }) => open(group.matcher))
-    const kept = new Set(ungated ? [ungated.index] : [])
+    const live = groups.map((group, index) => ({ group, index })).filter(({ group }) => isObject(group) && onlyOurs(group, agent, event) &&
+      group.hooks.every((entry) => runnableEntry(entry, agent)) && (typeof group.matcher === 'string' || !gatesEvent(group.matcher, agent)))
+    const open = (matcher) => !gatesEvent(matcher, agent)
+    const ungated = live.find(({ group }) => open(group.matcher))
     const matchers = new Set()
-    for (const { group, index } of ours) {
+    for (const { group, index } of live) {
       if (index === ungated?.index) continue
-      if (ungated || open(group.matcher) || matchers.has(group.matcher)) found.push({ event, index })
-      else { matchers.add(group.matcher); kept.add(index) }
+      if (ungated || matchers.has(group.matcher)) found.push({ event, index })
+      else matchers.add(group.matcher)
     }
   }
   return found

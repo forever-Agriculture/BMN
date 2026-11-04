@@ -3087,6 +3087,50 @@ it('ends every Codex report with the limit of what it checked', async () => {
     expect(await readFile(path, 'utf8')).toBe(again)
   })
 
+  it.each([
+    ['a null matcher, which Claude Code does not run', { matcher: null }],
+    ['a list as a matcher, which Claude Code does not run', { matcher: ['Bash'] }],
+    ['a timeout of zero, which Claude Code does not run', { timeout: 0 }]
+  ])('never lets a dead group cover the working one: %s (Story 106.9)', async (_name, dead) => {
+    const fresh = await hookFileFixture('{}')
+    await runHooks(['install', '--yes', 'claude', '--file', fresh])
+    const working = JSON.parse(await readFile(fresh, 'utf8')).hooks
+    const entry = working.PreToolUse[0].hooks[0]
+    const { timeout, ...group } = dead as { timeout?: number; matcher?: unknown }
+    const deadGroup = { ...group, hooks: [{ ...entry, ...(timeout === undefined ? {} : { timeout }) }] }
+    const path = await hookFileFixture(JSON.stringify({ hooks: { ...working, PreToolUse: [deadGroup, working.PreToolUse[0]] } }, null, 2))
+    expect((await runHooks(['check', 'claude', '--file', path])).stdout).not.toContain('is here twice')
+    expect((await runHooks(['install', '--yes', 'claude', '--file', path])).code).toBe(0)
+    const after = JSON.parse(await readFile(path, 'utf8')).hooks.PreToolUse
+    expect(after).toContainEqual(working.PreToolUse[0])
+    const again = await readFile(path, 'utf8')
+    await runHooks(['install', '--yes', 'claude', '--file', path])
+    expect(await readFile(path, 'utf8')).toBe(again)
+    const report = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout)
+    expect(JSON.stringify(report)).not.toContain('"overlaps"')
+  })
+
+  it('treats a null matcher as no matcher for Codex, whose parser reads it so, and keeps one working entry (Story 106.9)', async () => {
+    const fresh = await hookFileFixture('{}', 'hooks.json')
+    await runHooks(['install', '--yes', 'codex', '--file', fresh])
+    const working = JSON.parse(await readFile(fresh, 'utf8')).hooks
+    const entry = working.PreToolUse[0].hooks[0]
+    const path = await hookFileFixture(JSON.stringify({ hooks: { ...working, PreToolUse: [{ matcher: null, hooks: [entry] }, { matcher: 'request_user_input', hooks: [entry] }] } }, null, 2), 'hooks.json')
+    expect((await runHooks(['install', '--yes', 'codex', '--file', path])).code).toBe(0)
+    expect(JSON.parse(await readFile(path, 'utf8')).hooks.PreToolUse).toEqual([{ matcher: null, hooks: [entry] }])
+  })
+
+  it('leaves a dead Codex group alone and never removes the working entry for it (Story 106.9)', async () => {
+    const fresh = await hookFileFixture('{}', 'hooks.json')
+    await runHooks(['install', '--yes', 'codex', '--file', fresh])
+    const working = JSON.parse(await readFile(fresh, 'utf8')).hooks
+    const entry = working.PreToolUse[0].hooks[0]
+    const dead = { hooks: [{ ...entry, timeout: 1.5 }] }
+    const path = await hookFileFixture(JSON.stringify({ hooks: { ...working, PreToolUse: [dead, { matcher: 'request_user_input', hooks: [entry] }] } }, null, 2), 'hooks.json')
+    expect((await runHooks(['install', '--yes', 'codex', '--file', path])).code).toBe(0)
+    expect(JSON.parse(await readFile(path, 'utf8')).hooks.PreToolUse).toContainEqual({ matcher: 'request_user_input', hooks: [entry] })
+  })
+
   it('does not call a Claude entry wired when its timeout is zero', async () => {
     const path = await hookFileFixture({
       hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 0, command: DOCUMENTED_CLAUDE }] }] }
