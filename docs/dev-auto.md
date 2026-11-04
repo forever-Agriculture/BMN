@@ -62,9 +62,11 @@ or dropped, or taken off the board, withdraws the go until your next one, even i
 board that cannot be read grants nothing):
 an edit made after the go does not count until you give a new go, and the run tells you about it. At start and
 at every resume the run keeps the same go, its rounds left and its money in its handoff, and asks you nothing
-about them. An epic without Run needs, or without a recorded go, runs as before: the run continues under your
-invocation without the extra rounds or deferrals, explains in its handoff why the record is missing, and never
-asks you to restate the approval or records a go itself.
+about them. Every run has at least 4 extra repair rounds per boundary (your card, 2026-11-04): the greater of 4
+and its go's number. An epic without Run needs, or without a recorded go, also has the 4, without deferrals; the
+run continues under your invocation, explains in its handoff why the record is missing, and never asks you to
+restate the approval or records a go itself. A go you withdrew, or one that cannot be confirmed, gives no rounds,
+your later narrower word holds (`spend_ledger.py limit`), and what was used stays used.
 
 A run decides a technical point itself only when the evidence is complete; otherwise it asks the consultant
 first and follows a confident answer. A point that is yours (spend beyond what you approved, a change to the work or its criteria, a
@@ -73,7 +75,8 @@ settle, goes at once under **Needs your decision** in its handoff, and the run c
 story that point does not block. It asks you only when no remaining work can go on, and never while you are
 Away; its final report lists every open entry. When a boundary's rounds are used up, a criterion your Run
 needs list as deferrable is deferred (the story is marked done with the deferral noted and named under Known
-limits, and a new story is proposed); anything else waits as Needs your decision. A broad "continue" or "work
+limits, and a new story is proposed); anything else parks BLOCKED with its evidence while every other story goes
+on, and the report says so. A run never asks you for a round. A broad "continue" or "work
 autonomously" answers none of your points.
 
 Money: every paid job a run launches goes through the skill's `scripts/spend_ledger.py`, one ledger per plan
@@ -95,17 +98,18 @@ When you say you are leaving, or press Away, BMN tells each running session once
 authorised work left for the night then sends one card with `bmn grant ask`. For an epic with a go, the
 card is filled from its Run needs: only the named actions it lists (such as merging one of its PRs), never
 repair rounds, which your go already gave; with no named actions, the run says it needs nothing. A run
-without a go asks for only what its work needs: extra repair rounds per boundary (2, 3 or 4) and named
-actions with their targets. You answer in the window or on Telegram; an unanswered card grants nothing, and
+without a go asks for only the named actions its work needs, with their targets, and no rounds. You answer in the window or on Telegram; an unanswered card grants nothing, and
 every grant ends when you are back.
 
 The skill's `references/away-grant.md` says how a run uses it. Right before each step a grant would pay
 for, it reads the grant fresh (`scripts/check.py grant`, which reads `bmn grant --run`), never from the
 handoff. It records the use first with `bmn grant use`; a refused use means the step waits as it would
 without a grant. A round at a parked boundary, from your go or from a grant, still needs new evidence and a
-method the consultant agrees, recorded first; your go's rounds come first. Before the last round the run
-puts the whole boundary to the consultant once (the step back), and when the rounds are used the boundary
-defers what Run needs allow or waits as Needs your decision. Rounds count per boundary across resumes, new
+method the consultant agrees, recorded first; the ledger's rounds come first. Before the last round a different
+agent, the consultant, looks at the big picture (`references/step-back-brief.md`): is the goal or criterion wrong,
+what is the real cause, what would it drop, what different method. `spend_ledger.py round` refuses the last round
+without that answer for this epic, boundary and failed-method record. With no different method the story parks
+without using it, and when the rounds are used the boundary defers what Run needs allow or parks. Rounds count per boundary across resumes, new
 leads, gos and Away periods. After each granted step the run reports what it did with `bmn grant report`,
 and the morning summary shows those reports apart from BMN's own record. What code enforces (who answers,
 expiry, the counts it records) and what is the run's rule are in [agent-control.md](agent-control.md), "The

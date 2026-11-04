@@ -17,7 +17,7 @@ The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it
 ## Run needs
 
 What his go on this epic approves for its runs, as his instruction (read from the plan commit that recorded the go):
-- **Extra repair rounds:** <0–4> per boundary, beyond dev-auto's own allowance.
+- **Extra repair rounds:** 4 per boundary, beyond dev-auto's own allowance (a run has at least 4; name more only with a reason).
 - **Deferrable:** <a criterion or story, with the condition under which it may be deferred>, or `none`.
 - **Money cap:** <amount and what it covers>, or `none` (no paid launches).
 - **Named actions for an Away card:** <action and target>, including an exact command or message, or `none`.
