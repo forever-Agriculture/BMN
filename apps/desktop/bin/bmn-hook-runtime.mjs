@@ -260,12 +260,8 @@ async function runHook(args) {
   const opens = requests.filter((request) => request.method === 'attention.open')
   // Story 76.4 AC3: the typed agent's own blocking question, in its main conversation, can still be refused here, before its
   // native request opens; BMN says whether it is (only while the owner said away).
-  // Story 103.6: and while he is here, the same call, Codex's asynchronous question too, can be handed back for naming no reason.
-  const refusable = reasonRefusableQuestion(agent, event) ? opens.find((request) => request.params.kind === 'question') : undefined
-  if (refusable !== undefined) {
-    refusable.params.reasonRefusable = true
-    if (awayRefusableQuestion(agent, event)) refusable.params.awayRefusable = true
-  }
+  const refusable = awayRefusableQuestion(agent, event) ? opens.find((request) => request.params.kind === 'question') : undefined
+  if (refusable !== undefined) refusable.params.awayRefusable = true
   // Remote Control shows the Claude app's own notice, so BMN does not page a question too; a permission it still pages,
   // since the phone answers it from the card (owner card 2026-10-17: "Always send"; Story 78.5).
   if (agent === 'claude' && opens.some((request) => request.params.kind !== 'permission') && claudeRemoteControlled(agentPid, event.session_id)) {
@@ -384,13 +380,6 @@ function awayRefusableQuestion(agent, event) {
   if (event.hook_event_name !== 'PreToolUse' || (event.agent_id !== undefined && event.agent_id !== null)) return false
   if (agent === 'claude') return event.tool_name === 'AskUserQuestion'
   return agent === 'codex' && userInputTool(event.tool_name) && !asyncUserInputTool(event.tool_name)
-}
-
-/** The typed agent's own question tool in its main conversation, asynchronous or not (Story 103.1 AC1-AC2 measured both). */
-function reasonRefusableQuestion(agent, event) {
-  if (event.hook_event_name !== 'PreToolUse' || (event.agent_id !== undefined && event.agent_id !== null)) return false
-  if (agent === 'claude') return event.tool_name === 'AskUserQuestion'
-  return agent === 'codex' && userInputTool(event.tool_name)
 }
 
 /** A PreToolUse refusal in the hook-specific form and the older decision form (measured in Story 76.2 for both apps). */

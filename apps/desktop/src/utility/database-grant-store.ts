@@ -3,11 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   AWAY_RECORD_KEY,
   GRANT_RECORD_KEY,
-  QUESTION_HAND_BACK_KEY,
   answerGrant,
-  appendQuestionHandBack,
-  parseQuestionHandBacks,
-  type QuestionHandBack,
   askGrant,
   markDepartureTold,
   parseAwayRecord,
@@ -121,12 +117,4 @@ function setGrantPhoneMessage(database: DatabaseConnection, periodId: string, ru
   return result
 }
 
-/** Story 103.6 AC7: one more line in the count of hand-backs, one raw setting, no question's text. */
-export function recordQuestionHandBack(database: DatabaseConnection, entry: QuestionHandBack): void {
-  const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(QUESTION_HAND_BACK_KEY) as { value_json: string } | undefined
-  const next = appendQuestionHandBack(parseQuestionHandBacks(row?.value_json), entry)
-  database.prepare(`INSERT INTO app_setting(key, value_json, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`).run(QUESTION_HAND_BACK_KEY, JSON.stringify(next), entry.at)
-}
-
-export const GRANT_OPERATIONS = Object.freeze({ recordQuestionHandBack, getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage })
+export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage })

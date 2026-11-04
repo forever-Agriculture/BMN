@@ -121,8 +121,6 @@ export interface ControlHandlers {
     manualChoices?: ManualChoices
     /** Story 76.4: the session's own hook may still refuse this blocking question before its native request opens. */
     awayRefusable?: boolean
-    /** Story 103.6: this is an agent's own question to the owner, which must say why only he can decide. */
-    reasonRefusable?: boolean
   }): Promise<unknown>
   /**
    * A session may address one destination, in any workspace; the handler stores the handoff and queues it for the
@@ -1251,7 +1249,7 @@ export class ControlServer {
       case 'attention.open': {
         const params = closedParams(rawParams, [
           'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified',
-          'origin', 'prompt', 'producer', 'manualChoices', 'awayRefusable', 'reasonRefusable'
+          'origin', 'prompt', 'producer', 'manualChoices', 'awayRefusable'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalidError('The handoff request key is reserved')
@@ -1285,12 +1283,6 @@ export class ControlServer {
         if (awayRefusable !== undefined && (scope.kind !== 'session' || kind !== 'question' || !origin?.startsWith('hook:'))) {
           throw invalidError('awayRefusable is for a session hook\'s own question')
         }
-        // The same hook says so for the reason check; `bmn ask` from a session is the agent's own question by its origin (103.6 AC4).
-        const hookReason = readBoolean(params, 'reasonRefusable')
-        if (hookReason !== undefined && (scope.kind !== 'session' || kind !== 'question' || !origin?.startsWith('hook:'))) {
-          throw invalidError('reasonRefusable is for a session hook\'s own question')
-        }
-        const reasonRefusable = hookReason === true || (scope.kind === 'session' && origin === 'cli' && (kind === 'question' || kind === 'permission'))
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -1306,7 +1298,6 @@ export class ControlServer {
           ...(manualChoices ? { manualChoices } : {}),
           ...(producer === undefined ? {} : { producer }),
           ...(awayRefusable === true ? { awayRefusable } : {}),
-          ...(reasonRefusable ? { reasonRefusable } : {})
         }))
       }
       case 'conversation.observe': {

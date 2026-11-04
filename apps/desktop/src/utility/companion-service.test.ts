@@ -12,9 +12,6 @@ import {
   AWAY_AGENT_TEXT,
   AWAY_BACK_AGENT_TEXT,
   AWAY_QUESTION_REFUSAL,
-  QUESTION_HAND_BACK,
-  QUESTION_HAND_BACK_KEY,
-  parseQuestionHandBacks,
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
   HOOK_EVENT_LOG_LIMIT,
@@ -4466,78 +4463,28 @@ describe('Away (Story 76.3)', () => {
     expect(service.awayForOwner().state).toBe('back')
   })
 
-  describe('a question must say why only he can decide (Story 103.6)', () => {
+  describe('a question opens as asked (Story 106.19)', () => {
     const open = (over: Record<string, unknown> = {}, texts = ['Which colour?']) => ({
       sessionId: 's1', incarnationId: 'incarnation-1', requestKey: `claude:question:${String(Math.random())}`, kind: 'question' as const,
-      title: `Claude asks: ${texts[0]}`, origin: 'hook:claude:PreToolUse', reasonRefusable: true,
+      title: `Claude asks: ${texts[0]}`, origin: 'hook:claude:PreToolUse',
       prompt: { harness: 'claude', questions: texts.map((text) => ({ id: null, header: null, text, multiSelect: false, options: [{ label: 'One', description: null }] })) },
       ...over
     }) as never
     const handlers = () => service['control']['options'].handlers
     const rows = () => COMPANION_OPERATIONS.listAttention(database).filter(row => row.sessionId === 's1')
 
-    it('hands a bare question back, opening nothing, and counts it with no text (AC1, AC7)', async () => {
-      expect(await handlers().openAttention(open())).toEqual({ refused: true, changed: false, reason: QUESTION_HAND_BACK })
-      expect(rows()).toEqual([])
-      expect(JSON.stringify(readHandBacks())).not.toContain('colour')
-      expect(readHandBacks().entries).toMatchObject([{ sessionId: 's1', outcome: 'handed-back' }])
-    })
-
-    it('opens a question with its word, as today, and counts nothing (AC2)', async () => {
+    it('opens a question with or without a word, one card each, and keeps no count', async () => {
+      expect(await handlers().openAttention(open())).toMatchObject({ state: 'open' })
       expect(await handlers().openAttention(open({}, ['Scope: which colour?']))).toMatchObject({ state: 'open' })
-      expect(readHandBacks().entries).toEqual([])
+      expect(rows()).toHaveLength(2)
+      expect(database.prepare("SELECT 1 FROM app_setting WHERE key = 'question-hand-backs-v1'").get()).toBeUndefined()
     })
 
-    it('hands back a call where any one question lacks its word', async () => {
-      expect(await handlers().openAttention(open({}, ['Scope: which colour?', 'Which size?']))).toMatchObject({ refused: true })
-    })
-
-    it('opens the same question asked again unchanged, and counts a repeat; a changed one is handed back (AC3)', async () => {
-      await handlers().openAttention(open())
+    it('leaves an old count row in place, read by nothing', async () => {
+      database.prepare("INSERT INTO app_setting(key, value_json, updated_at) VALUES ('question-hand-backs-v1', '{\"version\":1,\"dropped\":0,\"entries\":[]}', '2026-11-04T00:00:00.000Z')").run()
       expect(await handlers().openAttention(open())).toMatchObject({ state: 'open' })
-      expect(readHandBacks().entries.map((entry) => entry.outcome)).toEqual(['handed-back', 'repeat'])
-      expect(await handlers().openAttention(open({}, ['Which size?']))).toMatchObject({ refused: true })
+      expect(database.prepare("SELECT 1 FROM app_setting WHERE key = 'question-hand-backs-v1'").get()).toBeDefined()
     })
-
-    it('keeps the repeat per process: another incarnation is handed back once of its own', async () => {
-      await handlers().openAttention(open())
-      expect(await handlers().openAttention(open({ incarnationId: 'incarnation-2' }))).toMatchObject({ refused: true })
-    })
-
-    it('takes any card while he is away or leaving, and the Away refusal comes first for a blocking tool (AC4)', async () => {
-      await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
-      expect(await handlers().openAttention(open({ awayRefusable: true }))).toEqual({ refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL })
-      expect(await handlers().openAttention(open())).toMatchObject({ state: 'open' })
-      expect(await handlers().openAttention(open({ origin: 'cli', prompt: undefined, title: 'A draft for the morning' }))).toMatchObject({ state: 'open' })
-      await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
-      expect(readHandBacks().entries).toEqual([])
-    })
-
-    it('takes any card while he is only leaving, when no Away is set yet (AC4)', async () => {
-      await handlers().leaveAway({ scope: { kind: 'owner' } })
-      expect(await handlers().openAttention(open())).toMatchObject({ state: 'open' })
-      expect(await handlers().openAttention(open({ origin: 'cli', prompt: undefined, title: 'A draft for the morning' }))).toMatchObject({ state: 'open' })
-      expect(readHandBacks().entries).toEqual([])
-    })
-
-    it('says the same to `bmn ask` while he is here, by refusing the call with the fixed words (AC4)', async () => {
-      const ask = open({ origin: 'cli', prompt: undefined, title: 'Deploy now?', kind: 'permission' })
-      await expect(handlers().openAttention(ask)).rejects.toThrow(QUESTION_HAND_BACK)
-      expect(rows()).toEqual([])
-      expect(await handlers().openAttention(open({ origin: 'cli', prompt: undefined, title: 'Deploy now?', kind: 'permission' }))).toMatchObject({ state: 'open' })
-      expect(await handlers().openAttention(open({ origin: 'cli', prompt: undefined, title: 'Go: deploy now?', kind: 'permission' }))).toMatchObject({ state: 'open' })
-    })
-
-    it('changes nothing without the hook\'s word: a sub-agent, a teammate, an unreadable prompt (AC5)', async () => {
-      expect(await handlers().openAttention(open({ reasonRefusable: undefined }))).toMatchObject({ state: 'open' })
-      expect(await handlers().openAttention(open({ prompt: undefined }))).toMatchObject({ state: 'open' })
-      expect(readHandBacks().entries).toEqual([])
-    })
-
-    function readHandBacks() {
-      const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(QUESTION_HAND_BACK_KEY) as { value_json: string } | undefined
-      return parseQuestionHandBacks(row?.value_json)
-    }
   })
 
   it('refuses a blocking question while said away, opening nothing, and opens it as before once he is back (Story 76.4 AC3)', async () => {

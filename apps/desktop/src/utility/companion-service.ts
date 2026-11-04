@@ -45,8 +45,6 @@ import {
   type AwayRecord,
   agentAwayView,
   AWAY_QUESTION_REFUSAL,
-  QUESTION_HAND_BACK,
-  questionsNeedingReason,
   awayTelegramWaiting,
   awayTelegramWentOn,
   AWAY_SUMMARY_LIMITS,
@@ -156,7 +154,6 @@ import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 import { commandPinSha } from '../../bin/grant-command.mjs'
-import { QuestionRepeats } from './question-repeats'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -451,7 +448,6 @@ export class CompanionService {
    */
   private readonly hookReporters = new Map<string, string>()
   private readonly producers: LiveProducers
-  private readonly questionRepeats = new QuestionRepeats()
   private readonly quietDelivery: QuietHoursDelivery
   private readonly morningDigest: DevAutoMorningDigest
   private digestSettings: TelegramMorningDigest = { ...DEFAULT_TELEGRAM_MORNING_DIGEST }
@@ -844,11 +840,6 @@ export class CompanionService {
           // native request; the hook refuses the tool with this reason. An already open dialog is never touched.
           if (p.awayRefusable === true && this.awayRecord.state === 'away' && this.refusableQuestion(p.origin)) {
             return { refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL }
-          }
-          // Story 103.6: while he is here, a question naming no reason goes back once; asked again unchanged it opens.
-          if (await this.questionHandedBack(p)) {
-            if (p.origin === 'cli') throw new HostControlError(ERROR_CODES.invalidArgument, `Not asked. ${QUESTION_HAND_BACK}`)
-            return { refused: true, changed: false, reason: QUESTION_HAND_BACK }
           }
           return this.publicAttention(await this.openAttention(p))
         }),
@@ -1603,24 +1594,6 @@ export class CompanionService {
     } catch {
       return []
     }
-  }
-
-  /**
-   * Whether this question goes back to its agent (103.6 AC1-AC5). Only while he is here: away or leaving, any card is taken, since a
-   * draft or a card for the morning needs no word. A prompt BMN could not read opens as it always did. The count holds no text and
-   * losing it loses no question, so a store that fails only costs the count.
-   */
-  private async questionHandedBack(p: { sessionId: string; incarnationId?: string | null; kind: string; title: string; origin?: string; prompt?: AttentionPrompt; reasonRefusable?: boolean }): Promise<boolean> {
-    if (p.reasonRefusable !== true || this.awayRecord.state === 'away') return false
-    if (this.grantRead.state === 'read' && openGrantPeriod(this.grantRead.record) !== null) return false
-    const texts = p.prompt !== undefined && 'questions' in p.prompt ? p.prompt.questions.map((question) => question.text) : p.origin === 'cli' ? [p.title] : null
-    if (texts === null || !questionsNeedingReason(texts)) return false
-    const producer = p.incarnationId === undefined || p.incarnationId === null ? null : this.producers.stamp(p.sessionId, p.incarnationId)
-    const repeat = this.questionRepeats.seen(`${p.sessionId}|${producer?.conversationReference ?? p.incarnationId ?? ''}`, texts)
-    await this.options.database.companion('recordQuestionHandBack', {
-      at: this.iso(), sessionId: p.sessionId, conversation: producer?.conversationReference ?? null, agentCli: producer?.agentCli ?? null, outcome: repeat ? 'repeat' : 'handed-back'
-    }).catch(() => undefined)
-    return !repeat
   }
 
   /** A blocking question tool of an app whose refusal Story 76.2 measured clean, reported by that app's own PreToolUse. */
