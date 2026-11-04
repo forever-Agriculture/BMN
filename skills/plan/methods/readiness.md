@@ -19,6 +19,10 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 
 13. **Runs without asking.** List every point where the run could need him: a decision, an approval, spend, an action, a credential, a check. Each is settled in the epic (Decisions, a stop gate's rule), covered by `## Run needs`, or is a step before the go or at the end (the story's **Owner:** line). Any other point is a finding. Walk his real causes by name: a command that can prompt (a Git or SSH login, `sudo`), a message to a person (its exact text, or a draft on a card), a design choice the run might meet and its default, a command only he can run, an expired account or credential. Each ends in Decisions, `**Prepared:**`, Named actions, or an **Owner:** step before the go. While the dev-auto in force cannot read Run needs, the run records them in its handoff as his instruction.
 
+14. **People and messages.** Walk every repository the stories touch and every acceptance step, by name: who owns it, who accepts, did they agree. Each is a `person` line in Prepared with its check and date, or a named message in `**Messages:**` (person, destination, purpose; only facts or access). A person's answer the plan needs and does not have is a fact to ask them now, not at run time.
+15. **Challenges.** Each `## Challenges` answer holds against the code and the people named (Scale, Origin, Verified, Exists, People). The lead answers; the epic reviewer checks.
+16. **One batch.** Everything only he can decide goes in one batch of cards here, the go last, each with your recommendation and its fallback if he does not answer. Nothing found later reaches him unless it is reserved (irreversible, money beyond the plan, private data, no work can proceed): it goes in the epic, and the run decides or parks.
+
 ## Verdict
 
 - **PASS**: one line, then ask for the go (one card), holding the row token and approval text from `bmn plan status --epic N --json`; on his go, record it at once with `bmn plan go` and read it back with `run_needs.py` (SKILL.md, rule 11).

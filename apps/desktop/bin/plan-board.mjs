@@ -40,7 +40,10 @@ const PREPARED_LINE = /^(?:[-*]\s*)?\*\*Prepared:?\*\*:?(.*)$/iu
  * approved, and changing it would ask a new go (decision d6).
  */
 const PREPARED_ITEMS_FROM = 104
-const PREPARED_KINDS = 'account|credential|service|command|message|owner step'
+/** Epics from 107 on answer five fixed challenges (Epic 106 D9), each under its label in `## Challenges`. */
+const CHALLENGES_FROM = 107
+const CHALLENGE_LABELS = ['Scale', 'Origin', 'Verified', 'Exists', 'People']
+const PREPARED_KINDS = 'account|credential|service|command|message|person|owner step'
 const PREPARED_NEED = new RegExp(`^((?:${PREPARED_KINDS})(?:\\s*,\\s*(?:${PREPARED_KINDS}))*)\\s*:\\s*(.*)$`, 'isu')
 const PREPARED_NONE = /^none\s*,?\s*because\s+\S/isu
 const PREPARED_DATE = /\bchecked\s+\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])\b/u
@@ -333,6 +336,8 @@ export function readEpicFile(path) {
   const legacy = LEGACY_MARKER.exec(lines.find((line) => line.trim() !== '') ?? '')
   const epicHeading = text.match(/^#{1,2} Epic (\d+)\b/mu)
   const sections = [...text.matchAll(/^## (.+?)\s*$/gmu)].map((match) => match[1])
+  const challengeText = /^## Challenges\s*$(.*?)(?=^## |(?![\s\S]))/msu.exec(text)?.[1] ?? ''
+  const challenges = [...challengeText.matchAll(/^\s*[-*]?\s*\*\*(.+?):\*\*\s*\S/gmu)].map((match) => match[1])
   const stories = []
   let current = null
   let inCriteria = false
@@ -356,7 +361,7 @@ export function readEpicFile(path) {
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
     if (criterion) current.criteria.push({ id: Number(criterion[1]), line: index + 1 })
   })
-  return { path, bytes: Buffer.byteLength(text), legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines) }
+  return { path, bytes: Buffer.byteLength(text), challenges, legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines) }
 }
 
 function epicFiles(planRoot) {
@@ -484,6 +489,11 @@ export async function checkPlan(resolved) {
 
 /** The owner's steps sit only before the go or at the end (Epic 90, D1): never between unattended stories. */
 function runNeedsProblems(epic, at, add) {
+  if (epic.epic >= CHALLENGES_FROM) {
+    const missing = CHALLENGE_LABELS.filter((label) => !epic.challenges.includes(label))
+    if (!epic.sections.includes('Challenges')) add(at, `missing section ## Challenges (epics from ${CHALLENGES_FROM} on)`)
+    else if (missing.length > 0) add(at, `## Challenges does not answer: ${missing.join(', ')}`)
+  }
   if (!epic.sections.includes('Run needs')) add(at, `missing section ## Run needs (epics from ${RUN_NEEDS_FROM} on)`)
   if (epic.epic >= PREPARED_FROM && epic.sections.includes('Run needs')) {
     if (epic.prepared === null) add(at, 'Run needs has no **Prepared:** line (what the run will need, each with its check; or none, because <reason>)')

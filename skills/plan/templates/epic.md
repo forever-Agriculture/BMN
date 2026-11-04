@@ -21,11 +21,20 @@ What his go on this epic approves for its runs, as his instruction (read from th
 - **Deferrable:** <a criterion or story, with the condition under which it may be deferred>, or `none`.
 - **Money cap:** <amount and what it covers>, or `none` (no paid launches).
 - **Named actions for an Away card:** <action and target>, including an exact command or message, or `none`.
-- **Prepared:** <kind>: <target>, check: <how>, checked <date>; one for each need, or `none, because <reason>`. The kinds are account, credential, service, command, message, owner step; an owner step needs neither `check:` nor a date, and every other need needs both (`bmn plan check` reports it, from Epic 104 on).
+- **Messages:** <person>, on <destination>: <purpose>. One sentence each, only facts or access, or `none`: at most 2 per purpose, saying his agent wrote them.
+- **Prepared:** <kind>: <target>, check: <how>, checked <date>; one for each need, or `none, because <reason>`. The kinds are person (who owns or accepts what), account, credential, service, command, message, owner step; an owner step needs neither `check:` nor a date, and every other need needs both (`bmn plan check` reports it, from Epic 104 on).
 
 ## Truth impact
 
 <The truth documents and contracts it adds, changes or removes; or `none` with a reason.>
+
+## Challenges
+
+- **Scale:** <at 1000 times the data, what happens and what does a run cost?>
+- **Origin:** <who asked for each story, in whose words?>
+- **Verified:** <which facts were checked, where?>
+- **Exists:** <what here or in a sibling repository already does this?>
+- **People:** <whose repository does it touch, who agreed, what will a person see?>
 
 ## What exists today
 

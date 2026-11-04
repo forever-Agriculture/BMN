@@ -337,6 +337,20 @@ describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', 
   }
   const reasons = async (main: string): Promise<string[]> => (await checkPlan(await resolvePlan(main))).findings.map((finding) => `${finding.where.replace(/^.*\/|:\d+$/gu, '')}: ${finding.reason}`)
 
+  describe('## Challenges, from Epic 107 on (Epic 106 D9)', () => {
+    const answers = '## Challenges\n\n- **Scale:** a.\n- **Origin:** b.\n- **Verified:** c.\n- **Exists:** d.\n- **People:** e.\n\n'
+    const withChallenges = (number: number, text: string): string => owned(number, ['none']).replace('## Stories', `${text}## Stories`)
+    it('asks for all five labels with an answer, and says which is missing', async () => {
+      expect((await reasons(project(107, withChallenges(107, answers)))).filter((reason) => reason.includes('Challenges'))).toEqual([])
+      expect((await reasons(project(107, owned(107, ['none']))))).toEqual(expect.arrayContaining([expect.stringContaining('missing section ## Challenges')]))
+      const short = answers.replace('- **People:** e.\n', '').replace('- **Exists:** d.', '- **Exists:**')
+      expect(await reasons(project(107, withChallenges(107, short)))).toEqual(expect.arrayContaining([expect.stringContaining('does not answer: Exists, People')]))
+    })
+    it('leaves an earlier epic alone', async () => {
+      expect((await reasons(project(106, owned(106, ['none'])))).filter((reason) => reason.includes('Challenges'))).toEqual([])
+    })
+  })
+
   describe('each need on **Prepared:**, from Epic 104 on (R103-FR1; the full review, finding 5)', () => {
     const withPrepared = (number: number, line: string): string => owned(number, ['none']).replace('- Extra repair rounds: 0.\n', `- Extra repair rounds: 0.\n${line}\n`)
     // The same table as dev-auto's tests/test_run_needs.py (GRAMMAR): BMN refuses what dev-auto could not read, and both read one form.
@@ -348,6 +362,7 @@ describe('epics from 90 on are planned to run without asking (Story 90.2 AC5)', 
       ['- **Prepared:** service, account: the host, check: `curl host`, checked 2026-11-02.'],
       ['- **Prepared:** command: `a; b`, check: `which a`, checked 2026-11-02; message, credential: none, because a stub.'],
       ['- **Prepared:** owner step: close BMN at the end.'],
+      ['- **Prepared:** person: Denys owns q-chat, check: his line in the org list, checked 2026-11-04.'],
       ['- **Prepared:** owner step: close BMN at the end; account: none, because a stub.']
     ])('takes %s', async (line) => {
       expect(await reasons(project(104, withPrepared(104, line)))).toEqual([])
