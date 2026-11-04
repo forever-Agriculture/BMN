@@ -150,10 +150,7 @@ export function writeRemoteAnswerHarness(directory: string, fixtures: string): s
     "    spawnSync('bmn', ['hook', agent], { input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup', session_id: foregroundId }), encoding: 'utf8' })",
     "  }",
     "  const input = JSON.stringify({ ...read(name), ...patch, ...(native ? { session_id: foregroundId } : {}) })",
-    "  const report = () => spawnSync('bmn', ['hook', agent], { input, encoding: 'utf8' })",
-    "  const first = report()",
-    // Story 103.6: the recorded questions name no reason, so each goes back once; asked again unchanged it opens, as for a real agent.
-    "  return (first.stdout.includes('was not shown to the owner') ? report() : first).status",
+    "  return spawnSync('bmn', ['hook', agent], { input, encoding: 'utf8' }).status",
     "}",
     "const queue = []",
     "let waiter = null",
