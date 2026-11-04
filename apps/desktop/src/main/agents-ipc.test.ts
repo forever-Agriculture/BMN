@@ -2377,6 +2377,13 @@ describe('the hook report at BMN\'s start (102.4)', () => {
     expect(app({ approval: { state: 'whatever' } })).not.toHaveProperty('approval')
   })
 
+  it('keeps each migration reason and validates it like the other event lists (104.2)', () => {
+    expect(app({ reworded: ['PreToolUse', 4, 'x'.repeat(65)], raised: ['PermissionRequest'], widened: ['PreToolUse'] }))
+      .toMatchObject({ reworded: ['PreToolUse'], raised: ['PermissionRequest'], widened: ['PreToolUse'] })
+    const invalid = app({ reworded: 'PreToolUse', raised: [null], widened: [] })
+    for (const field of ['reworded', 'raised', 'widened']) expect(invalid).not.toHaveProperty(field)
+  })
+
   it('says nothing of a standing it cannot read', () => {
     const row = app({ commandGuard: { state: 'whatever' }, nativeRules: 'whatever' })
     expect(row).not.toHaveProperty('commandGuard')

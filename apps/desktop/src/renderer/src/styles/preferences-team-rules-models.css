@@ -135,6 +135,11 @@
   text-transform: none;
 }
 
+/* Hook setup guidance stays readable beside the section name. */
+#health-hooks .caption {
+  color: var(--muted);
+}
+
 .preferences-dialog .page-note {
   margin: 14px 0;
   color: var(--muted);

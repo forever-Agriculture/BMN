@@ -1318,7 +1318,7 @@ async function checkHooksCommand(agents, pathFor, asJson, askCodex = true) {
   lines.push(wired
     ? 'Every hook BMN expects is wired. This is what is configured, not proof that a hook fired.'
     : 'Run `bmn hooks install <agent>` to add the missing entries. This reports configuration, not that a hook fired.')
-  if (approval?.state === 'not-approved') lines.push('Codex runs a new or changed entry only once you approve it: run /hooks in Codex, then `bmn hooks check`.')
+  if (approval?.state === 'not-approved') lines.push('Review /hooks in Codex if you want these enabled, then run `bmn hooks check`.')
   process.stdout.write(`${lines.join('\n\n')}\n`)
   return ok ? 0 : 1
 }
@@ -1553,6 +1553,7 @@ async function installOpenCodePlugin(path, asJson, yes) {
 
 async function installHooksCommand(agent, path, asJson, yes) {
   if (agent === 'opencode') return installOpenCodePlugin(path, asJson, yes)
+  const profileReview = 'If Codex uses this file, review /hooks there if you want these enabled.'
   // One read: the report, the merge and the conflict check all describe the same bytes.
   const file = readHookFile(path, agent)
   if (file.state !== 'read' && file.state !== 'missing') {
@@ -1572,7 +1573,9 @@ async function installHooksCommand(agent, path, asJson, yes) {
   if (report.missing.length === 0 && raised.length === 0 && widened.length === 0 && reworded.length === 0 && rows.length === 0) {
     const wroteRules = agent === 'codex' ? await withDefaultsAdmission(async () => writeCodexRules(path)) : false
     const message = `Nothing to do: every hook BMN expects is already in ${path}.`
-    process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path, rules: wroteRules }, null, 2) : `${message}${wroteRules ? ` Wrote ${codexRulesPath(dirname(path))}.` : ''}`}\n`)
+    const approval = agent === 'codex' ? await codexApproval(path) : null
+    const note = agent === 'codex' ? `Hook declarations unchanged. ${approval === null ? profileReview : approvalWords(approval)}` : null
+    process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path, rules: wroteRules, ...(approval === null ? {} : { approval }), ...(note === null ? {} : { note }) }, null, 2) : `${message}${wroteRules ? ` Wrote ${codexRulesPath(dirname(path))}.` : ''}${note === null ? '' : `\n${note}`}`}\n`)
     return 0
   }
   // Only now, when there is a write to do. AC2 gives an already-wired file a successful no-op, and
@@ -1629,11 +1632,12 @@ async function installHooksCommand(agent, path, asJson, yes) {
       process.stderr.write(`bmn: cannot write ${path} (${error.code ?? error.message})\n`)
       return 1
     }
+    const approval = agent === 'codex' ? await codexApproval(path) : null
     const trust = agent === 'codex'
-      ? 'Codex must trust the hooks once: run /hooks in Codex. `bmn hooks check` reports configuration, not that a hook fired.'
+      ? `${approval === null ? profileReview : approvalWords(approval)} \`bmn hooks check\` reports configuration, not that a hook fired.`
       : '`bmn hooks check` reports configuration, not that a hook fired.'
     if (asJson) {
-      process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(reworded.length === 0 ? {} : { reworded }), backup, file: path, diff, note: trust }, null, 2)}\n`)
+      process.stdout.write(`${JSON.stringify({ installed: report.missing, ...(raised.length === 0 ? {} : { raised }), ...(widened.length === 0 ? {} : { widened }), ...(reworded.length === 0 ? {} : { reworded }), backup, file: path, diff, note: trust, ...(approval === null ? {} : { approval }) }, null, 2)}\n`)
       return 0
     }
     const lines = report.missing.length === 0 ? [] : [`Added ${report.missing.length} hook ${report.missing.length === 1 ? 'entry' : 'entries'} to ${path}: ${report.missing.join(', ')}`]

@@ -882,7 +882,7 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(hookRowWords({ ...row, nativeRules: 'unusable' })).toMatchObject({ needs: true, lines: ['The app\'s own rules · its settings cannot take them'] })
     // What Codex itself says: one line, with the guard's standing not repeated; only approved entries need nothing.
     expect(hookRowWords({ ...row, commandGuard: { state: 'not-approved' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse'] } })).toMatchObject({
-      needs: true, lines: ['Codex does not run 8 of BMN\'s entries until you approve them · run /hooks in Codex'] })
+      needs: true, lines: ['8 entries disabled or awaiting approval · review /hooks in Codex if you want them enabled'] })
     expect(hookRowWords({ ...row, commandGuard: { state: 'unverified', reason: 'no answer in 10 s' }, approval: { state: 'unverified', reason: 'no answer in 10 s' } })).toMatchObject({
       needs: true, lines: ['BMN could not ask Codex whether it runs BMN\'s entries · no answer in 10 s'] })
     expect(hookRowWords({ ...row, commandGuard: { state: 'holds' }, approval: { state: 'approved' }, nativeRules: 'present' })).toMatchObject({ needs: false, lines: [] })
@@ -890,11 +890,28 @@ describe('Integrations › Health (60.6 AC4)', () => {
       needs: true, lines: ['BMN cannot find Codex, so it cannot say whether it runs BMN\'s entries · check that it is on your PATH'] })
   })
 
+  it('names the declaration migrations beside native review, without claiming approval was carried (104.2)', () => {
+    const base = { file: 'f', state: 'installed' as const, placed: ['PreToolUse'], older: [], installed: [], left: [] }
+    const codex = hookRowWords({ ...base, harness: 'codex', reworded: ['PreToolUse'],
+      approval: { state: 'not-approved', entries: 1, events: ['PreToolUse'] } })
+    expect(codex.needs).toBe(true)
+    expect(codex.lines).toContain('Command updated at start: PreToolUse')
+    expect(codex.lines.join(' ')).toContain('if you want them enabled')
+    expect(codex.lines.join(' ')).not.toMatch(/approval carried|still runs/iu)
+    const addedDisabled = hookRowWords({ ...base, harness: 'codex', installed: ['PreToolUse'],
+      approval: { state: 'not-approved', entries: 1, events: ['PreToolUse'] } })
+    expect(addedDisabled.lines).toContain('Added at start: PreToolUse')
+    expect(addedDisabled.lines).toContain('1 entry disabled or awaiting approval · review /hooks in Codex if you want them enabled')
+    expect(addedDisabled.lines.join(' ')).not.toMatch(/asks you once|before it runs/iu)
+    const claude = hookRowWords({ ...base, harness: 'claude', raised: ['PermissionRequest'], widened: ['PreToolUse'] })
+    expect(claude.lines).toEqual(['Timeout updated at start: PermissionRequest', 'Matcher updated at start: PreToolUse'])
+  })
+
   it('says what BMN found and did in each app\'s hook file at start, failure first, with no button (Story 75.9)', () => {
     expect(markup).toContain('<h4 class="group-head" id="health-hooks">Hooks<span class="caption">BMN&#x27;s entries in each app&#x27;s hook file, installed at start</span></h4>')
     expect([...markup.matchAll(/data-hooks="([a-z-]+)"><span>([A-Za-z ]+)<\/span>/g)].map((match) => `${match[2]} ${match[1]}`)).toEqual(['Codex left', 'Claude Code in-place', 'OpenCode in-place'])
-    expect(markup).toMatch(/data-hooks="left">.*?<span><span class="needs-dot"[^>]*><\/span>5 entries in place · 2 left as they are<\/span><span class="faint">PostToolUse · changed<\/span><span class="faint">Interrupt · not BMN&#x27;s<\/span><span class="faint">Added at start: SessionStart, SessionEnd · Codex asks you once, in \/hooks, before it runs them<\/span>/)
-    expect(markup).toMatch(/data-hooks="in-place"><span>Claude Code<\/span>.*?<span class="faint">9 entries in place<\/span>/)
+    expect(markup).toMatch(/data-hooks="left">.*?<span><span class="needs-dot"[^>]*><\/span>5 entries in place · 2 left as they are<\/span><span class="muted">PostToolUse · changed<\/span><span class="muted">Interrupt · not BMN&#x27;s<\/span><span class="muted">Added at start: SessionStart, SessionEnd<\/span>/)
+    expect(markup).toMatch(/data-hooks="in-place"><span>Claude Code<\/span>.*?<span class="muted">9 entries in place<\/span>/)
     expect(markup).toContain('Not set up on this computer')
     expect(words(markup)).toMatch(/Checked at start, \d\d:\d\d\. BMN adds an entry only where an event has none of its own/)
     expect(markup).not.toContain('Check configured hooks')
@@ -917,7 +934,7 @@ describe('Integrations › Health (60.6 AC4)', () => {
     expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'installed', placed: ['plugin', 'cli.json'], older: [], installed: [], upgraded: ['plugin'], left: [] }))
       .toEqual({ needs: false, head: '2 entries in place', lines: ['Upgraded at start: plugin · a running OpenCode is woken only once it reports the new plugin'] })
     expect(hookRowWords({ harness: 'claude', file: 'f', state: 'checked', placed: ['PreToolUse'], older: ['PreToolUse'], installed: [], left: [] }).lines)
-      .toEqual(['PreToolUse · in an older wording, which does the same and still runs'])
+      .toEqual(['PreToolUse · older compatible wording'])
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: null } })))).toContain('Not checked yet: BMN checks them each time it starts.')
     expect(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: { state: 'failed', checkedAt: 'x', reason: 'The hook install timed out' } } }))).toContain('<p class="preferences-error" role="alert">The hook install timed out</p>')
   })

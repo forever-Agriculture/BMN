@@ -43,7 +43,7 @@ export function guardWords(standing) {
   if (standing.state === 'holds') return 'command guard holds'
   if (standing.state === 'does-not-answer') return `command guard does not answer: ${standing.reason}`
   if (standing.state === 'changed') return 'command guard: the entry is not one BMN wrote, so BMN did not run it'
-  if (standing.state === 'not-approved') return 'command guard does not run: Codex has not approved its entry'
+  if (standing.state === 'not-approved') return 'command guard does not run: its Codex entry is disabled or awaiting approval'
   if (standing.state === 'unverified') return `command guard not verified: ${standing.reason}`
   if (standing.state === 'no-codex') return 'command guard not verified: BMN cannot find Codex'
   return 'command guard: no entry'

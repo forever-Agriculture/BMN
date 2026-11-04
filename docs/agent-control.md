@@ -755,7 +755,7 @@ Both commands say what is **configured**: never that a hook fired (the session's
 that it will run (BMN's entry does nothing while BMN is not running, the command guard's excepted). Codex is the one thing
 BMN can ask: it runs an entry only while it is enabled and approved, and it keeps the approval against a hash of the
 event, matcher, command and timeout, so **any change to an entry turns it off in Codex until he approves it again**. So
-`check` and BMN's start ask real Codex (`codex app-server`, `hooks/list`, read-only) about BMN's entries in its own file:
+`check`, explicit `install` (including a no-op) and BMN's start ask real Codex (`codex app-server`, `hooks/list`, read-only) about BMN's entries in its own file:
 an entry it will not run gives `not-approved` and Needs you, with the guard, prompt guard, messages and turn changes that
 need it said to be off; a missing list, no answer in 10 s or an answer BMN cannot read gives `unverified`, and no Codex
 on the PATH gives `no-codex` (its file holds BMN's entries, so that may be a PATH problem): both Needs you, never "holds". BMN never writes that approval itself and never passes `--dangerously-bypass-hook-trust`. A test pins each
@@ -763,6 +763,16 @@ entry's full declaration, so a change to one is a decision. Codex loads its hook
 it can stop every hook; `check` then finds BMN's entries unlisted. Session details shows the run's latest event (**Observed
 by BMN**, or **Not observed in this run**), and its **Hooks in Integrations › Health** opens this section; one received
 event proves only that event reached BMN.
+
+**Codex approval during updates (Epic 104).** Ordinary BMN code updates run behind the existing `bmn hook codex`
+entrypoint; sufficient hook declarations stay unchanged, keeping their positional keys and native approval. Required
+command, timeout or matcher migrations still happen: startup output and Health name those events, and explicit install
+reports both its changes (or unchanged declarations) and Codex's observed approval. Disabled or unapproved entries stay
+off; review `/hooks` in Codex if you want them enabled. A compatible older wording alone does not prove execution.
+BMN does not copy or restore approvals after a declaration change. Codex 0.166.0 accepted conflicting native writes
+using the same expected version in a two-process trial, so automatic carry is separate follow-up pending a verified
+upstream fix. A newer version number alone never enables it. Native approval observations are snapshots, not a guarantee
+that an entry will execute or stay approved. `--file` does not ask Codex about a file outside its active profile.
 
 **Installing for Claude Code and Codex.** `install` shows the requested path, the resolved target, the entries and the
 proposed diff on stderr, then asks Yes with No as the default: an empty answer, No or a closed prompt writes nothing.

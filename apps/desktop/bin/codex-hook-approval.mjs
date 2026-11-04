@@ -112,7 +112,7 @@ export function approvalFrom(answer, entries) {
 /** One line for a report. */
 export function approvalWords(approval) {
   if (approval.state === 'approved') return 'Codex says it runs these entries; that does not prove one fired'
-  if (approval.state === 'not-approved') return `Codex does not run ${approval.entries} of these entries (${approval.events.join(', ')}) until you approve them: run /hooks in Codex`
+  if (approval.state === 'not-approved') return `Codex reports ${approval.entries} of these entries disabled or awaiting approval (${approval.events.join(', ')}). Review /hooks in Codex if you want them enabled`
   if (approval.state === 'unverified') return `BMN could not ask Codex whether it runs these entries: ${approval.reason}`
   return 'BMN cannot find Codex, so it cannot say whether it runs these entries: check that it is on your PATH'
 }
@@ -121,7 +121,7 @@ export function approvalWords(approval) {
 export function claimWithApproval(line, approval, event) {
   if (typeof line !== 'string' || approval === null) return line
   const name = line.split(':')[0]
-  if (approval.state === 'not-approved' && approval.events.includes(event)) return `${name}: off, Codex has not approved its entry`
+  if (approval.state === 'not-approved' && approval.events.includes(event)) return `${name}: off, Codex reports its entry disabled or unapproved`
   if (approval.state === 'unverified') return `${name}: not verified, BMN could not ask Codex whether it runs its entry`
   if (approval.state === 'no-codex') return `${name}: not verified, BMN cannot find Codex`
   return line

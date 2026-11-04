@@ -818,10 +818,14 @@ export interface HookAppAtStart {
   file: string
   /** `not-set-up`: the app keeps no settings folder on this computer, and BMN created none. */
   state: 'checked' | 'installed' | 'left' | 'failed' | 'not-set-up'
-  /** Events whose entry is in place, added now or before; `older` of them in an older wording that still runs. */
+  /** Events whose entry is in place, added now or before; `older` of them in a compatible older wording. */
   placed: string[]
   older: string[]
   installed: string[]
+  /** Existing declarations changed at start: command wording, required timeout, or matcher. */
+  reworded?: string[]
+  raised?: string[]
+  widened?: string[]
   /** Entries BMN's own earlier release wrote, upgraded byte for byte at this start (Story 96.3); absent when none was. */
   upgraded?: string[]
   /** BMN's own earlier OpenCode plugin left in place because its upgrade failed: it cannot tell a stop from a finished turn (Story 96.6). */

@@ -13,6 +13,7 @@ import { doctorVersions, runBmnDoctor } from '../../bin/doctor-adapters.mjs'
 import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
 import { withOpenCodeFloor } from '../../bin/opencode-floor.mjs'
 import { doctorWorker, loadDoctorState, readDoctorView } from '../../bin/doctor.mjs'
+import { observeHookWrites } from './test-fixtures/hook-write-observer'
 
 const REQUIRED = {
   claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
@@ -40,6 +41,7 @@ function syntheticProfile(home: string, codexStart = ''): void {
   writeFileSync(join(home, 'answer'), JSON.stringify({ id: 2, result: { data: [{ hooks: approved, warnings: [], errors: [] }] } }))
   writeFileSync(join(home, '.local/bin/codex'), `#!/bin/sh
 ${codexStart}while IFS= read -r line; do
+  printf '%s\\n' "$line" >> "$HOME/native-hook-rpc"
   case "$line" in
 *'"initialize"'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
 *'hooks/list'*) cat "$HOME/answer"; printf '\\n' ;;
@@ -161,6 +163,24 @@ describe('Doctor hooks producer contract', () => {
       const result = await doctor(home)
       expect(result.state).toBe('problems')
       expect(result.problems).toEqual([{ code: 'hook-check', item: 1, app: 'codex', cause: 'approval:not-approved' }])
+    }), 150_000)
+
+    it('observes revoked and disabled entries without any native approval mutation (104.2)', () => withHome(async (home) => {
+      syntheticProfile(home, WRITES)
+      const config = join(home, '.codex/config.toml')
+      const native = '# owner-native state\n[hooks.state.synthetic]\ntrusted_hash = "withdrawn"\nenabled = false\n'
+      writeFileSync(config, native)
+      const answer = JSON.parse(readFileSync(join(home, 'answer'), 'utf8'))
+      answer.result.data[0].hooks[0].trustStatus = 'modified'
+      answer.result.data[0].hooks[0].enabled = false
+      writeFileSync(join(home, 'answer'), JSON.stringify(answer))
+      expect(await observeHookWrites([config, join(home, '.codex/hooks.json')], async () => {
+        expect((await doctor(home)).problems).toEqual([{ code: 'hook-check', item: 1, app: 'codex', cause: 'approval:not-approved' }])
+      })).toEqual([])
+      expect(readFileSync(config, 'utf8')).toBe(native)
+      const methods = readFileSync(join(home, 'native-hook-rpc'), 'utf8').trim().split('\n').map((line) => JSON.parse(line).method)
+      expect(methods).toContain('hooks/list')
+      expect(methods.every((method) => ['initialize', 'initialized', 'hooks/list'].includes(method))).toBe(true)
     }), 150_000)
 
     it('says it could not ask when Codex ends without answering, never that the entries run', () => withHome(async (home) => {

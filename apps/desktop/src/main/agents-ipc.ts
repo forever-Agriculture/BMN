@@ -873,6 +873,9 @@ export function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
       placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason }),
       ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) }),
       ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) }),
+      ...(names(row.reworded).length === 0 ? {} : { reworded: names(row.reworded) }),
+      ...(names(row.raised).length === 0 ? {} : { raised: names(row.raised) }),
+      ...(names(row.widened).length === 0 ? {} : { widened: names(row.widened) }),
       ...commandGuardFrom(row.commandGuard),
       ...approvalFrom(row.approval),
       ...(row.nativeRules === 'present' || row.nativeRules === 'missing' || row.nativeRules === 'unusable' ? { nativeRules: row.nativeRules } : {})

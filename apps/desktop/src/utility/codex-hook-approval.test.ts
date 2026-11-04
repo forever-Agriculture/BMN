@@ -1,19 +1,21 @@
 // MODULE: codex-hook-approval.test.ts - Story 102.4: a report says what real Codex says about BMN's entries, never "holds" from the entry's text alone
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { approvalFrom, approvalWords, askCodexHooks, claimWithApproval, codexHookKey, guardWithApproval } from '../../bin/codex-hook-approval.mjs'
+import { observeHookWrites } from './test-fixtures/hook-write-observer'
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '../../bin/bmn')
 /** Answers as `codex app-server` does: line by line, and at the end of its input it exits with no answer (measured, Codex 0.166.0). */
 const FAKE_CODEX = `#!/bin/sh
 while IFS= read -r line; do
+  printf '%s\\n' "$line" >> "$HOME/codex-rpc"
   case "$line" in
     *'"initialize"'*) printf '%s\\n' '{"id":1,"result":{"userAgent":"fake"}}' ;;
-    *'hooks/list'*) cat "$HOME/answer"; printf '\\n' ;;
+    *'hooks/list'*) if test -f "$HOME/answer"; then cat "$HOME/answer"; else printf '%s' '{"id":2,"error":{"code":-32601}}'; fi; printf '\\n' ;;
   esac
 done
 `
@@ -106,9 +108,9 @@ describe('reading its answer (102.4)', () => {
     expect(claimWithApproval(line, { state: 'approved' }, 'UserPromptSubmit')).toBe(line)
     expect(claimWithApproval(line, null, 'UserPromptSubmit')).toBe(line)
     expect(claimWithApproval(line, { state: 'not-approved', entries: 1, events: ['Stop'] }, 'UserPromptSubmit')).toBe(line)
-    expect(claimWithApproval(line, { state: 'not-approved', entries: 1, events: ['UserPromptSubmit'] }, 'UserPromptSubmit')).toBe('prompt guard: off, Codex has not approved its entry')
+    expect(claimWithApproval(line, { state: 'not-approved', entries: 1, events: ['UserPromptSubmit'] }, 'UserPromptSubmit')).toBe('prompt guard: off, Codex reports its entry disabled or unapproved')
     expect(claimWithApproval(line, { state: 'unverified', reason: 'r' }, 'UserPromptSubmit')).toBe('prompt guard: not verified, BMN could not ask Codex whether it runs its entry')
-    expect(approvalWords({ state: 'not-approved', entries: 8, events: ['PreToolUse', 'Stop'] })).toBe('Codex does not run 8 of these entries (PreToolUse, Stop) until you approve them: run /hooks in Codex')
+    expect(approvalWords({ state: 'not-approved', entries: 8, events: ['PreToolUse', 'Stop'] })).toBe('Codex reports 8 of these entries disabled or awaiting approval (PreToolUse, Stop). Review /hooks in Codex if you want them enabled')
   })
 })
 
@@ -141,6 +143,108 @@ describe('the reports, through the real command (102.4)', () => {
   }
   const row = (stdout: string) => JSON.parse(stdout).agents[0]
 
+  const assertReadOnly = (before: string): void => {
+    expect(readFileSync(join(root, '.codex/config.toml'), 'utf8')).toBe(before)
+    const messages = readFileSync(join(root, 'codex-rpc'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    expect(messages.some((message) => message.method === 'hooks/list')).toBe(true)
+    expect(messages.every((message) => ['initialize', 'initialized', 'hooks/list'].includes(message.method))).toBe(true)
+  }
+  const nativeState = (): string => {
+    const text = '# native state belongs to Codex\n[hooks.state.primary]\ntrusted_hash = "revoked"\nenabled = false\n'
+    writeFileSync(join(root, '.codex/config.toml'), text)
+    writeFileSync(join(root, 'codex-rpc'), '')
+    return text
+  }
+
+  it('the write observer detects same-byte rewrites of hooks and native state (104.2)', async () => {
+    const place = home()
+    install(place)
+    nativeState()
+    const paths = [place.hooks, join(root, '.codex/config.toml')]
+    expect(await observeHookWrites(paths, () => {
+      for (const path of paths) writeFileSync(path, readFileSync(path))
+    })).toEqual(['config.toml', 'hooks.json'])
+  }, 90_000)
+
+  it('observes approval after a no-op explicit install, preserving declarations, backups and native state (104.2)', async () => {
+    const place = home()
+    install(place)
+    answerFor(place.hooks, () => 'trusted')
+    const before = readFileSync(place.hooks, 'utf8')
+    const files = readdirSync(dirname(place.hooks)).sort()
+    const native = nativeState()
+    expect(await observeHookWrites([place.hooks, join(root, '.codex/config.toml')], () => {
+      const result = cli(['hooks', 'install', 'codex', '--yes', '--json'], place.env)
+      expect(result.status, result.stderr).toBe(0)
+      expect(JSON.parse(result.stdout)).toMatchObject({ installed: [], backup: null, approval: { state: 'approved' } })
+      expect(JSON.parse(result.stdout).note).toContain('Hook declarations unchanged')
+      expect(readFileSync(place.hooks, 'utf8')).toBe(before)
+      // nativeState added only config.toml; a no-op adds no hook backup.
+      expect(readdirSync(dirname(place.hooks)).sort()).toEqual([...new Set([...files, 'config.toml'])].sort())
+      expect(cli(['hooks', 'install', 'codex', '--yes'], place.env).stdout).toContain('Codex says it runs these entries')
+      const start = cli(['hooks', 'install', '--absent', '--yes', '--json'], place.env)
+      expect(JSON.parse(start.stdout).agents.find((entry: { agent: string }) => entry.agent === 'codex')).toMatchObject({ state: 'checked', installed: [], approval: { state: 'approved' } })
+      expect(readFileSync(place.hooks, 'utf8')).toBe(before)
+      assertReadOnly(native)
+    })).toEqual([])
+  }, 90_000)
+
+  it('migrates socket-gated PreToolUse once and reports fresh native review without restoring revoked state (104.2)', async () => {
+    const place = home()
+    install(place)
+    answerFor(place.hooks, () => 'modified')
+    const data = JSON.parse(readFileSync(place.hooks, 'utf8'))
+    data.hooks.PreToolUse[0].hooks[0].command = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook codex; exit 0'
+    writeFileSync(place.hooks, JSON.stringify(data))
+    const native = nativeState()
+    expect(await observeHookWrites([join(root, '.codex/config.toml')], () => {
+      const result = cli(['hooks', 'install', 'codex', '--yes', '--json'], place.env)
+      expect(result.status, result.stderr).toBe(0)
+      expect(JSON.parse(result.stdout)).toMatchObject({ reworded: ['PreToolUse'], approval: { state: 'not-approved', entries: 7 } })
+      expect(JSON.parse(readFileSync(place.hooks, 'utf8')).hooks.PreToolUse[0].hooks[0].command).toContain('PATH=')
+      expect(JSON.parse(result.stdout).note).toContain('if you want them enabled')
+      const after = readFileSync(place.hooks, 'utf8')
+      const repeat = JSON.parse(cli(['hooks', 'install', 'codex', '--yes', '--json'], place.env).stdout)
+      expect(repeat).toMatchObject({ installed: [], backup: null, approval: { state: 'not-approved' } })
+      expect(repeat).not.toHaveProperty('reworded')
+      expect(readFileSync(place.hooks, 'utf8')).toBe(after)
+      assertReadOnly(native)
+    })).toEqual([])
+  }, 90_000)
+
+  it('keeps a deliberately disabled hook off and observes a later revocation without writing native trust (104.2)', async () => {
+    const place = home()
+    install(place)
+    answerFor(place.hooks, () => 'trusted')
+    const answer = JSON.parse(readFileSync(join(root, 'answer'), 'utf8'))
+    answer.result.data[0].hooks[0].enabled = false
+    writeFileSync(join(root, 'answer'), JSON.stringify(answer))
+    const native = nativeState()
+    expect(await observeHookWrites([place.hooks, join(root, '.codex/config.toml')], () => {
+      const result = JSON.parse(cli(['hooks', 'install', 'codex', '--yes', '--json'], place.env).stdout)
+      expect(result.approval).toMatchObject({ state: 'not-approved', entries: 1, events: ['PreToolUse'] })
+      expect(result.note).toContain('disabled or awaiting approval')
+      answerFor(place.hooks, () => 'modified')
+      const start = JSON.parse(cli(['hooks', 'install', '--absent', '--yes', '--json'], place.env).stdout)
+      expect(start.agents.find((entry: { agent: string }) => entry.agent === 'codex').approval).toMatchObject({ state: 'not-approved', entries: 7 })
+      expect(cli(['hooks', 'approval', '--json'], place.env).status).toBe(0)
+      cli(['hooks', 'check', 'codex', '--json'], place.env)
+      assertReadOnly(native)
+    })).toEqual([])
+  }, 90_000)
+
+  it('explicit install does not ask Codex about a custom hook file it does not read (104.2)', () => {
+    const place = home()
+    install(place)
+    const other = join(root, 'elsewhere.json')
+    writeFileSync(other, readFileSync(place.hooks))
+    writeFileSync(join(root, 'codex-rpc'), '')
+    const result = JSON.parse(cli(['hooks', 'install', 'codex', '--file', other, '--yes', '--json'], place.env).stdout)
+    expect(result).not.toHaveProperty('approval')
+    expect(result.note).toContain('If Codex uses this file, review /hooks there if you want these enabled.')
+    expect(existsSync(join(root, 'codex-rpc')) ? readFileSync(join(root, 'codex-rpc'), 'utf8') : '').toBe('')
+  }, 90_000)
+
   it('with every entry changed, says the guard does not run, exits 1 and claims nothing that needs an entry', () => {
     const place = home()
     install(place)
@@ -149,13 +253,13 @@ describe('the reports, through the real command (102.4)', () => {
     expect(asJson.status).toBe(1)
     expect(row(asJson.stdout)).toMatchObject({ commandGuard: { state: 'not-approved' }, approval: { state: 'not-approved', entries: 7 } })
     const text = cli(['hooks', 'check', 'codex'], place.env).stdout
-    expect(text).toContain('command guard does not run: Codex has not approved its entry')
-    expect(text).toContain('Codex does not run 7 of these entries')
-    expect(text).toContain('run /hooks in Codex, then `bmn hooks check`')
+    expect(text).toContain('command guard does not run: its Codex entry is disabled or awaiting approval')
+    expect(text).toContain('Codex reports 7 of these entries disabled or awaiting approval')
+    expect(text).toContain('Review /hooks in Codex if you want these enabled, then run `bmn hooks check`')
     expect(text).not.toContain('command guard holds')
     expect(text).not.toMatch(/prompt guard: active/u)
-    expect(text).toMatch(/messages: off, Codex has not approved its entry/u)
-    expect(text).toMatch(/turn changes: off, Codex has not approved its entry/u)
+    expect(text).toMatch(/messages: off, Codex reports its entry disabled or unapproved/u)
+    expect(text).toMatch(/turn changes: off, Codex reports its entry disabled or unapproved/u)
   }, 90_000)
 
   it('with every entry approved, says the guard holds and exits 0', () => {

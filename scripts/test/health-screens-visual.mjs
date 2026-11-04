@@ -1,4 +1,4 @@
-/* global window, document, getComputedStyle */
+/* global window, document, getComputedStyle, requestAnimationFrame, innerHeight */
 // MODULE: health-screens-visual.mjs - Story 96.6: Integrations › Health on the audit fixture, in the real renderer, at 889×768 and 640×720, with keyboard, focus, overflow and redaction checks
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end), as the other Preferences screens
 // do: the unit-test roster, a synthetic rules master and stand-ins for claude and codex. Once Health has read that home,
@@ -77,11 +77,11 @@ function auditSnapshot(real, now, { dropGroup = null, codexHooksLeft = false, do
     health: real.health.state === 'checked' ? { ...real.health, targets: real.health.targets.map((target) => ({ ...target, state: 'current' })) } : real.health,
     probes: [{ harness: 'claude', outcome: 'fail', at: new Date(now - 3_600_000).toISOString(), version: '2.1.296' }],
     hooks: { state: 'checked', checkedAt: new Date(now - 60_000).toISOString(), apps: [
-      { harness: 'claude', file: join(real.home ?? '/home/synthetic', '.claude/settings.json'), state: 'checked', placed: ['Notification', 'PreToolUse', 'Stop'], older: [], installed: [], left: [] },
+      { harness: 'claude', file: join(real.home ?? '/home/synthetic', '.claude/settings.json'), state: 'installed', placed: ['Notification', 'PreToolUse', 'PermissionRequest', 'Stop'], older: [], installed: [], raised: ['PermissionRequest'], widened: ['PreToolUse'], left: [] },
       { harness: 'codex', file: join(real.home ?? '/home/synthetic', '.codex/hooks.json'), state: 'checked', placed: ['PreToolUse', 'Stop'], older: [], installed: [],
         left: codexHooksLeft ? [{ event: 'SessionEnd', why: 'changed' }] : [],
         // Story 102.4: the row in its Needs you state, a guard that does not answer and the app's own rules missing.
-        ...(codexHooksLeft ? { commandGuard: { state: 'does-not-answer', reason: 'command guard cannot load' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse', 'Stop'] }, nativeRules: 'missing' } : { commandGuard: { state: 'holds' }, nativeRules: 'present' }) },
+        ...(codexHooksLeft ? { reworded: ['PreToolUse'], commandGuard: { state: 'does-not-answer', reason: 'command guard cannot load' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse', 'Stop'] }, nativeRules: 'missing' } : { commandGuard: { state: 'holds' }, nativeRules: 'present' }) },
       codexHooksLeft ? { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'checked', placed: ['plugin', 'cli.json'], older: [], installed: [], left: [] }
         : { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
     ] },
@@ -196,6 +196,39 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       check(`${name}: one live status, the head, naming the issues and their sections`, layout.statuses === 1 && /^Read .+ · \d+ need(s)? you: .*Tools.*Context limits.*Hooks.*Doctor/u.test(layout.head ?? ''), { head: layout.head, statuses: layout.statusTexts })
       check(`${name}: the head stays under 120 characters`, (layout.head ?? '').length < 120, { length: (layout.head ?? '').length })
       check(`${name}: the first failure comes before the inventory, which starts closed`, layout.firstNeed !== null && layout.leftoversTop !== null && layout.firstNeed < layout.leftoversTop && layout.leftoversOpen === false, layout)
+      await serve(auditSnapshot(real, Date.now(), { codexHooksLeft: true }))
+      await reload()
+      const codexHooks = main.locator('[data-hooks]').filter({ hasText: 'Codex' }).first()
+      await codexHooks.scrollIntoViewIfNeeded()
+      const hookWords = await codexHooks.innerText()
+      check(`${name}: changed Codex declarations and native review are clear without a carried-approval claim`,
+        /Command updated at start: PreToolUse/u.test(hookWords) && /disabled or awaiting approval/u.test(hookWords) && /if you want them enabled/u.test(hookWords) && !/approval carried|still runs/iu.test(hookWords))
+      const claudeHooks = await main.locator('[data-hooks]').filter({ hasText: 'Claude Code' }).first().innerText()
+      check(`${name}: required timeout and matcher migrations are named`, /Timeout updated at start: PermissionRequest/u.test(claudeHooks) && /Matcher updated at start: PreToolUse/u.test(claudeHooks))
+      await page.mouse.move(2, 2)
+      await codexHooks.getByText('Command updated at start: PreToolUse', { exact: true }).waitFor()
+      const captureBounds = await codexHooks.evaluate(async (row) => {
+        const scroller = row.closest('.preferences-main')
+        const area = scroller.getBoundingClientRect()
+        const initial = row.getBoundingClientRect()
+        scroller.scrollTop += initial.top - area.top - (area.height - initial.height) / 2
+        const rect = () => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right } }
+        const before = rect()
+        await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+        const after = rect()
+        const sticky = [...row.closest('.preferences-page').querySelectorAll('.page-head, .page-views')].map(el => el.getBoundingClientRect().bottom)
+        const top = Math.max(area.top, 0, ...sticky)
+        const bottom = Math.min(area.bottom, innerHeight)
+        return { before, after, top, bottom, scrollTop: scroller.scrollTop,
+          stable: Object.keys(before).every(key => Math.abs(before[key] - after[key]) <= 1),
+          visible: after.top >= top && after.bottom <= bottom && after.left >= area.left && after.right <= area.right }
+      })
+      check(`${name}: the captured Codex row is stable and inside the unobscured viewport`, captureBounds.stable && captureBounds.visible, captureBounds)
+      const hookShot = `health-${name}-hook-review.png`
+      await page.screenshot({ path: join(outDirectory, hookShot) })
+      report.shots.push(hookShot)
+      await serve(auditSnapshot(real, Date.now()))
+      await reload()
       // The keyboard: Leftovers, then a group, toggled with Enter and Space, the focus left on the summary.
       const summary = main.locator('.leftovers > summary')
       await summary.scrollIntoViewIfNeeded()

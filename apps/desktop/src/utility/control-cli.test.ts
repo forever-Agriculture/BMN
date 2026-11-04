@@ -3820,9 +3820,9 @@ describe('bmn hooks install', () => {
     const claude = await runHooks(['install', '--yes', 'claude', '--file', claudePath])
 
     // The whole sentence, not just "/hooks": the fixture's own path ends in hooks.json.
-    expect(codex.stdout).toContain('Codex must trust the hooks once: run /hooks in Codex.')
+    expect(codex.stdout).toContain('If Codex uses this file, review /hooks there if you want these enabled.')
     expect(codex.stdout).toContain('reports configuration, not that a hook fired')
-    expect(claude.stdout).not.toContain('trust the hooks once')
+    expect(claude.stdout).not.toContain('review /hooks')
     // Install writes the required events only; PermissionRequest stays the owner's own choice.
     expect(Object.keys(JSON.parse(await readFile(codexPath, 'utf8')).hooks)).toEqual(CODEX_EVENTS)
   })
