@@ -39,7 +39,7 @@ function world() {
 }
 
 /** A BMAD board with a go whose ledger takes a repair round, then the committed move to plan/ and a BMN go with an allowances file. */
-async function movedAfterARound(w) {
+async function movedAfterARound(w, source = OLD) {
   file(w.repo, OLD, 'development_status:\n  epic-7: ready # go 2026-11-02\n  7-1-keep-the-original-requirement: ready-for-dev\n')
   file(w.repo, '_bmad-output/planning-artifacts/epics.md', EPIC)
   git(w.repo, 'add', '-A'); git(w.repo, 'commit', '-qm', 'old plan')
@@ -49,8 +49,8 @@ async function movedAfterARound(w) {
   const round = w.ledger('round', '--budget', budget, '--boundary', '7.1', '--use-id', 'r1')
   expect(round.stdout, round.stderr).toMatch(/TAKEN/u)
   const anchor = git(w.repo, 'rev-parse', 'HEAD')
-  file(w.repo, 'plan/status.yaml', `format: bmn-plan\nschema_version: 1\nmoved_from: ${OLD}\nqueue: []\ndevelopment_status:\n  epic-7: backlog\n  7-1-keep-the-original-requirement: backlog\n`)
-  file(w.repo, 'plan/migration.json', JSON.stringify({ version: 1, source_board: OLD, history_head: anchor }))
+  file(w.repo, 'plan/status.yaml', `format: bmn-plan\nschema_version: 1\nmoved_from: ${source}\nqueue: []\ndevelopment_status:\n  epic-7: backlog\n  7-1-keep-the-original-requirement: backlog\n`)
+  file(w.repo, 'plan/migration.json', JSON.stringify({ version: 1, source_board: source, history_head: anchor }))
   file(w.repo, 'plan/epics/007-fixture.md', EPIC)
   file(w.repo, 'plan/allowances/007.yaml', ALLOWANCES)
   rmSync(join(w.repo, OLD))
@@ -81,6 +81,13 @@ describe.skipIf(!RUN_NEEDS)('which ledger is the plan\'s, with dev-auto\'s own s
     expect((await w.allow('limits.rechecks.per=epic', false)).error?.code).toBe('USED')
     // A limit's value still changes.
     expect((await w.allow('limits.rechecks.limit=3', false)).ok).toBe(true)
+  }, 120_000)
+
+  it('a move recorded with a doubled slash in its source board reads as dev-auto reads it (second recheck)', async () => {
+    const w = world()
+    const budget = await movedAfterARound(w, '_bmad-output//implementation-artifacts/sprint-status.yaml')
+    expect(budget.slice(0, 16)).toBe(w.identity(join(w.repo, 'plan')))
+    expect((await w.allow('limits.repair_rounds=')).error?.code).toBe('USED')
   }, 120_000)
 
   it('a nested plan of the same repository with a used limit of the same epic leaves this plan free', async () => {

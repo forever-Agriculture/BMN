@@ -710,6 +710,12 @@ function migrationSource(repo, root) {
   return origin.source
 }
 
+/** Python's `PurePosixPath(path).parent` taken `times` times, as text: empty and `.` parts dropped, `.` for none left. */
+export function pythonParent(path, times) {
+  const parts = path.split('/').filter((part) => part !== '' && part !== '.')
+  return parts.slice(0, Math.max(0, parts.length - times)).join('/') || '.'
+}
+
 /** spend_ledger.py `plan_identity`: a moved plan keeps the identity of the board it came from. Throws when unconfirmed. */
 export function planIdentity(planRoot) {
   const root = realPath(planRoot)
@@ -724,7 +730,7 @@ export function planIdentity(planRoot) {
   const source = migrationSource(repository.top, root)
   if (source === null) return `${repository.common}::${posixRelative(repository.top, root)}`
   if (repository.top === root) throw unconfirmed('the original product repository cannot be established')
-  return `${repository.common}::${posix.dirname(posix.dirname(source))}`
+  return `${repository.common}::${pythonParent(source, 2)}`
 }
 
 /** The ledger ids dev-auto would use for this plan's epic: the canonical one and what the location's alias names. */
