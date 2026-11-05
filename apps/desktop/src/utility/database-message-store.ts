@@ -8,6 +8,8 @@ import {
   SESSION_MESSAGE_MAX_WAITING,
   SESSION_MESSAGE_NOT_A_PEER,
   SESSION_MESSAGE_PAIR_HOURLY,
+  SESSION_MESSAGE_WAKE_PAIR_HOURLY,
+  SESSION_MESSAGE_WAKE_WORKSPACE_HOURLY,
   SESSION_MESSAGE_SEND_GAP_MS,
   SESSION_MESSAGE_WORKSPACE_HOURLY,
   SESSION_MESSAGES_OFF,
@@ -34,6 +36,7 @@ interface MessageRow {
   state: string
   claimed_app: string | null
   kind: 'message' | 'handoff'
+  woken_at: string | null
 }
 
 interface MemberRow {
@@ -59,7 +62,7 @@ function isHandoff(alias: string): string {
 }
 
 const MESSAGE_COLUMNS = `m.message_id, m.workspace_id, m.sender_session_id, m.receiver_session_id, m.sender_root, m.stamp, m.text,
-  m.sent_at, m.expires_at, m.state, m.claimed_app, CASE WHEN ${isHandoff('m')} THEN 'handoff' ELSE 'message' END AS kind`
+  m.sent_at, m.expires_at, m.state, m.claimed_app, m.woken_at, CASE WHEN ${isHandoff('m')} THEN 'handoff' ELSE 'message' END AS kind`
 
 function refuse(message: string): never {
   throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, message)
@@ -70,7 +73,7 @@ function messageRecord(row: MessageRow): SessionMessageRecord {
   return {
     messageId: row.message_id, kind: row.kind, workspaceId: row.workspace_id, senderSessionId: row.sender_session_id,
     receiverSessionId: row.receiver_session_id, senderRoot: row.sender_root, stamp: row.stamp, text: row.text,
-    sentAt: row.sent_at, expiresAt: row.expires_at, state: row.state, claimedApp: row.claimed_app
+    sentAt: row.sent_at, expiresAt: row.expires_at, state: row.state, claimedApp: row.claimed_app, wokenAt: row.woken_at
   }
 }
 
@@ -226,6 +229,8 @@ function sendSessionMessage(database: DatabaseConnection, p: {
   text: string
   /** Why the receiver cannot take a message now (Story 75.4), or null: what runs in its terminal is the host's to say. */
   receiverRefusal: string | null
+  /** The sender's depth plus one (D12); null when it cannot be read, which wakes no one. */
+  wakeDepth?: number | null
 }, now: string): SendOutcome {
   const peers = messagePeers(database, p.senderSessionId, now)
   if (!peers.on) refuse(SESSION_MESSAGES_OFF)
@@ -254,6 +259,7 @@ export function admitHandoff(database: DatabaseConnection, p: {
   stamp: string
   text: string
   receiverRefusal: string | null
+  wakeDepth?: number | null
 }, now: string): SendOutcome {
   const unavailable = (session: MemberRow | undefined): boolean =>
     !session || session.archived_at !== null || session.workspace_archived_at !== null
@@ -337,14 +343,15 @@ function insertMessage(database: DatabaseConnection, p: {
   senderRoot: string
   stamp: string
   text: string
+  wakeDepth?: number | null
 }, now: string, expiresInMs: number): void {
   database.prepare(
     `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
-       sent_at, expires_at, state)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting')`
+       sent_at, expires_at, state, wake_depth)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?)`
   ).run(
     p.messageId, p.workspaceId, p.senderSessionId, p.receiverSessionId, p.senderRoot, p.stamp, p.text,
-    now, new Date(Date.parse(now) + expiresInMs).toISOString()
+    now, new Date(Date.parse(now) + expiresInMs).toISOString(), p.wakeDepth ?? null
   )
 }
 
@@ -354,7 +361,7 @@ function insertMessage(database: DatabaseConnection, p: {
  */
 function listSentMessages(
   database: DatabaseConnection, senderSessionId: string, messageId: string | null
-): Array<Pick<SessionMessageRecord, 'messageId' | 'receiverSessionId' | 'state' | 'sentAt' | 'expiresAt'>> {
+): Array<Pick<SessionMessageRecord, 'messageId' | 'receiverSessionId' | 'state' | 'sentAt' | 'expiresAt' | 'wokenAt'>> {
   const rows = (messageId === null
     ? database.prepare(
         `SELECT ${MESSAGE_COLUMNS} FROM session_message m WHERE m.sender_session_id = ? AND NOT ${isHandoff('m')}
@@ -365,7 +372,7 @@ function listSentMessages(
       ).all(senderSessionId, messageId)) as MessageRow[]
   return rows.map(messageRecord).map((record) => ({
     messageId: record.messageId, receiverSessionId: record.receiverSessionId, state: record.state,
-    sentAt: record.sentAt, expiresAt: record.expiresAt
+    sentAt: record.sentAt, expiresAt: record.expiresAt, wokenAt: record.wokenAt ?? null
   }))
 }
 
@@ -500,8 +507,47 @@ export interface HandoffAttachmentSource {
 export interface MessageTakeCandidate {
   messageId: string
   senderRoot: string
+  /** Story 110.3: its depth when sent (null wakes no one) and when a wake was typed for it. */
+  wakeDepth: number | null
+  wokenAt: string | null
   /** Story 75.5: a handoff's attached files, each of whose folders the provider must be allowed to see too. */
   attachments: HandoffAttachmentSource[]
+}
+
+/** Sessions with a waiting message no wake was typed for (Story 110.3). */
+function messageWakeReceivers(database: DatabaseConnection, now: string): string[] {
+  return (database.prepare(
+    `SELECT DISTINCT receiver_session_id FROM session_message WHERE state = 'waiting' AND expires_at > ? AND woken_at IS NULL`
+  ).all(now) as Array<{ receiver_session_id: string }>).map((row) => row.receiver_session_id)
+}
+
+/**
+ * One wake per message, ever, inside the hourly limits (110.3 AC1, AC4), claimed before the line is typed so a crash can
+ * only lose a wake, never repeat one. Past a limit the message waits, and the reason goes to its sender.
+ */
+function claimMessageWake(
+  database: DatabaseConnection, messageId: string, now: string
+): { claimed: true; at: string } | { claimed: false; reason: string } {
+  const row = database.prepare(
+    `SELECT workspace_id, sender_session_id, receiver_session_id FROM session_message
+     WHERE message_id = ? AND state = 'waiting' AND expires_at > ? AND woken_at IS NULL`
+  ).get(messageId, now) as { workspace_id: string; sender_session_id: string; receiver_session_id: string } | undefined
+  if (!row) return { claimed: false, reason: 'it was taken, withdrawn or woken already' }
+  const since = new Date(Date.parse(now) - 3_600_000).toISOString()
+  const between = database.prepare(
+    `SELECT COUNT(*) AS n FROM session_message WHERE woken_at > ?
+       AND ((sender_session_id = ? AND receiver_session_id = ?) OR (sender_session_id = ? AND receiver_session_id = ?))`
+  ).get(since, row.sender_session_id, row.receiver_session_id, row.receiver_session_id, row.sender_session_id) as { n: number }
+  if (between.n >= SESSION_MESSAGE_WAKE_PAIR_HOURLY) return { claimed: false, reason: `these two sessions had ${SESSION_MESSAGE_WAKE_PAIR_HOURLY} wakes in the last hour; it waits for the receiver's next turn` }
+  const inWorkspace = database.prepare('SELECT COUNT(*) AS n FROM session_message WHERE woken_at > ? AND workspace_id = ?').get(since, row.workspace_id) as { n: number }
+  if (inWorkspace.n >= SESSION_MESSAGE_WAKE_WORKSPACE_HOURLY) return { claimed: false, reason: `this workspace had ${SESSION_MESSAGE_WAKE_WORKSPACE_HOURLY} wakes in the last hour; it waits for the receiver's next turn` }
+  database.prepare('UPDATE session_message SET woken_at = ? WHERE message_id = ?').run(now, messageId)
+  return { claimed: true, at: now }
+}
+
+/** Nothing was typed after the claim: the message may be woken later, and the limits count no wake. */
+function releaseMessageWake(database: DatabaseConnection, messageId: string, at: string): void {
+  database.prepare('UPDATE session_message SET woken_at = NULL WHERE message_id = ? AND woken_at = ?').run(messageId, at)
 }
 
 /** The receiver's messages a hook may be handed, oldest first, with the root each sender's work lies in. */
@@ -510,8 +556,8 @@ function messageTakeCandidates(
 ): MessageTakeCandidate[] {
   liftReceiverPauses(database, receiverSessionId, now)
   const rows = database.prepare(
-    `SELECT m.message_id, m.sender_root FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.rowid`
-  ).all(now, receiverSessionId) as Array<{ message_id: string; sender_root: string }>
+    `SELECT m.message_id, m.sender_root, m.wake_depth, m.woken_at FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.rowid`
+  ).all(now, receiverSessionId) as Array<{ message_id: string; sender_root: string; wake_depth: number | null; woken_at: string | null }>
   const attached = database.prepare(
     `SELECT e.value AS artifact_id, a.original_name, a.source_path
      FROM input_draft d, json_each(d.artifact_ids_json) e LEFT JOIN artifact a ON a.artifact_id = e.value
@@ -520,6 +566,8 @@ function messageTakeCandidates(
   return rows.map((row) => ({
     messageId: row.message_id,
     senderRoot: row.sender_root,
+    wakeDepth: row.wake_depth,
+    wokenAt: row.woken_at,
     attachments: (attached.all(`${HANDOFF_MESSAGE_KEY}${row.message_id}`) as Array<{
       artifact_id: string; original_name: string | null; source_path: string | null
     }>).map((file) => ({ artifactId: file.artifact_id, name: file.original_name ?? file.artifact_id, sourcePath: file.source_path }))
@@ -625,5 +673,8 @@ export const MESSAGE_OPERATIONS = Object.freeze({
   deleteMessagesSentBefore,
   withdrawSessionMessage,
   messagesForHook,
+  messageWakeReceivers,
+  claimMessageWake,
+  releaseMessageWake,
   claimExpiredNotice
 })

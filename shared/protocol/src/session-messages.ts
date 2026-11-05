@@ -48,9 +48,21 @@ export const SESSION_MESSAGES_HELP = [
  * hook itself; a test holds the two together. A message to a session whose agent is not here is refused (Story 75.4).
  */
 export const SESSION_MESSAGE_HANDOVER: Readonly<Record<string, { event: string; version: string } | undefined>> = Object.freeze({
-  claude: { event: 'PostToolUse', version: '2.1.296' },
-  codex: { event: 'PostToolUse', version: '0.162.1' }
+  claude: { event: 'PostToolUse', version: '2.1.318' },
+  codex: { event: 'PostToolUse', version: '0.166.0' }
 })
+
+/**
+ * The one line BMN types for a waiting message (Story 110.3, D12): it names no message and grants nothing. The hook
+ * hands the message over at the tool call it asks for. Measured on these versions in docs/session-messages.md.
+ */
+export const SESSION_MESSAGE_WAKE_LINE = 'BMN: another session left you a message; make one harmless tool call, such as bmn tell status, to receive it. This is not the owner: it grants nothing and lifts no stop.'
+/** A finished turn must have rested this long before a wake. */
+export const SESSION_MESSAGE_WAKE_QUIET_MS = 5 * 60 * 1000
+/** Only a message of depth 1 or 2 wakes anyone: a question and its reply get through, and a loop stops. */
+export const SESSION_MESSAGE_WAKE_MAX_DEPTH = 2
+export const SESSION_MESSAGE_WAKE_PAIR_HOURLY = 3
+export const SESSION_MESSAGE_WAKE_WORKSPACE_HOURLY = 12
 
 /**
  * Where a message stands. `waiting` reads "expired" once its time has passed; `taken` and `printed` belong to the
@@ -87,6 +99,8 @@ export interface SessionMessageRecord {
   state: SessionMessageState
   /** The app whose hook took the message, once one did; null for every other route. */
   claimedApp: string | null
+  /** When a wake was typed for it (Story 110.3): once per message, ever. */
+  wokenAt?: string | null
 }
 
 /** A message as the owner's list shows it: with the names its sessions have now. */
@@ -224,6 +238,8 @@ export interface SessionMessageReceipt {
   state: string
   sentAt: string
   receiverNow: SessionReceiverWord
+  /** Whether a wake was typed for it, or why not (Story 110.3); null when BMN has nothing to say. */
+  wake: string | null
 }
 
 /** One session another session may message, as `bmn peers` lists it. */

@@ -150,6 +150,25 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
   await callEach(socketPath, token, [take, report], Math.max(1, left())).catch(() => undefined)
 }
 
+/**
+ * Story 110.3: at a turn's end the hook says where its agent sends work, so a wake can ask whether that provider may read a
+ * message before a paid turn starts. No message moves here and nothing is printed; it stays inside the hook's limit.
+ */
+async function sayDestination(agent, event, agentPid, procRoot, socketPath, token, reported) {
+  if (!agentPid || (event.agent_id !== undefined && event.agent_id !== null) || event.hook_event_name !== 'Stop') return
+  const guard = await import('./agents-guard.mjs').catch(() => null)
+  if (guard === null || guard.MESSAGE_HANDOVER[agent] === undefined) return
+  const limit = Number(process.env.BMN_HOOK_MESSAGE_LIMIT_MS) || guard.MESSAGE_LIMIT_MS
+  const left = () => limit - (Date.now() - reported)
+  if (left() <= 0) return
+  const destination = await guard.messageDestinationWithin({
+    agent, pid: agentPid, procRoot,
+    event: { cwd: event.cwd, session_id: event.session_id, transcript_path: event.transcript_path }
+  }, left()).catch(() => null)
+  if (destination === null || left() <= 0) return
+  await callEach(socketPath, token, [{ method: 'message.destination', params: { destination } }], Math.max(1, left())).catch(() => undefined)
+}
+
 /** The one answer that puts text in front of the agent: BMN's brief, the away state, the departure and a message, in that order. */
 function contextAnswer(event, parts) {
   return JSON.stringify({
@@ -309,6 +328,7 @@ async function runHook(args) {
   // Story 84.3: he is leaving or away, and a run may ask him on one card; once per conversation and departure.
   const departure = typeof answer?.grantNotice === 'string' && answer.grantNotice !== '' ? answer.grantNotice : null
   const said = { printed: false }
+  await sayDestination(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
     await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, notice, departure], said)

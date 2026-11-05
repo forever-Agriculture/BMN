@@ -153,6 +153,8 @@ export interface ControlHandlers {
    * Epic 66.4: hands a session's own hook the one message it may print for its agent, consuming it. `destination`
    * is where that agent sends work, as the hook resolved it for this event.
    */
+  /** Story 110.3: where a session's agent sends its work, for a wake's question to the provider. */
+  messageDestination(p: { sessionId: string; incarnationId: string; destination: { provider: string; host: string; basis: string; default: boolean } }): { recorded: boolean } | Promise<{ recorded: boolean }>
   takeMessage(p: {
     sessionId: string
     incarnationId: string
@@ -573,6 +575,18 @@ function requirePid(params: Params): number {
   const { pid } = params
   if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 2 || pid > 0x7fff_ffff) throw invalidError('pid must be a process id')
   return pid
+}
+
+function messageDestination(params: Record<string, unknown>): { provider: string; host: string; basis: string; default: boolean } {
+  if (params.destination === undefined) throw invalidError('destination is required')
+  const destination = closedParams(params.destination, ['provider', 'host', 'basis', 'default'])
+  if (typeof destination.default !== 'boolean') throw invalidError('destination.default must be true or false')
+  return {
+    provider: requireText(destination, 'provider', IDENTIFIER),
+    host: requireText(destination, 'host', RULES.name),
+    basis: requireEnum(destination, 'basis', DESTINATION_BASES),
+    default: destination.default
+  }
 }
 
 /** How a destination can be known; an unknown one is never sent. */
@@ -1169,18 +1183,15 @@ export class ControlServer {
         if (scope.kind !== 'session') throw unauthorized('Only a session may collect its own messages')
         const app = requireEnum(params, 'agent', Object.keys(SESSION_MESSAGE_HANDOVER))
         const pid = requirePid(params)
-        if (params.destination === undefined) throw invalidError('destination is required')
-        const destination = closedParams(params.destination, ['provider', 'host', 'basis', 'default'])
-        if (typeof destination.default !== 'boolean') throw invalidError('destination.default must be true or false')
         return handlers.takeMessage({
-          sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid, app,
-          destination: {
-            provider: requireText(destination, 'provider', IDENTIFIER),
-            host: requireText(destination, 'host', RULES.name),
-            basis: requireEnum(destination, 'basis', DESTINATION_BASES),
-            default: destination.default
-          }
+          sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid, app, destination: messageDestination(params)
         })
+      }
+      case 'message.destination': {
+        // Story 110.3: the hook's word at a turn's end on where this session's agent sends its work. It carries no message.
+        const params = closedParams(rawParams, ['destination'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may say where its own agent sends work')
+        return handlers.messageDestination({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, destination: messageDestination(params) })
       }
       case 'message.report': {
         const params = closedParams(rawParams, ['messageId', 'claimId', 'pid'])

@@ -254,7 +254,10 @@ async function run(scenario, binary) {
       const ready = app === 'claude' ? /^❯/mu : app === 'codex' ? /^›/mu : /Ask anything/u
       const shown = []
       for (let waited = 0; waited < 90_000 && !ready.test(await screen().catch(() => '')); waited += 5_000) {
-        if (/trust/iu.test(await screen())) { await input.focus(); await page.keyboard.press('Enter') }
+        // Claude Code's folder dialog stands on its No: the key moves to Yes first (a new profile shows it; Story 110.1).
+        const asked = await screen()
+        if (/❯\s*(?:\d\.\s*)?No, exit/u.test(asked)) { await input.focus(); await page.keyboard.press('ArrowDown'); await sleep(300); await page.keyboard.press('Enter') }
+        else if (/trust/iu.test(asked)) { await input.focus(); await page.keyboard.press('Enter') }
         shown.push((await screen()).split('\n').slice(-6))
         await sleep(5_000)
       }
@@ -421,12 +424,17 @@ async function run(scenario, binary) {
         await input.focus(); await page.keyboard.press('Escape')
         // Story 110.1 AC3: a question card opens while the turn runs, and stays open past the tick.
         const asking = app === 'claude' ? 'AskUserQuestion' : 'request_user_input'
-        const four = await tick(4, () => type(`Use your ${asking} tool to ask the owner one question: which colour, with the options Blue and Green. Then wait for the answer.`))
+        // Codex offers its blocking question only in Plan mode; Default has a non-blocking one that holds nothing open.
+        const four = await tick(4, async () => {
+          if (app === 'codex') { await type('/plan'); await sleep(2_000) }
+          await type(`Use your ${asking} tool to ask the owner one question: which colour, with the options Blue and Green. Then wait for the answer.`)
+        })
+        state.questionScreen = (await screen()).split('\n').slice(-14)
         check(`${app}: tick 4 skips a session with a question open`, skipped(four), { logs: four })
         await input.focus(); await page.keyboard.press('Escape'); await sleep(1_500); await page.keyboard.press('Control+U')
         // A stop: the owner's Escape during a long tool call, with the prompt empty afterwards.
         const five = await tick(5, async () => {
-          await type('Run this shell command in the foreground, never in the background: sleep 300')
+          await type(`Run this shell command in the foreground, never in the background: python3 -c 'import time; time.sleep(300)'`)
           await sleep(12_000)
           await input.focus(); await page.keyboard.press('Escape')
         })

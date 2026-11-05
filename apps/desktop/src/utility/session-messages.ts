@@ -28,7 +28,7 @@ import {
   type SessionRecord
 } from '@bmn/protocol'
 import type { DatabaseWorkerClient } from './database-client'
-import type { HandoffAttachmentSource, SendOutcome } from './database-message-store'
+import type { HandoffAttachmentSource, MessageTakeCandidate, SendOutcome } from './database-message-store'
 import { HostControlError, invalidHostControl } from './session-manager'
 
 export type { MessageDestination }
@@ -63,6 +63,8 @@ interface SessionMessagesOptions {
 }
 
 const DAY_MS = 86_400_000
+/** How long after BMN types a line its prompt event may still be taken for that line, not his. */
+const TYPED_LINE_SEEN_MS = 60_000
 /** How many held-back reasons one run keeps; the oldest leave first. */
 const HELD_MAX = 500
 
@@ -76,7 +78,8 @@ function agentNow(foreground: SessionAgentNow): string | null {
 
 /**
  * Messages between the sessions of one workspace. Nothing here types into a terminal: a message reaches an agent
- * only through its own hook. Nothing here opens a request except the one notice of a pause.
+ * only through its own hook; `MessageWake` may type the one fixed line that asks for a tool call, and no message.
+ * Nothing here opens a request except the one notice of a pause.
  */
 export class SessionMessages {
   /**
@@ -87,6 +90,18 @@ export class SessionMessages {
   private readonly held = new Map<string, string>()
   /** Story 75.5: the root of the folder each attached file was published from, by file, once BMN found it this run. */
   private readonly roots = new Map<string, string>()
+  /**
+   * Story 110.3 (D12): each run's wake depth. His typed prompt or a run's start sets it to 0; a message handed over raises it
+   * to that message's depth if higher; a message sent has it plus 1. Held for this run of BMN only: after a restart nothing
+   * reads it until the next turn starts, and a depth BMN cannot read wakes no one.
+   */
+  private readonly depths = new Map<string, { incarnationId: string; depth: number | null }>()
+  /** Where each session's agent sends its work, as its hook last said: a wake asks the provider before a paid turn starts. */
+  private readonly destinations = new Map<string, { incarnationId: string; destination: MessageDestination }>()
+  /** When BMN last typed a line into a session, and whether its prompt event was seen: BMN's own line is no owner's prompt. */
+  private readonly typed = new Map<string, { at: number; seen: boolean }>()
+  /** Why a waiting message was not woken, for its sender: this run only, since it may name a limit of the owner's team. */
+  private readonly wakeNotes = new Map<string, string>()
 
   constructor(private readonly options: SessionMessagesOptions) {}
 
@@ -184,6 +199,7 @@ export class SessionMessages {
       sessionId: sender.sessionId, name: sender.name, folder: senderRoot,
       app: appName(agentNow(this.options.foreground(sender.sessionId)))
     })
+    const wakeDepth = this.nextDepth(p.senderSessionId, p.senderIncarnationId)
     // The reads above took time, and the terminal may have been given another process meanwhile. This is the
     // last look: a send is the word of the process that was running when the store was asked, and a process
     // that ends after that does not cancel it. A message outlives its sender's process in any case.
@@ -192,7 +208,7 @@ export class SessionMessages {
       (app) => appName(app) ?? 'an app')
     const outcome = await this.options.database.companion('sendSessionMessage', {
       messageId: randomUUID(), senderSessionId: p.senderSessionId, receiverSessionId: p.destinationSessionId,
-      senderRoot, stamp, text: cleaned.text, receiverRefusal
+      senderRoot, stamp, text: cleaned.text, receiverRefusal, wakeDepth
     }, this.iso())
     this.options.changed()
     if (outcome.accepted) {
@@ -245,7 +261,7 @@ export class SessionMessages {
     senderCwd: string
     destinationSessionId: string
     attachments: readonly HandoffAttachmentSource[]
-  }): Promise<{ senderRoot: string; stamp: string; receiverRefusal: string | null }> {
+  }): Promise<{ senderRoot: string; stamp: string; receiverRefusal: string | null; wakeDepth: number | null }> {
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const sender = await this.options.session(p.senderSessionId)
     if (!sender) invalidHostControl('The sending session is unavailable')
@@ -268,7 +284,7 @@ export class SessionMessages {
     })
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     return {
-      senderRoot, stamp,
+      senderRoot, stamp, wakeDepth: this.nextDepth(p.senderSessionId, p.senderIncarnationId),
       receiverRefusal: sessionMessageReceiverRefusal(this.options.foreground(p.destinationSessionId), (app) => appName(app) ?? 'an app')
     }
   }
@@ -307,7 +323,8 @@ export class SessionMessages {
       messages: messages.map((message) => ({
         messageId: message.messageId, receiverSessionId: message.receiverSessionId,
         state: sessionMessageStateWord(message, now), sentAt: message.sentAt,
-        receiverNow: words.get(message.receiverSessionId) ?? 'not heard from'
+        receiverNow: words.get(message.receiverSessionId) ?? 'not heard from',
+        wake: this.wakeWord(message)
       }))
     }
   }
@@ -334,42 +351,15 @@ export class SessionMessages {
   }): Promise<{ message: SessionMessageTaken | null; expired?: string }> {
     if (SESSION_MESSAGE_HANDOVER[p.app] === undefined) return { message: null }
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
+    this.destinations.set(p.sessionId, { incarnationId: p.incarnationId, destination: p.destination })
     const database = this.options.database
     const told = await database.companion('claimExpiredNotice', p.sessionId, this.iso())
     const expired = told === null ? {} : { expired: sessionMessageExpiredLine(told) }
     const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
     // One question per folder: the messages of one repository share its answer for this event.
-    const answers = new Map<string, { allowed: boolean; reason: string }>()
-    const ask = async (root: string): Promise<{ allowed: boolean; reason: string }> => {
-      let answer = answers.get(root)
-      if (answer === undefined) {
-        try {
-          answer = await this.options.providerAnswer(p.destination, root)
-        } catch {
-          answer = { allowed: false, reason: 'BMN could not read the approved team' }
-        }
-        answers.set(root, answer)
-      }
-      return answer
-    }
+    const ask = this.providerQuestions(p.destination)
     for (const candidate of candidates) {
-      let refusal: string | null = null
-      for (const file of candidate.attachments) {
-        const root = await this.attachmentRoot(file)
-        if (root === null) {
-          refusal = `BMN cannot tell which folder ${cleanSessionMessageName(file.name)} came from`
-          break
-        }
-        const answer = await ask(root)
-        if (!answer.allowed) {
-          refusal = answer.reason
-          break
-        }
-      }
-      if (refusal === null) {
-        const answer = await ask(candidate.senderRoot)
-        if (!answer.allowed) refusal = answer.reason
-      }
+      const refusal = await this.providerRefusal(candidate, ask)
       if (refusal !== null) {
         const detail = `Not handed over by the hook: ${stripFormatCharacters(refusal)}.`.slice(0, 400)
         if (this.hold(candidate.messageId, detail)) this.options.changed()
@@ -394,11 +384,124 @@ export class SessionMessages {
         return { message: null, ...expired }
       }
       this.held.delete(candidate.messageId)
+      this.wakeNotes.delete(candidate.messageId)
+      this.raiseDepth(p.sessionId, p.incarnationId, candidate.wakeDepth)
       this.options.changed()
       const stamp = sessionMessageStampAtDelivery(claim.record.stamp, claim.record.sentAt, this.options.now().getTime())
       return { message: { messageId: claim.record.messageId, claimId, stamp, text: claim.record.text }, ...expired }
     }
     return { message: null, ...expired }
+  }
+
+  /** One provider question per folder for one destination, answered at most once; an unreadable team refuses. */
+  private providerQuestions(destination: MessageDestination): (root: string) => Promise<{ allowed: boolean; reason: string }> {
+    const answers = new Map<string, { allowed: boolean; reason: string }>()
+    return async (root) => {
+      let answer = answers.get(root)
+      if (answer === undefined) {
+        try {
+          answer = await this.options.providerAnswer(destination, root)
+        } catch {
+          answer = { allowed: false, reason: 'BMN could not read the approved team' }
+        }
+        answers.set(root, answer)
+      }
+      return answer
+    }
+  }
+
+  /** Why this destination's provider may not have this message: its files' folders first, then the folder it came from. */
+  private async providerRefusal(candidate: Pick<MessageTakeCandidate, 'attachments' | 'senderRoot'>, ask: (root: string) => Promise<{ allowed: boolean; reason: string }>): Promise<string | null> {
+    for (const file of candidate.attachments) {
+      const root = await this.attachmentRoot(file)
+      if (root === null) return `BMN cannot tell which folder ${cleanSessionMessageName(file.name)} came from`
+      const answer = await ask(root)
+      if (!answer.allowed) return answer.reason
+    }
+    const answer = await ask(candidate.senderRoot)
+    return answer.allowed ? null : answer.reason
+  }
+
+  // ---- Story 110.3: the wake's part of a session's state
+
+  /** A turn began: his typed prompt or a run's start sets the depth to 0; BMN's own line does not (D12). */
+  turnStarted(sessionId: string, incarnationId: string): void {
+    const typed = this.typed.get(sessionId)
+    if (typed !== undefined && !typed.seen && this.options.now().getTime() - typed.at < TYPED_LINE_SEEN_MS) {
+      typed.seen = true
+      return
+    }
+    this.depths.set(sessionId, { incarnationId, depth: 0 })
+  }
+
+  /** BMN typed a line into this session, the Away wake's or a message's: the prompt event that follows is not his. */
+  bmnTyped(sessionId: string): void {
+    this.typed.set(sessionId, { at: this.options.now().getTime(), seen: false })
+    for (const oldest of this.typed.keys()) {
+      if (this.typed.size <= HELD_MAX) break
+      this.typed.delete(oldest)
+    }
+  }
+
+  typedAt(sessionId: string): number | null {
+    return this.typed.get(sessionId)?.at ?? null
+  }
+
+  private depthOf(sessionId: string, incarnationId: string): number | null {
+    const known = this.depths.get(sessionId)
+    return known?.incarnationId === incarnationId ? known.depth : null
+  }
+
+  private nextDepth(sessionId: string, incarnationId: string): number | null {
+    const depth = this.depthOf(sessionId, incarnationId)
+    return depth === null ? null : depth + 1
+  }
+
+  /** A message handed over raises the session's depth to its own if higher, in a running turn or a woken one; unknown stays unknown. */
+  private raiseDepth(sessionId: string, incarnationId: string, messageDepth: number | null): void {
+    const depth = this.depthOf(sessionId, incarnationId)
+    this.depths.set(sessionId, { incarnationId, depth: depth === null || messageDepth === null ? null : Math.max(depth, messageDepth) })
+  }
+
+  /** The hook's word, at the end of a turn, on where this session's agent sends its work; the wake asks about it before typing. */
+  rememberDestination(sessionId: string, incarnationId: string, destination: MessageDestination): void {
+    if (this.options.liveIncarnationId(sessionId) !== incarnationId) return
+    this.destinations.set(sessionId, { incarnationId, destination })
+  }
+
+  /** Why a wake must not start a turn for this message: no paid turn starts for text its provider may not read. */
+  async wakeRefusal(sessionId: string, incarnationId: string, messageId: string): Promise<string | null> {
+    const known = this.destinations.get(sessionId)
+    if (known?.incarnationId !== incarnationId) return 'BMN does not know yet which provider its agent uses'
+    const candidates = await this.options.database.companion('messageTakeCandidates', sessionId, this.iso())
+    const candidate = candidates.find((one) => one.messageId === messageId)
+    if (candidate === undefined) return 'it was taken, withdrawn or paused'
+    const refusal = await this.providerRefusal(candidate, this.providerQuestions(known.destination))
+    return refusal === null ? null : 'its provider may not read this message'
+  }
+
+  wakeCandidates(sessionId: string): Promise<MessageTakeCandidate[]> {
+    return this.options.database.companion('messageTakeCandidates', sessionId, this.iso())
+  }
+
+  /** What a message's sender reads about its wake; a stored message from before this story simply has none. */
+  noteWake(messageId: string, reason: string | null): void {
+    if (reason === null) { this.wakeNotes.delete(messageId); return }
+    if (this.wakeNotes.get(messageId) === reason) return
+    this.wakeNotes.delete(messageId)
+    this.wakeNotes.set(messageId, reason)
+    for (const oldest of this.wakeNotes.keys()) {
+      if (this.wakeNotes.size <= HELD_MAX) break
+      this.wakeNotes.delete(oldest)
+    }
+    this.options.changed()
+  }
+
+  private wakeWord(message: { messageId: string; state: string; wokenAt?: string | null | undefined }): string | null {
+    if (message.wokenAt) return `woken at ${message.wokenAt}`
+    if (message.state !== 'waiting') return null
+    const note = this.wakeNotes.get(message.messageId)
+    return note === undefined ? null : `not woken: ${note}`
   }
 
   /**

@@ -70,6 +70,7 @@ import type { OpenReadOnly } from './agent-history-store'
 import { testTelegramOrigin } from './telegram-connector'
 import { testQaContractOrigin, testQaPicheOrigins } from './qa-sessions'
 import { testAwayWakeTimes } from './away-wake'
+import { testMessageWakeQuiet } from './message-wake'
 import { TurnChangesClient } from './turn-changes-client'
 import { TurnRetention } from './turn-changes-retention'
 import { TURN_STORE_FOLDER } from './turn-changes-store'
@@ -359,6 +360,8 @@ async function start(): Promise<void> {
     historyAdapters: historyAdapters(),
     // A test-mode run (Story 90.6): the Away wake-up's times, shortened only in a test-mode host.
     awayWake: testAwayWakeTimes(process.argv, process.env),
+    // A test-mode run (110.3): the message wake's quiet time, shortened only in a test-mode host.
+    messageWake: testMessageWakeQuiet(process.argv, process.env),
     // A test-mode run (100.6): its synthetic studio is the only site with a reviewed QA contract.
     qaContractOrigin: testQaContractOrigin(process.argv, process.env),
     qaPicheOrigins: testQaPicheOrigins(process.argv, process.env),

@@ -37,20 +37,24 @@ export interface WakeAttention {
   openedAt: string
 }
 
-export interface AwayWakeOptions {
+/** What proves a session idle (Stories 90.6, 110.3): shared by the Away wake and a message's wake. */
+export interface WakeProof {
   now(): Date
-  /** The said-away record as the service holds it now; read again right before the write. */
-  away(): AwayRecord
-  observations(): Iterable<WakeObservation>
   /** The session's latest hook observation now, read again right before the write. */
   observation(sessionId: string): WakeObservation | undefined
-  openAttention(): Promise<readonly WakeAttention[]>
   liveIncarnation(sessionId: string): string | null | undefined
   foreground(sessionId: string): string | null
   generation(sessionId: string): { generation: number; pending: number }
   /** The session's screen with dim cells blanked, once every byte so far is drawn; null when there is no mirror. */
   screen(sessionId: string, incarnationId: string): Promise<WakeScreen | null>
   write(sessionId: string, text: string): void
+}
+
+export interface AwayWakeOptions extends WakeProof {
+  /** The said-away record as the service holds it now; read again right before the write. */
+  away(): AwayRecord
+  observations(): Iterable<WakeObservation>
+  openAttention(): Promise<readonly WakeAttention[]>
   log(line: string): void
   everyMs?: number
   quietMs?: number
@@ -153,35 +157,80 @@ export class AwayWake {
 
   /** Null once the line was typed; otherwise why this session was left alone for this tick. */
   private async wake(seen: WakeObservation, generation: number, open: readonly WakeAttention[], period: string, since: number): Promise<string | null> {
-    const app = seen.agent
-    if (!isWakeApp(app)) return `${app} sessions are not woken (no recorded idle prompt)`
-    if (!FINISHED[app].includes(seen.event)) return `its latest event is ${seen.event}, not a finished turn`
-    // A child's turn is not the session's, and a stop the owner made stays a stop (R93-FR2).
-    if (seen.source === 'subagent' || seen.source === 'interrupted') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
-    if (app === 'opencode' && (seen.plugin ?? 0) < OPENCODE_WAKE_PLUGIN) return 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
-    if (Date.parse(seen.observedAt) <= since) return 'no hook event since the owner left'
-    const mine = open.filter((row) => row.sessionId === seen.sessionId && row.state === 'open')
-    const turn = mine.find((row) => row.kind === 'notice' && row.requestKey === `${app}:turn`)
-    if (!turn) return 'no open finished-turn notice'
-    if (this.options.now().getTime() - Date.parse(turn.openedAt) < (this.options.quietMs ?? AWAY_WAKE_QUIET_MS)) return 'its turn finished less than 15 minutes ago'
-    if (mine.length !== 1) return 'another request of it is open'
-    const screen = await this.options.screen(seen.sessionId, seen.incarnationId)
+    if (Date.parse(seen.observedAt) <= since && isWakeApp(seen.agent) && finishedOwnTurn(seen) === null) return 'no hook event since the owner left'
+    return typeIfIdle(this.options, {
+      seen, generation, open, quietMs: this.options.quietMs ?? AWAY_WAKE_QUIET_MS, quietWords: 'its turn finished less than 15 minutes ago', line: AWAY_WAKE_LINE,
+      stillAllowed: () => {
+        const now = this.options.away()
+        return now.state !== 'away' || now.periodId !== period ? 'the owner is no longer away in this period' : null
+      }
+    })
+  }
+}
+
+/** Why this event is not the session's own finished turn; null when it is. */
+function finishedOwnTurn(seen: WakeObservation): string | null {
+  const app = seen.agent
+  if (!isWakeApp(app)) return `${app} sessions are not woken (no recorded idle prompt)`
+  if (!FINISHED[app].includes(seen.event)) return `its latest event is ${seen.event}, not a finished turn`
+  // A child's turn is not the session's, and a stop the owner made stays a stop (R93-FR2).
+  if (seen.source === 'subagent' || seen.source === 'interrupted') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
+  if (app === 'opencode' && (seen.plugin ?? 0) < OPENCODE_WAKE_PLUGIN) return 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
+  return null
+}
+
+/**
+ * Types one line into a session proven idle, or says why not: a finished turn of its own, quiet long enough, no request of it
+ * open, the same run and agent in front, its requests unchanged, and an empty prompt on its screen. `claim` is taken once
+ * the first checks hold, and given back through `unclaim` if the last ones do not. The last checks run together,
+ * synchronously, right before the one write.
+ */
+export async function typeIfIdle(proof: WakeProof, p: {
+  seen: WakeObservation
+  generation: number
+  open: readonly WakeAttention[]
+  quietMs: number
+  quietWords: string
+  line: string
+  /** Read in the last, synchronous checks. */
+  stillAllowed(): string | null
+  claim?(): Promise<string | null>
+  unclaim?(): Promise<void>
+}): Promise<string | null> {
+  const { seen, generation, open } = p
+  const notFinished = finishedOwnTurn(seen)
+  if (notFinished !== null) return notFinished
+  const app = seen.agent as WakeApp
+  const mine = open.filter((row) => row.sessionId === seen.sessionId && row.state === 'open')
+  const turn = mine.find((row) => row.kind === 'notice' && row.requestKey === `${app}:turn`)
+  if (!turn) return 'no open finished-turn notice'
+  if (proof.now().getTime() - Date.parse(turn.openedAt) < p.quietMs) return p.quietWords
+  if (mine.length !== 1) return 'another request of it is open'
+  const refused = p.stillAllowed()
+  if (refused !== null) return refused
+  const claimed = await p.claim?.()
+  if (claimed) return claimed
+  const last = async (): Promise<string | null> => {
+    const screen = await proof.screen(seen.sessionId, seen.incarnationId)
     // The last checks run together, synchronously, right before the one write.
-    const now = this.options.away()
-    if (now.state !== 'away' || now.periodId !== period) return 'the owner is no longer away in this period'
-    if (this.options.liveIncarnation(seen.sessionId) !== seen.incarnationId) return 'its run changed'
-    const latest = this.options.observation(seen.sessionId)
+    const allowed = p.stillAllowed()
+    if (allowed !== null) return allowed
+    if (proof.liveIncarnation(seen.sessionId) !== seen.incarnationId) return 'its run changed'
+    const latest = proof.observation(seen.sessionId)
     if (!latest || latest.agent !== seen.agent || latest.event !== seen.event || latest.source !== seen.source ||
       latest.plugin !== seen.plugin || latest.observedAt !== seen.observedAt) return 'its agent reported again'
-    const front = this.options.foreground(seen.sessionId)
+    const front = proof.foreground(seen.sessionId)
     if (front === null || seen.foreground === null || front !== seen.foreground) return 'its agent is not in the foreground'
-    const changes = this.options.generation(seen.sessionId)
+    const changes = proof.generation(seen.sessionId)
     if (changes.generation !== generation || changes.pending > 0) return 'its requests changed'
     if (screen === null) return 'no screen to read'
     if (!idlePrompt(app, screen.lines, screen.cursor)) return 'its prompt is not empty and idle'
-    this.options.write(seen.sessionId, AWAY_WAKE_LINE)
+    proof.write(seen.sessionId, p.line)
     return null
   }
+  const reason = await last().catch(() => 'unreadable state')
+  if (reason !== null) await p.unclaim?.()
+  return reason
 }
 
 /** The test-only interval and quiet time (90.6 Verification), honoured only in a test-mode host. */

@@ -139,7 +139,7 @@ function describePeers(result) {
 function describeTellStatus(result) {
   const rows = isObject(result) && Array.isArray(result.messages) ? result.messages.filter(isObject) : []
   if (rows.length === 0) return 'No messages sent by this session'
-  return rows.map((row) => `${row.messageId}\t${row.state}\t${row.receiverSessionId}\t${row.receiverNow ?? 'not heard from'}\t${row.sentAt}`).join('\n')
+  return rows.map((row) => `${row.messageId}\t${row.state}\t${row.receiverSessionId}\t${row.receiverNow ?? 'not heard from'}\t${row.sentAt}${row.wake ? `\t${row.wake}` : ''}`).join('\n')
 }
 
 /**

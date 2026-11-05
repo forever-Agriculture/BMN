@@ -147,6 +147,7 @@ import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
 import { AwayWake } from './away-wake'
+import { MessageWake } from './message-wake'
 import { GrantDepartureNotices } from './agent-grant-notices'
 import { QaSessions, shippedQaAccounts } from './qa-sessions'
 import { foregroundProcessFolder } from './foreground-process'
@@ -251,6 +252,7 @@ interface CompanionServiceOptions {
   policyReader?: PolicyReader
   /** Story 90.6: a test-mode host shortens the Away wake-up's 2 hours and 15 minutes. */
   awayWake?: { everyMs?: number; quietMs?: number }
+  messageWake?: { quietMs?: number }
 }
 
 function text(params: Record<string, unknown>, key: string, max = 4096): string {
@@ -392,6 +394,7 @@ export class CompanionService {
   private sweepTimer: NodeJS.Timeout | undefined
   /** Story 90.6: while he is Away, the fixed wake line every 2 hours into sessions idle at an empty prompt. */
   private readonly awayWake: AwayWake
+  private readonly messageWake: MessageWake
   /** Local ports each session's programs listen on, read from /proc on its own cadence (Story 41.1). */
   private readonly ports: PortWatch
   private readonly now: () => Date
@@ -557,12 +560,47 @@ export class CompanionService {
         await mirror.settled()
         return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
       },
-      write: (sessionId, text) => options.manager.writeToSession(sessionId, bracketedPaste(text, true)),
+      write: (sessionId, text) => {
+        this.messages.bmnTyped(sessionId)
+        options.manager.writeToSession(sessionId, bracketedPaste(text, true))
+      },
       log: (line) => {
         const entry = `${this.iso()} ${line}\n`
         process.stderr.write(`[BMN] ${entry}`)
         this.awayWakeWrites = this.awayWakeWrites
           .then(() => this.appendBoundedLog(join(options.roots.state, 'away-wake.log'), entry))
+          .catch(() => undefined)
+      }
+    })
+    this.messageWake = new MessageWake({
+      ...options.messageWake,
+      now: () => this.now(),
+      observation: (sessionId) => this.hookObservations.get(sessionId),
+      openAttention: async () => (await options.database.companion('listAttention')).filter((row) => row.state === 'open'),
+      liveIncarnation: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
+      generation: (sessionId) => this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 },
+      screen: async (sessionId, incarnationId) => {
+        const mirror = options.manager.runningScreenMirror(sessionId, incarnationId)
+        if (!mirror) return null
+        await mirror.settled()
+        return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+      },
+      write: (sessionId, text) => {
+        this.messages.bmnTyped(sessionId)
+        options.manager.writeToSession(sessionId, bracketedPaste(text, true))
+      },
+      receivers: () => options.database.companion('messageWakeReceivers', this.iso()),
+      candidates: (sessionId) => this.messages.wakeCandidates(sessionId),
+      providerRefusal: (sessionId, incarnationId, messageId) => this.messages.wakeRefusal(sessionId, incarnationId, messageId),
+      claim: (messageId) => options.database.companion('claimMessageWake', messageId, this.iso()),
+      release: (messageId, at) => options.database.companion('releaseMessageWake', messageId, at),
+      typedAt: (sessionId) => this.messages.typedAt(sessionId),
+      note: (messageId, reason) => this.messages.noteWake(messageId, reason),
+      log: (line) => {
+        const entry = `${this.iso()} ${line}\n`
+        this.awayWakeWrites = this.awayWakeWrites
+          .then(() => this.appendBoundedLog(join(options.roots.state, 'message-wake.log'), entry))
           .catch(() => undefined)
       }
     })
@@ -857,6 +895,7 @@ export class CompanionService {
         messageStatus: (sessionId, messageId) => this.controlCall(() => this.messages.status(sessionId, messageId)),
         cancelMessage: (sessionId, messageId) => this.controlCall(() => this.messages.cancel(sessionId, messageId)),
         takeMessage: (p) => this.controlCall(() => this.messages.take(p)),
+        messageDestination: (p) => { this.messages.rememberDestination(p.sessionId, p.incarnationId, p.destination); return { recorded: true } },
         reportMessage: (p) => this.controlCall(() => this.messages.report(p)),
         // Epic 69: the answer is one status word. Without the scanning thread nothing is recorded.
         markTurn: (p) => this.controlCall(async () => {
@@ -2542,6 +2581,8 @@ export class CompanionService {
           foreground: ended ? null : this.options.manager.foregroundProcessIdentity(p.sessionId)
         })
         if (p.agent === 'codex') void this.readCodexUsage(p.sessionId, p.incarnationId, p.event === 'Stop')
+        // His typed prompt or a run's start sets its wake depth to 0 (Story 110.3, D12); a compaction starts neither.
+        if (p.event === 'UserPromptSubmit' || (p.event === 'SessionStart' && p.source !== 'compact')) this.messages.turnStarted(p.sessionId, p.incarnationId)
         if (isCompactionEvent(p)) {
           const earlier = this.hookCompactions.get(p.sessionId)
           const count = earlier?.incarnationId === p.incarnationId ? earlier.count + 1 : 1
@@ -2822,7 +2863,8 @@ export class CompanionService {
     // Not awaited: a slow sensor or a slow send must not hold the sweep, and an overlapping check skips.
     void this.healthAlerts.sweep().catch(() => undefined)
     // Not awaited either: each tick is claimed before its first await, so an overlapping sweep types nothing twice.
-    void this.awayWake.sweep().catch(() => undefined)
+    // A message's wake after it, so the two never type into one session in one sweep.
+    void this.awayWake.sweep().catch(() => undefined).then(() => this.messageWake.sweep()).catch(() => undefined)
     // Epic 66.3: old messages go by the owner's confirmed Keep agent history days; once an hour is often enough.
     if (this.now().getTime() - this.lastMessageSweepAt >= MESSAGE_SWEEP_EVERY_MS) {
       this.lastMessageSweepAt = this.now().getTime()
@@ -3192,7 +3234,7 @@ export class CompanionService {
         handoffId: draftId, messageId: randomUUID(), senderSessionId: p.sourceSessionId,
         receiverSessionId: p.destinationSessionId, senderRoot: prepared.senderRoot, stamp: prepared.stamp, pointer,
         text: p.text, file, attachmentIds: artifacts.map((artifact) => artifact.artifactId),
-        receiverRefusal: prepared.receiverRefusal
+        receiverRefusal: prepared.receiverRefusal, wakeDepth: prepared.wakeDepth
       }, this.iso())
     } catch (error) {
       await removeStored()

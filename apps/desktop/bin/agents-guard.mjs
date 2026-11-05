@@ -295,8 +295,8 @@ function decision(input) {
  * (`SESSION_MESSAGE_HANDOVER` in shared/protocol/src/session-messages.ts); a test holds the two together.
  */
 export const MESSAGE_HANDOVER = {
-  claude: { event: 'PostToolUse', version: '2.1.296' },
-  codex: { event: 'PostToolUse', version: '0.162.1' }
+  claude: { event: 'PostToolUse', version: '2.1.318' },
+  codex: { event: 'PostToolUse', version: '0.166.0' }
 }
 
 /** How long everything a hook adds to an event for a message may take, resolving the destination included. */

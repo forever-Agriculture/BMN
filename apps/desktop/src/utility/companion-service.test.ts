@@ -656,8 +656,9 @@ describe('handoffs that deliver themselves (Story 75.5)', () => {
   it('removes the file it wrote when the store refuses the handoff under a message limit', async () => {
     await queueAgentHandoff(common())
     const after = await storedFiles()
-    clock = new Date(Date.parse(now) + 31_000).toISOString()
-    await expect(queueAgentHandoff(common())).rejects.toThrow('Your earlier message to that session is still waiting; one at a time')
+    // A second one inside the 30-second gap: a newer message goes through (110.2), a burst does not.
+    clock = new Date(Date.parse(now) + 1_000).toISOString()
+    await expect(queueAgentHandoff(common())).rejects.toThrow(/seconds/u)
     expect(await storedFiles()).toEqual(after)
     expect(database.prepare("SELECT COUNT(*) AS count FROM input_draft WHERE origin = 'handoff'").get()).toEqual({ count: 1 })
   })
@@ -3431,7 +3432,7 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     const rows = (await listing()).messages
     expect(rows.map((row) => [row.messageId, row.senderName, row.receiverName, row.state, row.text]))
       .toEqual([[sent.messageId, 'One', 'Two', 'waiting', 'first line\nsecond line']])
-    expect(await handlers().messageStatus('s1', null)).toEqual({ messages: [{ messageId: sent.messageId, receiverSessionId: 's2', state: 'waiting', sentAt: now }] })
+    expect(await handlers().messageStatus('s1', null)).toEqual({ messages: [expect.objectContaining({ messageId: sent.messageId, receiverSessionId: 's2', state: 'waiting', sentAt: now, wake: null })] })
     expect(await handlers().messageStatus('s2', null)).toEqual({ messages: [] })
   })
 

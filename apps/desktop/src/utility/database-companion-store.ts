@@ -990,10 +990,11 @@ export function queueAgentHandoff(database: DatabaseConnection, p: {
   file: ArtifactRecord
   attachmentIds: string[]
   receiverRefusal: string | null
+  wakeDepth?: number | null
 }, now: string): SendOutcome {
   const outcome = admitHandoff(database, {
     messageId: p.messageId, senderSessionId: p.senderSessionId, receiverSessionId: p.receiverSessionId,
-    senderRoot: p.senderRoot, stamp: p.stamp, text: p.pointer, receiverRefusal: p.receiverRefusal
+    senderRoot: p.senderRoot, stamp: p.stamp, text: p.pointer, receiverRefusal: p.receiverRefusal, wakeDepth: p.wakeDepth ?? null
   }, now)
   if (!outcome.accepted) return outcome
   for (const artifactId of p.attachmentIds) {

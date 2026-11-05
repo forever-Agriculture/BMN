@@ -1796,10 +1796,10 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     const withoutTeam = await runHooks(['check', 'codex'])
     const asJson = JSON.parse((await runHooks(['check', '--json'], { HOME: session.home })).stdout) as { agents: Array<{ agent: string; messages?: string }> }
 
-    expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Codex 0.162.1)')
-    expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.296)')
+    expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Codex 0.166.0)')
+    expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.318)')
     expect(withTeam.stdout).toContain('  messages: none; a message or handoff for OpenCode is refused to its sender')
-    expect(withoutTeam.stdout).toContain('  messages: not handed over until a team is approved (measured on Codex 0.162.1)')
+    expect(withoutTeam.stdout).toContain('  messages: not handed over until a team is approved (measured on Codex 0.166.0)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.messages).toMatch(/^messages: handed to a working agent/)
     expect(asJson.agents.find((row) => row.agent === 'claude')?.messages).toMatch(/^messages: handed to a working agent/)
   })
