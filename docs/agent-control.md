@@ -1052,7 +1052,7 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   folder, for a script their package.json has. A refusal costs little: the step goes in a pinned script or waits. A program found on the PATH is taken as installed, even in a folder he can write to. For each
   use `grant use` prints the exact text to run or send; anything else waits. `bmn policy --repo` lists both for
   every repository, because they belong to none, which is what Codex's Auto Review reads
-  ([app-measures.md](../plan/references/103/app-measures.md)).
+  (measured in the local plan, not in this repository).
   The limits: this is authority, not a lock. BMN answers no native prompt (D4), so an app that prompts on a granted
   item holds the step, and the morning report says so. The list helps a reviewer say yes, and a reviewer can say yes
   without it (2 of 5 measured), so the record that holds is `bmn grant use`. A runner's own file (`make`'s Makefile,

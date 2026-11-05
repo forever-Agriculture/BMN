@@ -29,6 +29,11 @@ each app these records also hold one real message from end to end: `bmn tell` ty
 session's shell, handed to the working agent by BMN's own hook (below). A message written by one
 app's agent and handed to the other's on an installed build is not in these records.
 
+Unlike `bmn tell`, `bmn handoff <destination-id> --text ...` or `--text-file -` can cross workspaces and
+carry up to ten published files. BMN stores it and hands the receiving Claude Code or Codex agent a
+bounded, stamped pointer through its `PostToolUse` hook; OpenCode, shells and stopped receivers are
+refused.
+
 ## Codex 0.162.1
 
 **The answer that hands a text over.** On `PostToolUse` the hook prints

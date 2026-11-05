@@ -301,5 +301,5 @@ string for the stroke icon set in `icons.tsx` (stroke 1.4, round caps, no fill):
 - Linux x64 only; the package target is an unpacked folder, not a `.deb` or AppImage.
 - Output written after the last saved snapshot can be lost if the app or window crashes; the app
   says so when it recovers.
-- Start again runs a fresh process; use Resume to reopen a Claude Code or Codex conversation.
+- Start again runs a fresh process; use Resume to reopen a Claude Code, Codex or OpenCode conversation.
 - A model placed by hand in a custom Model folder is accepted by size without a checksum check.

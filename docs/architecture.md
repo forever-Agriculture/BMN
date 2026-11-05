@@ -31,6 +31,9 @@ flowchart LR
 | Database worker | The single SQLite connection; every write is one transaction | `apps/desktop/src/utility/database-worker.ts` |
 | Quick look search worker | A contents search's reads, masking and matching, apart from the thread that keeps terminals flowing; a stop is read inside each file | `apps/desktop/src/utility/quick-look-search-worker.ts` |
 
+A fresh profile with no rules master or approved team enters Setup, which checks Claude Code, Codex
+and OpenCode and guides the owner through visible install and sign-in sessions.
+
 Messages between processes are defined once in `shared/protocol` (`@bmn/protocol`) and
 validated on arrival.
 
@@ -235,7 +238,11 @@ skips `.git` and `node_modules` entries and descendant `dist`, `build`, `out`, `
 and `.cache` directories. A context rooted there and regular files with the six generated names
 remain searchable. It does not follow symbolic links and cancels superseded requests.
 The renderer shows the searched root and routes a chosen file through the existing file-reference
-preview. No index, content search or watcher is maintained.
+preview. The palette's name search keeps no index or watcher. Quick look's separate Contents mode
+searches literal text of 2 to 256 characters, masked, over tracked and unignored Git files or a
+bounded walk elsewhere, and stops at 20,000 files, 2,000 matching lines or 1 MiB per file. It renders
+Markdown files up to 512 KiB as a page, with Rendered and Source views, and edits supported config and
+`.env` files; `.env` values stay masked and drafts are written only on Save.
 
 **Archive shares host workspace admission.** Starts and moves claim admission before asynchronous
 checks; an archive reserves its mutation and refuses host-owned live, starting or exit-unconfirmed

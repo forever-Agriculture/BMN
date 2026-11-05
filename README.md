@@ -22,7 +22,7 @@ acceptance. BMN shows those runs under **dev-auto runs…** ([dev-auto runs](doc
 works without it.
 
 New here? The [feature guide](docs/features.md) walks through the main workflows — launching
-and resuming sessions, answering agents, files, voice, Telegram, backups — and says where each
+and resuming sessions, answering agents, the team, files, voice, Telegram, backups — and says where each
 feature stops. This page sums up the product and how to install it.
 
 ## What it does
@@ -39,7 +39,8 @@ feature stops. This page sums up the product and how to install it.
   [xterm.js](https://xtermjs.org/) view. There is no tmux layer and no replayed output, so key
   encodings, colors, bell and OSC notifications reach the program unchanged. Your CLIs keep their
   own configuration, authentication, hooks and permissions. Live panes support Sixel images and
-  every session advertises them by default, so Codex `/pets` works however you start Codex.
+  every session advertises them by default, so Codex `/pets` works in a direct BMN terminal; Codex
+  inside tmux or Zellij may still reject it.
   ([The terminal and panes](docs/features.md#the-terminal-and-panes))
 - **Process control and resume.** Stop a process and keep its last screen as saved output. Start it
   again, or resume the stored Claude Code / Codex / OpenCode conversation through the CLI's own
@@ -48,12 +49,30 @@ feature stops. This page sums up the product and how to install it.
   [What survives](docs/architecture.md#what-survives) says what each ending keeps.
   ([Process lifecycle and resume](docs/features.md#process-lifecycle-and-resume))
 - **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
-  publish a file, report progress, ask you a question, hand a longer package to another session's
-  agent (BMN delivers it itself), leave a peer a short message, or send text to its own session. Each session gets a token scoped to that session. `bmn hooks check` says
+  publish a file, report progress, ask you a question, hand a longer package to a working Claude Code
+  or Codex session in any unarchived workspace (BMN delivers it itself; OpenCode, shell, stopped and
+  archived destinations are refused), leave a peer a short message, or send text to its own session. Each session gets a token scoped to that session. `bmn hooks check` says
   which of BMN's hook entries each harness's own settings file carries, and
   `bmn hooks install <agent>` adds the missing ones without touching anything else.
   ([Agent attention](docs/features.md#agent-attention-needs-you-progress-and-handoffs),
   [docs/agent-control.md](docs/agent-control.md))
+- **A team you approve.** One file you own names your agents, their apps, models, roles and whether
+  each provider may see private work; nothing takes effect until you approve it. `bmn team ask` puts
+  one question to the teammate of a role, in that app's own read-only mode, and the answer is advice.
+  ([The team and one rules master](docs/features.md#the-team-and-one-rules-master))
+- **One set of rules, skills and tools.** BMN keeps one rules text, one skills folder and one list of
+  MCP tools, and writes them into each agent app's own settings, showing or undoing each change.
+- **Limits you set.** **Pushes and merges** says what your sessions may push or merge without asking,
+  per repository owner and repository. BMN installs deny rules for commands you must never run by
+  accident (Docker and Podman prune, `prime-select nvidia`), and Claude Code and Codex hooks hold a
+  wider set of critical commands for your review. This guard is not a sandbox.
+- **Planning.** A project's plan lives in `plan/`, with one board you read and edit and one command
+  (`bmn plan`) that reads, checks and changes it. ([Planning](docs/planning.md))
+- **Manual QA.** A `qa` teammate tests a running web app against a curated brief and retains a checked
+  report with browser evidence and a GO, GO WITH ISSUES or NO-GO verdict.
+- **Away.** Say you are away and BMN shows a read-only **While you were away** summary when you are
+  back. In between it may type one fixed reminder every two hours into an idle agent session; it never
+  answers a request or resumes a session you stopped.
 - **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. Session and workspace dots, plus
   `Ctrl+Shift+U`, take you to the right one. Going to a session clears its notices; blocking
   requests stay until answered or explicitly dismissed. Its status button opens the request card. OpenCode subagent requests appear here too. Repeated
@@ -64,12 +83,12 @@ feature stops. This page sums up the product and how to install it.
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
   a hash. The Files panel previews them and offers Open, Save As, Show in Folder and Deliver to
   session. ([Files and file references](docs/features.md#files-and-file-references))
-- **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
-  **Open file reference…** in the palette, to see a read-only snapshot of that file at the line,
-  with Copy reference and Show in Folder. Relative paths resolve from the session's launch
-  directory, which the preview names; you can pick another folder for one opening. **Send to
-  session** lets you choose a destination, review the exact absolute reference, and append it to
-  that session's input without pressing Enter. The preview does not edit, run or store the file.
+- **Quick look.** `Ctrl+Shift+E` opens the project over the window: a file tree, go to a file,
+  a search of the contents and Markdown rendered as a page. `.env` and supported config files can be
+  edited and saved, with `.env` values masked. `Ctrl+click` a path an agent printed, such as
+  `src/parser.ts:42:7`, to open it at that line; relative paths resolve from the session's launch
+  directory. **Send to session…** appends a reference to a session's input without pressing Enter.
+  ([Files and file references](docs/features.md#files-and-file-references))
 - **Local voice dictation.** Hold Space in any terminal to talk; release to paste the text into the
   session, without pressing Enter. Transcription runs on your CPU with
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No audio leaves the computer. Approve
@@ -109,7 +128,6 @@ feature stops. This page sums up the product and how to install it.
 | `Ctrl+Shift+\` | Send the next key straight to the terminal |
 | Hold `Space`, or `Ctrl+Shift+Space` | Dictate |
 | `Ctrl +` / `Ctrl −` / `Ctrl 0` | Font size |
-| `Ctrl+click` a printed file path | Open a read-only preview of the file |
 
 Selecting text with the mouse copies it. Right-click goes to programs that read the mouse, such as
 vim, unless you hold Shift. While such a program reads the mouse, `Ctrl+click` belongs to it too;
@@ -121,6 +139,9 @@ first.
 - [Features](docs/features.md): a user guide to the main workflows and their limits
 - [Architecture](docs/architecture.md): processes, data flow and the rules they follow
 - [Agent control](docs/agent-control.md): the `bmn` command and its local API
+- [Planning](docs/planning.md): the plan format, the board and `bmn plan`
+- [dev-auto runs](docs/dev-auto.md): what BMN shows of a dev-auto run
+- [Session messages](docs/session-messages.md): how a message reaches another session's agent
 - [Voice dictation](docs/voice.md): engine, models, speed and privacy
 - [Telegram](docs/telegram.md): connecting your own bot
 - [Telegram investigation notes](docs/telegram-investigations.md): open questions, regression checks and test pitfalls

@@ -16,8 +16,6 @@ it like any desktop application.
 
 ## First run
 
-Approved design, Story 79.2, 2026-10-20. Implementation and runtime proof follow in 79.3–79.6.
-
 A fresh profile with no setup record, rules master or approved team opens one **Setup** screen in a
 Setup workspace. An existing master or approved team records setup as already complete, so the
 owner's existing profile does not open it automatically. **Skip for now** and **Finish** persist
@@ -152,7 +150,7 @@ permissions.
 
 Live panes display Sixel images. Every session has **Terminal images (Sixel)** on by default,
 whether it runs a shell, Codex, Claude Code, OpenCode or another agent, so Codex can use `/pets`
-however you start it. **Off** in the New session form opts a session out and keeps
+in a direct BMN terminal. **Off** in the New session form opts a session out and keeps
 `TERM=xterm-256color`. Graphics sessions use BMN's `xterm-sixel-256color` terminfo entry. On SSH
 hosts, under `sudo`, or inside containers without that entry, run the remote or privileged command
 with `TERM=xterm-256color`, or set that session to Off. A Codex process inside tmux or Zellij follows
@@ -315,8 +313,9 @@ again. Nothing needs pressing: ten minutes later the next turn there is scanned 
 reads the work tree ends the pause, and each try that fails waits twice as long, up to two hours.
 How turns are recorded, the limits and each wording: [turn-changes.md](turn-changes.md).
 
-**Handoffs.** An agent can hand a longer text, with up to ten of its published files, to the agent
-of any other session, in this workspace or another (`bmn handoff`). BMN delivers it by itself, as
+**Handoffs.** An agent can hand a longer text, with up to ten of its published files, to the working
+Claude Code or Codex agent of another session, in this workspace or another (`bmn handoff`); OpenCode,
+shell, stopped and archived destinations are refused. BMN delivers it by itself, as
 it delivers a message: it stores the whole text and the list of files in one file, and the
 receiving agent's own hook hands that agent a short pointer to it after its next tool call. You do
 nothing; nothing is typed into a terminal. Before anything is handed over, BMN checks the folder the
@@ -399,6 +398,15 @@ main session's prompt. For Claude Code and Codex, eight identical tool calls (fa
 last 20 since your last message open one notice; the hook event list shows the repeat count. BMN
 only tells you and leaves the agent running.
 
+BMN installs deny rules for Docker and Podman prune commands and `prime-select nvidia`, including their
+`sudo` forms, in Claude Code, Codex and OpenCode. Claude Code and Codex hooks also hold a broader set of
+critical shell commands for your review. This guard is not a general sandbox.
+
+**Away.** Set Away from the header checkbox, `bmn away` and `bmn back`, or Telegram's `/away` and `/back`.
+When you are back, BMN shows a read-only **While you were away** summary, which you can reopen from the
+palette. While you are Away, BMN may type one fixed reminder every two hours into an eligible idle agent
+session ([telegram.md](telegram.md)). It never resumes a stopped session or answers a request.
+
 The full command reference, the hook contract and the security model are in
 [agent-control.md](agent-control.md). Two limits matter here: everything an agent reports is its
 claim, not a verified fact, and the control API keeps sessions apart but is not a sandbox against a
@@ -420,6 +428,14 @@ that may not see private work, BMN tells the app to stop the prompt before it le
 session shows a card with **Allow here** (that provider, that workspace only) and **Keep
 blocked**. Claude Code and Codex take that answer through their prompt hook; that your installed
 versions obey has not been tested live yet, and the card says so. OpenCode is not covered.
+
+Codex teammates use a read-only permission profile that denies the listed credential stores to Codex,
+its shell and its subagents; other files your user can read remain in scope. `bmn team ask --origin
+http://127.0.0.1:PORT --disposable` gives a Claude Code or Codex teammate a Playwright browser for a
+loopback app. It only looks by default; `--interact` adds clicks, typing and page evaluation. The origin
+list does not stop redirects or requests the page makes itself, and interactive scripts run as your user
+with file, network and socket access, so use it only on a disposable app with synthetic data. OpenCode
+asks get no browser.
 
 Integrations → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
 where the app does not follow links, which BMN installs by itself after an approval, after its own
@@ -452,9 +468,12 @@ The `qa` teammate uses BMN's shared `manual-qa` skill to test a running goal, ac
 exploration, UI quality and repaired flows. Quick QA asks take a curated brief and a disposable
 loopback web target, stay signed out, and retain a checked report with native browser evidence.
 The report's GO, GO WITH ISSUES or NO-GO is shown only after validation. Unsafe browser callbacks
-are unavailable to QA. Bench QA is refused until a compliant boundary is established. A signed-out
-QA pane has passed an isolated native desktop rehearsal; account access remains disabled pending
-native tool confinement and the production account path.
+are unavailable to QA. Bench QA is refused until a compliant boundary is established. Qualified QA
+runs can use saved accounts named in the brief: a look-only account makes audited reads under a
+registered site contract, and interaction needs a marked test account or a specific approved grant.
+Eligible signed-out passes first explore as a user and compare what screens imply with what other
+screens do; grounded opinions go in `JUDGMENT:` notes and cannot change the verdict. Account runs and
+narrow retests skip this pass.
 
 Team → **Models** has one of the agents your team names a researcher look up your models'
 published prices and context windows, in an empty folder, sent nothing but the model names and the
@@ -492,8 +511,10 @@ critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
 
 **Before you go** (Epic 84): when you say you are leaving, an agent forwards it with `bmn away --leaving` and the
 Away check reads **leaving**. Each run with authorised work left for the night may then ask you once, on one card,
-for only what that work needs: extra repair rounds at a review boundary, or a named merge, push to the default
-branch or pull request elsewhere, each with its reason. A gold **N cards** beside the Away check opens them, the
+for only what that work needs: extra repair rounds at a review boundary, a named merge, push to the default
+branch or pull request elsewhere, one simple command exactly as it will run in a named folder, or one exact
+message through a named tool to a named recipient, each with its reason. The agent records a matching use with
+`bmn grant use` before acting. A gold **N cards** beside the Away check opens them, the
 cards' only place; you grant all, some or none, and a run that needs nothing says so. Your answer holds until you
 are back; an unanswered card grants nothing, a run that asks again cannot change what you granted until you answer
 again, and **Not leaving** withdraws the open cards. The same cards reach Telegram once you are away
@@ -727,7 +748,8 @@ Pages are cards with buttons: tap an option to answer an agent's question (Claud
 mode, OpenCode; several questions one at a time, with **‹ Back**; multi-select as toggles; **Other…** to
 reply in your own words), or **Allow once** / **Deny** a Claude `Bash` or
 OpenCode permission once you turn on **Answer permission prompts from Telegram** (never "always
-allow"). The card then says what happened: ✓ only when the agent confirmed the answer, ⚠ when it was
+allow"). Claude Code `Write` and `Edit` requests can be answered too while their hook is waiting; the card
+shows the full path and change. The card then says what happened: ✓ only when the agent confirmed the answer, ⚠ when it was
 sent but not confirmed, or why nothing was sent. Codex permissions, subagent and sandbox prompts still
 say to answer at the laptop. Telegram cannot manage sessions.
 

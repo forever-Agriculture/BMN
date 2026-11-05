@@ -20,7 +20,7 @@ The lead verifies machine-only boundaries such as process cleanup, backup conten
 | S04.2 | Process lifecycle and resume | Start a stopped session again | fresh incarnation starts exactly once |
 | S04.3 | Process lifecycle and resume | Inspect resume and close choices | bash does not falsely offer agent resume; close choices are explicit |
 | S05.1 | Agent attention, progress and handoffs | Open Needs you and progress views | empty or synthetic records labelled truthfully |
-| S05.2 | Agent attention, progress and handoffs | Open handoff/draft destination picker | destination is explicit; cancel types nothing |
+| S05.2 | Agent attention, progress and handoffs | Send a synthetic `bmn handoff <destination-id> --text ... --key ...` to a working Claude Code or Codex session | delivered through the agent's hook, shown in Messages as a handoff; no attention card or editor opens |
 | S05.3 | Agent attention, progress and handoffs | Exercise a synthetic agent question and its answer; require an authorized agent fixture | the exact synthetic question is answered once; missing real-agent coverage stays explicit |
 | S06.1 | Team and rules | Open Team and roles | unapproved synthetic profile grants nothing |
 | S06.2 | Team and rules | Open Rules and inspect missing master | missing/unapproved state is honest; no real file touched |

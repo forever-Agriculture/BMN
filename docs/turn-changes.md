@@ -5,8 +5,9 @@ BMN can record what differs in a Git work tree between the moment the owner send
 the moment the agent's turn ends. This page holds the measurements that feature is built on
 (Story 69.1): how BMN copies a work tree without touching it or running anything it names, what
 that costs, and, per app and version, whether the app waits for its prompt hook before it acts
-and which events mark the ends of a turn. BMN records turns only for an app and version that
-holds PASS in the table below. [How a turn is recorded](#how-a-turn-is-recorded) says what the
+and which events mark the ends of a turn. BMN records Claude Code and Codex turns on any installed
+version; only the versions in the table below have measured prompt ordering, and any other version is
+recorded with unverified ordering and incomplete totals. [How a turn is recorded](#how-a-turn-is-recorded) says what the
 app does with all of this, and [What the owner reads](#what-the-owner-reads) what he sees of it.
 
 Measured 2026-10-13 on Linux (Ryzen 5 4600H, 12 threads, ext4, Git 2.53.0, Node 24.14.0) with
