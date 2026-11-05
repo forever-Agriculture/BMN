@@ -399,7 +399,7 @@ describe('D15 cutover', () => {
     if (!keepBmad) git(publish, 'rm', '-rqf', '_bmad-output')
     file(publish, 'plan/VISION.md', visionText('edited on the branch'))
     git(publish, 'add', '-A'); git(publish, 'commit', '-qm', 'move'); const moveCommit = git(publish, 'rev-parse', 'HEAD')
-    git(publish, 'switch', '-q', 'main'); file(publish, 'upstream-product.txt', 'incoming product\n'); if (productBoth) file(publish, 'both.sh', bothLines.replace('line 9\n', 'line 9 upstream\n')); if (platform) file(publish, 'docs/platform/README.md', 'new index\n'); git(publish, 'add', '.'); git(publish, 'commit', '-qm', 'product on master')
+    git(publish, 'switch', '-q', 'main'); file(publish, 'upstream-product.txt', 'incoming product\n'); if (productBoth) file(publish, 'both.sh', bothLines.replace('line 9\n', 'line 9 upstream\n')); if (platform) { file(publish, 'docs/platform/README.md', 'new index\n'); file(publish, 'docs/platform/epic-9-new.md', '# Epic 9: added on master\n') } git(publish, 'add', '.'); git(publish, 'commit', '-qm', 'product on master')
     afterCut(publish, board)
     git(publish, 'merge', '-q', '--no-ff', '-m', 'Merge move', 'move'); git(publish, 'push', '-q', 'origin', 'main'); git(f.repo, 'fetch', '-q', 'origin')
     if (moveCheckout) { git(f.repo, 'merge', '-q', '--ff-only', 'origin/main') }
@@ -556,6 +556,7 @@ describe('D15 cutover', () => {
     const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
     expect(result.outcome).toBe('moved')
     expect(readFileSync(join(f.repo, 'docs/platform/README.md'), 'utf8')).toBe('new index\n')
+    expect(readFileSync(join(f.repo, 'docs/platform/epic-9-new.md'), 'utf8')).toBe('# Epic 9: added on master\n')
     expect(statSync(join(f.repo, 'docs/platform')).mode & 0o200).toBe(0o200)
   }, 30_000)
   it('restores the lead hint when the merged row comes from a side whose epic text had none', () => {

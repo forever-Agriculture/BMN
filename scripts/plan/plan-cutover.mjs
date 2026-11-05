@@ -600,7 +600,8 @@ export function productInstall(repo, from, to, planningPaths, keepBmad) {
 /** A fenced planning file keeps its inode, so the watchdog can still restore its mode. */
 function writeProduct(repo, write) {
   const full = join(repo, write.path)
-  if (!write.planning) {
+  // A planning file master added after this checkout's HEAD has no fenced inode to keep; it is written like a product file.
+  if (!write.planning || (write.image && !lstatSync(full, { throwIfNoEntry: false }))) {
     // A product file can share a folder with fenced planning files; the fence's mode comes back at once.
     let folder = dirname(full)
     while (!existsSync(folder)) folder = dirname(folder)
