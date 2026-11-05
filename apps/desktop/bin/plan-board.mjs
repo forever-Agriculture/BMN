@@ -5,6 +5,7 @@ import { createReadStream, existsSync, readFileSync, readdirSync, realpathSync, 
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { insideDirectory } from './shared-helpers.mjs'
+import { SIZE_LIMIT, allowanceFileName, allowanceFindings, ownerApprovedSize } from './plan-allowances.mjs'
 
 /**
  * A plan is found the same way by every reader (R77-FR3, FR6): the enclosing product repository first, also
@@ -294,7 +295,7 @@ export async function readBoard(path, { epics = [] } = {}) {
       else if (top[1] === 'schema_version') result.schemaVersion = value
       else if (top[1] === 'moved_from') movedFrom = value
       else if (top[1] === 'legacy_rows') legacyPath = value
-      else if (/^rules_from_(?:run_needs|prepared|prepared_items|challenges)$/u.test(top[1])) {
+      else if (/^rules_from_(?:run_needs|prepared|prepared_items|challenges|allowances|size)$/u.test(top[1])) {
         if (!/^[1-9]\d*$/u.test(value)) result.malformed.push({ line: lineNumber, text: `${top[1]} needs a positive epic number`, where: 'header' })
         else result.rules[top[1].slice('rules_from_'.length)] = Number(value)
       }
@@ -401,6 +402,7 @@ export function readEpicFile(path) {
   const sections = [...text.matchAll(/^## (.+?)\s*$/gmu)].map((match) => match[1])
   const challengeText = /^## Challenges\s*$(.*?)(?=^## |(?![\s\S]))/msu.exec(text)?.[1] ?? ''
   const challenges = [...challengeText.matchAll(/^\s*[-*]?\s*\*\*(.+?):\*\*\s*\S/gmu)].map((match) => match[1])
+  const decisions = /^## Decisions\s*$(.*?)(?=^## |(?![\s\S]))/msu.exec(text)?.[1] ?? ''
   const stories = []
   let current = null
   let inCriteria = false
@@ -428,7 +430,7 @@ export function readEpicFile(path) {
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
     if (criterion) current.criteria.push({ id: Number(criterion[1]), line: index + 1 })
   })
-  return { path, bytes: Buffer.byteLength(text), challenges, legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines) }
+  return { path, bytes: Buffer.byteLength(text), challenges, decisions, legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines) }
 }
 
 function epicFiles(planRoot) {
@@ -544,8 +546,14 @@ export async function checkPlan(resolved) {
       if (story.criteria.length === 0) add(`${at}:${story.line}`, `Story ${story.id} has no numbered acceptance criteria`)
       if (!story.verification) add(`${at}:${story.line}`, `Story ${story.id} has no **Verification:**`)
     }
-    if (!epic.legacy) runNeedsProblems(epic, at, add, board.rules)
+    if (!epic.legacy) runNeedsProblems(epic, at, add, board.rules, allowanceFileName(resolved.planRoot, epic.epic) !== null)
+    // Over the size limit before it reaches him (110.8, D11): a plan opts in with rules_from_size, and his quoted word lifts it.
+    const criteria = epic.stories.reduce((sum, story) => sum + story.criteria.length, 0)
+    if (board.rules.size !== undefined && epic.epic >= board.rules.size && row && !FINISHED.includes(row.status) && (epic.stories.length > SIZE_LIMIT.stories || criteria > SIZE_LIMIT.criteria) && !ownerApprovedSize(epic.decisions)) {
+      add(at, `${epic.stories.length} stories and ${criteria} criteria, over ${SIZE_LIMIT.stories} stories or ${SIZE_LIMIT.criteria} criteria: split it before he sees it, or quote his word for this size in Decisions`)
+    }
   }
+  for (const finding of await allowanceFindings(resolved, board, new Set(epicsSeen.keys()))) add(finding.where, finding.reason)
   for (const row of epicRows.values()) if (!epicsSeen.has(row.epic)) add(`${boardName}:${row.line}`, `epic-${row.epic} has no epic file under plan/epics/`)
   for (const row of storyRows.values()) {
     if (epicsSeen.has(row.epic)) { if (!headingStories.has(row.story)) add(`${boardName}:${row.line}`, `${row.key} has no "### Story ${row.story}" heading`) }
@@ -555,7 +563,7 @@ export async function checkPlan(resolved) {
 }
 
 /** The owner's steps sit only before the go or at the end (Epic 90, D1): never between unattended stories. */
-function runNeedsProblems(epic, at, add, rules = {}) {
+function runNeedsProblems(epic, at, add, rules = {}, hasAllowances = false) {
   const runFrom = rules.run_needs ?? RUN_NEEDS_FROM
   const preparedFrom = rules.prepared ?? PREPARED_FROM
   const itemsFrom = rules.prepared_items ?? PREPARED_ITEMS_FROM
@@ -566,7 +574,8 @@ function runNeedsProblems(epic, at, add, rules = {}) {
     else if (missing.length > 0) add(at, `## Challenges does not answer: ${missing.join(', ')}`)
   }
   if (epic.epic >= runFrom && !epic.sections.includes('Run needs')) add(at, `missing section ## Run needs (epics from ${runFrom} on)`)
-  if (epic.epic >= Math.min(preparedFrom, itemsFrom)) {
+  // With an allowances file its prepared list is the one checked (110.4 AC2): Run needs may be one line pointing to it.
+  if (!hasAllowances && epic.epic >= Math.min(preparedFrom, itemsFrom)) {
     if (epic.prepared === null) add(at, 'Run needs has no **Prepared:** line (what the run will need, each with its check; or none, because <reason>)')
     else if (PREPARED_EMPTY.test(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** says "${epic.prepared.text}": name each need with its check, or say none, because <reason>`)
     else if (epic.epic >= itemsFrom) for (const problem of preparedProblems(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** ${problem}`)

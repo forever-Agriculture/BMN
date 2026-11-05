@@ -4,6 +4,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { chmodSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
+import { AllowRefusal, DECISION_REFERENCE, SOURCE_QUOTE, SOURCE_TIME, allowanceFileName, allowancePathAt, allowanceText, allowanceTextAt, parseAllowances, readAllowances, recordAllow } from './plan-allowances.mjs'
 import {
   BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, epicLeadHint, readBoard, resolvePlan, rowToken, withLeadHint
 } from './plan-board.mjs'
@@ -12,6 +13,8 @@ const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan check [--json] [--project P]
        bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P] [--json]
        bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]
+       bmn plan allowances <epic> [--at COMMIT] [--project P] [--json]
+       bmn plan allow <epic> CHANGE... --reason R --expect TOKEN [--source TEXT] [--project P] [--json]
        bmn plan publish [--project P] [--json]
        bmn plan copy --row KEY --expect TOKEN [--project P] [--json]
        bmn plan sync [--project P] [--json]
@@ -166,7 +169,8 @@ async function status(argv) {
   if (json) {
     const approvals = plan.format === FORMAT && epics.length > 0 ? { approval_texts: epics.flatMap((epic) => {
       const name = epicFileName(plan.planRoot, epic)
-      return name === null ? [] : [{ epic, file: `epics/${name}`, sha256: approvalText(readFileSync(join(plan.planRoot, 'epics', name), 'utf8')) }]
+      const allowances = allowanceFileName(plan.planRoot, epic)
+      return name === null ? [] : [{ epic, file: `epics/${name}`, ...(allowances ? { allowances_file: `allowances/${allowances}` } : {}), sha256: approvalText(readFileSync(join(plan.planRoot, 'epics', name), 'utf8'), allowanceText(plan.planRoot, epic)) }]
     }) } : {}
     out(JSON.stringify({
       ok: true, ...resolvedFields(plan), schema_version: board.schemaVersion, queue: board.queue,
@@ -496,21 +500,20 @@ function refuse(json, code, message, extra = {}) {
 }
 
 const GO_DATE = /\bgo (\d{4}-\d{2}-\d{2})\b/u
-const SOURCE_TIME = /\b(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/u
-const SOURCE_QUOTE = /["'“‘«][^"'”’»]+["'”’»]/u
-const DECISION_REFERENCE = /\bbmn: ?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/\S+/u
 const FINISHED_STATUSES = ['done', 'dropped']
 
 /**
  * The text a go approves: the epic's Run needs and Decisions, each section's body (to the next heading of
  * levels 1-4) without surrounding blank space, hashed with SHA-256. run_needs.py reads the same sections the
- * same way, so one text gives one identity in both.
+ * same way, so one text gives one identity in both. An epic with an allowances file adds that file's text
+ * (Story 110.4); with none the hash is what it always was, so earlier gos read back unchanged.
  */
-export function approvalText(text) {
+export function approvalText(text, allowances = null) {
   const normal = (text ?? '').replace(/\r\n?/gu, '\n')
   const body = (name) => new RegExp(`(?:^|(?<=\\n))#{2,4} ${name}[ \\t]*\\n([\\s\\S]*?)(?=(?:^|(?<=\\n))#{1,4} |$)`, 'u')
     .exec(normal)?.[1].replace(/^[ \t\n]+|[ \t\n]+$/gu, '') ?? ''
-  return createHash('sha256').update(`Run needs\n${body('Run needs')}\nDecisions\n${body('Decisions')}\n`).digest('hex')
+  const file = allowances === null ? '' : `Allowances\n${allowances.replace(/\r\n?/gu, '\n')}\n`
+  return createHash('sha256').update(`Run needs\n${body('Run needs')}\nDecisions\n${body('Decisions')}\n${file}`).digest('hex')
 }
 
 function epicFileName(planRoot, epic) {
@@ -676,7 +679,7 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
     try { approvedFrom = gitSync(repo, ['rev-parse', '--verify', '--quiet', `${approved}^{commit}`]).trim() } catch { throw new GoRefusal('NO_APPROVED_TEXT', `--approved ${approved} is no commit of the plan's history at ${repo}`) }
     const then = showAt(repo, approvedFrom, epicRel)
     if (then === null) throw new GoRefusal('NO_APPROVED_TEXT', `commit ${approved} holds no ${epicRel}, so it names no approved text for epic ${epic}`)
-    approvedSha = approvalText(then)
+    approvedSha = approvalText(then, allowanceTextAt(plan, approvedFrom, epic))
   } else throw new GoRefusal('NO_APPROVED_TEXT', 'no approved text named: --approved gives what he approved, sha256:HEX from bmn plan status --epic N --json or the plan commit he approved')
 
   const release = locked ? () => {} : await lockBoard(plan.boardPath)
@@ -706,13 +709,19 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
     // What he approved must be what the go commit holds: the committed text, or the working copy committed with it.
     const workingEpic = readFileSync(join(plan.planRoot, 'epics', name))
     const committedEpic = readHistory(() => showAt(repo, head, epicRel))
-    const committedSha = committedEpic === null ? null : approvalText(committedEpic)
-    const workingSha = approvalText(workingEpic.toString('utf8'))
+    const workingAllowances = allowanceText(plan.planRoot, epic)
+    const committedSha = committedEpic === null ? null : approvalText(committedEpic, readHistory(() => allowanceTextAt(plan, head, epic)))
+    const workingSha = approvalText(workingEpic.toString('utf8'), workingAllowances)
     const epicIncluded = committedSha !== approvedSha
     if (epicIncluded && workingSha !== approvedSha) {
       throw new GoRefusal('CHANGED_TERMS', `epic ${epic}'s Run needs and Decisions are not the approved text sha256:${approvedSha.slice(0, 12)}… (working copy ${workingSha.slice(0, 12)}…, committed ${committedSha === null ? 'none' : `${committedSha.slice(0, 12)}…`}); ask for the go on the current text`)
     }
 
+    // The file he approved is one the run can read (110.4): a go never records a file its reader refuses.
+    if (workingAllowances !== null && epicIncluded) {
+      const problem = parseAllowances(workingAllowances, epic).problems[0]
+      if (problem) throw new GoRefusal('BAD_ALLOWANCES', `plan/allowances/${allowanceFileName(plan.planRoot, epic)}:${problem.line}: ${problem.reason}`)
+    }
     const message = [
       `plan: go for Epic ${epic} (go ${goDate})`, '',
       `Recorded by bmn plan go: the owner's go on ${key} and the Run needs and Decisions it approved.`, '',
@@ -721,6 +730,9 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
     ].join('\n')
     const parentBoard = readHistory(() => treeEntry(repo, head, boardRel))
     const parentEpic = readHistory(() => treeEntry(repo, head, epicRel))
+    const heldAllowances = readHistory(() => allowancePathAt(plan, head, epic))
+    const allowancesRel = workingAllowances === null ? heldAllowances : `${epicRel.slice(0, epicRel.length - `epics/${name}`.length)}allowances/${allowanceFileName(plan.planRoot, epic)}`
+    const parentAllowances = heldAllowances === null ? null : readHistory(() => treeEntry(repo, head, heldAllowances))
     const temporaryIndex = join(readHistory(() => gitSync(repo, ['rev-parse', '--absolute-git-dir']).trim()), `bmn-plan-go-${process.pid}-${randomBytes(3).toString('hex')}.index`)
     let created
     try {
@@ -731,6 +743,11 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
       if (epicIncluded) {
         const epicBlob = gitSync(repo, ['hash-object', '-w', '--stdin'], { input: workingEpic }).trim()
         gitSync(repo, ['update-index', '--add', '--cacheinfo', `${parentEpic?.mode ?? '100644'},${epicBlob},${epicRel}`], own)
+        // The go's commit holds the file exactly when the file he approved exists: one removed since goes with it (D13).
+        if (workingAllowances !== null) {
+          const allowancesBlob = gitSync(repo, ['hash-object', '-w', '--stdin'], { input: workingAllowances }).trim()
+          gitSync(repo, ['update-index', '--add', '--cacheinfo', `${parentAllowances?.mode ?? '100644'},${allowancesBlob},${allowancesRel}`], own)
+        } else if (heldAllowances !== null) gitSync(repo, ['update-index', '--force-remove', '--', heldAllowances], own)
       }
       const tree = gitSync(repo, ['write-tree'], own).trim()
       created = gitSync(repo, ['commit-tree', tree, '-p', head, '-F', '-'], { input: message }).trim()
@@ -748,6 +765,7 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
     try {
       followIndex(repo, boardRel, parentBoard, treeEntry(repo, created, boardRel), transform)
       if (epicIncluded) followIndex(repo, epicRel, parentEpic, treeEntry(repo, created, epicRel), undefined)
+      if (epicIncluded && workingAllowances !== null) followIndex(repo, allowancesRel, parentAllowances, treeEntry(repo, created, allowancesRel), undefined)
     } catch { /* the go stands; an index entry left behind only shows as a staged change */ }
     keepVersion(plan.boardPath, working)
     publishGo(plan.boardPath, key, { commit: created, from: current.token }, working, workingText, seam)
@@ -755,7 +773,7 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
     // Read back what the commit holds: the row, the approved text and the trailers.
     const recordedRow = rowIn(showAt(repo, created, boardRel) ?? '', key)
     const trailers = goTrailers(gitSync(repo, ['log', '-1', '--format=%B', created]))
-    if (recordedRow?.status !== 'ready' || GO_DATE.exec(recordedRow.note)?.[1] !== goDate || approvalText(showAt(repo, created, epicRel) ?? '') !== approvedSha || trailers.source !== source) {
+    if (recordedRow?.status !== 'ready' || GO_DATE.exec(recordedRow.note)?.[1] !== goDate || approvalText(showAt(repo, created, epicRel) ?? '', allowanceTextAt(plan, created, epic)) !== approvedSha || trailers.source !== source) {
       throw new PlanError('READBACK', `commit ${created} does not read back as the go it was written to be; see git -C ${repo} show ${created.slice(0, 12)}`)
     }
     const row = rowIn(readFileSync(plan.boardPath, 'utf8'), key)
@@ -855,6 +873,61 @@ async function go(argv) {
   return result.pending ? EXIT.findings : EXIT.ok
 }
 
+/** `bmn plan allowances N [--at COMMIT] [--json]`: the one reader of the file (D6). */
+async function allowances(argv) {
+  const { positionals, options } = parse(argv, { flags: ['json'], values: ['project', 'at'] })
+  const json = options.json === true
+  if (positionals.length !== 1 || !/^\d{1,6}$/u.test(positionals[0])) throw new PlanUsageError('plan allowances takes one epic number: bmn plan allowances <epic> [--at COMMIT] [--json]')
+  let read
+  try {
+    const plan = await resolvePlan(options.project ?? process.cwd())
+    read = await readAllowances(plan, Number(positionals[0]), { at: options.at ?? null })
+  } catch (error) {
+    if (error instanceof AllowRefusal) return refuse(json, error.code, error.message)
+    return failure(error, json)
+  }
+  if (json) { out(JSON.stringify({ ok: true, ...read }, null, 2)); return EXIT.ok }
+  const fields = read.current?.fields ?? read.draft ?? null
+  out([
+    `epic ${read.epic}: ${read.state}${read.reason ? ` (${read.reason})` : ''}`,
+    ...(read.go_commit ? [`go commit ${read.go_commit.slice(0, 12)}${read.current ? `; last recorded ${read.current.commit.slice(0, 12)} (${read.current.source}); token ${read.token}` : ''}`] : []),
+    ...(fields ? Object.entries(fields.limits).map(([name, one]) => `${name}: ${one.limit}${one.ceiling === undefined ? '' : ` of ${one.ceiling}`} ${one.unit === 'count' ? '' : `${one.unit} `}per ${one.per}`) : []),
+    ...(fields?.may.length ? [`may: ${fields.may.join('; ')}`] : []),
+    ...(fields?.stays_out.length ? [`stays out: ${fields.stays_out.join('; ')}`] : []),
+    ...(read.hand_edit ? [`HAND_EDIT: ${read.hand_edit}`] : [])
+  ].join('\n'))
+  return EXIT.ok
+}
+
+/** `bmn plan allow N CHANGE... --reason R --expect TOKEN [--source WORDS]`: D1 and D7, against the last recorded version. */
+async function allow(argv) {
+  const { positionals, options } = parse(argv, { flags: ['json'], values: ['project', 'reason', 'source', 'expect'] })
+  const json = options.json === true
+  if (positionals.length < 2 || !/^\d{1,6}$/u.test(positionals[0])) throw new PlanUsageError('plan allow takes an epic and its changes: bmn plan allow <epic> limits.NAME.limit=N --reason R --expect TOKEN [--source WORDS]')
+  if (options.expect === undefined) throw new PlanUsageError('plan allow needs --expect TOKEN, the token bmn plan allowances --json printed')
+  const epic = Number(positionals[0])
+  let plan, result
+  try {
+    plan = await resolvePlan(options.project ?? process.cwd())
+    result = await recordAllow(plan, epic, { changes: positionals.slice(1), reason: options.reason, source: options.source, expect: options.expect })
+  } catch (error) {
+    if (error instanceof AllowRefusal) return refuse(json, error.code, error.message)
+    return failure(error, json)
+  }
+  // A tracked plan's change follows the plan's route: it stands here at once, and a refused publish only says unpublished (110.5 AC6).
+  const published = plan.tracked ? await (await import('./plan-publish.mjs')).publishPlan(plan) : null
+  if (json) out(JSON.stringify({ ok: true, epic, commit: result.commit, history_repo: result.repo, changes: result.changes, token: result.token, ...(published ? { publication: published.outcome, unpublished: published.unpublished ?? null } : {}) }, null, 2))
+  else {
+    out([
+      `recorded: epic ${epic}, commit ${result.commit.slice(0, 12)} in ${result.repo}`,
+      ...result.changes.map((one) => `${one.field}: ${one.before} -> ${one.after}`),
+      `token ${result.token}`,
+      ...(published && published.outcome !== 'published' && published.outcome !== 'ignored' ? [`${published.outcome}${published.unpublished ? ` ${published.unpublished}` : ''}: the change stands here`] : [])
+    ].join('\n'))
+  }
+  return EXIT.ok
+}
+
 function writtenNote(results) {
   return results.length ? ` (already written: ${results.map((one) => `${one.board}, token ${one.token}`).join('; ')})` : ''
 }
@@ -873,7 +946,7 @@ export async function runPlanCommand(argv, migrationLocked = false) {
     return action === undefined ? EXIT.unable : EXIT.ok
   }
   if (rest.includes('--help') || rest.includes('-h')) { out(PLAN_USAGE); return EXIT.ok }
-  if (!migrationLocked && ['set', 'go', 'publish', 'copy', 'sync', 'check'].includes(action)) {
+  if (!migrationLocked && ['set', 'go', 'publish', 'copy', 'sync', 'check', 'allow'].includes(action)) {
     const at = rest.indexOf('--project'), inline = rest.find(value => value.startsWith('--project='))
     const project = inline?.slice('--project='.length) ?? (at >= 0 ? rest[at + 1] : null) ?? process.cwd()
     try { return await (await import('./plan-migration-lock.mjs')).withMigrationWriter(project, () => runPlanCommand(argv, true)) }
@@ -884,6 +957,8 @@ export async function runPlanCommand(argv, migrationLocked = false) {
     if (action === 'check') return await check(rest)
     if (action === 'set') return await set(rest)
     if (action === 'go') return await go(rest)
+    if (action === 'allowances') return await allowances(rest)
+    if (action === 'allow') return await allow(rest)
     if (action === 'sync') {
       const { positionals, options } = parse(rest, { flags: ['json'], values: ['project'] })
       if (positionals.length) throw new PlanUsageError('plan sync takes no positional arguments')
@@ -919,7 +994,7 @@ export async function runPlanCommand(argv, migrationLocked = false) {
         return ['published', 'ignored'].includes(result.outcome) ? EXIT.ok : EXIT.findings
       } catch (error) { return failure(error, options.json === true) }
     }
-    throw new PlanUsageError(`plan expects status, check, set, go, sync, copy or publish, not ${action}`)
+    throw new PlanUsageError(`plan expects status, check, set, go, allowances, allow, sync, copy or publish, not ${action}`)
   } catch (error) {
     if (error instanceof PlanUsageError) { err(`bmn: ${error.message}\nRun "bmn plan --help" for usage.`); return EXIT.unable }
     throw error

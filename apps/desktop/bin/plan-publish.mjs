@@ -119,8 +119,8 @@ function conflictingEpics(path, base, ours, theirs) {
     const b = boardRows(base), o = boardRows(ours), t = boardRows(theirs)
     return [...new Set([...o.keys(), ...t.keys()].filter((key) => o.get(key) !== t.get(key) && o.get(key) !== b.get(key) && t.get(key) !== b.get(key)).map((key) => Number(/^(?:epic-)?(\d+)/u.exec(key)?.[1])).filter(Number.isFinite))]
   }
-  const number = /^plan\/epics\/(\d+)-/u.exec(path)?.[1]
-  return number ? [Number(number)] : []
+  const number = /^plan\/(?:epics\/(\d+)-|allowances\/(\d+)\.yaml$)/u.exec(path)
+  return number ? [Number(number[1] ?? number[2])] : []
 }
 
 function mergeBytes(folder, file, base, ours, theirs, suffix) {
@@ -218,6 +218,9 @@ export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, d
         }
       }
       if (b !== null && !equal(b, t) && !equal(o, t) && /^plan\/epics\/\d+-/u.test(file) && approvalText(b.toString()) !== approvalText(t?.toString() ?? '')) conflicts.push(Number(/^plan\/epics\/(\d+)/u.exec(file)[1]))
+      // An upstream restriction or deletion of an epic's allowances file is read as its changed terms are (110.5 AC6).
+      const allowances = /^plan\/allowances\/(\d+)\.yaml$/u.exec(file)
+      if (allowances && b !== null && !equal(b, t) && !equal(o, t)) conflicts.push(Number(allowances[1]))
       if (prTip && !merged.conflict) {
         const prBase = blob(repo, state.published ?? upstream, file), incoming = blob(repo, prTip, file)
         const combined = mergeBytes(folder, file, prBase, projected.get(file), incoming, 'pr')

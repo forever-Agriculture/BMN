@@ -258,6 +258,8 @@ extraResources:
     to: bin/plan-migration-lock.mjs
   - from: bin/plan-publish.mjs
     to: bin/plan-publish.mjs
+  - from: bin/plan-allowances.mjs
+    to: bin/plan-allowances.mjs
   - from: bin/plan-statuses.mjs
     to: bin/plan-statuses.mjs
   # Keep migration helpers' source-relative imports and adjacent watchdog intact.
