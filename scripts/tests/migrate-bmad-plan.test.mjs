@@ -95,6 +95,36 @@ development_status:
 }
 
 describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
+  it.each(['07', '008', '9'])('discovers a platform contract whose filename uses epic number %s', padded => {
+    const { root, repo } = fixture(), number = Number(padded), source = `docs/platform/epic-${padded}-hygiene.md`
+    const text = `# Epic ${number}: Hygiene\n\n## Story ${number}.1: Preserve the contract\n\n**Acceptance criteria:**\n1. **Given** the original plan, **then** its complete contract remains primary.\n`
+    mkdirSync(join(repo, 'docs/platform'), { recursive: true }); writeFileSync(join(repo, source), text)
+    const board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    writeFileSync(board, readFileSync(board, 'utf8') + `  epic-${number}: in-progress\n  ${number}-1-preserve-the-contract: backlog\n`)
+    const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage })
+    const target = `epics/${String(number).padStart(3, '0')}-hygiene.md`
+    expect(existsSync(join(stage, target))).toBe(true)
+    expect(readFileSync(join(stage, target), 'utf8')).toContain(text)
+    expect(manifest.spans).toContainEqual(expect.objectContaining({ source, to: target }))
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+  })
+  it.each(['existing-primary', 'ambiguous-padded', 'explicit-padded'])('keeps the established contract or requires a padded candidate decision (%s)', shape => {
+    const { root, repo } = fixture(), first = shape === 'existing-primary' ? 'epic-7-primary.md' : 'epic-07-first.md'
+    const later = 'epic-007-later.md', one = '# Epic 7: Original\n\n## Story 7.1: Original\n', two = '# Epic 7: Later\n\n## Story 7.1: Later\n\n## Story 7.2: Extra\n'
+    mkdirSync(join(repo, 'docs/platform'), { recursive: true })
+    writeFileSync(join(repo, 'docs/platform', first), one); writeFileSync(join(repo, 'docs/platform', later), two)
+    const board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    writeFileSync(board, readFileSync(board, 'utf8') + `  epic-7: in-progress${shape === 'explicit-padded' ? ' # canonical docs/platform/' + later : ''}\n  7-1-original: backlog\n`)
+    const stage = join(root, 'out/plan')
+    if (shape === 'ambiguous-padded') {
+      expect(() => stagePlan({ repo, stage })).toThrow(/multiple padded contracts/u)
+      return
+    }
+    const manifest = stagePlan({ repo, stage }), target = shape === 'existing-primary' ? 'epics/007-primary.md' : 'epics/007-later.md'
+    expect(existsSync(join(stage, target))).toBe(true)
+    expect(readFileSync(join(stage, target), 'utf8')).toContain(shape === 'existing-primary' ? one : two)
+    expect(manifest.spans).toContainEqual(expect.objectContaining({ source: `docs/platform/${shape === 'existing-primary' ? first : later}`, to: target }))
+  })
   it('seeds copied rows from exact blame and requires evidence for uncommitted writer provenance (107.7)', () => {
     const { root, repo } = fixture(), board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
     const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })

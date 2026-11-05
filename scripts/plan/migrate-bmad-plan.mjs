@@ -218,14 +218,16 @@ export function stagePlan({ repo, stage, contextRepo = repo, date = new Date().t
   const platformFiles = new Set(inventory.files.filter((file) => file.path.startsWith('docs/platform/')).map((file) => file.path))
   for (const number of new Set(board.rows.map((row) => rowEpic(row.key)).filter(Number.isFinite))) {
     if (epics.some((epic) => epic.number === number)) continue
-    const candidates = inventory.files.filter((file) => new RegExp(`^epic-${number}[-.].*\\.md$`, 'u').test(basename(file.path)) && file.link === null)
+    const candidates = inventory.files.filter((file) => new RegExp(`^epic-0*${number}[-.].*\\.md$`, 'u').test(basename(file.path)) && file.link === null)
       .map((file) => ({ ...file, text: readFileSync(join(repo, file.path), 'utf8') }))
       .sort((one, two) => [...two.text.matchAll(new RegExp(`^#{2,4} Story ${number}\\.`, 'gmu'))].length - [...one.text.matchAll(new RegExp(`^#{2,4} Story ${number}\\.`, 'gmu'))].length || one.path.localeCompare(two.path))
     const row = board.rows.find((row) => row.key === `epic-${number}`)
     const explicit = candidates.filter((file) => row?.comment.includes(file.path))
     if (explicit.length > 1) throw new Error(`epic ${number}: its row names multiple contracts; keep both and settle the canonical one before staging`)
-    const found = explicit[0] ?? candidates[0]
-    const title = found ? basename(found.path, '.md').replace(new RegExp(`^epic-${number}-?`, 'u'), '') || `Epic ${number}` : `Recorded on the board ${number}`
+    const established = candidates.filter(file => new RegExp(`^epic-${number}[-.]`, 'u').test(basename(file.path)))
+    if (!explicit.length && !established.length && candidates.length > 1) throw new Error(`epic ${number}: multiple padded contracts; keep every input and name its canonical contract in the row before staging`)
+    const found = explicit[0] ?? established[0] ?? candidates[0]
+    const title = found ? basename(found.path, '.md').replace(new RegExp(`^epic-0*${number}-?`, 'u'), '') || `Epic ${number}` : `Recorded on the board ${number}`
     epics.push({ kind: 'epic', number, title, text: found?.text ?? `# Epic ${number}: ${title}\n\nRecorded on the old board only; its original comments are in history.md.\n`, source: found?.path ?? null, synthetic: !found, start: 0, end: found ? found.text.split('\n').length : 0 })
   }
   const epicFile = new Map(epics.map((epic) => [epic.number, `epics/${pad3(epic.number)}-${slugOf(epic.title)}.md`]))
