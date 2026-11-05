@@ -1,7 +1,7 @@
 // MODULE: plan-allowances.mjs - Epic 110 Stories 110.4-110.5: plan/allowances/NNN.yaml, what a run may use: the one parser, the recorded version, `bmn plan allow`
 // The file is a strict small part of YAML, read here and nowhere else (D6): dev-auto asks `bmn plan allowances`. It is trusted as a go is (D7):
 // only a commit written by `bmn plan go` or `bmn plan allow` counts; a hand edit is reported and ignored. An epic with no file reads as before.
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -617,15 +617,15 @@ export function compareVersions(before, after, uses = () => false) {
  * epic that cannot be read counts as uses of every limit, so a frozen field stays frozen.
  */
 export function ledgerUses(plan, epic, environment = process.env) {
-  const base = environment.XDG_STATE_HOME || join(environment.HOME || homedir(), '.local', 'state')
-  const folder = join(base, 'dev-auto', 'budgets')
+  const folder = ledgerFolder(environment)
   const counted = new Set()
   let unreadable = false
   let names
-  try { names = readdirSync(folder) } catch { return () => false }
+  // No folder: dev-auto never counted anything here. A folder that cannot be listed may hold uses, so everything freezes.
+  try { names = readdirSync(folder) } catch (error) { return error?.code === 'ENOENT' ? () => false : () => true }
   const same = (a, b) => { try { return realpathSync(a) === realpathSync(b) } catch { return false } }
   for (const name of names) {
-    if (!new RegExp(`^[0-9a-f]{16}-epic-${epic}\\.json$`, 'u').test(name)) continue
+    if (!ledgerName(epic).test(name)) continue
     let data
     try { data = JSON.parse(readFileSync(join(folder, name), 'utf8')) } catch { unreadable = true; continue }
     if (!data || typeof data !== 'object' || !same(data.plan_root, plan.planRoot)) continue
@@ -634,6 +634,36 @@ export function ledgerUses(plan, epic, environment = process.env) {
     if (Object.values(data.jobs ?? {}).some((job) => job && !['refused', 'released'].includes(job.state))) counted.add('money_usd')
   }
   return (limit) => unreadable || counted.has(limit)
+}
+
+const ledgerFolder = (environment) => join(environment.XDG_STATE_HOME || join(environment.HOME || homedir(), '.local', 'state'), 'dev-auto', 'budgets')
+const ledgerName = (epic) => new RegExp(`^[0-9a-f]{16}-epic-${epic}\\.json$`, 'u')
+
+/** One budget's lock, held by a child `flock` until released: the flock(2) lock spend_ledger.py takes while it counts a use. */
+function holdFlock(path, waitMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('flock', ['-x', '-w', String(Math.max(1, Math.ceil(waitMs / 1000))), path, 'sh', '-c', 'echo held; exec cat >/dev/null'], { stdio: ['pipe', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdin.on('error', () => { /* the lock ends with the child either way */ })
+    child.on('error', (error) => reject(new AllowRefusal('LEDGER_LOCK', `cannot take the ledger lock ${path} (${error.message}); nothing changed`)))
+    child.stdout.on('data', (chunk) => { out += chunk; if (out.includes('held\n')) resolve(() => { child.stdin.end() }) })
+    child.on('exit', () => { if (!out.includes('held\n')) reject(new AllowRefusal('LEDGER_LOCKED', `${path} stays held by a use being counted; try again; nothing changed`)) })
+  })
+}
+
+/**
+ * Every ledger lock of this epic, held from the scan of its uses until the change is committed (D13), so a use cannot be
+ * counted under a limit's old meaning in between. Taken after the board lock; a use never takes the board lock.
+ */
+export async function holdLedgers(epic, environment = process.env, waitMs = 10_000) {
+  const folder = ledgerFolder(environment)
+  let names
+  try { names = readdirSync(folder) } catch (error) { if (error?.code === 'ENOENT') return () => {}; names = [] }
+  const releases = []
+  try {
+    for (const name of names.filter((one) => ledgerName(epic).test(one)).sort()) releases.push(await holdFlock(join(folder, name.replace(/\.json$/u, '.lock')), waitMs))
+  } catch (error) { for (const release of releases) release(); throw error }
+  return () => { for (const release of releases) release() }
 }
 
 function ownerWordsProblem(source) {
@@ -668,7 +698,9 @@ export async function recordAllow(plan, epic, { changes: words, reason, source, 
   const changes = parseChanges(words)
   if (changes.length === 0) throw new AllowRefusal('BAD_CHANGE', 'name a change: limits.NAME.limit=N')
   const release = await lockBoard(plan.boardPath)
+  let releaseLedgers = () => {}
   try {
+    releaseLedgers = await holdLedgers(epic)
     const read = await readAllowances(plan, epic)
     if (read.state === 'withdrawn' || read.state === 'conflict') throw new AllowRefusal(read.state.toUpperCase(), read.reason)
     if (read.state !== 'recorded') throw new AllowRefusal('NOT_RECORDED', `epic ${epic}'s go records no allowances file: ${read.reason}`)
@@ -726,7 +758,7 @@ export async function recordAllow(plan, epic, { changes: words, reason, source, 
     const back = await readAllowances(plan, epic)
     if (back.state !== 'recorded' || back.current.commit !== created) throw new AllowRefusal('READBACK', `commit ${created} does not read back as the recorded version; see git -C ${repo} show ${created.slice(0, 12)}`)
     return { commit: created, changes: compared.changes, token: back.token, repo, needed_words: compared.words, fields: back.current.fields }
-  } finally { release() }
+  } finally { releaseLedgers(); release() }
 }
 
 /** Rules a plan opts into: stories and criteria of an unfinished epic (110.8, D11). */

@@ -1,6 +1,6 @@
 // MODULE: plan-allowances.test.ts - Stories 110.4, 110.5, 110.8: an epic's allowances file: its check, the go's hash, the recorded version, `bmn plan allow`, the size limit
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -459,6 +459,39 @@ describe('a limit with uses keeps its meaning (110.5 AC4)', () => {
     writeFileSync(join(folder, 'fedcba9876543210-epic-7.json'), '{not json')
     expect(allow(g.main, g.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
   })
+  it('a ledger folder that cannot be listed freezes; one that does not exist counts nothing', () => {
+    const f = goFor()
+    const folder = join(f.home, 'state/dev-auto/budgets')
+    mkdirSync(folder, { recursive: true })
+    chmodSync(folder, 0o000)
+    try {
+      expect(allow(f.main, f.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
+    } finally { chmodSync(folder, 0o755) }
+    rmSync(folder, { recursive: true })
+    expect(allow(f.main, f.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).code).toBe(0)
+  })
+  it('a use being counted holds allow back, and allow then sees it (D13)', async () => {
+    const f = goFor()
+    withUses(f, {})
+    const ledger = join(f.home, 'state/dev-auto/budgets/0123456789abcdef-epic-7')
+    // spend_ledger.py's own lock: flock(2) on the budget's .lock file, held while it counts a use.
+    const holder = spawn('flock', ['-x', `${ledger}.lock`, 'sh', '-c', 'echo held; exec cat >/dev/null'], { stdio: ['pipe', 'pipe', 'ignore'] })
+    await new Promise((done) => holder.stdout!.once('data', done))
+    const token = read(f.main, f.home).token
+    const pending = new Promise<{ code: number | null; out: string }>((done) => {
+      const child = spawn(process.execPath, [BMN, 'plan', 'allow', '7', 'limits.rechecks.per=epic', '--expect', token, '--reason', 'r', '--source', WORDS, '--json'],
+        { cwd: f.main, env: { PATH: process.env.PATH, HOME: f.home, XDG_STATE_HOME: join(f.home, 'state'), LC_ALL: 'C', ...IDENTITY } })
+      let out = ''
+      child.stdout.on('data', (chunk) => { out += chunk })
+      child.on('close', (code) => done({ code, out }))
+    })
+    await new Promise((done) => setTimeout(done, 1000))
+    // The use is saved while allow waits for the lock.
+    writeFileSync(`${ledger}.json`, JSON.stringify({ plan_root: f.plan, epic: 7, gos: [], jobs: {}, rounds: {}, ...rechecks }))
+    holder.stdin!.end()
+    const result = await pending
+    expect(JSON.parse(result.out).error.code).toBe('USED')
+  }, 20_000)
 })
 
 describe('a hand edit counts for nothing (110.5 AC5)', () => {
