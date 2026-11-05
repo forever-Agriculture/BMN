@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, posix } from 'node:path'
 import { checkPlan } from '../../apps/desktop/bin/plan-board.mjs'
 import { archive, checkSpans, stagePlan } from './migrate-bmad-plan.mjs'
-import { extractPlan, mergeStagedPlan, planFingerprint, reconcilePlan, saveJournal } from './plan-cutover.mjs'
+import { extractPlan, mergeStagedPlan, planFingerprint, publishedInputs, reconcilePlan, saveJournal, staysLocal } from './plan-cutover.mjs'
 
 function git(repo, args, options = {}) {
   const result = spawnSync('git', ['-C', repo, ...args], { maxBuffer: 512 * 1024 * 1024, ...options })
@@ -57,10 +57,8 @@ export async function prepareMoveBranch({ repo, publish, upstream, branch, previ
     for (const path of manifest.files.map(file => file.to).filter(Boolean)) if (patterns.some(pattern => pattern.test(path))) rmSync(join(stage, path), { force: true })
   }
   const moved = join(stage, 'references', 'moved', stagedDate); mkdirSync(join(moved, 'conflicts'), { recursive: true })
-  const outOfPlan = localOnly.map(source => new RegExp(source, 'u'))
-  capture.conflicts.forEach((conflict, index) => { if (!outOfPlan.some(pattern => pattern.test(conflict.path))) cpSync(conflict.kept, join(moved, 'conflicts', `conflict-${index + 1}.local`)) })
-  // Absolute local paths stay in the private capture; the published record is paths, owners' short names and hashes.
-  writeFileSync(join(moved, 'inputs.json'), JSON.stringify({ upstream: capture.upstream, fingerprint: capture.fingerprint, worktrees: capture.worktrees.length, inputs: capture.inputs.length, conflicts: capture.conflicts.map(({ path, phase, local_sha256, incoming_sha256, rows }) => ({ path, phase, local_sha256, incoming_sha256, ...(rows ? { rows } : {}) })) }, null, 2) + '\n')
+  capture.conflicts.forEach((conflict, index) => { if (!staysLocal(conflict.path, manifest.files, localOnly)) cpSync(conflict.kept, join(moved, 'conflicts', `conflict-${index + 1}.local`)) })
+  writeFileSync(join(moved, 'inputs.json'), JSON.stringify(publishedInputs(capture), null, 2) + '\n')
   writeFileSync(join(moved, 'settled-conflicts.json'), JSON.stringify({ capture: capture.settled_conflicts.map(({ path, key, local, upstream: value, settled }) => ({ path, key, local, upstream: value, settled })), plan: merged?.settled_conflicts ?? [], plan_conflicts: merged?.conflicts ?? [], local_only: (merged?.local_only ?? []).map(({ path, sha256, reason }) => ({ path, sha256, reason })) }, null, 2) + '\n')
   const metadataPath = join(stage, 'migration.json'), metadata = loadJson(metadataPath)
   saveJournal(metadataPath, { ...metadata, history_head: head, baseline_fingerprint: planFingerprint(capture.projection), approval_conflicts: [...new Set([...capture.approval_conflicts, ...(merged?.approval_conflicts ?? [])])].sort((a, b) => a - b), approval_conflict_values: [...capture.approval_conflict_values, ...(merged?.approval_conflict_values ?? [])] })
@@ -93,7 +91,7 @@ export async function prepareMoveBranch({ repo, publish, upstream, branch, previ
       if (retired.length) git(publish, ['update-index', '--force-remove', '-z', '--stdin'], { env, input: retired.join('\0') + '\0' })
     }
     const placed = new Map((manifest.spans ?? []).map(span => [span.source, span.to]))
-    for (const path of tracked.filter(platformEpic)) {
+    for (const path of keepBmad ? [] : tracked.filter(platformEpic)) {
       const current = git(publish, ['show', `${head}:${path}`], { allowFailure: true })
       // A stub already on the branch stays; an upstream edit of a retired document is captured and needs no second copy here.
       const bytes = previous && isStub(publish, previous.head, path) ? git(publish, ['show', `${previous.head}:${path}`]).toString()

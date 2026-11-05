@@ -34,11 +34,11 @@ function fixture() {
 }
 const handover = repo => ({ inventory_verified: true, worktrees: [repo], writers: [] })
 
-async function killAt(repo, phase, chmodIndex = null, action = 'cutover') {
+async function killAt(repo, phase, chmodIndex = null, action = 'cutover', options = { upstream: 'upstream' }) {
   const module = new URL('../plan/plan-cutover.mjs', import.meta.url).href
   const code = `import {cutoverPlan,rollbackPlan} from ${JSON.stringify(module)};
 import{readFileSync}from'node:fs';
-await ${action === 'cutover' ? 'cutoverPlan' : 'rollbackPlan'}({repo:${JSON.stringify(repo)},upstream:'upstream',handover:${JSON.stringify(handover(repo))},seam:async(phase,state)=>{
+await ${action === 'cutover' ? 'cutoverPlan' : 'rollbackPlan'}({...${JSON.stringify(options)},repo:${JSON.stringify(repo)},handover:${JSON.stringify(handover(repo))},seam:async(phase,state)=>{
 if(phase!==${JSON.stringify(phase)}||(${JSON.stringify(chmodIndex)}!==null&&state.chmod_index!==${JSON.stringify(chmodIndex)}))return;
 const stat=readFileSync('/proc/'+process.pid+'/stat','utf8');
 console.log(JSON.stringify({pid:process.pid,start_ticks:stat.slice(stat.lastIndexOf(')')+1).trim().split(/\\s+/)[19],watchdog:state.watchdog}));
@@ -433,6 +433,69 @@ describe('D15 cutover', () => {
     expect(readFileSync(join(f.repo, 'plan/status.yaml'), 'utf8')).toContain('7-1-one: review # from a worktree')
     expect(statSync(join(f.repo, 'plan/status.yaml')).mode & 0o200).toBe(0o200)
   }, 30_000)
+  it('parks a merged move when a go was withdrawn to backlog and restored after the cut', async () => {
+    const f = await mergedFixture({ afterCut: (publish, board) => {
+      const text = readFileSync(join(publish, board), 'utf8')
+      file(publish, board, text.replace('epic-7: in-progress', 'epic-7: backlog # go 2026-11-01')); git(publish, 'commit', '-qam', 'withdraw by backlog')
+      file(publish, board, text); git(publish, 'commit', '-qam', 'restore')
+    } })
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result).toMatchObject({ outcome: 'parked', code: 'APPROVAL_HISTORY_AFTER_CUT' })
+  }, 30_000)
+  it('takes upstream plan changes into a checkout behind it, and parks staged or conflicting native plan work', async () => {
+    const f = await mergedFixture({ moveCheckout: true })
+    git(f.publish, 'switch', '-q', 'main'); git(f.publish, 'pull', '-q', 'origin', 'main'); file(f.publish, 'plan/VISION.md', visionText('changed upstream later')); git(f.publish, 'add', '.'); git(f.publish, 'commit', '-qm', 'later plan'); git(f.publish, 'push', '-q', 'origin', 'main'); git(f.repo, 'fetch', '-q', 'origin')
+    file(f.repo, 'plan/history.md', readFileSync(join(f.repo, 'plan/history.md'), 'utf8') + 'live native note\n'); git(f.repo, 'add', 'plan/history.md')
+    expect(await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })).toMatchObject({ outcome: 'parked', code: 'NATIVE_INDEX_STAGED' })
+    git(f.repo, 'reset', '-q', '--', 'plan/history.md')
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(readFileSync(join(f.repo, 'plan/VISION.md'), 'utf8')).toBe(visionText('changed upstream later'))
+    expect(readFileSync(join(f.repo, 'plan/history.md'), 'utf8')).toContain('live native note')
+  }, 30_000)
+  it('recovers a merged native switch killed after its plan left the checkout', async () => {
+    const f = await mergedFixture({ moveCheckout: true })
+    file(f.repo, 'plan/VISION.md', visionText('dirty native edit'))
+    await killAt(f.repo, 'native-moved', null, 'cutover', { upstream: 'origin/main', baseline: f.baseline })
+    expect(existsSync(join(f.repo, 'plan'))).toBe(false)
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(readFileSync(join(f.repo, 'plan/VISION.md'), 'utf8')).toBe(visionText('dirty native edit'))
+    expect(statSync(join(f.repo, 'plan/VISION.md')).mode & 0o200).toBe(0o200)
+    expect(statSync(join(f.repo, 'plan')).mode & 0o200).toBe(0o200)
+  }, 45_000)
+  it('recovers a merged switch killed after product files changed, without losing or duplicating them', async () => {
+    const f = await mergedFixture()
+    file(f.repo, f.board, readFileSync(join(f.repo, f.board), 'utf8').replace('7-1-one: backlog', '7-1-one: review # live'))
+    await killAt(f.repo, 'installed', null, 'cutover', { upstream: 'origin/main', baseline: f.baseline })
+    expect(readFileSync(join(f.repo, 'upstream-product.txt'), 'utf8')).toBe('incoming product\n')
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(readFileSync(join(f.repo, 'plan/status.yaml'), 'utf8')).toContain('7-1-one: review # live')
+    expect(git(f.repo, 'status', '--short', '--', 'upstream-product.txt')).toBe('')
+  }, 45_000)
+  it('holds a go row whose withdrawal is disputed, and settles a plain note conflict', async () => {
+    const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    const rows = (a, b) => `development_status:\n  epic-7: ${a}\n  epic-8: ${b}\n`
+    file(f.repo, board, rows('ready-for-dev # go 2026-01-01', 'in-progress # old')); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'rows'); git(f.repo, 'branch', '-f', 'upstream')
+    git(f.repo, 'switch', '-q', 'upstream'); file(f.repo, board, rows('ready-for-dev # go 2026-01-01 upstream note', 'in-progress # upstream')); git(f.repo, 'commit', '-qam', 'upstream'); git(f.repo, 'switch', '-q', 'main')
+    file(f.repo, board, rows('backlog # go 2026-01-01', 'in-progress # local'))
+    const result = await reconcilePlan({ repo: f.repo, upstream: 'upstream', upstreamInHistory: true, output: join(f.root, 'c') })
+    expect(result.approval_conflicts).toEqual([7])
+    expect(result.settled_conflicts.map(row => row.key)).toEqual(['epic-8'])
+  })
+  it('never publishes a private file through a capture conflict', async () => {
+    const f = fixture(), secret = '_bmad-output/planning-artifacts/secret/job.json'
+    file(f.repo, secret, '{"raw":"base"}\n'); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'secret'); git(f.repo, 'branch', '-f', 'upstream')
+    const remote = join(f.root, 'remote.git'); git(f.repo, 'clone', '-q', '--bare', f.repo, remote); git(f.repo, 'remote', 'add', 'origin', remote)
+    const publish = join(f.root, 'publish'); git(f.root, 'clone', '-q', remote, publish); git(publish, 'config', 'user.name', 'Fixture'); git(publish, 'config', 'user.email', 'f@example.invalid')
+    file(publish, secret, '{"raw":"upstream"}\n'); git(publish, 'commit', '-qam', 'upstream'); git(publish, 'push', '-q', 'origin', 'main'); git(f.repo, 'fetch', '-q', 'origin')
+    file(f.repo, secret, '{"raw":"LOCAL SECRET"}\n')
+    const cut = await prepareMoveBranch({ repo: f.repo, publish, upstream: 'origin/main', branch: 'b', date: '2026-11-05', localOnly: ['^references/secret/'], output: join(f.root, 'c'), message: 'docs: move' })
+    expect(cut.outcome).toBe('cut')
+    expect(() => git(publish, 'grep', '-q', 'LOCAL SECRET', 'b', '--', 'plan')).toThrow()
+    expect(git(publish, 'ls-tree', '-r', '--name-only', 'b', '--', 'plan')).toContain('plan/status.yaml')
+  }, 30_000)
   it('parks a merged move with a go recorded and reverted on the old board after the cut', async () => {
     const f = await mergedFixture({ afterCut: (publish, board) => {
       const text = readFileSync(join(publish, board), 'utf8')
@@ -449,8 +512,20 @@ describe('D15 cutover', () => {
     const f = await mergedFixture()
     expect(await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo) })).toMatchObject({ outcome: 'parked', code: 'BASELINE_REQUIRED' })
     expect(await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: { ...f.baseline, fingerprint: 'other' } })).toMatchObject({ outcome: 'parked', code: 'BASELINE_REQUIRED' })
-    file(f.repo, 'local.txt', 'local\n'); git(f.repo, 'add', 'local.txt'); git(f.repo, 'commit', '-qm', 'local commit')
-    expect(await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })).toMatchObject({ outcome: 'parked', code: 'LOCAL_COMMITS_NOT_ON_DEFAULT' })
+  }, 30_000)
+  it('keeps unpublished local commits in history under a true merge and names the local history for the approval reader', async () => {
+    const f = await mergedFixture()
+    file(f.repo, 'local.txt', 'local\n'); file(f.repo, f.board, readFileSync(join(f.repo, f.board), 'utf8').replace('epic-7: in-progress', 'epic-7: in-progress # committed locally'))
+    git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'local commit'); const local = git(f.repo, 'rev-parse', 'HEAD')
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(git(f.repo, 'rev-parse', 'HEAD^1')).toBe(local); expect(git(f.repo, 'rev-parse', 'HEAD^2')).toBe(git(f.repo, 'rev-parse', 'origin/main'))
+    expect(git(f.repo, 'log', '-1', '--format=%B')).toContain('Plan-Cutover: yes')
+    expect(JSON.parse(git(f.repo, 'show', 'HEAD:plan/migration.json')).local_history_head).toBe(local)
+    expect(git(f.repo, 'show', 'HEAD:plan/status.yaml')).toContain('committed locally')
+    expect(readFileSync(join(f.repo, 'local.txt'), 'utf8')).toBe('local\n'); expect(readFileSync(join(f.repo, 'upstream-product.txt'), 'utf8')).toBe('incoming product\n')
+    expect(git(f.repo, 'ls-tree', 'HEAD', '--', f.board)).toBe('')
+    expect(git(f.repo, 'status', '--short', '--', 'plan', 'local.txt', 'upstream-product.txt')).toBe('')
   }, 30_000)
   it('parks instead of overwriting staged or conflicting product work', async () => {
     const f = await mergedFixture({ afterCut: publish => { file(publish, 'product.txt', 'incoming change\n'); git(publish, 'commit', '-qam', 'incoming') } })
@@ -466,11 +541,13 @@ describe('D15 cutover', () => {
     const f = fixture(), roots2 = name => { const dir = join(f.root, name); mkdirSync(dir, { recursive: true }); return dir }
     const base = roots2('base'), ours = roots2('ours'), theirs = roots2('theirs')
     file(base, 'epics/007-alpha.md', 'one\ntwo\n'); file(ours, 'epics/007-beta.md', 'one\ntwo\nthree\n'); file(theirs, 'epics/007-alpha.md', 'zero\none\ntwo\n')
+    file(base, 'PLAN-index.md', 'see epics/007-alpha.md\n'); file(ours, 'PLAN-index.md', 'see epics/007-beta.md\n'); file(theirs, 'PLAN-index.md', 'see epics/007-alpha.md\n')
     file(base, 'references/secret/job.json', 'old secret\n'); file(ours, 'references/secret/job.json', 'new secret\n'); file(ours, 'references/secret/other.json', 'new private file\n')
     file(base, 'references/removed.md', 'old\n'); file(ours, 'references/removed.md', 'changed\n')
     const output = join(f.root, 'out', 'plan'), result = mergeStagedPlan({ base, ours, theirs, output, date: '2026-11-05', localOnly: ['^references/secret/'], keep: join(f.root, 'kept') })
     expect(readFileSync(join(output, 'epics/007-alpha.md'), 'utf8')).toBe('zero\none\ntwo\nthree\n')
     expect(existsSync(join(output, 'epics/007-beta.md'))).toBe(false)
+    expect(readFileSync(join(output, 'PLAN-index.md'), 'utf8')).toBe('see epics/007-alpha.md\n')
     expect(existsSync(join(output, 'references/secret'))).toBe(false)
     expect(existsSync(join(output, 'references/removed.md'))).toBe(false)
     expect(result.local_only.map(entry => entry.path).sort()).toEqual(['references/removed.md', 'references/secret/job.json', 'references/secret/other.json'])
@@ -517,6 +594,26 @@ describe('D15 cutover', () => {
     expect(git(publish, 'show', 'move-2:plan/references/late.md')).toBe('after the first cut')
     expect(git(publish, 'show', 'move-2:docs/platform/epic-7-probe.md')).toContain('The preserved record is')
     expect(git(publish, 'ls-tree', '-r', '--name-only', 'move-2', '--', '_bmad-output', 'plan/references/secret')).toBe('')
+  }, 30_000)
+  it('attributes copied rows from the upstream board at the cut, leaving local-only rows in the plan', async () => {
+    const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    const author = (name, message) => execFileSync('git', ['-C', f.repo, '-c', `user.name=${name}`, '-c', 'user.email=a@example.invalid', 'commit', '-qam', message])
+    file(f.repo, board, 'development_status:\n  epic-7: in-progress\n  7-1-one: backlog\n  7-2-two: ready-for-dev # his\n'); git(f.repo, 'add', '.'); author('Oleksandr', 'owner rows')
+    file(f.repo, board, 'development_status:\n  epic-7: in-progress\n  7-1-one: review # Artem took it\n  7-2-two: ready-for-dev # his\n'); author('Artem Kobrin', 'artem row')
+    const remote = join(f.root, 'remote.git'); git(f.repo, 'clone', '-q', '--bare', f.repo, remote); git(f.repo, 'remote', 'add', 'origin', remote); git(f.repo, 'fetch', '-q', 'origin')
+    const publish = join(f.root, 'publish'); git(f.root, 'clone', '-q', remote, publish); git(publish, 'config', 'user.name', 'Fixture'); git(publish, 'config', 'user.email', 'f@example.invalid')
+    file(f.repo, board, 'development_status:\n  epic-7: in-progress\n  7-1-one: done # owner local\n  7-2-two: in-progress # owner local\n  7-3-new: backlog\n')
+    const before = readFileSync(join(f.repo, board))
+    const cut = await prepareMoveBranch({ repo: f.repo, publish, upstream: 'origin/main', branch: 'b2', keepBmad: true, date: '2026-11-05', output: join(f.root, 'c'), message: 'docs: move' })
+    expect(cut).toMatchObject({ outcome: 'cut' })
+    const copy = JSON.parse(git(publish, 'show', 'b2:plan/bmad-copy.json'))
+    expect(Object.keys(copy.excluded)).toEqual(['7-1-one'])
+    expect(copy.rows['7-2-two'].last_copied).toEqual({ status: 'ready-for-dev', note: 'his' })
+    expect(copy.plan_only).toEqual(['7-3-new']); expect(copy.unresolved).toEqual({}); expect(copy.active).toBe(false)
+    expect(git(publish, 'show', 'b2:plan/status.yaml')).toContain('7-3-new')
+    expect(git(publish, 'show', `b2:${board}`)).toContain('7-1-one: review # Artem took it')
+    expect(git(publish, 'diff', '--name-only', 'origin/main', 'b2', '--', '_bmad-output')).toBe('')
+    expect(readFileSync(join(f.repo, board)).equals(before)).toBe(true)
   }, 30_000)
   it('parks a re-cut whose product side conflicts instead of guessing', async () => {
     const f = fixture()

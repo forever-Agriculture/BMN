@@ -6,7 +6,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, re
 import { homedir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { rowToken, suggestedLeadHint, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
+import { ROW, rowToken, suggestedLeadHint, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
 import { FROM_BMAD as STATUS_TABLE } from '../../apps/desktop/bin/plan-statuses.mjs'
 
 /**
@@ -510,6 +510,31 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
       }
     } catch { /* Missing or uncertain attribution parks activation; never infer non-Artem ownership. */ }
     const copy = { version: 1, active: false, source_board: boardPath, rows: Object.create(null), excluded: Object.create(null), unresolved: Object.create(null) }
+    if (pinnedHistoryHead) {
+      // D10 on a branch cut from upstream: who last changed the target line there, and what that line holds. A row absent there stays in his plan only.
+      const target = new Map()
+      const git = args => execFileSync('git', ['-C', contextRepo, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
+      let section = false, author = null, commit = null, sourceLine = null
+      for (const text of git(['blame', '--line-porcelain', pinnedHistoryHead, '--', boardPath]).split('\n')) {
+        const head = /^([0-9a-f]{40,64}) \d+ (\d+)(?: \d+)?$/u.exec(text)
+        if (head) { commit = head[1]; sourceLine = Number(head[2]); author = null }
+        else if (text.startsWith('author ')) author = text.slice(7)
+        else if (text.startsWith('\t')) {
+          const line = text.slice(1).replace(/\r$/u, '')
+          if (/^\S/u.test(line) && !line.startsWith('#')) section = /^development_status:/u.test(line)
+          const row = section && ROW.exec(line)
+          if (row) target.set(row[1], { status: row[2], note: row[3] ?? '', author, commit, line: sourceLine, sha256: sha256(line) })
+        }
+      }
+      copy.plan_only = []
+      for (const row of rows) {
+        const line = target.get(row.key)
+        if (!line) { copy.plan_only.push(row.key); continue }
+        const provenance = { author: line.author, commit: line.commit, history_head: pinnedHistoryHead, source_line: line.line, row_sha256: line.sha256 }
+        if (/\bartem\b/iu.test(line.author ?? '')) copy.excluded[row.key] = provenance
+        else copy.rows[row.key] = { last_copied: { status: line.status, note: line.note }, source_token: rowToken(row.key, row.status, row.note), provenance }
+      }
+    } else
     for (const row of board.rows.filter(row => rows.some(mapped => mapped.key === row.key))) {
       const mapped = rows.find(mapped => mapped.key === row.key), supplied = Object.hasOwn(copyOwners, row.key) ? copyOwners[row.key] : null, original = attributed.get(row.line)
       let provenance = { ...original, repository: contextRepo, history_head: historyHead, source_line: row.line, row_sha256: sha256(row.text) }
