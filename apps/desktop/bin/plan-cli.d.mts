@@ -17,7 +17,7 @@ export declare function runPlanCommand(argv: string[]): Promise<number>
 export declare function approvalText(text: string | null | undefined): string
 export declare function addToQueue(text: string, epic: number): string | null
 export declare function recordGo(plan: Awaited<ReturnType<typeof import('./plan-board.mjs').resolvePlan>>, options: {
-  epic: number; source?: string; approved?: string; expect: string; date?: string; note?: string; now?: Date; seam?: (step: string, commit: string) => void
+  epic: number; source?: string; approved?: string; expect: string; date?: string; note?: string; now?: Date; seam?: (step: string, commit: string) => void; copySeam?: (phase: string, state: unknown) => void | Promise<void>
 }): Promise<{
   outcome: 'recorded' | 'recorded-before'; commit: string; date: string; source: string; approvedSha: string; file: string; repo: string; epicIncluded: boolean
   row: { status: string; note: string; token: string } | null; pending: boolean; noteClipped?: boolean

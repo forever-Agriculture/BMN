@@ -6,7 +6,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, re
 import { homedir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ROW, rowToken, suggestedLeadHint, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
+import { rowToken, suggestedLeadHint, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
 import { FROM_BMAD as STATUS_TABLE } from '../../apps/desktop/bin/plan-statuses.mjs'
 
 /**
@@ -181,6 +181,66 @@ export function reverseRewrites(text, rewrites) {
   return out
 }
 
+/** Apply D25 again after merging hand edits from an older full-history plan; that merge cannot resurrect finished work. */
+export function selectUnfinishedPlan(stage, manifest) {
+  if (!manifest.unfinished_only) return
+  const finished = new Set(manifest.board.rows.filter(row => row.to === 'archive-only' && /^epic-\d+$/u.test(row.key)).map(row => rowEpic(row.key)))
+  const boardPath = join(stage, 'status.yaml'), boardText = readFileSync(boardPath, 'utf8'), board = parseBoard(boardText)
+  for (const row of board.rows) if (/^epic-\d+$/u.test(row.key) && ['done', 'dropped'].includes(row.status)) finished.add(rowEpic(row.key))
+  const nextNumber = 1 + Math.max(0, ...board.rows.map(row => rowEpic(row.key)).filter(Number.isFinite))
+  const omittedLines = new Set(board.rows.filter(row => finished.has(rowEpic(row.key))).map(row => row.line - 1))
+  const lines = boardText.split('\n').filter((_, index) => !omittedLines.has(index))
+  const queueAt = lines.findIndex(line => /^queue:/u.test(line))
+  if (queueAt >= 0) {
+    let end = queueAt + 1
+    while (end < lines.length && /^\s+-\s+\d+/u.test(lines[end])) end++
+    const previous = [...lines.slice(queueAt, end).join('\n').replace(/#.*$/gmu, '').matchAll(/\b\d+\b/gu)].map(match => Number(match[0]))
+    const present = new Set(board.rows.filter(row => /^epic-\d+$/u.test(row.key) && !finished.has(rowEpic(row.key))).map(row => rowEpic(row.key)))
+    const ready = board.rows.filter(row => /^epic-\d+$/u.test(row.key) && row.status === 'ready').map(row => rowEpic(row.key))
+    const queue = [...new Set([...previous.filter(number => present.has(number)), ...ready.filter(number => present.has(number))])]
+    lines.splice(queueAt, end - queueAt, ...(queue.length ? ['queue:', ...queue.map(number => `  - ${number}`)] : ['queue: []']))
+  }
+  const selectedBoard = lines.join('\n')
+  if (selectedBoard !== boardText) writeFileSync(boardPath, selectedBoard)
+  const files = filesUnder(stage).map(file => file.path), present = new Set(files)
+  const excluded = path => ((/^epics\//u.test(path) || /^references\/(?:platform|history\/docs\/platform)\//u.test(path)) && finished.has(Number(/(?:^|\/)(?:epic-)?0*(\d+)[-.]/u.exec(path)?.[1]))) || (path.startsWith('shared/') && !Object.hasOwn(manifest.written, path))
+  const kept = new Set(files.filter(path => !excluded(path) && (!path.startsWith('references/') || Object.hasOwn(manifest.written, path))))
+  const pending = [...kept], scanned = new Set(), gone = new Set()
+  const note = 'references/gone-link-targets.md'
+  const map = target => target.startsWith('plan/') && excluded(target.slice(5)) ? (gone.add(target.slice(5)), { path: `plan/${note}`, anchor: '' }) : null
+  while (pending.length) {
+    const path = pending.pop()
+    if (scanned.has(path)) continue
+    scanned.add(path)
+    if (!path.endsWith('.md')) continue
+    const full = join(stage, path), text = readFileSync(full, 'utf8')
+    const rewritten = rewriteLinks(text, `plan/${path}`, `plan/${path}`, map, () => true)
+    if (rewritten.text !== text) writeFileSync(full, rewritten.text)
+    for (const link of linksIn(rewritten.text)) {
+      if (/^[a-z][a-z0-9+.-]*:|^\//iu.test(link.dest)) continue
+      let name = link.dest.split('#')[0]; try { name = decodeURI(name) } catch { /* as written */ }
+      const target = name ? posix.normalize(posix.join(posix.dirname(path), name.replace(/:\d+(?::\d+)?$/u, ''))) : path
+      for (const candidate of files) if (!excluded(candidate) && (candidate === target || candidate.startsWith(target + '/')) && !kept.has(candidate)) { kept.add(candidate); pending.push(candidate) }
+    }
+  }
+  // Generated missing-target notes remain authoritative even if no rewritten link needed them until this merge.
+  if (present.has(note) || gone.size) {
+    kept.add(note); mkdirSync(dirname(join(stage, note)), { recursive: true })
+    const before = existsSync(join(stage, note)) ? readFileSync(join(stage, note), 'utf8') : '# Link targets kept in Git history\n'
+    if (gone.size) writeFileSync(join(stage, note), before + '\n## Finished work omitted by D25\n\n' + [...gone].sort().map(path => `- \`${path}\`: finished before the move; its original remains in Git history.`).join('\n') + '\n')
+  }
+  for (const path of files) if (!kept.has(path)) rmSync(join(stage, path))
+  const plan = join(stage, 'PLAN.md'), text = readFileSync(plan, 'utf8')
+  const next = /^New epics number from \d+\.[^\n]*/mu.exec(readFileSync(join(manifest.stage, 'PLAN.md'), 'utf8'))?.[0]
+  if (next) {
+    const existing = /^New epics number from (\d+)\.[^\n]*/mu.exec(text)
+    const declared = Number(existing?.[1] ?? 0)
+    const updated = (existing?.[0] ?? next).replace(/\d+/u, String(Math.max(declared, nextNumber, Number(/\d+/u.exec(next)[0]))))
+    const result = /^New epics number from /mu.test(text) ? text.replace(/^New epics number from \d+\.[^\n]*/mu, updated) : text.replace('\n## Users', '\n' + updated + '\n\n## Users')
+    if (result !== text) writeFileSync(plan, result)
+  }
+}
+
 /** The board: header lines before `development_status:` and each row with its line, status and comment. */
 function parseBoard(text) {
   const lines = text.split('\n')
@@ -191,7 +251,7 @@ function parseBoard(text) {
   lines.forEach((line, index) => {
     if (/^development_status:/u.test(line)) { section = true; return }
     if (!section) { header.push({ line: index + 1, text: line }); return }
-    const row = /^ {2}([\w.-]+):[ \t]*([\w-]+)[ \t]*(?:#[ \t]?(.*?))?[ \t]*$/u.exec(line)
+    const row = /^ {2}([\w.-]+):[ \t]*([\w-]+)[ \t]*(?:#[ \t]?(.*?))?[ \t]*$/u.exec(line.replace(/\r$/u, ''))
     if (row) rows.push({ line: index + 1, key: row[1], status: row[2], comment: row[3] ?? '', text: line })
     else other.push({ line: index + 1, text: line })
   })
@@ -203,7 +263,8 @@ function parseBoard(text) {
  * Build the staged plan. `repo` is the product checkout holding `_bmad-output/`; `stage` an empty folder that
  * becomes `plan/`. Returns the manifest (also written to `<stage>/../migration-manifest.json`).
  */
-export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, contextRepo = repo, date = new Date().toISOString().slice(0, 10), docs = null, vision = null, keepBmad = false, copyOwners = {}, archive: archiveFolder = join(homedir(), 'projects', `bmn-archive-${date}`) }) {
+export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, contextRepo = repo, date = new Date().toISOString().slice(0, 10), docs = null, vision = null, keepBmad = false, unfinishedOnly = false, archive: archiveFolder = join(homedir(), 'projects', `bmn-archive-${date}`) }) {
+  if (keepBmad && unfinishedOnly) throw new Error('unfinished-only cannot omit rows from a kept BMAD board')
   if (existsSync(stage) && readdirSync(stage).length > 0) throw new Error(`${stage} is not empty: refusing to stage over it`)
   const planning = '_bmad-output/planning-artifacts'
   const implementation = '_bmad-output/implementation-artifacts'
@@ -214,10 +275,12 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   const boardText = readFileSync(join(repo, boardPath), 'utf8')
   const { segments } = segmentEpics(epicsText)
   const board = parseBoard(boardText)
-  const epics = segments.filter((segment) => segment.kind === 'epic')
+  let epics = segments.filter((segment) => segment.kind === 'epic')
+  const finished = new Set(board.rows.filter(row => /^epic-\d+$/u.test(row.key) && ['done', 'dropped'].includes(STATUS_TABLE[row.status])).map(row => rowEpic(row.key)))
+  const nextEpic = 1 + Math.max(0, ...board.rows.map(row => rowEpic(row.key)).filter(Number.isFinite), ...epics.map(epic => epic.number))
   const platformFiles = new Set(inventory.files.filter((file) => file.path.startsWith('docs/platform/')).map((file) => file.path))
   for (const number of new Set(board.rows.map((row) => rowEpic(row.key)).filter(Number.isFinite))) {
-    if (epics.some((epic) => epic.number === number)) continue
+    if (epics.some((epic) => epic.number === number) || (unfinishedOnly && finished.has(number))) continue
     const candidates = inventory.files.filter((file) => new RegExp(`^epic-0*${number}[-.].*\\.md$`, 'u').test(basename(file.path)) && file.link === null)
       .map((file) => ({ ...file, text: readFileSync(join(repo, file.path), 'utf8') }))
       .sort((one, two) => [...two.text.matchAll(new RegExp(`^#{2,4} Story ${number}\\.`, 'gmu'))].length - [...one.text.matchAll(new RegExp(`^#{2,4} Story ${number}\\.`, 'gmu'))].length || one.path.localeCompare(two.path))
@@ -230,7 +293,31 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
     const title = found ? basename(found.path, '.md').replace(new RegExp(`^epic-0*${number}-?`, 'u'), '') || `Epic ${number}` : `Recorded on the board ${number}`
     epics.push({ kind: 'epic', number, title, text: found?.text ?? `# Epic ${number}: ${title}\n\nRecorded on the old board only; its original comments are in history.md.\n`, source: found?.path ?? null, synthetic: !found, start: 0, end: found ? found.text.split('\n').length : 0 })
   }
+  if (unfinishedOnly) epics = epics.filter(epic => !finished.has(epic.number))
+  const keptSegment = segment => !unfinishedOnly || segment.kind === 'front' || (segment.kind === 'epic' ? !finished.has(segment.number) : segment.covers.some(number => !finished.has(number)))
   const epicFile = new Map(epics.map((epic) => [epic.number, `epics/${pad3(epic.number)}-${slugOf(epic.title)}.md`]))
+  // Follow the unfinished contracts' links transitively. Unlinked historical evidence stays in Git and the local archive.
+  const selected = new Set([epicsPath, boardPath, ...epics.map(epic => epic.source).filter(Boolean)])
+  const finishedFile = path => /^(?:docs\/platform|_bmad-output\/planning-artifacts)\/(?:.*\/)?epic-0*(\d+)[-.]/u.test(path) && finished.has(Number(/(?:^|\/)epic-0*(\d+)[-.]/u.exec(path)?.[1]))
+  const selectLinks = (text, from) => {
+    for (const link of linksIn(text)) {
+      if (/^[a-z][a-z0-9+.-]*:|^\//iu.test(link.dest)) continue
+      let path = link.dest.split('#')[0]
+      try { path = decodeURI(path) } catch { /* Keep malformed URLs as written, like rewriteLinks. */ }
+      const target = path === '' ? from : posix.normalize(posix.join(posix.dirname(from), path.replace(/:\d+(?::\d+)?$/u, '')))
+      if (finishedFile(target)) continue
+      for (const file of inventory.files) if ((file.path === target || file.path.startsWith(target + '/')) && !finishedFile(file.path)) selected.add(file.path)
+    }
+  }
+  if (unfinishedOnly) {
+    for (const segment of segments.filter(keptSegment)) selectLinks(segment.text, epicsPath)
+    const scanned = new Set()
+    while ([...selected].some(path => !scanned.has(path))) for (const path of [...selected]) {
+      if (scanned.has(path)) continue
+      scanned.add(path)
+      if (path !== epicsPath && path.endsWith('.md') && existsSync(join(repo, path))) selectLinks(readFileSync(join(repo, path), 'utf8'), path)
+    }
+  }
   const sharedNames = new Set()
   const sharedFile = (segment) => {
     let name = segment.kind === 'front' ? 'front-matter.md' : `${slugOf(segment.title.replace(/^Extension:?\s*/iu, ''))}.md`
@@ -242,6 +329,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
 
   // Where each source path goes in the plan (repository-relative → plan-relative), or null for the archive only.
   const placeOf = (path) => {
+    if (unfinishedOnly && !selected.has(path)) return null
     if (path === epicsPath) return 'shared/front-matter.md'
     if (path === boardPath) return 'status.yaml'
     if (keepBmad && path.startsWith('_bmad-output/')) return null // Kept where it is; the plan links it.
@@ -256,7 +344,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   const inSource = target => inventory.roots.some(root => target === root || target.startsWith(root + '/')) || /^docs\/platform\/(?:.*\/)?epic-\d+[-.].*\.md$/u.test(target)
   const contextPath = target => existsSync(join(repo, target)) || inSource(target) ? join(repo, target) : join(contextRepo, target)
   const exists = (target) => existsSync(contextPath(target))
-  const manifest = { version: 1, date, repo, context_repo: contextRepo, source_roots: inventory.roots, stage, archive: archiveFolder, keep_bmad: keepBmad, moved_from: boardPath, retired: keepBmad ? [] : inventory.roots, files: [], spans: [], rewrites: {}, unresolved: [], gone: [], board: { rows: [], header: [] }, written: {} }
+  const manifest = { version: 1, date, repo, context_repo: contextRepo, source_roots: inventory.roots, stage, archive: archiveFolder, keep_bmad: keepBmad, unfinished_only: unfinishedOnly, moved_from: boardPath, retired: keepBmad ? [] : inventory.roots, files: [], spans: [], rewrites: {}, unresolved: [], gone: [], board: { rows: [], header: [] }, written: {} }
   const retired = (target) => manifest.retired.some((root) => target === root || target.startsWith(`${root}/`))
 
   // Where each heading of epics.md lands: its anchor in epics.md, and the file and anchor it has after the move.
@@ -270,7 +358,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
     for (const heading of headingsOf(segment.text)) {
       const old = headingAnchor(heading, documentCounter)
       const placed = headingAnchor(heading, fileCounters.get(file))
-      if (!anchors.has(old)) anchors.set(old, { file, anchor: placed })
+      if (!anchors.has(old)) anchors.set(old, { file, anchor: placed, kept: keptSegment(segment) })
     }
   }
   const sourceAnchors = new Map()
@@ -290,15 +378,17 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
     if (target === epicsPath && line !== '') {
       const number = Number(line.slice(1).split(':')[0])
       const holder = segments.find((segment) => number > segment.start && number <= segment.end)
+      if (holder && !keptSegment(holder)) return gone(target, anchor, from)
       return { path: `${planRoot}/${holder ? fileOfSegment(holder) : 'shared/front-matter.md'}`, anchor: anchor ?? '' }
     }
     if (target === epicsPath) {
       const placed = anchor ? anchors.get(anchor) : undefined
-      if (placed) return { path: `${planRoot}/${placed.file}`, anchor: placed.anchor }
+      if (placed) return placed.kept ? { path: `${planRoot}/${placed.file}`, anchor: placed.anchor } : gone(target, anchor, from)
       const number = /^epic-(\d+)\b/u.exec(anchor ?? '')?.[1]
       if (number && epicFile.has(Number(number))) return { path: `${planRoot}/${epicFile.get(Number(number))}`, anchor: '' }
       return anchor ? dead(`${planRoot}/shared/front-matter.md`) : { path: `${planRoot}/shared/front-matter.md`, anchor: '' }
     }
+    if (unfinishedOnly && exists(target) && placeOf(target) === null && (retired(target) || platformFiles.has(target))) return gone(target, anchor, from)
     // A file that leaves with the retired folders (_bmad/, the apps' bmad-* skills) is linked at its archived copy.
     if (exists(target) && placeOf(target) === null && retired(target)) {
       const path = `${archiveFolder}/files/${target}${line}`
@@ -342,7 +432,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   for (const row of board.rows) {
     const epicNumber = rowEpic(row.key)
     const span = { source: boardPath, lines: [row.line, row.line], sha256: sha256(row.text) }
-    if (/^epic-\d+-retrospective$/u.test(row.key)) { manifest.board.rows.push({ ...span, key: row.key, to: 'archive-only' }); continue }
+    if ((!keepBmad && /^epic-\d+-retrospective$/u.test(row.key)) || (unfinishedOnly && finished.has(epicNumber))) { manifest.board.rows.push({ ...span, key: row.key, to: 'archive-only' }); continue }
     let status = STATUS_TABLE[row.status]
     if (status === undefined) throw new Error(`board row ${row.key}: status ${row.status} has no mapping`)
     if (/^epic-\d+$/u.test(row.key) && status !== 'done' && PARKED.test(row.comment)) status = 'paused'
@@ -434,6 +524,10 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
 
   // Epic files: marker, links to shared text, the epic's own extension, the epic, then the moved board comments.
   for (const segment of segments) {
+    if (!keptSegment(segment)) {
+      manifest.spans.push({ source: epicsPath, lines: [segment.start + 1, segment.end], sha256: sha256(segment.text), to: 'archive-only' })
+      continue
+    }
     if (segment.kind === 'front' || (segment.kind === 'extension' && segment.covers.length !== 1)) {
       const moved = moveText(segment.text, epicsPath, segment.file)
       write(segment.file, `${moved.text}\n`, moved.rewrites)
@@ -479,19 +573,19 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
     const epic = /^epic-(\d+)$/u.exec(row.key), story = /^(\d+)-(\d+)(?:-|$)/u.exec(row.key)
     const identity = epic ? `epic ${Number(epic[1])}` : story ? `story ${Number(story[1])}.${Number(story[2])}` : null
     const opaque = !/^(?:epic-)?\d+(?:[-.]|$)/u.test(row.key)
-    if (opaque || (identity !== null && identities.has(identity))) {
+    if (opaque || identity === null || identities.has(identity)) {
       const original = manifest.board.rows.find((entry) => entry.key === row.key)
       if (!original) throw new Error(`legacy row ${row.key} has no original board span`)
-      legacyRows[row.key] = { original_key: row.key, source_line: original.lines[0], source_sha256: original.sha256, reason: opaque ? 'opaque original identifier' : 'distinct original row sharing a numeric identifier' }
+      legacyRows[row.key] = { original_key: row.key, source_line: original.lines[0], source_sha256: original.sha256, reason: opaque || identity === null ? 'opaque original identifier' : 'distinct original row sharing a numeric identifier' }
     } else if (identity !== null) identities.add(identity)
   }
   if (Object.keys(legacyRows).length) write('legacy-rows.json', JSON.stringify({ version: 1, source_board: boardPath, rows: legacyRows }, null, 2) + '\n')
   let historyHead = pinnedHistoryHead
   if (!historyHead) try { historyHead = execFileSync('git', ['-C', contextRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { /* a stage without history grants no historical approval */ }
-  write('migration.json', JSON.stringify({ version: 1, source_board: boardPath, history_head: historyHead, source_board_sha256: sha256(boardText) }, null, 2) + '\n')
+  write('migration.json', JSON.stringify({ version: 1, source_board: boardPath, history_head: historyHead, source_board_sha256: sha256(boardText), unfinished_only: unfinishedOnly }, null, 2) + '\n')
   const statusText = [
     '# The project\'s board (BMN plan format, docs/planning.md). Edit by hand whenever you like; agents change one row with `bmn plan set`.',
-    `# Moved from BMAD's sprint-status.yaml on ${date}: header history in history.md, long comments in each epic's Log, retrospective rows archived.`,
+    `# Moved from BMAD's sprint-status.yaml on ${date}: header history in history.md, long comments in each epic's Log${keepBmad ? ', every original row retained.' : ', retrospective rows archived.'}`,
     'format: bmn-plan', 'schema_version: 1',
     `bmad_board: ${boardPath}`, `moved_from: ${boardPath}`,
     ...(Object.keys(legacyRows).length ? ['legacy_rows: legacy-rows.json'] : []),
@@ -504,53 +598,22 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   ].join('\n')
   write('status.yaml', statusText)
   if (keepBmad) {
-    const attributed = new Map()
-    try {
-      const blamed = execFileSync('git', ['-C', contextRepo, 'blame', '--line-porcelain', '--contents', '-', '--', boardPath], { input: boardText, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'] })
-      let commit = null, author = null, line = null
-      for (const text of blamed.split('\n')) {
-        const head = /^([0-9a-f]{40,64}) \d+ (\d+)(?: \d+)?$/u.exec(text)
-        if (head) { commit = head[1]; line = Number(head[2]); author = null }
-        else if (text.startsWith('author ')) author = text.slice(7)
-        else if (text.startsWith('\t')) attributed.set(line, { author, commit })
-      }
-    } catch { /* Missing or uncertain attribution parks activation; never infer non-Artem ownership. */ }
-    const copy = { version: 1, active: false, source_board: boardPath, rows: Object.create(null), excluded: Object.create(null), unresolved: Object.create(null) }
-    if (pinnedHistoryHead) {
-      // D10 on a branch cut from upstream: who last changed the target line there, and what that line holds. A row absent there stays in his plan only.
-      const target = new Map()
-      const git = args => execFileSync('git', ['-C', contextRepo, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
-      let section = false, author = null, commit = null, sourceLine = null
-      for (const text of git(['blame', '--line-porcelain', pinnedHistoryHead, '--', boardPath]).split('\n')) {
-        const head = /^([0-9a-f]{40,64}) \d+ (\d+)(?: \d+)?$/u.exec(text)
-        if (head) { commit = head[1]; sourceLine = Number(head[2]); author = null }
-        else if (text.startsWith('author ')) author = text.slice(7)
-        else if (text.startsWith('\t')) {
-          const line = text.slice(1).replace(/\r$/u, '')
-          if (/^\S/u.test(line) && !line.startsWith('#')) section = /^development_status:/u.test(line)
-          const row = section && ROW.exec(line)
-          if (row) target.set(row[1], { status: row[2], note: row[3] ?? '', author, commit, line: sourceLine, sha256: sha256(line) })
-        }
-      }
-      copy.plan_only = []
-      for (const row of rows) {
-        const line = target.get(row.key)
-        if (!line) { copy.plan_only.push(row.key); continue }
-        const provenance = { author: line.author, commit: line.commit, history_head: pinnedHistoryHead, source_line: line.line, row_sha256: line.sha256 }
-        if (/\bartem\b/iu.test(line.author ?? '')) copy.excluded[row.key] = provenance
-        else copy.rows[row.key] = { last_copied: { status: line.status, note: line.note }, source_token: rowToken(row.key, row.status, row.note), provenance }
-      }
-    } else
-    for (const row of board.rows.filter(row => rows.some(mapped => mapped.key === row.key))) {
-      const mapped = rows.find(mapped => mapped.key === row.key), supplied = Object.hasOwn(copyOwners, row.key) ? copyOwners[row.key] : null, original = attributed.get(row.line)
-      let provenance = { ...original, repository: contextRepo, history_head: historyHead, source_line: row.line, row_sha256: sha256(row.text) }
-      if (supplied) {
-        if (supplied.row_sha256 !== provenance.row_sha256 || typeof supplied.author !== 'string' || !supplied.author.trim() || typeof supplied.evidence !== 'string' || !supplied.evidence.trim()) throw new Error(`COPY_PROVENANCE_INVALID: ${row.key} handover does not prove the exact captured row`)
-        provenance = { ...provenance, author: supplied.author, evidence: supplied.evidence, commit: null }
-      }
-      if (!provenance.author || provenance.author === 'Not Committed Yet' || (!provenance.evidence && (!provenance.commit || /^0+$/u.test(provenance.commit)))) copy.unresolved[row.key] = provenance
-      else if (/\bartem\b/iu.test(provenance.author)) copy.excluded[row.key] = provenance
-      else copy.rows[row.key] = { last_copied: { status: row.status, note: row.comment }, source_token: rowToken(mapped.key, mapped.status, mapped.note), provenance }
+    // D25 replaces writer ownership with two-way baselines for every row. Original dirty inputs remain in the capture.
+    const original = pinnedHistoryHead ? execFileSync('git', ['-C', contextRepo, 'show', `${pinnedHistoryHead}:${boardPath}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }) : boardText
+    const target = new Map(parseBoard(original).rows.map(row => [row.key, { status: row.status, note: row.comment }]))
+    const copy = { version: 2, active: false, source_board: boardPath, rows: Object.create(null), excluded: {}, unresolved: {}, holds: {} }
+    const capturedRows = new Map(board.rows.map(row => [row.key, row]))
+    for (const row of rows) {
+      const raw = target.get(row.key) ?? null
+      const value = raw ? { status: STATUS_TABLE[raw.status], note: [...raw.note].slice(0, NOTE_LIMIT).join('') } : null
+      if (raw && !value.status) throw new Error(`COPY_STATUS: ${row.key} has no baseline mapping`)
+      copy.rows[row.key] = { last_copied: raw, source_value: value, source_token: value ? rowToken(row.key, value.status, value.note) : null,
+        note_projection: { raw: capturedRows.get(row.key)?.comment ?? row.note, visible: row.note } }
+    }
+    for (const [key, raw] of target) if (!Object.hasOwn(copy.rows, key)) {
+      const value = { status: STATUS_TABLE[raw.status], note: [...raw.note].slice(0, NOTE_LIMIT).join('') }
+      if (!value.status) throw new Error(`COPY_STATUS: ${key} has no deleted baseline mapping`)
+      copy.rows[key] = { last_copied: raw, source_value: value, source_token: rowToken(key, value.status, value.note) }
     }
     manifest.copy = copy
     write('bmad-copy.json', JSON.stringify(copy, null, 2) + '\n')
@@ -578,7 +641,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   // before the switch (Story 77.7), every principle marked provisional.
   const visionText = vision === null ? visionDraft({ repo: contextRepo, segments, date }) : readFileSync(vision, 'utf8')
   write('VISION.md', visionText)
-  write('PLAN.md', planText({ repo: contextRepo, date, docs, vision: visionText, provisional: vision === null, rows, keepBmad }))
+  write('PLAN.md', planText({ repo: contextRepo, date, docs, vision: visionText, provisional: vision === null, rows, keepBmad, nextEpic, unfinishedOnly }))
   writeFileSync(join(dirname(stage), 'migration-manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`)
   return manifest
 }
@@ -610,7 +673,7 @@ ${sections.join('\n')}${anchorLines.length ? `\n## Anchors that were gone\n\n${[
 }
 
 /** PLAN.md: today's purpose and scope from the vision and the board, the standing rules, and the index of docs/; the old front matter stays history in shared/. */
-function planText({ repo, date, docs, vision = '', provisional = false, rows = [], keepBmad = false }) {
+function planText({ repo, date, docs, vision = '', provisional = false, rows = [], keepBmad = false, nextEpic, unfinishedOnly = false }) {
   const visionLead = /^## Vision\s*\n+([\s\S]*?)(?:\n\s*\n|\n## |$(?![\s\S]))/mu.exec(vision)?.[1]?.replace(/\s+/gu, ' ').trim() ?? ''
   const epics = rows.filter((row) => /^epic-\d+$/u.test(row.key)).map((row) => ({ number: Number(row.key.slice(5)), status: row.status }))
   const numbers = epics.map((epic) => epic.number)
@@ -625,6 +688,8 @@ Moved from BMAD on ${date}. Every epic before ${date} is a legacy epic in \`epic
 ${visionLead || 'See VISION.md.'}${provisional ? ' (The vision is a draft until the owner approves it.)' : ''}
 
 ${keepBmad ? 'The epic text and board are copied here. Every other planning document stays where it was, in [`_bmad-output/`](../_bmad-output/), and the epics link it there.\n\n' : ''}The principles every epic serves are in [VISION.md](VISION.md). The plan holds ${numbers.length ? `epics ${Math.min(...numbers)}–${Math.max(...numbers)}` : 'no epics yet'}: ${done} finished (done or dropped) and ${epics.length - done} not, each with its row in [status.yaml](status.yaml); the queue says what comes next.
+
+New epics number from ${nextEpic}.${unfinishedOnly ? ' Finished epics were omitted from this move; their contracts and rows remain in Git history.' : ''}
 
 ## Users
 
@@ -929,7 +994,7 @@ async function main(argv) {
   }
   if (action === 'stage') {
     const stage = resolve(flag(argv, '--stage'))
-    const manifest = stagePlan({ repo, stage, date: flag(argv, '--date') ?? undefined, vision: flag(argv, '--vision'), keepBmad: argv.includes('--keep-bmad'), ...(flag(argv, '--archive') ? { archive: resolve(flag(argv, '--archive')) } : {}) })
+    const manifest = stagePlan({ repo, stage, date: flag(argv, '--date') ?? undefined, vision: flag(argv, '--vision'), keepBmad: argv.includes('--keep-bmad'), unfinishedOnly: argv.includes('--unfinished-only'), ...(flag(argv, '--archive') ? { archive: resolve(flag(argv, '--archive')) } : {}) })
     const failures = checkSpans({ repo, stage, manifest })
     process.stdout.write(`${JSON.stringify({ files: manifest.files.length, archive_only: manifest.files.filter((file) => file.to === 'archive-only').length, spans: manifest.spans.length, board_rows: manifest.board.rows.length, rewrites: Object.values(manifest.rewrites).flat().length, unresolved: manifest.unresolved.length, span_failures: failures }, null, 1)}\n`)
     return failures.length === 0 ? 0 : 1

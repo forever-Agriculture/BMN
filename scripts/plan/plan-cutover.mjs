@@ -7,12 +7,13 @@ import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { migrationPaths } from '../../apps/desktop/bin/plan-migration-lock.mjs'
 import { checkPlan, defaultLocation, epicLeadHint, PlanError, ROW, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
-import { replaceRow } from '../../apps/desktop/bin/plan-cli.mjs'
+import { addToQueue, replaceRow } from '../../apps/desktop/bin/plan-cli.mjs'
 import { TO_BMAD } from '../../apps/desktop/bin/plan-statuses.mjs'
+import { fullCopyNote } from '../../apps/desktop/bin/plan-bmad-copy.mjs'
 import { verifyParserProof } from '../../apps/desktop/bin/plan-bmad-parser.mjs'
 import { preparedBmadProof } from './prepare-bmad-copy.mjs'
 export { migrationPaths, withMigrationWriter } from '../../apps/desktop/bin/plan-migration-lock.mjs'
-import { archive, checkSpans, sources, stagePlan } from './migrate-bmad-plan.mjs'
+import { archive, checkSpans, selectUnfinishedPlan, sources, stagePlan } from './migrate-bmad-plan.mjs'
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 function git(repo, args, options = {}) {
@@ -409,7 +410,7 @@ export function mergedMoveOf(repo, upstream) {
   const added = textGit(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-filter=A', '--format=%H', head, '--', 'plan/migration.json']).split('\n').filter(Boolean)
   const commit = added.find(id => spawnSync('git', ['-C', repo, 'rev-parse', `${id}^1`], { encoding: 'utf8' }).stdout.trim() === metadata.history_head)
   if (metadata.version !== 1 || !commit) throw new PlanError('MOVE_BOUNDARY_UNCONFIRMED', `upstream's move commit does not descend directly from ${metadata.history_head}; it was squashed or rebased after master advanced`)
-  return { head, anchor: metadata.history_head, commit, source_board: metadata.source_board }
+  return { head, anchor: metadata.history_head, commit, source_board: metadata.source_board, unfinished_only: metadata.unfinished_only === true }
 }
 /**
  * A contribution can leave between the cut and the switch: a checkout pulled the move, a worktree was removed. What now
@@ -535,6 +536,18 @@ export function mergeStagedPlan({ base, ours, theirs, output, date, localOnly = 
   rmSync(`${output}.merge`, { recursive: true, force: true })
   result.approval_conflicts = [...new Set(result.approval_conflicts)].sort((x, y) => x - y)
   restoreLeadHints(output, result)
+  const boardPath = join(output, 'status.yaml')
+  if (existsSync(boardPath)) {
+    let board = readFileSync(boardPath, 'utf8')
+    for (const [key, row] of rowsOf(board)) if (/^epic-\d+$/u.test(key) && row.status === 'ready') board = addToQueue(board, Number(key.slice(5))) ?? board
+    writeFileSync(boardPath, board)
+  }
+  const planPath = join(output, 'PLAN.md'), freshPath = join(ours, 'PLAN.md')
+  if (existsSync(planPath) && existsSync(freshPath)) {
+    const text = readFileSync(planPath, 'utf8'), fresh = readFileSync(freshPath, 'utf8'), declaration = /^New epics number from (\d+)\./mu
+    const before = declaration.exec(text), incoming = declaration.exec(fresh)
+    if (before && incoming && Number(incoming[1]) > Number(before[1])) writeFileSync(planPath, text.replace(declaration, `New epics number from ${incoming[1]}.`))
+  }
   return result
 }
 /** A row's note and its epic's text can come from different sides; the row always carries the hint of the text that won. Its earlier note stays on record. */
@@ -709,7 +722,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
       if (problem) return { outcome: 'parked', code: 'HANDOVER_REQUIRED', reason: problem, journal: paths.journal }
       if (merged) carryBaseline(repo, merged.anchor, capture.projection, baseline.projection)
       stage = join(runFolder, `stage-${pass}`, 'plan')
-      manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage, keepBmad, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged?.anchor ?? null, archive: join(runFolder, `archive-${pass}`) })
+      manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage, keepBmad, unfinishedOnly: merged?.unfinished_only === true, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged?.anchor ?? null, archive: join(runFolder, `archive-${pass}`) })
       if (manifest.copy && Object.keys(manifest.copy.unresolved).length) return { outcome: 'parked', code: 'COPY_PROVENANCE_REQUIRED', rows: Object.keys(manifest.copy.unresolved), journal: paths.journal }
       const archiveFailures = archive({ repo: capture.projection, manifest, folder: manifest.archive })
       if (archiveFailures.length) throw new Error('ARCHIVE_INVALID: ' + archiveFailures.join('; '))
@@ -718,7 +731,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
       if (spans.length) throw new Error('STAGE_INVALID: ' + spans.join('; '))
       if (merged) {
         const baseStage = join(runFolder, `base-${pass}`, 'plan')
-        stagePlan({ repo: baseline.projection, contextRepo: repo, stage: baseStage, keepBmad, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged.anchor, archive: join(runFolder, `base-archive-${pass}`) })
+        stagePlan({ repo: baseline.projection, contextRepo: repo, stage: baseStage, keepBmad, unfinishedOnly: merged.unfinished_only === true, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged.anchor, archive: join(runFolder, `base-archive-${pass}`) })
         let theirs = extractPlan(repo, merged.head, join(runFolder, `upstream-${pass}`))
         if (native) {
           // What the checkout has beyond upstream, committed or live, on top of upstream's plan: the base is where the two forked.
@@ -731,6 +744,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
         planMerge = mergeStagedPlan({ base: baseStage, ours: stage, theirs, output, date, localOnly, keep: join(runFolder, 'local-only') })
         stage = output
       }
+      selectUnfinishedPlan(stage, manifest)
       const checked = await checkPlan({ productRoot: repo, planRoot: stage, boardPath: join(stage, 'status.yaml'), format: 'bmn-plan' })
       if (checked.findings.length) throw new Error('STAGE_INVALID: ' + checked.findings.map(f => f.reason).join('; '))
       await step('staged', { stage })
@@ -753,7 +767,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
     const moved = join(stage, 'references', 'moved', date)
     mkdirSync(moved, { recursive: true })
     mkdirSync(join(moved, 'conflicts'), { recursive: true })
-    for (let index = 0; index < capture.conflicts.length; index++) if (!staysLocal(capture.conflicts[index].path, manifest.files, localOnly)) cpSync(capture.conflicts[index].kept, join(moved, 'conflicts', `conflict-${index + 1}.local`))
+    for (let index = 0; index < capture.conflicts.length; index++) if (!keepBmad && !manifest.unfinished_only && !staysLocal(capture.conflicts[index].path, manifest.files, localOnly)) cpSync(capture.conflicts[index].kept, join(moved, 'conflicts', `conflict-${index + 1}.local`))
     writeFileSync(join(moved, 'inputs.json'), JSON.stringify(merged ? publishedInputs(capture) : capture, null, 2) + '\n')
     const metadata = join(stage, 'migration.json')
     const metadataNow = loadJournal(metadata)
@@ -955,12 +969,12 @@ export async function rollbackPlan({ repo: given, handover, seam = async () => {
         if (Object.hasOwn(protectedRows, key)) continue
         const old = before.get(key), current = after.get(key)
         if (JSON.stringify(old) === JSON.stringify(current)) continue
-        const status = current ? TO_BMAD[current.status] : 'withdrawn', note = current?.note ?? 'removed from the owner plan after cutover'
+        const status = current ? TO_BMAD[current.status] : 'withdrawn', note = fullCopyNote(copy?.rows?.[key], current) ?? 'removed from the owner plan after cutover'
         if (!status) throw new Error(`UNKNOWN_STATUS: ${key} has ${current?.status}`)
-        const desired = { status, note: [...note].slice(0, 1000).join('') }, target = targetRows.get(key) ?? null
+        const desired = { status, note }, target = targetRows.get(key) ?? null
         const baseline = copy?.rows?.[key]?.last_copied ?? originalRows.get(key) ?? null
         if (JSON.stringify(target) !== JSON.stringify(baseline) && JSON.stringify(target) !== JSON.stringify(desired)) throw new Error(`ROLLBACK_COPY_CONFLICT: ${key}; the later BMAD row and canonical plan are retained; resolve the row before retrying rollback`)
-        boardText = replaceRow(boardText, key, status, [...note].slice(0, 1000).join(''))?.text ?? appendRow(boardText, key, status, [...note].slice(0, 1000).join(''))
+        boardText = replaceRow(boardText, key, status, note)?.text ?? appendRow(boardText, key, status, note)
       }
       writeFileSync(boardWrite.object, boardText); boardWrite.after.sha256 = sha256(boardText)
       if (planFingerprint(plan) !== fingerprint) throw new Error('INPUT_CHANGED: plan changed while preparing rollback; snapshot retained')

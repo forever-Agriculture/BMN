@@ -1,11 +1,11 @@
 // MODULE: migrate-bmad-plan.test.mjs - Story 77.6: the BMAD-to-plan move on a synthetic BMAD project: shared sections, links, long comments, a park, binaries, a rerun and a collision
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { archive, checkLinks, checkSpans, normalizeEpic, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
+import { archive, checkLinks, checkSpans, normalizeEpic, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, selectUnfinishedPlan, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
 
 const BMN = resolve(import.meta.dirname, '../../apps/desktop/bin/bmn')
 const roots = []
@@ -95,6 +95,69 @@ development_status:
 }
 
 describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
+  it('moves only unfinished epics and their transitive linked documents, accounting for omitted history (108 D25)', () => {
+    const { root, repo } = fixture(), source = '_bmad-output/planning-artifacts/epics.md'
+    const original = readFileSync(join(repo, source), 'utf8')
+    writeFileSync(join(repo, source), original.replace('## Epic 2: Second', '## Epic 2: Second\n\n[context](reference-context.md#part) and [finished](epics.md#epic-1-first-thing).'))
+    mkdirSync(join(repo, 'docs/platform'), { recursive: true })
+    writeFileSync(join(repo, 'docs/platform/epic-1-old.md'), '# Epic 1: Old\n')
+    const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, unfinishedOnly: true })
+    const board = readFileSync(join(stage, 'status.yaml'), 'utf8')
+    expect(board).not.toMatch(/epic-[13]:|[13]-1-/u)
+    expect(readdirSync(join(stage, 'epics'))).toHaveLength(2)
+    expect(readFileSync(join(stage, 'epics/002-second.md'), 'utf8')).toContain('gone-link-targets.md')
+    expect(existsSync(join(stage, 'references/reference-context.md'))).toBe(true)
+    expect(existsSync(join(stage, 'references/reference-1/shot.png'))).toBe(false)
+    expect(existsSync(join(stage, 'references/platform/epic-1-old.md'))).toBe(false)
+    expect(manifest.spans).toContainEqual(expect.objectContaining({ source, to: 'archive-only', sha256: createHash('sha256').update(segmentEpics(original).segments.find(s => s.number === 1).text).digest('hex') }))
+    expect(manifest.board.rows.find(row => row.key === 'epic-1').to).toBe('archive-only')
+    expect(manifest.unfinished_only).toBe(true)
+    expect(readFileSync(join(stage, 'PLAN.md'), 'utf8')).toContain('New epics number from 5.')
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+  })
+  it('does not copy an extension covering only finished epics (108 D25)', () => {
+    const { root, repo } = fixture(), path = join(repo, '_bmad-output/planning-artifacts/epics.md')
+    writeFileSync(path, readFileSync(path, 'utf8').replace('## Epic 1: First Thing', '## Extension: Finished only\n\nHistorical extension.\n\n## Epic 1: First Thing'))
+    const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, unfinishedOnly: true })
+    expect(existsSync(join(stage, 'shared/finished-only.md'))).toBe(false)
+    expect(manifest.spans.some(span => span.to === 'archive-only')).toBe(true)
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+  })
+  it('does not resurrect a hand-edited finished epic or its unlinked evidence when carrying an older cut forward (108 D25)', () => {
+    const { root, repo } = fixture(), stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, unfinishedOnly: true })
+    const old = join(stage, 'epics/001-hand-edited-title.md')
+    writeFileSync(old, '# Epic 1: Hand edited historical contract\n')
+    mkdirSync(join(stage, 'references/historical-evidence'), { recursive: true })
+    writeFileSync(join(stage, 'references/historical-evidence/raw.log'), 'old evidence\n')
+    const open = join(stage, 'epics/002-second.md')
+    writeFileSync(open, readFileSync(open, 'utf8') + '\n[finished](001-hand-edited-title.md)\n')
+    selectUnfinishedPlan(stage, manifest)
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(join(stage, 'references/historical-evidence/raw.log'))).toBe(false)
+    expect(readFileSync(open, 'utf8')).toContain('gone-link-targets.md')
+    expect(readFileSync(join(stage, 'references/gone-link-targets.md'), 'utf8')).toContain('001-hand-edited-title.md')
+  })
+  it('prunes merged finished rows and plan-only completed epics while preserving the next unused number (108 D25)', () => {
+    const { root, repo } = fixture(), stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, unfinishedOnly: true })
+    const board = join(stage, 'status.yaml')
+    writeFileSync(board, readFileSync(board, 'utf8').replace('queue: []', 'queue:\n  - 1\n  - 9\n  - 2') + '  epic-1: done\n  1-1-do-it: done\n  epic-9: done\n  9-1-newly-finished: done\n')
+    writeFileSync(join(stage, 'epics/009-newly-finished.md'), '# Epic 9: Newly finished\n')
+    selectUnfinishedPlan(stage, manifest)
+    expect(readFileSync(board, 'utf8')).not.toMatch(/epic-[19]:|[19]-1-/u)
+    expect(readFileSync(board, 'utf8')).toContain('queue:\n  - 2')
+    expect(existsSync(join(stage, 'epics/009-newly-finished.md'))).toBe(false)
+    expect(readFileSync(join(stage, 'PLAN.md'), 'utf8')).toContain('New epics number from 10.')
+  })
+  it('retains owner numbering reservations and prose through repeated final unfinished selections', () => {
+    const { root, repo } = fixture(), generated = join(root, 'out/plan'), manifest = stagePlan({ repo, stage: generated, unfinishedOnly: true })
+    const stage = join(root, 'merged'); cpSync(generated, stage, { recursive: true })
+    const plan = join(stage, 'PLAN.md'), declaration = 'New epics number from 200. Owner reserves the earlier numbers.'
+    writeFileSync(plan, readFileSync(plan, 'utf8').replace(/^New epics number from .*$/mu, declaration))
+    for (let pass = 0; pass < 2; pass++) {
+      selectUnfinishedPlan(stage, manifest)
+      expect(readFileSync(plan, 'utf8')).toContain(declaration)
+    }
+  })
   it.each(['07', '008', '9'])('discovers a platform contract whose filename uses epic number %s', padded => {
     const { root, repo } = fixture(), number = Number(padded), source = `docs/platform/epic-${padded}-hygiene.md`
     const text = `# Epic ${number}: Hygiene\n\n## Story ${number}.1: Preserve the contract\n\n**Acceptance criteria:**\n1. **Given** the original plan, **then** its complete contract remains primary.\n`
@@ -125,24 +188,22 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(readFileSync(join(stage, target), 'utf8')).toContain(shape === 'existing-primary' ? one : two)
     expect(manifest.spans).toContainEqual(expect.objectContaining({ source: `docs/platform/${shape === 'existing-primary' ? first : later}`, to: target }))
   })
-  it('seeds copied rows from exact blame and requires evidence for uncommitted writer provenance (107.7)', () => {
+  it('seeds every row for two-way sync, including Artem and dirty rows (108 D25)', () => {
     const { root, repo } = fixture(), board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
     const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })
     git('init', '-qb', 'main'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=f@example.invalid', 'commit', '-qm', 'initial plan')
     writeFileSync(board, readFileSync(board, 'utf8').replace('4-1-d: ready-for-dev', '4-1-d: review'))
     git('add', '.'); git('-c', 'user.name=Artem Kobrin', '-c', 'user.email=artem@example.invalid', 'commit', '-qm', 'Artem row')
+    const upstream = git('rev-parse', 'HEAD').toString().trim()
     writeFileSync(board, readFileSync(board, 'utf8').replace('4-2-extra-on-board: backlog', '4-2-extra-on-board: in-progress'))
-    const first = stagePlan({ repo, stage: join(root, 'one/plan'), keepBmad: true })
-    expect(first.copy.active).toBe(false)
-    expect(first.copy.rows['1-1-do-it'].last_copied).toEqual({ status: 'done', note: '' })
-    expect(first.copy.excluded['4-1-d'].author).toBe('Artem Kobrin')
-    expect(first.copy.unresolved['4-2-extra-on-board'].commit).toMatch(/^0+$/u)
-    const text = readFileSync(board, 'utf8').split('\n').find(line => line.startsWith('  4-2-extra-on-board:'))
-    const proof = { author: 'Fixture', row_sha256: createHash('sha256').update(text).digest('hex'), evidence: 'Synthetic fixture writer acknowledges this exact row' }
-    const second = stagePlan({ repo, stage: join(root, 'two/plan'), keepBmad: true, copyOwners: { '4-2-extra-on-board': proof } })
-    expect(second.copy.unresolved).toEqual({})
-    expect(second.copy.rows['4-2-extra-on-board'].provenance.evidence).toBe(proof.evidence)
-    expect(() => stagePlan({ repo, stage: join(root, 'bad/plan'), keepBmad: true, copyOwners: { '4-2-extra-on-board': { ...proof, row_sha256: 'wrong' } } })).toThrow('COPY_PROVENANCE_INVALID')
+    const result = stagePlan({ repo, stage: join(root, 'one/plan'), keepBmad: true, historyHead: upstream })
+    expect(result.copy.version).toBe(2)
+    expect(result.copy.active).toBe(false)
+    expect(result.copy.excluded).toEqual({})
+    expect(result.copy.unresolved).toEqual({})
+    expect(result.copy.rows['4-1-d'].last_copied.status).toBe('review')
+    expect(result.copy.rows['4-2-extra-on-board'].last_copied.status).toBe('backlog')
+    expect(result.copy.rows['4-2-extra-on-board'].source_value.status).toBe('backlog')
   })
   it('normalizes headings and missing planning sections while keeping every story requirement byte (107.4)', () => {
     const { root } = fixture(), path = join(root, '110-fixture.md')
@@ -165,7 +226,7 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, keepBmad: true })
     expect(checkSpans({ repo, stage, manifest })).toEqual([])
     const metadata = JSON.parse(readFileSync(join(stage, 'legacy-rows.json'), 'utf8'))
-    expect(Object.keys(metadata.rows)).toEqual(['1-1-distinct-finished-work', 'epic-33b', '33b-1-kept', 'rpc-integer-inputs-delivery'])
+    expect(Object.keys(metadata.rows)).toEqual(['epic-1-retrospective', '1-1-distinct-finished-work', 'epic-33b', '33b-1-kept', 'rpc-integer-inputs-delivery'])
     expect(metadata.rows['epic-33b'].original_key).toBe('epic-33b')
     execFileSync('git', ['init', '-q', join(root, 'out')])
     const check = () => spawnSync(process.execPath, [BMN, 'plan', 'check', '--json'], { cwd: join(root, 'out'), encoding: 'utf8' })

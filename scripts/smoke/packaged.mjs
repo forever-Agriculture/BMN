@@ -76,7 +76,11 @@ try {
 const ownerRootsBefore = ownerFingerprint()
 // The bmn CLI loads its parts by relative path on BMN's own runtime. A part the build left out breaks
 // its command, and the prompt guard reads its own missing file as "no guard": load every one here.
-const packagedCli = cliModules(join(repoRoot, 'apps/desktop/bin')).map(name => join(packagedResources, 'bin', name))
+const packagedCli = [
+  ...cliModules(join(repoRoot, 'apps/desktop/bin')).map(name => join(packagedResources, 'bin', name)),
+  ...readdirSync(join(repoRoot, 'scripts/plan')).filter(name => name.endsWith('.mjs')).map(name => join(packagedResources, 'scripts/plan', name))
+]
+if (!existsSync(join(packagedResources, 'scripts/plan/cutover-watchdog.py'))) throw new Error('packaged migration watchdog is missing')
 const missingCli = packagedCli.filter(file => !existsSync(file))
 if (missingCli.length > 0) throw new Error(`packaged bmn CLI files are missing: ${missingCli.join(', ')}`)
 const cliLoad = spawnSync(packagedBinary, [

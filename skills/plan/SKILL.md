@@ -13,7 +13,7 @@ Planning turns the owner's intent into epics an implementing agent can deliver w
 
 Run `bmn plan status --json` in the project (no BMN needed). It names the product root, the plan root, the board, the format (`bmn-plan` or `bmad`) and the history mode.
 
-- **`bmn-plan`**: write `plan/VISION.md`, `plan/PLAN.md`, `plan/epics/NNN-slug.md` and rows in `plan/status.yaml`.
+- **`bmn-plan`**: write `plan/VISION.md`, `plan/PLAN.md`, `plan/epics/NNN-slug.md` and rows in `plan/status.yaml`. When `bmad_copy: true` declares a version-2 copy, run `bmn plan sync` before reading rows; `set` and `publish` also synchronize. Both boards include every row; never exclude a colleague's rows. A disputed go holds its whole epic for explicit resolution. A new plan epic's row reaches the retained board on the next sync; its epic text stays in `plan/`. Follow `PLAN.md`'s next epic number after an unfinished-only move.
 - **`bmad`**: write the project's existing BMAD files in their existing shape (its epics file or epic files, its `sprint-status.yaml`), with the same rules below read through [In a BMAD project](#in-a-bmad-project). Never create `plan/` or any of its files in a BMAD project and never reformat or migrate its files.
 - **No plan yet** (`NO_PLAN`): create `plan/` from the templates, and add `/plan/` to `.gitignore` only when the owner says the plan stays out of the product repository (then `git init` inside `plan/`, no remote).
 - **An error** (`BOTH_PLANS`, `UNKNOWN_SCHEMA`, `MALFORMED`): stop and tell the owner; never pick one plan yourself.

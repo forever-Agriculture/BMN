@@ -5,7 +5,7 @@ import { existsSync, fsyncSync, mkdirSync, openSync, closeSync, readFileSync, re
 import { dirname, join, resolve } from 'node:path'
 import { PlanError, ROW } from './plan-board.mjs'
 import { approvalText, lockBoard } from './plan-cli.mjs'
-import { copyFindings, isCopiedPlan } from './plan-bmad-copy.mjs'
+import { copyAuthorityState, copyFindings, isCopiedPlan } from './plan-bmad-copy.mjs'
 import { verifyParserProof } from './plan-bmad-parser.mjs'
 
 function git(repo, args, options = {}) {
@@ -80,9 +80,11 @@ export function publicationState(plan) {
   try { loc = location(plan); state = load(loc.path); if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('invalid publication state') } catch { state = {}; authorityUnconfirmed = true }
   const numbers = value => Array.isArray(value) && value.every(number => Number.isInteger(number) && number >= 0)
   if (!numbers(migration.approval_conflicts ?? []) || !numbers(state.conflicts ?? []) || !Array.isArray(migration.approval_conflict_values ?? []) || !Array.isArray(state.conflict_values ?? [])) authorityUnconfirmed = true
+  let copied = { conflicts: [], conflict_values: [] }
+  try { copied = copyAuthorityState(plan) } catch { authorityUnconfirmed = true }
   const known = {
-    conflicts: [...new Set([...(numbers(migration.approval_conflicts ?? []) ? migration.approval_conflicts ?? [] : []), ...(numbers(state.conflicts ?? []) ? state.conflicts ?? [] : [])])],
-    conflict_values: [...(Array.isArray(migration.approval_conflict_values) ? migration.approval_conflict_values : []), ...(Array.isArray(state.conflict_values) ? state.conflict_values : [])],
+    conflicts: [...new Set([...(numbers(migration.approval_conflicts ?? []) ? migration.approval_conflicts ?? [] : []), ...(numbers(state.conflicts ?? []) ? state.conflicts ?? [] : []), ...copied.conflicts])],
+    conflict_values: [...(Array.isArray(migration.approval_conflict_values) ? migration.approval_conflict_values : []), ...(Array.isArray(state.conflict_values) ? state.conflict_values : []), ...copied.conflict_values],
     publication: state.pr ?? null,
     ...(authorityUnconfirmed ? { authority_unconfirmed: true } : {})
   }

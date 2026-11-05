@@ -47,6 +47,38 @@ it('packages every file the bmn CLI loads beside bmn.mjs', () => {
   expect(loaded.filter(name => !packaged.has(name))).toEqual([])
 })
 
+it('loads migration, copy and publish helpers from the configured package resource layout (108.5)', () => {
+  const appDir = resolve(import.meta.dirname, '../../apps/desktop')
+  const { load } = createRequire(createRequire(createRequire(join(appDir, 'package.json')).resolve('electron-builder')).resolve('app-builder-lib'))('js-yaml')
+  const resources = load(readFileSync(join(appDir, 'electron-builder.yml'), 'utf8')).extraResources
+  const root = mkdtempSync(join(tmpdir(), 'bmn-plan-package-')), modules = []
+  try {
+    for (const entry of resources.filter(entry => /^(?:scripts\/plan|apps\/desktop\/bin|bin\/(?:plan-|shared-helpers))/u.test(entry.to))) {
+      const source = resolve(appDir, entry.from)
+      const names = statSync(source).isDirectory() ? readdirSync(source).filter(name => entry.filter.includes(name) || (entry.filter.includes('*.mjs') && name.endsWith('.mjs'))) : [null]
+      for (const name of names) {
+        const destination = join(root, entry.to, ...(name ? [name] : []))
+        mkdirSync(dirname(destination), { recursive: true }); copyFileSync(name ? join(source, name) : source, destination)
+        if (destination.endsWith('.mjs')) modules.push(destination)
+      }
+    }
+    const required = ['scripts/plan/migrate-bmad-plan.mjs', 'scripts/plan/plan-cutover.mjs', 'scripts/plan/prepare-bmad-copy.mjs', 'scripts/plan/prepare-move-branch.mjs', 'bin/plan-bmad-copy.mjs', 'bin/plan-publish.mjs']
+    expect(modules).toEqual(expect.arrayContaining(required.map(name => join(root, name))))
+    for (const name of readdirSync(join(root, 'apps/desktop/bin'))) expect(readFileSync(join(root, 'apps/desktop/bin', name))).toEqual(readFileSync(join(root, 'bin', name)))
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      const loaded = await Promise.all(process.argv.slice(1).map(file => import(file)));
+      const needed = ['stagePlan', 'cutoverPlan', 'prepareBmadCopy', 'prepareMoveBranch', 'syncPlan', 'publishPlan'];
+      for (const name of needed) if (!loaded.some(module => typeof module[name] === 'function')) throw new Error(name);
+      console.log('loaded');
+    `, ...modules], { encoding: 'utf8', timeout: 10_000 })
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe('loaded')
+    const watchdog = new URL('./cutover-watchdog.py', new URL(`file://${join(root, 'scripts/plan/plan-cutover.mjs')}`))
+    const python = spawnSync('python3', ['-c', "import sys; from pathlib import Path; compile(Path(sys.argv[1]).read_text(), sys.argv[1], 'exec')", fileURLToPath(watchdog)], { encoding: 'utf8' })
+    expect(python.status, python.stderr).toBe(0)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 it('packages every module a separately started bin program or a runtime load needs (Story 100.8)', () => {
   // The installed QA pane crashed on import: qa-pane-run.mjs and qa-browser-relay.mjs start as programs of their own, and the
   // utility process loads qa-claude-fence.mjs from the packaged bin folder, so the bmn graph above never reached their imports.

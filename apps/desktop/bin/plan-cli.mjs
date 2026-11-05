@@ -14,6 +14,7 @@ const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]
        bmn plan publish [--project P] [--json]
        bmn plan copy --row KEY --expect TOKEN [--project P] [--json]
+       bmn plan sync [--project P] [--json]
 
 The project's planning: its plan and its board, in BMN's own format (plan/PLAN.md, plan/status.yaml,
 plan/epics/NNN-slug.md; docs/planning.md) or in BMAD's (_bmad-output/.../sprint-status.yaml). This is
@@ -872,7 +873,7 @@ export async function runPlanCommand(argv, migrationLocked = false) {
     return action === undefined ? EXIT.unable : EXIT.ok
   }
   if (rest.includes('--help') || rest.includes('-h')) { out(PLAN_USAGE); return EXIT.ok }
-  if (!migrationLocked && ['set', 'go', 'publish', 'copy', 'check'].includes(action)) {
+  if (!migrationLocked && ['set', 'go', 'publish', 'copy', 'sync', 'check'].includes(action)) {
     const at = rest.indexOf('--project'), inline = rest.find(value => value.startsWith('--project='))
     const project = inline?.slice('--project='.length) ?? (at >= 0 ? rest[at + 1] : null) ?? process.cwd()
     try { return await (await import('./plan-migration-lock.mjs')).withMigrationWriter(project, () => runPlanCommand(argv, true)) }
@@ -883,6 +884,18 @@ export async function runPlanCommand(argv, migrationLocked = false) {
     if (action === 'check') return await check(rest)
     if (action === 'set') return await set(rest)
     if (action === 'go') return await go(rest)
+    if (action === 'sync') {
+      const { positionals, options } = parse(rest, { flags: ['json'], values: ['project'] })
+      if (positionals.length) throw new PlanUsageError('plan sync takes no positional arguments')
+      try {
+        const plan = await resolvePlan(options.project ?? process.cwd())
+        if (plan.defaultAvailable === false) throw new PlanError('NO_DEFAULT_CHECKOUT', 'add the default checkout before syncing')
+        const result = await (await import('./plan-bmad-copy.mjs')).syncPlan(plan)
+        if (options.json) out(JSON.stringify({ ok: !result.findings.length, ...result }, null, 2))
+        else out(`${result.outcome}; ${result.findings.length} holds`)
+        return result.findings.length ? EXIT.findings : EXIT.ok
+      } catch (error) { return failure(error, options.json === true) }
+    }
     if (action === 'copy') {
       const { positionals, options } = parse(rest, { flags: ['json'], values: ['project', 'row', 'expect'] })
       if (positionals.length || !options.row || !options.expect) throw new PlanUsageError('plan copy needs --row KEY --expect TOKEN from plan check --json')
@@ -906,7 +919,7 @@ export async function runPlanCommand(argv, migrationLocked = false) {
         return ['published', 'ignored'].includes(result.outcome) ? EXIT.ok : EXIT.findings
       } catch (error) { return failure(error, options.json === true) }
     }
-    throw new PlanUsageError(`plan expects status, check, set, go, copy or publish, not ${action}`)
+    throw new PlanUsageError(`plan expects status, check, set, go, sync, copy or publish, not ${action}`)
   } catch (error) {
     if (error instanceof PlanUsageError) { err(`bmn: ${error.message}\nRun "bmn plan --help" for usage.`); return EXIT.unable }
     throw error

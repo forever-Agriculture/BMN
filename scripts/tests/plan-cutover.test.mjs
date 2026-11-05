@@ -10,7 +10,7 @@ import { archive, checkSpans, stagePlan } from '../plan/migrate-bmad-plan.mjs'
 import { prepareMoveBranch } from '../plan/prepare-move-branch.mjs'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
 import { publicationState } from '../../apps/desktop/bin/plan-publish.mjs'
-import { setWithCopy } from '../../apps/desktop/bin/plan-bmad-copy.mjs'
+import { setWithCopy, syncPlan } from '../../apps/desktop/bin/plan-bmad-copy.mjs'
 
 const roots = []
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })))
@@ -58,16 +58,29 @@ await new Promise(()=>setInterval(()=>{},1000));}});`
 }
 
 describe('D15 cutover', () => {
+  it.each([300, 1058])('retains a %i-character BMAD note through migration, sync, status-only set and rollback (108 D25)', async size => {
+    const f = fixture(), path = '_bmad-output/implementation-artifacts/sprint-status.yaml', note = 'x'.repeat(size)
+    file(f.repo, path, readFileSync(join(f.repo, path), 'utf8').replace('7-1-one: backlog', `7-1-one: backlog # ${note}`))
+    git(f.repo, 'commit', '-qam', 'historical long note'); git(f.repo, 'branch', '-f', 'upstream')
+    expect((await move({ repo: f.repo, upstream: 'upstream', handover: handover(f.repo), keepBmad: true })).outcome).toBe('moved')
+    const plan = await resolvePlan(f.repo)
+    expect((await syncPlan(plan)).findings).toEqual([])
+    expect(readFileSync(join(f.repo, path), 'utf8')).toContain(note)
+    const visible = /^ {2}7-1-one: backlog # (.*)$/mu.exec(readFileSync(plan.boardPath, 'utf8'))[1]
+    const result = await setWithCopy(plan, { key: '7-1-one', status: 'review', expect: rowToken('7-1-one', 'backlog', visible) })
+    expect(result.outcome).toBe('changed')
+    expect(readFileSync(join(f.repo, path), 'utf8')).toContain(`7-1-one: review # ${note}`)
+    expect((await rollbackPlan({ repo: f.repo, handover: handover(f.repo) })).outcome).toBe('rolled-back')
+    expect(readFileSync(join(f.repo, path), 'utf8')).toContain(`7-1-one: review # ${note}\n`)
+  })
   it('refuses rollback over a later edit to the same BMAD row and retains both plans', async () => {
     for (const keepBmad of [false, true]) {
       const f = fixture(), target = '_bmad-output/implementation-artifacts/sprint-status.yaml'
       await move({ repo: f.repo, upstream: 'upstream', handover: handover(f.repo), keepBmad })
       file(f.repo, target, readFileSync(join(f.repo, target), 'utf8').replace('7-1-one: backlog', '7-1-one: review # Artem later edit'))
       const canonical = readFileSync(join(f.repo, 'plan/status.yaml'), 'utf8').replace('7-1-one: backlog', '7-1-one: paused # owner parked')
-      if (keepBmad) {
-        const result = await setWithCopy(await resolvePlan(f.repo), { key: '7-1-one', status: 'paused', note: 'owner parked', expect: rowToken('7-1-one', 'backlog', '') })
-        expect(result.copy.outcome).toBe('COPY_CONFLICT')
-      } else file(f.repo, 'plan/status.yaml', canonical)
+      // Independent editor changes remain possible on both boards; rollback must preserve them in either mode.
+      file(f.repo, 'plan/status.yaml', canonical)
       const original = readFileSync(join(f.repo, target)), head = git(f.repo, 'rev-parse', 'HEAD')
       await expect(rollbackPlan({ repo: f.repo, handover: handover(f.repo) })).rejects.toThrow('ROLLBACK_COPY_CONFLICT')
       expect(readFileSync(join(f.repo, target))).toEqual(original)
@@ -238,7 +251,7 @@ describe('D15 cutover', () => {
     expect(git(linked, 'rev-parse', 'HEAD')).toBe(orphan)
     expect(readFileSync(join(linked, '_bmad-output/planning-artifacts/note.md'), 'utf8')).toBe('first\nmiddle\nlast\n')
   })
-  it('parks a missing registered worktree and unresolved copied-row ownership before fencing', async () => {
+  it('parks a missing registered worktree and preserves dirty rows without an ownership exclusion (108 D25)', async () => {
     const missing = fixture(), linked = join(missing.root, 'gone')
     git(missing.repo, 'worktree', 'add', '-qb', 'gone', linked); file(linked, 'staged.txt', 'only in its index\n'); git(linked, 'add', 'staged.txt'); rmSync(linked, { recursive: true })
     const initial = git(missing.repo, 'rev-parse', 'HEAD')
@@ -249,7 +262,9 @@ describe('D15 cutover', () => {
     const f = fixture(), board = join(f.repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
     writeFileSync(board, readFileSync(board, 'utf8').replace('7-1-one: backlog', '7-1-one: review'))
     const result = await move({ repo: f.repo, upstream: 'upstream', handover: handover(f.repo), keepBmad: true })
-    expect(result).toMatchObject({ outcome: 'parked', code: 'COPY_PROVENANCE_REQUIRED', rows: ['7-1-one'] })
+    expect(result).toMatchObject({ outcome: 'moved' })
+    expect(JSON.parse(readFileSync(join(f.repo, 'plan/bmad-copy.json'), 'utf8'))).toMatchObject({ version: 2, excluded: {}, unresolved: {} })
+    expect(readFileSync(join(f.repo, 'plan/status.yaml'), 'utf8')).toContain('7-1-one: review')
   })
   it('holds only the affected epic when upstream narrows its approved terms during reconciliation', async () => {
     const f = fixture(), epics = '_bmad-output/planning-artifacts/epics.md'
@@ -603,6 +618,38 @@ describe('D15 cutover', () => {
     expect(() => git(publish, 'grep', '-q', 'LOCAL SECRET', 'b', '--', 'plan')).toThrow()
     expect(git(publish, 'ls-tree', '-r', '--name-only', 'b', '--', 'plan')).toContain('plan/status.yaml')
   }, 30_000)
+  it('deletes finished platform contracts and fixes product links on an unfinished-only cut (108 D25)', async () => {
+    const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    file(f.repo, board, readFileSync(join(f.repo, board), 'utf8') + '  epic-8: done\n  8-1-finished: done\n')
+    file(f.repo, 'docs/platform/epic-08-finished.md', '# Epic 8: Finished\n\n## Story 8.1: Finished\n\nOriginal finished requirement.\n')
+    file(f.repo, 'README.md', '# Product\n\n[old contract](docs/platform/epic-08-finished.md#epic-8-finished)\n')
+    git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'finished contract')
+    const remote = join(f.root, 'remote.git'); git(f.repo, 'clone', '-q', '--bare', f.repo, remote); git(f.repo, 'remote', 'add', 'origin', remote)
+    const publish = join(f.root, 'publish'); git(f.root, 'clone', '-q', remote, publish); git(publish, 'config', 'user.name', 'Fixture'); git(publish, 'config', 'user.email', 'f@example.invalid')
+    const first = await prepareMoveBranch({ repo: f.repo, publish, upstream: 'origin/main', branch: 'old', date: '2026-11-05', output: join(f.root, 'first'), message: 'docs: old full-history move' })
+    const declaration = 'New epics number from 200. Keep the owner reservation.'
+    git(publish, 'switch', '-q', 'old')
+    file(publish, 'plan/PLAN.md', readFileSync(join(publish, 'plan/PLAN.md'), 'utf8').replace(/^New epics number from .*$/mu, declaration))
+    file(publish, 'plan/status.yaml', readFileSync(join(publish, 'plan/status.yaml'), 'utf8') + '  epic-199: done\n')
+    file(publish, 'plan/epics/199-finished.md', '# Epic 199: Finished\n')
+    git(publish, 'add', 'plan'); git(publish, 'commit', '-qm', 'owner reserves numbers after plan-only completed work')
+    const oldEdited = git(publish, 'rev-parse', 'HEAD')
+    git(publish, 'switch', '-q', 'main')
+    file(f.repo, 'docs/platform/epic-08-finished.md', '# Epic 8: Finished\n\n## Story 8.1: Finished\n\nChanged finished requirement.\n')
+    git(f.repo, 'commit', '-qam', 'later finished contract'); git(f.repo, 'push', '-q', 'origin', 'main'); git(publish, 'fetch', '-q', 'origin')
+    const cut = await prepareMoveBranch({ repo: f.repo, publish, upstream: 'origin/main', branch: 'd25', date: '2026-11-05', unfinishedOnly: true, previous: { head: oldEdited, projection: first.baseline.projection, date: first.baseline.date }, output: join(f.root, 'cut'), message: 'docs: unfinished move' })
+    expect(cut.outcome).toBe('cut')
+    expect(() => git(publish, 'cat-file', '-e', 'd25:docs/platform/epic-08-finished.md')).toThrow()
+    expect(git(publish, 'show', 'd25:README.md')).toContain('plan/references/gone-link-targets.md')
+    expect(git(publish, 'show', 'd25:plan/status.yaml')).not.toContain('epic-8:')
+    expect(git(publish, 'ls-tree', '-r', '--name-only', 'd25', '--', 'plan/references/history/docs/platform')).not.toContain('epic-08-finished.md')
+    expect(readFileSync(join(f.repo, 'docs/platform/epic-08-finished.md'), 'utf8')).toContain('# Epic 8: Finished')
+    expect(git(publish, 'show', 'd25:plan/PLAN.md')).toContain(declaration)
+    expect(git(publish, 'show', 'd25:plan/status.yaml')).not.toContain('epic-199:')
+    const again = await prepareMoveBranch({ repo: f.repo, publish, upstream: 'origin/main', branch: 'd25-again', date: '2026-11-05', unfinishedOnly: true, previous: { head: cut.commit, projection: cut.baseline.projection, date: cut.baseline.date }, output: join(f.root, 'again'), message: 'docs: repeated unfinished move' })
+    expect(again.outcome).toBe('cut')
+    expect(git(publish, 'show', 'd25-again:plan/PLAN.md')).toContain(declaration)
+  }, 30_000)
   it('parks a merged move with a go recorded and reverted on the old board after the cut', async () => {
     const f = await mergedFixture({ afterCut: (publish, board) => {
       const text = readFileSync(join(publish, board), 'utf8')
@@ -660,6 +707,19 @@ describe('D15 cutover', () => {
     expect(result.local_only.map(entry => entry.path).sort()).toEqual(['references/removed.md', 'references/secret/job.json', 'references/secret/other.json'])
     expect(JSON.stringify(result)).not.toContain('new secret')
   })
+  it('carries a new ready epic into the merged queue and advances its next number beyond a hand-edited older draft', () => {
+    const f = fixture(), side = name => join(f.root, name)
+    const board = 'format: bmn-plan\nschema_version: 1\nqueue: []\ndevelopment_status:\n  epic-7: in-progress\n  7-1-one: backlog\n'
+    file(side('base'), 'status.yaml', board); file(side('ours'), 'status.yaml', board.replace('queue: []', 'queue:\n  - 129') + '  epic-129: ready # go 2026-11-05\n')
+    file(side('theirs'), 'status.yaml', board.replace('7-1-one: backlog', '7-1-one: review # native plan edit'))
+    file(side('base'), 'PLAN.md', 'New epics number from 129.\n')
+    file(side('ours'), 'PLAN.md', 'New epics number from 130.\n')
+    file(side('theirs'), 'PLAN.md', 'New epics number from 129. Owner-authored explanation.\n')
+    mergeStagedPlan({ base: side('base'), ours: side('ours'), theirs: side('theirs'), output: side('out'), date: '2026-11-05', keep: side('kept') })
+    expect(readFileSync(join(side('out'), 'status.yaml'), 'utf8')).toContain('queue:\n  - 129')
+    expect(readFileSync(join(side('out'), 'status.yaml'), 'utf8')).toContain('7-1-one: review # native plan edit')
+    expect(readFileSync(join(side('out'), 'PLAN.md'), 'utf8')).toBe('New epics number from 130. Owner-authored explanation.\n')
+  })
   it('rolls a merged move back from its baseline, keeping later product and rows', async () => {
     const f = await mergedFixture()
     const moved = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
@@ -702,7 +762,7 @@ describe('D15 cutover', () => {
     expect(git(publish, 'show', 'move-2:docs/platform/epic-7-probe.md')).toContain('The preserved record is')
     expect(git(publish, 'ls-tree', '-r', '--name-only', 'move-2', '--', '_bmad-output', 'plan/references/secret')).toBe('')
   }, 30_000)
-  it('attributes copied rows from the upstream board at the cut, leaving local-only rows in the plan', async () => {
+  it('baselines every writer from upstream while retaining new rows for two-way appends (108 D25)', async () => {
     const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
     const author = (name, message) => execFileSync('git', ['-C', f.repo, '-c', `user.name=${name}`, '-c', 'user.email=a@example.invalid', 'commit', '-qam', message])
     file(f.repo, board, 'development_status:\n  epic-7: in-progress\n  7-1-one: backlog\n  7-2-two: ready-for-dev # his\n'); git(f.repo, 'add', '.'); author('Oleksandr', 'owner rows')
@@ -714,9 +774,11 @@ describe('D15 cutover', () => {
     const cut = await prepareMoveBranch({ repo: f.repo, publish, upstream: 'origin/main', branch: 'b2', keepBmad: true, date: '2026-11-05', output: join(f.root, 'c'), message: 'docs: move' })
     expect(cut).toMatchObject({ outcome: 'cut' })
     const copy = JSON.parse(git(publish, 'show', 'b2:plan/bmad-copy.json'))
-    expect(Object.keys(copy.excluded)).toEqual(['7-1-one'])
+    expect(copy.version).toBe(2)
+    expect(Object.keys(copy.excluded)).toEqual([])
+    expect(copy.rows['7-1-one'].last_copied).toEqual({ status: 'review', note: 'Artem took it' })
     expect(copy.rows['7-2-two'].last_copied).toEqual({ status: 'ready-for-dev', note: 'his' })
-    expect(copy.plan_only).toEqual(['7-3-new']); expect(copy.unresolved).toEqual({}); expect(copy.active).toBe(false)
+    expect(copy.rows['7-3-new'].last_copied).toBe(null); expect(copy.unresolved).toEqual({}); expect(copy.active).toBe(false)
     expect(git(publish, 'show', 'b2:plan/status.yaml')).toContain('7-3-new')
     expect(git(publish, 'show', `b2:${board}`)).toContain('7-1-one: review # Artem took it')
     expect(git(publish, 'diff', '--name-only', 'origin/main', 'b2', '--', '_bmad-output')).toBe('')

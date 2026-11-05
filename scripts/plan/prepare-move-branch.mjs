@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, posix } from 'node:path'
 import { checkPlan } from '../../apps/desktop/bin/plan-board.mjs'
-import { archive, checkSpans, stagePlan } from './migrate-bmad-plan.mjs'
+import { archive, checkSpans, rewriteLinks, selectUnfinishedPlan, stagePlan } from './migrate-bmad-plan.mjs'
 import { extractPlan, mergeStagedPlan, planFingerprint, publishedInputs, reconcilePlan, saveJournal, staysLocal } from './plan-cutover.mjs'
 
 function git(repo, args, options = {}) {
@@ -33,13 +33,13 @@ const platformEpic = path => /^docs\/platform\/(?:.*\/)?epic-\d+[-.].*\.md$/u.te
  * The move's first parent is the upstream tip it was cut from, which is what the approval reader pins as the boundary.
  * A previous cut supplies the plan's hand edits and the product-side cleanup; nothing is pushed here.
  */
-export async function prepareMoveBranch({ repo, publish, upstream, branch, previous = null, date = new Date().toISOString().slice(0, 10), vision = null, keepBmad = false, copyOwners = {}, historicalWorktrees = [], localOnly = [], output, message }) {
+export async function prepareMoveBranch({ repo, publish, upstream, branch, previous = null, date = new Date().toISOString().slice(0, 10), vision = null, keepBmad = false, unfinishedOnly = false, copyOwners = {}, historicalWorktrees = [], localOnly = [], output, message }) {
   const head = text(publish, ['rev-parse', upstream])
   if (git(repo, ['cat-file', '-e', `${head}^{commit}`], { allowFailure: true }).status !== 0) return { outcome: 'parked', code: 'UPSTREAM_UNKNOWN', reason: `fetch ${head} into the source repository first` }
   const stagedDate = previous?.date ?? date
   const capture = await reconcilePlan({ repo, upstream: head, upstreamInHistory: true, historicalWorktrees, output: join(output, 'capture') })
   const generated = join(output, 'generated', 'plan')
-  const manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage: generated, keepBmad, copyOwners, vision, date: stagedDate, historyHead: head, archive: join(output, 'archive') })
+  const manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage: generated, keepBmad, unfinishedOnly, copyOwners, vision, date: stagedDate, historyHead: head, archive: join(output, 'archive') })
   if (manifest.copy && Object.keys(manifest.copy.unresolved).length) return { outcome: 'parked', code: 'COPY_PROVENANCE_REQUIRED', rows: Object.keys(manifest.copy.unresolved) }
   const archiveFailures = archive({ repo: capture.projection, manifest, folder: manifest.archive })
   if (archiveFailures.length) return { outcome: 'parked', code: 'ARCHIVE_INVALID', failures: archiveFailures }
@@ -56,16 +56,19 @@ export async function prepareMoveBranch({ repo, publish, upstream, branch, previ
     const patterns = localOnly.map(source => new RegExp(source, 'u'))
     for (const path of manifest.files.map(file => file.to).filter(Boolean)) if (patterns.some(pattern => pattern.test(path))) rmSync(join(stage, path), { force: true })
   }
+  selectUnfinishedPlan(stage, manifest)
+  if (manifest.copy) saveJournal(join(stage, 'bmad-copy.json'), manifest.copy)
   const moved = join(stage, 'references', 'moved', stagedDate); mkdirSync(join(moved, 'conflicts'), { recursive: true })
-  capture.conflicts.forEach((conflict, index) => { if (!staysLocal(conflict.path, manifest.files, localOnly)) cpSync(conflict.kept, join(moved, 'conflicts', `conflict-${index + 1}.local`)) })
+  capture.conflicts.forEach((conflict, index) => { if (!keepBmad && !unfinishedOnly && !staysLocal(conflict.path, manifest.files, localOnly)) cpSync(conflict.kept, join(moved, 'conflicts', `conflict-${index + 1}.local`)) })
   writeFileSync(join(moved, 'inputs.json'), JSON.stringify(publishedInputs(capture), null, 2) + '\n')
   writeFileSync(join(moved, 'settled-conflicts.json'), JSON.stringify({ capture: capture.settled_conflicts.map(({ path, key, local, upstream: value, settled }) => ({ path, key, local, upstream: value, settled })), plan: merged?.settled_conflicts ?? [], plan_conflicts: merged?.conflicts ?? [], local_only: (merged?.local_only ?? []).map(({ path, sha256, reason }) => ({ path, sha256, reason })) }, null, 2) + '\n')
   const metadataPath = join(stage, 'migration.json'), metadata = loadJson(metadataPath)
-  saveJournal(metadataPath, { ...metadata, history_head: head, baseline_fingerprint: planFingerprint(capture.projection), approval_conflicts: [...new Set([...capture.approval_conflicts, ...(merged?.approval_conflicts ?? [])])].sort((a, b) => a - b), approval_conflict_values: [...capture.approval_conflict_values, ...(merged?.approval_conflict_values ?? [])] })
+  saveJournal(metadataPath, { ...metadata, unfinished_only: unfinishedOnly, history_head: head, baseline_fingerprint: planFingerprint(capture.projection), approval_conflicts: [...new Set([...capture.approval_conflicts, ...(merged?.approval_conflicts ?? [])])].sort((a, b) => a - b), approval_conflict_values: [...capture.approval_conflict_values, ...(merged?.approval_conflict_values ?? [])] })
   const checked = await checkPlan({ productRoot: publish, planRoot: stage, boardPath: join(stage, 'status.yaml'), format: 'bmn-plan' })
   if (checked.findings.length) return { outcome: 'parked', code: 'STAGE_INVALID', failures: checked.findings.map(finding => finding.reason) }
 
   const index = join(output, 'move.index'), env = { ...process.env, GIT_INDEX_FILE: index }, gitDir = text(publish, ['rev-parse', '--absolute-git-dir'])
+  const omitted = new Set(unfinishedOnly ? manifest.files.filter(file => file.to === 'archive-only' && platformEpic(file.path)).map(file => file.path) : [])
   try {
     let unmerged = []
     if (previous) {
@@ -78,6 +81,7 @@ export async function prepareMoveBranch({ repo, publish, upstream, branch, previ
       const blocking = conflicted.filter(path => !retiredRoot(path) && !platformEpic(path) && !stubbed.has(path))
       if (blocking.length) return { outcome: 'parked', code: 'MOVE_PRODUCT_CONFLICT', paths: blocking }
       for (const path of stubbed) {
+        if (omitted.has(path)) continue
         // The branch forwards this document; upstream's newer full text moves to its preserved record.
         const record = join(stage, 'references', 'history', path); mkdirSync(dirname(record), { recursive: true })
         writeFileSync(record, git(publish, ['show', `${head}:${path}`]))
@@ -92,12 +96,34 @@ export async function prepareMoveBranch({ repo, publish, upstream, branch, previ
     }
     const placed = new Map((manifest.spans ?? []).map(span => [span.source, span.to]))
     for (const path of keepBmad ? [] : tracked.filter(platformEpic)) {
+      if (omitted.has(path)) { git(publish, ['update-index', '--force-remove', '--', path], { env }); continue }
       const current = git(publish, ['show', `${head}:${path}`], { allowFailure: true })
       // A stub already on the branch stays; an upstream edit of a retired document is captured and needs no second copy here.
       const bytes = previous && isStub(publish, previous.head, path) ? git(publish, ['show', `${previous.head}:${path}`]).toString()
         : forwardingStub(path, current.status === 0 ? current.stdout.toString() : '', placed.get(path) ? `plan/${placed.get(path)}` : 'plan/PLAN.md')
       const oid = git(publish, ['hash-object', '-w', '--stdin'], { input: bytes }).toString().trim()
       git(publish, ['update-index', '--add', '--cacheinfo', `100644,${oid},${path}`], { env })
+    }
+    if (omitted.size) {
+      const rewrittenTargets = new Set()
+      for (const path of tracked.filter(path => path.endsWith('.md') && !path.startsWith('plan/') && !retiredRoot(path) && !omitted.has(path))) {
+        const current = git(publish, ['show', `:${path}`], { env }).toString()
+        const result = rewriteLinks(current, path, path, target => {
+          const file = target.replace(/:\d+(?::\d+)?$/u, '')
+          if (!omitted.has(file)) return null
+          rewrittenTargets.add(file)
+          return { path: 'plan/references/gone-link-targets.md', anchor: '' }
+        }, () => true)
+        if (result.text === current) continue
+        const oid = git(publish, ['hash-object', '-w', '--stdin'], { input: result.text }).toString().trim()
+        git(publish, ['update-index', '--add', '--cacheinfo', `100644,${oid},${path}`], { env })
+      }
+      if (rewrittenTargets.size) {
+        const note = join(stage, 'references/gone-link-targets.md')
+        let before = ''; try { before = readFileSync(note, 'utf8') } catch { /* First omitted link. */ }
+        mkdirSync(dirname(note), { recursive: true })
+        writeFileSync(note, before + '\n## Product links to finished contracts\n\n' + [...rewrittenTargets].sort().map(path => `- \`${path}\`: finished before the move; use Git history for its original contract.`).join('\n') + '\n')
+      }
     }
     git(dirname(stage), ['add', '--sparse', '--all', '--', 'plan'], { env: { ...env, GIT_DIR: gitDir, GIT_WORK_TREE: dirname(stage) } })
     const tree = git(publish, ['write-tree'], { env }).toString().trim()

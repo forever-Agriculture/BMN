@@ -260,6 +260,23 @@ extraResources:
     to: bin/plan-publish.mjs
   - from: bin/plan-statuses.mjs
     to: bin/plan-statuses.mjs
+  # Keep migration helpers' source-relative imports and adjacent watchdog intact.
+  - from: ../../scripts/plan
+    to: scripts/plan
+    filter:
+      - '*.mjs'
+      - cutover-watchdog.py
+  - from: bin
+    to: apps/desktop/bin
+    filter:
+      - plan-cli.mjs
+      - plan-board.mjs
+      - plan-bmad-copy.mjs
+      - plan-bmad-parser.mjs
+      - plan-migration-lock.mjs
+      - plan-publish.mjs
+      - plan-statuses.mjs
+      - shared-helpers.mjs
   # Story 77.4: BMN's own skills and the module that installs them into the skills folder at start.
   - from: bin/agents-own-skills.mjs
     to: bin/agents-own-skills.mjs
