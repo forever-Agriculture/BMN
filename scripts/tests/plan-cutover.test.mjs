@@ -535,6 +535,20 @@ describe('D15 cutover', () => {
     expect(git(f.repo, 'show', ':both.sh')).toContain('line 9 upstream')
     expect(git(f.repo, 'show', ':both.sh')).not.toContain('line 1 local')
   }, 45_000)
+  it('settles a same-go row finished locally while upstream still reads backlog, keeping the row further along', async () => {
+    const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    const rows = (a, b) => `development_status:\n  epic-7: ${a}\n  7-1-one: ${b}\n`
+    file(f.repo, board, rows('backlog # planned', 'review # old')); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'rows'); git(f.repo, 'branch', '-f', 'upstream')
+    git(f.repo, 'switch', '-q', 'upstream'); file(f.repo, board, rows('backlog # go 2026-01-01 upstream', 'in-progress # upstream went back')); git(f.repo, 'commit', '-qam', 'upstream'); git(f.repo, 'switch', '-q', 'main')
+    file(f.repo, board, rows('done # go 2026-01-01 finished', 'review # local note'))
+    const result = await reconcilePlan({ repo: f.repo, upstream: 'upstream', upstreamInHistory: true, output: join(f.root, 'c') })
+    expect(result.approval_conflicts).toEqual([])
+    const merged = readFileSync(join(f.root, 'c/projection', board), 'utf8')
+    expect(merged).toContain('epic-7: done # go 2026-01-01 finished')
+    expect(merged).toContain('7-1-one: review # local note')
+    expect(result.settled_conflicts.map(row => row.key).sort()).toEqual(['7-1-one', 'epic-7'])
+    expect(result.settled_conflicts.find(row => row.key === 'epic-7').upstream.status).toBe('backlog')
+  })
   it('holds a go row whose withdrawal is disputed, and settles a plain note conflict', async () => {
     const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
     const rows = (a, b) => `development_status:\n  epic-7: ${a}\n  epic-8: ${b}\n`

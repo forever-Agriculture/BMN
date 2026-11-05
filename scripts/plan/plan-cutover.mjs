@@ -288,7 +288,7 @@ export async function reconcilePlan({ repo: given, upstream, output, historicalW
     if (!board) return incoming
     for (const row of board.conflicts) {
       if (row.approval) approvalValues.push({ path, key: row.key, epic: row.approval, local: JSON.stringify(row.local), upstream: JSON.stringify(row.upstream), reason: 'conflicting go or withdrawal on the old board' })
-      else settledConflicts.push({ path, key: row.key, owner, kept, local: row.local, upstream: row.upstream, settled: 'no go or withdrawal in dispute; upstream text kept, whole local kept' })
+      else settledConflicts.push({ path, key: row.key, owner, kept, local: row.local, upstream: row.upstream, settled: row.settled })
     }
     return { ...incoming, bytes: Buffer.from(board.text), sha256: sha256(board.text) }
   }
@@ -494,7 +494,7 @@ export function mergeStagedPlan({ base, ours, theirs, output, date, localOnly = 
         for (const row of board.conflicts) {
           result.rows.push({ key: row.key, kept })
           if (row.approval) { result.approval_conflicts.push(row.approval); result.approval_conflict_values.push({ path, key: row.key, epic: row.approval, local: JSON.stringify(row.local), upstream: JSON.stringify(row.upstream), reason: 'conflicting go or withdrawal on the board' }) }
-          else result.settled_conflicts.push({ path, key: row.key, kept, local: row.local, upstream: row.upstream, settled: 'no go or withdrawal in dispute; upstream text kept, whole local kept' })
+          else result.settled_conflicts.push({ path, key: row.key, kept, local: row.local, upstream: row.upstream, settled: row.settled })
         }
       }
     } else if (!o) chosen = u
@@ -759,6 +759,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
 
 // The approval reader's own withdrawal words (dev-auto run_needs.py), plus this format's dropped.
 const WITHDRAWN = new Set(['backlog', 'withdrawn', 'superseded', 'skipped', 'dropped'])
+const PROGRESS = new Map([['backlog', 0], ['ready-for-dev', 1], ['ready', 1], ['in-progress', 2], ['review', 3], ['done', 4]])
 const GO_TOKEN = /\bgo \d{4}-\d{2}-\d{2}\b/gu
 const goTokens = row => JSON.stringify([...new Set(row?.note.match(GO_TOKEN) ?? [])].sort())
 /**
@@ -778,9 +779,13 @@ function mergeBoard(base, local, incoming) {
       continue
     }
     const goOld = goTokens(old), goMine = goTokens(mine), goOther = goTokens(other), epic = /^epic-(\d+)$/u.exec(key)
-    const withdrawn = row => !row || WITHDRAWN.has(row.status), carriesGo = [goOld, goMine, goOther].some(value => value !== '[]')
-    const disputed = (goMine !== goOld && goOther !== goOld && goMine !== goOther) || (carriesGo && withdrawn(mine) !== withdrawn(other))
-    conflicts.push({ key, local: mine ?? null, upstream: other ?? null, approval: epic && disputed ? Number(epic[1]) : null })
+    // Withdrawing is an act: a side that stayed in backlog since the base withdrew nothing.
+    const withdrew = row => (!row || WITHDRAWN.has(row.status)) && Boolean(old) && !WITHDRAWN.has(old.status), carriesGo = [goOld, goMine, goOther].some(value => value !== '[]')
+    const disputed = (goMine !== goOld && goOther !== goOld && goMine !== goOther) || (carriesGo && withdrew(mine) !== withdrew(other))
+    // With nothing in dispute the row further along wins, so finished work never reads as waiting to start; both values stay on record.
+    const localAhead = !disputed && mine && other && PROGRESS.get(mine.status) > PROGRESS.get(other.status)
+    if (localAhead) text = replaceRow(text, key, mine.status, mine.note)?.text ?? text
+    conflicts.push({ key, local: mine ?? null, upstream: other ?? null, approval: epic && disputed ? Number(epic[1]) : null, settled: localAhead ? 'no go or withdrawal in dispute; the local row is further along and was kept, upstream value on record' : 'no go or withdrawal in dispute; upstream text kept, whole local kept' })
   }
   return { text, conflicts }
 }
