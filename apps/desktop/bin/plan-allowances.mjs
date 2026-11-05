@@ -440,7 +440,8 @@ export async function allowanceFindings(plan, board, epicNumbers) {
   if (board.rules?.allowances !== undefined) {
     for (const epic of epicNumbers) if (epic >= board.rules.allowances && !seen.has(epic)) add('plan/allowances', `epic ${epic} has no allowances file (epics from ${board.rules.allowances} on)`)
   }
-  if (plan.format !== 'bmn-plan' || plan.history === 'none') return findings
+  // A plan with no history of its own on record (none, or a staged copy such as the cutover's) has no recorded version to compare.
+  if (plan.format !== 'bmn-plan' || plan.history === undefined || plan.history === 'none') return findings
   // A version on record and a file that says otherwise: reported, and the reader keeps the recorded one.
   for (const epic of epicNumbers) {
     const { repo, folder } = historyOf(plan)

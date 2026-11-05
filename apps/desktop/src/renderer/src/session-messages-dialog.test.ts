@@ -97,7 +97,7 @@ describe('an opened message, read-only (Story 66.2, 75.4)', () => {
     expect(messageNote(message({ state: 'printed', claimedApp: 'codex' }), NOW))
       .toBe(`Printed for the agent by Codex's hook: printed, not proven read. Hand-over measured on Codex ${version}.`)
     expect(messageNote(message({ state: 'printed', claimedApp: 'claude' }), NOW))
-      .toBe("Printed for the agent by Claude Code's hook: printed, not proven read. Hand-over measured on Claude Code 2.1.296.")
+      .toBe("Printed for the agent by Claude Code's hook: printed, not proven read. Hand-over measured on Claude Code 2.1.318.")
     // An app BMN holds no measurement for is named without one.
     expect(messageNote(message({ state: 'printed', claimedApp: 'opencode' }), NOW)).toBe("Printed for the agent by OpenCode's hook: printed, not proven read.")
   })
@@ -107,7 +107,7 @@ describe('an opened message, read-only (Story 66.2, 75.4)', () => {
     for (const [app, measured] of Object.entries(SESSION_MESSAGE_HANDOVER)) {
       expect(handover).toContain(`measured on ${app === 'codex' ? 'Codex' : 'Claude Code'} ${measured!.version}`)
     }
-    expect(handover).toBe('Claude Code (measured on Claude Code 2.1.296), Codex (measured on Codex 0.162.1)')
+    expect(handover).toBe('Claude Code (measured on Claude Code 2.1.318), Codex (measured on Codex 0.166.0)')
     expect(handover).not.toContain('OpenCode')
   })
 
