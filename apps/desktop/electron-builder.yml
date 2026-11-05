@@ -277,6 +277,7 @@ extraResources:
       - plan-bmad-parser.mjs
       - plan-migration-lock.mjs
       - plan-publish.mjs
+      - plan-allowances.mjs
       - plan-statuses.mjs
       - shared-helpers.mjs
   # Story 77.4: BMN's own skills and the module that installs them into the skills folder at start.
