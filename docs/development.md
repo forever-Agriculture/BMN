@@ -3,7 +3,7 @@
 
 ## Prerequisites
 
-- Linux x64. Development happens on Ubuntu 24.04.
+- Linux x64. Development happens on Ubuntu 26.04.
 - Node.js 24 (`engines` allows `>=24 <25`).
 - pnpm 12.3.4. `corepack enable` provides the version pinned in `package.json`.
 - `node-gyp` on `PATH` (`npm install -g node-gyp`). pnpm compiles `better-sqlite3` with it during
@@ -24,9 +24,9 @@ pnpm refuses a package version published less than three days ago. To let one ur
 through, add it to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` as `name@version` with a dated
 comment, and remove the entry once the version is three days old.
 
-## Ubuntu 24.04 AppArmor
+## Ubuntu AppArmor
 
-Ubuntu 24.04 restricts unprivileged user namespaces, which Chromium's sandbox needs. Without an
+Ubuntu 24.04 and later restrict unprivileged user namespaces, which Chromium's sandbox needs. Without an
 exception, Electron exits at once with `SIGTRAP`, and the kernel log shows
 `apparmor="DENIED" operation="capable" profile="unprivileged_userns"`.
 

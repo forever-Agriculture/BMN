@@ -1,18 +1,25 @@
 <!-- MODULE: README.md - Build BMN and start a first session. -->
 # BMN
 
-*Be a man: use a proper terminal.*
+*Use a proper terminal.*
 
-A desktop terminal for working with coding agents on Linux. It runs your shells and your
-installed agent CLIs (Claude Code, Codex, OpenCode, or any other command) in real terminals, keeps
-them organized in workspaces, and gives the agents a small local API for sharing files, reporting
-progress and asking for your attention.
+A Linux desktop terminal for running a team of coding agents. It runs your shells and your
+installed agent CLIs (Claude Code, Codex, OpenCode, or any other command) in real terminals and
+keeps them organized in workspaces. Each session gets the `bmn` command, so its agent can share
+files, report progress, ask you a question, message another session, read the project's plan and
+get a read-only second opinion from a teammate on the team you approved.
 
-Everything runs on your computer. There is no account, cloud backend or telemetry.
+BMN runs on your computer: it has no account, cloud backend or telemetry. Your agent CLIs still
+talk to their own providers.
 
-> Status: early and personal. It is built and used on Ubuntu 24.04 (x64). Other Linux distributions
+> Status: early and personal. It is built and used on Ubuntu 26.04 (x64). Other Linux distributions
 > may work; macOS and Windows are not supported. There are no distribution packages: the build is an
 > unpacked folder for the computer that made it.
+
+BMN's author usually runs it with [dev-auto](https://github.com/forever-Agriculture/dev-auto), a
+skill for Codex and Claude Code that implements planned epics and keeps going until they pass
+acceptance. BMN shows those runs under **dev-auto runs…** ([dev-auto runs](docs/dev-auto.md)). BMN
+works without it.
 
 New here? The [feature guide](docs/features.md) walks through the main workflows — launching
 and resuming sessions, answering agents, files, voice, Telegram, backups — and says where each
@@ -121,7 +128,7 @@ first.
 
 ## Install from source
 
-Requirements (Linux x64, tested on Ubuntu 24.04):
+Requirements (Linux x64, tested on Ubuntu 26.04):
 
 - Node.js 24 and pnpm 12.3.4 (`corepack enable` picks the pinned pnpm)
 - `node-gyp` on your `PATH` (`npm install -g node-gyp`); pnpm builds the native modules with it
@@ -146,7 +153,7 @@ pnpm run update:desktop               # later: wait for BMN to close, then rebui
 
 On Ubuntu 24.04 and later, AppArmor blocks the user namespaces that Chromium's sandbox needs. If
 the app exits immediately with `SIGTRAP`, install the AppArmor profile described in
-[docs/development.md](docs/development.md#ubuntu-2404-apparmor). The app never turns the sandbox
+[docs/development.md](docs/development.md#ubuntu-apparmor). The app never turns the sandbox
 off.
 
 To try it without touching your real data, run the development build. It uses a throwaway
