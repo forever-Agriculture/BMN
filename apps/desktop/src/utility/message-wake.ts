@@ -29,6 +29,8 @@ export interface MessageWakeOptions extends WakeProof {
   release(messageId: string, at: string): Promise<void>
   observation(sessionId: string): WakeObservation | undefined
   openAttention(): Promise<readonly WakeAttention[]>
+  /** When this run's latest turn finished with nothing left in flight, by its own hook; the owner reading it does not change this. */
+  finishedTurn(sessionId: string, incarnationId: string): string | null
   /** When BMN last typed anything into this session (this wake or the Away wake); null when it has not. */
   typedAt(sessionId: string): number | null
   /** Why a message was not woken, for its sender's `bmn tell status`; null clears it. Held for this run only. */
@@ -92,6 +94,7 @@ export class MessageWake {
     let claimedAt: string | null = null
     const reason = await typeIfIdle(this.options, {
       seen, generation, open, quietMs, quietWords: `its turn finished less than ${Math.round(quietMs / 60_000)} minutes ago`, line: SESSION_MESSAGE_WAKE_LINE,
+      finished: { at: this.options.finishedTurn(sessionId, seen.incarnationId), unknown: 'BMN did not see this run finish a turn with nothing in flight' },
       stillAllowed: () => {
         const typed = this.options.typedAt(sessionId)
         return typed !== null && this.options.now().getTime() - typed < quietMs ? 'BMN typed into it a moment ago' : null

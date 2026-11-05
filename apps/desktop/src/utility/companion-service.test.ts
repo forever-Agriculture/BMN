@@ -3436,6 +3436,23 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     expect(await handlers().messageStatus('s2', null)).toEqual({ messages: [] })
   })
 
+  it('knows a turn finished from the hook alone: the owner reading it changes nothing, work going on ends it (110.3)', async () => {
+    const finished = () => service['finishedTurns'].get('s2')?.incarnationId ?? null
+    const open = () => handlers().openAttention({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'claude:turn', kind: 'notice', title: 'Synthetic turn finished', origin: 'hook:claude:Stop' })
+    await open()
+    expect(finished()).toBe('incarnation-2')
+    await handlers().openAttention({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'claude:question', kind: 'question', title: 'Synthetic question?', origin: 'hook:claude:PreToolUse' })
+    expect(finished()).toBe('incarnation-2')
+    await handlers().withdrawAttention({ sessionId: 's2', requestKey: 'claude:question', origin: 'hook:claude:PostToolUse' })
+    expect(finished()).toBe('incarnation-2')
+    await handlers().withdrawAttention({ sessionId: 's2', requestKey: 'claude:turn', origin: 'hook:claude:UserPromptSubmit' })
+    expect(finished()).toBeNull()
+    await open()
+    // Selecting the session closes the reminder through the store; only a hook's word ends the finished turn.
+    await service['closeAttentionByKey']('s2', 'claude:turn', 'withdrawn', 'Opened in BMN; reminder cleared', 'window')
+    expect(finished()).toBe('incarnation-2')
+  })
+
   it('has no owner route that pastes, pauses or resumes messages: Messages only reads (75.4 AC2)', () => {
     const methods = Object.values(METHOD_REGISTRY).map(String)
     expect(methods.filter((method) => method.startsWith('messages.'))).toEqual(['messages.list'])

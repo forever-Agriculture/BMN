@@ -2,7 +2,8 @@
 
 An agent in one session can leave a short message for another in the same workspace
 (`bmn tell`; [agent-control.md](agent-control.md#messages-between-sessions)). BMN never types a
-message with Enter. A working agent gets one from its own app's hook, which may add text to what
+message with Enter; it may type one fixed line, which names no message, into a resting session
+([Story 110.1](#what-reaches-a-session-story-1101)). A working agent gets one from its own app's hook, which may add text to what
 the agent reads after a tool call. This page records, per app and version, whether that is proven
 to arrive once and whole. BMN hands a message over by itself only where the table says PASS.
 

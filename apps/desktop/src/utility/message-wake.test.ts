@@ -26,6 +26,7 @@ function world(agent = 'claude') {
     typedAt: null as number | null,
     providerRefusal: null as string | null,
     claim: { claimed: true, at: at(T) } as { claimed: true; at: string } | { claimed: false; reason: string },
+    finished: { incarnationId: 'run-b', at: at(T) } as { incarnationId: string; at: string } | null,
     beforeScreen: undefined as (() => void) | undefined
   }
   const written: Array<{ sessionId: string; text: string }> = []
@@ -61,6 +62,7 @@ function world(agent = 'claude') {
       if (one) one.wokenAt = null
     },
     openAttention: async () => state.attention,
+    finishedTurn: (_sessionId, incarnationId) => (state.finished?.incarnationId === incarnationId ? state.finished.at : null),
     typedAt: () => state.typedAt,
     note: (messageId, reason) => notes.set(messageId, reason),
     log: () => undefined
@@ -88,6 +90,13 @@ describe('a resting session gets its message (110.3 AC1)', () => {
     expect(w.written).toEqual([])
     expect(w.notes.get('m1')).toBe('its turn finished less than 5 minutes ago')
     expect(w.claimed).toEqual([])
+  })
+  it('a session the owner has looked at still rests: selecting it cleared its reminder, not its finished turn', async () => {
+    const w = world()
+    w.state.attention = []
+    await w.wake.sweep()
+    expect(w.written).toHaveLength(1)
+    expect(w.notes.get('m1')).toBeNull()
   })
   it('only apps that passed the measurement', async () => {
     expect([...MESSAGE_WAKE_APPS]).toEqual(['claude', 'codex'])
@@ -129,7 +138,8 @@ describe('nothing is typed, and the sender is told why (110.3 AC2)', () => {
     ['a sub-agent', (w) => { w.state.seen = { ...w.state.seen!, source: 'subagent' } }, 'its latest event is Stop from subagent, not its own finished turn'],
     ['a message its provider may not read', (w) => { w.state.providerRefusal = 'its provider may not read this message' }, 'its provider may not read this message'],
     ['no agent heard from', (w) => { w.state.seen = undefined }, 'BMN has not heard from its agent'],
-    ['no finished-turn notice', (w) => { w.state.attention = [] }, 'no open finished-turn notice'],
+    ['a turn BMN did not see finish, or one that ended with work still in flight', (w) => { w.state.finished = null }, 'BMN did not see this run finish a turn with nothing in flight'],
+    ['a finished turn of an earlier run', (w) => { w.state.finished = { incarnationId: 'run-a', at: at(T) } }, 'BMN did not see this run finish a turn with nothing in flight'],
     ['requests changing', (w) => { w.state.pending = 1 }, 'its requests changed'],
     ['no screen', (w) => { w.state.screen = null }, 'no screen to read']
   ]

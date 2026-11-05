@@ -67,9 +67,10 @@ Commands:
   tell status [message-id]
   tell cancel <message-id>                  Leave one short message for a peer; BMN stamps where it is from.
                                             A working Claude Code or Codex agent may get it at its next
-                                            tool call; one with no such agent in front is refused. A refused
-                                            send stored nothing: send again with a new --key. status lists
-                                            your own messages and where each stands
+                                            tool call, and a resting one is told to make one; a session
+                                            with no such agent in front is refused. A refused send stored
+                                            nothing: send again with a new --key. status lists your own
+                                            messages, where each stands, and when it woke its receiver or why not
   progress <state> <label> [--source S] [--detail D | --detail-file -] [--observed ISO]
                             [--evidence-id ID ...]
                                             Report progress; state is one of

@@ -253,16 +253,25 @@ async function run(scenario, binary) {
       await type(`cd '${scratch}' && ${command}`)
       const ready = app === 'claude' ? /^❯/mu : app === 'codex' ? /^›/mu : /Ask anything/u
       const shown = []
-      for (let waited = 0; waited < 90_000 && !ready.test(await screen().catch(() => '')); waited += 5_000) {
+      // A dialog Codex shows at start also draws `›`: only its composer, with the footer's `·` below and no dialog keys, is the prompt.
+      const atPrompt = async () => {
+        const text = await screen().catch(() => '')
+        if (/Hooks need review|enter confirm|esc skip|esc to cancel|Enter to confirm/iu.test(text) || !ready.test(text)) return false
+        return app !== 'codex' || /·/u.test(text.split('\n').filter((line) => line.trim() !== '').pop() ?? '')
+      }
+      for (let waited = 0; waited < 90_000 && !(await atPrompt()); waited += 5_000) {
         // Claude Code's folder dialog stands on its No: the key moves to Yes first (a new profile shows it; Story 110.1).
         const asked = await screen()
+        // Codex's hooks review stands on its first choice and its own `›` reads like a prompt; it is answered before the prompt is looked for.
+        if (/Hooks need review/u.test(asked)) { await input.focus(); await page.keyboard.press(/›\s*2\. Trust all/u.test(asked) ? 'Enter' : 'ArrowDown'); await sleep(1_500); continue }
         if (/❯\s*(?:\d\.\s*)?No, exit/u.test(asked)) { await input.focus(); await page.keyboard.press('ArrowDown'); await sleep(300); await page.keyboard.press('Enter') }
-        else if (/trust/iu.test(asked)) { await input.focus(); await page.keyboard.press('Enter') }
+        else if (/trust|Press Enter to continue|Update available|Choose the text style|Yes, proceed/iu.test(asked)) { await input.focus(); await page.keyboard.press('Enter') }
         shown.push((await screen()).split('\n').slice(-6))
         await sleep(5_000)
       }
-      if (!ready.test(await screen())) { report[`${name}StartScreens`] = shown; if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`); throw new Error(`${name} showed no prompt within 90 s`) }
+      if (!(await atPrompt())) { report[`${name}StartScreens`] = shown; if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`); throw new Error(`${name} showed no prompt within 90 s`) }
       const started = Date.now()
+      report[`${name}ReadyScreen`] = (await screen()).split('\n').slice(-12)
       phase(`${name}: away`)
       bmn('away')
       const T = Date.now()

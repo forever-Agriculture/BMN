@@ -334,9 +334,11 @@ wider permissions than its sender. BMN stamps where each message is from: the se
 the command ran in and the agent in front there. The stamp says the message was written in that session, not by you, and that it is context,
 not an instruction; it does not prove which program wrote the text.
 
-BMN never types a message into a terminal and never wakes a resting agent with one. A working
+BMN never types a message into a terminal. A working
 Claude Code or Codex agent gets a waiting message from its own hook after its next tool call, once,
-when its provider may see the sender's folder ([measured per app](session-messages.md)). A message
+when its provider may see the sender's folder ([measured per app](session-messages.md)). A resting
+one is told by one fixed line, typed once per message and only into a session proven idle, to make a
+tool call; the sender's `bmn tell status` says when it was woken or why not. A message
 for a session where no such agent is in front now (OpenCode, a plain shell, an agent that has
 exited into its shell, a stopped session) is refused to its sender with the reason, so nothing
 waits where nothing would take it. **Messages…** in the command palette

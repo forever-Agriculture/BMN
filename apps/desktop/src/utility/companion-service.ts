@@ -170,6 +170,8 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+/** The key of the notice an agent's hook opens when its turn finishes, and withdraws when work goes on. */
+const TURN_KEY = /^[a-z]+:turn$/u
 /** How often a read for the Turn changes dialog is asked while prompts' scans keep stopping it (Story 69.5). */
 const TURN_READ_ATTEMPTS = 3
 const MESSAGE_SWEEP_EVERY_MS = 60 * 60_000
@@ -395,6 +397,8 @@ export class CompanionService {
   /** Story 90.6: while he is Away, the fixed wake line every 2 hours into sessions idle at an empty prompt. */
   private readonly awayWake: AwayWake
   private readonly messageWake: MessageWake
+  /** Each session's last turn its hook reported finished with nothing in flight (110.3): a hook's withdrawal ends it, the owner reading it does not. */
+  private readonly finishedTurns = new Map<string, { incarnationId: string; at: string }>()
   /** Local ports each session's programs listen on, read from /proc on its own cadence (Story 41.1). */
   private readonly ports: PortWatch
   private readonly now: () => Date
@@ -577,6 +581,10 @@ export class CompanionService {
       now: () => this.now(),
       observation: (sessionId) => this.hookObservations.get(sessionId),
       openAttention: async () => (await options.database.companion('listAttention')).filter((row) => row.state === 'open'),
+      finishedTurn: (sessionId, incarnationId) => {
+        const turn = this.finishedTurns.get(sessionId)
+        return turn?.incarnationId === incarnationId ? turn.at : null
+      },
       liveIncarnation: (sessionId) => options.manager.liveIncarnationId(sessionId),
       foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
       generation: (sessionId) => this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 },
@@ -887,7 +895,9 @@ export class CompanionService {
           if (p.awayRefusable === true && this.awayRecord.state === 'away' && this.refusableQuestion(p.origin)) {
             return { refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL }
           }
-          return this.publicAttention(await this.openAttention(p))
+          const opened = this.publicAttention(await this.openAttention(p))
+          if (p.kind === 'notice' && TURN_KEY.test(p.requestKey)) this.finishedTurns.set(p.sessionId, { incarnationId: p.incarnationId, at: this.iso() })
+          return opened
         }),
         prepareHandoff: (p) => this.controlCall(() => this.queueAgentHandoff(p)),
         listPeers: (sessionId) => this.controlCall(() => this.messages.peers(sessionId)),
@@ -999,10 +1009,12 @@ export class CompanionService {
           else this.emit('conversations', p.sessionId)
           return result
         }),
-        withdrawAttention: (p) => this.controlCall(() => p.requestKey.startsWith('handoff:')
-          ? this.withdrawAgentHandoff(p.sessionId, p.requestKey.slice('handoff:'.length))
-          : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
-        ),
+        withdrawAttention: (p) => this.controlCall(() => {
+          if (TURN_KEY.test(p.requestKey)) this.finishedTurns.delete(p.sessionId)
+          return p.requestKey.startsWith('handoff:')
+            ? this.withdrawAgentHandoff(p.sessionId, p.requestKey.slice('handoff:'.length))
+            : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
+        }),
         resolveAttention: (p) => this.controlCall(
           () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
         ),

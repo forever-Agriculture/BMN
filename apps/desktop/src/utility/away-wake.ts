@@ -192,6 +192,11 @@ export async function typeIfIdle(proof: WakeProof, p: {
   quietMs: number
   quietWords: string
   line: string
+  /**
+   * When this session's turn finished, with the words for not knowing, when the open notice is not the proof: selecting a
+   * session clears its reminder, and a session the owner has looked at can still rest (110.3). The Away wake keeps the notice.
+   */
+  finished?: { at: string | null; unknown: string }
   /** Read in the last, synchronous checks. */
   stillAllowed(): string | null
   claim?(): Promise<string | null>
@@ -203,9 +208,10 @@ export async function typeIfIdle(proof: WakeProof, p: {
   const app = seen.agent as WakeApp
   const mine = open.filter((row) => row.sessionId === seen.sessionId && row.state === 'open')
   const turn = mine.find((row) => row.kind === 'notice' && row.requestKey === `${app}:turn`)
-  if (!turn) return 'no open finished-turn notice'
-  if (proof.now().getTime() - Date.parse(turn.openedAt) < p.quietMs) return p.quietWords
-  if (mine.length !== 1) return 'another request of it is open'
+  const finishedAt = p.finished ? p.finished.at : turn?.openedAt ?? null
+  if (finishedAt === null) return p.finished ? p.finished.unknown : 'no open finished-turn notice'
+  if (proof.now().getTime() - Date.parse(finishedAt) < p.quietMs) return p.quietWords
+  if (mine.some((row) => row !== turn)) return 'another request of it is open'
   const refused = p.stillAllowed()
   if (refused !== null) return refused
   const claimed = await p.claim?.()
