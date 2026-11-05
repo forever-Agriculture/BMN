@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { compareVersions, fieldsFrom, parseAllowances } from '../../bin/plan-allowances.mjs'
+import { compareVersions, fieldsFrom, ledgerIds, parseAllowances } from '../../bin/plan-allowances.mjs'
 import { approvalText } from '../../bin/plan-cli.mjs'
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -457,19 +457,23 @@ describe('a limit with uses keeps its meaning (110.5 AC4)', () => {
     const folder = join(g.home, 'state/dev-auto/budgets')
     mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, 'fedcba9876543210-epic-7.json'), '{not json')
+    // Another id's unreadable ledger is not this plan's; this plan's own unreadable one freezes.
+    expect(allow(g.main, g.home, 'limits.consults.per=boundary', ['--reason', 'r', '--source', WORDS]).code).toBe(0)
+    const [own] = [...ledgerIds({ planRoot: g.plan }, 7, folder)]
+    writeFileSync(join(folder, `${own}.json`), '{not json')
     expect(allow(g.main, g.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
   })
-  it('a moved plan\'s ledger, which keeps the folder it was first opened in, still freezes (full review)', () => {
-    // spend_ledger.py keeps the original plan folder after a move: the BMAD board's, inside the same product repository.
+  it('a ledger is the plan\'s by dev-auto\'s own id or its exact folder; another folder of the same repository is not (full review)', () => {
     const f = goFor()
-    withUses(f, { ...rechecks, plan_root: join(f.main, '_bmad-output/implementation-artifacts') })
-    expect(allow(f.main, f.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
-    // A folder of the same Git history outside the checkout (another worktree) counts as well.
+    // Inside the product, but another plan's: its uses leave this plan free (moved plans: scripts/tests/plan-allow-ledger.test.mjs).
+    withUses(f, { ...rechecks, plan_root: join(f.main, 'vendor/other/plan') })
+    expect(allow(f.main, f.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).code).toBe(0)
+    // Named by this plan's own id, whatever folder it records, it counts.
     const g = goFor()
-    const other = join(g.home, 'other-worktree')
-    git(g.main, 'worktree', 'add', '-q', '--detach', other)
-    mkdirSync(join(other, '_bmad-output'))
-    withUses(g, { ...rechecks, plan_root: join(other, '_bmad-output') })
+    const folder = join(g.home, 'state/dev-auto/budgets')
+    mkdirSync(folder, { recursive: true })
+    const [own] = [...ledgerIds({ planRoot: g.plan }, 7, folder)]
+    writeFileSync(join(folder, `${own}.json`), JSON.stringify({ plan_root: '/elsewhere', epic: 7, gos: [], jobs: {}, rounds: {}, ...rechecks }))
     expect(allow(g.main, g.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
   })
   it('a ledger folder that cannot be listed freezes; one that does not exist counts nothing', () => {

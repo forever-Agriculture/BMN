@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 
 /** What a run has with a file that names no repair_rounds (D13). */
 export const DEFAULT_ROUNDS = 4
@@ -613,8 +613,9 @@ export function compareVersions(before, after, uses = () => false) {
 }
 
 /**
- * What the ledger counted for each limit (110.5 AC4): the budgets dev-auto keeps for this plan and epic. A ledger of this
- * epic that cannot be read counts as uses of every limit, so a frozen field stays frozen.
+ * What the ledger counted for each limit (110.5 AC4): the budgets dev-auto keeps for this plan and epic, found by its own
+ * ids. One of them that cannot be read, or ids that cannot be confirmed, count as uses of every limit, so a frozen field
+ * stays frozen.
  */
 export function ledgerUses(plan, epic, environment = process.env) {
   const folder = ledgerFolder(environment)
@@ -623,12 +624,17 @@ export function ledgerUses(plan, epic, environment = process.env) {
   let names
   // No folder: dev-auto never counted anything here. A folder that cannot be listed may hold uses, so everything freezes.
   try { names = readdirSync(folder) } catch (error) { return error?.code === 'ENOENT' ? () => false : () => true }
-  const ours = ledgerOwner(plan)
+  // Dev-auto's own ids for this plan; when they cannot be confirmed, nothing is known to be unused.
+  let ids
+  try { ids = ledgerIds(plan, epic, folder) } catch { return () => true }
+  const root = realPath(plan.planRoot)
   for (const name of names) {
     if (!ledgerName(epic).test(name)) continue
+    const id = name.slice(0, -'.json'.length)
     let data
-    try { data = JSON.parse(readFileSync(join(folder, name), 'utf8')) } catch { unreadable = true; continue }
-    if (!data || typeof data !== 'object' || !ours(data.plan_root)) continue
+    try { data = JSON.parse(readFileSync(join(folder, name), 'utf8')) } catch { if (ids.has(id)) unreadable = true; continue }
+    // Its id, or the folder recorded in it exactly (a ledger opened by an older dev-auto).
+    if (!data || typeof data !== 'object' || !(ids.has(id) || (typeof data.plan_root === 'string' && realPath(data.plan_root) === root))) continue
     for (const use of Object.values(data.uses ?? {})) if (use?.answer === 'TAKEN' && typeof use.limit === 'string') counted.add(use.limit)
     if (Object.values(data.rounds ?? {}).some((use) => use?.answer === 'TAKEN')) counted.add('repair_rounds')
     if (Object.values(data.jobs ?? {}).some((job) => job && !['refused', 'released'].includes(job.state))) counted.add('money_usd')
@@ -636,29 +642,106 @@ export function ledgerUses(plan, epic, environment = process.env) {
   return (limit) => unreadable || counted.has(limit)
 }
 
-/**
- * Whether a ledger's recorded plan folder is this plan's. A moved plan's ledger keeps the folder it was first opened in
- * (spend_ledger.py's plan identity), so any folder inside this plan's product repository counts, or one whose Git
- * history is the product's: counting another plan's use only freezes a field, missing one would let it change.
- */
-function ledgerOwner(plan) {
-  const real = (path) => { try { return realpathSync(path) } catch { return resolve(path) } }
-  const product = real(plan.productRoot ?? plan.planRoot)
-  // The run's checkout and the default one: a plan read from a linked worktree lives in the default checkout.
-  const roots = [...new Set([product, plan.defaultCheckout, plan.planRoot].filter((one) => typeof one === 'string').map(real))]
-  const inside = (path) => roots.some((root) => { const rel = relative(root, path); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) })
-  const common = (directory) => {
-    try { return real(resolve(directory, gitRun(directory, ['rev-parse', '--git-common-dir']).trim())) } catch { return null }
+// ---------------------------------------------------------------------------------------------
+// Which ledgers are this plan's: the ids dev-auto's spend_ledger.py gives them (`plan_identity`, `location_identity`,
+// `resolve_budget`), computed the same way, so a moved plan keeps its ledger and another plan's never counts.
+
+class LedgerOwnerUnconfirmed extends Error {}
+const unconfirmed = (why) => new LedgerOwnerUnconfirmed(why)
+const realPath = (path) => { try { return realpathSync(path) } catch { return resolve(path) } }
+const posixRelative = (from, to) => relative(from, to).split(sep).join('/') || '.'
+const sha16 = (text) => createHash('sha256').update(text).digest('hex').slice(0, 16)
+const MOVED_FROM = /^moved_from:\s*([^\s#]+)/mu
+const BUDGET_ID = /^[0-9a-f]{16}-epic-\d+$/u
+
+function repositoryOf(root) {
+  const [top, common] = gitRun(root, ['rev-parse', '--show-toplevel', '--git-common-dir']).split('\n')
+  return { top: realPath(top), common: realPath(isAbsolute(common) ? common : join(root, common)) }
+}
+
+/** spend_ledger.py `location_identity`: the plan as every linked worktree sees it, or the folder itself outside Git. */
+export function locationIdentity(planRoot) {
+  const root = realPath(planRoot)
+  try { const { top, common } = repositoryOf(root); return `${common}::${posixRelative(top, root)}` } catch { return root }
+}
+
+/** run_needs.py `migration_origin`, as far as identity needs it: the first committed move's source board, or null. */
+function migrationSource(repo, root) {
+  const boardRel = posixRelative(repo, join(root, 'status.yaml'))
+  const metaRel = posixRelative(repo, join(root, 'migration.json'))
+  let header = ''
+  try { header = readFileSync(join(root, 'status.yaml'), 'utf8') } catch { /* no board */ }
+  const moved = MOVED_FROM.exec(header)
+  let origin = null
+  let commits = []
+  try { commits = gitRun(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-filter=A', '--format=%H', 'HEAD', '--', metaRel]).split(/\s+/u).filter(Boolean) } catch { /* an unborn history */ }
+  for (const commit of commits) {
+    try {
+      const recorded = JSON.parse(gitRun(repo, ['show', `${commit}:${metaRel}`]))
+      const source = recorded.source_board
+      const anchor = recorded.history_head
+      if (source === undefined || anchor === undefined) continue
+      const committed = MOVED_FROM.exec(gitRun(repo, ['show', `${commit}:${boardRel}`]))
+      if (recorded.version !== 1 || !committed || committed[1] !== source) continue
+      if (typeof anchor !== 'string' || !/^[0-9a-f]{40,64}$/u.test(anchor) || gitRun(repo, ['rev-parse', `${commit}^1`]).trim() !== anchor) continue
+      if (typeof source !== 'string' || posix.isAbsolute(source) || source.split('/').some((part) => part === '.' || part === '..') || posix.basename(source) !== 'sprint-status.yaml') continue
+      origin = { source, anchor }
+      const local = JSON.parse(gitRun(repo, ['show', `HEAD:${metaRel}`])).local_history_head
+      if (local !== undefined && local !== null) {
+        const named = gitRun(repo, ['log', '--reverse', '--first-parent', '--format=%H', '-G', 'local_history_head', 'HEAD', '--', metaRel]).split(/\s+/u).filter(Boolean)
+        if (!/^[0-9a-f]{40,64}$/u.test(String(local)) || named.length === 0 || gitRun(repo, ['rev-parse', `${named[0]}^1`]).trim() !== local || !gitRun(repo, ['log', '-1', '--format=%B', named[0]]).includes('Plan-Cutover: yes')) {
+          throw unconfirmed("the migration's local history cannot be confirmed")
+        }
+      }
+      break
+    } catch (error) {
+      if (error instanceof LedgerOwnerUnconfirmed) throw error
+    }
   }
-  let productHistory
-  return (recorded) => {
-    if (typeof recorded !== 'string' || recorded === '') return false
-    const path = real(recorded)
-    if (inside(path)) return true
-    if (!existsSync(path)) return false
-    productHistory ??= common(product)
-    return productHistory !== null && common(path) === productHistory
+  if (origin === null) {
+    if (moved || existsSync(join(root, 'migration.json'))) throw unconfirmed('the migration has no confirmed committed cutover boundary')
+    return null
   }
+  let metadata = null
+  try { metadata = JSON.parse(readFileSync(join(root, 'migration.json'), 'utf8')) } catch { /* checked below */ }
+  if (!metadata || typeof metadata !== 'object' || !moved || moved[1] !== origin.source || metadata.version !== 1 || metadata.source_board !== origin.source || metadata.history_head !== origin.anchor) {
+    throw unconfirmed('working migration declarations differ from the original committed move')
+  }
+  return origin.source
+}
+
+/** spend_ledger.py `plan_identity`: a moved plan keeps the identity of the board it came from. Throws when unconfirmed. */
+export function planIdentity(planRoot) {
+  const root = realPath(planRoot)
+  let repository
+  try { repository = repositoryOf(root) } catch (error) {
+    if (!/not a git repository/iu.test(error.message)) throw unconfirmed('the product repository cannot be read')
+    let header = ''
+    try { header = readFileSync(join(root, 'status.yaml'), 'utf8') } catch { /* no board */ }
+    if (MOVED_FROM.test(header) || existsSync(join(root, 'migration.json'))) throw unconfirmed('the original product repository cannot be established')
+    return root
+  }
+  const source = migrationSource(repository.top, root)
+  if (source === null) return `${repository.common}::${posixRelative(repository.top, root)}`
+  if (repository.top === root) throw unconfirmed('the original product repository cannot be established')
+  return `${repository.common}::${posix.dirname(posix.dirname(source))}`
+}
+
+/** The ledger ids dev-auto would use for this plan's epic: the canonical one and what the location's alias names. */
+export function ledgerIds(plan, epic, folder) {
+  const number = String(Number(epic))
+  const ids = new Set([`${sha16(planIdentity(plan.planRoot))}-epic-${number}`])
+  const location = `${sha16(locationIdentity(plan.planRoot))}-epic-${number}`
+  const aliasPath = join(folder, `${location}.alias.json`)
+  if (!existsSync(aliasPath)) { ids.add(location); return ids }
+  let value
+  try { value = JSON.parse(readFileSync(aliasPath, 'utf8')) } catch { throw unconfirmed(`the alias ${location} cannot be read`) }
+  const canonical = value?.canonical
+  if (value?.version !== 1 || typeof canonical !== 'string' || !BUDGET_ID.test(canonical) || canonical === location || canonical.split('-epic-')[1] !== number) throw unconfirmed(`the alias ${location} is not a direct alias for this epic`)
+  if (existsSync(join(folder, `${canonical}.alias.json`))) throw unconfirmed('alias chains are refused')
+  if (existsSync(join(folder, `${location}.json`))) throw unconfirmed('an alias and a second data file coexist')
+  ids.add(canonical)
+  return ids
 }
 
 const ledgerFolder = (environment) => join(environment.XDG_STATE_HOME || join(environment.HOME || homedir(), '.local', 'state'), 'dev-auto', 'budgets')
