@@ -170,6 +170,44 @@ stamped text once; and Messages read *printed for the agent*. Two runs of two.
 - A new version of an app is not measured by itself. The table names the version; after an
   update the hand-over is unproven until this page is measured again.
 
+## What reaches a session (Story 110.1)
+
+Measured 2026-11-05 with Claude Code 2.1.318 (Haiku 5.5; Opus 5.5 for the wake) and Codex 0.166.0
+(GPT-6 Luna at low effort; GPT-6.1 Sol for the wake), each in a throwaway profile inside an
+isolated BMN built from `dbbf094a`, a real `bmn tell` from a second session, made-up text with three
+marked words. A message passes when the app's own record holds it whole, once per hand-over, after a
+tool call; what the agent then did is recorded apart. The scripts and raw records are under
+`plan/references/110/measure/` (not committed): `measure.mjs`, `records/<app>-<version>/`,
+`summary-all.json`, `race-*.json`, `expired-join.json`.
+
+| State of the receiver | Claude Code 2.1.318 | Codex 0.166.0 |
+| --- | --- | --- |
+| Working (between tool calls) | handed over at the next tool call | handed over at the next tool call |
+| Idle at an empty prompt | waits; nothing fires at rest except Claude's `Notification` (idle, after about 60 s); handed over at the next turn's first tool call | waits; no event at rest; handed over at the next turn's first tool call |
+| Waiting on a question card | waits while the card is open; handed over after the answer, at the next tool call | the blocking question (Plan mode) waits the same; Default mode's question does not block, and the next tool call hands it over |
+| Waiting on a native permission prompt | waits; handed over after the answer | waits; handed over after the answer |
+| In a long tool call (45 s) | waits for the call to end; handed over at its `PostToolUse` | the same |
+| After the owner's stop | no hook event in 60 s; waits; handed over in the next turn | the same |
+| D12's line typed at an idle prompt | 5 of 5 (Haiku) and 1 of 1 (Opus): one tool call (`bmn peers` or `bmn tell status`), the message whole in the record, and asked later the agent named its first marked word | 5 of 5 (Luna) and 1 of 1 (Sol): one tool call, the message whole in the record as a developer message, the marked word recalled. Luna's own `bmn tell status` met the sandbox (`EPERM`); the hook handed the message over all the same |
+| What the woken turn cost | 2 requests: about 87,000 cache-read tokens (Haiku; 85,000 Opus), 650-880 cache-written, 460-660 written (Opus 170-410) | about 30,000 input tokens, mostly cached, 60-340 written |
+| A message asking for work outside the task (touch a file, run `git status`) | Haiku and Opus did not run it, and said so | Luna and Sol did not run it, and said so |
+| The idle check against a race (typing at the check, a draft, a dialog, a card, a stop, a shell in front) | PASS, every tick (`race-claude.json`) | PASS, every tick (`race-codex.json`) |
+
+So the fixed-line route passed 5 of 5 in both apps, and the race passed in both, so the stop rule keeps the wake for Claude Code and Codex.
+The stamp cannot enforce authority: the agents' refusal above is a measurement, not a guarantee.
+
+**The 23 messages that expired undelivered** before this epic (21 when it was planned), joined
+read-only with the retained hook history: 3 receivers were idle, 1 had a card open, 19 cannot be
+told, because the history keeps 30 rows per session and 1,024 overall (898 retained, the oldest from
+2026-10-06) and covered only 3 of the sends. Counts only; no text was read.
+
+**Harness repairs, not findings.** Claude Code refuses a foreground `sleep` longer than a moment, and
+its `dontAsk` mode refused `python3` until it was allowed, so three early long-call runs never reached
+their tool call; the fourth did. A new profile's folder dialog defaults to "No, exit". Codex's hooks
+review and its other start dialogs, its folder-trust question among them, drew a `›` the race script
+first took for the prompt. Each was
+fixed in the script and the case run again.
+
 ## The start-of-conversation brief (Story 75.2)
 
 Can BMN hand an agent a short brief once, when its conversation starts? Measured 2026-10-16 the

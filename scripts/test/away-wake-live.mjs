@@ -218,7 +218,7 @@ async function run(scenario, binary) {
   if (openCode) readme = openCode.readme
   const name = openCode ? `opencode${upgrade ? '-upgrade' : ''} ${openCode.version}` : app
   if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
-  const command = app === 'claude' ? `claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}` : app === 'codex' ? `codex -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  const command = app === 'claude' ? `claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {
@@ -256,7 +256,7 @@ async function run(scenario, binary) {
       // A dialog Codex shows at start also draws `›`: only its composer, with the footer's `·` below and no dialog keys, is the prompt.
       const atPrompt = async () => {
         const text = await screen().catch(() => '')
-        if (/Hooks need review|enter confirm|esc skip|esc to cancel|Enter to confirm/iu.test(text) || !ready.test(text)) return false
+        if (/Hooks need review|Trust this folder|enter continue|esc quit|enter confirm|esc skip|esc to cancel|Enter to confirm/iu.test(text) || !ready.test(text)) return false
         return app !== 'codex' || /·/u.test(text.split('\n').filter((line) => line.trim() !== '').pop() ?? '')
       }
       for (let waited = 0; waited < 90_000 && !(await atPrompt()); waited += 5_000) {
@@ -271,6 +271,7 @@ async function run(scenario, binary) {
       }
       if (!(await atPrompt())) { report[`${name}StartScreens`] = shown; if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`); throw new Error(`${name} showed no prompt within 90 s`) }
       const started = Date.now()
+      report[`${name}StartScreens`] = shown
       report[`${name}ReadyScreen`] = (await screen()).split('\n').slice(-12)
       phase(`${name}: away`)
       bmn('away')
