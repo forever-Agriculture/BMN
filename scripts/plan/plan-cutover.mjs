@@ -1,8 +1,8 @@
 // MODULE: plan-cutover.mjs - Epic 107 per-file planning reconciliation and durable cutover inputs
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, closeSync, cpSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { chmodSync, closeSync, cpSync, createReadStream, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { migrationPaths } from '../../apps/desktop/bin/plan-migration-lock.mjs'
@@ -177,8 +177,55 @@ function approvalParts(image, path) {
   return result
 }
 
-/** Read-only capture of every worktree; output contains the merged old tree and whole conflicting local images. */
-export async function reconcilePlan({ repo: given, upstream, output }) {
+/** An owner-declared historical exception is pinned to one registered noncanonical root and HEAD. */
+async function historicalDeclarations(repo, checkouts, declarations) {
+  const fail = reason => { throw new PlanError('HISTORICAL_SCOPE_CHANGED', reason) }
+  if (!Array.isArray(declarations)) fail('historical_worktrees must list exact owner-approved roots, heads and evidence')
+  const location = declarations.length ? await defaultLocation(repo) : null
+  if (location && !location.available) fail('the canonical default checkout must be confirmed before archiving another worktree')
+  const canonical = location ? realpathSync(location.checkout) : repo
+  const result = new Map()
+  for (const entry of declarations) {
+    let root
+    try { root = typeof entry?.root === 'string' ? realpathSync(entry.root) : null } catch { fail('an approved historical worktree is absent') }
+    const checkout = checkouts.find(value => value.root === root)
+    if (!checkout || root === repo || root === canonical || result.has(root) || !/^[0-9a-f]{40,64}$/u.test(entry?.head ?? '') || checkout.head !== entry.head || typeof entry.evidence !== 'string' || !entry.evidence.trim()) {
+      fail(`historical exception does not match one registered noncanonical worktree at its approved HEAD: ${root ?? '(missing)'}`)
+    }
+    result.set(root, { root, head: entry.head, evidence: entry.evidence })
+  }
+  return result
+}
+
+/** The original index, reachable history and registration remain local, beside their captured planning images. */
+async function historicalSnapshot(capture, destination, registration) {
+  const folder = join(destination, 'historical', sha256(capture.root))
+  mkdirSync(folder, { recursive: true, mode: 0o700 })
+  const save = (name, bytes) => {
+    const path = join(folder, name); writeFileSync(path, bytes, { mode: 0o600 })
+    return { path, sha256: sha256(bytes) }
+  }
+  const indexPath = resolve(capture.root, textGit(capture.root, ['rev-parse', '--git-path', 'index']))
+  const index = existsSync(indexPath) ? save('index', readFileSync(indexPath)) : null
+  const sharedPath = textGit(capture.root, ['rev-parse', '--shared-index-path'])
+  const sharedIndex = sharedPath ? save(basename(sharedPath), readFileSync(resolve(capture.root, sharedPath))) : null
+  if ((existsSync(indexPath) ? sha256(readFileSync(indexPath)) : null) !== (index?.sha256 ?? null)) {
+    throw new PlanError('HISTORICAL_SCOPE_CHANGED', 'the historical index changed while its complete image was captured')
+  }
+  const bundlePath = join(folder, 'history.bundle')
+  git(capture.root, ['bundle', 'create', bundlePath, 'HEAD'])
+  chmodSync(bundlePath, 0o600)
+  if (!textGit(capture.root, ['bundle', 'list-heads', bundlePath]).split('\n').some(line => line === `${capture.head} HEAD`)) {
+    throw new PlanError('HISTORICAL_SCOPE_CHANGED', 'historical HEAD changed while its history was captured')
+  }
+  const hash = createHash('sha256')
+  for await (const bytes of createReadStream(bundlePath)) hash.update(bytes)
+  return { root: capture.root, head: capture.head, base: null, evidence: capture.historical.evidence,
+    index, shared_index: sharedIndex, bundle: { path: bundlePath, sha256: hash.digest('hex') }, registration: save('worktrees.porcelain', registration) }
+}
+
+/** Capture every worktree; historical planning images never contribute canonical values. */
+export async function reconcilePlan({ repo: given, upstream, output, historicalWorktrees = [] }) {
   const repo = realpathSync(given), destination = resolve(output)
   upstream = await upstreamFor(repo, upstream)
   if (existsSync(destination) && readdirSync(destination).length) throw new Error('reconciliation output is not empty')
@@ -186,22 +233,25 @@ export async function reconcilePlan({ repo: given, upstream, output }) {
   const projection = join(destination, 'projection'), objects = join(destination, 'objects')
   mkdirSync(projection); mkdirSync(objects)
   const wt = worktrees(repo).sort((a, b) => a.root === repo ? -1 : b.root === repo ? 1 : a.root.localeCompare(b.root))
+  const historical = await historicalDeclarations(repo, wt, historicalWorktrees)
   const roots = new Set(wt.flatMap(w => sources(w.root).roots))
   const planning = path => [...roots].some(root => path === root || path.startsWith(root + '/')) || /^docs\/platform\/(?:.*\/)?epic-\d+[-.].*\.md$/u.test(path)
   const upstreamHead = textGit(repo, ['rev-parse', upstream]), incomingTree = tree(repo, upstreamHead, planning)
   const captures = wt.map(w => {
     const merged = spawnSync('git', ['-C', repo, 'merge-base', w.head, upstreamHead], { encoding: 'utf8' })
-    if (merged.status === 1) throw new PlanError('NO_COMMON_PLANNING_BASE', `${w.root} has unrelated history (${w.head}); preserve it and settle the handover before cutover`)
-    if (merged.status !== 0) throw new PlanError('UNREADABLE_PLANNING_BASE', `the common ancestor of ${w.root} cannot be read`)
-    const base = merged.stdout.trim(), inventory = sources(w.root)
-    return { ...w, base, files: inventory.files, baseTree: tree(repo, base, planning), headTree: tree(repo, w.head, planning), indexTree: index(w.root, planning) }
+    const archived = historical.get(w.root)
+    if (archived && merged.status !== 1) throw new PlanError('HISTORICAL_SCOPE_CHANGED', 'the historical exception no longer describes unrelated history')
+    if (merged.status === 1 && !archived) throw new PlanError('NO_COMMON_PLANNING_BASE', `${w.root} has unrelated history (${w.head}); preserve it and settle the handover before cutover`)
+    if (merged.status !== 0 && !archived) throw new PlanError('UNREADABLE_PLANNING_BASE', `the common ancestor of ${w.root} cannot be read`)
+    const base = archived ? null : merged.stdout.trim(), inventory = sources(w.root)
+    return { ...w, base, historical: archived ?? null, files: inventory.files, baseTree: base === null ? new Map() : tree(repo, base, planning), headTree: tree(repo, w.head, planning), indexTree: index(w.root, planning) }
   })
   const stored = blobs(repo, [...incomingTree.values(), ...captures.flatMap(c => [...c.baseTree.values(), ...c.headTree.values(), ...c.indexTree.values()])].map(entry => entry.oid))
   const image = entry => entry ? { ...entry, ...stored.get(entry.oid) } : null
-  const inputs = [], conflicts = [], approvalValues = [], canonical = new Map([...incomingTree].map(([path, entry]) => [path, image(entry)]))
-  const keepInput = (owner, kind, path, value) => {
-    if (value && !existsSync(join(objects, value.sha256))) writeFileSync(join(objects, value.sha256), value.bytes)
-    inputs.push({ owner, kind, path, sha256: value?.sha256 ?? sha256('absent'), present: Boolean(value), mode: value?.mode ?? null, ...(value?.inode ? { inode: value.inode, device: value.device, permissions: value.permissions } : {}), object: value ? join(objects, value.sha256) : null })
+  const inputs = [], conflicts = [], approvalValues = [], historicalArchives = [], canonical = new Map([...incomingTree].map(([path, entry]) => [path, image(entry)]))
+  const keepInput = (owner, kind, path, value, historical = false) => {
+    if (value && !existsSync(join(objects, value.sha256))) writeFileSync(join(objects, value.sha256), value.bytes, { mode: 0o600 })
+    inputs.push({ owner, kind, path, sha256: value?.sha256 ?? sha256('absent'), present: Boolean(value), mode: value?.mode ?? null, ...(historical ? { historical: true } : {}), ...(value?.inode ? { inode: value.inode, device: value.device, permissions: value.permissions } : {}), object: value ? join(objects, value.sha256) : null })
   }
   const merge = (path, base, local, incoming, owner, phase) => {
     if (equal(local, base)) return incoming
@@ -226,6 +276,15 @@ export async function reconcilePlan({ repo: given, upstream, output }) {
     return incoming
   }
   for (const capture of captures) {
+    if (capture.historical) {
+      for (const path of new Set([...capture.files.map(file => file.path), ...capture.headTree.keys(), ...capture.indexTree.keys()])) {
+        keepInput(capture.head, 'HEAD', path, image(capture.headTree.get(path)), true)
+        keepInput(capture.root, 'index', path, image(capture.indexTree.get(path)), true)
+        keepInput(capture.root, 'working', path, working(capture.root, path), true)
+      }
+      historicalArchives.push(await historicalSnapshot(capture, destination, git(repo, ['worktree', 'list', '--porcelain', '-z'])))
+      continue
+    }
     const paths = new Set([...capture.files.map(file => file.path), ...capture.baseTree.keys(), ...capture.headTree.keys(), ...capture.indexTree.keys(), ...incomingTree.keys()])
     for (const path of paths) {
       const base = image(capture.baseTree.get(path)), head = image(capture.headTree.get(path)), staged = image(capture.indexTree.get(path)), live = working(capture.root, path), incoming = image(incomingTree.get(path))
@@ -247,8 +306,8 @@ export async function reconcilePlan({ repo: given, upstream, output }) {
     }
   }
   for (const [path, value] of canonical) put(projection, path, value)
-  const fingerprint = sha256(JSON.stringify({ upstreamHead, worktrees: captures.map(c => [c.root, c.head]), inputs: inputs.map(({ owner, kind, path, sha256, mode, inode, device }) => ({ owner, kind, path, sha256, mode, inode, device })) }))
-  const result = { version: 1, repo, projection, upstream: upstreamHead, worktrees: captures.map(c => ({ root: c.root, head: c.head, base: c.base })), inputs, conflicts, fingerprint, approval_conflicts: [...new Set(approvalValues.map(value => value.epic))].sort((a, b) => a - b), approval_conflict_values: [...new Map(approvalValues.map(value => [JSON.stringify(value), value])).values()] }
+  const fingerprint = sha256(JSON.stringify({ upstreamHead, worktrees: captures.map(c => [c.root, c.head, c.historical]), historical_archives: historicalArchives.map(c => [c.root, c.index?.sha256 ?? null, c.shared_index?.sha256 ?? null, c.registration.sha256]), inputs: inputs.map(({ owner, kind, path, sha256, mode, inode, device, historical }) => ({ owner, kind, path, sha256, mode, inode, device, historical })) }))
+  const result = { version: 1, repo, projection, upstream: upstreamHead, worktrees: captures.map(c => ({ root: c.root, head: c.head, base: c.base })), historical_worktrees: historicalArchives, inputs, conflicts, fingerprint, approval_conflicts: [...new Set(approvalValues.map(value => value.epic))].sort((a, b) => a - b), approval_conflict_values: [...new Map(approvalValues.map(value => [JSON.stringify(value), value])).values()] }
   writeFileSync(join(destination, 'manifest.json'), JSON.stringify(result, null, 2) + '\n')
   return result
 }
@@ -350,7 +409,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
     const parserProof = keepBmad ? preparedBmadProof(repo) : null
     let capture, stage, manifest
     for (let pass = 1; pass <= 3; pass++) {
-      capture = await reconcilePlan({ repo, upstream, output: join(runFolder, `capture-${pass}`) })
+      capture = await reconcilePlan({ repo, upstream, historicalWorktrees: handover?.historical_worktrees, output: join(runFolder, `capture-${pass}`) })
       await step('captured', { pass, capture_manifest: join(runFolder, `capture-${pass}`, 'manifest.json') })
       const problem = handoverProblem(capture, handover)
       if (problem) return { outcome: 'parked', code: 'HANDOVER_REQUIRED', reason: problem, journal: paths.journal }
@@ -365,7 +424,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
       const checked = await checkPlan({ productRoot: repo, planRoot: stage, boardPath: join(stage, 'status.yaml'), format: 'bmn-plan' })
       if (checked.findings.length) throw new Error('STAGE_INVALID: ' + checked.findings.map(f => f.reason).join('; '))
       await step('staged', { stage })
-      const next = await reconcilePlan({ repo, upstream, output: join(runFolder, `verify-${pass}`) })
+      const next = await reconcilePlan({ repo, upstream, historicalWorktrees: handover?.historical_worktrees, output: join(runFolder, `verify-${pass}`) })
       if (next.fingerprint === capture.fingerprint) break
       if (pass === 3) return { outcome: 'parked', code: 'INPUTS_STILL_CHANGING', journal: paths.journal }
     }
@@ -376,7 +435,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
     await watchdog.arm()
     await step('fenced', { fenced: true })
     for (let index = 0; index < fence.length; index++) { applyFence([fence[index]]); await seam('chmod', { ...state, chmod_index: index }) }
-    const final = await reconcilePlan({ repo, upstream, output: join(runFolder, 'final-capture') })
+    const final = await reconcilePlan({ repo, upstream, historicalWorktrees: handover?.historical_worktrees, output: join(runFolder, 'final-capture') })
     if (final.fingerprint !== capture.fingerprint) return { outcome: 'parked', code: 'INPUT_CHANGED_DURING_HANDOVER', journal: paths.journal }
     await step('final-captured')
     const moved = join(stage, 'references', 'moved', date)
@@ -399,7 +458,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
     await step('ref-committed', { index_refreshed: true, preserved_index_entries: kept })
     return { outcome: 'moved', commit: prepared.commit, journal: paths.journal, conflicts: capture.conflicts, preserved_index_entries: kept }
   } catch (error) {
-    if (['MISSING_WORKTREE', 'NO_COMMON_PLANNING_BASE', 'UNREADABLE_PLANNING_BASE', 'BMAD_PREPARATION_REQUIRED', 'BMAD_PREPARATION_UNREADABLE', 'NO_DEFAULT_CHECKOUT', 'NOT_DEFAULT_CHECKOUT'].includes(error.code)) return { outcome: 'parked', code: error.code, reason: error.message, journal: paths.journal }
+    if (['MISSING_WORKTREE', 'NO_COMMON_PLANNING_BASE', 'UNREADABLE_PLANNING_BASE', 'BMAD_PREPARATION_REQUIRED', 'BMAD_PREPARATION_UNREADABLE', 'NO_DEFAULT_CHECKOUT', 'NOT_DEFAULT_CHECKOUT', 'HISTORICAL_SCOPE_CHANGED'].includes(error.code)) return { outcome: 'parked', code: error.code, reason: error.message, journal: paths.journal }
     throw error
   } finally { await watchdog.release(); await seam('restored', loadJournal(paths.journal)) }
 }

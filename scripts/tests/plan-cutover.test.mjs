@@ -3,7 +3,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyFence, cutoverPlan, fenceInventory, migrationPaths, reconcilePlan, rollbackPlan, saveJournal, startWatchdog, withMigrationWriter } from '../plan/plan-cutover.mjs'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
@@ -130,6 +130,100 @@ describe('D15 cutover', () => {
       if (watchdog) await watchdog.release()
       chmodSync(target, stat.mode)
     }
+  })
+  it('captures a pinned historical worktree separately, preserving its index, history and every planning image (108 D24)', async () => {
+    const f = fixture(), linked = join(f.root, 'historical'), note = '_bmad-output/planning-artifacts/note.md'
+    const orphan = git(f.repo, 'commit-tree', git(f.repo, 'rev-parse', 'HEAD^{tree}'), '-m', 'unrelated historical root')
+    git(f.repo, 'worktree', 'add', '-qb', 'historical', linked, orphan)
+    file(linked, note, 'historical committed\n'); git(linked, 'add', note); git(linked, 'commit', '-qm', 'historical note')
+    const head = git(linked, 'rev-parse', 'HEAD')
+    file(linked, note, 'historical staged\n'); git(linked, 'add', note)
+    file(linked, note, 'historical working\n'); file(linked, '_bmad-output/local-only.md', 'untracked history\n')
+    const indexFile = git(linked, 'rev-parse', '--git-path', 'index'), index = readFileSync(indexFile)
+    const registration = git(f.repo, 'worktree', 'list', '--porcelain')
+    const capture = await reconcilePlan({ repo: f.repo, upstream: 'upstream', output: join(f.root, 'capture'), historicalWorktrees: [{ root: linked, head, evidence: 'Synthetic owner historical-archive approval' }] })
+    expect(readFileSync(join(capture.projection, note), 'utf8')).toBe('first\nmiddle\nlast\n')
+    expect(existsSync(join(capture.projection, '_bmad-output/local-only.md'))).toBe(false)
+    const historical = capture.historical_worktrees[0]
+    expect(historical).toMatchObject({ root: linked, head, base: null, evidence: 'Synthetic owner historical-archive approval' })
+    expect(readFileSync(historical.index.path)).toEqual(index)
+    expect(git(linked, 'bundle', 'verify', historical.bundle.path)).toContain(head)
+    const variants = capture.inputs.filter(input => input.historical && input.path === note && input.present)
+    expect(variants.map(input => [input.kind, readFileSync(input.object, 'utf8')])).toEqual([
+      ['HEAD', 'historical committed\n'], ['index', 'historical staged\n'], ['working', 'historical working\n']
+    ])
+    expect(readFileSync(capture.inputs.find(input => input.historical && input.path === '_bmad-output/local-only.md' && input.kind === 'working').object, 'utf8')).toBe('untracked history\n')
+    expect(readFileSync(indexFile)).toEqual(index)
+    expect(git(f.repo, 'worktree', 'list', '--porcelain')).toBe(registration)
+    expect(git(linked, 'rev-parse', 'HEAD')).toBe(head)
+  })
+  it.each(['changed-head', 'canonical', 'canonical-from-linked', 'unregistered'])('refuses a historical declaration whose exact approved scope does not hold (%s)', async shape => {
+    const f = fixture(), linked = join(f.root, 'historical')
+    const orphan = git(f.repo, 'commit-tree', git(f.repo, 'rev-parse', 'HEAD^{tree}'), '-m', 'unrelated historical root')
+    git(f.repo, 'worktree', 'add', '-qb', 'historical', linked, orphan)
+    const declared = { root: linked, head: orphan, evidence: 'Synthetic owner historical-archive approval' }
+    if (shape === 'changed-head') { file(linked, '_bmad-output/local.md', 'later edit'); git(linked, 'add', '.'); git(linked, 'commit', '-qm', 'after approval') }
+    if (shape === 'canonical') { declared.root = f.repo; declared.head = git(f.repo, 'rev-parse', 'HEAD') }
+    if (shape === 'canonical-from-linked') { git(f.repo, 'branch', '-f', 'upstream', orphan); declared.root = f.repo; declared.head = git(f.repo, 'rev-parse', 'HEAD') }
+    if (shape === 'unregistered') declared.root = f.root
+    await expect(reconcilePlan({ repo: shape === 'canonical-from-linked' ? linked : f.repo, upstream: 'upstream', output: join(f.root, 'capture'), historicalWorktrees: [declared] })).rejects.toMatchObject({ code: 'HISTORICAL_SCOPE_CHANGED' })
+    expect(existsSync(join(f.repo, 'plan'))).toBe(false)
+  })
+  it('keeps the historical exception through final capture and rollback without changing the historical checkout', async () => {
+    const f = fixture(), linked = join(f.root, 'historical'), note = '_bmad-output/planning-artifacts/note.md'
+    const orphan = git(f.repo, 'commit-tree', git(f.repo, 'rev-parse', 'HEAD^{tree}'), '-m', 'unrelated historical root')
+    git(f.repo, 'worktree', 'add', '-qb', 'historical', linked, orphan)
+    file(linked, note, 'historical value, never canonical\n')
+    const indexPath = git(linked, 'rev-parse', '--git-path', 'index'), index = readFileSync(indexPath)
+    const inventory = { inventory_verified: true, worktrees: [f.repo, linked], writers: [], historical_worktrees: [{ root: linked, head: orphan, evidence: 'Synthetic owner historical-archive approval' }] }
+    const result = await move({ repo: f.repo, upstream: 'upstream', handover: inventory })
+    expect(result.outcome).toBe('moved')
+    expect(readFileSync(join(f.repo, 'plan/references/note.md'), 'utf8')).toBe('first\nmiddle\nlast\n')
+    expect(JSON.parse(readFileSync(join(f.repo, 'plan/references/moved', new Date().toISOString().slice(0, 10), 'inputs.json'), 'utf8')).historical_worktrees).toHaveLength(1)
+    expect((await rollbackPlan({ repo: f.repo, handover: inventory })).outcome).toBe('rolled-back')
+    expect(git(linked, 'rev-parse', 'HEAD')).toBe(orphan)
+    expect(readFileSync(indexPath)).toEqual(index)
+    expect(readFileSync(join(linked, note), 'utf8')).toBe('historical value, never canonical\n')
+  })
+  it.each(['index', 'registration'])('includes historical archive-only changes in its final fingerprint (%s)', async shape => {
+    const f = fixture(), linked = join(f.root, 'historical')
+    const head = git(f.repo, 'commit-tree', git(f.repo, 'rev-parse', 'HEAD^{tree}'), '-m', 'unrelated historical root')
+    git(f.repo, 'worktree', 'add', '-qb', 'historical', linked, head)
+    const options = { repo: f.repo, upstream: 'upstream', historicalWorktrees: [{ root: linked, head, evidence: 'Synthetic owner archive approval' }] }
+    const first = await reconcilePlan({ ...options, output: join(f.root, 'first') })
+    if (shape === 'index') { file(linked, 'product.txt', 'later staged product\n'); git(linked, 'add', 'product.txt') }
+    else git(f.repo, 'worktree', 'lock', '--reason', 'owner retains history', linked)
+    const next = await reconcilePlan({ ...options, output: join(f.root, 'next') })
+    expect(next.fingerprint).not.toBe(first.fingerprint)
+  })
+  it('archives the shared index beside a split index so its full staged entries remain readable', async () => {
+    const f = fixture(), linked = join(f.root, 'historical')
+    const head = git(f.repo, 'commit-tree', git(f.repo, 'rev-parse', 'HEAD^{tree}'), '-m', 'unrelated historical root')
+    git(f.repo, 'worktree', 'add', '-qb', 'historical', linked, head)
+    git(linked, 'update-index', '--split-index')
+    file(linked, 'product.txt', 'staged product\n'); git(linked, 'add', 'product.txt')
+    const sharedPath = resolve(linked, git(linked, 'rev-parse', '--shared-index-path')), shared = readFileSync(sharedPath)
+    const indexPath = git(linked, 'rev-parse', '--git-path', 'index'), index = readFileSync(indexPath), entries = git(linked, 'ls-files', '--stage')
+    const capture = await reconcilePlan({ repo: f.repo, upstream: 'upstream', output: join(f.root, 'capture'), historicalWorktrees: [{ root: linked, head, evidence: 'Synthetic owner archive approval' }] })
+    const archived = capture.historical_worktrees[0]
+    expect(archived.shared_index).toBeTruthy()
+    expect(readFileSync(archived.shared_index.path)).toEqual(shared)
+    expect(execFileSync('git', ['-C', linked, 'ls-files', '--stage'], { encoding: 'utf8', env: { ...process.env, GIT_INDEX_FILE: archived.index.path } }).trim()).toBe(entries)
+    expect(readFileSync(indexPath)).toEqual(index)
+    expect(readFileSync(sharedPath)).toEqual(shared)
+  })
+  it('recaptures a later historical product-index write before recording the cutover archive', async () => {
+    const f = fixture(), linked = join(f.root, 'historical')
+    const head = git(f.repo, 'commit-tree', git(f.repo, 'rev-parse', 'HEAD^{tree}'), '-m', 'unrelated historical root')
+    git(f.repo, 'worktree', 'add', '-qb', 'historical', linked, head)
+    const inventory = { inventory_verified: true, worktrees: [f.repo, linked], writers: [], historical_worktrees: [{ root: linked, head, evidence: 'Synthetic owner archive approval' }] }
+    let changed = false
+    const result = await move({ repo: f.repo, upstream: 'upstream', handover: inventory, seam: async phase => {
+      if (phase === 'staged' && !changed) { changed = true; file(linked, 'product.txt', 'later staged product\n'); git(linked, 'add', 'product.txt') }
+    } })
+    expect(result.outcome).toBe('moved')
+    const input = JSON.parse(readFileSync(join(f.repo, 'plan/references/moved', new Date().toISOString().slice(0, 10), 'inputs.json'), 'utf8')).historical_worktrees[0]
+    expect(readFileSync(input.index.path)).toEqual(readFileSync(git(linked, 'rev-parse', '--git-path', 'index')))
   })
   it('parks unrelated legacy worktree history without inventing a merge base or changing its files', async () => {
     const f = fixture(), linked = join(f.root, 'legacy-pre-rewrite'), initial = git(f.repo, 'rev-parse', 'HEAD')
