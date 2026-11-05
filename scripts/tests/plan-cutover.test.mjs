@@ -694,6 +694,12 @@ describe('D15 cutover', () => {
     expect(existsSync(join(f.root, 'archive/files/_bmad-output/implementation-artifacts/large-output.bin'))).toBe(false)
     expect(checkSpans({ repo: f.repo, stage, manifest })).toEqual([])
     expect(readFileSync(join(f.repo, board), 'utf8')).toContain('epic-7')
+    const repeated = fixture()
+    file(repeated.repo, board, 'development_status:\n  epic-7: done\n  7-1-one: done\n  7-2-orphan-guard: done\n  7-2-Orphan-guard: done\n')
+    git(repeated.repo, 'add', '.'); git(repeated.repo, 'commit', '-qm', 'renamed row')
+    const stubbed = join(repeated.root, 'stage/plan')
+    stagePlan({ repo: repeated.repo, stage: stubbed, keepBmad: true, date: '2026-11-05', archive: join(repeated.root, 'archive') })
+    expect(readFileSync(join(stubbed, 'epics/007-probe.md'), 'utf8').match(/^### Story 7\.2:/gmu)).toHaveLength(1)
   })
   it('parks a re-cut whose product side conflicts instead of guessing', async () => {
     const f = fixture()

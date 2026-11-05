@@ -400,9 +400,14 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
       rows.splice(after + 1, 0, { key, status, note: status === 'dropped' ? 'no board row before the move; dropped in the epic text' : 'no board row before the move' })
       manifest.reconciled.push({ key, change: `row added as ${status}`, reason: 'a story heading with no board row' })
     }
+    const stubbed = new Set()
     for (const row of rows) {
       const match = /^(\d+)-(\d+)-(.*)$/u.exec(row.key)
       if (!match || Number(match[1]) !== epic.number || headed.has(`${Number(match[1])}.${Number(match[2])}`)) continue
+      // Two rows can share a number (a case-only rename kept on the old board): one heading, both rows stay.
+      const number = `${Number(match[1])}.${Number(match[2])}`
+      if (stubbed.has(number)) continue
+      stubbed.add(number)
       const title = match[3].split('-').join(' ')
       stubs.set(epic.number, [...(stubs.get(epic.number) ?? []), `### Story ${Number(match[1])}.${Number(match[2])}: ${title.charAt(0).toUpperCase()}${title.slice(1)}\n\nRecorded on the board only before the move; its board note and this epic's Log hold what was done.`])
       manifest.reconciled.push({ key: row.key, change: 'heading stub appended to the epic file', reason: 'a board row with no story heading' })
