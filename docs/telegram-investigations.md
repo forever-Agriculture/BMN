@@ -109,7 +109,7 @@ changed scope or a new test allowance.
 
 Local detailed evidence is under `.dev-auto/evidence/epics-50-52/` and is not
 committed. Start with `finish/acceptance-matrix.json`, the `native-*` receipts,
-`finish/b2buster-phone-incident.json`, and `resume-installed/phone-budget.json`.
+`finish/*-phone-incident.json`, and `resume-installed/phone-budget.json`.
 Temporary provider profiles and credential copies were removed after the tests.
 Passing checks cover 775 affected tests plus typecheck, lint and build; source,
 isolated connector/PTY, native consumer, installed build and owner-phone evidence

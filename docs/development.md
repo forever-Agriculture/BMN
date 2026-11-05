@@ -3,7 +3,7 @@
 
 ## Prerequisites
 
-- Linux x64. Development happens on Ubuntu 24.04.
+- Linux x64. Development happens on Ubuntu 26.04.
 - Node.js 24 (`engines` allows `>=24 <25`).
 - pnpm 12.3.4. `corepack enable` provides the version pinned in `package.json`.
 - `node-gyp` on `PATH` (`npm install -g node-gyp`). pnpm compiles `better-sqlite3` with it during
@@ -24,9 +24,9 @@ pnpm refuses a package version published less than three days ago. To let one ur
 through, add it to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` as `name@version` with a dated
 comment, and remove the entry once the version is three days old.
 
-## Ubuntu 24.04 AppArmor
+## Ubuntu AppArmor
 
-Ubuntu 24.04 restricts unprivileged user namespaces, which Chromium's sandbox needs. Without an
+Ubuntu 24.04 and later restrict unprivileged user namespaces, which Chromium's sandbox needs. Without an
 exception, Electron exits at once with `SIGTRAP`, and the kernel log shows
 `apparmor="DENIED" operation="capable" profile="unprivileged_userns"`.
 
@@ -301,5 +301,5 @@ string for the stroke icon set in `icons.tsx` (stroke 1.4, round caps, no fill):
 - Linux x64 only; the package target is an unpacked folder, not a `.deb` or AppImage.
 - Output written after the last saved snapshot can be lost if the app or window crashes; the app
   says so when it recovers.
-- Start again runs a fresh process; use Resume to reopen a Claude Code or Codex conversation.
+- Start again runs a fresh process; use Resume to reopen a Claude Code, Codex or OpenCode conversation.
 - A model placed by hand in a custom Model folder is accepted by size without a checksum check.

@@ -336,8 +336,8 @@ reaches it (a unit test reads the sources to keep it that way).
   `Next`/`Submit`, Enter; each move is read back from the screen before the next key. A multi-select
   question must first show with nothing ticked and the cursor on option 1. Codex keys: Down to "None of
   the above", Tab, the text, Enter. Proof: Claude's one string per question (labels joined by `, `,
-  typed text last), Codex `["None of the above", "user_note: <text>"]`, OpenCode's label arrays. Claude permissions for other tools (`Edit`, `Write`, …) were not driven
-  and are not recognised.
+  typed text last), Codex `["None of the above", "user_note: <text>"]`, OpenCode's label arrays. Claude `Write` and `Edit` permissions are answered only through their waiting hook; they have no
+  key route. Other tools' permissions are not recognised.
 - **Screen mirror.** Each live session keeps its last 64 KB of output. A headless terminal copy
   (`screen-mirror.ts`) starts once a Claude, Codex or OpenCode hook reports from that session, seeded
   from that tail, or earlier, when the app reports its own state on screen (`OSC 7501;…:app=codex`, or

@@ -1,6 +1,10 @@
 # MODULE: dev-auto.md - run visibility, cleanup and owner-controlled worktree retirement
 # dev-auto runs
 
+BMN's author usually runs it with [dev-auto](https://github.com/forever-Agriculture/dev-auto), a
+skill for Codex and Claude Code that implements planned epics and keeps going until they pass
+acceptance. BMN works without it; this page covers what BMN shows of a run.
+
 Open **dev-auto runs…** in the command palette, or **Review results… → dev-auto runs…**
 for one workspace. It reads current handoffs and their selected sprint-board rows by itself: on
 opening, when the window gets the focus, when a request changes, and every 30 seconds while it is
