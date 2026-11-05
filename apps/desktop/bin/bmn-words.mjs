@@ -64,7 +64,8 @@ Commands:
   peers                                     List the sessions of your workspace you may leave a message for,
                                             with the agent in front of each now
   tell <session-id> --text T | --text-file - --key K
-  tell status [message-id]                  Leave one short message for a peer; BMN stamps where it is from.
+  tell status [message-id]
+  tell cancel <message-id>                  Leave one short message for a peer; BMN stamps where it is from.
                                             A working Claude Code or Codex agent may get it at its next
                                             tool call; one with no such agent in front is refused. A refused
                                             send stored nothing: send again with a new --key. status lists

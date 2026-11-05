@@ -147,6 +147,7 @@ function fakeHandlers(current: Map<string, string>) {
     reportUsage: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     reportGuard: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     submitInput: vi.fn(async (): Promise<void> => undefined),
+    cancelMessage: vi.fn(async (): Promise<unknown> => ({ messageId: 'message-1', state: 'withdrawn' })),
     takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] })),
     reportResumeCommand: vi.fn(async (p: Parameters<ControlHandlers['reportResumeCommand']>[0]): Promise<unknown> =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),

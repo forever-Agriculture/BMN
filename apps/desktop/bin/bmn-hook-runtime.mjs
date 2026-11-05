@@ -137,11 +137,15 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
   if (destination === null || left() <= 0) return
   const take = { method: 'message.take', params: { agent, pid: agentPid, destination } }
   const report = (outcomes) => {
-    const message = outcomes[0]?.result?.message
-    if (!isObject(message) || typeof message.stamp !== 'string' || typeof message.text !== 'string') return undefined
-    writeSync(1, contextAnswer(event, [...before, `${message.stamp}\n${message.text}`]))
+    const result = outcomes[0]?.result
+    const message = result?.message
+    // Story 110.2: the one line about a message this session sent that expired, told once, with or without a message.
+    const expired = typeof result?.expired === 'string' && result.expired !== '' ? result.expired : null
+    const whole = isObject(message) && typeof message.stamp === 'string' && typeof message.text === 'string'
+    if (!whole && expired === null) return undefined
+    writeSync(1, contextAnswer(event, [...before, expired, whole ? `${message.stamp}\n${message.text}` : null]))
     said.printed = true
-    return { method: 'message.report', params: { messageId: message.messageId, claimId: message.claimId, pid: agentPid } }
+    return whole ? { method: 'message.report', params: { messageId: message.messageId, claimId: message.claimId, pid: agentPid } } : undefined
   }
   await callEach(socketPath, token, [take, report], Math.max(1, left())).catch(() => undefined)
 }

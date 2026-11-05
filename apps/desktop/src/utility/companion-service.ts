@@ -103,7 +103,8 @@ import {
   type TurnDetailAnswer,
   type TurnDifferenceAnswer,
   type TurnFileView,
-  type TurnSessionView
+  type TurnSessionView,
+  sessionReceiverWord
 } from '@bmn/protocol'
 import {
   ArtifactFileError,
@@ -695,6 +696,13 @@ export class CompanionService {
         return this.knownSessions.get(sessionId)
       },
       foreground: (sessionId) => this.sessionForeground(sessionId),
+      receiversNow: async (sessionIds) => {
+        const cards = new Set((await options.database.companion('listAttention'))
+          .filter((row) => row.state === 'open' && (row.kind === 'question' || row.kind === 'permission')).map((row) => row.sessionId))
+        return new Map(sessionIds.map((sessionId) => [sessionId, sessionReceiverWord({
+          foreground: this.sessionForeground(sessionId), openCard: cards.has(sessionId), latest: this.hookObservations.get(sessionId)
+        })]))
+      },
       notice: async (p) => {
         await this.openAttention({
           sessionId: p.sessionId, incarnationId: p.incarnationId, requestKey: p.requestKey, kind: 'notice',
@@ -847,6 +855,7 @@ export class CompanionService {
         listPeers: (sessionId) => this.controlCall(() => this.messages.peers(sessionId)),
         sendMessage: (p) => this.controlCall(() => this.messages.send(p)),
         messageStatus: (sessionId, messageId) => this.controlCall(() => this.messages.status(sessionId, messageId)),
+        cancelMessage: (sessionId, messageId) => this.controlCall(() => this.messages.cancel(sessionId, messageId)),
         takeMessage: (p) => this.controlCall(() => this.messages.take(p)),
         reportMessage: (p) => this.controlCall(() => this.messages.report(p)),
         // Epic 69: the answer is one status word. Without the scanning thread nothing is recorded.

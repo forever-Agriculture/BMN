@@ -852,5 +852,41 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       record_json TEXT NOT NULL CHECK(json_valid(record_json)),
       PRIMARY KEY(qa_id,sequence)
     );`
+  },
+  {
+    // Story 110.2: a sender may withdraw a waiting message, and is told once of one that expired; every message that
+    // has already expired counts as told. Story 110.3: a message's wake depth and its one wake. Stored rows read as before.
+    version: 35,
+    sql: `CREATE TABLE session_message_next (
+        message_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspace(workspace_id) ON DELETE CASCADE,
+        sender_session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        receiver_session_id TEXT NOT NULL REFERENCES session(session_id) ON DELETE CASCADE,
+        sender_root TEXT NOT NULL,
+        stamp TEXT NOT NULL,
+        text TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('waiting', 'paste-uncertain', 'pasted', 'taken', 'printed', 'withdrawn')),
+        claim_id TEXT,
+        claimed_incarnation_id TEXT,
+        claimed_pid INTEGER,
+        claimed_app TEXT,
+        claimed_at TEXT,
+        expiry_told_at TEXT,
+        wake_depth INTEGER,
+        woken_at TEXT
+      );
+      INSERT INTO session_message_next(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
+        sent_at, expires_at, state, claim_id, claimed_incarnation_id, claimed_pid, claimed_app, claimed_at, expiry_told_at)
+      SELECT message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
+        sent_at, expires_at, state, claim_id, claimed_incarnation_id, claimed_pid, claimed_app, claimed_at,
+        CASE WHEN state = 'waiting' AND expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') THEN expires_at END
+      FROM session_message;
+      DROP TABLE session_message;
+      ALTER TABLE session_message_next RENAME TO session_message;
+      CREATE INDEX session_message_by_workspace ON session_message(workspace_id, sent_at);
+      CREATE INDEX session_message_by_receiver ON session_message(receiver_session_id, state, sent_at);
+      CREATE INDEX session_message_by_sender ON session_message(sender_session_id, sent_at);`
   }
 ])

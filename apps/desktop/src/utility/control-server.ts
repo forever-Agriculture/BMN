@@ -145,8 +145,10 @@ export interface ControlHandlers {
     /** The folder the sending `bmn` process itself stood in. */
     senderCwd: string
   }): Promise<unknown>
-  /** The caller's own sent messages and where each stands; nothing of a receiver's activity. */
+  /** The caller's own sent messages, where each stands, and one word for each receiver now (Story 110.2). */
   messageStatus(sessionId: string, messageId: string | null): Promise<unknown>
+  /** Story 110.2: its sender withdraws a message that still waits. */
+  cancelMessage(sessionId: string, messageId: string): Promise<unknown>
   /**
    * Epic 66.4: hands a session's own hook the one message it may print for its agent, consuming it. `destination`
    * is where that agent sends work, as the hook resolved it for this event.
@@ -1155,6 +1157,11 @@ export class ControlServer {
         const params = closedParams(rawParams, ['messageId'])
         if (scope.kind !== 'session') throw unauthorized('Only a session may read the state of its own messages')
         return handlers.messageStatus(scope.sessionId, readText(params, 'messageId', IDENTIFIER) ?? null)
+      }
+      case 'message.cancel': {
+        const params = closedParams(rawParams, ['messageId'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may withdraw its own message')
+        return handlers.cancelMessage(scope.sessionId, requireText(params, 'messageId', IDENTIFIER))
       }
       case 'message.take': {
         // Read-and-consume only, for the session's own hook: nothing here can write to a terminal or name another session.

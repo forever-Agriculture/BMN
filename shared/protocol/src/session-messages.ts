@@ -5,8 +5,10 @@ import { isQaLaunchRequest } from './qa'
 
 /** The longest message text, counted after invisible and direction-changing characters are removed. */
 const SESSION_MESSAGE_MAX_CHARACTERS = 2000
-/** How long BMN hands a waiting message over by itself; afterwards no route delivers it. */
-export const SESSION_MESSAGE_EXPIRY_MS = 2 * 60 * 60 * 1000
+/** How long BMN hands a waiting message over by itself; afterwards no route delivers it (Story 110.2: was 2 hours; a stored message keeps its own). */
+export const SESSION_MESSAGE_EXPIRY_MS = 24 * 60 * 60 * 1000
+/** A handoff's deadline: it carries work to go on with now, so it stays as it was (Story 110.2). */
+export const SESSION_HANDOFF_EXPIRY_MS = 2 * 60 * 60 * 1000
 /** The shortest time between two sends a session is allowed. */
 export const SESSION_MESSAGE_SEND_GAP_MS = 30_000
 /** How many messages may wait for one receiver at once. */
@@ -52,10 +54,10 @@ export const SESSION_MESSAGE_HANDOVER: Readonly<Record<string, { event: string; 
 
 /**
  * Where a message stands. `waiting` reads "expired" once its time has passed; `taken` and `printed` belong to the
- * hook hand-over (Story 66.4). `paste-uncertain` and `pasted` were the owner's Paste, gone in Story 75.4: a message
- * stored with either still reads as it did.
+ * hook hand-over (Story 66.4); `withdrawn` is its sender's `bmn tell cancel` (Story 110.2). `paste-uncertain` and
+ * `pasted` were the owner's Paste, gone in Story 75.4: a message stored with either still reads as it did.
  */
-const SESSION_MESSAGE_STATES = ['waiting', 'paste-uncertain', 'pasted', 'taken', 'printed'] as const
+const SESSION_MESSAGE_STATES = ['waiting', 'paste-uncertain', 'pasted', 'taken', 'printed', 'withdrawn'] as const
 export type SessionMessageState = (typeof SESSION_MESSAGE_STATES)[number]
 
 export function isSessionMessageState(value: unknown): value is SessionMessageState {
@@ -191,12 +193,37 @@ export interface SessionMessageTaken {
   text: string
 }
 
-/** What a sender may read of its own message: nothing of the receiver's activity. */
+/**
+ * Where a message's receiver stands now, in the word its sender reads (Story 110.2): one of these and nothing more
+ * of its activity. BMN's own hook reports decide it, so it is what BMN heard, not what the agent is doing this instant.
+ */
+export const SESSION_RECEIVER_WORDS = ['working', 'resting', 'waiting on the owner', 'not heard from'] as const
+export type SessionReceiverWord = (typeof SESSION_RECEIVER_WORDS)[number]
+
+/** The hook events that mean a turn is over: a finished one, or the owner's stop. */
+const RESTING_EVENTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  claude: ['Stop', 'Notification'], codex: ['Stop', 'Interrupt']
+})
+
+/** The word for a receiver, from what holds its terminal, its open cards and its latest hook report. */
+export function sessionReceiverWord(p: {
+  foreground: SessionAgentNow
+  openCard: boolean
+  latest: { agent: string; event: string; source: string | null } | undefined
+}): SessionReceiverWord {
+  if (p.foreground.state !== 'agent') return 'not heard from'
+  if (p.openCard) return 'waiting on the owner'
+  if (p.latest === undefined || p.latest.agent !== p.foreground.app) return 'not heard from'
+  return RESTING_EVENTS[p.latest.agent]?.includes(p.latest.event) === true && p.latest.source !== 'subagent' ? 'resting' : 'working'
+}
+
+/** What a sender may read of its own message: its state and one word for the receiver. */
 export interface SessionMessageReceipt {
   messageId: string
   receiverSessionId: string
   state: string
   sentAt: string
+  receiverNow: SessionReceiverWord
 }
 
 /** One session another session may message, as `bmn peers` lists it. */
@@ -242,7 +269,29 @@ export function sessionMessageStateWord(record: Pick<SessionMessageRecord, 'stat
     case 'pasted': return 'pasted by the owner'
     case 'taken': return 'taken, not confirmed'
     case 'printed': return 'printed for the agent'
+    case 'withdrawn': return 'withdrawn by its sender'
   }
+}
+
+/** How long ago a message was sent, in the stamp's words (Story 110.2): a stale "hold your commit" reads as stale. */
+export function sessionMessageAge(sentAt: string, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - Date.parse(sentAt)) / 60_000)
+  if (!Number.isFinite(minutes) || minutes < 1) return 'less than a minute'
+  if (minutes < 60) return minutes === 1 ? '1 minute' : `${minutes} minutes`
+  const hours = Math.floor(minutes / 60)
+  return hours === 1 ? '1 hour' : `${hours} hours`
+}
+
+/** A stored stamp as it reaches the agent: closed with how long ago the message was sent, worked out at hand-over. */
+export function sessionMessageStampAtDelivery(stamp: string, sentAt: string, now: number): string {
+  const age = `Sent ${sessionMessageAge(sentAt, now)} ago.`
+  return stamp.endsWith(']') ? `${stamp.slice(0, -1)}. ${age}]` : `${stamp} ${age}`
+}
+
+/** The one line a sender's agent gets about a message that expired undelivered (Story 110.2 AC3). */
+export function sessionMessageExpiredLine(p: { receiverName: string; text: string; messageId: string }): string {
+  return `[BMN: your message ${p.messageId} to session "${cleanSessionMessageName(p.receiverName)}" expired undelivered; no route hands it over now. ` +
+    `It began: "${cleanSessionMessageName(sessionMessageFirstLine(p.text, 80))}"]`
 }
 
 /**

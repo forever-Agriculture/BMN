@@ -12,8 +12,10 @@ import {
   cleanSessionMessageName,
   cleanSessionMessageText,
   sessionHandoffStamp,
+  sessionMessageExpiredLine,
   sessionMessageReceiverRefusal,
   sessionMessageStamp,
+  sessionMessageStampAtDelivery,
   sessionMessageStateWord,
   stripFormatCharacters,
   type MessageDestination,
@@ -22,6 +24,7 @@ import {
   type SessionMessageReceipt,
   type SessionMessageTaken,
   type SessionPeer,
+  type SessionReceiverWord,
   type SessionRecord
 } from '@bmn/protocol'
 import type { DatabaseWorkerClient } from './database-client'
@@ -37,6 +40,8 @@ interface SessionMessagesOptions {
   session(sessionId: string): Promise<SessionRecord | undefined>
   /** What holds a session's terminal now: the agent in front, its shell, another program, or nothing running. */
   foreground(sessionId: string): SessionAgentNow
+  /** One word per receiver, for its sender (Story 110.2): BMN's latest word on it, read together. */
+  receiversNow(sessionIds: readonly string[]): Promise<ReadonlyMap<string, SessionReceiverWord>>
   /** Opens the one notice a pause made by an hourly limit gets, on the session whose send was refused. */
   notice(p: { sessionId: string; incarnationId: string; requestKey: string; title: string; body: string }): Promise<void>
   /** Something the Messages dialog shows has changed. */
@@ -161,7 +166,7 @@ export class SessionMessages {
     destinationSessionId: string
     text: string
     senderCwd: string
-  }): Promise<{ messageId: string; state: 'waiting' }> {
+  }): Promise<{ messageId: string; state: 'waiting'; receiverNow: SessionReceiverWord }> {
     this.sameProcess(p.senderSessionId, p.senderIncarnationId)
     const cleaned = cleanSessionMessageText(p.text)
     if ('problem' in cleaned) invalidHostControl(cleaned.problem)
@@ -190,8 +195,15 @@ export class SessionMessages {
       senderRoot, stamp, text: cleaned.text, receiverRefusal
     }, this.iso())
     this.options.changed()
-    if (outcome.accepted) return { messageId: outcome.messageId, state: outcome.state }
+    if (outcome.accepted) {
+      return { messageId: outcome.messageId, state: outcome.state, receiverNow: (await this.words([p.destinationSessionId])).get(p.destinationSessionId) ?? 'not heard from' }
+    }
     return this.paused(outcome, p)
+  }
+
+  /** The receivers' words; a store that cannot say leaves "not heard from", and never holds a send's answer back. */
+  private async words(sessionIds: readonly string[]): Promise<ReadonlyMap<string, SessionReceiverWord>> {
+    return this.options.receiversNow(sessionIds).catch(() => new Map<string, SessionReceiverWord>())
   }
 
   /**
@@ -276,17 +288,26 @@ export class SessionMessages {
     }
   }
 
-  /** `bmn tell status`: the caller's own sent messages and where each stands. Nothing of a receiver's activity. */
+  /** `bmn tell cancel`: the caller's own waiting message can no longer be handed over. */
+  async cancel(senderSessionId: string, messageId: string): Promise<{ messageId: string; state: string }> {
+    const { state } = await this.options.database.companion('withdrawSessionMessage', senderSessionId, messageId, this.iso())
+    this.options.changed()
+    return { messageId, state }
+  }
+
+  /** `bmn tell status`: the caller's own sent messages, where each stands, and one word for its receiver now. */
   async status(senderSessionId: string, messageId: string | null): Promise<{ messages: SessionMessageReceipt[] }> {
     const messages = await this.options.database.companion('listSentMessages', senderSessionId, messageId)
     if (messageId !== null && messages.length === 0) {
       throw new HostControlError(ERROR_CODES.notFound, 'No message of yours has that id')
     }
     const now = this.options.now().getTime()
+    const words = await this.words([...new Set(messages.map((message) => message.receiverSessionId))])
     return {
       messages: messages.map((message) => ({
         messageId: message.messageId, receiverSessionId: message.receiverSessionId,
-        state: sessionMessageStateWord(message, now), sentAt: message.sentAt
+        state: sessionMessageStateWord(message, now), sentAt: message.sentAt,
+        receiverNow: words.get(message.receiverSessionId) ?? 'not heard from'
       }))
     }
   }
@@ -301,7 +322,8 @@ export class SessionMessages {
    * the hourly limit's pauses; this asks, per message, whether the provider the hook resolved may see private
    * work in the root stored with that message, and for a handoff in the root of every attached file's folder too
    * (Story 75.5). A message refused for its provider stays waiting and the list says why for as long as this run
-   * lasts; a later one from another folder is not held up behind it. One message per event.
+   * lasts; a later one from another folder is not held up behind it. One message per event. Beside it goes the one line
+   * for the oldest message this session sent that expired and it was not told of (Story 110.2 AC3), once.
    */
   async take(p: {
     sessionId: string
@@ -309,10 +331,12 @@ export class SessionMessages {
     pid: number
     app: string
     destination: MessageDestination
-  }): Promise<{ message: SessionMessageTaken | null }> {
+  }): Promise<{ message: SessionMessageTaken | null; expired?: string }> {
     if (SESSION_MESSAGE_HANDOVER[p.app] === undefined) return { message: null }
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
     const database = this.options.database
+    const told = await database.companion('claimExpiredNotice', p.sessionId, this.iso())
+    const expired = told === null ? {} : { expired: sessionMessageExpiredLine(told) }
     const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
     // One question per folder: the messages of one repository share its answer for this event.
     const answers = new Map<string, { allowed: boolean; reason: string }>()
@@ -352,14 +376,14 @@ export class SessionMessages {
         continue
       }
       // The answers above took time: a hook of a process this terminal no longer runs is handed nothing.
-      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
+      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null, ...expired }
       const claimId = randomUUID()
       const claim = await database.companion('claimMessageForHook', {
         messageId: candidate.messageId, receiverSessionId: p.sessionId, incarnationId: p.incarnationId,
         pid: p.pid, app: p.app, claimId
       }, this.iso())
       // Lost to another claim, or a condition ended between the two reads: nothing more on this event.
-      if (!claim.claimed || claim.record === null) return { message: null }
+      if (!claim.claimed || claim.record === null) return { message: null, ...expired }
       // The store answers later than it was asked. A claim that landed for a process the terminal stopped running
       // meanwhile is never answered with the text; it is given back so the terminal's next process may have the
       // message. Giving back is best effort: if it fails, the message stays "taken, not confirmed", which the
@@ -367,13 +391,14 @@ export class SessionMessages {
       if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) {
         await database.companion('releaseMessageClaim', { messageId: candidate.messageId, claimId }).catch(() => undefined)
         this.options.changed()
-        return { message: null }
+        return { message: null, ...expired }
       }
       this.held.delete(candidate.messageId)
       this.options.changed()
-      return { message: { messageId: claim.record.messageId, claimId, stamp: claim.record.stamp, text: claim.record.text } }
+      const stamp = sessionMessageStampAtDelivery(claim.record.stamp, claim.record.sentAt, this.options.now().getTime())
+      return { message: { messageId: claim.record.messageId, claimId, stamp, text: claim.record.text }, ...expired }
     }
-    return { message: null }
+    return { message: null, ...expired }
   }
 
   /**
@@ -388,8 +413,7 @@ export class SessionMessages {
     // means nothing is handed over on this event, and the message waits for the next.
     let timer: ReturnType<typeof setTimeout> | undefined
     const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), SESSION_MESSAGE_WAITING_CHECK_MS) })
-    const found = this.options.database.companion('messageTakeCandidates', p.sessionId, this.iso())
-      .then((candidates) => candidates.length > 0, () => false)
+    const found = this.options.database.companion('messagesForHook', p.sessionId, this.iso()).catch(() => false)
     try {
       return await Promise.race([found, late])
     } finally {
@@ -415,7 +439,7 @@ export class SessionMessages {
   /**
    * Deletes messages sent longer ago than the owner's confirmed "Keep agent history" days. No confirmed limit,
    * or Never, deletes none; a shorter limit he has not confirmed is not `confirmedKeepDays` yet, so it does
-   * not apply. The two-hour expiry only ends hand-over and deletes nothing.
+   * not apply. A message's expiry only ends hand-over and deletes nothing.
    */
   async sweep(): Promise<number> {
     const days = await this.options.confirmedKeepDays()

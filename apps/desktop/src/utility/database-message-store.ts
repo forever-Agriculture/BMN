@@ -1,6 +1,7 @@
 // MODULE: database-message-store.ts - messages sessions of one workspace leave each other, and handoffs between any two: peers, limits, pauses that lift by themselves, the one claim (Epic 66, Stories 75.4, 75.5)
 import {
   ERROR_CODES,
+  SESSION_HANDOFF_EXPIRY_MS,
   SESSION_MESSAGE_EXPIRY_MS,
   SESSION_MESSAGE_HOUR_MS,
   SESSION_MESSAGE_LIST_LIMIT,
@@ -11,6 +12,7 @@ import {
   SESSION_MESSAGE_WORKSPACE_HOURLY,
   SESSION_MESSAGES_OFF,
   SESSION_MESSAGES_PAUSED,
+  cleanSessionMessageName,
   isSessionMessageState,
   type SessionMessageListing,
   type SessionMessageListRow,
@@ -234,7 +236,7 @@ function sendSessionMessage(database: DatabaseConnection, p: {
   const sender = member(database, p.senderSessionId)!
   const paused = limitOutcome(database, sender, p.receiverSessionId, receiver.name, now)
   if (paused !== null) return paused
-  insertMessage(database, { ...p, workspaceId: sender.workspace_id }, now)
+  insertMessage(database, { ...p, workspaceId: sender.workspace_id }, now, SESSION_MESSAGE_EXPIRY_MS)
   return { accepted: true, messageId: p.messageId, state: 'waiting' }
 }
 
@@ -268,24 +270,19 @@ export function admitHandoff(database: DatabaseConnection, p: {
   }
   const paused = limitOutcome(database, sender, p.receiverSessionId, receiver!.name, now)
   if (paused !== null) return paused
-  insertMessage(database, { ...p, workspaceId: sender.workspace_id }, now)
+  insertMessage(database, { ...p, workspaceId: sender.workspace_id }, now, SESSION_HANDOFF_EXPIRY_MS)
   return { accepted: true, messageId: p.messageId, state: 'waiting' }
 }
 
 /**
- * The limits every send meets, refused in their own words: one waiting per pair, the gap between one session's
- * sends, and the receiver's queue. The send one past an hourly limit stores the pause it caused and is answered
- * with it; null lets the send through.
+ * The limits every send meets, refused in their own words: the gap between one session's sends and the receiver's
+ * queue, which names who may free it (Story 110.2: several may wait per pair). The send one past an hourly limit
+ * stores the pause it caused and is answered with it; null lets the send through.
  */
 function limitOutcome(
   database: DatabaseConnection, sender: MemberRow, receiverSessionId: string, receiverName: string, now: string
 ): SendOutcome | null {
   const p = { senderSessionId: sender.session_id, receiverSessionId }
-  const waiting = database.prepare(
-    `SELECT COUNT(*) AS count FROM session_message
-     WHERE sender_session_id = ? AND receiver_session_id = ? AND state = 'waiting' AND expires_at > ?`
-  ).get(p.senderSessionId, p.receiverSessionId, now) as { count: number }
-  if (waiting.count > 0) refuse('Your earlier message to that session is still waiting; one at a time')
   const last = database.prepare(
     'SELECT sent_at FROM session_message WHERE sender_session_id = ? ORDER BY sent_at DESC LIMIT 1'
   ).get(p.senderSessionId) as { sent_at: string } | undefined
@@ -293,10 +290,16 @@ function limitOutcome(
     refuse(`Wait ${SESSION_MESSAGE_SEND_GAP_MS / 1000} seconds between messages`)
   }
   const queued = database.prepare(
-    "SELECT COUNT(*) AS count FROM session_message WHERE receiver_session_id = ? AND state = 'waiting' AND expires_at > ?"
-  ).get(p.receiverSessionId, now) as { count: number }
-  if (queued.count >= SESSION_MESSAGE_MAX_WAITING) {
-    refuse(`That session already has ${SESSION_MESSAGE_MAX_WAITING} messages waiting; try again later`)
+    `SELECT s.name, s.workspace_id, m.sender_session_id FROM session_message m JOIN session s ON s.session_id = m.sender_session_id
+     WHERE m.receiver_session_id = ? AND m.state = 'waiting' AND m.expires_at > ? ORDER BY m.sent_at, m.rowid`
+  ).all(p.receiverSessionId, now) as Array<{ name: string; workspace_id: string; sender_session_id: string }>
+  if (queued.length >= SESSION_MESSAGE_MAX_WAITING) {
+    const own = queued.some((row) => row.sender_session_id === p.senderSessionId)
+    // Only a sender's name its peers may already see: a handoff's sender in another workspace stays unnamed.
+    const names = [...new Set(queued.filter((row) => row.workspace_id === sender.workspace_id && row.sender_session_id !== p.senderSessionId)
+      .map((row) => cleanSessionMessageName(row.name)))]
+    const who = [...(own ? ['withdraw yours with bmn tell cancel ID'] : []), ...(names.length === 0 ? [] : [`tell ${names.join(', ')}, who may withdraw theirs`])]
+    refuse(`That session already has ${SESSION_MESSAGE_MAX_WAITING} messages waiting; ${who.length === 0 ? 'try again later' : who.join(' or ')}`)
   }
   const [first, second] = ordered(p.senderSessionId, p.receiverSessionId)
   const pair = pairRow(database, sender.workspace_id, first, second)
@@ -334,14 +337,14 @@ function insertMessage(database: DatabaseConnection, p: {
   senderRoot: string
   stamp: string
   text: string
-}, now: string): void {
+}, now: string, expiresInMs: number): void {
   database.prepare(
     `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text,
        sent_at, expires_at, state)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting')`
   ).run(
     p.messageId, p.workspaceId, p.senderSessionId, p.receiverSessionId, p.senderRoot, p.stamp, p.text,
-    now, new Date(Date.parse(now) + SESSION_MESSAGE_EXPIRY_MS).toISOString()
+    now, new Date(Date.parse(now) + expiresInMs).toISOString()
   )
 }
 
@@ -364,6 +367,46 @@ function listSentMessages(
     messageId: record.messageId, receiverSessionId: record.receiverSessionId, state: record.state,
     sentAt: record.sentAt, expiresAt: record.expiresAt
   }))
+}
+
+/**
+ * `bmn tell cancel`: its sender withdraws a message that still waits, in one step. A claim already made stays as it
+ * is, a message that expired has no route left, and any other id or a handoff is not its sender's to cancel here.
+ */
+function withdrawSessionMessage(database: DatabaseConnection, senderSessionId: string, messageId: string, now: string): { state: string } {
+  const row = database.prepare(
+    `SELECT ${MESSAGE_COLUMNS} FROM session_message m WHERE m.sender_session_id = ? AND m.message_id = ? AND NOT ${isHandoff('m')}`
+  ).get(senderSessionId, messageId) as MessageRow | undefined
+  if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'No message of yours has that id')
+  if (row.state === 'withdrawn') return { state: 'withdrawn' }
+  if (row.state !== 'waiting') refuse('That message was already taken for its receiver; it cannot be withdrawn')
+  if (row.expires_at <= now) refuse('That message has expired; no route hands it over')
+  database.prepare("UPDATE session_message SET state = 'withdrawn' WHERE message_id = ? AND state = 'waiting'").run(messageId)
+  return { state: 'withdrawn' }
+}
+
+/**
+ * Whether a hook should ask at all (Story 110.2): a message may be handed over, or the session sent one that expired
+ * and it was not told yet. A wrong yes costs one unanswered `message.take`.
+ */
+function messagesForHook(database: DatabaseConnection, sessionId: string, now: string): boolean {
+  return messageTakeCandidates(database, sessionId, now).length > 0 || oldestExpiredUntold(database, sessionId, now) !== undefined
+}
+
+function oldestExpiredUntold(database: DatabaseConnection, senderSessionId: string, now: string): { message_id: string; text: string; receiver_name: string } | undefined {
+  return database.prepare(
+    `SELECT m.message_id, m.text, r.name AS receiver_name FROM session_message m JOIN session r ON r.session_id = m.receiver_session_id
+     WHERE m.sender_session_id = ? AND m.state = 'waiting' AND m.expires_at <= ? AND m.expiry_told_at IS NULL
+     ORDER BY m.expires_at, m.rowid LIMIT 1`
+  ).get(senderSessionId, now) as { message_id: string; text: string; receiver_name: string } | undefined
+}
+
+/** The oldest expired message its sender was not told of, marked told in one step: at most once, whatever comes of the answer. */
+function claimExpiredNotice(database: DatabaseConnection, senderSessionId: string, now: string): { messageId: string; receiverName: string; text: string } | null {
+  const row = oldestExpiredUntold(database, senderSessionId, now)
+  if (row === undefined) return null
+  const updated = database.prepare('UPDATE session_message SET expiry_told_at = ? WHERE message_id = ? AND expiry_told_at IS NULL').run(now, row.message_id)
+  return Number(updated.changes) === 1 ? { messageId: row.message_id, receiverName: row.receiver_name, text: row.text } : null
 }
 
 /**
@@ -579,5 +622,8 @@ export const MESSAGE_OPERATIONS = Object.freeze({
   claimMessageForHook,
   releaseMessageClaim,
   reportMessagePrinted,
-  deleteMessagesSentBefore
+  deleteMessagesSentBefore,
+  withdrawSessionMessage,
+  messagesForHook,
+  claimExpiredNotice
 })

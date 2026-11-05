@@ -76,7 +76,10 @@ function wakesInTranscript(app, since) {
     if (stat.isDirectory()) walk(path)
     else if (name.endsWith('.jsonl') && stat.mtimeMs >= since) files.push(path)
   } }
-  walk(app === 'claude' ? join(homedir(), '.claude/projects', scratch.replace(/[^A-Za-z0-9]/gu, '-')) : join(homedir(), '.codex/sessions'))
+  // An isolated profile's records, when the caller set one (Story 110.1).
+  walk(app === 'claude'
+    ? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects', scratch.replace(/[^A-Za-z0-9]/gu, '-'))
+    : join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions'))
   let count = 0
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
@@ -215,7 +218,7 @@ async function run(scenario, binary) {
   if (openCode) readme = openCode.readme
   const name = openCode ? `opencode${upgrade ? '-upgrade' : ''} ${openCode.version}` : app
   if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
-  const command = app === 'claude' ? 'claude' : app === 'codex' ? `codex -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  const command = app === 'claude' ? `claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}` : app === 'codex' ? `codex -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {
@@ -416,9 +419,40 @@ async function run(scenario, binary) {
         const three = await tick(3, () => type('/model'))
         check(`${app}: tick 3 skips a session with an open dialog (/model)`, skipped(three), { logs: three })
         await input.focus(); await page.keyboard.press('Escape')
-        const four = await tick(4, () => type(app === 'claude' ? '/exit' : '/quit'), 60_000)
-        check(`${app}: tick 4 skips a session with a shell in front`, four.length <= 1 && !four.some((line) => line.includes('typed')), { logs: four })
-        check(`${app}: the agent received the wake line only once overall`, wakesInTranscript(app, started) === 1, { count: wakesInTranscript(app, started) })
+        // Story 110.1 AC3: a question card opens while the turn runs, and stays open past the tick.
+        const asking = app === 'claude' ? 'AskUserQuestion' : 'request_user_input'
+        const four = await tick(4, () => type(`Use your ${asking} tool to ask the owner one question: which colour, with the options Blue and Green. Then wait for the answer.`))
+        check(`${app}: tick 4 skips a session with a question open`, skipped(four), { logs: four })
+        await input.focus(); await page.keyboard.press('Escape'); await sleep(1_500); await page.keyboard.press('Control+U')
+        // A stop: the owner's Escape during a long tool call, with the prompt empty afterwards.
+        const five = await tick(5, async () => {
+          await type('Run this shell command in the foreground, never in the background: sleep 300')
+          await sleep(12_000)
+          await input.focus(); await page.keyboard.press('Escape')
+        })
+        check(`${app}: tick 5 skips a session its owner stopped`, skipped(five), { logs: five })
+        await input.focus(); await page.keyboard.press('Control+U')
+        // Typing starts at the check: a finished turn, then keys from a second before the sweep the first tick's log line predicts.
+        const firstTyped = logs().find((line) => line.includes('typed the wake line'))
+        const sweepAt = firstTyped ? Date.parse(firstTyped.slice(0, 24)) : T + EVERY_MS
+        let keysAt = null
+        const six = await tick(6, async () => {
+          await type('Reply with the single word ok.')
+          await sleep(15_000)
+          const boundary = T + 6 * EVERY_MS
+          const sweep = sweepAt + Math.ceil((boundary - sweepAt) / 30_000) * 30_000
+          await sleep(Math.max(0, sweep - 1_000 - Date.now()))
+          keysAt = new Date().toISOString()
+          await input.focus()
+          for (let key = 0; key < 14; key += 1) { await page.keyboard.type('x'); await sleep(150) }
+        })
+        const typedScreen = (await screen()).split('\n').slice(-8)
+        // Either order is safe only if nothing was typed over the keys: a line typed after a key reached the prompt would stand in it.
+        check(`${app}: tick 6 types nothing over keys that start at the check`, !six.some((line) => line.includes('typed')) || wakesInTranscript(app, started) === 2 && !typedScreen.join('\n').includes('xBMN'), { logs: six, keysAt, typedScreen })
+        await input.focus(); await page.keyboard.press('Control+U'); await sleep(500)
+        const seven = await tick(7, () => type(app === 'claude' ? '/exit' : '/quit'), 60_000)
+        check(`${app}: tick 7 skips a session with a shell in front`, seven.length <= 1 && !seven.some((line) => line.includes('typed')), { logs: seven })
+        check(`${app}: the agent received the wake line only where a tick says it typed one`, wakesInTranscript(app, started) === logs().filter((line) => line.includes('typed the wake line')).length, { count: wakesInTranscript(app, started) })
       }
       report[`${name}State`] = state
       bmn('back')

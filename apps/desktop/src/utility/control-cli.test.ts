@@ -95,7 +95,7 @@ async function cliFixture() {
     openAttention: vi.fn<ControlHandlers['openAttention']>(async () => ({ opened: true })),
     prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })),
     listPeers: vi.fn<ControlHandlers['listPeers']>(async () => ({ on: true, paused: false, peers: [] })),
-    sendMessage: vi.fn<ControlHandlers['sendMessage']>(async () => ({ messageId: 'message-1', state: 'waiting' })),
+    sendMessage: vi.fn<ControlHandlers['sendMessage']>(async () => ({ messageId: 'message-1', state: 'waiting', receiverNow: 'resting' })),
     messageStatus: vi.fn<ControlHandlers['messageStatus']>(async () => ({ messages: [] })),
     takeMessage: vi.fn<ControlHandlers['takeMessage']>(async () => ({ message: null })),
     reportMessage: vi.fn<ControlHandlers['reportMessage']>(async () => ({ recorded: true })),
@@ -109,6 +109,7 @@ async function cliFixture() {
     reportUsage: vi.fn<ControlHandlers['reportUsage']>(async () => ({ recorded: true })),
     reportGuard: vi.fn<ControlHandlers['reportGuard']>(async () => ({ recorded: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined),
+    cancelMessage: vi.fn<ControlHandlers['cancelMessage']>(async (_sessionId, messageId) => ({ messageId, state: 'withdrawn' })),
     takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] })),
     reportResumeCommand: vi.fn<ControlHandlers['reportResumeCommand']>(async (p) =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
@@ -1388,14 +1389,14 @@ describe('bmn peers and bmn tell (Story 66.2)', () => {
 
     const result = await runCli(['tell', 'session-2', '--text', 'hold any commit on local main', '--key', 'tell-1'], { env: fixture.sessionEnv, cwd: folder })
 
-    expect(result).toEqual({ code: 0, stdout: 'Message message-1 is waiting for session session-2. Its state: bmn tell status\n', stderr: '' })
+    expect(result).toEqual({ code: 0, stdout: 'Message message-1 is waiting for session session-2. That session now: resting. Its state: bmn tell status\n', stderr: '' })
     expect(fixture.handlers.sendMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.sendMessage).toHaveBeenLastCalledWith({
       senderSessionId: 'session-1', senderIncarnationId: 'incarnation-1', destinationSessionId: 'session-2',
       text: 'hold any commit on local main', senderCwd: folder
     })
     const repeat = await runCli(['tell', 'session-2', '--text', 'hold any commit on local main', '--key', 'tell-1'], { env: fixture.sessionEnv, cwd: folder })
-    expect(repeat.stdout).toBe('Message message-1 is waiting for session session-2 (already done earlier; not repeated). Its state: bmn tell status\n')
+    expect(repeat.stdout).toBe('Message message-1 is waiting for session session-2 (already done earlier; not repeated). That session now: resting. Its state: bmn tell status\n')
     expect(fixture.handlers.sendMessage).toHaveBeenCalledTimes(1)
   })
 
@@ -1450,15 +1451,22 @@ describe('bmn peers and bmn tell (Story 66.2)', () => {
     expect(result).toEqual({ code: 1, stdout: '', stderr: 'bmn: INVALID_ARGUMENT: That session is not one of your peers; run bmn peers\n' })
   })
 
+  it('withdraws the caller\'s own message with bmn tell cancel (110.2 AC5)', async () => {
+    const fixture = await cliFixture()
+    expect(await runCli(['tell', 'cancel', 'message-1'], { env: fixture.sessionEnv })).toEqual({ code: 0, stdout: 'Message message-1 is withdrawn; it will not be handed over\n', stderr: '' })
+    expect(fixture.handlers.cancelMessage).toHaveBeenLastCalledWith('session-1', 'message-1')
+    expect((await runCli(['tell', 'cancel'], { env: fixture.sessionEnv })).stderr).toContain('tell cancel expects one message id')
+  })
+
   it('lists the caller\'s own messages: id, state word, receiving session and time', async () => {
     const fixture = await cliFixture()
     fixture.handlers.messageStatus.mockResolvedValue({ messages: [
-      { messageId: 'message-2', receiverSessionId: 'session-3', state: 'printed for the agent', sentAt: '2026-10-13T09:00:31.000Z' },
-      { messageId: 'message-1', receiverSessionId: 'session-2', state: 'waiting', sentAt: '2026-10-13T09:00:00.000Z' }
+      { messageId: 'message-2', receiverSessionId: 'session-3', state: 'printed for the agent', sentAt: '2026-10-13T09:00:31.000Z', receiverNow: 'working' },
+      { messageId: 'message-1', receiverSessionId: 'session-2', state: 'waiting', sentAt: '2026-10-13T09:00:00.000Z', receiverNow: 'resting' }
     ] })
 
     expect((await runCli(['tell', 'status'], { env: fixture.sessionEnv })).stdout)
-      .toBe('message-2\tprinted for the agent\tsession-3\t2026-10-13T09:00:31.000Z\nmessage-1\twaiting\tsession-2\t2026-10-13T09:00:00.000Z\n')
+      .toBe('message-2\tprinted for the agent\tsession-3\tworking\t2026-10-13T09:00:31.000Z\nmessage-1\twaiting\tsession-2\tresting\t2026-10-13T09:00:00.000Z\n')
     expect(fixture.handlers.messageStatus).toHaveBeenLastCalledWith('session-1', null)
     await runCli(['tell', 'status', 'message-1'], { env: fixture.sessionEnv })
     expect(fixture.handlers.messageStatus).toHaveBeenLastCalledWith('session-1', 'message-1')
@@ -1505,6 +1513,33 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true })
     fixture.handlers.takeMessage.mockResolvedValue({ message })
   }
+
+  it('prints the one line about a message that expired, with no report when no message goes with it (110.2 AC3)', async () => {
+    const fixture = await cliFixture()
+    const session = await codexSession(fixture.root)
+    fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true })
+    fixture.handlers.takeMessage.mockResolvedValue({ message: null, expired: '[BMN: your message expired]' })
+
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+    expect(result).toEqual({
+      code: 0, stderr: '',
+      stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: '[BMN: your message expired]' } })
+    })
+    expect(fixture.handlers.reportMessage).not.toHaveBeenCalled()
+  })
+
+  it('prints the expired line before a message that goes with it, and reports the message', async () => {
+    const fixture = await cliFixture()
+    const session = await codexSession(fixture.root)
+    fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true })
+    fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE, expired: '[BMN: your message expired]' })
+
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+    expect(result.stdout).toBe(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `[BMN: your message expired]\n\n${STAMP}\nhold any commit on local main\nI am about to merge` } }))
+    expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
+  })
 
   it('prints the stamped message in Codex\'s measured answer form, once, and then reports it as printed', async () => {
     const fixture = await cliFixture()

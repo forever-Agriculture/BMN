@@ -90,13 +90,15 @@ export function awaySummaryData(database: DatabaseConnection, call: AwaySummaryC
        (SELECT name FROM session WHERE session_id = m.receiver_session_id) AS receiver
      FROM session_message m WHERE m.sent_at >= ? AND m.sent_at < ? ORDER BY m.sent_at, m.rowid LIMIT ?`
   ).all(call.since, until, AWAY_ACTIVITY_LIMITS.messages + 1) as Array<{
-    sender_session_id: string; receiver_session_id: string; state: 'waiting' | 'paste-uncertain' | 'pasted' | 'taken' | 'printed'; expires_at: string
+    sender_session_id: string; receiver_session_id: string; state: 'waiting' | 'paste-uncertain' | 'pasted' | 'taken' | 'printed' | 'withdrawn'; expires_at: string
     handoff: number; receiver: string | null
   }>
   if (messages.length > AWAY_ACTIVITY_LIMITS.messages) gaps.messages = { kind: 'truncated', at: AWAY_ACTIVITY_LIMITS.messages }
   const nowMs = Date.parse(call.now)
   for (const message of messages.slice(0, AWAY_ACTIVITY_LIMITS.messages)) {
     const entry = of(message.sender_session_id)
+    // A message its sender withdrew went nowhere and nothing waits on it (Story 110.2).
+    if (message.state === 'withdrawn') continue
     const state = sessionHandoffState({ state: message.state, expiresAt: message.expires_at }, nowMs)
     if (message.handoff) entry.handoffs.push({ receiver: message.receiver ?? 'a session BMN no longer holds', state })
     else entry.messages[state] += 1

@@ -53,6 +53,8 @@ export function messageNote(message: SessionMessageListRow, now: number): string
   const hook = message.claimedApp === null ? "the agent's hook" : `${appName(message.claimedApp)}'s hook`
   const measured = message.claimedApp === null ? undefined : SESSION_MESSAGE_HANDOVER[message.claimedApp]
   switch (message.state) {
+    case 'withdrawn':
+      return `Its sender withdrew it. It will not reach ${receiver}.`
     // The owner's Paste is gone (Story 75.4); a message stored with either of its states still reads as it did.
     case 'pasted':
       return `You pasted it into ${receiver}. Enter was not pressed.`

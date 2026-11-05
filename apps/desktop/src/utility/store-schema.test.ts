@@ -9,6 +9,7 @@ import {
   initializeDatabase,
   type DatabaseConnection
 } from './database-initialization'
+import { configureDatabase } from './database-config'
 import { createWorkspace, selectWorkspace } from './database-workspace-store'
 import { DATABASE_MIGRATIONS, DEFAULT_WORKSPACE_ID, STORY_SCHEMA_TABLES } from './store-schema'
 
@@ -22,9 +23,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the 34 ordered migrations and only the owned tables', () => {
+  it('contains the 35 ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -205,7 +206,7 @@ describe('owned database schema', () => {
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
           { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 },
           { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 },
-          { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }
+          { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -323,7 +324,7 @@ describe('owned database schema', () => {
           { version: 19, applied_at: migratedAt },
           { version: 20, applied_at: migratedAt }, { version: 21, applied_at: migratedAt },
           { version: 22, applied_at: migratedAt }, { version: 23, applied_at: migratedAt }, { version: 24, applied_at: migratedAt }, { version: 25, applied_at: migratedAt },
-          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }, { version: 28, applied_at: migratedAt }, { version: 29, applied_at: migratedAt }, { version: 30, applied_at: migratedAt }, { version: 31, applied_at: migratedAt }, { version: 32, applied_at: migratedAt }, { version: 33, applied_at: migratedAt }, { version: 34, applied_at: migratedAt }
+          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }, { version: 28, applied_at: migratedAt }, { version: 29, applied_at: migratedAt }, { version: 30, applied_at: migratedAt }, { version: 31, applied_at: migratedAt }, { version: 32, applied_at: migratedAt }, { version: 33, applied_at: migratedAt }, { version: 34, applied_at: migratedAt }, { version: 35, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -370,7 +371,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 34 })
+        .toEqual({ version: 35 })
     } finally {
       database.close()
     }
@@ -720,7 +721,7 @@ it('adds messages between sessions at version 26, which version 28 turns on for 
     expect(database.prepare('SELECT COUNT(*) AS count FROM session_message_pair').get()).toEqual({ count: 0 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 34 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 35 })
   } finally { database.close() }
 })
 
@@ -752,7 +753,8 @@ it('adds turn changes at version 27, which version 28 turns on for every existin
 
     expect(database.prepare('SELECT * FROM workspace WHERE workspace_id = ?').get(DEFAULT_WORKSPACE_ID)).toEqual({ ...workspaceBefore, turn_changes: 1 })
     expect(database.prepare("SELECT * FROM session WHERE session_id = 'old-a'").get()).toEqual({ ...sessionBefore, setup_purpose_json: null })
-    expect(database.prepare("SELECT * FROM session_message WHERE message_id = 'm-1'").get()).toEqual(messageBefore)
+    // Story 110.2 adds what stays empty on a stored row; it long expired, so its sender counts as told.
+    expect(database.prepare("SELECT * FROM session_message WHERE message_id = 'm-1'").get()).toEqual({ ...messageBefore, expiry_told_at: (messageBefore as { expires_at: string }).expires_at, wake_depth: null, woken_at: null })
     for (const table of ['turn_capture', 'turn_record', 'turn_capture_reference', 'turn_removal_job']) {
       expect(database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({ count: 0 })
     }
@@ -800,7 +802,7 @@ it('adds turn changes at version 27, which version 28 turns on for every existin
     expect(database.prepare('SELECT COUNT(*) AS count FROM turn_removal_job').get()).toEqual({ count: 2 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 34 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 35 })
   } finally { database.close() }
 })
 
@@ -855,7 +857,7 @@ it('turns messages and turn changes on at version 28 for every workspace and ses
     ])
     expect(rows('SELECT * FROM session ORDER BY session_id')).toEqual(sessionsBefore.map((row) => ({ ...row, receive_messages: 1, setup_purpose_json: null })))
     expect(rows('SELECT * FROM session_message_pair')).toEqual(pairsBefore)
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 34 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 35 })
 
     // A workspace created after the upgrade is on, though the column's declared default is still 0; the record
     // carries no switch.
@@ -886,5 +888,45 @@ it('starts a fresh database with its default workspace on, and every workspace a
     expect(database.prepare("SELECT session_messages, turn_changes FROM workspace WHERE workspace_id = 'w-shop'").get())
       .toEqual({ session_messages: 1, turn_changes: 1 })
     expect(database.prepare("SELECT receive_messages FROM session WHERE session_id = 's-new'").get()).toEqual({ receive_messages: 1 })
+  } finally { database.close() }
+})
+
+it('version 35 keeps every stored message as it read, counts one that already expired as told, and takes the new state (Story 110.2 AC6)', () => {
+  const database = new BetterSqlite3(':memory:') as unknown as DatabaseConnection
+  try {
+    configureDatabase(database)
+    database.exec('CREATE TABLE schema_migration (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
+    for (const migration of DATABASE_MIGRATIONS) {
+      if (migration.version >= 35) break
+      database.exec(migration.sql)
+      database.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)').run(migration.version, '2026-11-01T00:00:00.000Z')
+    }
+    database.prepare("INSERT INTO workspace(workspace_id, name, default_cwd, archived_at, revision) VALUES ('w', 'W', NULL, NULL, 1)").run()
+    for (const id of ['a', 'b']) {
+      database.prepare(`INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at) VALUES (?, 'w', ?, '/', '/bin/bash', '[]', 1, 'at')`).run(id, id)
+    }
+    const insert = database.prepare(
+      `INSERT INTO session_message(message_id, workspace_id, sender_session_id, receiver_session_id, sender_root, stamp, text, sent_at, expires_at, state)
+       VALUES (?, 'w', 'a', 'b', '/work', '[stamp]', 'text', '2026-10-01T00:00:00.000Z', ?, ?)`
+    )
+    insert.run('expired', '2026-10-01T02:00:00.000Z', 'waiting')
+    insert.run('future', '2999-01-01T00:00:00.000Z', 'waiting')
+    insert.run('printed', '2026-10-01T02:00:00.000Z', 'printed')
+    const before = database.prepare('SELECT * FROM session_message ORDER BY message_id').all() as Array<Record<string, unknown>>
+
+    initializeDatabase(database, '2026-11-05T00:00:00.000Z')
+
+    const after = database.prepare('SELECT * FROM session_message ORDER BY message_id').all() as Array<Record<string, unknown>>
+    expect(after).toEqual(before.map((row) => ({
+      ...row, wake_depth: null, woken_at: null, expiry_told_at: row.message_id === 'expired' ? row.expires_at : null
+    })))
+    expect(database.prepare("UPDATE session_message SET state = 'withdrawn' WHERE message_id = 'future'").run().changes).toBe(1)
+    expect(() => database.prepare("UPDATE session_message SET state = 'read' WHERE message_id = 'future'").run()).toThrow(/CHECK constraint/)
+    const indexes = (database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'session_message' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name)
+    expect(indexes).toEqual(['session_message_by_receiver', 'session_message_by_sender', 'session_message_by_workspace'])
+    // A deleted session still takes its messages with it.
+    database.prepare("DELETE FROM session WHERE session_id = 'b'").run()
+    expect(database.prepare('SELECT COUNT(*) AS count FROM session_message').get()).toEqual({ count: 0 })
+    expect(database.pragma('foreign_key_check')).toEqual([])
   } finally { database.close() }
 })
