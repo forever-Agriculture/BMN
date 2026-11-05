@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { migrationPaths } from '../../apps/desktop/bin/plan-migration-lock.mjs'
-import { checkPlan, defaultLocation, PlanError, ROW } from '../../apps/desktop/bin/plan-board.mjs'
+import { checkPlan, defaultLocation, epicLeadHint, PlanError, ROW, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
 import { replaceRow } from '../../apps/desktop/bin/plan-cli.mjs'
 import { TO_BMAD } from '../../apps/desktop/bin/plan-statuses.mjs'
 import { verifyParserProof } from '../../apps/desktop/bin/plan-bmad-parser.mjs'
@@ -411,6 +411,31 @@ export function mergedMoveOf(repo, upstream) {
   if (metadata.version !== 1 || !commit) throw new PlanError('MOVE_BOUNDARY_UNCONFIRMED', `upstream's move commit does not descend directly from ${metadata.history_head}; it was squashed or rebased after master advanced`)
   return { head, anchor: metadata.history_head, commit, source_board: metadata.source_board }
 }
+/**
+ * A contribution can leave between the cut and the switch: a checkout pulled the move, a worktree was removed. What now
+ * reads as the cut's upstream was not edited, so it keeps the baseline's value instead of undoing it. Gos are read from history, never from these bytes.
+ */
+export function carryBaseline(repo, anchor, projection, baseline) {
+  const sameRow = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  const sameBytes = (a, b) => !a ? !b : Boolean(b) && a.sha256 === b.sha256
+  for (const path of new Set([...filesUnder(baseline), ...filesUnder(projection)])) {
+    const before = working(baseline, path), now = working(projection, path)
+    if (sameBytes(before, now)) continue
+    const at = blobAt(repo, anchor, path)
+    if (path.endsWith('/sprint-status.yaml') && before && now) {
+      let cut, current, upstream
+      try { cut = rowsOf(before.bytes.toString()); current = rowsOf(now.bytes.toString()); upstream = rowsOf(at?.bytes.toString() ?? '') } catch (error) { if (/^DUPLICATE: /u.test(error.message)) continue; throw error }
+      let text = now.bytes.toString()
+      for (const [key, row] of cut) {
+        if (sameRow(row, current.get(key)) || !sameRow(current.get(key), upstream.get(key))) continue
+        text = replaceRow(text, key, row.status, row.note)?.text ?? appendRow(text, key, row.status, row.note)
+      }
+      writeFileSync(join(projection, path), text)
+    } else if (sameBytes(now, at)) {
+      if (before) { mkdirSync(dirname(join(projection, path)), { recursive: true }); rmSync(join(projection, path), { force: true }); cpSync(join(baseline, path), join(projection, path), { verbatimSymlinks: true }) } else rmSync(join(projection, path), { force: true })
+    }
+  }
+}
 /** The reader seeds gos through the cut only: an approval event after it, even one later reverted, must not vanish silently. */
 export function approvalEventsAfterCut(repo, source, anchor, tips) {
   const events = []
@@ -509,7 +534,24 @@ export function mergeStagedPlan({ base, ours, theirs, output, date, localOnly = 
   }
   rmSync(`${output}.merge`, { recursive: true, force: true })
   result.approval_conflicts = [...new Set(result.approval_conflicts)].sort((x, y) => x - y)
+  restoreLeadHints(output, result)
   return result
+}
+/** A row's note and its epic's text can come from different sides; the row always carries the hint of the text that won. Its earlier note stays on record. */
+function restoreLeadHints(output, result) {
+  const board = join(output, 'status.yaml')
+  if (!existsSync(board)) return
+  let text = readFileSync(board, 'utf8')
+  for (const [key, row] of rowsOf(text)) {
+    if (!/^epic-\d+$/u.test(key) || ['done', 'dropped'].includes(row.status)) continue
+    const hint = epicLeadHint(output, key)
+    if (!hint) continue
+    const { note } = withLeadHint(row.note, hint)
+    if (note === row.note) continue
+    text = replaceRow(text, key, row.status, note)?.text ?? text
+    result.settled_conflicts.push({ path: 'status.yaml', key, local: row, upstream: null, settled: "the epic's lead hint restored to the row" })
+  }
+  writeFileSync(board, text)
 }
 /** Is this old-source path, under its generated placement too, one that must stay out of anything published? */
 export const staysLocal = (path, placements, localOnly) => {
@@ -558,7 +600,15 @@ export function productInstall(repo, from, to, planningPaths, keepBmad) {
 /** A fenced planning file keeps its inode, so the watchdog can still restore its mode. */
 function writeProduct(repo, write) {
   const full = join(repo, write.path)
-  if (!write.planning) { atomicImage(full, write.image, write.image?.mode === '100755' ? 0o755 : undefined); return }
+  if (!write.planning) {
+    // A product file can share a folder with fenced planning files; the fence's mode comes back at once.
+    let folder = dirname(full)
+    while (!existsSync(folder)) folder = dirname(folder)
+    const mode = statSync(folder).mode & 0o777
+    chmodSync(folder, mode | 0o200)
+    try { atomicImage(full, write.image, write.image?.mode === '100755' ? 0o755 : undefined) } finally { chmodSync(folder, mode) }
+    return
+  }
   if (!write.image) { const mode = statSync(dirname(full)).mode & 0o777; chmodSync(dirname(full), mode | 0o200); try { rmSync(full, { force: true }) } finally { chmodSync(dirname(full), mode) } return }
   const mode = statSync(full).mode & 0o777
   chmodSync(full, mode | 0o200); try { writeFileSync(full, write.image.bytes) } finally { chmodSync(full, mode) }
@@ -656,6 +706,7 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
       await step('captured', { pass, capture_manifest: join(runFolder, `capture-${pass}`, 'manifest.json') })
       const problem = handoverProblem(capture, handover)
       if (problem) return { outcome: 'parked', code: 'HANDOVER_REQUIRED', reason: problem, journal: paths.journal }
+      if (merged) carryBaseline(repo, merged.anchor, capture.projection, baseline.projection)
       stage = join(runFolder, `stage-${pass}`, 'plan')
       manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage, keepBmad, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged?.anchor ?? null, archive: join(runFolder, `archive-${pass}`) })
       if (manifest.copy && Object.keys(manifest.copy.unresolved).length) return { outcome: 'parked', code: 'COPY_PROVENANCE_REQUIRED', rows: Object.keys(manifest.copy.unresolved), journal: paths.journal }

@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirS
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { applyFence, cutoverPlan, fenceInventory, mergeStagedPlan, migrationPaths, planFingerprint as planFingerprintOf, reconcilePlan, rollbackPlan, saveJournal, startWatchdog, withMigrationWriter } from '../plan/plan-cutover.mjs'
+import { applyFence, carryBaseline, cutoverPlan, fenceInventory, mergeStagedPlan, migrationPaths, planFingerprint as planFingerprintOf, reconcilePlan, rollbackPlan, saveJournal, startWatchdog, withMigrationWriter } from '../plan/plan-cutover.mjs'
 import { archive, checkSpans, stagePlan } from '../plan/migrate-bmad-plan.mjs'
 import { prepareMoveBranch } from '../plan/prepare-move-branch.mjs'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
@@ -385,8 +385,9 @@ describe('D15 cutover', () => {
   })
   const visionText = words => `# Vision\n\n## Vision\n\n${words}\n\n## Principles\n\n1. One rule.\n`
   // A PR's move merged remotely: fixture cut from A, plan edited upstream, the default checkout still on the old board.
-  async function mergedFixture({ keepBmad = false, afterCut = () => {}, moveCheckout = false, productBoth = false } = {}) {
+  async function mergedFixture({ keepBmad = false, afterCut = () => {}, moveCheckout = false, productBoth = false, platform = false } = {}) {
     const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    if (platform) { file(f.repo, 'docs/platform/README.md', 'old index\n'); file(f.repo, 'docs/platform/epic-7-probe.md', '# Epic 7: Probe contract\n'); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'platform') }
     const bothLines = Array.from({ length: 12 }, (_, at) => `line ${at + 1}\n`).join('')
     if (productBoth) { file(f.repo, 'both.sh', bothLines); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'both') }
     const remote = join(f.root, 'remote.git'); git(f.repo, 'clone', '-q', '--bare', f.repo, remote); git(f.repo, 'remote', 'add', 'origin', remote); git(f.repo, 'fetch', '-q', 'origin'); git(f.repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
@@ -398,7 +399,7 @@ describe('D15 cutover', () => {
     if (!keepBmad) git(publish, 'rm', '-rqf', '_bmad-output')
     file(publish, 'plan/VISION.md', visionText('edited on the branch'))
     git(publish, 'add', '-A'); git(publish, 'commit', '-qm', 'move'); const moveCommit = git(publish, 'rev-parse', 'HEAD')
-    git(publish, 'switch', '-q', 'main'); file(publish, 'upstream-product.txt', 'incoming product\n'); if (productBoth) file(publish, 'both.sh', bothLines.replace('line 9\n', 'line 9 upstream\n')); git(publish, 'add', '.'); git(publish, 'commit', '-qm', 'product on master')
+    git(publish, 'switch', '-q', 'main'); file(publish, 'upstream-product.txt', 'incoming product\n'); if (productBoth) file(publish, 'both.sh', bothLines.replace('line 9\n', 'line 9 upstream\n')); if (platform) file(publish, 'docs/platform/README.md', 'new index\n'); git(publish, 'add', '.'); git(publish, 'commit', '-qm', 'product on master')
     afterCut(publish, board)
     git(publish, 'merge', '-q', '--no-ff', '-m', 'Merge move', 'move'); git(publish, 'push', '-q', 'origin', 'main'); git(f.repo, 'fetch', '-q', 'origin')
     if (moveCheckout) { git(f.repo, 'merge', '-q', '--ff-only', 'origin/main') }
@@ -535,6 +536,36 @@ describe('D15 cutover', () => {
     expect(git(f.repo, 'show', ':both.sh')).toContain('line 9 upstream')
     expect(git(f.repo, 'show', ':both.sh')).not.toContain('line 1 local')
   }, 45_000)
+  it('keeps the rows and text of a contribution that left between the cut and the switch', async () => {
+    const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    const remote = join(f.root, 'remote.git'); git(f.repo, 'clone', '-q', '--bare', f.repo, remote); git(f.repo, 'remote', 'add', 'origin', remote); git(f.repo, 'fetch', '-q', 'origin')
+    const live = readFileSync(join(f.repo, board), 'utf8').replace('7-1-one: backlog', '7-1-one: done # finished live')
+    file(f.repo, board, live); file(f.repo, '_bmad-output/planning-artifacts/live-note.md', 'written live before the cut\n')
+    const anchor = git(f.repo, 'rev-parse', 'HEAD')
+    const first = await reconcilePlan({ repo: f.repo, upstream: anchor, upstreamInHistory: true, output: join(f.root, 'first') })
+    const again = await reconcilePlan({ repo: f.repo, upstream: anchor, upstreamInHistory: true, output: join(f.root, 'second') })
+    // The second capture behaves as if the live checkout had pulled the move: its bytes are back at the cut's upstream.
+    file(join(f.root, 'second/projection'), board, git(f.repo, 'show', `${anchor}:${board}`) + '\n')
+    rmSync(join(f.root, 'second/projection/_bmad-output/planning-artifacts/live-note.md'))
+    carryBaseline(f.repo, anchor, again.projection, first.projection)
+    expect(readFileSync(join(again.projection, board), 'utf8')).toContain('7-1-one: done # finished live')
+    expect(readFileSync(join(again.projection, '_bmad-output/planning-artifacts/live-note.md'), 'utf8')).toBe('written live before the cut\n')
+  })
+  it('writes a product file beside fenced planning files during the switch', async () => {
+    const f = await mergedFixture({ platform: true })
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(readFileSync(join(f.repo, 'docs/platform/README.md'), 'utf8')).toBe('new index\n')
+    expect(statSync(join(f.repo, 'docs/platform')).mode & 0o200).toBe(0o200)
+  }, 30_000)
+  it('restores the lead hint when the merged row comes from a side whose epic text had none', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-hint-')); roots.push(root)
+    const rows = note => `format: bmn-plan\nschema_version: 1\nqueue: []\ndevelopment_status:\n  epic-7: in-progress # ${note}\n`
+    const side = (name, note) => { file(root, `${name}/status.yaml`, rows(note)); file(root, `${name}/epics/007-x.md`, '# Epic 7: X\n\n**Suggested lead:** Sol 🇺🇸 — why\n'); return join(root, name) }
+    const result = mergeStagedPlan({ base: side('base', 'Suggested lead: Sol 🇺🇸 · old'), ours: side('ours', 'a live note'), theirs: side('theirs', 'Suggested lead: Sol 🇺🇸 · old'), output: join(root, 'out'), date: '2026-11-05', keep: join(root, 'keep') })
+    expect(readFileSync(join(root, 'out/status.yaml'), 'utf8')).toContain('epic-7: in-progress # Suggested lead: Sol 🇺🇸 · a live note')
+    expect(result.settled_conflicts.map(row => row.key)).toEqual(['epic-7'])
+  })
   it('settles a same-go row finished locally while upstream still reads backlog, keeping the row further along', async () => {
     const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
     const rows = (a, b) => `development_status:\n  epic-7: ${a}\n  7-1-one: ${b}\n`
