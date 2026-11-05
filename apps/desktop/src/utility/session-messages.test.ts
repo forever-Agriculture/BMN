@@ -497,6 +497,23 @@ describe('where a message stands for its sender (110.2)', () => {
     expect((await messages.status('a', sent.messageId)).messages[0]!.state).toBe('expired')
   })
 
+  it.each([
+    ['refuses', () => ({ allowed: false, reason: 'Moonshot AI gets public work only' })],
+    ['cannot be read', () => { throw new Error('team unreadable') }]
+  ])('quotes no words of an expired message when the provider now %s for the folder it came from (full review)', async (_case, answer) => {
+    const sent = await tell('a', 'b', 'private plan for the release')
+    clock += 24 * HOUR
+    const asked: string[] = []
+    allowed = (_destination, senderRoot) => { asked.push(senderRoot); return answer() }
+    const told = await take('a', OPENAI, { app: 'claude' })
+    expect(asked.length).toBeGreaterThan(0)
+    expect(told.expired).toBe(`[BMN: your message ${sent.messageId} to session "Builder" expired undelivered; no route hands it over now. Its words are not shown here: this session's provider may not see the folder it was sent from.]`)
+    expect(told.expired).not.toContain('private plan')
+    // Told once: a later permitted event does not tell it again.
+    allowed = () => ({ allowed: true, reason: 'ok' })
+    expect((await take('a', OPENAI, { app: 'claude' })).expired).toBeUndefined()
+  })
+
   it('tells one expired message per event, oldest first, beside a message for the same event', async () => {
     const first = await tell('a', 'b', 'first lost')
     clock += 31 * SECOND

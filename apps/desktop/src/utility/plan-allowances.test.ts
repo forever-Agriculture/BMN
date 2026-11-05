@@ -459,6 +459,19 @@ describe('a limit with uses keeps its meaning (110.5 AC4)', () => {
     writeFileSync(join(folder, 'fedcba9876543210-epic-7.json'), '{not json')
     expect(allow(g.main, g.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
   })
+  it('a moved plan\'s ledger, which keeps the folder it was first opened in, still freezes (full review)', () => {
+    // spend_ledger.py keeps the original plan folder after a move: the BMAD board's, inside the same product repository.
+    const f = goFor()
+    withUses(f, { ...rechecks, plan_root: join(f.main, '_bmad-output/implementation-artifacts') })
+    expect(allow(f.main, f.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
+    // A folder of the same Git history outside the checkout (another worktree) counts as well.
+    const g = goFor()
+    const other = join(g.home, 'other-worktree')
+    git(g.main, 'worktree', 'add', '-q', '--detach', other)
+    mkdirSync(join(other, '_bmad-output'))
+    withUses(g, { ...rechecks, plan_root: join(other, '_bmad-output') })
+    expect(allow(g.main, g.home, 'limits.rechecks.per=epic', ['--reason', 'r', '--source', WORDS]).json.error.code).toBe('USED')
+  })
   it('a ledger folder that cannot be listed freezes; one that does not exist counts nothing', () => {
     const f = goFor()
     const folder = join(f.home, 'state/dev-auto/budgets')

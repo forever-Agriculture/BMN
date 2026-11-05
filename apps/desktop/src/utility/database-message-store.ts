@@ -400,20 +400,20 @@ function messagesForHook(database: DatabaseConnection, sessionId: string, now: s
   return messageTakeCandidates(database, sessionId, now).length > 0 || oldestExpiredUntold(database, sessionId, now) !== undefined
 }
 
-function oldestExpiredUntold(database: DatabaseConnection, senderSessionId: string, now: string): { message_id: string; text: string; receiver_name: string } | undefined {
+function oldestExpiredUntold(database: DatabaseConnection, senderSessionId: string, now: string): { message_id: string; text: string; sender_root: string; receiver_name: string } | undefined {
   return database.prepare(
-    `SELECT m.message_id, m.text, r.name AS receiver_name FROM session_message m JOIN session r ON r.session_id = m.receiver_session_id
+    `SELECT m.message_id, m.text, m.sender_root, r.name AS receiver_name FROM session_message m JOIN session r ON r.session_id = m.receiver_session_id
      WHERE m.sender_session_id = ? AND m.state = 'waiting' AND m.expires_at <= ? AND m.expiry_told_at IS NULL
      ORDER BY m.expires_at, m.rowid LIMIT 1`
-  ).get(senderSessionId, now) as { message_id: string; text: string; receiver_name: string } | undefined
+  ).get(senderSessionId, now) as { message_id: string; text: string; sender_root: string; receiver_name: string } | undefined
 }
 
 /** The oldest expired message its sender was not told of, marked told in one step: at most once, whatever comes of the answer. */
-function claimExpiredNotice(database: DatabaseConnection, senderSessionId: string, now: string): { messageId: string; receiverName: string; text: string } | null {
+function claimExpiredNotice(database: DatabaseConnection, senderSessionId: string, now: string): { messageId: string; receiverName: string; text: string; senderRoot: string } | null {
   const row = oldestExpiredUntold(database, senderSessionId, now)
   if (row === undefined) return null
   const updated = database.prepare('UPDATE session_message SET expiry_told_at = ? WHERE message_id = ? AND expiry_told_at IS NULL').run(now, row.message_id)
-  return Number(updated.changes) === 1 ? { messageId: row.message_id, receiverName: row.receiver_name, text: row.text } : null
+  return Number(updated.changes) === 1 ? { messageId: row.message_id, receiverName: row.receiver_name, text: row.text, senderRoot: row.sender_root } : null
 }
 
 /**

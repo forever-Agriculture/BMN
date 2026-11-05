@@ -212,3 +212,43 @@ describe('a sweep overlapping another types nothing twice', () => {
     expect(w.written).toHaveLength(1)
   })
 })
+
+describe('two receivers in one sweep (110.3 AC2, full review)', () => {
+  it('a card that opens for the second while the first is checked stops the second write', async () => {
+    const generations = new Map([['a', 1], ['b', 1]])
+    const attention: WakeAttention[] = []
+    const written: string[] = []
+    const finished = at(T)
+    const seen = (sessionId: string): WakeObservation => ({ sessionId, incarnationId: `run-${sessionId}`, agent: 'claude', event: 'Stop', source: null, plugin: null, observedAt: at(T), foreground: `fg-${sessionId}` })
+    const wake = new MessageWake({
+      now: () => new Date(T + SESSION_MESSAGE_WAKE_QUIET_MS + 1000),
+      observation: (sessionId) => seen(sessionId),
+      liveIncarnation: (sessionId) => `run-${sessionId}`,
+      foreground: (sessionId) => `fg-${sessionId}`,
+      generation: (sessionId) => ({ generation: generations.get(sessionId) ?? 0, pending: 0 }),
+      screen: async (sessionId) => {
+        await Promise.resolve()
+        // While A's screen is read, B's permission card opens: B's generation moves on.
+        if (sessionId === 'a' && !attention.length) {
+          attention.push({ sessionId: 'b', requestKey: 'claude:permission', kind: 'permission', state: 'open', openedAt: at(T) })
+          generations.set('b', 2)
+        }
+        return { lines: CLAUDE_IDLE, cursor: { x: 0, y: 0 } }
+      },
+      write: (sessionId) => written.push(sessionId),
+      receivers: async () => ['a', 'b'],
+      candidates: async (sessionId) => [{ messageId: `m-${sessionId}`, wakeDepth: 1, wokenAt: null }],
+      providerRefusal: async () => null,
+      claim: async () => ({ claimed: true, at: at(T) }),
+      release: async () => undefined,
+      // Read once, before the card opens.
+      openAttention: async () => [...attention],
+      finishedTurn: () => finished,
+      typedAt: () => null,
+      note: () => undefined,
+      log: () => undefined
+    })
+    await wake.sweep()
+    expect(written).toEqual(['a'])
+  })
+})

@@ -353,11 +353,13 @@ export class SessionMessages {
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
     this.destinations.set(p.sessionId, { incarnationId: p.incarnationId, destination: p.destination })
     const database = this.options.database
-    const told = await database.companion('claimExpiredNotice', p.sessionId, this.iso())
-    const expired = told === null ? {} : { expired: sessionMessageExpiredLine(told) }
-    const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
     // One question per folder: the messages of one repository share its answer for this event.
     const ask = this.providerQuestions(p.destination)
+    const told = await database.companion('claimExpiredNotice', p.sessionId, this.iso())
+    // Its first words are the sender's own private work: quoted only where this provider may see the folder they came from.
+    const quoted = told === null ? null : (await this.providerRefusal({ attachments: [], senderRoot: told.senderRoot }, ask)) === null
+    const expired = told === null ? {} : { expired: sessionMessageExpiredLine({ ...told, text: quoted ? told.text : null }) }
+    const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
     for (const candidate of candidates) {
       const refusal = await this.providerRefusal(candidate, ask)
       if (refusal !== null) {

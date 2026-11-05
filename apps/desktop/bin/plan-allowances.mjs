@@ -3,9 +3,9 @@
 // only a commit written by `bmn plan go` or `bmn plan allow` counts; a hand edit is reported and ignored. An epic with no file reads as before.
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** What a run has with a file that names no repair_rounds (D13). */
 export const DEFAULT_ROUNDS = 4
@@ -623,17 +623,42 @@ export function ledgerUses(plan, epic, environment = process.env) {
   let names
   // No folder: dev-auto never counted anything here. A folder that cannot be listed may hold uses, so everything freezes.
   try { names = readdirSync(folder) } catch (error) { return error?.code === 'ENOENT' ? () => false : () => true }
-  const same = (a, b) => { try { return realpathSync(a) === realpathSync(b) } catch { return false } }
+  const ours = ledgerOwner(plan)
   for (const name of names) {
     if (!ledgerName(epic).test(name)) continue
     let data
     try { data = JSON.parse(readFileSync(join(folder, name), 'utf8')) } catch { unreadable = true; continue }
-    if (!data || typeof data !== 'object' || !same(data.plan_root, plan.planRoot)) continue
+    if (!data || typeof data !== 'object' || !ours(data.plan_root)) continue
     for (const use of Object.values(data.uses ?? {})) if (use?.answer === 'TAKEN' && typeof use.limit === 'string') counted.add(use.limit)
     if (Object.values(data.rounds ?? {}).some((use) => use?.answer === 'TAKEN')) counted.add('repair_rounds')
     if (Object.values(data.jobs ?? {}).some((job) => job && !['refused', 'released'].includes(job.state))) counted.add('money_usd')
   }
   return (limit) => unreadable || counted.has(limit)
+}
+
+/**
+ * Whether a ledger's recorded plan folder is this plan's. A moved plan's ledger keeps the folder it was first opened in
+ * (spend_ledger.py's plan identity), so any folder inside this plan's product repository counts, or one whose Git
+ * history is the product's: counting another plan's use only freezes a field, missing one would let it change.
+ */
+function ledgerOwner(plan) {
+  const real = (path) => { try { return realpathSync(path) } catch { return resolve(path) } }
+  const product = real(plan.productRoot ?? plan.planRoot)
+  // The run's checkout and the default one: a plan read from a linked worktree lives in the default checkout.
+  const roots = [...new Set([product, plan.defaultCheckout, plan.planRoot].filter((one) => typeof one === 'string').map(real))]
+  const inside = (path) => roots.some((root) => { const rel = relative(root, path); return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel)) })
+  const common = (directory) => {
+    try { return real(resolve(directory, gitRun(directory, ['rev-parse', '--git-common-dir']).trim())) } catch { return null }
+  }
+  let productHistory
+  return (recorded) => {
+    if (typeof recorded !== 'string' || recorded === '') return false
+    const path = real(recorded)
+    if (inside(path)) return true
+    if (!existsSync(path)) return false
+    productHistory ??= common(product)
+    return productHistory !== null && common(path) === productHistory
+  }
 }
 
 const ledgerFolder = (environment) => join(environment.XDG_STATE_HOME || join(environment.HOME || homedir(), '.local', 'state'), 'dev-auto', 'budgets')

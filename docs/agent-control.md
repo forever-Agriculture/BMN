@@ -476,7 +476,8 @@ agent sends work, taking and reporting. A resting agent reads a message at the f
 turn. A message not collected within 24 hours is no longer handed over: it reads *expired*, and
 nothing is deleted by that; a message stored before Story 110.2 keeps its two hours, and a handoff
 always has two. When a message expires undelivered, its sender's agent gets one line at its next
-tool call, naming the receiver and the message's first words, once.
+tool call, naming the receiver and the message's first words, once; the words are left out when the
+provider the hook resolved for that event may not see private work from the folder it was sent from.
 
 A message speaks for its session, not for one process in it. `bmn tell` is refused when, by the
 time BMN passes the message to its store, the terminal runs another process than the one that sent

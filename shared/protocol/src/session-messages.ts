@@ -304,10 +304,15 @@ export function sessionMessageStampAtDelivery(stamp: string, sentAt: string, now
   return stamp.endsWith(']') ? `${stamp.slice(0, -1)}. ${age}]` : `${stamp} ${age}`
 }
 
-/** The one line a sender's agent gets about a message that expired undelivered (Story 110.2 AC3). */
-export function sessionMessageExpiredLine(p: { receiverName: string; text: string; messageId: string }): string {
-  return `[BMN: your message ${p.messageId} to session "${cleanSessionMessageName(p.receiverName)}" expired undelivered; no route hands it over now. ` +
-    `It began: "${cleanSessionMessageName(sessionMessageFirstLine(p.text, 80))}"]`
+/**
+ * The one line a sender's agent gets about a message that expired undelivered (Story 110.2 AC3). Its first words are
+ * quoted only when the provider the hook resolved now may see private work from the folder it was sent from; text null
+ * leaves them out.
+ */
+export function sessionMessageExpiredLine(p: { receiverName: string; text: string | null; messageId: string }): string {
+  const head = `[BMN: your message ${p.messageId} to session "${cleanSessionMessageName(p.receiverName)}" expired undelivered; no route hands it over now.`
+  return p.text === null ? `${head} Its words are not shown here: this session's provider may not see the folder it was sent from.]`
+    : `${head} It began: "${cleanSessionMessageName(sessionMessageFirstLine(p.text, 80))}"]`
 }
 
 /**

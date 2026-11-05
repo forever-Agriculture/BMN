@@ -53,13 +53,12 @@ export class MessageWake {
     if (this.running) return
     this.running = true
     try {
-      let open: readonly WakeAttention[] | null = null
-      for (const sessionId of await this.options.receivers()) {
-        // The generation is read before the requests are, so a change between the two is seen.
-        const generation = this.options.generation(sessionId).generation
-        open ??= await this.options.openAttention()
-        await this.receiver(sessionId, generation, open).catch(() => undefined)
-      }
+      // Every receiver's generation is read before the requests are, as the Away wake does, so a request that opens
+      // for any of them after the one shared read below changes its generation and stops the write.
+      const receivers = (await this.options.receivers()).map((sessionId) => ({ sessionId, generation: this.options.generation(sessionId).generation }))
+      if (receivers.length === 0) return
+      const open = await this.options.openAttention()
+      for (const { sessionId, generation } of receivers) await this.receiver(sessionId, generation, open).catch(() => undefined)
     } finally {
       this.running = false
     }
