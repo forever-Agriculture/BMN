@@ -424,6 +424,7 @@ export function readEpicFile(path) {
     if (owner) current.owner = { value: owner[1]?.toLowerCase() ?? null, line: index + 1 }
     if (/^\*\*Acceptance criteria:?\*\*/iu.test(line)) { inCriteria = true; return }
     if (/^\*\*Verification:?\*\*/iu.test(line)) { current.verification = true; inCriteria = false; return }
+    if (/^\*\*[^*]+:\*\*(?:\s|$)/u.test(line)) { inCriteria = false; return }
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
     if (criterion) current.criteria.push({ id: Number(criterion[1]), line: index + 1 })
   })

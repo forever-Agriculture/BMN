@@ -146,6 +146,14 @@ function ownProject(root: string): string {
 }
 
 describe('the plan format, its reader and its check (Story 77.1)', () => {
+  it.each(['', '<!-- bmn-plan: bmad-legacy -->\n'])('does not count numbered notes after a labelled criteria section (%s)', (marker) => {
+    const path = file(fixture(), '001-fixture.md', marker + '# Epic 1: Fixture\n\n### Story 1.1: Fixture\n\n**Acceptance criteria:**\n1. **Given** a, **then** b.\n1. **Given** c, **then** d.\n\n**Dev notes:**\n1. A numbered implementation note.\n\n**Status 2026-11-05:**\n1. A numbered observation.\n')
+    expect(readEpicFile(path).stories[0]?.criteria.map((criterion) => criterion.id)).toEqual([1, 1])
+  })
+  it('keeps unnumbered legacy acceptance distinct from later numbered status observations', () => {
+    const path = file(fixture(), '001-fixture.md', '<!-- bmn-plan: bmad-legacy -->\n# Epic 1: Fixture\n\n### Story 1.1: Fixture\n\n**Acceptance Criteria:**\n**Given** a\n**When** b\n**Then** c\n\n**Status 2026-11-05:**\n1. First observation.\n2. Second observation.\n\n**Read later:**\n1. Another observation.\n')
+    expect(readEpicFile(path).stories[0]?.criteria).toEqual([])
+  })
   it('keeps explicitly historical legacy story text without counting it as a second live declaration', () => {
     const root = fixture()
     const text = '# Epic 26: Fixture\n\n## Story 26.3: Current\nCurrent requirement.\n\n## Story 26.3 as written on 14 October 2026 (superseded)\nOriginal requirement stays verbatim.\n'
