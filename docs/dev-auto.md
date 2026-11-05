@@ -59,6 +59,8 @@ without his explicit approval for that worktree; needed evidence is preserved fi
 
 ## Runs on the plan's decisions
 
+An epic with `plan/allowances/NNN.yaml` ([planning.md](planning.md#one-file-of-what-a-run-may-use)) holds all of this in one file. `spend_ledger.py use --limit NAME --boundary B --amount A --use-id ID` counts a use under the ledger's lock against the value read that moment, so a raise needs no restart and a retry returns the first answer. A limit used up with room under its ceiling is raised by the lead with its reason, and the run goes on with no card; at the ceiling that story parks and every other continues, or one card if the epic says so. What `may` names is done without a card, and `stays_out` is never asked for. With a file its `repair_rounds` is the number, so your 2 means 2; the floor of 4 below stays for an epic with no file. `money_usd` is the cap `launch` reserves against. A new go or a raise refills nothing, and a value lowered under what was used allows no more.
+
 An epic planned from Epic 90 on lists its **Run needs** ([planning.md](planning.md)): extra repair rounds
 per boundary, the criteria or stories that may be deferred and when, a money cap, and named actions for an
 Away card, an exact command or message included. From Epic 103 on it also lists **Prepared**: what the run

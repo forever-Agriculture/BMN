@@ -52,9 +52,20 @@ go      records the owner's go on one epic of a BMN-format plan with Git history
         TOKEN, a finished epic, an unreadable history and a failed commit, writing nothing; other changed
         or staged files stay as they were and out of the commit. The same request again finds its commit
         and only completes what a crash left undone; dev-auto reads the go back with run_needs.py.
+allowances prints what an epic's runs may use, from plan/allowances/NNN.yaml as the last recorded version holds it: its
+        state, limits, may, stays_out, deferrable, messages, prepared, money cap and rounds, and the TOKEN for allow. --at
+        COMMIT reads it as that commit holds it. A hand edit, committed or not, is reported and ignored; a withdrawn go
+        or a held conflict grants nothing. This is the only reader of that file.
+allow   changes that file in one commit naming who, why and each field's before and after, with no new go. CHANGE is
+        limits.NAME.limit=N, limits.NAME={limit: N, ceiling: M, per: epic}, limits.NAME= (removes it), may+=TEXT,
+        stays_out+=TEXT, stays_out-=TEXT, deferrable+={what: X, when: Y}, messages+={...}, prepared+={...} or
+        prepared.TARGET.checked=DATE. With no --source: a limit at or under its ceiling, a lower limit, an addition
+        to stays_out and a Prepared need's checked date. Anything else needs --source, his quoted words with their
+        time. A limit with any use cannot be renamed or removed and its per and unit stay, source or not. A tracked plan
+        publishes the change: it stands here at once, and a refused publish only prints unpublished.
 
 Statuses (BMN's format): ${STATUSES.join(', ')}. BMAD boards take BMAD's: ${BMAD_STATUSES.join(', ')}.
-Exit status: 0 done or no findings, 1 findings (check) or a refused or conflicting change (set, go),
+Exit status: 0 done or no findings, 1 findings (check) or a refused or conflicting change (set, go, allow),
              2 usage error, unknown row or status, or a plan that cannot be resolved or read`
 
 /** Written synchronously and whole: a full board as JSON is more than a pipe takes in one write. */

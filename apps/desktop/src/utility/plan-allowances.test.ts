@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { compareVersions, parseAllowances } from '../../bin/plan-allowances.mjs'
+import { compareVersions, fieldsFrom, parseAllowances } from '../../bin/plan-allowances.mjs'
 import { approvalText } from '../../bin/plan-cli.mjs'
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -520,5 +520,25 @@ describe('a withdrawn go grants nothing (110.5 AC7)', () => {
     expect(bmn(main, home, ['allow', '7', 'limits.rechecks.limit=3', '--reason', 'r', '--expect', token, '--json']).json.error.code).toBe('WITHDRAWN')
     git(plan, 'add', '-A'); git(plan, 'commit', '-qm', 'plan: back')
     expect(read(main, home)).toMatchObject({ state: 'withdrawn' })
+  })
+})
+
+describe('the plan skill gives a new epic the file (110.6 AC5, 110.8 AC3)', () => {
+  const root = join(import.meta.dirname, '../../../..')
+  const read = (path: string) => readFileSync(join(root, path), 'utf8')
+  it('its template reads clean once the epic is named, with 4 repair rounds', () => {
+    const { data, problems } = parseAllowances(read('skills/plan/templates/allowances.yaml').replace('<N>', '7'), 7)
+    expect(problems).toEqual([])
+    const fields = fieldsFrom(data)
+    expect(fields.rounds).toBe(4)
+    expect(Object.keys(fields.limits)).toEqual(['repair_rounds', 'full_reviews', 'rechecks', 'consults', 'qa_passes', 'test_hours', 'money_usd'])
+    expect(fields.limits.money_usd!.ceiling ?? null).toBeNull()
+  })
+  it('the epic template, the skill and readiness say so', () => {
+    expect(read('skills/plan/templates/epic.md')).toContain('plan/allowances/NNN.yaml')
+    expect(read('skills/plan/SKILL.md')).toMatch(/plan\/allowances\/NNN\.yaml[^\n]*4 repair rounds[^\n]*never one more slice[^\n]*split before he sees it/u)
+    const readiness = read('skills/plan/methods/readiness.md')
+    expect(readiness).toMatch(/Walk each limit/u)
+    expect(readiness).toMatch(/split the epic before he sees it/u)
   })
 })

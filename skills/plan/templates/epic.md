@@ -16,7 +16,7 @@ The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it
 
 ## Run needs
 
-What his go on this epic approves for its runs, as his instruction (read from the plan commit that recorded the go):
+See `plan/allowances/NNN.yaml` ([template](allowances.yaml)): every limit and permission of this epic's runs, read as his instruction from the plan commit that recorded the go. With that file this section is this one line; delete the list below. A project that has not opted in (`rules_from_allowances`) may keep the list:
 - **Extra repair rounds:** 4 per boundary, beyond dev-auto's own allowance (a run has at least 4; name more only with a reason).
 - **Deferrable:** <a criterion or story, with the condition under which it may be deferred>, or `none`.
 - **Money cap:** <amount and what it covers>, or `none` (no paid launches).

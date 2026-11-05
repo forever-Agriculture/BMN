@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
 import { approvalText, recordGo, runPlanCommand } from '../../apps/desktop/bin/plan-cli.mjs'
 import { publishPlan, publicationState } from '../../apps/desktop/bin/plan-publish.mjs'
+import { readAllowances, recordAllow } from '../../apps/desktop/bin/plan-allowances.mjs'
 import { BMAD_PARSER_PATHS, BMAD_PARSER_ORIGINAL, BMAD_PARSER_PREPARED } from '../../apps/desktop/bin/plan-bmad-parser.mjs'
 import { compatibleParser } from '../plan/bmad-parser-patch.mjs'
 
@@ -46,6 +47,85 @@ async function fixture() {
   const readPolicy = async () => { policyReads++; return { repository: { authorizes: true, level: 'merge-and-push-main' } } }
   return { root, repo, remote, plan, epic, readPolicy, reads: () => policyReads }
 }
+
+const ALLOWANCES = 'schema: 1\nepic: 1\nlimits:\n  rechecks: {limit: 2, ceiling: 4, per: boundary}\n  repair_rounds: {limit: 4, ceiling: 8, per: boundary}\nmay: []\nstays_out:\n  - production\n'
+/** A published go on an epic with a file, and a second clone that can change the default branch. */
+async function allowed(f) {
+  file(f.repo, 'plan/allowances/001.yaml', ALLOWANCES)
+  await recordGo(f.plan, { epic: 1, source: '"Go" 2026-11-05T15:15', approved: `sha256:${approvalText(f.epic, ALLOWANCES)}`, expect: rowToken('epic-1', 'backlog', '') })
+  git(f.repo, 'push', '-q', 'origin', 'main')
+  const other = join(f.root, 'other'); git(f.repo, 'clone', f.remote, other)
+  git(other, 'config', 'user.name', 'Fixture'); git(other, 'config', 'user.email', 'f@example.invalid')
+  return other
+}
+const raise = async (f, value) => recordAllow(f.plan, 1, { changes: [`limits.rechecks.limit=${value}`], reason: 'a real finding needs one more', expect: (await readAllowances(f.plan, 1)).token })
+const rejected = (f) => chmodSync(file(f.remote, 'hooks/pre-receive', '#!/bin/sh\nexit 1\n'), 0o755)
+
+describe('a change of limits on a tracked plan (110.5 AC6, AC7)', () => {
+  it('stands locally at once when the publish is rejected, says unpublished, and the run keeps the new value', async () => {
+    const f = await fixture()
+    await allowed(f)
+    rejected(f)
+    const token = (await readAllowances(f.plan, 1)).token
+    const result = spawnSync(process.execPath, [join(import.meta.dirname, '../../apps/desktop/bin/bmn'), 'plan', 'allow', '1', 'limits.rechecks.limit=3', '--reason', 'a real finding needs one more', '--expect', token, '--project', f.repo],
+      { encoding: 'utf8', env: { ...process.env, BMN_SESSION_ID: '' } })
+    expect(`${result.stdout}${result.stderr}`).toMatch(/^unpublished|\nunpublished/mu)
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('limits.rechecks.limit: 2 -> 3')
+    const read = await readAllowances(f.plan, 1)
+    expect(read.state).toBe('recorded')
+    expect(read.current.fields.limits.rechecks.limit).toBe(3)
+    expect(git(f.repo, 'log', '-1', '--format=%B')).toMatch(/^Allow-Change: limits\.rechecks\.limit/mu)
+    expect(git(f.remote, 'log', '-1', '--format=%H', 'main')).not.toBe(read.current.commit)
+  })
+  it('publishes a change nobody else touched, and only then is nothing unpublished', async () => {
+    const f = await fixture()
+    await allowed(f)
+    await raise(f, 3)
+    expect(await publishPlan(f.plan, { readPolicy: f.readPolicy, direct: true })).toMatchObject({ outcome: 'published', conflicts: [] })
+    expect(git(f.remote, 'show', 'main:plan/allowances/001.yaml')).toContain('limit: 3')
+    expect((await readAllowances(f.plan, 1)).state).toBe('recorded')
+  })
+  it.each([
+    ['a different raise upstream', (text) => text.replace('limit: 2, ceiling: 4', 'limit: 3, ceiling: 4')],
+    ['a restriction upstream', (text) => text.replace('stays_out:\n', 'stays_out:\n  - customer data\n')],
+    ['a deletion upstream', () => null]
+  ])('holds the epic on %s: it names the epic, keeps ours, and grants nothing until it is read again', async (_name, change) => {
+    const f = await fixture()
+    const other = await allowed(f)
+    const path = join(other, 'plan/allowances/001.yaml')
+    const incoming = change(readFileSync(path, 'utf8'))
+    if (incoming === null) git(other, 'rm', '-q', 'plan/allowances/001.yaml'); else writeFileSync(path, incoming)
+    git(other, 'add', '-A'); git(other, 'commit', '-qm', 'upstream terms'); git(other, 'push', '-q', 'origin', 'main')
+    expect(await publishPlan(f.plan, { readPolicy: f.readPolicy, direct: true })).toMatchObject({ outcome: 'PLAN_CONFLICT', conflicts: [1] })
+    expect(f.reads()).toBe(0)
+    expect(readFileSync(join(f.repo, 'plan/allowances/001.yaml'), 'utf8')).toBe(ALLOWANCES)
+    const read = await readAllowances(f.plan, 1)
+    expect(read.state).toBe('conflict')
+    await expect(raise(f, 3)).rejects.toMatchObject({ code: 'CONFLICT' })
+    if (process.env.DEV_AUTO_RUN_NEEDS) expect(readGo(f).state).toBe('PLAN_CONFLICT')
+  })
+  it('names the epic for a real conflict in its file: both sides raised', async () => {
+    const f = await fixture()
+    const other = await allowed(f)
+    const path = join(other, 'plan/allowances/001.yaml')
+    writeFileSync(path, readFileSync(path, 'utf8').replace('limit: 2, ceiling: 4', 'limit: 4, ceiling: 4'))
+    git(other, 'add', '-A'); git(other, 'commit', '-qm', 'upstream raise'); git(other, 'push', '-q', 'origin', 'main')
+    await raise(f, 3)
+    expect(await publishPlan(f.plan, { readPolicy: f.readPolicy, direct: true })).toMatchObject({ outcome: 'PLAN_CONFLICT', conflicts: [1] })
+    expect(readFileSync(join(f.repo, '.git/bmn-plan-publish/conflicts/plan/allowances/001.yaml.upstream'), 'utf8')).toContain('limit: 4')
+    expect((await readAllowances(f.plan, 1)).state).toBe('conflict')
+  })
+  it('grants nothing on a withdrawn go, and another epic stands', async () => {
+    const f = await fixture()
+    await allowed(f)
+    const board = join(f.repo, 'plan/status.yaml')
+    writeFileSync(board, readFileSync(board, 'utf8').replace(/^ {2}epic-1:.*$/mu, '  epic-1: dropped'))
+    const read = await readAllowances(f.plan, 1)
+    expect(read.state).toBe('withdrawn')
+    await expect(raise(f, 3)).rejects.toMatchObject({ code: 'WITHDRAWN' })
+  })
+})
 
 describe('D11 publication', () => {
   it('holds an upstream-deleted approved epic before a rejected publication and leaves another Go standing', async () => {
