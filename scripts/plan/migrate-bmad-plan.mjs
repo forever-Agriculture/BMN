@@ -244,6 +244,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   const placeOf = (path) => {
     if (path === epicsPath) return 'shared/front-matter.md'
     if (path === boardPath) return 'status.yaml'
+    if (keepBmad && path.startsWith('_bmad-output/')) return null // Kept where it is; the plan links it.
     if (platformFiles.has(path)) return `references/platform/${path.slice('docs/platform/'.length)}`
     if (path === planning) return 'references'
     if (path.startsWith(`${planning}/`)) return `references/${path.slice(planning.length + 1)}`
@@ -306,7 +307,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
     // Only what exists moves; a path under _bmad-output that names nothing is a gone target.
     let place = exists(target) ? placeOf(target) : null
     // A folder link (a reference-* folder) moves with its folder.
-    if (place === null && target.startsWith(`${planning}/`) && exists(target)) place = `references/${target.slice(planning.length + 1)}`
+    if (!keepBmad && place === null && target.startsWith(`${planning}/`) && exists(target)) place = `references/${target.slice(planning.length + 1)}`
     const path = place === null ? target : `${planRoot}/${place}`
     if (anchor && !anchorExists(target, anchor)) return dead(`${path}${line}`)
     return place === null ? null : `${path}${line}`
@@ -551,9 +552,10 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   }
 
   // Every other file under _bmad-output moves to references/ (links rewritten in markdown); _bmad and skills archive only.
+  // A project that keeps BMAD keeps those files in place: they are listed and hashed, never copied.
   for (const file of inventory.files) {
     const place = placeOf(file.path)
-    const entry = { path: file.path, sha256: file.sha256, bytes: file.bytes, link: file.link, to: place === null ? 'archive-only' : place }
+    const entry = { path: file.path, sha256: file.sha256, bytes: file.bytes, link: file.link, to: place !== null ? place : keepBmad && file.path.startsWith('_bmad-output/') ? 'linked' : 'archive-only' }
     manifest.files.push(entry)
     if (place === null || file.path === epicsPath || file.path === boardPath) continue
     const target = join(stage, place)
@@ -571,7 +573,7 @@ export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, 
   // before the switch (Story 77.7), every principle marked provisional.
   const visionText = vision === null ? visionDraft({ repo: contextRepo, segments, date }) : readFileSync(vision, 'utf8')
   write('VISION.md', visionText)
-  write('PLAN.md', planText({ repo: contextRepo, date, docs, vision: visionText, provisional: vision === null, rows }))
+  write('PLAN.md', planText({ repo: contextRepo, date, docs, vision: visionText, provisional: vision === null, rows, keepBmad }))
   writeFileSync(join(dirname(stage), 'migration-manifest.json'), `${JSON.stringify(manifest, null, 1)}\n`)
   return manifest
 }
@@ -603,7 +605,7 @@ ${sections.join('\n')}${anchorLines.length ? `\n## Anchors that were gone\n\n${[
 }
 
 /** PLAN.md: today's purpose and scope from the vision and the board, the standing rules, and the index of docs/; the old front matter stays history in shared/. */
-function planText({ repo, date, docs, vision = '', provisional = false, rows = [] }) {
+function planText({ repo, date, docs, vision = '', provisional = false, rows = [], keepBmad = false }) {
   const visionLead = /^## Vision\s*\n+([\s\S]*?)(?:\n\s*\n|\n## |$(?![\s\S]))/mu.exec(vision)?.[1]?.replace(/\s+/gu, ' ').trim() ?? ''
   const epics = rows.filter((row) => /^epic-\d+$/u.test(row.key)).map((row) => ({ number: Number(row.key.slice(5)), status: row.status }))
   const numbers = epics.map((epic) => epic.number)
@@ -617,7 +619,7 @@ Moved from BMAD on ${date}. Every epic before ${date} is a legacy epic in \`epic
 
 ${visionLead || 'See VISION.md.'}${provisional ? ' (The vision is a draft until the owner approves it.)' : ''}
 
-The principles every epic serves are in [VISION.md](VISION.md). The plan holds ${numbers.length ? `epics ${Math.min(...numbers)}–${Math.max(...numbers)}` : 'no epics yet'}: ${done} finished (done or dropped) and ${epics.length - done} not, each with its row in [status.yaml](status.yaml); the queue says what comes next.
+${keepBmad ? 'The epic text and board are copied here. Every other planning document stays where it was, in [`_bmad-output/`](../_bmad-output/), and the epics link it there.\n\n' : ''}The principles every epic serves are in [VISION.md](VISION.md). The plan holds ${numbers.length ? `epics ${Math.min(...numbers)}–${Math.max(...numbers)}` : 'no epics yet'}: ${done} finished (done or dropped) and ${epics.length - done} not, each with its row in [status.yaml](status.yaml); the queue says what comes next.
 
 ## Users
 
@@ -734,7 +736,7 @@ export function checkSpans({ repo, stage, manifest }) {
     let source = null
     try { source = lstatSync(join(repo, file.path)).isSymbolicLink() ? sha256(`link:${readlinkSync(join(repo, file.path))}`) : sha256(readFileSync(join(repo, file.path))) } catch { /* gone */ }
     if (source !== file.sha256) failures.push(`${file.path} changed since the manifest`)
-    if (file.to === 'archive-only' || file.path.endsWith('epics.md') || file.path.endsWith('sprint-status.yaml')) continue
+    if (file.to === 'archive-only' || file.to === 'linked' || file.path.endsWith('epics.md') || file.path.endsWith('sprint-status.yaml')) continue
     const full = join(stage, file.to)
     if (file.link !== null) { if (!lstatSync(full, { throwIfNoEntry: false })?.isSymbolicLink()) failures.push(`${file.to} is not the link it was`); continue }
     const now = file.path.endsWith('.md') ? sha256(unrewritten(file.to) ?? '') : existsSync(full) ? sha256(readFileSync(full)) : null
@@ -814,15 +816,16 @@ export function checkLinks({ repo, stage, manifest }) {
 export function archive({ repo, manifest, folder }) {
   if (existsSync(folder) && readdirSync(folder).length > 0) throw new Error(`${folder} is not empty: refusing to archive over it`)
   mkdirSync(join(folder, 'files'), { recursive: true })
-  const roots = [...new Set(manifest.files.map((file) => file.path.split('/').slice(0, file.path.startsWith('.') ? 3 : 1).join('/')))]
-  for (const file of manifest.files) {
+  const archived = manifest.files.filter((file) => file.to !== 'linked')
+  const roots = [...new Set(archived.map((file) => file.path.split('/').slice(0, file.path.startsWith('.') ? 3 : 1).join('/')))]
+  for (const file of archived) {
     const target = join(folder, 'files', file.path)
     mkdirSync(dirname(target), { recursive: true })
     const source = join(repo, file.path)
     if (lstatSync(source).isSymbolicLink()) symlinkSync(readlinkSync(source), target)
     else cpSync(source, target, { preserveTimestamps: true })
   }
-  writeFileSync(join(folder, 'SHA256SUMS'), manifest.files.map((file) => `${file.sha256}  ${file.path}${file.link !== null ? ` -> ${file.link}` : ''}`).join('\n') + '\n')
+  writeFileSync(join(folder, 'SHA256SUMS'), archived.map((file) => `${file.sha256}  ${file.path}${file.link !== null ? ` -> ${file.link}` : ''}`).join('\n') + '\n')
   writeFileSync(join(folder, 'README.md'), `# BMAD planning, archived ${manifest.date}
 
 Byte-identical copies of every input to this project's move to BMN's plan format:
@@ -847,6 +850,7 @@ The second line checks every restored file against \`SHA256SUMS\`.
 export function verifyTree({ root, manifest }) {
   const failures = []
   for (const file of manifest.files) {
+    if (file.to === 'linked') continue // It never left its place.
     const full = join(root, file.path)
     let now = null
     try { now = lstatSync(full).isSymbolicLink() ? sha256(`link:${readlinkSync(full)}`) : sha256(readFileSync(full)) } catch { /* missing */ }

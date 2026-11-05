@@ -114,9 +114,23 @@ const inside = (root, path) => { const r = relative(root, path); return r === ''
 function worktrees(repo) {
   return git(repo, ['worktree', 'list', '--porcelain', '-z']).toString().split('\0\0').filter(Boolean).map(block => {
     const data = Object.fromEntries(block.split('\0').filter(Boolean).map(line => { const at = line.indexOf(' '); return at < 0 ? [line, true] : [line.slice(0, at), line.slice(at + 1)] }))
-    if (!existsSync(data.worktree)) throw new PlanError('MISSING_WORKTREE', `registered worktree ${data.worktree} is absent; retain its registration and settle its index/history before cutover`)
+    if (!existsSync(data.worktree)) {
+      if (!absentHoldsNothing(repo, data)) throw new PlanError('MISSING_WORKTREE', `registered worktree ${data.worktree} is absent; retain its registration and settle its index/history before cutover`)
+      return null
+    }
     return { root: realpathSync(data.worktree), head: data.HEAD }
-  })
+  }).filter(Boolean)
+}
+/** A registration whose folder is gone can only still hold staged work; with an index equal to its HEAD there is nothing to capture. Its registration stays. */
+function absentHoldsNothing(repo, data) {
+  const admin = join(textGit(repo, ['rev-parse', '--git-common-dir']).replace(/^(?!\/)/u, `${repo}/`), 'worktrees')
+  if (!existsSync(admin) || !data.prunable || !data.HEAD) return false
+  for (const id of readdirSync(admin)) {
+    const pointer = join(admin, id, 'gitdir')
+    if (!existsSync(pointer) || dirname(readFileSync(pointer, 'utf8').trim()) !== data.worktree) continue
+    return spawnSync('git', ['--git-dir', join(admin, id), 'diff', '--cached', '--quiet', data.HEAD]).status === 0
+  }
+  return false
 }
 function tree(repo, ref, planning) {
   const result = new Map()
@@ -263,11 +277,13 @@ export async function reconcilePlan({ repo: given, upstream, output, historicalW
       for (const [name, value] of [['base', base], ['local', local], ['incoming', incoming]]) writeFileSync(join(folder, name), value.bytes)
       const combined = spawnSync('git', ['merge-file', '-p', join(folder, 'local'), join(folder, 'base'), join(folder, 'incoming')], { maxBuffer: 64 * 1024 * 1024 })
       const modeConflict = local.mode !== base.mode && incoming.mode !== base.mode && local.mode !== incoming.mode
-      if (combined.status === 0 && !modeConflict) return { bytes: combined.stdout, sha256: sha256(combined.stdout), mode: local.mode === base.mode ? incoming.mode : local.mode }
+      if (combined.status === 0 && !modeConflict && !(path.endsWith('/sprint-status.yaml') && repeatsRows(combined.stdout.toString('utf8')))) return { bytes: combined.stdout, sha256: sha256(combined.stdout), mode: local.mode === base.mode ? incoming.mode : local.mode }
     }
     const kept = join(destination, 'conflicts', sha256(owner).slice(0, 12), phase, path)
     mkdirSync(dirname(kept), { recursive: true }); writeFileSync(kept, local?.bytes ?? Buffer.alloc(0))
-    const board = path.endsWith('/sprint-status.yaml') && local && incoming ? mergeBoard(base, local, incoming) : null
+    // A stale image with repeated rows cannot be merged by row; it stays whole under conflicts, with upstream's text in the plan.
+    let board = null
+    try { board = path.endsWith('/sprint-status.yaml') && local && incoming ? mergeBoard(base, local, incoming) : null } catch (error) { if (!/^DUPLICATE: /u.test(error.message)) throw error }
     conflicts.push({ path, owner, phase, kept, local_present: Boolean(local), incoming_present: Boolean(incoming), local_sha256: local?.sha256 ?? null, incoming_sha256: incoming?.sha256 ?? null, ...(board ? { rows: board.conflicts.map(row => row.key) } : {}) })
     if (!board) return incoming
     for (const row of board.conflicts) {
@@ -498,7 +514,8 @@ export function mergeStagedPlan({ base, ours, theirs, output, date, localOnly = 
 /** Is this old-source path, under its generated placement too, one that must stay out of anything published? */
 export const staysLocal = (path, placements, localOnly) => {
   const patterns = localOnly.map(source => new RegExp(source, 'u')), placed = placements.find(file => file.path === path)?.to
-  return patterns.some(pattern => pattern.test(path) || (placed && pattern.test(placed)))
+  // A kept BMAD document stays in its own checkout; a conflict over it publishes nothing.
+  return placed === 'linked' || patterns.some(pattern => pattern.test(path) || (placed && pattern.test(placed)))
 }
 /** The published record of a capture: paths and hashes, no absolute local paths or kept bytes. */
 export function publishedInputs(capture) {
@@ -649,12 +666,12 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
       if (spans.length) throw new Error('STAGE_INVALID: ' + spans.join('; '))
       if (merged) {
         const baseStage = join(runFolder, `base-${pass}`, 'plan')
-        stagePlan({ repo: baseline.projection, contextRepo: repo, stage: baseStage, keepBmad, vision, date, historyHead: merged.anchor, archive: join(runFolder, `base-archive-${pass}`) })
+        stagePlan({ repo: baseline.projection, contextRepo: repo, stage: baseStage, keepBmad, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged.anchor, archive: join(runFolder, `base-archive-${pass}`) })
         let theirs = extractPlan(repo, merged.head, join(runFolder, `upstream-${pass}`))
         if (native) {
-          // The checkout's live plan edits, against its own HEAD, on top of upstream's plan.
+          // What the checkout has beyond upstream, committed or live, on top of upstream's plan: the base is where the two forked.
           const combined = join(runFolder, `native-${pass}`, 'plan')
-          const nativeMerge = mergeStagedPlan({ base: extractPlan(repo, 'HEAD', join(runFolder, `native-head-${pass}`)), ours: join(repo, 'plan'), theirs, output: combined, date, keep: join(runFolder, 'local-only'), incomingOnly: new Set() })
+          const nativeMerge = mergeStagedPlan({ base: extractPlan(repo, textGit(repo, ['merge-base', 'HEAD', merged.head]), join(runFolder, `native-head-${pass}`)), ours: join(repo, 'plan'), theirs, output: combined, date, keep: join(runFolder, 'local-only'), incomingOnly: new Set() })
           if (nativeMerge.conflicts.length || nativeMerge.rows.length) return { outcome: 'parked', code: 'NATIVE_PLAN_CONFLICT', conflicts: [...nativeMerge.conflicts.map(entry => entry.path), ...nativeMerge.rows.map(entry => entry.key)], journal: paths.journal }
           theirs = combined
         }
@@ -768,6 +785,7 @@ function mergeBoard(base, local, incoming) {
   return { text, conflicts }
 }
 
+const repeatsRows = (text) => { try { rowsOf(text); return false } catch (error) { if (/^DUPLICATE: /u.test(error.message)) return true; throw error } }
 function rowsOf(text) {
   const rows = new Map(); let section = false
   for (const line of text.split('\n')) {
