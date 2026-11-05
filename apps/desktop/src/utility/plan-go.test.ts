@@ -42,7 +42,7 @@ const NEEDS = '- **Extra repair rounds:** 1 per boundary.\n- **Deferrable:** non
 function epicText(needs = NEEDS): string {
   return `# Epic 7: Fixture\n\n**Suggested lead:** Opus — fixture.\n\n## Outcome\n\nIt works.\n\n## Why\n\nThe owner, 2026-10-26: "make it".\n\n## Boundary and dependencies\n\nNone.\n\n## Truth impact\n\nnone: a fixture.\n\n## Run needs\n\n${needs}\n## Decisions\n\n- D1: synthetic.\n\n## Stories\n\n### Story 7.1: One\n\nAs the owner, I want it.\n\n**Owner:** none.\n\n**Acceptance criteria:**\n1. **Given** a, **then** b.\n\n**Verification:** unit tests.\n`
 }
-const BOARD = 'format: bmn-plan\nschema_version: 1\n# The order of unfinished epics; every ready epic is here.\nqueue: []\ndevelopment_status:\n  epic-6: done # finished\n  6-1-six: done\n\n  epic-7: backlog # Suggested lead: Opus · fixture\n  7-1-one: backlog\n'
+const BOARD = 'format: bmn-plan\nschema_version: 1\nrules_from_run_needs: 90\nrules_from_prepared: 103\nrules_from_prepared_items: 104\nrules_from_challenges: 107\n# The order of unfinished epics; every ready epic is here.\nqueue: []\ndevelopment_status:\n  epic-6: done # finished\n  6-1-six: done\n\n  epic-7: backlog # Suggested lead: Opus · fixture\n  7-1-one: backlog\n'
 
 /** A product repository whose ignored plan keeps its own history, as BMN's does; the plan committed once. */
 function project(): { main: string; plan: string; home: string } {
@@ -72,6 +72,15 @@ function snapshot(plan: string): { head: string; board: string; index: string; s
 }
 
 describe('the owner\'s go becomes one commit of the plan\'s history (Story 96.1 AC1)', () => {
+  it('requires normalization before a new Go on legacy work and writes nothing (107.4)', () => {
+    const { main, plan, home } = project()
+    file(plan, 'epics/007-fixture.md', '<!-- bmn-plan: bmad-legacy -->\n' + epicText())
+    const before = snapshot(plan)
+    const result = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home), '--json'])
+    expect(result.code).toBe(1)
+    expect(result.json.error.code).toBe('NEEDS_NORMALIZE')
+    expect(snapshot(plan)).toEqual(before)
+  })
   it('records one canonical lead and flag after the go head, replacing stale repeated hints (100.1 AC2)', () => {
     const { main, plan, home } = project()
     file(plan, 'epics/007-fixture.md', epicText().replace('Opus — fixture.', 'Sol 🇺🇸: fixture.'))
@@ -160,7 +169,7 @@ describe('the owner\'s go becomes one commit of the plan\'s history (Story 96.1 
     expect(git(plan, 'log', '-1', '--format=%B')).toContain(`Approved-From: ${approvedCommit}`)
   })
 
-  it('records the go of a plan the product repository tracks in that repository, from its default checkout only', () => {
+  it('records a tracked plan go in its default checkout when invoked from a linked worktree', () => {
     const root = fixture()
     const main = join(root, 'main')
     mkdirSync(main, { recursive: true }); git(main, 'init', '-qb', 'main')
@@ -174,8 +183,8 @@ describe('the owner\'s go becomes one commit of the plan\'s history (Story 96.1 
     file(main, 'src/app.txt', 'product changed\n')
     const home = join(root, 'home'); mkdirSync(home)
     git(main, 'worktree', 'add', '-q', '-b', 'run', join(root, 'run'))
-    const refused = bmn(join(root, 'run'), home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home)])
-    expect([refused.code, refused.err]).toEqual([1, expect.stringContaining('NOT_DEFAULT_CHECKOUT')])
+    const linked = bmn(join(root, 'run'), home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home)])
+    expect(linked.code, linked.err).toBe(0)
     const result = bmn(main, home, ['go', '7', '--source', SOURCE, '--approved', approved(main, home), '--expect', token(main, home), '--json'])
     expect(result.code, result.err).toBe(0)
     expect(git(main, 'show', '--format=', '--name-only', 'HEAD')).toBe('plan/status.yaml')

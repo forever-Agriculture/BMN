@@ -1,13 +1,23 @@
 // MODULE: migrate-bmad-plan.test.mjs - Story 77.6: the BMAD-to-plan move on a synthetic BMAD project: shared sections, links, long comments, a park, binaries, a rerun and a collision
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { archive, checkLinks, checkSpans, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
+import { archive, checkLinks, checkSpans, normalizeEpic, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
 
 const BMN = resolve(import.meta.dirname, '../../apps/desktop/bin/bmn')
 const roots = []
+it('keeps generated foreign-project context neutral and derives its purpose from the source', () => {
+  const { repo, root } = fixture(), stage = join(root, 'out/plan')
+  stagePlan({ repo, stage })
+  const plan = readFileSync(join(stage, 'PLAN.md'), 'utf8'), vision = readFileSync(join(stage, 'VISION.md'), 'utf8')
+  expect(plan).toContain('[docs/architecture.md](../docs/architecture.md)')
+  expect(plan).not.toMatch(/control socket|phone connector|Story 77\./u)
+  expect(vision).toContain('A synthetic product for the move.')
+  expect(vision).not.toMatch(/Epic 75|Story 77\.|every epic since/u)
+})
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })))
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'bmn-migrate-')); roots.push(root)
@@ -85,6 +95,90 @@ development_status:
 }
 
 describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
+  it('seeds copied rows from exact blame and requires evidence for uncommitted writer provenance (107.7)', () => {
+    const { root, repo } = fixture(), board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })
+    git('init', '-qb', 'main'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=f@example.invalid', 'commit', '-qm', 'initial plan')
+    writeFileSync(board, readFileSync(board, 'utf8').replace('4-1-d: ready-for-dev', '4-1-d: review'))
+    git('add', '.'); git('-c', 'user.name=Artem Kobrin', '-c', 'user.email=artem@example.invalid', 'commit', '-qm', 'Artem row')
+    writeFileSync(board, readFileSync(board, 'utf8').replace('4-2-extra-on-board: backlog', '4-2-extra-on-board: in-progress'))
+    const first = stagePlan({ repo, stage: join(root, 'one/plan'), keepBmad: true })
+    expect(first.copy.active).toBe(false)
+    expect(first.copy.rows['1-1-do-it'].last_copied).toEqual({ status: 'done', note: '' })
+    expect(first.copy.excluded['4-1-d'].author).toBe('Artem Kobrin')
+    expect(first.copy.unresolved['4-2-extra-on-board'].commit).toMatch(/^0+$/u)
+    const text = readFileSync(board, 'utf8').split('\n').find(line => line.startsWith('  4-2-extra-on-board:'))
+    const proof = { author: 'Fixture', row_sha256: createHash('sha256').update(text).digest('hex'), evidence: 'Synthetic fixture writer acknowledges this exact row' }
+    const second = stagePlan({ repo, stage: join(root, 'two/plan'), keepBmad: true, copyOwners: { '4-2-extra-on-board': proof } })
+    expect(second.copy.unresolved).toEqual({})
+    expect(second.copy.rows['4-2-extra-on-board'].provenance.evidence).toBe(proof.evidence)
+    expect(() => stagePlan({ repo, stage: join(root, 'bad/plan'), keepBmad: true, copyOwners: { '4-2-extra-on-board': { ...proof, row_sha256: 'wrong' } } })).toThrow('COPY_PROVENANCE_INVALID')
+  })
+  it('normalizes headings and missing planning sections while keeping every story requirement byte (107.4)', () => {
+    const { root } = fixture(), path = join(root, '110-fixture.md')
+    const story = '### Story 110.1 — Keep the packet\n\n**Owner:** none.\n**Acceptance criteria:**\n1. **Given** the original packet, **then** use every byte.\n\n**Verification:** real replay.\n'
+    writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 110 — Fixture\n\n## 1. Outcome\nKeep it.\n\n## 3. Boundary and order\nOnly this.\n\n## Run needs\n- **Money cap:** $55.\n\n## 9. Stories\n\n' + story)
+    const result = normalizeEpic({ path, additions: { Why: 'Synthetic fixture.', 'Truth impact': 'none', Prepared: 'none, because this fixture is entirely local.', Challenges: ['Scale', 'Origin', 'Verified', 'Exists', 'People'].map((label) => `- **${label}:** synthetic fixture.`).join('\n') } })
+    const text = readFileSync(path, 'utf8')
+    expect(text).toContain(story)
+    expect(text).toContain('- **Money cap:** $55.')
+    expect(text).toContain('## Boundary and dependencies\nOnly this.')
+    expect(text).toContain('**Prepared:** none, because this fixture is entirely local.')
+    expect(text).not.toContain('bmad-legacy')
+    expect(result.story_bytes_unchanged).toBe(true)
+    expect(() => normalizeEpic({ path, additions: {} })).toThrow('already normalized')
+  })
+  it('preserves opaque and duplicate legacy IDs explicitly without weakening new row checks (107.4)', () => {
+    const { root, repo } = fixture()
+    const source = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    writeFileSync(source, readFileSync(source, 'utf8') + '  1-1-distinct-finished-work: done\n  epic-33b: backlog\n  33b-1-kept: backlog\n  rpc-integer-inputs-delivery: review\n')
+    const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, keepBmad: true })
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+    const metadata = JSON.parse(readFileSync(join(stage, 'legacy-rows.json'), 'utf8'))
+    expect(Object.keys(metadata.rows)).toEqual(['1-1-distinct-finished-work', 'epic-33b', '33b-1-kept', 'rpc-integer-inputs-delivery'])
+    expect(metadata.rows['epic-33b'].original_key).toBe('epic-33b')
+    execFileSync('git', ['init', '-q', join(root, 'out')])
+    const check = () => spawnSync(process.execPath, [BMN, 'plan', 'check', '--json'], { cwd: join(root, 'out'), encoding: 'utf8' })
+    expect(JSON.parse(check().stdout).findings).toEqual([])
+    const board = join(stage, 'status.yaml')
+    writeFileSync(board, readFileSync(board, 'utf8') + '  1-1-new-duplicate: done\n  new-opaque-work: backlog\n')
+    const findings = JSON.parse(check().stdout).findings
+    expect(findings.some((f) => f.reason.includes('1-1-new-duplicate') && f.reason.includes('again'))).toBe(true)
+    expect(findings.some((f) => f.reason.includes('new-opaque-work') && f.reason.includes('no epic'))).toBe(true)
+  })
+  it('discovers delegated platform epics and keeps comment-only rows in history (107.4)', () => {
+    const { root, repo } = fixture()
+    const source = '# MODULE: epic-12.md - delegated contract\n\n**Suggested lead:** Sol 🇺🇸 — synthetic.\n\n## Story 12.1: Keep the words\n\nThe exact requirement must survive.\n'
+    mkdirSync(join(repo, 'docs/platform'), { recursive: true })
+    writeFileSync(join(repo, 'docs/platform/epic-12-provider.md'), source)
+    const board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    const comment = 'comment without an epic '.repeat(20).trim()
+    writeFileSync(board, readFileSync(board, 'utf8') + `  epic-12: in-progress # delegated docs/platform/epic-12-provider.md\n  12-1-keep: review\n  epic-99: backlog # ${comment}\n`)
+    const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, keepBmad: true })
+    expect(manifest.keep_bmad).toBe(true)
+    expect(readFileSync(join(stage, 'epics/012-provider.md'), 'utf8')).toContain(source)
+    expect(readFileSync(join(stage, 'history.md'), 'utf8')).toContain(comment)
+    expect(readFileSync(join(stage, 'status.yaml'), 'utf8')).toContain('epic-12: in-progress # Suggested lead: Sol 🇺🇸')
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+  })
+  it('maps every D10 status and keeps BMAD bytes with migration identity and plan thresholds (107.4)', () => {
+    const { root, repo } = fixture(), board = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
+    const table = { 'ready-for-dev': 'ready', optional: 'backlog', superseded: 'dropped', withdrawn: 'dropped', skipped: 'dropped', deferred: 'paused', complete_with_blocked: 'blocked', blocked: 'blocked' }
+    const additions = Object.keys(table).map((status, i) => `  epic-${50 + i}: ${status}`).join('\n') + '\n'
+    const original = readFileSync(board, 'utf8') + additions; writeFileSync(board, original)
+    const stage = join(root, 'out/plan'), manifest = stagePlan({ repo, stage, keepBmad: true })
+    const moved = readFileSync(join(stage, 'status.yaml'), 'utf8')
+    expect(moved).toContain('bmad_board: _bmad-output/implementation-artifacts/sprint-status.yaml')
+    expect(moved).toContain('moved_from: _bmad-output/implementation-artifacts/sprint-status.yaml')
+    expect(moved).toContain('rules_from_run_needs: 1')
+    expect(moved).toContain('rules_from_challenges: 1')
+    for (const [i, [old, next]] of Object.entries(table).entries()) {
+      expect(moved).toMatch(new RegExp(`  epic-${50 + i}: ${next} # .*${old}`))
+    }
+    expect(readFileSync(board, 'utf8')).toBe(original)
+    expect(manifest.retired).toEqual([])
+    expect(checkSpans({ repo, stage, manifest })).toEqual([])
+  })
   it('rewrites links so the span check can reverse them exactly', () => {
     const exists = (path) => ['_bmad-output/planning-artifacts/reference-context.md', 'apps/x.ts'].includes(path)
     const map = (path) => (path === '_bmad-output/planning-artifacts/reference-context.md' ? 'plan/references/reference-context.md' : null)
@@ -123,11 +217,11 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(status).toContain('format: bmn-plan\nschema_version: 1\n')
     expect(status).toContain('  epic-2: in-progress # board comment moved to the epic\'s Log 2026-10-17\n')
     expect(readFileSync(join(stage, 'epics/002-second.md'), 'utf8')).toContain(`- epic-2 (board comment until 2026-10-17): ${'long comment '.repeat(20).trim()}`)
-    expect(status).toContain('  epic-4: paused # parked 2026-10-16 by the owner\n')
-    expect(status).toContain('  4-1-d: backlog\n')
+    expect(status).toContain('  epic-4: paused # parked 2026-10-16 by the owner; BMAD backlog\n')
+    expect(status).toContain('  4-1-d: ready # BMAD ready-for-dev\n')
     expect(status).toContain('  3-2-c: dropped # no board row before the move; dropped in the epic text\n')
     expect(status).not.toMatch(/^ {2}epic-1-retrospective/mu)
-    expect(status).not.toMatch(/: ready\b/u)
+    expect(status).not.toMatch(/^ {2}epic-\d+: ready\b/mu)
     expect(readFileSync(join(stage, 'history.md'), 'utf8')).toContain('# Delivery order: 1 -> 2 -> 3 -> 4')
     expect(readFileSync(join(stage, 'references/reference-1/shot.png'))).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]))
     expect(readlinkSync(join(stage, 'references/context-link.md'))).toBe('reference-context.md')
@@ -138,8 +232,8 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     // The foundation (owner 2026-10-17): a vision draft he approves before the switch, and the architecture linked.
     const vision = readFileSync(join(stage, 'VISION.md'), 'utf8')
     expect(vision).toMatch(/^## Principles\n\n1\. .*\*provisional\*/mu)
-    expect(vision).toContain('The owner approves it, or replaces it, before the switch (Story 77.7)')
-    expect(readFileSync(join(stage, 'PLAN.md'), 'utf8')).toMatch(/^## Architecture\n\nThe architecture as built: \[docs\/architecture\.md\]\(\.\.\/docs\/architecture\.md\)/mu)
+    expect(vision).toContain('The owner approves it, or replaces it, before the switch;')
+    expect(readFileSync(join(stage, 'PLAN.md'), 'utf8')).toMatch(/^## Architecture\n\nProject architecture: \[docs\/architecture\.md\]\(\.\.\/docs\/architecture\.md\)/mu)
     const approved = join(root, 'approved-vision.md')
     writeFileSync(approved, '# x: vision\n\n## Vision\n\nApproved.\n\n## Principles\n\n1. **One.** (owner, 2026-10-17)\n')
     const again = join(root, 'again', 'plan')

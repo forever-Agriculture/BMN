@@ -15,6 +15,8 @@ export interface ResolvedPlan {
   productRoot: string
   defaultCheckout: string
   runCheckout: string
+  defaultAvailable?: boolean
+  defaultBranch?: string | null
   format: 'bmn-plan' | 'bmad'
   planRoot: string
   boardPath: string
@@ -23,14 +25,16 @@ export interface ResolvedPlan {
   history: 'plan-repository' | 'product-repository' | 'none'
 }
 
-export interface BoardRow { key: string; status: string; note: string; line: number; epic: number | null; story: string | null; token: string }
+export interface BoardRow { key: string; status: string; note: string; line: number; epic: number | null; story: string | null; token: string; legacy?: boolean; legacy_id?: string }
 export interface Board {
   format: string | null
   schemaVersion: string | null
+  rules: Record<string, number>
+  legacyRows: Record<string, { original_key: string; source_line: number; source_sha256: string; reason: string }>
   queue: number[]
   queueLines: number[]
   rows: BoardRow[]
-  malformed: Array<{ line: number; text: string; where: 'queue' | 'development_status' }>
+  malformed: Array<{ line: number; text: string; where: 'queue' | 'development_status' | 'header' }>
   duplicates: Array<{ key: string; line: number; first: number }>
   headerDuplicates: Array<{ key: string; line: number; first: number }>
   logicalDuplicates: Array<{ id: string; key: string; line: number; first: { key: string; line: number } }>
@@ -52,6 +56,7 @@ export declare function suggestedLeadHint(text: string): string | null
 export declare function epicLeadHint(planRoot: string, key: string): string | null
 export declare function withLeadHint(note: string, hint: string, date?: string): { note: string; clipped: boolean }
 export declare function resolvePlan(start: string): Promise<ResolvedPlan>
+export declare function defaultLocation(root: string): Promise<{checkout: string; available: boolean; remote: boolean; branch?: string | null}>
 export declare function readBoard(path: string, options?: { epics?: number[] }): Promise<Board>
 export declare function readEpicFile(path: string): EpicFile
 export declare function boardProblems(board: Board, boardName: string): Array<{ where: string; reason: string }>

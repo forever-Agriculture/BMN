@@ -250,6 +250,16 @@ extraResources:
     to: bin/plan-cli.mjs
   - from: bin/plan-board.mjs
     to: bin/plan-board.mjs
+  - from: bin/plan-bmad-copy.mjs
+    to: bin/plan-bmad-copy.mjs
+  - from: bin/plan-bmad-parser.mjs
+    to: bin/plan-bmad-parser.mjs
+  - from: bin/plan-migration-lock.mjs
+    to: bin/plan-migration-lock.mjs
+  - from: bin/plan-publish.mjs
+    to: bin/plan-publish.mjs
+  - from: bin/plan-statuses.mjs
+    to: bin/plan-statuses.mjs
   # Story 77.4: BMN's own skills and the module that installs them into the skills folder at start.
   - from: bin/agents-own-skills.mjs
     to: bin/agents-own-skills.mjs

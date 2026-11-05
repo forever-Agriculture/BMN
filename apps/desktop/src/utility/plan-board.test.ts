@@ -34,6 +34,10 @@ function bmn(cwd: string, home: string, ...args: string[]): { code: number; out:
 
 const BOARD = `format: bmn-plan
 schema_version: 1
+rules_from_run_needs: 90
+rules_from_prepared: 103
+rules_from_prepared_items: 104
+rules_from_challenges: 107
 queue:
   - 2
 development_status:
@@ -93,7 +97,7 @@ describe('epic lead hints survive run updates (Story 100.1)', () => {
     const path = join(main, 'plan/status.yaml')
     writeFileSync(path, BOARD.replace('go 2026-10-17', note))
     const findings = (await checkPlan(await resolvePlan(main))).findings
-    expect(findings).toContainEqual({ where: 'plan/status.yaml:8', reason: 'epic-2 must carry one hint: Suggested lead: Sol 🇺🇸' })
+    expect(findings).toContainEqual({ where: 'plan/status.yaml:12', reason: 'epic-2 must carry one hint: Suggested lead: Sol 🇺🇸' })
     expect(update(main, 'accepted locally').code).toBe(0)
     expect((await checkPlan(await resolvePlan(main))).findings).toEqual([])
     const fixed = readFileSync(path, 'utf8')
@@ -101,7 +105,7 @@ describe('epic lead hints survive run updates (Story 100.1)', () => {
     expect((await checkPlan(await resolvePlan(main))).findings).toEqual([])
   })
 
-  it('each tracked board copy uses its own epic lead and returns its actual written token', () => {
+  it('a tracked plan uses the canonical epic lead and leaves the linked copy untouched', () => {
     const root = fixture()
     const main = repo(join(root, 'main'))
     file(main, 'plan/status.yaml', BOARD)
@@ -112,12 +116,11 @@ describe('epic lead hints survive run updates (Story 100.1)', () => {
     const result = bmn(run, fixture(), 'set', 'epic-2', 'review', '--expect', rowToken('epic-2', 'ready', 'go 2026-10-17'), '--note', 'checks passed', '--json')
     expect(result.code, result.err).toBe(0)
     const written = JSON.parse(result.out).written
-    for (const [checkout, lead] of [[run, 'Sol'], [main, 'Opus']]) {
-      const note = `Suggested lead: ${lead} 🇺🇸 · checks passed`
-      const board = join(checkout!, 'plan/status.yaml')
-      expect(readFileSync(board, 'utf8')).toContain(`epic-2: review # ${note}`)
-      expect(written.find((entry: { board: string }) => entry.board === board).token).toBe(rowToken('epic-2', 'review', note))
-    }
+    const note = 'Suggested lead: Opus 🇺🇸 · checks passed'
+    expect(readFileSync(join(main, 'plan/status.yaml'), 'utf8')).toContain(`epic-2: review # ${note}`)
+    expect(written).toHaveLength(1)
+    expect(written[0].token).toBe(rowToken('epic-2', 'review', note))
+    expect(readFileSync(join(run, 'plan/status.yaml'), 'utf8')).toBe(BOARD)
   })
 })
 function epicText(number: number, stories: number[], extra = ''): string {
@@ -143,6 +146,15 @@ function ownProject(root: string): string {
 }
 
 describe('the plan format, its reader and its check (Story 77.1)', () => {
+  it('keeps explicitly historical legacy story text without counting it as a second live declaration', () => {
+    const root = fixture()
+    const text = '# Epic 26: Fixture\n\n## Story 26.3: Current\nCurrent requirement.\n\n## Story 26.3 as written on 14 October 2026 (superseded)\nOriginal requirement stays verbatim.\n'
+    const path = file(root, '026-fixture.md', '<!-- bmn-plan: bmad-legacy -->\n' + text)
+    expect(readEpicFile(path).stories.map((story) => story.id)).toEqual(['26.3'])
+    expect(readFileSync(path, 'utf8')).toContain(text)
+    file(root, '026-fixture.md', text.replaceAll('## Story', '### Story'))
+    expect(readEpicFile(path).stories.map((story) => story.id)).toEqual(['26.3', '26.3'])
+  })
   it('resolves our own plan from the product root, a linked worktree and inside plan/.git, reading it from the default checkout', async () => {
     const main = ownProject(fixture())
     const child = join(main, '..', 'child'); git(main, 'worktree', 'add', '-qb', 'child', child)
@@ -205,7 +217,7 @@ describe('the plan format, its reader and its check (Story 77.1)', () => {
 
   it('passes a project made from the templates', async () => {
     const main = repo(join(fixture(), 'main'))
-    const fill = (text: string): string => text.replaceAll('<N+1>', '2').replaceAll('<N>', '1').replaceAll('<slug>', 'first')
+    const fill = (text: string): string => text.replaceAll('<N+1>', '2').replaceAll('<N>', '1').replaceAll('<slug>', 'first').replace(/^.*\*\*Prepared:\*\*.*$/mu, '- **Prepared:** none, because synthetic local fixtures need no service.')
     file(main, 'plan/VISION.md', visionText())
     file(main, 'plan/PLAN.md', planText())
     file(main, 'plan/status.yaml', fill(readFileSync(join(TEMPLATES, 'status.yaml'), 'utf8')))
@@ -298,7 +310,7 @@ development_status:
     file(main, 'plan/status.yaml', `${BOARD}  2-1-again: backlog\n  9-1-orphan: backlog\nschema_version: 999\n`)
     const { findings } = await checkPlan(await resolvePlan(main))
     const reasons = findings.map((finding) => finding.reason)
-    expect(reasons).toContain('2-1-again is story 2.1 again (first 2-1-second at line 9)')
+    expect(reasons).toContain('2-1-again is story 2.1 again (first 2-1-second at line 13)')
     expect(reasons).toContain('9-1-orphan belongs to epic 9, which has neither an epic-9 row nor an epic file')
     expect(reasons).toContain('schema_version appears twice (first at line 2)')
     expect(reasons).toContain('schema_version 999; this BMN reads 1')

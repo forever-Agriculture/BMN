@@ -30,18 +30,18 @@ const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signal
 const VISION_SECTIONS = ['Vision', 'Principles']
 const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
 /** Epics from 90 on are planned to run without asking (Epic 90, 90.2 AC5): Run needs, and each story's Owner line in order. */
-const RUN_NEEDS_FROM = 90
+const RUN_NEEDS_FROM = 1
 /** Epics from 103 on list what their run will need from outside itself before his go (Story 103.4, R103-FR1). */
-const PREPARED_FROM = 103
+const PREPARED_FROM = 1
 /** One form with dev-auto's run_needs.py, which prints these needs for the run; tests on both sides read one table. */
 const PREPARED_LINE = /^(?:[-*]\s*)?\*\*Prepared:?\*\*:?(.*)$/iu
 /**
  * Each need says how and when it was checked (R103-FR1), from the epic after 103: Epic 103's own line is inside the text he
  * approved, and changing it would ask a new go (decision d6).
  */
-const PREPARED_ITEMS_FROM = 104
+const PREPARED_ITEMS_FROM = 1
 /** Epics from 107 on answer five fixed challenges (Epic 106 D9), each under its label in `## Challenges`. */
-const CHALLENGES_FROM = 107
+const CHALLENGES_FROM = 1
 const CHALLENGE_LABELS = ['Scale', 'Origin', 'Verified', 'Exists', 'People']
 const PREPARED_KINDS = 'account|credential|service|command|message|person|owner step'
 const PREPARED_NEED = new RegExp(`^((?:${PREPARED_KINDS})(?:\\s*,\\s*(?:${PREPARED_KINDS}))*)\\s*:\\s*(.*)$`, 'isu')
@@ -132,7 +132,28 @@ function headerOf(path) {
   try { text = readFileSync(path, { encoding: 'utf8', flag: 'r' }).slice(0, 4096) } catch { return null }
   const format = /^format:[ \t]*['"]?([\w-]+)['"]?[ \t]*(?:#.*)?$/mu.exec(text)?.[1] ?? null
   const schema = /^schema_version:[ \t]*['"]?([^\s'"#]+)['"]?[ \t]*(?:#.*)?$/mu.exec(text)?.[1] ?? null
-  return { format, schema }
+  const bmadBoard = /^bmad_board:[ \t]*['"]?([^\s'"#]+)['"]?[ \t]*(?:#.*)?$/mu.exec(text)?.[1] ?? null
+  return { format, schema, bmadBoard }
+}
+
+/** D13: the branch the remote names, never the order in Git's worktree list. */
+export async function defaultLocation(root) {
+  const listing = await git(root, ['worktree', 'list', '--porcelain'])
+  const trees = listing.trim().split(/\n\n/u).map((block) => ({
+    path: /^worktree (.+)$/mu.exec(block)?.[1], branch: /^branch refs\/heads\/(.+)$/mu.exec(block)?.[1]
+  }))
+  const remotes = (await git(root, ['remote'])).trim().split('\n')
+  if (!remotes.includes('origin')) return { checkout: trees[0]?.path ?? root, available: true, remote: false }
+  let branch
+  try {
+    const ref = (await git(root, ['symbolic-ref', '-q', 'refs/remotes/origin/HEAD'])).trim()
+    await git(root, ['rev-parse', '--verify', ref])
+    branch = ref.replace(/^refs\/remotes\/origin\//u, '')
+  } catch {
+    try { branch = /^ref: refs\/heads\/(.+)\tHEAD$/mu.exec(await git(root, ['ls-remote', '--symref', 'origin', 'HEAD']))?.[1] } catch { /* status can read locally; writers refuse */ }
+  }
+  const found = branch && trees.find((tree) => tree.branch === branch)
+  return { checkout: found?.path ?? root, available: Boolean(found), remote: true, branch: branch ?? null }
 }
 
 /** A directory is a plan root with its own history when it is `plan/` holding our board. */
@@ -160,29 +181,45 @@ export async function resolvePlan(start) {
     if (outer === null) break
     root = outer
   }
-  let defaultCheckout = root
-  try {
-    const first = /^worktree (.+)$/mu.exec(await git(root, ['worktree', 'list', '--porcelain']))
-    if (first) defaultCheckout = first[1]
-  } catch { /* a repository without worktrees: the checkout at hand is the default */ }
+  const location = await defaultLocation(root)
+  const defaultCheckout = location.checkout
 
-  const own = await locate(root, defaultCheckout, 'plan/status.yaml')
+  // Even an old linked branch without plan/ reads the canonical plan once cutover lands.
+  const own = await locate(defaultCheckout, defaultCheckout, 'plan/status.yaml')
+  // The directory can be installed before the journaled ref update; readers remain on the old board until that commit lands.
+  const common = resolve(defaultCheckout, (await git(defaultCheckout, ['rev-parse', '--git-common-dir'])).trim())
+  const migrationJournal = join(common, 'bmn-plan-cutover', 'state.json')
+  if (own.exists && existsSync(migrationJournal)) {
+    let migration
+    try { migration = JSON.parse(readFileSync(migrationJournal, 'utf8')) } catch { throw new PlanError('MIGRATION_UNREADABLE', 'the migration journal cannot confirm which plan is committed') }
+    if (migration.switch_commit) {
+      if (!/^[0-9a-f]{40,64}$/u.test(migration.switch_commit)) throw new PlanError('MIGRATION_UNREADABLE', 'the migration journal has an invalid switch commit')
+      try { await git(defaultCheckout, ['merge-base', '--is-ancestor', migration.switch_commit, 'HEAD']) }
+      catch { own.exists = false }
+    }
+    if (migration.rollback_commit) {
+      if (!/^[0-9a-f]{40,64}$/u.test(migration.rollback_commit)) throw new PlanError('MIGRATION_UNREADABLE', 'the migration journal has an invalid rollback commit')
+      try { await git(defaultCheckout, ['merge-base', '--is-ancestor', migration.rollback_commit, 'HEAD']); own.exists = false }
+      catch { /* the move is still the committed reader state */ }
+    }
+  }
   let bmadDirectory = BMAD_DEFAULT
   let configText = null
-  for (const base of root === defaultCheckout ? [root] : [root, defaultCheckout]) {
+  for (const base of root === defaultCheckout ? [root] : own.exists ? [defaultCheckout, root] : [root, defaultCheckout]) {
     try { configText = readFileSync(join(base, '_bmad/bmm/config.yaml'), 'utf8'); break } catch { /* absent here */ }
   }
   if (configText !== null) {
     const configured = /^implementation_artifacts:\s*(.+?)\s*$/mu.exec(configText)?.[1]
     if (configured) bmadDirectory = configured.replace(/^(['"])(.*)\1$/u, '$2').replaceAll('{project-root}/', '').replaceAll('{project-root}', '.')
   }
-  const bmadLocal = relative(root, resolve(root, bmadDirectory, 'sprint-status.yaml'))
+  const declaredBoard = own.exists ? headerOf(own.path)?.bmadBoard : null
+  const bmadLocal = declaredBoard ?? relative(root, resolve(root, bmadDirectory, 'sprint-status.yaml'))
   if (bmadLocal.startsWith('..') || isAbsolute(bmadLocal)) throw new PlanError('OUTSIDE', 'the BMAD config names a board outside the checkout')
-  const bmad = await locate(root, defaultCheckout, bmadLocal)
+  const bmad = await locate(own.exists ? defaultCheckout : root, defaultCheckout, bmadLocal)
 
-  const base = { productRoot: root, defaultCheckout, runCheckout: root }
+  const base = { productRoot: root, defaultCheckout, runCheckout: root, defaultAvailable: location.available, defaultBranch: location.branch ?? null }
   if (own.exists) {
-    if (bmad.exists) throw new PlanError('BOTH_PLANS', `both plans are present: ${own.path} and ${bmad.path}; keep one`)
+    if (bmad.exists && !declaredBoard) throw new PlanError('BOTH_PLANS', `both plans are present: ${own.path} and ${bmad.path}; name the retained board with bmad_board`)
     const header = headerOf(own.path)
     if (header?.format !== FORMAT) throw new PlanError('MALFORMED', `${own.path} does not start with format: ${FORMAT}`)
     if (header.schema !== String(SCHEMA_VERSION)) throw new PlanError('UNKNOWN_SCHEMA', `${own.path} has schema_version ${header.schema ?? '(none)'}; this BMN reads ${SCHEMA_VERSION}`)
@@ -219,12 +256,28 @@ async function locate(root, defaultCheckout, localPath) {
  * malformed for the check.
  */
 export async function readBoard(path, { epics = [] } = {}) {
-  const result = { format: null, schemaVersion: null, queue: [], queueLines: [], rows: [], malformed: [], duplicates: [], headerDuplicates: [], logicalDuplicates: [], totalRows: 0 }
+  const result = { format: null, schemaVersion: null, rules: {}, legacyRows: Object.create(null), queue: [], queueLines: [], rows: [], malformed: [], duplicates: [], headerDuplicates: [], logicalDuplicates: [], totalRows: 0 }
   const seen = new Map()
   const headers = new Map()
   const logical = new Map()
   let section = null
   let lineNumber = 0
+  let legacyPath = null, movedFrom = null, legacyLoaded = false
+  const loadLegacy = () => {
+    if (legacyLoaded || legacyPath === null) return
+    legacyLoaded = true
+    try {
+      if (legacyPath !== 'legacy-rows.json' || !movedFrom) throw new Error('legacy_rows requires legacy-rows.json and moved_from')
+      const file = resolve(path, '..', legacyPath), root = realpathSync(resolve(path, '..'))
+      if (!insideDirectory(root, realpathSync(file))) throw new Error('legacy metadata leaves the plan')
+      const metadata = JSON.parse(readFileSync(file, 'utf8'))
+      if (metadata.version !== 1 || metadata.source_board !== movedFrom || !metadata.rows || Array.isArray(metadata.rows)) throw new Error('invalid legacy metadata version/source/rows')
+      for (const [key, row] of Object.entries(metadata.rows)) {
+        if (!row || row.original_key !== key || !Number.isSafeInteger(row.source_line) || row.source_line < 1 || !/^[0-9a-f]{64}$/u.test(row.source_sha256)) throw new Error(`invalid legacy identity ${key}`)
+      }
+      Object.assign(result.legacyRows, metadata.rows)
+    } catch (error) { result.malformed.push({ line: headers.get('legacy_rows') ?? 1, text: `legacy_rows: ${error.message}`, where: 'header' }) }
+  }
   const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity })
   for await (const raw of lines) {
     lineNumber++
@@ -239,6 +292,12 @@ export async function readBoard(path, { epics = [] } = {}) {
       else headers.set(top[1], lineNumber)
       if (top[1] === 'format') result.format = value
       else if (top[1] === 'schema_version') result.schemaVersion = value
+      else if (top[1] === 'moved_from') movedFrom = value
+      else if (top[1] === 'legacy_rows') legacyPath = value
+      else if (/^rules_from_(?:run_needs|prepared|prepared_items|challenges)$/u.test(top[1])) {
+        if (!/^[1-9]\d*$/u.test(value)) result.malformed.push({ line: lineNumber, text: `${top[1]} needs a positive epic number`, where: 'header' })
+        else result.rules[top[1].slice('rules_from_'.length)] = Number(value)
+      }
       else if (top[1] === 'queue' || top[1] === 'development_status') section = top[1]
       continue
     }
@@ -252,16 +311,20 @@ export async function readBoard(path, { epics = [] } = {}) {
     if (!row) { result.malformed.push({ line: lineNumber, text: line.slice(0, 200), where: 'development_status' }); continue }
     result.totalRows++
     const [, key, status, note = ''] = row
+    loadLegacy()
+    const legacy = Object.hasOwn(result.legacyRows, key)
     if (seen.has(key)) result.duplicates.push({ key, line: lineNumber, first: seen.get(key) })
     else seen.set(key, lineNumber)
     const epic = rowEpic(key)
     // Two keys for one epic or story (epic-1 and epic-01, 1-1-a and 1-1-b) make the board ambiguous.
-    const id = /^epic-\d+$/u.test(key) ? `epic ${epic}` : rowStory(key) !== null ? `story ${rowStory(key)}` : null
+    const id = legacy ? null : /^epic-\d+$/u.test(key) ? `epic ${epic}` : rowStory(key) !== null ? `story ${rowStory(key)}` : null
     if (id !== null && logical.has(id) && logical.get(id).key !== key) result.logicalDuplicates.push({ id, key, line: lineNumber, first: logical.get(id) })
     else if (id !== null && !logical.has(id)) logical.set(id, { key, line: lineNumber })
     if (epics.length > 0 && !epics.includes(epic)) continue
-    result.rows.push({ key, status, note, line: lineNumber, epic, story: rowStory(key), token: rowToken(key, status, note) })
+    result.rows.push({ key, status, note, line: lineNumber, epic, story: legacy ? null : rowStory(key), token: rowToken(key, status, note), ...(legacy ? { legacy: true, legacy_id: key } : {}) })
   }
+  loadLegacy()
+  for (const key of Object.keys(result.legacyRows)) if (!seen.has(key)) result.malformed.push({ line: headers.get('legacy_rows') ?? 1, text: `legacy identity ${key} has no board row`, where: 'header' })
   return result
 }
 
@@ -345,8 +408,11 @@ export function readEpicFile(path) {
   lines.forEach((line, index) => {
     if (/^\s*```/u.test(line)) fence = !fence
     if (fence) return
-    const story = /^### Story (\d+)\.(\d+)\b/u.exec(line)
+    const story = (legacy ? /^#{2,4} Story (\d+)\.(\d+)\b/u : /^### Story (\d+)\.(\d+)\b/u).exec(line)
     if (story) {
+      if (legacy && /^#{2,4} Story \d+\.\d+ as written on \d{1,2} [A-Za-z]+ \d{4} \(superseded\)\s*$/u.test(line)) {
+        current = null; inCriteria = false; return
+      }
       current = { id: `${Number(story[1])}.${Number(story[2])}`, epic: Number(story[1]), line: index + 1, criteria: [], verification: false, owner: null }
       stories.push(current)
       inCriteria = false
@@ -389,7 +455,7 @@ export async function checkPlan(resolved) {
     if (!STATUSES.includes(row.status)) add(at, `unknown status ${row.status} for ${row.key} (one of ${STATUSES.join(', ')})`)
     if ([...row.note].length > NOTE_LIMIT) add(at, `note of ${row.key} is ${[...row.note].length} characters, over ${NOTE_LIMIT}`)
     if (REASON_STATUSES.includes(row.status) && row.note.trim() === '') add(at, `${row.key} is ${row.status} without a reason in its note`)
-    if (rowEpic(row.key) === null) add(at, `row key ${row.key} names no epic`)
+    if (rowEpic(row.key) === null && !row.legacy) add(at, `row key ${row.key} names no epic`)
   }
   const epicRows = new Map(board.rows.filter((row) => /^epic-\d+$/u.test(row.key)).map((row) => [row.epic, row]))
   const storyRows = new Map(board.rows.filter((row) => row.story !== null).map((row) => [row.story, row]))
@@ -477,7 +543,7 @@ export async function checkPlan(resolved) {
       if (story.criteria.length === 0) add(`${at}:${story.line}`, `Story ${story.id} has no numbered acceptance criteria`)
       if (!story.verification) add(`${at}:${story.line}`, `Story ${story.id} has no **Verification:**`)
     }
-    if (!epic.legacy && epic.epic >= RUN_NEEDS_FROM) runNeedsProblems(epic, at, add)
+    if (!epic.legacy) runNeedsProblems(epic, at, add, board.rules)
   }
   for (const row of epicRows.values()) if (!epicsSeen.has(row.epic)) add(`${boardName}:${row.line}`, `epic-${row.epic} has no epic file under plan/epics/`)
   for (const row of storyRows.values()) {
@@ -488,18 +554,23 @@ export async function checkPlan(resolved) {
 }
 
 /** The owner's steps sit only before the go or at the end (Epic 90, D1): never between unattended stories. */
-function runNeedsProblems(epic, at, add) {
-  if (epic.epic >= CHALLENGES_FROM) {
+function runNeedsProblems(epic, at, add, rules = {}) {
+  const runFrom = rules.run_needs ?? RUN_NEEDS_FROM
+  const preparedFrom = rules.prepared ?? PREPARED_FROM
+  const itemsFrom = rules.prepared_items ?? PREPARED_ITEMS_FROM
+  const challengesFrom = rules.challenges ?? CHALLENGES_FROM
+  if (epic.epic >= challengesFrom) {
     const missing = CHALLENGE_LABELS.filter((label) => !epic.challenges.includes(label))
-    if (!epic.sections.includes('Challenges')) add(at, `missing section ## Challenges (epics from ${CHALLENGES_FROM} on)`)
+    if (!epic.sections.includes('Challenges')) add(at, `missing section ## Challenges (epics from ${challengesFrom} on)`)
     else if (missing.length > 0) add(at, `## Challenges does not answer: ${missing.join(', ')}`)
   }
-  if (!epic.sections.includes('Run needs')) add(at, `missing section ## Run needs (epics from ${RUN_NEEDS_FROM} on)`)
-  if (epic.epic >= PREPARED_FROM && epic.sections.includes('Run needs')) {
+  if (epic.epic >= runFrom && !epic.sections.includes('Run needs')) add(at, `missing section ## Run needs (epics from ${runFrom} on)`)
+  if (epic.epic >= Math.min(preparedFrom, itemsFrom)) {
     if (epic.prepared === null) add(at, 'Run needs has no **Prepared:** line (what the run will need, each with its check; or none, because <reason>)')
     else if (PREPARED_EMPTY.test(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** says "${epic.prepared.text}": name each need with its check, or say none, because <reason>`)
-    else if (epic.epic >= PREPARED_ITEMS_FROM) for (const problem of preparedProblems(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** ${problem}`)
+    else if (epic.epic >= itemsFrom) for (const problem of preparedProblems(epic.prepared.text)) add(`${at}:${epic.prepared.line}`, `**Prepared:** ${problem}`)
   }
+  if (epic.epic < runFrom) return
   let latest = null
   for (const story of epic.stories) {
     const owner = story.owner

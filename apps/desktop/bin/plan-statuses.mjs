@@ -1,0 +1,3 @@
+// MODULE: plan-statuses.mjs - D10's explicit lossless migration and safe one-way status maps
+export const FROM_BMAD = Object.freeze({ done: 'done', backlog: 'backlog', 'ready-for-dev': 'ready', drafted: 'backlog', contexted: 'backlog', 'in-progress': 'in-progress', review: 'review', optional: 'backlog', superseded: 'dropped', withdrawn: 'dropped', skipped: 'dropped', deferred: 'paused', complete_with_blocked: 'blocked', blocked: 'blocked' })
+export const TO_BMAD = Object.freeze({ backlog: 'backlog', ready: 'ready-for-dev', 'in-progress': 'in-progress', review: 'review', done: 'done', blocked: 'blocked', paused: 'deferred', dropped: 'withdrawn' })

@@ -11,8 +11,16 @@ to the corresponding live session.
 
 The board rows come through the same resolver and streamed reader as `bmn plan` (Epic 77,
 [planning.md](planning.md)): BMN's own `plan/status.yaml` or a BMAD `sprint-status.yaml`, of any
-size, read in the checkout the plan's tracking names. Both plans present, an unknown schema or a
+size. BMN's plan is read in the repository's default checkout from every worktree, whether tracked
+or ignored; an explicitly declared `bmad_board` may remain beside it. An undeclared pair, an unknown schema or a
 malformed own board shows as "Board unavailable" with the reason.
+
+A tracked BMN plan is checkpointed and published with `bmn plan publish` at each story's end.
+Publication projects only planning paths onto the remote default branch and uses one plan PR; it
+keeps unrelated staged and unstaged product work in place. The local go commit remains in the default
+checkout's history after the published plan is taken back. Rejection leaves `unpublished N` and local
+commits; a plan conflict keeps both inputs and makes only that epic read `PLAN_CONFLICT` in
+`run_needs.py`. Neither condition asks a card. Ignored plans retain local plan history without publishing.
 
 A handoff's `- Run id:` (written once when the run starts) and each Decided-for-you line's leading
 entry id (`[d3]`, never renumbered) make a decision the same decision through text edits, compaction
