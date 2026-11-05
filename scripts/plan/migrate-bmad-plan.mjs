@@ -203,7 +203,7 @@ function parseBoard(text) {
  * Build the staged plan. `repo` is the product checkout holding `_bmad-output/`; `stage` an empty folder that
  * becomes `plan/`. Returns the manifest (also written to `<stage>/../migration-manifest.json`).
  */
-export function stagePlan({ repo, stage, contextRepo = repo, date = new Date().toISOString().slice(0, 10), docs = null, vision = null, keepBmad = false, copyOwners = {}, archive: archiveFolder = join(homedir(), 'projects', `bmn-archive-${date}`) }) {
+export function stagePlan({ repo, stage, historyHead: pinnedHistoryHead = null, contextRepo = repo, date = new Date().toISOString().slice(0, 10), docs = null, vision = null, keepBmad = false, copyOwners = {}, archive: archiveFolder = join(homedir(), 'projects', `bmn-archive-${date}`) }) {
   if (existsSync(stage) && readdirSync(stage).length > 0) throw new Error(`${stage} is not empty: refusing to stage over it`)
   const planning = '_bmad-output/planning-artifacts'
   const implementation = '_bmad-output/implementation-artifacts'
@@ -480,8 +480,8 @@ export function stagePlan({ repo, stage, contextRepo = repo, date = new Date().t
     } else if (identity !== null) identities.add(identity)
   }
   if (Object.keys(legacyRows).length) write('legacy-rows.json', JSON.stringify({ version: 1, source_board: boardPath, rows: legacyRows }, null, 2) + '\n')
-  let historyHead = null
-  try { historyHead = execFileSync('git', ['-C', contextRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { /* a stage without history grants no historical approval */ }
+  let historyHead = pinnedHistoryHead
+  if (!historyHead) try { historyHead = execFileSync('git', ['-C', contextRepo, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { /* a stage without history grants no historical approval */ }
   write('migration.json', JSON.stringify({ version: 1, source_board: boardPath, history_head: historyHead, source_board_sha256: sha256(boardText) }, null, 2) + '\n')
   const statusText = [
     '# The project\'s board (BMN plan format, docs/planning.md). Edit by hand whenever you like; agents change one row with `bmn plan set`.',

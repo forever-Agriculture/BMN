@@ -225,7 +225,7 @@ async function historicalSnapshot(capture, destination, registration) {
 }
 
 /** Capture every worktree; historical planning images never contribute canonical values. */
-export async function reconcilePlan({ repo: given, upstream, output, historicalWorktrees = [] }) {
+export async function reconcilePlan({ repo: given, upstream, output, historicalWorktrees = [], upstreamInHistory = false }) {
   const repo = realpathSync(given), destination = resolve(output)
   upstream = await upstreamFor(repo, upstream)
   if (existsSync(destination) && readdirSync(destination).length) throw new Error('reconciliation output is not empty')
@@ -244,11 +244,13 @@ export async function reconcilePlan({ repo: given, upstream, output, historicalW
     if (merged.status === 1 && !archived) throw new PlanError('NO_COMMON_PLANNING_BASE', `${w.root} has unrelated history (${w.head}); preserve it and settle the handover before cutover`)
     if (merged.status !== 0 && !archived) throw new PlanError('UNREADABLE_PLANNING_BASE', `the common ancestor of ${w.root} cannot be read`)
     const base = archived ? null : merged.stdout.trim(), inventory = sources(w.root)
-    return { ...w, base, historical: archived ?? null, files: inventory.files, baseTree: base === null ? new Map() : tree(repo, base, planning), headTree: tree(repo, w.head, planning), indexTree: index(w.root, planning) }
+    // A checkout already holding a move retired its old files; those deletions are not local edits.
+    const moved = spawnSync('git', ['-C', repo, 'cat-file', '-e', `${w.head}:plan/migration.json`]).status === 0
+    return { ...w, base, moved, historical: archived ?? null, files: inventory.files, baseTree: base === null ? new Map() : tree(repo, base, planning), headTree: tree(repo, w.head, planning), indexTree: index(w.root, planning) }
   })
   const stored = blobs(repo, [...incomingTree.values(), ...captures.flatMap(c => [...c.baseTree.values(), ...c.headTree.values(), ...c.indexTree.values()])].map(entry => entry.oid))
   const image = entry => entry ? { ...entry, ...stored.get(entry.oid) } : null
-  const inputs = [], conflicts = [], approvalValues = [], historicalArchives = [], canonical = new Map([...incomingTree].map(([path, entry]) => [path, image(entry)]))
+  const inputs = [], conflicts = [], approvalValues = [], settledConflicts = [], historicalArchives = [], canonical = new Map([...incomingTree].map(([path, entry]) => [path, image(entry)]))
   const keepInput = (owner, kind, path, value, historical = false) => {
     if (value && !existsSync(join(objects, value.sha256))) writeFileSync(join(objects, value.sha256), value.bytes, { mode: 0o600 })
     inputs.push({ owner, kind, path, sha256: value?.sha256 ?? sha256('absent'), present: Boolean(value), mode: value?.mode ?? null, ...(historical ? { historical: true } : {}), ...(value?.inode ? { inode: value.inode, device: value.device, permissions: value.permissions } : {}), object: value ? join(objects, value.sha256) : null })
@@ -265,15 +267,14 @@ export async function reconcilePlan({ repo: given, upstream, output, historicalW
     }
     const kept = join(destination, 'conflicts', sha256(owner).slice(0, 12), phase, path)
     mkdirSync(dirname(kept), { recursive: true }); writeFileSync(kept, local?.bytes ?? Buffer.alloc(0))
-    conflicts.push({ path, owner, phase, kept, local_present: Boolean(local), incoming_present: Boolean(incoming), local_sha256: local?.sha256 ?? null, incoming_sha256: incoming?.sha256 ?? null })
-    if (path.endsWith('/sprint-status.yaml')) {
-      const ours = rowsOf(local?.bytes.toString() ?? ''), theirs = rowsOf(incoming?.bytes.toString() ?? '')
-      for (const key of new Set([...ours.keys(), ...theirs.keys()])) {
-        const epic = Number(/^(?:epic-)?(\d+)(?:[-.]|$)/u.exec(key)?.[1])
-        if (Number.isFinite(epic) && JSON.stringify(ours.get(key)) !== JSON.stringify(theirs.get(key))) approvalValues.push({ path, key, epic, local: JSON.stringify(ours.get(key) ?? null), upstream: JSON.stringify(theirs.get(key) ?? null), reason: 'conflicting old board values' })
-      }
+    const board = path.endsWith('/sprint-status.yaml') && local && incoming ? mergeBoard(base, local, incoming) : null
+    conflicts.push({ path, owner, phase, kept, local_present: Boolean(local), incoming_present: Boolean(incoming), local_sha256: local?.sha256 ?? null, incoming_sha256: incoming?.sha256 ?? null, ...(board ? { rows: board.conflicts.map(row => row.key) } : {}) })
+    if (!board) return incoming
+    for (const row of board.conflicts) {
+      if (row.approval) approvalValues.push({ path, key: row.key, epic: row.approval, local: JSON.stringify(row.local), upstream: JSON.stringify(row.upstream), reason: 'conflicting go or withdrawal on the old board' })
+      else settledConflicts.push({ path, key: row.key, owner, kept, local: row.local, upstream: row.upstream, settled: 'no go or withdrawal in dispute; upstream text kept, whole local kept' })
     }
-    return incoming
+    return { ...incoming, bytes: Buffer.from(board.text), sha256: sha256(board.text) }
   }
   for (const capture of captures) {
     if (capture.historical) {
@@ -285,13 +286,16 @@ export async function reconcilePlan({ repo: given, upstream, output, historicalW
       historicalArchives.push(await historicalSnapshot(capture, destination, git(repo, ['worktree', 'list', '--porcelain', '-z'])))
       continue
     }
+    if (capture.moved) continue
     const paths = new Set([...capture.files.map(file => file.path), ...capture.baseTree.keys(), ...capture.headTree.keys(), ...capture.indexTree.keys(), ...incomingTree.keys()])
     for (const path of paths) {
       const base = image(capture.baseTree.get(path)), head = image(capture.headTree.get(path)), staged = image(capture.indexTree.get(path)), live = working(capture.root, path), incoming = image(incomingTree.get(path))
       for (const [kind, value, owner] of [['base', base, capture.base], ['HEAD', head, capture.head], ['index', staged, capture.root], ['working', live, capture.root], ['upstream', incoming, upstreamHead]]) keepInput(owner, kind, path, value)
       if (path.endsWith('.md') && !equal(base, incoming)) {
         const prior = approvalParts(base, path), next = approvalParts(incoming, path)
-        for (const [epic, terms] of prior) if (JSON.stringify(terms) !== JSON.stringify(next.get(epic)) && terms.some(Boolean)) approvalValues.push({ path, key: `epic-${epic}`, epic, local: JSON.stringify(approvalParts(head, path).get(epic) ?? terms), upstream: JSON.stringify(next.get(epic) ?? null), reason: 'upstream approved sections changed' })
+        // When the moved history keeps upstream, its reader sees upstream's change at once; a worktree only behind it holds nothing.
+        const mine = approvalParts(live ?? head, path), same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+        for (const [epic, terms] of prior) if (terms.some(Boolean) && !same(terms, next.get(epic)) && (!upstreamInHistory || (!same(terms, mine.get(epic)) && !same(mine.get(epic), next.get(epic))))) approvalValues.push({ path, key: `epic-${epic}`, epic, local: JSON.stringify(mine.get(epic) ?? null), upstream: JSON.stringify(next.get(epic) ?? null), reason: 'upstream approved sections changed' })
       }
       if (path.endsWith('/sprint-status.yaml') && !equal(base, incoming)) {
         const prior = rowsOf(base?.bytes.toString() ?? ''), next = rowsOf(incoming?.bytes.toString() ?? '')
@@ -307,7 +311,7 @@ export async function reconcilePlan({ repo: given, upstream, output, historicalW
   }
   for (const [path, value] of canonical) put(projection, path, value)
   const fingerprint = sha256(JSON.stringify({ upstreamHead, worktrees: captures.map(c => [c.root, c.head, c.historical]), historical_archives: historicalArchives.map(c => [c.root, c.index?.sha256 ?? null, c.shared_index?.sha256 ?? null, c.registration.sha256]), inputs: inputs.map(({ owner, kind, path, sha256, mode, inode, device, historical }) => ({ owner, kind, path, sha256, mode, inode, device, historical })) }))
-  const result = { version: 1, repo, projection, upstream: upstreamHead, worktrees: captures.map(c => ({ root: c.root, head: c.head, base: c.base })), historical_worktrees: historicalArchives, inputs, conflicts, fingerprint, approval_conflicts: [...new Set(approvalValues.map(value => value.epic))].sort((a, b) => a - b), approval_conflict_values: [...new Map(approvalValues.map(value => [JSON.stringify(value), value])).values()] }
+  const result = { version: 1, repo, projection, upstream: upstreamHead, worktrees: captures.map(c => ({ root: c.root, head: c.head, base: c.base })), historical_worktrees: historicalArchives, inputs, conflicts, fingerprint, approval_conflicts: [...new Set(approvalValues.map(value => value.epic))].sort((a, b) => a - b), approval_conflict_values: [...new Map(approvalValues.map(value => [JSON.stringify(value), value])).values()], settled_conflicts: settledConflicts }
   writeFileSync(join(destination, 'manifest.json'), JSON.stringify(result, null, 2) + '\n')
   return result
 }
@@ -322,7 +326,7 @@ function filesUnder(root, prefix = '') {
   }
   return files
 }
-function planFingerprint(folder) {
+export function planFingerprint(folder) {
   return sha256(JSON.stringify(filesUnder(folder).map(path => {
     const full = join(folder, path), stat = lstatSync(full), link = stat.isSymbolicLink()
     return [path, link ? '120000' : stat.mode & 0o111 ? '100755' : '100644', sha256(link ? Buffer.from(readlinkSync(full)) : readFileSync(full))]
@@ -379,8 +383,164 @@ function refreshIndex(repo, state) {
   } finally { try { closeSync(fd) } catch { /* already closed after copying */ } rmSync(lock, { force: true }); rmSync(lock + '.lock', { force: true }) }
 }
 
+/** Upstream already holding a confirmed move: its plan, the pre-move commit it was cut from, and the move commit. */
+export function mergedMoveOf(repo, upstream) {
+  const head = textGit(repo, ['rev-parse', upstream])
+  const read = spawnSync('git', ['-C', repo, 'show', `${head}:plan/migration.json`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  if (read.status !== 0) return null
+  let metadata
+  try { metadata = JSON.parse(read.stdout) } catch { throw new PlanError('MOVE_BOUNDARY_UNCONFIRMED', 'the upstream migration record is unreadable') }
+  const added = textGit(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-filter=A', '--format=%H', head, '--', 'plan/migration.json']).split('\n').filter(Boolean)
+  const commit = added.find(id => spawnSync('git', ['-C', repo, 'rev-parse', `${id}^1`], { encoding: 'utf8' }).stdout.trim() === metadata.history_head)
+  if (metadata.version !== 1 || !commit) throw new PlanError('MOVE_BOUNDARY_UNCONFIRMED', `upstream's move commit does not descend directly from ${metadata.history_head}; it was squashed or rebased after master advanced`)
+  return { head, anchor: metadata.history_head, commit, source_board: metadata.source_board }
+}
+/** The reader seeds gos through the cut only: an approval event after it, even one later reverted, must not vanish silently. */
+export function approvalEventsAfterCut(repo, source, anchor, tips) {
+  const events = []
+  const boardAt = commit => { const read = spawnSync('git', ['-C', repo, 'show', `${commit}:${source}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }); return read.status === 0 ? rowsOf(read.stdout) : null }
+  for (const tip of new Set(tips)) {
+    let previous = boardAt(anchor)
+    if (!previous) continue
+    for (const commit of textGit(repo, ['rev-list', '--reverse', '--topo-order', '--full-history', `${anchor}..${tip}`, '--', source]).split('\n').filter(Boolean)) {
+      const rows = boardAt(commit)
+      if (!rows) continue // The move's own retirement of the board.
+      for (const key of new Set([...previous.keys(), ...rows.keys()])) {
+        if (!/^epic-\d+$/u.test(key)) continue
+        const old = previous.get(key), now = rows.get(key)
+        if (goTokens(old) !== goTokens(now) || (Boolean(old) && (!now || (WITHDRAWN.has(now.status) && !WITHDRAWN.has(old.status))))) events.push({ commit, key, before: old ?? null, after: now ?? null })
+      }
+      previous = rows
+    }
+  }
+  return events
+}
+export function extractPlan(repo, commit, output) {
+  mkdirSync(output, { recursive: true })
+  const archived = spawnSync('git', ['-C', repo, 'archive', commit, 'plan'], { maxBuffer: 2 * 1024 * 1024 * 1024 })
+  if (archived.status !== 0) throw new Error('the upstream plan cannot be read')
+  const unpacked = spawnSync('tar', ['-x', '-C', output], { input: archived.stdout, maxBuffer: 64 * 1024 * 1024 })
+  if (unpacked.status !== 0) throw new Error('the upstream plan cannot be unpacked')
+  return join(output, 'plan')
+}
+const epicNumber = path => /^epics\/0*(\d+)[-.]/u.exec(path)?.[1] ?? null
+/** One generated epic may be renamed by a title edit; it keeps the file upstream established. */
+function establishedPaths(generated, theirs) {
+  const byNumber = new Map()
+  for (const path of theirs) { const number = epicNumber(path); if (number) byNumber.set(number, [...(byNumber.get(number) ?? []), path]) }
+  const mapped = new Map()
+  for (const path of generated) {
+    const number = epicNumber(path), established = number ? byNumber.get(number) : null
+    if (established?.length > 1 && !established.includes(path)) throw new PlanError('EPIC_FILE_AMBIGUOUS', `epic ${number} has several files upstream: ${established.join(', ')}`)
+    mapped.set(established?.length === 1 ? established[0] : path, path)
+  }
+  return mapped
+}
+const INCOMING_ONLY = new Set(['migration.json', 'VISION.md', 'PLAN.md', 'bmad-copy.json'])
+/**
+ * base and ours are stagePlan outputs from the two captures under one context, so base to ours is exactly what changed in
+ * the old sources; base to theirs is every edit made to the plan since. D15's rule applies per path, and per row on the board.
+ * Text under a local-only pattern, or changed locally after upstream removed it, stays out of the plan and only its hash is named.
+ */
+export function mergeStagedPlan({ base, ours, theirs, output, date, localOnly = [], keep }) {
+  const patterns = localOnly.map(source => new RegExp(source, 'u')), privatePath = path => patterns.some(pattern => pattern.test(path))
+  const theirFiles = filesUnder(theirs), oursBy = establishedPaths(filesUnder(ours), theirFiles), baseBy = establishedPaths(filesUnder(base), theirFiles)
+  const result = { conflicts: [], rows: [], approval_conflicts: [], approval_conflict_values: [], settled_conflicts: [], local_only: [] }
+  const keepAside = (path, image, reason) => {
+    const kept = join(keep, sha256(path).slice(0, 16)); mkdirSync(keep, { recursive: true, mode: 0o700 }); writeFileSync(kept, image.bytes, { mode: 0o600 })
+    result.local_only.push({ path, sha256: image.sha256, kept, reason })
+  }
+  const conflictFile = (path, image) => { const kept = `references/moved/${date}/conflicts/${path}.local`; put(output, kept, { ...image, mode: '100644' }); return kept }
+  mkdirSync(output, { recursive: true })
+  for (const path of new Set([...oursBy.keys(), ...baseBy.keys(), ...theirFiles])) {
+    const load = (root, name) => name === undefined ? null : working(root, name)
+    const b = load(base, baseBy.get(path)), o = load(ours, oursBy.get(path)), u = theirFiles.includes(path) ? working(theirs, path) : null
+    if (privatePath(path)) { if (o && !equal(o, b)) keepAside(path, o, 'local-only path changed'); continue }
+    let chosen
+    if (INCOMING_ONLY.has(path) || equal(o, b)) chosen = u
+    else if (equal(u, b) || equal(o, u)) chosen = o
+    else if (!u) { keepAside(path, o, 'changed locally after upstream removed it'); chosen = null }
+    else if (path === 'status.yaml' && o) {
+      const board = mergeBoard(b, o, u)
+      chosen = { ...u, bytes: Buffer.from(board.text), sha256: sha256(board.text) }
+      if (board.conflicts.length) {
+        const kept = conflictFile(path, o)
+        for (const row of board.conflicts) {
+          result.rows.push({ key: row.key, kept })
+          if (row.approval) { result.approval_conflicts.push(row.approval); result.approval_conflict_values.push({ path, key: row.key, epic: row.approval, local: JSON.stringify(row.local), upstream: JSON.stringify(row.upstream), reason: 'conflicting go or withdrawal on the board' }) }
+          else result.settled_conflicts.push({ path, key: row.key, kept, local: row.local, upstream: row.upstream, settled: 'no go or withdrawal in dispute; upstream text kept, whole local kept' })
+        }
+      }
+    } else if (!o) chosen = u
+    else {
+      const folder = `${output}.merge`; mkdirSync(folder, { recursive: true })
+      for (const [name, value] of [['base', b], ['local', o], ['incoming', u]]) writeFileSync(join(folder, name), value?.bytes ?? Buffer.alloc(0))
+      const combined = o.mode !== '120000' && u.mode !== '120000' ? spawnSync('git', ['merge-file', '-p', join(folder, 'local'), join(folder, 'base'), join(folder, 'incoming')], { maxBuffer: 64 * 1024 * 1024 }) : { status: 1 }
+      if (combined.status === 0) chosen = { ...u, bytes: combined.stdout, sha256: sha256(combined.stdout) }
+      else { chosen = u; result.conflicts.push({ path, kept: conflictFile(path, o), local_sha256: o.sha256, incoming_sha256: u.sha256 }) }
+    }
+    put(output, path, chosen)
+  }
+  rmSync(`${output}.merge`, { recursive: true, force: true })
+  result.approval_conflicts = [...new Set(result.approval_conflicts)].sort((x, y) => x - y)
+  return result
+}
+function blobAt(repo, commit, path) {
+  const entry = textGit(repo, ['ls-tree', commit, '--', path])
+  const match = /^(\d+) blob ([0-9a-f]+)\t/u.exec(entry)
+  if (!match) return null
+  const bytes = git(repo, ['cat-file', 'blob', match[2]])
+  return { bytes, sha256: sha256(bytes), mode: match[1], oid: match[2] }
+}
+/** What advancing the default checkout from H to C does outside plan/. Nothing is written here; an overlap parks before any write. */
+export function productInstall(repo, from, to, planningPaths, keepBmad) {
+  const entries = git(repo, ['diff-tree', '-r', '-z', '--name-only', '--no-renames', from, to]).toString().split('\0').filter(Boolean)
+  const writes = [], overlaps = []
+  for (const path of entries) {
+    if (path === 'plan' || path.startsWith('plan/')) continue
+    const planning = planningPaths.has(path), incoming = blobAt(repo, to, path)
+    // A retired old file stays physically for recovery unless it survives as a kept board or a forwarding stub.
+    if (planning && !keepBmad && !incoming) continue
+    const old = blobAt(repo, from, path), live = working(repo, path)
+    const staged = textGit(repo, ['ls-files', '-s', '--', path]), entryOf = blob => blob ? `${blob.mode} ${blob.oid} 0\t${path}` : ''
+    if (!planning && staged !== entryOf(old) && staged !== entryOf(incoming)) { overlaps.push({ path, reason: 'staged change overlaps the incoming one' }); continue }
+    if (equal(live, incoming)) continue
+    if (equal(live, old)) { writes.push({ path, image: incoming, planning }); continue }
+    if (planning) { writes.push({ path, image: incoming, planning, captured: true }); continue } // Its local bytes are already in the capture.
+    if (old && live && incoming && live.mode !== '120000' && incoming.mode !== '120000') {
+      const folder = join(migrationPaths(repo).folder, `product-merge-${process.pid}`); mkdirSync(folder, { recursive: true })
+      try {
+        for (const [name, value] of [['base', old], ['local', live], ['incoming', incoming]]) writeFileSync(join(folder, name), value.bytes)
+        const combined = spawnSync('git', ['merge-file', '-p', join(folder, 'local'), join(folder, 'base'), join(folder, 'incoming')], { maxBuffer: 64 * 1024 * 1024 })
+        if (combined.status === 0) { writes.push({ path, image: { ...incoming, bytes: combined.stdout, sha256: sha256(combined.stdout), mode: live.mode }, planning: false, merged: true }); continue }
+      } finally { rmSync(folder, { recursive: true, force: true }) }
+    }
+    overlaps.push({ path, reason: 'local changes conflict with the incoming ones' })
+  }
+  return { writes, overlaps, affected: entries }
+}
+/** A fenced planning file keeps its inode, so the watchdog can still restore its mode. */
+function writeProduct(repo, write) {
+  const full = join(repo, write.path)
+  if (!write.planning) { atomicImage(full, write.image, write.image?.mode === '100755' ? 0o755 : undefined); return }
+  if (!write.image) { const mode = statSync(dirname(full)).mode & 0o777; chmodSync(dirname(full), mode | 0o200); try { rmSync(full, { force: true }) } finally { chmodSync(dirname(full), mode) } return }
+  const mode = statSync(full).mode & 0o777
+  chmodSync(full, mode | 0o200); try { writeFileSync(full, write.image.bytes) } finally { chmodSync(full, mode) }
+}
+function prepareMergedCommit(repo, stage, merged) {
+  const paths = migrationPaths(repo), indexFile = join(paths.folder, `merged-${process.pid}.index`), environment = { ...process.env, GIT_INDEX_FILE: indexFile }
+  try {
+    git(repo, ['read-tree', merged.head], { env: environment })
+    const gitDir = textGit(repo, ['rev-parse', '--absolute-git-dir'])
+    git(dirname(stage), ['add', '--sparse', '--all', '--', 'plan'], { env: { ...environment, GIT_DIR: gitDir, GIT_WORK_TREE: dirname(stage) } })
+    const tree = git(repo, ['write-tree'], { env: environment }).toString().trim()
+    const unchanged = tree === textGit(repo, ['rev-parse', `${merged.head}^{tree}`])
+    return unchanged ? merged.head : textGit(repo, ['commit-tree', tree, '-p', merged.head, '-m', 'plan: bring the move up to the live plan'])
+  } finally { rmSync(indexFile, { force: true }) }
+}
+
 /** Switch only with complete handover and a stable final capture. All original physical files remain for recovery. */
-export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = false, vision = null, date = new Date().toISOString().slice(0, 10), seam = async () => {} }) {
+export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = false, vision = null, date = new Date().toISOString().slice(0, 10), baseline = null, localOnly = [], seam = async () => {} }) {
   const repo = realpathSync(given), paths = migrationPaths(repo), watchdog = await startWatchdog(repo)
   let state = loadJournal(paths.journal)
   const step = async (phase, extra = {}) => { state = { ...state, ...extra, phase }; saveJournal(paths.journal, state); await seam(phase, state) }
@@ -396,63 +556,113 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
       await step('ref-committed', { index_refreshed: true, preserved_index_entries: kept })
       return { outcome: 'already-moved', commit: state.switch_commit, journal: paths.journal }
     }
+    const merged = mergedMoveOf(repo, upstream)
+    if (merged) {
+      const parked = (code, reason, extra = {}) => ({ outcome: 'parked', code, reason, journal: paths.journal, ...extra })
+      if (!baseline?.projection || !existsSync(baseline.projection) || planFingerprint(baseline.projection) !== baseline.fingerprint || !baseline.date) return parked('BASELINE_REQUIRED', 'a merged move needs the capture projection it was generated from, pinned by fingerprint and date')
+      date = baseline.date
+      const head = textGit(repo, ['rev-parse', 'HEAD'])
+      if (spawnSync('git', ['-C', repo, 'merge-base', '--is-ancestor', head, merged.head]).status !== 0) return parked('LOCAL_COMMITS_NOT_ON_DEFAULT', `${textGit(repo, ['rev-list', '--count', `${merged.head}..${head}`])} local commits are not on the remote default branch; publish them before the switch`)
+      const events = approvalEventsAfterCut(repo, merged.source_board, merged.anchor, [merged.head, head])
+      if (events.length) return parked('APPROVAL_HISTORY_AFTER_CUT', 'the old board recorded approval events after the move was cut; cut the move again', { events })
+    }
+    const native = Boolean(merged) && ancestor(repo, merged.commit)
     if (existsSync(join(repo, 'plan'))) {
-      if (!state?.switch_commit || planFingerprint(join(repo, 'plan')) !== state.installed_fingerprint) throw new Error('EXISTING_PLAN: keep and settle the existing plan before starting another move')
-      const preserved = join(paths.folder, `interrupted-plan-${randomBytes(5).toString('hex')}`)
-      renameSync(join(repo, 'plan'), preserved)
-      state.preserved_interrupted_plan = preserved
+      const interrupted = state?.switch_commit && planFingerprint(join(repo, 'plan')) === state.installed_fingerprint
+      if (!interrupted && !native) throw new Error('EXISTING_PLAN: keep and settle the existing plan before starting another move')
+      if (interrupted) {
+        const preserved = join(paths.folder, `interrupted-plan-${randomBytes(5).toString('hex')}`)
+        renameSync(join(repo, 'plan'), preserved)
+        state.preserved_interrupted_plan = preserved
+        if (state.native_backup && existsSync(state.native_backup)) renameSync(state.native_backup, join(repo, 'plan'))
+      }
     }
     const nonce = randomBytes(8).toString('hex'), runFolder = join(paths.folder, nonce)
     mkdirSync(runFolder, { recursive: true })
     state = { version: 1, repo, phase: 'capturing', fenced: false, watchdog_nonce: watchdog.nonce, watchdog: { pid: watchdog.pid, start_ticks: watchdog.start_ticks }, owner: { pid: process.pid, start_ticks: startTicks(process.pid) }, run_folder: runFolder, keep_bmad: keepBmad, date }
     await step('capturing')
     const parserProof = keepBmad ? preparedBmadProof(repo) : null
-    let capture, stage, manifest
+    const capturing = output => reconcilePlan({ repo, upstream: merged ? merged.anchor : upstream, upstreamInHistory: Boolean(merged), historicalWorktrees: handover?.historical_worktrees, output })
+    let capture, stage, manifest, planMerge = null
     for (let pass = 1; pass <= 3; pass++) {
-      capture = await reconcilePlan({ repo, upstream, historicalWorktrees: handover?.historical_worktrees, output: join(runFolder, `capture-${pass}`) })
+      capture = await capturing(join(runFolder, `capture-${pass}`))
       await step('captured', { pass, capture_manifest: join(runFolder, `capture-${pass}`, 'manifest.json') })
       const problem = handoverProblem(capture, handover)
       if (problem) return { outcome: 'parked', code: 'HANDOVER_REQUIRED', reason: problem, journal: paths.journal }
       stage = join(runFolder, `stage-${pass}`, 'plan')
-      manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage, keepBmad, copyOwners: handover.copy_owners ?? {}, vision, date, archive: join(runFolder, `archive-${pass}`) })
+      manifest = stagePlan({ repo: capture.projection, contextRepo: repo, stage, keepBmad, copyOwners: handover.copy_owners ?? {}, vision, date, historyHead: merged?.anchor ?? null, archive: join(runFolder, `archive-${pass}`) })
       if (manifest.copy && Object.keys(manifest.copy.unresolved).length) return { outcome: 'parked', code: 'COPY_PROVENANCE_REQUIRED', rows: Object.keys(manifest.copy.unresolved), journal: paths.journal }
       const archiveFailures = archive({ repo: capture.projection, manifest, folder: manifest.archive })
       if (archiveFailures.length) throw new Error('ARCHIVE_INVALID: ' + archiveFailures.join('; '))
       await step('archived', { archive: manifest.archive })
       const spans = checkSpans({ repo: capture.projection, stage, manifest })
       if (spans.length) throw new Error('STAGE_INVALID: ' + spans.join('; '))
+      if (merged) {
+        const baseStage = join(runFolder, `base-${pass}`, 'plan')
+        stagePlan({ repo: baseline.projection, contextRepo: repo, stage: baseStage, keepBmad, vision, date, historyHead: merged.anchor, archive: join(runFolder, `base-archive-${pass}`) })
+        const theirs = native ? join(repo, 'plan') : extractPlan(repo, merged.head, join(runFolder, `upstream-${pass}`))
+        const output = join(runFolder, `merged-${pass}`, 'plan')
+        planMerge = mergeStagedPlan({ base: baseStage, ours: stage, theirs, output, date, localOnly, keep: join(runFolder, 'local-only') })
+        stage = output
+      }
       const checked = await checkPlan({ productRoot: repo, planRoot: stage, boardPath: join(stage, 'status.yaml'), format: 'bmn-plan' })
       if (checked.findings.length) throw new Error('STAGE_INVALID: ' + checked.findings.map(f => f.reason).join('; '))
       await step('staged', { stage })
-      const next = await reconcilePlan({ repo, upstream, historicalWorktrees: handover?.historical_worktrees, output: join(runFolder, `verify-${pass}`) })
+      const next = await capturing(join(runFolder, `verify-${pass}`))
       if (next.fingerprint === capture.fingerprint) break
       if (pass === 3) return { outcome: 'parked', code: 'INPUTS_STILL_CHANGING', journal: paths.journal }
     }
     const problem = handoverProblem(capture, handover)
     if (problem) return { outcome: 'parked', code: 'HANDOVER_REQUIRED', reason: problem, journal: paths.journal }
-    const fence = fenceInventory(capture.worktrees)
+    const nativeFingerprint = native ? planFingerprint(join(repo, 'plan')) : null
+    const nativeFence = native ? filesUnder(join(repo, 'plan')).map(path => join(repo, 'plan', path)).filter(path => !lstatSync(path).isSymbolicLink()).map(path => { const stat = lstatSync(path); return { path, device: String(stat.dev), inode: String(stat.ino), mode: stat.mode & 0o777 } }) : []
+    const fence = [...fenceInventory(capture.worktrees), ...nativeFence]
     await step('armed', { fence, final_fingerprint: capture.fingerprint })
     await watchdog.arm()
     await step('fenced', { fenced: true })
     for (let index = 0; index < fence.length; index++) { applyFence([fence[index]]); await seam('chmod', { ...state, chmod_index: index }) }
-    const final = await reconcilePlan({ repo, upstream, historicalWorktrees: handover?.historical_worktrees, output: join(runFolder, 'final-capture') })
-    if (final.fingerprint !== capture.fingerprint) return { outcome: 'parked', code: 'INPUT_CHANGED_DURING_HANDOVER', journal: paths.journal }
+    const final = await capturing(join(runFolder, 'final-capture'))
+    if (final.fingerprint !== capture.fingerprint || (native && planFingerprint(join(repo, 'plan')) !== nativeFingerprint)) return { outcome: 'parked', code: 'INPUT_CHANGED_DURING_HANDOVER', journal: paths.journal }
     await step('final-captured')
     const moved = join(stage, 'references', 'moved', date)
     mkdirSync(moved, { recursive: true })
     mkdirSync(join(moved, 'conflicts'), { recursive: true })
-    for (let index = 0; index < capture.conflicts.length; index++) cpSync(capture.conflicts[index].kept, join(moved, 'conflicts', `conflict-${index + 1}.local`))
+    const outOfPlan = localOnly.map(source => new RegExp(source, 'u'))
+    for (let index = 0; index < capture.conflicts.length; index++) if (!outOfPlan.some(pattern => pattern.test(capture.conflicts[index].path))) cpSync(capture.conflicts[index].kept, join(moved, 'conflicts', `conflict-${index + 1}.local`))
     writeFileSync(join(moved, 'inputs.json'), JSON.stringify(capture, null, 2) + '\n')
     const metadata = join(stage, 'migration.json')
-    saveJournal(metadata, { ...loadJournal(metadata), approval_conflicts: capture.approval_conflicts, approval_conflict_values: capture.approval_conflict_values })
-    if (keepBmad) {
+    const metadataNow = loadJournal(metadata)
+    saveJournal(metadata, { ...metadataNow,
+      approval_conflicts: [...new Set([...(metadataNow.approval_conflicts ?? []), ...capture.approval_conflicts, ...(planMerge?.approval_conflicts ?? [])])].sort((a, b) => a - b),
+      approval_conflict_values: [...(metadataNow.approval_conflict_values ?? []), ...capture.approval_conflict_values, ...(planMerge?.approval_conflict_values ?? [])] })
+    if (capture.settled_conflicts.length || planMerge) {
+      const settled = { capture: capture.settled_conflicts, plan: planMerge?.settled_conflicts ?? [], plan_conflicts: planMerge?.conflicts ?? [], local_only: (planMerge?.local_only ?? []).map(({ path, sha256, reason }) => ({ path, sha256, reason })) }
+      writeFileSync(join(moved, 'settled-conflicts.json'), JSON.stringify(settled, null, 2) + '\n')
+    }
+    if (keepBmad && existsSync(join(stage, 'bmad-copy.json'))) {
       const record = join(stage, 'bmad-copy.json'); saveJournal(record, { ...loadJournal(record), active: true, parser_preparation: parserProof })
     }
-    const expected = textGit(repo, ['rev-parse', 'HEAD']), prepared = prepareCommit(repo, stage, capture, keepBmad, expected, parserProof)
-    await step('commit-prepared', { expected_parent: expected, branch: textGit(repo, ['symbolic-ref', 'HEAD']), switch_commit: prepared.commit, affected: prepared.affected, before_index: prepared.beforeIndex, installed_fingerprint: planFingerprint(stage), source_board: manifest.moved_from, original_projection: capture.projection })
+    const expected = textGit(repo, ['rev-parse', 'HEAD'])
+    let prepared, install = null
+    if (merged) {
+      const commit = prepareMergedCommit(repo, stage, merged)
+      install = productInstall(repo, expected, commit, new Set(capture.inputs.map(input => input.path)), keepBmad)
+      if (install.overlaps.length) return { outcome: 'parked', code: 'PRODUCT_OVERLAP', overlaps: install.overlaps, journal: paths.journal }
+      prepared = { commit, affected: install.affected, beforeIndex: Object.fromEntries(install.affected.map(path => [path, textGit(repo, ['ls-files', '-s', '--', path])])) }
+    } else prepared = prepareCommit(repo, stage, capture, keepBmad, expected, parserProof)
+    const retiredPaths = merged && !keepBmad ? [...new Set(capture.inputs.filter(input => input.kind === 'upstream' && input.present).map(input => input.path))] : null
+    await step('commit-prepared', { expected_parent: expected, branch: textGit(repo, ['symbolic-ref', 'HEAD']), switch_commit: prepared.commit, affected: prepared.affected, before_index: prepared.beforeIndex, installed_fingerprint: planFingerprint(stage), source_board: manifest.moved_from, original_projection: capture.projection, ...(merged ? { rollback_baseline: merged.anchor, retired_paths: retiredPaths ?? [] } : {}) })
+    if (native) {
+      const moving = new Set(nativeFence.map(entry => entry.path))
+      for (const entry of nativeFence) chmodSync(entry.path, entry.mode)
+      const backup = join(paths.folder, `native-plan-${nonce}`)
+      await step('native-released', { fence: state.fence.filter(entry => !moving.has(entry.path)), native_backup: backup })
+      renameSync(join(repo, 'plan'), backup)
+    }
     renameSync(stage, join(repo, 'plan'))
+    for (const write of install?.writes ?? []) writeProduct(repo, write)
     await step('installed')
-    git(repo, ['update-ref', state.branch, prepared.commit, expected])
+    if (prepared.commit !== expected) git(repo, ['update-ref', state.branch, prepared.commit, expected])
     await step('ref-committed')
     const kept = refreshIndex(repo, state)
     await step('ref-committed', { index_refreshed: true, preserved_index_entries: kept })
@@ -461,6 +671,33 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
     if (['MISSING_WORKTREE', 'NO_COMMON_PLANNING_BASE', 'UNREADABLE_PLANNING_BASE', 'BMAD_PREPARATION_REQUIRED', 'BMAD_PREPARATION_UNREADABLE', 'NO_DEFAULT_CHECKOUT', 'NOT_DEFAULT_CHECKOUT', 'HISTORICAL_SCOPE_CHANGED'].includes(error.code)) return { outcome: 'parked', code: error.code, reason: error.message, journal: paths.journal }
     throw error
   } finally { await watchdog.release(); await seam('restored', loadJournal(paths.journal)) }
+}
+
+const WITHDRAWN = new Set(['withdrawn', 'superseded', 'skipped', 'dropped'])
+const GO_TOKEN = /\bgo \d{4}-\d{2}-\d{2}\b/gu
+const goTokens = row => JSON.stringify([...new Set(row?.note.match(GO_TOKEN) ?? [])].sort())
+/**
+ * Row by row, D15's rule per row instead of per file: one side changed, take it; both differently, upstream's text.
+ * Only a go both sides changed differently can affect authority (D11); a diverged status note grants and removes nothing.
+ */
+function mergeBoard(base, local, incoming) {
+  const before = rowsOf(base?.bytes.toString() ?? ''), ours = rowsOf(local.bytes.toString()), theirs = rowsOf(incoming.bytes.toString())
+  let text = incoming.bytes.toString()
+  const conflicts = [], same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  for (const key of new Set([...before.keys(), ...ours.keys(), ...theirs.keys()])) {
+    const old = before.get(key), mine = ours.get(key), other = theirs.get(key)
+    if (same(mine, old) || same(mine, other)) continue
+    if (same(other, old)) {
+      if (!mine) continue // Upstream keeps a row a stale local copy dropped; the whole local image remains kept.
+      text = replaceRow(text, key, mine.status, mine.note)?.text ?? appendRow(text, key, mine.status, mine.note)
+      continue
+    }
+    const goOld = goTokens(old), goMine = goTokens(mine), goOther = goTokens(other), epic = /^epic-(\d+)$/u.exec(key)
+    const withdrawn = row => !row || WITHDRAWN.has(row.status)
+    const disputed = (goMine !== goOld && goOther !== goOld && goMine !== goOther) || withdrawn(mine) !== withdrawn(other)
+    conflicts.push({ key, local: mine ?? null, upstream: other ?? null, approval: epic && disputed ? Number(epic[1]) : null })
+  }
+  return { text, conflicts }
 }
 
 function rowsOf(text) {
@@ -516,10 +753,11 @@ function prepareRollback(repo, state, writes, currentHead, folder) {
     git(repo, ['read-tree', currentHead], { env })
     // Later held rows need the compatible parser even when the canonical plan is rolled back.
     const parserPaths = state.keep_bmad ? verifyParserProof(repo, loadJournal(join(repo, 'plan/bmad-copy.json'))?.parser_preparation) : []
-    const retired = git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', `${state.switch_commit}^`, state.switch_commit]).toString().split('\0').filter(path => path && !parserPaths.includes(path))
+    const baseline = state.rollback_baseline ?? `${state.switch_commit}^`
+    const retired = (state.retired_paths ?? git(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', baseline, state.switch_commit]).toString().split('\0')).filter(path => path && !parserPaths.includes(path))
     const planPaths = git(repo, ['ls-tree', '-r', '--name-only', '-z', currentHead, '--', 'plan']).toString().split('\0').filter(Boolean)
     const affected = [...new Set([...retired, ...planPaths, state.source_board])]
-    const parentTree = tree(repo, `${state.switch_commit}^`, path => affected.includes(path))
+    const wanted = new Set(affected), parentTree = tree(repo, baseline, path => wanted.has(path))
     const updates = affected.map(path => {
       const entry = parentTree.get(path)
       return `${entry ? entry.mode + ' ' + entry.oid : '0 ' + '0'.repeat(40)}\t${path}\0`
