@@ -995,14 +995,28 @@ export function normalizeEpic({ path, additions = {} }) {
 
 const ADDED_LINE = /^\*\*(Owner|Verification):\*\*\s*(.*)$/u
 const QUOTED = /“([^”]+)”/gu
+const NONE_RECORDED = /^none recorded in the moved text\.?$/u
 const LABEL_WORDS = new Set(['none', 'before', 'the', 'go', 'at', 'end', 'and', 'still', 'open', 'in', 'existing', 'check', 'checks'])
 /** A story's requirement words, in order: list markers, the acceptance label's spelling and spacing set aside. */
 function storyWords(text) {
   return text
     .replace(/\*\*Acceptance(?: [Cc]riteria)?:?\*\*:?/gu, '⟨AC⟩')
     .replace(/\*\*Acceptance \(([^)\n]*)\):\*\*/gu, '⟨AC⟩ ($1)')
-    .replace(/^[ \t]*(?:\d+\.|[-*+])[ \t]+/gmu, '')
+    .replace(/^([ \t]*)(?:\d+\.|[-*+])[ \t]+/gmu, (_, indent) => (indent.length >= 2 ? '⟨nested⟩ ' : ''))
     .replace(/\s+/gu, ' ').trim()
+}
+/** Whether a quote is one or more whole lines or sentences of the story, in order: never a fragment that drops a "Never". */
+function wholeUnits(story, quote) {
+  const units = story.split(/\n|(?<=[.;!?]|:\*\*)[ \t]+/u).map(storyWords).filter(Boolean)
+  const target = storyWords(quote)
+  for (let start = 0; start < units.length; start += 1) {
+    let joined = ''
+    for (let end = start; end < units.length && joined.length < target.length; end += 1) {
+      joined = joined ? `${joined} ${units[end]}` : units[end]
+      if (joined === target) return true
+    }
+  }
+  return false
 }
 /** Why a reshaped story body is not the original's presentation change, or null (constrained option B). */
 export function storyReshapeProblem(before, after) {
@@ -1015,13 +1029,13 @@ export function storyReshapeProblem(before, after) {
     const [, kind, value] = added
     const quotes = [...value.matchAll(QUOTED)].map((match) => match[1])
     for (const quote of quotes) {
-      if (!words.includes(storyWords(quote))) return `${kind} quotes words the story does not hold: “${quote}”`
+      if (!wholeUnits(before, quote)) return `${kind} quotes words the story does not hold as whole lines or sentences: “${quote}”`
       if (storyWords(quote).split(' ').length < 2) return `${kind} quotes a single word, which proves nothing: “${quote}”`
     }
     if (kind === 'Owner' && !/^none\.?$/u.test(value) && quotes.length === 0) return `an added Owner line other than none must quote the story's own owner step`
-    if (kind === 'Verification' && quotes.length === 0 && !/^none recorded in the moved text\b/u.test(value)) return `an added Verification line must quote an existing check, or say "none recorded in the moved text"`
+    if (kind === 'Verification' && quotes.length === 0 && !NONE_RECORDED.test(value)) return `an added Verification line must quote an existing check, or say exactly "none recorded in the moved text"`
     // Outside its quotes a line carries only its labels (timing, "Existing check in AC1"), never a claim of its own.
-    const unquoted = kind === 'Verification' && /^none recorded in the moved text\b/u.test(value) ? [] : value.replace(QUOTED, ' ').toLowerCase().replace(/\bac\d+\b/gu, ' ').split(/[^a-z]+/u).filter(Boolean)
+    const unquoted = kind === 'Verification' && NONE_RECORDED.test(value) ? [] : value.replace(QUOTED, ' ').toLowerCase().replace(/\bac\d+\b/gu, ' ').split(/[^a-z]+/u).filter(Boolean)
     const extra = unquoted.filter((word) => !LABEL_WORDS.has(word))
     if (extra.length > 0) return `${kind} adds words outside its quotes: ${extra.join(' ')}`
   }

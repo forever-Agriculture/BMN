@@ -249,13 +249,22 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(storyReshapeProblem(before, good.replace('2. Memory stays within 25%.\n', ''))).toMatch(/requirement words changed/u)
     expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“the soak passes in CI”'))).toMatch(/does not hold/u)
     expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** a new unit test.\n'))).toMatch(/must quote an existing check/u)
-    expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** none recorded in the moved text; a gap for his batch.\n'))).toBeNull()
+    expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** none recorded in the moved text\n'))).toBeNull()
     expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** at the end'))).toMatch(/must quote the story/u)
     // a quote must prove something, and a line says nothing of its own beside its quotes (pre-review, 2026-11-06)
-    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“46”'))).toMatch(/single word/u)
-    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“46 of 48”, verified in CI'))).toMatch(/outside its quotes: verified ci/u)
-    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** at the end: “run the soak”, and he signs the release'))).toMatch(/outside its quotes: he signs release/u)
-    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** before the go: “run the soak”, still open: “four hours”'))).toBeNull()
+    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“46”'))).toMatch(/whole lines or sentences/u)
+    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“At least 46 of 48 slots succeed.”, verified in CI'))).toMatch(/outside its quotes: verified ci/u)
+    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“46 of 48 slots succeed.”'))).toMatch(/whole lines or sentences/u)
+    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** at the end: “**Do:** run the soak.”, and he signs the release'))).toMatch(/outside its quotes: he signs release/u)
+    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** before the go: “run the soak.”'))).toBeNull()
+    // the final review's cases (2026-11-06): a fragment that drops "Never", a claim after "none recorded", a changed nesting
+    const never = '**Do:** Never deploy production. Run the soak.\n'
+    expect(storyReshapeProblem(never, '**Owner:** before the go: “deploy production.”\n\n' + never)).toMatch(/whole lines or sentences/u)
+    expect(storyReshapeProblem(never, '**Owner:** before the go: “Run the soak.”\n\n' + never)).toBeNull()
+    expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** none recorded in the moved text; production deployment is approved.\n'))).toMatch(/say exactly/u)
+    const nested = '- Top.\n  - Under top.\n'
+    expect(storyReshapeProblem(nested, '1. Top.\n   - Under top.\n')).toBeNull()
+    expect(storyReshapeProblem(nested, '1. Top.\n2. Under top.\n')).toMatch(/requirement words changed/u)
     expect(storyReshapeProblem(before, good.replace('Existing check in AC1: “At least 46 of 48 slots succeed.”', 'Existing check in AC1: “At least 46 of 48 slots succeed.”; AC2: “Memory stays within 25%.”'))).toBeNull()
     const givens = '**Acceptance Criteria:**\n\n**Given** a clone\n**When** I run the gate\n**Then** it passes\n'
     expect(storyReshapeProblem(givens, '**Owner:** none\n\n**Acceptance criteria:**\n\n1. **Given** a clone **When** I run the gate **Then** it passes\n\n**Verification:** Existing check: “**When** I run the gate **Then** it passes”\n')).toBeNull()
@@ -269,6 +278,7 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(result.stories_reshaped).toEqual(['23.1'])
     writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n## Story 23.1: Soak\n\n' + before)
     expect(() => normalizeEpic({ path, additions: { ...additions, stories: { '23.1': good.replace('25%', '30%') } } })).toThrow('story 23.1: its requirement words changed')
+    expect(() => normalizeEpic({ path, additions: { ...additions, stories: { '23.1': good.replace('**Owner:** none', '**Owner:** before the go: “slots succeed.”') } } })).toThrow('whole lines or sentences')
   })
   it('preserves opaque and duplicate legacy IDs explicitly without weakening new row checks (107.4)', () => {
     const { root, repo } = fixture()
