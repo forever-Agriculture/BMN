@@ -822,7 +822,9 @@ export async function cutoverPlan({ repo: given, upstream, handover, keepBmad = 
     }
     renameSync(stage, join(repo, 'plan'))
     for (const write of install?.writes ?? []) writeProduct(repo, write)
-    await step('installed')
+    // A fenced file the move removed (upstream retired it while BMAD stays) has no mode left to restore.
+    const removed = new Set((install?.writes ?? []).filter(write => !write.image).map(write => join(repo, write.path)))
+    await step('installed', removed.size ? { fence: state.fence.filter(entry => !removed.has(entry.path) || lstatSync(entry.path, { throwIfNoEntry: false })) } : {})
     if (prepared.commit !== expected) git(repo, ['update-ref', state.branch, prepared.commit, expected])
     await step('ref-committed')
     const kept = refreshIndex(repo, state)

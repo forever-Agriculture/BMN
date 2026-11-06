@@ -447,6 +447,17 @@ describe('D15 cutover', () => {
     expect((await resolvePlan(f.repo)).format).toBe('bmn-plan')
     expect((await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })).outcome).toBe('already-moved')
   }, 30_000)
+  it('releases the fence when BMAD stays and upstream removed a fenced planning file (b2, 6 Nov)', async () => {
+    const removed = '_bmad-output/planning-artifacts/note.md'
+    const f = await mergedFixture({ keepBmad: true, afterCut: publish => { git(publish, 'rm', '-q', removed); git(publish, 'commit', '-qm', 'artifact moved into the plan') } })
+    expect(existsSync(join(f.repo, removed))).toBe(true)
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), keepBmad: true, baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(existsSync(join(f.repo, removed))).toBe(false)
+    const journal = JSON.parse(readFileSync(migrationPaths(f.repo).journal, 'utf8'))
+    expect(journal).toMatchObject({ fenced: false, phase: 'restored' })
+    expect(statSync(join(f.repo, f.board)).mode & 0o200).toBe(0o200)
+  }, 30_000)
   it('finds a recut move whose commit merges the previous cut, as its first parent is the advanced master', async () => {
     const f = await mergedFixture({ recut: true })
     const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
