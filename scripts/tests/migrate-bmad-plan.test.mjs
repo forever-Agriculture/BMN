@@ -265,6 +265,11 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     const nested = '- Top.\n  - Under top.\n'
     expect(storyReshapeProblem(nested, '1. Top.\n   - Under top.\n')).toBeNull()
     expect(storyReshapeProblem(nested, '1. Top.\n2. Under top.\n')).toMatch(/requirement words changed/u)
+    // the recheck's case: the same three items, but the deploy step changes parent
+    const deep = '- Top.\n  - Conditional group.\n    - Deploy only here.\n'
+    expect(storyReshapeProblem(deep, '1. Top.\n   - Conditional group.\n      - Deploy only here.\n')).toBeNull()
+    expect(storyReshapeProblem(deep, '- Top.\n  - Conditional group.\n  - Deploy only here.\n')).toMatch(/requirement words changed/u)
+    expect(storyReshapeProblem(deep, '- Top.\n- Conditional group.\n  - Deploy only here.\n')).toMatch(/requirement words changed/u)
     expect(storyReshapeProblem(before, good.replace('Existing check in AC1: “At least 46 of 48 slots succeed.”', 'Existing check in AC1: “At least 46 of 48 slots succeed.”; AC2: “Memory stays within 25%.”'))).toBeNull()
     const givens = '**Acceptance Criteria:**\n\n**Given** a clone\n**When** I run the gate\n**Then** it passes\n'
     expect(storyReshapeProblem(givens, '**Owner:** none\n\n**Acceptance criteria:**\n\n1. **Given** a clone **When** I run the gate **Then** it passes\n\n**Verification:** Existing check: “**When** I run the gate **Then** it passes”\n')).toBeNull()
@@ -279,6 +284,8 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n## Story 23.1: Soak\n\n' + before)
     expect(() => normalizeEpic({ path, additions: { ...additions, stories: { '23.1': good.replace('25%', '30%') } } })).toThrow('story 23.1: its requirement words changed')
     expect(() => normalizeEpic({ path, additions: { ...additions, stories: { '23.1': good.replace('**Owner:** none', '**Owner:** before the go: “slots succeed.”') } } })).toThrow('whole lines or sentences')
+    writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n## Story 23.1: Soak\n\n' + deep)
+    expect(() => normalizeEpic({ path, additions: { ...additions, stories: { '23.1': '- Top.\n  - Conditional group.\n  - Deploy only here.\n' } } })).toThrow('requirement words changed')
   })
   it('preserves opaque and duplicate legacy IDs explicitly without weakening new row checks (107.4)', () => {
     const { root, repo } = fixture()

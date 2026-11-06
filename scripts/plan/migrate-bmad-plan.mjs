@@ -997,12 +997,19 @@ const ADDED_LINE = /^\*\*(Owner|Verification):\*\*\s*(.*)$/u
 const QUOTED = /“([^”]+)”/gu
 const NONE_RECORDED = /^none recorded in the moved text\.?$/u
 const LABEL_WORDS = new Set(['none', 'before', 'the', 'go', 'at', 'end', 'and', 'still', 'open', 'in', 'existing', 'check', 'checks'])
+/** A list item's depth among the items above it, as a sign: the hierarchy counts, its indent width does not. */
+function listLevel(levels, width) {
+  while (levels.length > 0 && levels[levels.length - 1] >= width) levels.pop()
+  levels.push(width)
+  return levels.length > 1 ? `⟨level ${levels.length - 1}⟩ ` : ''
+}
 /** A story's requirement words, in order: list markers, the acceptance label's spelling and spacing set aside. */
 function storyWords(text) {
+  const levels = []
   return text
     .replace(/\*\*Acceptance(?: [Cc]riteria)?:?\*\*:?/gu, '⟨AC⟩')
     .replace(/\*\*Acceptance \(([^)\n]*)\):\*\*/gu, '⟨AC⟩ ($1)')
-    .replace(/^([ \t]*)(?:\d+\.|[-*+])[ \t]+/gmu, (_, indent) => (indent.length >= 2 ? '⟨nested⟩ ' : ''))
+    .replace(/^([ \t]*)(?:\d+\.|[-*+])[ \t]+/gmu, (_, indent) => listLevel(levels, indent.length))
     .replace(/\s+/gu, ' ').trim()
 }
 /** Whether a quote is one or more whole lines or sentences of the story, in order: never a fragment that drops a "Never". */
