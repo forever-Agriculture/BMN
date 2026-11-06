@@ -35,7 +35,8 @@ import {
   type TelegramStatus,
   type UsageReading,
   type UsageWindow,
-  type AwaySummaryPayload
+  type AwaySummaryPayload,
+  type NowReport
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AWAY_WAKE_LINE } from './away-wake'
@@ -3403,6 +3404,15 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     // A session still sees only itself in session.list.
     const own = await handlers().listSessions({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' }) as SessionRecord[]
     expect(own.map((session) => session.sessionId)).toEqual(['s1'])
+  })
+
+  it('counts an agent its hooks reported in bmn now, as the sheet does, though a shell is in front (110.9)', async () => {
+    const manager = service['options'].manager
+    manager.foregroundProcessIdentity = () => null
+    const read = (): Promise<NowReport> => service['control']['options'].handlers.readNow({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })
+    expect((await read()).agentRunning).toBe(false)
+    await handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'Stop', source: null, toolName: null, effects: [] })
+    expect((await read()).agentRunning).toBe(true)
   })
 
   it('lists peers with the agent in front there now, and stamps a message with the sender\'s', async () => {

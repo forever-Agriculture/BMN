@@ -95,6 +95,7 @@ async function cliFixture() {
     openAttention: vi.fn<ControlHandlers['openAttention']>(async () => ({ opened: true })),
     prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })),
     listPeers: vi.fn<ControlHandlers['listPeers']>(async () => ({ on: true, paused: false, peers: [] })),
+    readNow: vi.fn<ControlHandlers['readNow']>(async () => ({ text: 'Thu 5 Nov, 09:40. No agent running.', sections: [] })),
     sendMessage: vi.fn<ControlHandlers['sendMessage']>(async () => ({ messageId: 'message-1', state: 'waiting', receiverNow: 'resting' })),
     messageStatus: vi.fn<ControlHandlers['messageStatus']>(async () => ({ messages: [] })),
     takeMessage: vi.fn<ControlHandlers['takeMessage']>(async () => ({ message: null })),
@@ -1338,6 +1339,29 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
     expect(withTeam.stdout).toContain('  prompt guard: not available in OpenCode (it has no prompt event BMN can answer)')
     expect(withoutTeam.stdout).toContain('  prompt guard: inactive (no team has been approved, so no prompt is checked)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.guard).toMatch(/^prompt guard: active, stops a prompt/)
+  })
+})
+
+describe('bmn now (Story 110.9, D10)', () => {
+  const report = { at: '2026-11-05T07:40:00.000Z', audience: 'agent', text: 'Thu 5 Nov, 09:40. 2 sessions, 1 waits on the owner.\n\nBMN\nBMN-110: 110.3 time-left range, 2 of 3 stories. Waits on the owner. No estimate.',
+    sessions: 2, waiting: 1, agentRunning: true, sections: [{ title: 'Waits on the owner', rows: [{ name: 'BMN-110', who: 'the owner' }] }] }
+  it('prints the standup text, and with --json the same rows as data, for the calling session\'s own scope', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.readNow.mockResolvedValue(report)
+    expect(await runCli(['now'], { env: fixture.sessionEnv })).toEqual({ code: 0, stdout: `${report.text}\n`, stderr: '' })
+    expect(fixture.handlers.readNow).toHaveBeenLastCalledWith({ kind: 'session', sessionId: 'session-1', incarnationId: expect.any(String) })
+    expect(JSON.parse((await runCli(['now', '--json'], { env: fixture.sessionEnv })).stdout)).toEqual(report)
+  })
+  it('reads every workspace with the owner\'s token, and takes no arguments', async () => {
+    const fixture = await cliFixture()
+    await writeOwnerToken(dirname(fixture.socketPath), fixture.auth.ownerToken)
+    fixture.handlers.readNow.mockResolvedValue({ ...report, audience: 'owner' })
+    expect((await runCli(['now', '--owner'], { env: { BMN_CONTROL_SOCKET: fixture.socketPath } })).code).toBe(0)
+    expect(fixture.handlers.readNow).toHaveBeenLastCalledWith({ kind: 'owner' })
+    expect((await runCli(['now', 'extra'], { env: fixture.sessionEnv })).code).not.toBe(0)
+  })
+  it('is listed in bmn help', async () => {
+    expect((await runCli(['help'])).stdout).toContain('  now [--json]')
   })
 })
 

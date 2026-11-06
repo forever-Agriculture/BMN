@@ -62,6 +62,6 @@ describe('QA: results provenance', () => {
       onOpenRuns: () => undefined, onClose: () => undefined, onOpenReport: () => undefined }))
     expect(markup).toContain('<p class="dialog-note">Reported by the agent, not verified by BMN.</p>')
     expect(markup).not.toContain('use History')
-    expect(markup).toContain('dev-auto runs…')
+    expect(markup).toContain('Now…')
   })
 })

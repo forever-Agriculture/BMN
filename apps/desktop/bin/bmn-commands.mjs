@@ -243,6 +243,12 @@ const COMMANDS = {
     options: [],
     build: () => ({ method: 'peers.list', params: {} })
   },
+  // Story 110.9: the Now rows as standup text (--json: the same rows as data).
+  now: {
+    args: [],
+    options: [],
+    build: () => ({ method: 'now.read', params: {} })
+  },
   away: {
     args: [],
     options: ['note', 'status', 'revision', 'key', 'leaving'],

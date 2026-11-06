@@ -31,6 +31,10 @@ describe('app keymap', () => {
     expect(SHORTCUT_LABELS['quick-look']).toBe('Ctrl Shift E')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyG', key: 'G' }))).toBe('quick-look-contents')
     expect(SHORTCUT_LABELS['quick-look-contents']).toBe('Ctrl Shift G')
+    // Story 110.9: the Now sheet, from anywhere.
+    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyN', key: 'N' }))).toBe('now')
+    expect(SHORTCUT_LABELS.now).toBe('Ctrl Shift N')
+    expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyN', key: 'n' }))).toBeNull()
     expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyP', key: 'p' }))).toBeNull()
   })
 

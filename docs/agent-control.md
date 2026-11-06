@@ -44,6 +44,10 @@ Commands:
   handoff --outline                         Print the optional outline of a complete handoff; sends nothing
   peers                                     List the sessions of your workspace you may leave a message for,
                                             with the agent in front of each now
+  now [--json]                              Where every session of your workspace is: what it does, who it
+                                            waits on, a time left only where one is computed, as standup
+                                            text; --json gives the same rows as data. States and labels
+                                            only: no message or card text. The owner's token sees all
   tell <session-id> --text T | --text-file - --key K
   tell status [message-id]
   tell cancel <message-id>                  Leave one short message for a peer; BMN stamps where it is from.
@@ -2883,6 +2887,22 @@ Claude Code's auto mode, as the owner runs it, let `bmn team ask` command lines 
 (2026-10-15), so BMN offers no permission rule for it; should a later Claude Code refuse it, the narrowest rule is `Bash(bmn team ask:*)`, installed only
 by the owner.
 
+## Where every session is: `bmn now`
+
+`bmn now [--json]` (Story 110.9) prints the owner's Now sheet as standup text: one line per session of the
+caller's workspace with what it does, who it waits on and a time left only where BMN computed one, then the
+stories finished since the start of the previous working day. `--json` gives the same rows as data, by section.
+A session's token covers its own workspace only, as `bmn peers` does, and states and labels only: a session
+waiting on a card reads `Waits on the owner.` with no card title, and no row carries a message, a card or the
+handoff's own text (D10). The owner's token (`--owner`) covers every workspace with card titles, as his sheet
+and Copy standup do. One generator (`@bmn/protocol`'s `standupText`) writes both. BMN knows the terminal title
+only in the window, so a session with no run reads its `bmn progress` label, else the hook's Working or Idle.
+
+```bash
+bmn now          # Thu 5 Nov, 09:40. 3 sessions, 1 waits on the owner. …
+bmn now --json   # {"text": …, "sections": [{"title": "BMN", "rows": [{"name", "doing", "who", "left", …}]}]}
+```
+
 ## Read-only app health: `bmn doctor`
 
 `bmn doctor [--details] [--json]` shares Health's automatic doctor and works with BMN closed, without a socket or token.
@@ -3194,7 +3214,8 @@ merge only at the level it prints; run git push and gh pr as commands of their o
   nothing of their activity; `message.send` takes exactly `destinationSessionId`, `text`,
   `senderCwd` and `idempotencyKey`, takes the sender from the token, and refuses every destination
   `peers.list` would not return in one wording. Both refuse the owner token. `bmn list` and `bmn
-  snapshot` still return the caller's own session only.
+  snapshot` still return the caller's own session only. `now.read` (Story 110.9) takes no parameters:
+  a session token reads its own workspace's rows, states and labels only; the owner token reads them all.
 - A message is never written to a terminal, and never opens
   a request. `message.status` shows a sender its own messages only. `message.take` is accepted only
   from a session token, for its own live process, with the agent's process id and the whole

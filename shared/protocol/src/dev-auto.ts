@@ -27,6 +27,27 @@ export interface DevAutoRun {
   unavailable: string | null
   board: { checkout: string | null; rows: Array<{ key: string; status: string; comment: string }>; unavailable: string | null }
   ownerItems: Array<{ sessionId: string; requestId: string; title: string }>
+  /** Story 110.9: the handoff's `- Waiting on:`; null when it names nobody or has no such line (an older handoff). */
+  waitingOn?: string | null
+  /** Story 110.9: the handoff's `- Finished stories` lines that read cleanly, in their order; at most 100 lines are read. */
+  finishedStories?: DevAutoFinishedStory[]
+  /** Story 110.9: lines under `- Finished stories` that did not read as `N.M STARTED FINISHED` with FINISHED after STARTED. */
+  skippedFinishedStories?: number
+  /** Story 110.9, D14: the conversation ids the handoff's `Lead sessions` and `Lead host` fields name, in their order. */
+  leadConversations?: string[]
+  /**
+   * Story 110.9, D14: the BMN session this run belongs to: the live (or last) one whose agent conversation the handoff names,
+   * else the one live session launched in this checkout; null when neither says.
+   */
+  sessionId?: string | null
+  sessionLink?: 'conversation' | 'checkout' | null
+}
+
+/** One finished story of a run, as the handoff stamps it (UTC ISO-8601). */
+export interface DevAutoFinishedStory {
+  story: string
+  startedAt: string
+  finishedAt: string
 }
 
 export interface DevAutoRunsResult {

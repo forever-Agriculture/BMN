@@ -25,6 +25,7 @@ import {
   type GuardStop,
   listeningPortLabel,
   type InterruptedSessionCohort,
+  type NowSessionInput,
   type ProgressRecord,
   type ClosePromptRequest,
   type SessionRecord,
@@ -60,7 +61,7 @@ import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
 import { SessionMessagesDialog } from './session-messages-dialog'
-import { DevAutoRunsDialog } from './dev-auto-runs'
+import { NowSheet, createNowMemory } from './now-sheet'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { SessionPortsSection, portDetail, portsFor } from './session-ports'
@@ -128,6 +129,7 @@ import {
   sessionAttention,
   sessionProcessLive,
   sessionStatus,
+  isActionableAttention,
   splitCandidates,
   windowTitle,
   workspaceAttention,
@@ -238,6 +240,8 @@ function App(): React.JSX.Element {
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
+  /** Story 110.9: the row, scroll and open rows the Now sheet comes back on, and its last read of the runs. */
+  const nowMemory = useRef(createNowMemory())
   /** What the owner is looking at now, for the start-up offer that must not talk over it. */
   const dialogRef = useRef<ShellDialog | null>(null)
   /** What the newest update or quit interrupted, so the palette knows whether there is an offer. */
@@ -712,7 +716,8 @@ function App(): React.JSX.Element {
         return
       }
       const command = resolveShortcut(event)
-      if (!command || document.querySelector('dialog[open]')) return
+      // Story 110.9: the Now key also closes the open Now sheet; every other shortcut waits for a dialog to close.
+      if (!command || document.querySelector('dialog[open]') && !(command === 'now' && document.querySelector('dialog[open].now-dialog'))) return
       const target = event.target instanceof HTMLElement ? event.target : null
       const inTerminal = !!target?.closest('.terminal-surface')
       // Clipboard and select-all keys keep their text-field meaning outside the terminal.
@@ -1508,6 +1513,7 @@ function App(): React.JSX.Element {
       }
       case 'attention-next': return nextNeedingYou()
       case 'palette': return setDialog({ kind: 'palette' })
+      case 'now': return toggleNow()
       case 'quick-look': {
         // Text selected in the terminal that reads as one file reference opens that file at its line (Story 67.6 AC8).
         const reference = selectedReference(selectedSessionId ? controllers.current.get(selectedSessionId)?.selection() ?? '' : '')
@@ -1711,7 +1717,7 @@ function App(): React.JSX.Element {
         progress: () => openProgressDetail(selectedRecord, selectedRecord ? observedProgressFor(selectedRecord) : null),
         turnChanges: () => selectedRecord && setDialog({ kind: 'turn-changes', sessionId: selectedRecord.sessionId }),
         hookEvents: () => selectedRecord && setDialog({ kind: 'hook-events', session: selectedRecord }),
-        devAutoRuns: () => setDialog({ kind: 'dev-auto-runs' }),
+        now: () => setDialog({ kind: 'now' }),
         planUse: () => setDialog({ kind: 'plan-use' }),
         awaySummary: () => setDialog({ kind: 'away-summary' })
       }),
@@ -1801,6 +1807,26 @@ function App(): React.JSX.Element {
     live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId
   )
   const selectedProgress = selectedRecord ? observedProgressFor(selectedRecord) : null
+  /** Story 110.9: the Now key and the list icon open the sheet from anywhere, and close it when it is open. */
+  const toggleNow = (): void => setDialog((current) => current?.kind === 'now' ? null : current === null ? { kind: 'now' } : current)
+  const nowWorkspaces = useMemo(() => visibleWorkspaces(workspaces, false).map((workspace) => ({ workspaceId: workspace.workspaceId, name: workspace.name })), [workspaces])
+  /** What the window knows of each session, as the sidebar shows it, for the Now rows; hooks decide whether an agent is in front. */
+  const nowSessions = useMemo((): NowSessionInput[] => dialog?.kind !== 'now' ? [] : nowWorkspaces.flatMap((workspace) =>
+    visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): NowSessionInput => {
+      const incarnation = live[session.sessionId]?.incarnationId
+      const isLive = sessionProcessLive(session, incarnation)
+      const observed = observedProgressFor(session)
+      const observedActivity = activity[session.sessionId] ?? null
+      const card = unresolved.find((request) => request.sessionId === session.sessionId && isActionableAttention(request))
+      const title = observedActivity?.title?.replace(/^[^\p{L}\p{N}]+/u, '').trim() || null
+      return {
+        sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name,
+        dot: sessionStatus(session, isLive, unresolved, observed, observedActivity).dot, live: isLive, started: session.lastProcess !== null,
+        agent: activeHookOrigin(hookOrigins, session, incarnation) !== null || agentTag(session.executable, session.argv) !== 'Shell',
+        working: observedActivity?.working ?? false, progressLabel: observed && !observed.stale ? observed.label : null, title,
+        card: card ? { requestId: card.requestId, title: card.title } : null
+      }
+    })), [dialog?.kind, nowWorkspaces, sessions, live, progress, activity, unresolved, hookOrigins, Math.floor(now / 60_000)])
   const selectedStatus = selectedRecord ? sessionStatus(selectedRecord,
     sessionProcessLive(selectedRecord, live[selectedRecord.sessionId]?.incarnationId),
     unresolved, selectedProgress, activity[selectedRecord.sessionId] ?? null) : null
@@ -1944,6 +1970,9 @@ function App(): React.JSX.Element {
           <AwayCheck view={awayView} now={new Date(now)} onChange={(to) => sayAway(to)} onOpenSummary={() => setDialog({ kind: 'away-summary' })}
             sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null}
             grant={grantView} onOpenGrants={() => setDialog({ kind: 'before-you-go' })} />
+          <button type="button" className="icon-button" aria-label="Now" title={`Now (${SHORTCUT_LABELS.now})`} onClick={toggleNow}>
+            <Icon name="now" />
+          </button>
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
           </button>
@@ -2634,7 +2663,7 @@ function App(): React.JSX.Element {
           now={now}
           onOpenRequest={(request) => { setDialog(null); goToRequest(request) }}
           onOpenSession={(sessionId) => { setDialog(null); openSession(sessionId, true) }}
-          onOpenDevAutoRuns={() => setDialog({ kind: 'dev-auto-runs' })}
+          onOpenDevAutoRuns={() => setDialog({ kind: 'now' })}
           onPresented={(periodId) => {
             if (awayView.summaryShownAt === null) void window.aiTerminal.markAwaySummaryShown(periodId).then(setAwayView).catch(() => undefined)
           }}
@@ -2791,9 +2820,14 @@ function App(): React.JSX.Element {
           } : undefined}
         />
       ) : null}
-      {dialog?.kind === 'dev-auto-runs' ? <DevAutoRunsDialog
-        workspaceId={dialog.workspaceId} workspaces={workspaces}
-        onClose={() => setDialog(null)} onOpenSession={(id) => { setDialog(null); openSession(id) }} /> : null}
+      {dialog?.kind === 'now' ? <NowSheet workspaces={nowWorkspaces} sessions={nowSessions} home={home}
+        currentSessionId={selectedSessionId} memory={nowMemory.current} onClose={() => setDialog(null)}
+        onOpenRow={(row) => {
+          setDialog(null)
+          const card = row.cardRequestId === null ? undefined : attention.find((request) => request.requestId === row.cardRequestId)
+          if (card) goToRequest(card)
+          else if (row.sessionId !== null) openSession(row.sessionId)
+        }} /> : null}
       {dialog?.kind === 'workspace-messages' ? (() => {
         const workspace = workspaces.find((item) => item.workspaceId === dialog.workspaceId)
         return workspace ? <SessionMessagesDialog
@@ -2818,7 +2852,7 @@ function App(): React.JSX.Element {
         <WorkspaceResultsDialog
           workspace={dialog.workspace}
           now={now}
-          onOpenRuns={() => setDialog({ kind: 'dev-auto-runs', workspaceId: dialog.workspace.workspaceId })}
+          onOpenRuns={() => setDialog({ kind: 'now' })}
           onClose={() => setDialog(null)}
           onOpenReport={(session, report) => {
             if (activeWorkspaceRef.current !== dialog.openedFromWorkspaceId ||

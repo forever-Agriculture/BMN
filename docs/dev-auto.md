@@ -5,13 +5,23 @@ BMN's author usually runs it with [dev-auto](https://github.com/forever-Agricult
 skill for Codex and Claude Code that implements planned epics and keeps going until they pass
 acceptance. BMN works without it; this page covers what BMN shows of a run.
 
-Open **dev-auto runs…** in the command palette, or **Review results… → dev-auto runs…**
-for one workspace. It reads current handoffs and their selected sprint-board rows by itself: on
-opening, when the window gets the focus, when a request changes, and every 30 seconds while it is
-shown in a visible window, so a handoff dev-auto rewrites outside BMN shows without a press.
-BMN shows owning checkouts, copies, unknown ownership and unavailable sources separately.
-It never changes handoffs, boards, decisions or agent requests. Open request titles navigate
-to the corresponding live session.
+Runs show in **Now** (Story 110.9), which replaced the dev-auto runs dialog: `Ctrl Shift N`, the list icon
+beside search, **Now…** in the command palette, **Review results… → Now…** or the Away summary's link. Now
+gives each session one row (what it does, who it waits on, a time left only where one is computed) and opens
+a run's old per-run text (status, next step, card, stories, decisions, folder) inside its row; the sheet
+itself is in [design.md](design.md#now-sheet-story-1109). It reads current handoffs and their selected
+sprint-board rows by itself: on opening, when the window gets the focus, when a request changes, and every
+30 seconds while it is shown in a visible window, so a handoff dev-auto rewrites outside BMN shows without a
+press. A copy of another checkout is left out. It never changes handoffs, boards, decisions or agent
+requests. Agents read the same rows with `bmn now [--json]`, their own workspace only, states and labels only.
+
+Now reads two handoff lines dev-auto writes since 306f229: `- Waiting on:` (who or what the run waits for;
+`nobody` or empty names nobody) and `- Finished stories`, one `N.M STARTED FINISHED` line in UTC per accepted
+story (at most 100 lines; a line that does not read, or finishes before it starts, is skipped). A run's
+session is the live, else the last, BMN session whose agent conversation the handoff's `Lead sessions` or
+`Lead host` names; else the one live session launched in the run's checkout; else none ("No session"). BMN
+never guesses a session from a folder otherwise (D14). The time left needs two finished stories and a live
+session: the stories left times the run's fastest and slowest one, a range, never one number.
 
 The board rows come through the same resolver and streamed reader as `bmn plan` (Epic 77,
 [planning.md](planning.md)): BMN's own `plan/status.yaml` or a BMAD `sprint-status.yaml`, of any

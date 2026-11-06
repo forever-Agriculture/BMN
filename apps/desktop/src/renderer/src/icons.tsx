@@ -14,7 +14,10 @@ const PATHS = {
   image: 'M2.5 3.5h11v9h-11zM2.5 10.5l3-3 3 3 2-2 3 3M10.5 6.5h.01',
   search: 'M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM10.3 10.3l3.2 3.2',
   bell: 'M4 11V7a4 4 0 0 1 8 0v4l1 1.5H3zM6.5 14h3',
-  close: 'M4 4l8 8M12 4l-8 8'
+  close: 'M4 4l8 8M12 4l-8 8',
+  /** Story 110.9: the Now sheet, a short list. */
+  now: 'M3 4h.01M6 4h7.5M3 8h.01M6 8h7.5M3 12h.01M6 12h7.5',
+  chevron: 'M6 4l4 4-4 4'
 } as const
 
 type IconName = keyof typeof PATHS

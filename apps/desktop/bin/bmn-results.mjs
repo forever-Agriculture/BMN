@@ -56,6 +56,8 @@ function describeResult(command, positionals, options, result) {
           'BMN hands it to the agent there after its next tool call. Its state: bmn handoff status'
     case 'peers':
       return describePeers(result)
+    case 'now':
+      return isObject(result) && typeof result.text === 'string' ? result.text : JSON.stringify(result, null, 2)
     case 'decision':
       if (positionals[0] === 'record') {
         return isObject(result) ? `Decision ${result.key} recorded (away revision ${result.revision})${result.outcome === 'repeated' ? ' (already recorded earlier; not repeated)' : ''}` : 'Decision recorded'

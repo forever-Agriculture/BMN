@@ -1,4 +1,4 @@
-# MODULE: design.md - Shared screen rules and approved Health doctor design
+# MODULE: design.md - Shared screen rules, the approved Health doctor design and the Now sheet
 # Screen design rules
 
 These are the rules every BMN screen follows. Fable wrote them in Story 80.2 from a review of every screen, and
@@ -177,6 +177,45 @@ Approved by the owner on 2026-10-26 (card in run `dev-auto/epic-96-20261026`: �
   their open state; a focused group a refresh removed hands the focus to the Leftovers summary.
 - **Sizes.** 889×768 keeps the four-column grid; at ≤680 px rows take two columns (name | state, the path across,
   time and actions left on a third line). Locations wrap; nothing scrolls sideways.
+
+## Now sheet (Story 110.9)
+
+Approved by the owner on 2026-11-06 ("Approve as drawn", card `epic110-now-design-2`); the drawn design is
+`.dev-auto/evidence/110/now-design/index.html` in the Epic 110 run. It replaced the dev-auto runs dialog.
+
+- **Opening.** `Ctrl Shift N` or the list icon beside search (no dot on it), from anywhere; the same key closes
+  it. The palette entry is **Now…**; Review results… and the Away summary link to it.
+- **Sheet.** An L4 dialog, 960 wide at most and centred. Head line: `Read 09:40 · 12 sessions · ● 2 wait on you`
+  with Copy standup, a plain plate (B1), at its right. Then column labels and one scrolling list; the head stays.
+- **Rows.** One per session, parted by hairlines (L2): status dot (the sidebar's, F3), Session, Doing (with
+  `D of T` faint and a `stale` chip, L7), Waits on, Left. Columns `7 · 96–196 · 1fr · 96–176 · 128`; under a
+  780 px sheet `7 · 84–132 · 1fr · 72–124 · 112`. A long name is cut at its tail, whole in the tooltip and in
+  the open row. A row's chevron or → opens its explanation as label and value rows (Status, Next step, Card,
+  Time left, Stories, Decided, Folder); the card's title is a button that opens the session.
+- **Sections.** Waits on you first, then each workspace in sidebar order, then **Not running**, folded with
+  its count: stopped sessions without an unfinished run, finished runs and runs with no session. An unfinished
+  run whose session stopped stays in its project, muted.
+- **Words.** Doing is the run's current story, else the `bmn progress` label (`Working: …`), else the terminal
+  title, else Working or Idle; `Idle at 110.3` for an idle run with nobody named; `Shell, no agent`, `Stopped`,
+  `Finished 2 Nov`, `No session, stopped at 36.4`, `Handoff unreadable`. Waits on says `you: <card>` only for
+  an open card, else the handoff's `Waiting on`, blank for nobody, `unknown` (faint) when unreadable. Left is
+  `about X-Y h` or `about X-Y days` (+ wait when Waits on is not blank), `done`, or `no estimate` (faint).
+- **Gold.** Only the dots of Waits on you and the current session's bar (F2). Nothing waits on you: no gold.
+- **Keys and focus.** The list is one Tab stop (roving tabindex): ↑ ↓ Home End move, → ← open and close a row,
+  Enter opens the session (its card in front) and closes the sheet. Tab steps list, Copy standup, ×; Esc
+  closes. It opens on the row he left, same scroll, same rows open, else the first row. F1 ring on focus.
+- **Refresh.** Cards and hooks show at once; runs are read every 30 s while open (Story 75.7). Words change in
+  place; a row changes section only once pointer and focus left the list; if a focused row goes, focus takes
+  the next. Loading: rows at once from memory, run words fill in place, Copy disabled until the read returns.
+  Stale: the head says `stale` with one alert line, rows keep their last words.
+- **Sizes.** At a sheet of 600 px and under, down to BMN's 320: name and time, then doing, then the wait
+  (`Waits on …`); the column labels and "+ wait" go. The sheet's padding narrows at a 680 px window.
+- **Motion.** The dialog's own 180 ms settle only, off under reduced motion; dots never pulse, rows open in
+  one frame.
+- **Standup text.** Copy standup and `bmn now` give one generator's text (`@bmn/protocol` `standupText`):
+  `Thu 5 Nov, 09:40. 12 sessions, 2 wait on me.` (or `No agent running.`), then per workspace one line per
+  session and `Done since Wed: …` from the start of the previous working day. An agent's `bmn now` covers its
+  own workspace and reads `Waits on the owner.` with no card title (D10).
 
 ## Reviews
 

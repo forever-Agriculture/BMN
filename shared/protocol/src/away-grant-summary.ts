@@ -265,7 +265,7 @@ export function awayGrantSection(periods: readonly GrantPeriod[] | null, periodI
   return {
     count,
     rows: built.slice(0, AWAY_GRANT_LIMITS.runs).map((item) => item.row),
-    more: built.length > AWAY_GRANT_LIMITS.runs ? `${built.length - AWAY_GRANT_LIMITS.runs} more · dev-auto runs…` : null,
+    more: built.length > AWAY_GRANT_LIMITS.runs ? `${built.length - AWAY_GRANT_LIMITS.runs} more · Now…` : null,
     empty: null
   }
 }

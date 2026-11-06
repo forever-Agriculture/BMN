@@ -92,11 +92,11 @@ export function paneMenu(
 /**
  * The read-only views, together in the palette: While you were away… once a period has closed (Story 76.6), Review
  * results… and Messages… for the active workspace, Progress details, Turn changes… and Hook events… for the selected
- * session, then the dev-auto runs and plan use. Each opens what its menu entry opened before.
+ * session, then Now (Story 110.9, which replaced the dev-auto runs) and plan use. Each opens what its menu entry opened before.
  */
 export function readOnlyViewCommands(
   state: { workspace: string | null; session: string | null; progress: boolean; turnRecorded: boolean; awayPeriod?: string | null },
-  open: { results(): void; messages(): void; progress(): void; turnChanges(): void; hookEvents(): void; devAutoRuns(): void; planUse(): void; awaySummary?(): void }
+  open: { results(): void; messages(): void; progress(): void; turnChanges(): void; hookEvents(): void; now(): void; planUse(): void; awaySummary?(): void }
 ): PaletteCommand[] {
   const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand => ({ id, group: 'Commands', label, run, ...extra })
   const workspace = state.workspace ?? undefined
@@ -110,7 +110,7 @@ export function readOnlyViewCommands(
     command('progress-details', 'Progress details', open.progress, { disabled: state.session === null || !state.progress, context: session }),
     command('turn-changes', 'Turn changes…', open.turnChanges, { disabled: state.session === null || !state.turnRecorded, context: session }),
     command('hook-events', 'Hook events…', open.hookEvents, { disabled: state.session === null, context: session }),
-    command('dev-auto-runs', 'dev-auto runs…', open.devAutoRuns),
+    command('now', 'Now…', open.now, { shortcut: 'Ctrl Shift N' }),
     command('plan-use', 'Plan use…', open.planUse)
   ]
 }

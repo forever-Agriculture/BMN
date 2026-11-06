@@ -762,7 +762,9 @@ async function start(): Promise<void> {
           const directory = manager.liveLaunchDirectory(session.sessionId)
           return directory ? [[session.sessionId, directory] as const] : []
         }))
-        return readDevAutoRuns(workspaces, sessions, await database.companion('listAttention'), params.workspaceId, undefined, liveDirectories)
+        const attention = await database.companion('listAttention')
+        return readDevAutoRuns(workspaces, sessions, attention, params.workspaceId, undefined, liveDirectories,
+          await companionService.sessionConversations(sessions, attention))
       }
       case METHOD_REGISTRY.repositoryInspect:
         if (!isRepositoryInspectParams(params)) {

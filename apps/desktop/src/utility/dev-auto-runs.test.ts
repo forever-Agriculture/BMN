@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { AttentionRecord, SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { phoneField } from './quiet-hours-delivery'
-import { handoffFinished, parseHandoff, parseWorktrees, readDevAutoRuns, selectedEpics, worktreeText } from './dev-auto-runs'
+import { handoffFinished, leadConversations, linkRunSession, parseFinishedStories, parseHandoff, parseWorktrees, readDevAutoRuns, selectedEpics, worktreeText } from './dev-auto-runs'
 
 const roots: string[] = []
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })))
@@ -188,6 +188,68 @@ describe('read-only dev-auto runs', () => {
   }, 20_000)
 })
 
+
+describe('Now: Waiting on, finished stories and the run\'s session (Story 110.9)', () => {
+  const lead = '6c3f0f6e-1d0b-4e8a-9a51-2c1e5b7d9f01', resumed = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
+  const text = (extra: string): string => `- Project / selected epics: BMN; epics 110\n- Lead host / requested model / observed model: Claude Code ${lead} / opus / opus\n` +
+    `## Progress\n- Waiting on: Marta, review\n- Finished stories (one line each, \`N.M STARTED FINISHED\` in UTC, as each is accepted):\n` +
+    `  110.1 2026-11-05T15:20:00Z 2026-11-05T16:40:00Z\n  - 110.2 2026-11-05T17:00:00+02:00 2026-11-05T15:30:00Z\n  110.3 later\n` +
+    `  110.4 2026-11-05T18:00:00Z 2026-11-05T17:00:00Z\n\n## Measurement\n- Lead sessions: each lead session's ID or transcript path, one per lead or resume:\n` +
+    `  - ${lead}\n  - ${resumed.toUpperCase()} (resume)\n${extra}`
+  it('reads Waiting on and the stamped finished stories, skipping and counting lines that do not read', () => {
+    const parsed = parseHandoff(text(''))
+    expect(parsed.waitingOn).toBe('Marta, review')
+    expect(parsed.finishedStories).toEqual([
+      { story: '110.1', startedAt: '2026-11-05T15:20:00.000Z', finishedAt: '2026-11-05T16:40:00.000Z' },
+      { story: '110.2', startedAt: '2026-11-05T15:00:00.000Z', finishedAt: '2026-11-05T15:30:00.000Z' }])
+    expect(parsed.skippedFinishedStories).toBe(2)
+    for (const nobody of ['nobody', 'Nobody.', 'NOBODY | the person, service or session the run waits for', '']) {
+      expect(parseHandoff(text('').replace('Marta, review', nobody)).waitingOn).toBeNull()
+    }
+  })
+  it('reads an older handoff as today: no estimate source, Waits on blank', () => {
+    expect(parseHandoff('- Project / selected epics: X\n- Status: ACTIVE')).toMatchObject({ waitingOn: null, finishedStories: [], skippedFinishedStories: 0, leadConversations: [] })
+  })
+  it('reads at most 100 finished-story lines and counts the rest as skipped', () => {
+    const lines = Array.from({ length: 105 }, (_, n) => `  1.${n + 1} 2026-11-05T10:00:00Z 2026-11-05T11:00:00Z`).join('\n')
+    const read = parseFinishedStories(`- Finished stories:\n${lines}\n`)
+    expect(read.stories).toHaveLength(100)
+    expect(read.skipped).toBe(5)
+  })
+  it('names the lead conversations of Lead host and Lead sessions, in order, once each', () => {
+    expect(leadConversations(text(''))).toEqual([lead, resumed])
+  })
+  it('links a run to the session whose conversation it names, preferring a live one and then the later lead (D14)', () => {
+    const at = (id: string, state: 'live' | 'exited', cwd = '/x'): SessionRecord => ({ sessionId: id, workspaceId: 'w', cwd, archivedAt: null,
+      lastProcess: { state, incarnationId: `i-${id}`, exitCode: null, signal: null, detail: null } } as SessionRecord)
+    const runs = { checkout: '/repo', leadConversations: [lead, resumed] }
+    const none = (): string | null => null
+    expect(linkRunSession(runs, [at('a', 'exited'), at('b', 'exited')], new Map([['a', [lead]], ['b', [resumed]]]), none))
+      .toEqual({ sessionId: 'b', sessionLink: 'conversation' })
+    expect(linkRunSession(runs, [at('a', 'live'), at('b', 'exited')], new Map([['a', [lead]], ['b', [resumed]]]), none))
+      .toEqual({ sessionId: 'a', sessionLink: 'conversation' })
+    // A conversation outranks the folder; the folder stands in only for exactly one live session there.
+    expect(linkRunSession(runs, [at('a', 'exited'), at('c', 'live')], new Map([['a', [lead]]]), () => '/repo')).toEqual({ sessionId: 'a', sessionLink: 'conversation' })
+    expect(linkRunSession({ checkout: '/repo', leadConversations: [] }, [at('c', 'live'), at('d', 'exited')], new Map(), (s) => s.sessionId === 'c' ? '/repo' : null))
+      .toEqual({ sessionId: 'c', sessionLink: 'checkout' })
+    // Two live sessions in the checkout, or only a stopped one there: no guess.
+    expect(linkRunSession({ checkout: '/repo', leadConversations: [] }, [at('c', 'live'), at('e', 'live')], new Map(), () => '/repo'))
+      .toEqual({ sessionId: null, sessionLink: null })
+    expect(linkRunSession({ checkout: '/repo', leadConversations: [] }, [at('d', 'exited', '/repo')], new Map(), () => '/repo'))
+      .toEqual({ sessionId: null, sessionLink: null })
+    expect(linkRunSession(runs, [{ ...at('a', 'live'), archivedAt: '2026-11-05' }], new Map([['a', [lead]]]), none)).toEqual({ sessionId: null, sessionLink: null })
+  })
+  it('carries the link and the new fields through the bounded read', async () => {
+    const root = fixture(), main = join(root, 'main'); repo(main)
+    file(main, '.dev-auto/handoff.md', text(`- Owning checkout and branch: ${main} / main\n`))
+    const sessions = [{ sessionId: 's', workspaceId: 'w', name: 'Lead', cwd: main, archivedAt: null, lastProcess: { state: 'exited', incarnationId: 'i' } }] as SessionRecord[]
+    const result = await readDevAutoRuns([workspace(main)], sessions, [], undefined, undefined, new Map(), new Map([['s', [resumed]]]))
+    expect(result.runs[0]).toMatchObject({ sessionId: 's', sessionLink: 'conversation', waitingOn: 'Marta, review', skippedFinishedStories: 2,
+      finishedStories: [{ story: '110.1' }, { story: '110.2' }] })
+    const unlinked = await readDevAutoRuns([workspace(main)], sessions, [], undefined, undefined, new Map(), new Map())
+    expect(unlinked.runs[0]).toMatchObject({ sessionId: null, sessionLink: null })
+  })
+})
 
 describe('outbound handoff fields', () => {
   it('masks whole source fields before the reader clips them and leaves ownership paths raw', () => {

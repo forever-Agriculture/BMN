@@ -86,7 +86,7 @@ A BMAD board (`sprint-status.yaml`) keeps BMAD's statuses (`backlog`, `ready-for
 
 ## Where a plan is found
 
-Every reader (`bmn plan`, the app's dev-auto runs view, dev-auto through `bmn plan status --json`) resolves the same way:
+Every reader (`bmn plan`, the app's Now sheet, dev-auto through `bmn plan status --json`) resolves the same way:
 
 1. The product repository: Git's top level for the directory, and from inside `plan/` with its own `.git` the repository that encloses it.
 2. The default checkout is the worktree on the branch named by `origin/HEAD`. If that reference is absent or its branch is gone, a read-only `git ls-remote --symref origin HEAD` asks the remote. With no remote, the existing local worktree convention remains. The first worktree is never substituted for an unavailable remote default.

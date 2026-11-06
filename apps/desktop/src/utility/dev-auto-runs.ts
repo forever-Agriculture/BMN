@@ -74,7 +74,52 @@ function decisionEntry(value: string): DevAutoRun['decisionEntries'][number] {
   return { entry: ENTRY_ID.exec(value)?.[1] ?? null, bmnKey: record?.[2] ?? null, bmnSession: record?.[1] ?? null }
 }
 
-export function parseHandoff(text: string, format?: (value: string) => string): Pick<DevAutoRun, 'project' | 'status' | 'nextAction' | 'decisions' | 'runId' | 'decisionEntries' | 'omittedDecisions' | 'finished' | 'ownerCheckout' | 'ownerBranch' | 'truncatedFields'> {
+const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/u
+const FINISHED_LINE = /^(\d{1,6}\.\d{1,4})\s+(\S+)\s+(\S+)$/u
+const CONVERSATION = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu
+/** At most this many lines under `- Finished stories` are read; the rest count as skipped. */
+export const FINISHED_STORY_LINES = 100
+
+/** A field's first line and its continuation lines, as `handoffFinished` reads them; null unless it occurs exactly once. */
+function fieldBlock(text: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\/]/gu, '\\$&')
+  const blocks = [...text.matchAll(new RegExp(`^- ${escaped}[^\\n:]*:([^\\n]*(?:\\n(?!- |#)[^\\n]*)*)`, 'gmu'))]
+  return blocks.length === 1 ? blocks[0]![1]! : null
+}
+
+/**
+ * Story 110.9: `- Finished stories (…):` and its lines `N.M STARTED FINISHED` (ISO-8601, `Z` or an offset), as dev-auto
+ * 306f229 writes them. A line that does not read, or whose FINISHED is not after STARTED, is skipped and counted.
+ */
+export function parseFinishedStories(text: string): { stories: NonNullable<DevAutoRun['finishedStories']>; skipped: number } {
+  const block = fieldBlock(text, 'Finished stories')
+  if (block === null) return { stories: [], skipped: 0 }
+  const lines = block.split(/\r?\n/u).map((line) => line.trim().replace(/^[-*]\s+/u, '')).filter(Boolean)
+  const stories: NonNullable<DevAutoRun['finishedStories']> = []
+  let skipped = Math.max(0, lines.length - FINISHED_STORY_LINES)
+  for (const line of lines.slice(0, FINISHED_STORY_LINES)) {
+    const match = FINISHED_LINE.exec(line)
+    const started = match && STAMP.test(match[2]!) ? Date.parse(match[2]!) : Number.NaN
+    const finished = match && STAMP.test(match[3]!) ? Date.parse(match[3]!) : Number.NaN
+    if (!match || !Number.isFinite(started) || !Number.isFinite(finished) || finished <= started) { skipped++; continue }
+    stories.push({ story: match[1]!, startedAt: new Date(started).toISOString(), finishedAt: new Date(finished).toISOString() })
+  }
+  return { stories, skipped }
+}
+
+/** D14: the conversation ids the handoff names as its leads', in the order written (dev-auto's `interruptions.py` reads the same two fields). */
+export function leadConversations(text: string): string[] {
+  const ids: string[] = []
+  for (const name of ['Lead host / requested model / observed model', 'Lead sessions']) {
+    for (const match of (fieldBlock(text, name) ?? '').matchAll(CONVERSATION)) {
+      const id = match[0].toLowerCase()
+      if (!ids.includes(id) && ids.length < 64) ids.push(id)
+    }
+  }
+  return ids
+}
+
+export function parseHandoff(text: string, format?: (value: string) => string): Pick<DevAutoRun, 'project' | 'status' | 'nextAction' | 'decisions' | 'runId' | 'decisionEntries' | 'omittedDecisions' | 'finished' | 'ownerCheckout' | 'ownerBranch' | 'truncatedFields' | 'waitingOn' | 'finishedStories' | 'skippedFinishedStories' | 'leadConversations'> {
   let truncatedFields = 0
   const bound = (value: string): string => {
     const formatted = format ? format(value) : value
@@ -104,7 +149,12 @@ export function parseHandoff(text: string, format?: (value: string) => string): 
   const owning = field('Owning checkout and branch', true)
   const runId = field('Run id', true)
   const split = owning?.lastIndexOf(' / ') ?? -1
+  const waiting = field('Waiting on')
+  const finishedStories = parseFinishedStories(text)
   return {
+    waitingOn: waiting === null || /^nobody\b/iu.test(waiting) ? null : waiting,
+    finishedStories: finishedStories.stories, skippedFinishedStories: finishedStories.skipped,
+    leadConversations: leadConversations(text),
     project: field('Project / selected epics'), status: field('Status'), nextAction: field('Next safe action'),
     decisions: decisions.slice(0, 20), runId: runId !== null && RUN_ID.test(runId) ? runId : null,
     decisionEntries: decisionEntries.slice(0, 20), omittedDecisions: Math.max(0, decisions.length - 20), finished: handoffFinished(text),
@@ -152,9 +202,31 @@ async function limitedMap<T, R>(items: T[], job: (item: T) => Promise<R>): Promi
   return results
 }
 
+/**
+ * Story 110.9, D14: a run's session is the live (or else the last) session whose agent conversation the handoff names,
+ * the later-named lead winning a tie; else the one live session launched in this checkout. Never a guess from a folder.
+ */
+export function linkRunSession(run: Pick<DevAutoRun, 'leadConversations' | 'checkout'>, sessions: readonly SessionRecord[],
+  conversations: ReadonlyMap<string, readonly string[]>, liveCheckout: (session: SessionRecord) => string | null): Pick<DevAutoRun, 'sessionId' | 'sessionLink'> {
+  const named = run.leadConversations ?? []
+  let best: { sessionId: string; live: boolean; index: number } | null = null
+  for (const session of sessions) {
+    if (session.archivedAt !== null || named.length === 0) continue
+    const index = Math.max(-1, ...(conversations.get(session.sessionId) ?? []).map((id) => named.indexOf(id.toLowerCase())))
+    if (index < 0) continue
+    const live = session.lastProcess?.state === 'live'
+    if (!best || Number(live) > Number(best.live) || live === best.live && index > best.index) best = { sessionId: session.sessionId, live, index }
+  }
+  if (best) return { sessionId: best.sessionId, sessionLink: 'conversation' }
+  const here = sessions.filter((session) => session.archivedAt === null && session.lastProcess?.state === 'live' && liveCheckout(session) === run.checkout)
+  return here.length === 1 ? { sessionId: here[0]!.sessionId, sessionLink: 'checkout' } : { sessionId: null, sessionLink: null }
+}
+
 export async function readDevAutoRuns(workspaces: readonly WorkspaceRecord[], sessions: readonly SessionRecord[],
   attention: readonly AttentionRecord[], workspaceId?: string, format?: (value: string) => string,
-  liveLaunchDirectories: ReadonlyMap<string, string> = new Map()): Promise<DevAutoRunsResult> {
+  liveLaunchDirectories: ReadonlyMap<string, string> = new Map(),
+  /** Story 110.9: each session's agent conversation ids (its bound conversation and the ones its hooks report). */
+  conversations: ReadonlyMap<string, readonly string[]> = new Map()): Promise<DevAutoRunsResult> {
   const result: DevAutoRunsResult = { runs: [], skipped: 0, issues: [], observedAt: new Date().toISOString() }
   const addIssue = (message: string): void => { result.skipped++; if (result.issues.length < 100) result.issues.push(clip(message)) }
   const directories = new Map<string, Set<string>>()
@@ -246,10 +318,12 @@ export async function readDevAutoRuns(workspaces: readonly WorkspaceRecord[], se
     }
     const board = await boardFor(location.checkout, selectedEpics(format ? parseHandoff(file.text ?? '').project : fields.project))
     if (board.unavailable) addIssue(`${location.checkout}: ${board.unavailable}`)
+    const link = ownership === 'copy' ? { sessionId: null, sessionLink: null } : linkRunSession({ ...fields, checkout: location.checkout }, sessions, conversations,
+      (session) => { const directory = liveLaunchDirectories.get(session.sessionId); return directory ? sessionRoots.get(directory) ?? null : null })
     return {
       ...fields, workspaceIds: ids, ...location, updatedAt, ownership, unavailable: file.unavailable,
       ...(ownership === 'copy' ? { status: null, nextAction: null, finished: false, ownerItems: [] } : { ownerItems }),
-      board
+      board, ...link
     }
   })
   let size = 0

@@ -189,7 +189,7 @@ describe('buildAwaySummary (Story 76.6 AC1-AC2)', () => {
     expect(view.finished.rows[0]!.rows.find((row) => row.label === 'Decided')!.text).toBe('[d1] SQLite (bmn: s1/dev-auto:r1:d1)\nold line')
     expect(view.stuck.rows.map((row) => [row.title, row.state, row.text])).toEqual([['Epic 13 · followups', 'blocked', 'CI is green on PR #4; waits for the owner\'s merge']])
     expect(view.stuck.rows[0]!.rows.map((row) => row.label)).toEqual(['Run', 'Status', 'Next', 'Where'])
-    expect(view.stuck.rows[0]!.rows.at(-1)!.links).toEqual([{ kind: 'workflow', id: 'r3', text: 'Open in dev-auto runs' }])
+    expect(view.stuck.rows[0]!.rows.at(-1)!.links).toEqual([{ kind: 'workflow', id: 'r3', text: 'Open in Now' }])
     expect(view.decided.groups[0]!.records[0]!.rows.at(-1)!.text).toBe('Wed 23:41 by Builder (Claude Code) · also in dev-auto\'s handoff')
     // Runs of two workspaces carry the workspace in their title.
     const two = buildAwaySummary(input({ devAuto: { ...devAuto, result: { ...devAuto.result, runs: [devAuto.result.runs[2]!, run({ workspaceIds: ['v'], status: 'BLOCKED' })] }, workspaceNames: { w: 'Personal', v: 'Work' } } }))

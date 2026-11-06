@@ -122,6 +122,7 @@ feature stops. This page sums up the product and how to install it.
 | `Ctrl+Shift+↑` / `↓` | Previous / next session |
 | `Ctrl+Shift+←` / `→` | Previous / next workspace |
 | `Ctrl+Shift+U` | Next open request from an agent |
+| `Ctrl+Shift+N` | Now: where every session is, who it waits on, the standup text; again to close |
 | `Ctrl+Shift+C` | Copy the selection |
 | `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert`, right-click | Paste |
 | `Ctrl+Shift+A` | Select all |

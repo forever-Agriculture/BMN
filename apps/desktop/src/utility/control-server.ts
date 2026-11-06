@@ -136,6 +136,8 @@ export interface ControlHandlers {
   }): Promise<unknown>
   /** Epic 66: the sessions a session may message. Never reachable by the owner token. */
   listPeers(sessionId: string): Promise<unknown>
+  /** Story 110.9, `bmn now`: the owner's token reads every workspace with card titles; a session's its own, states and labels only. */
+  readNow(scope: ControlScope): Promise<unknown>
   /** One short text for one peer; the handler stamps where it is from and stores it. It reaches no terminal. */
   sendMessage(p: {
     senderSessionId: string
@@ -1142,6 +1144,10 @@ export class ControlServer {
           artifactIds,
           senderCwd
         }))
+      }
+      case 'now.read': {
+        closedParams(rawParams, [])
+        return handlers.readNow(scope)
       }
       case 'peers.list': {
         closedParams(rawParams, [])

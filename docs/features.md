@@ -269,6 +269,13 @@ Incoming requests leave your focus in place; cards overlay the pane without resi
 When desktop notifications are enabled, BMN shows one for a new request unless you are already
 looking at that session.
 
+**Now** (`Ctrl+Shift+N`, or the list icon beside search) is one sheet with one line per session: what it is
+doing, who it waits on and, for a dev-auto run, a time left from its own finished stories. Sessions that wait
+on you come first, then each workspace in sidebar order; stopped sessions and finished runs fold into Not
+running. Enter or a click opens the session, its card in front, and the same key brings the sheet back on that
+row. **Copy standup** copies the same facts as text; agents read them with `bmn now`. It replaced the dev-auto
+runs dialog ([dev-auto.md](dev-auto.md)).
+
 **Progress.** An agent can report running, waiting, blocked, done or failed, shown on a strip under
 the pane header. **Progress details** opens a read-only view of the report: who reported it, when,
 and any files the session published as evidence. Read it by one rule: *done* is the agent's claim,
@@ -839,5 +846,5 @@ the list on the left holds six pages, General, Agents, Integrations, Notificatio
 and opens one at a time; Agents (Team, Roles, Models, Changes, Asks) and Integrations (Health,
 Rules, Skills, Tools) switch their views with the control under the page head. Changing page
 neither saves nor resets edits. The ⋯ menus hold what you do by hand; what you only read (Review
-results, Messages, Progress details, Turn changes, Hook events, dev-auto runs, Plan use) opens from
+results, Messages, Progress details, Turn changes, Hook events, Now, Plan use) opens from
 the command palette.

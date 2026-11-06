@@ -63,6 +63,10 @@ Commands:
   handoff --outline                         Print the optional outline of a complete handoff; sends nothing
   peers                                     List the sessions of your workspace you may leave a message for,
                                             with the agent in front of each now
+  now [--json]                              Where every session of your workspace is: what it does, who it
+                                            waits on, a time left only where one is computed, as standup
+                                            text; --json gives the same rows as data. States and labels
+                                            only: no message or card text. The owner's token sees all
   tell <session-id> --text T | --text-file - --key K
   tell status [message-id]
   tell cancel <message-id>                  Leave one short message for a peer; BMN stamps where it is from.

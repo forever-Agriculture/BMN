@@ -2,6 +2,7 @@
 export * from './binding'
 export * from './companion'
 export * from './dev-auto'
+export * from './now'
 export * from './telegram-quiet'
 export * from './telegram-digest'
 export * from './telegram-health'

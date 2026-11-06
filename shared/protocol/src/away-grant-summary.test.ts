@@ -186,7 +186,7 @@ describe('awayGrantSection (Story 84.7 AC1)', () => {
     expect(row.lines.filter((line) => line.label === 'Granted').map((line) => line.text)).toContain('Open or update a PR from fix/grant in octo/skills, up to 2')
   })
 
-  it('keeps its bounds: 10 refusals per run, then "N more"; 20 runs, then "N more · dev-auto runs…"', () => {
+  it('keeps its bounds: 10 refusals per run, then "N more"; 20 runs, then "N more · Now…"', () => {
     let record = night({ 'run-80': { rounds: 2, 'merge-12': 'no', 'push-81': 'no' } })
     for (let index = 0; index < 12; index += 1) record = useGrant(read(record), AWAY, { runId: 'run-80', sessionId: 's1', id: `x${index}`, kind: 'action', item: 'push-81' }, at(15, 1, index)).record
     const refused = awayGrantSection(record.periods, 'p-1', NOW)!.rows[0]!.lines.filter((line) => line.label === 'Refused')
@@ -197,7 +197,7 @@ describe('awayGrantSection (Story 84.7 AC1)', () => {
     const many = awayGrantSection(night(answers, asks).periods, 'p-1', NOW)!
     expect(many.count).toBe(22)
     expect(many.rows).toHaveLength(AWAY_GRANT_LIMITS.runs)
-    expect(many.more).toBe('2 more · dev-auto runs…')
+    expect(many.more).toBe('2 more · Now…')
   })
 })
 

@@ -132,6 +132,7 @@ function fakeHandlers(current: Map<string, string>) {
     openAttention: vi.fn(async (): Promise<unknown> => ({ opened: true })),
     prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', state: 'queued' })),
     listPeers: vi.fn(async (): Promise<unknown> => ({ on: true, paused: false, peers: [] })),
+    readNow: vi.fn(async (): Promise<unknown> => ({ text: 'Now', sections: [] })),
     sendMessage: vi.fn(async (): Promise<unknown> => ({ messageId: 'message-1', state: 'waiting' })),
     messageStatus: vi.fn(async (): Promise<unknown> => ({ messages: [] })),
     takeMessage: vi.fn(async (): Promise<unknown> => ({ message: null })),
@@ -640,6 +641,17 @@ describe('messages between sessions over the socket (Epic 66)', () => {
     for (const handler of ['listPeers', 'sendMessage', 'messageStatus', 'takeMessage', 'reportMessage'] as const) {
       expect(fixture.handlers[handler]).not.toHaveBeenCalled()
     }
+  })
+
+  it('reads Now with the caller\'s own scope and refuses parameters (Story 110.9, D10)', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await agent.request('now.read', {})).result).toEqual({ text: 'Now', sections: [] })
+    expect(fixture.handlers.readNow).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'session', sessionId: 'session-1' }))
+    expectError(await agent.request('now.read', { workspaceId: 'other' }), ERROR_CODES.invalidArgument)
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    await owner.request('now.read', {})
+    expect(fixture.handlers.readNow).toHaveBeenLastCalledWith({ kind: 'owner' })
   })
 
   it('lists peers for the caller\'s own session', async () => {

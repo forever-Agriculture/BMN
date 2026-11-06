@@ -521,7 +521,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
       ...(run.nextAction !== null && state === 'blocked' ? [{ label: 'Next', text: run.nextAction }] : []),
       ...(run.decisions.length > 0 ? [{ label: 'Decided', text: run.decisions.join('\n') }] : []),
       { label: 'Where', text: `${run.branch ?? 'no branch'} · ${run.checkout}${run.updatedAt ? ` · changed ${awayMomentWords(run.updatedAt, now)}` : ''}`, muted: true,
-        links: [{ kind: 'workflow', id: run.runId ?? run.checkout, text: 'Open in dev-auto runs' }] }
+        links: [{ kind: 'workflow', id: run.runId ?? run.checkout, text: 'Open in Now' }] }
     ]
     return { key: `${run.runId ?? ''}\u0000${run.checkout}`, title, state, text, full: run.project ?? title, rows }
   }
@@ -531,12 +531,12 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
   const runsUnread = input.devAuto === null
   const stuck: AwaySummaryView['stuck'] = {
     rows: stuckRows.slice(0, AWAY_SUMMARY_LIMITS.runs),
-    more: stuckRows.length > AWAY_SUMMARY_LIMITS.runs ? `${stuckRows.length - AWAY_SUMMARY_LIMITS.runs} more · dev-auto runs…` : null,
+    more: stuckRows.length > AWAY_SUMMARY_LIMITS.runs ? `${stuckRows.length - AWAY_SUMMARY_LIMITS.runs} more · Now…` : null,
     empty: stuckRows.length > 0 ? null : runsUnread ? 'Dev-auto runs could not be read.' : 'No run is stuck.'
   }
   const finished: AwaySummaryView['finished'] = {
     rows: finishedRows.slice(0, AWAY_SUMMARY_LIMITS.runs),
-    more: finishedRows.length > AWAY_SUMMARY_LIMITS.runs ? `${finishedRows.length - AWAY_SUMMARY_LIMITS.runs} more · dev-auto runs…` : null,
+    more: finishedRows.length > AWAY_SUMMARY_LIMITS.runs ? `${finishedRows.length - AWAY_SUMMARY_LIMITS.runs} more · Now…` : null,
     empty: finishedRows.length > 0 ? null : runsUnread ? 'Dev-auto runs could not be read.' : 'No run finished while you were away.'
   }
 

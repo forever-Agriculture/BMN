@@ -104,7 +104,11 @@ import {
   type TurnDifferenceAnswer,
   type TurnFileView,
   type TurnSessionView,
-  sessionReceiverWord
+  sessionReceiverWord,
+  buildNow,
+  nowReport,
+  type NowReport,
+  type NowSessionInput
 } from '@bmn/protocol'
 import {
   ArtifactFileError,
@@ -470,6 +474,8 @@ export class CompanionService {
    * time. Kept apart from `hookEvents` because that log is bounded at 30 entries: terminal notices
    * can evict the very event this summary is about, and the summary must still name it.
    */
+  /** Story 110.9, D14: the agent conversations each session's hooks reported while BMN ran, newest last, at most 8. */
+  private readonly seenConversations = new Map<string, string[]>()
   private readonly hookObservations = new Map<string, {
     sessionId: string
     incarnationId: string
@@ -901,6 +907,7 @@ export class CompanionService {
         }),
         prepareHandoff: (p) => this.controlCall(() => this.queueAgentHandoff(p)),
         listPeers: (sessionId) => this.controlCall(() => this.messages.peers(sessionId)),
+        readNow: (scope) => this.controlCall(() => this.readNow(scope)),
         sendMessage: (p) => this.controlCall(() => this.messages.send(p)),
         messageStatus: (sessionId, messageId) => this.controlCall(() => this.messages.status(sessionId, messageId)),
         cancelMessage: (sessionId, messageId) => this.controlCall(() => this.messages.cancel(sessionId, messageId)),
@@ -992,6 +999,10 @@ export class CompanionService {
           return { outcome: result.outcome }
         }),
         observeConversation: (p) => this.controlCall(async () => {
+          if (p.incarnationId === options.manager.liveIncarnationId(p.sessionId)) {
+            const seen = (this.seenConversations.get(p.sessionId) ?? []).filter((id) => id !== p.conversationReference)
+            this.seenConversations.set(p.sessionId, [...seen, p.conversationReference].slice(-8))
+          }
           if (p.agentCli === 'claude' || p.agentCli === 'codex') {
             const previous = this.producers.stamp(p.sessionId, p.incarnationId)
             const current = this.producers.observe(p.sessionId, p.incarnationId, {
@@ -1893,6 +1904,74 @@ export class CompanionService {
           : null
       }
     })
+  }
+
+  /**
+   * Story 110.9, D14: each session's agent conversation ids: its stored binding (which a hook also records for an agent
+   * typed in a shell), the ones its hooks reported while BMN ran, and the ones its cards were opened by.
+   */
+  async sessionConversations(sessions: readonly SessionRecord[], attention: readonly AttentionRecord[]): Promise<Map<string, string[]>> {
+    const found = new Map<string, string[]>()
+    const add = (sessionId: string, id: string | undefined | null): void => {
+      if (!id) return
+      const list = found.get(sessionId) ?? []
+      if (!list.includes(id) && list.length < 32) found.set(sessionId, [...list, id])
+    }
+    await Promise.all(sessions.map(async (session) => {
+      const binding = await this.options.database.getConversationBinding(session.sessionId).catch(() => undefined)
+      if (binding?.status === 'bound') add(session.sessionId, binding.conversationReference)
+    }))
+    for (const [sessionId, ids] of this.seenConversations) for (const id of ids) add(sessionId, id)
+    for (const record of attention) add(record.sessionId, record.producer?.conversationReference)
+    return found
+  }
+
+  /**
+   * Story 110.9, `bmn now`: the Now rows and the standup text. The owner's token covers every workspace with card titles;
+   * a session's covers its own workspace, states and labels only (D10). BMN knows no terminal title here: that lives
+   * in the window, so a session without a run reads its progress label or the hook's Working or Idle.
+   */
+  private async readNow(scope: ControlScope): Promise<NowReport> {
+    const workspaces = (await this.options.database.listWorkspaces()).filter((workspace) => workspace.archivedAt === null)
+      .toSorted((left, right) => left.position - right.position || left.workspaceId.localeCompare(right.workspaceId))
+    const sessions = (await Promise.all(workspaces.map((workspace) => this.options.database.listSessions(workspace.workspaceId)))).flat()
+      .map((session) => this.options.manager.sessionWithCurrentProcessState(session))
+    const own = scope.kind === 'session' ? sessions.find((session) => session.sessionId === scope.sessionId) : undefined
+    const covered = scope.kind === 'owner' ? workspaces : workspaces.filter((workspace) => workspace.workspaceId === own?.workspaceId)
+    const attention = await this.options.database.companion('listAttention')
+    const progress = await this.options.database.companion('listProgress')
+    const liveDirectories = new Map(sessions.flatMap((session) => {
+      const directory = this.options.manager.liveLaunchDirectory(session.sessionId)
+      return directory ? [[session.sessionId, directory] as const] : []
+    }))
+    const runs = covered.length === 0 ? [] : (await readDevAutoRuns(workspaces, sessions, attention,
+      scope.kind === 'owner' ? undefined : covered[0]!.workspaceId, undefined, liveDirectories,
+      await this.sessionConversations(sessions, attention))).runs
+    const ids = new Set(covered.map((workspace) => workspace.workspaceId))
+    const inputs = sessions.filter((session) => session.archivedAt === null && ids.has(session.workspaceId))
+      .toSorted((left, right) => left.position - right.position || left.createdAt.localeCompare(right.createdAt) || left.sessionId.localeCompare(right.sessionId))
+      .map((session): NowSessionInput => {
+        const incarnation = this.options.manager.liveIncarnationId(session.sessionId)
+        const live = incarnation !== undefined && incarnation !== null
+        const card = attention.filter((record) => record.sessionId === session.sessionId && record.state === 'open' &&
+          record.kind !== 'notice' && (!live || record.incarnationId === incarnation))
+          .toSorted((left, right) => left.openedAt.localeCompare(right.openedAt))[0]
+        const label = progress.filter((record) => record.sessionId === session.sessionId && (!live || record.incarnationId === incarnation))
+          .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))[0]?.label ?? null
+        const foreground = this.sessionForeground(session.sessionId)
+        const working = sessionReceiverWord({ foreground, openCard: false, latest: this.hookObservations.get(session.sessionId) }) === 'working'
+        return {
+          sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name, live, started: session.lastProcess !== null,
+          dot: card ? 'needs-you' : live ? working ? 'running' : 'running-idle' : session.lastProcess ? 'exited' : 'idle',
+          // As the sheet decides: an agent in front, or this run's hooks reported one (he types agents inside shells).
+          agent: foreground.state === 'agent' || (live && this.hookObservations.get(session.sessionId)?.incarnationId === incarnation),
+          working, progressLabel: label, title: null,
+          card: card ? { requestId: card.requestId, title: card.title } : null
+        }
+      })
+    const view = buildNow({ now: this.now(), audience: scope.kind === 'owner' ? 'owner' : 'agent', workspaces: covered,
+      sessions: inputs, runs, home: this.options.home ?? homedir() })
+    return nowReport(view, covered)
   }
 
   private publicAttention(record: AttentionRecord): AttentionRecord {

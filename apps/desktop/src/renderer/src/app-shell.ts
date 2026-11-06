@@ -18,7 +18,8 @@ type ShellDialog =
   /** Read-only: a session's kept turns, one opened to its files and a file's difference (Story 69.5). */
   | { kind: 'turn-changes'; sessionId: string }
   | { kind: 'new-workspace' }
-  | { kind: 'dev-auto-runs'; workspaceId?: string }
+  /** Story 110.9: where every session is; it replaced the dev-auto runs dialog. */
+  | { kind: 'now' }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }

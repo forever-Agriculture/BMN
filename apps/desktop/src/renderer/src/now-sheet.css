@@ -1,0 +1,256 @@
+/* MODULE: now-sheet.css - Story 110.9: the Now sheet, ported from its approved design (.dev-auto/evidence/110/now-design); rows parted by hairlines, no frames */
+
+/* L4: the same lifted sheet as every dialog, wider, stopping at 960 and centred. */
+.app-dialog.now-dialog {
+  width: min(960px, calc(100vw - 32px));
+  max-height: 90vh;
+}
+
+.now-dialog .app-dialog-body {
+  flex: 1 1 auto;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.now-dialog .n-box {
+  container: now / inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px 20px 14px;
+}
+
+@media (max-width: 680px) {
+  .now-dialog .n-box { padding: 10px 12px 12px; }
+  .now-dialog .app-dialog-heading { padding-left: 12px; }
+}
+
+/* The head reads first, though Tab reaches it after the list (list, Copy standup, ×). */
+.now-dialog .n-head {
+  order: -2;
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.now-dialog .n-alert {
+  order: -1;
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.now-dialog .n-words {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.now-dialog .n-words .status-dot { margin-left: 2px; }
+.now-dialog .n-words .now-you { color: var(--text); }
+
+/* B1: Copy standup is a plain plate; gold stays on the dots. */
+.now-dialog button.plate {
+  min-height: 28px;
+  min-width: 112px;
+  padding: 3px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.now-dialog button.plate:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 13%, transparent); }
+.now-dialog button.plate:active:not(:disabled) { background: color-mix(in srgb, var(--text) 16%, transparent); }
+.now-dialog button.plate:disabled { background: color-mix(in srgb, var(--text) 4%, transparent); opacity: 0.55; cursor: default; }
+
+.now-dialog .n-note { margin: 0; padding: 6px 8px; color: var(--muted); font-size: 12px; }
+
+.now-dialog .n-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.now-dialog .n-cols,
+.now-dialog .n-main {
+  display: grid;
+  grid-template-columns: 7px minmax(96px, 196px) minmax(0, 1fr) minmax(96px, 176px) 128px;
+  align-items: center;
+  column-gap: 10px;
+}
+
+.now-dialog .n-cols {
+  flex: none;
+  padding: 0 32px 0 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* L1: a section is an uppercase head over one hairline. */
+.now-dialog .n-sec {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 26px;
+  margin: 0;
+  padding: 6px 8px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.now-dialog .n-sec b { font-weight: 400; letter-spacing: 0; color: var(--faint); }
+.now-dialog button.n-sec:hover:not(:disabled) { color: var(--text); background: none; }
+.now-dialog button.n-sec:active:not(:disabled) { background: none; }
+.now-dialog .n-sec svg { flex: none; }
+.now-dialog [aria-expanded='true'] > svg { rotate: 90deg; }
+
+.now-dialog .n-list { list-style: none; margin: 0; padding: 0; }
+
+/* L2 and B7: rows parted by hairline bottoms; the current session carries the gold bar (F2). */
+.now-dialog .n-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: stretch;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.now-dialog .n-row.is-current {
+  background: var(--selected);
+  box-shadow: inset 2px 0 0 var(--identity);
+}
+
+.now-dialog button.n-main {
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  text-align: left;
+  justify-content: stretch;
+}
+
+.now-dialog button.n-main:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.now-dialog button.n-main:active:not(:disabled) { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.now-dialog .n-main > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.now-dialog .c-name { font-size: 13px; }
+.now-dialog .c-doing .of { margin-left: 6px; color: var(--faint); }
+.now-dialog .c-doing .chip { margin-left: 6px; }
+.now-dialog .c-who { display: block; color: var(--muted); }
+.now-dialog .c-who::first-letter { text-transform: uppercase; }
+.now-dialog .c-who .lbl { display: none; }
+.now-dialog .c-who.is-you { color: var(--text); font-weight: 500; }
+.now-dialog .c-who.is-faint,
+.now-dialog .c-left.is-faint { color: var(--faint); }
+.now-dialog .c-left .plus { color: var(--muted); }
+.now-dialog .n-row.is-stopped .c-name,
+.now-dialog .n-row.is-stopped .c-doing { color: var(--muted); }
+
+/* B5: the chevron is a bare glyph. */
+.now-dialog button.n-chev {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--faint);
+}
+
+.now-dialog button.n-chev:hover:not(:disabled) { color: var(--text); background: none; }
+.now-dialog button.n-chev:active:not(:disabled) { background: none; }
+
+.now-dialog .n-fold {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 0;
+  padding: 4px 32px 12px 25px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.now-dialog .n-fold[hidden] { display: none; }
+.now-dialog .n-pair { display: contents; }
+.now-dialog .n-fold dt { color: var(--muted); }
+.now-dialog .n-fold dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.now-dialog .n-fold .path { color: var(--muted); font-family: var(--font-mono); font-size: 11.5px; }
+
+.now-dialog button.link {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: normal;
+}
+
+.now-dialog button.link:hover:not(:disabled),
+.now-dialog button.link:active:not(:disabled) { background: none; }
+
+@container now (max-width: 780px) {
+  .now-dialog .n-cols,
+  .now-dialog .n-main { grid-template-columns: 7px minmax(84px, 132px) minmax(0, 1fr) minmax(72px, 124px) 112px; }
+}
+
+/* 600 and under, down to BMN's 320: name and time, then doing, then the wait; column labels and "+ wait" go. */
+@container now (max-width: 600px) {
+  .now-dialog .n-cols { display: none; }
+
+  .now-dialog .n-main {
+    grid-template-columns: 7px minmax(0, 1fr) auto;
+    grid-template-areas: 'dot name left' '. doing doing' '. who who';
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 1px;
+    padding-block: 5px;
+  }
+
+  .now-dialog .n-main > .status-dot { grid-area: dot; align-self: center; }
+  .now-dialog .c-name { grid-area: name; }
+  .now-dialog .c-doing { grid-area: doing; font-size: 12px; }
+  .now-dialog .c-left { grid-area: left; font-size: 12px; }
+  .now-dialog .c-who { grid-area: who; font-size: 12px; }
+  .now-dialog .c-who:empty { display: none; }
+  .now-dialog .c-left .plus { display: none; }
+  .now-dialog .c-who .lbl { display: inline; }
+  .now-dialog .c-who::first-letter { text-transform: none; }
+  .now-dialog .n-fold { grid-template-columns: 68px minmax(0, 1fr); padding: 2px 10px 10px 23px; }
+}
