@@ -8,6 +8,7 @@ import { basename, dirname, join, posix, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { rowToken, suggestedLeadHint, withLeadHint } from '../../apps/desktop/bin/plan-board.mjs'
 import { FROM_BMAD as STATUS_TABLE } from '../../apps/desktop/bin/plan-statuses.mjs'
+import { allowanceFileName } from '../../apps/desktop/bin/plan-allowances.mjs'
 
 /**
  * The move, as Story 77.6 has it: nothing is lost. Every file under `_bmad-output/`, `_bmad/` and the apps'
@@ -954,10 +955,17 @@ export function normalizeEpic({ path, additions = {} }) {
     if (typeof additions[section] !== 'string' || !additions[section].trim()) throw new Error(`missing normalization content for ${section}`)
     missing.push(`## ${section}\n\n${additions[section].trim()}\n\n`)
   }
-  if (!/^## Stories\s*$/mu.test(text)) throw new Error('normalization needs an existing Stories section')
+  // A legacy epic often lists its stories with no heading above them: give them one, before the first story.
+  if (!/^## Stories\s*$/mu.test(text)) {
+    if (!/^### Story /mu.test(text)) throw new Error('normalization needs an existing Stories section')
+    text = text.replace(/^### Story /mu, '## Stories\n\n### Story ')
+  }
   text = text.replace(/^## Stories\s*\n/mu, missing.join('') + '## Stories\n')
   const needs = /^## Run needs\s*\n([\s\S]*?)(?=^## |(?![\s\S]))/mu.exec(text)
-  if (!/\*\*Prepared:/u.test(needs[1])) {
+  // With an allowances file its prepared list is the one checked (110.4 AC2), so Run needs takes no Prepared line.
+  const number = /^# Epic (\d+)/mu.exec(text)?.[1]
+  const allowances = number && basename(dirname(path)) === 'epics' ? allowanceFileName(dirname(dirname(path)), Number(number)) : null
+  if (!allowances && !/\*\*Prepared:/u.test(needs[1])) {
     if (typeof additions.Prepared !== 'string' || !additions.Prepared.trim()) throw new Error('missing normalization content for Prepared')
     text = text.replace(needs[0], needs[0].trimEnd() + `\n- **Prepared:** ${additions.Prepared.trim()}\n\n`)
   }

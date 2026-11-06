@@ -219,6 +219,25 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(result.story_bytes_unchanged).toBe(true)
     expect(() => normalizeEpic({ path, additions: {} })).toThrow('already normalized')
   })
+  it('adds a Stories heading before the first story when the legacy epic has none, and takes Prepared from an allowances file (BMN 109.1)', () => {
+    const { root } = fixture(), epics = join(root, 'plan/epics'), path = join(epics, '023-fixture.md')
+    mkdirSync(epics, { recursive: true })
+    mkdirSync(join(root, 'plan/allowances'), { recursive: true })
+    writeFileSync(join(root, 'plan/allowances/023.yaml'), 'schema: 1\nepic: 23\n')
+    const story = '## Story 23.1: Keep the packet\n\n**Do:** use every byte.\n\n### Detail\nkept.\n'
+    writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n## What is open\nA table.\n\n' + story + '\n## Order\n23.1 first.\n')
+    const additions = { Outcome: 'Kept.', Why: 'Synthetic.', 'Boundary and dependencies': 'Alone.', 'Run needs': 'See `plan/allowances/023.yaml`.', 'Truth impact': 'none', Challenges: '- **Scale:** small.' }
+    const result = normalizeEpic({ path, additions })
+    const text = readFileSync(path, 'utf8')
+    expect(text).toContain('## What is open\nA table.\n\n## Outcome\n\nKept.')
+    expect(text).toContain('## Stories\n### Story 23.1: Keep the packet\n\n**Do:** use every byte.\n\n### Detail\nkept.\n')
+    expect(text).toContain('## Order\n23.1 first.')
+    expect(text).not.toContain('**Prepared:**')
+    expect(result.story_bytes_unchanged).toBe(true)
+    rmSync(join(root, 'plan/allowances/023.yaml'))
+    writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n' + story)
+    expect(() => normalizeEpic({ path, additions })).toThrow('missing normalization content for Prepared')
+  })
   it('preserves opaque and duplicate legacy IDs explicitly without weakening new row checks (107.4)', () => {
     const { root, repo } = fixture()
     const source = join(repo, '_bmad-output/implementation-artifacts/sprint-status.yaml')
