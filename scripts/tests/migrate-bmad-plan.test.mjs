@@ -251,6 +251,12 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** a new unit test.\n'))).toMatch(/must quote an existing check/u)
     expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** none recorded in the moved text; a gap for his batch.\n'))).toBeNull()
     expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** at the end'))).toMatch(/must quote the story/u)
+    // a quote must prove something, and a line says nothing of its own beside its quotes (pre-review, 2026-11-06)
+    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“46”'))).toMatch(/single word/u)
+    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“46 of 48”, verified in CI'))).toMatch(/outside its quotes: verified ci/u)
+    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** at the end: “run the soak”, and he signs the release'))).toMatch(/outside its quotes: he signs release/u)
+    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** before the go: “run the soak”, still open: “four hours”'))).toBeNull()
+    expect(storyReshapeProblem(before, good.replace('Existing check in AC1: “At least 46 of 48 slots succeed.”', 'Existing check in AC1: “At least 46 of 48 slots succeed.”; AC2: “Memory stays within 25%.”'))).toBeNull()
     const givens = '**Acceptance Criteria:**\n\n**Given** a clone\n**When** I run the gate\n**Then** it passes\n'
     expect(storyReshapeProblem(givens, '**Owner:** none\n\n**Acceptance criteria:**\n\n1. **Given** a clone **When** I run the gate **Then** it passes\n\n**Verification:** Existing check: “**When** I run the gate **Then** it passes”\n')).toBeNull()
     const { root } = fixture(), path = join(root, '023-reshape.md')
