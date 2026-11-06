@@ -56,11 +56,13 @@ const OWNER_ORDER = ['before the go', 'none', 'at the end']
 const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }
 /**
- * BMN's move tool: `scripts/plan/` from the repository's `apps/desktop/bin/` and from the package's `resources/apps/desktop/bin/`,
- * one level up from the package's `resources/bin/`, where the installed `bmn` runs (108.6 focused review).
+ * BMN's move tool, chosen by where this module sits, never by what happens to exist (108.6 focused recheck): the installed
+ * `bmn` runs from the package's `resources/bin/`, whose tool is `resources/scripts/plan/`; the repository's and the package's
+ * `apps/desktop/bin/` reach `scripts/plan/` three levels up, inside their own tree.
  */
-const MOVE_TOOL = ['../../../scripts/plan/migrate-bmad-plan.mjs', '../scripts/plan/migrate-bmad-plan.mjs']
-  .map((path) => fileURLToPath(new URL(path, import.meta.url))).find((path) => existsSync(path)) ?? 'scripts/plan/migrate-bmad-plan.mjs in BMN'
+const MOVE_TOOL = fileURLToPath(new URL(
+  /[\\/]resources[\\/]bin[\\/]plan-board\.mjs$/u.test(fileURLToPath(import.meta.url)) ? '../scripts/plan/migrate-bmad-plan.mjs' : '../../../scripts/plan/migrate-bmad-plan.mjs',
+  import.meta.url))
 
 /**
  * A project still on a BMAD board is read as before, never written or run (Epic 108, R108-FR18): every writer and

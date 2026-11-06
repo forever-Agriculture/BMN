@@ -664,17 +664,20 @@ release()
     expect(readFileSync(path, 'utf8')).toBe(text)
   })
 
-  it('names a move tool that exists in the repository and in both packaged layouts (108.6 focused review)', () => {
+  it('names the bundled move tool in the repository and in both packaged layouts, never a stray one outside (108.6 focused review)', () => {
     const root = fixture()
-    const tool = join(root, 'resources/scripts/plan/migrate-bmad-plan.mjs')
-    file(root, 'resources/scripts/plan/migrate-bmad-plan.mjs', '')
-    for (const at of ['resources/bin', 'resources/apps/desktop/bin']) {
+    const tool = join(root, 'app/resources/scripts/plan/migrate-bmad-plan.mjs')
+    file(root, 'app/resources/scripts/plan/migrate-bmad-plan.mjs', '')
+    // Where the old lookup from resources/bin pointed, three levels up: outside the package.
+    file(root, 'scripts/plan/migrate-bmad-plan.mjs', '')
+    for (const at of ['app/resources/bin', 'app/resources/apps/desktop/bin']) {
       for (const name of ['plan-board.mjs', 'shared-helpers.mjs', 'plan-allowances.mjs']) file(root, `${at}/${name}`, readFileSync(resolve(__dirname, '../../bin', name), 'utf8'))
       const printed = execFileSync(process.execPath, ['--input-type=module', '-e', `import { needsMove } from ${JSON.stringify(join(root, at, 'plan-board.mjs'))}; process.stdout.write(needsMove('B'))`], { encoding: 'utf8' })
       expect(/node (\S+) stage/u.exec(printed)?.[1], at).toBe(tool)
     }
     const own = /node (\S+) stage/u.exec(needsMove('B'))?.[1]
-    expect(own !== undefined && existsSync(own)).toBe(true)
+    expect(own).toBe(resolve(__dirname, '../../../../scripts/plan/migrate-bmad-plan.mjs'))
+    expect(existsSync(own as string)).toBe(true)
   })
 
   it('board paths with real Git: an ignored plan is changed in the default checkout, his edit on another row kept; a tracked BMAD board is written in neither copy', async () => {
