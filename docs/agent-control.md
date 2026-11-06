@@ -461,9 +461,10 @@ its stamp, the sender's folder and where it stands. It has no Paste, Pause or Re
   them; selecting the session clears its reminder and does not count against it. Not over a draft,
   a dialog, a stop, a shell in front, a replaced run or a sub-agent, and not when its provider may
   not read that message or when BMN has not yet heard where its agent sends work. `bmn tell
-  status` shows the sender *woken at* a time, or *not woken* and why once BMN's wake sweep has
-  weighed it since BMN started (the reasons are kept in memory, for the newest messages only);
-  before that, neither. Each session holds a **wake depth**: your prompt or a run's start sets it
+  status` shows the sender *woken at* a time whenever BMN typed the line (kept with the message,
+  across restarts); for a message still waiting and not woken it shows *not woken* and why once
+  BMN's wake sweep has weighed it since BMN started (those reasons are kept in memory, for the
+  newest messages only), and before that nothing. Each session holds a **wake depth**: your prompt or a run's start sets it
   to 0, a message handed to the session raises it to that message's depth if higher, and a message
   sent has the session's depth plus 1. Only depth 1
   and 2 wake anyone, so a question and its reply get through and two agents cannot keep each other

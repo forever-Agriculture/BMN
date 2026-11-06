@@ -407,7 +407,11 @@ export async function setRow(boardPath, { key, status, note, expect, environment
       if (changed.token !== expect) return { outcome: 'conflict', current: { key, ...changed.before, token: changed.token } }
       // The queue holds unfinished epics only (docs/planning.md): a finished epic leaves it in the same write.
       const finished = /^epic-(\d+)$/u.exec(key)
-      if (finished && FINISHED_STATUSES.includes(status)) changed.text = removeFromQueue(changed.text, Number(finished[1])) ?? changed.text
+      if (finished && FINISHED_STATUSES.includes(status)) {
+        const dequeued = removeFromQueue(changed.text, Number(finished[1]))
+        if (dequeued === null) throw new PlanError('QUEUE_FORM', 'the board\'s queue: is not a block list (queue: [] or "  - N" lines); write it as one first')
+        changed.text = dequeued
+      }
       if (changed.text === before) return { outcome: 'unchanged', token: changed.token }
       seam('read', attempt)
       const kept = keepVersion(boardPath, before, environment)

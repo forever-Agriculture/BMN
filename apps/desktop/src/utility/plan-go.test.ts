@@ -498,4 +498,15 @@ describe('the approved text and the queue', () => {
     expect(bmn(main, home, ['set', 'epic-7', 'dropped', '--note', 'not needed', '--expect', token(main, home)]).code).toBe(0)
     expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toContain('queue: []\n')
   })
+
+  it('a queue in another form refuses the finishing write and keeps row and queue, as go does (Epic 111 F1, Astra batch 1)', () => {
+    const { main, plan, home } = project()
+    for (const head of ['queue: &work', 'queue: [7]']) {
+      const board = BOARD.replace('queue: []', head === 'queue: &work' ? `${head}\n  - 7` : head).replace('  epic-7: backlog # Suggested lead: Opus · fixture', '  epic-7: in-progress # Suggested lead: Opus · fixture')
+      file(plan, 'status.yaml', board)
+      const refused = bmn(main, home, ['set', 'epic-7', 'done', '--expect', token(main, home)])
+      expect([refused.code, refused.out + refused.err]).toEqual([2, expect.stringContaining('QUEUE_FORM')])
+      expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(board)
+    }
+  })
 })
