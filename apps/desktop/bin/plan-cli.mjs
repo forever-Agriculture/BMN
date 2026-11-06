@@ -462,7 +462,11 @@ async function set(argv) {
     } catch (error) { return failure(error, json) }
   }
   let result
-  try { result = await setRow(board.path, { key, status, note: board.note, expect: board.expect }) } catch (error) { return failure(error, json) }
+  try { result = await setRow(board.path, { key, status, note: board.note, expect: board.expect }) } catch (error) {
+    // The board's own form refuses the write, as `go` refuses it (exit 1), not a failure to read it.
+    if (error instanceof PlanError && error.code === 'QUEUE_FORM') return refuse(json, error.code, error.message)
+    return failure(error, json)
+  }
   if (result.outcome === 'conflict') return conflict(json, board, key, { before: result.current, token: result.current.token })
   if (result.outcome === 'busy') {
     if (json) out(JSON.stringify({ ok: false, error: { code: 'BUSY', message: `${board.path} kept changing; nothing written there` }, written: [] }, null, 2))

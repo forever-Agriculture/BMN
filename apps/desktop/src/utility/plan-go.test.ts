@@ -505,7 +505,7 @@ describe('the approved text and the queue', () => {
       const board = BOARD.replace('queue: []', head === 'queue: &work' ? `${head}\n  - 7` : head).replace('  epic-7: backlog # Suggested lead: Opus · fixture', '  epic-7: in-progress # Suggested lead: Opus · fixture')
       file(plan, 'status.yaml', board)
       const refused = bmn(main, home, ['set', 'epic-7', 'done', '--expect', token(main, home)])
-      expect([refused.code, refused.out + refused.err]).toEqual([2, expect.stringContaining('QUEUE_FORM')])
+      expect([refused.code, refused.out + refused.err]).toEqual([1, expect.stringContaining('QUEUE_FORM')])
       expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toBe(board)
     }
   })
