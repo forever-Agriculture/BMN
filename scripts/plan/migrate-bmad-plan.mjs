@@ -963,7 +963,7 @@ export function normalizeEpic({ path, additions = {} }) {
   text = text.replace(/^## Stories\s*\n/mu, missing.join('') + '## Stories\n')
   const needs = /^## Run needs\s*\n([\s\S]*?)(?=^## |(?![\s\S]))/mu.exec(text)
   // With an allowances file its prepared list is the one checked (110.4 AC2), so Run needs takes no Prepared line.
-  const number = /^# Epic (\d+)/mu.exec(text)?.[1]
+  const number = /^#{1,2} Epic (\d+)\b/mu.exec(text)?.[1]
   const allowances = number && basename(dirname(path)) === 'epics' ? allowanceFileName(dirname(dirname(path)), Number(number)) : null
   if (!allowances && !/\*\*Prepared:/u.test(needs[1])) {
     if (typeof additions.Prepared !== 'string' || !additions.Prepared.trim()) throw new Error('missing normalization content for Prepared')
