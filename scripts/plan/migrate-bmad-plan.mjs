@@ -970,13 +970,55 @@ export function normalizeEpic({ path, additions = {} }) {
     text = text.replace(needs[0], needs[0].trimEnd() + `\n- **Prepared:** ${additions.Prepared.trim()}\n\n`)
   }
   if (JSON.stringify(stories(text)) !== JSON.stringify(originalStories)) throw new Error('normalization would change a story body')
+  // Checked shape for a story (BMN 109.1, consult 20261106T141558-a9c588ba): only its presentation changes.
+  const rewrites = additions.stories ?? {}
+  const original = new Map(originalStories)
+  for (const [id, body] of Object.entries(rewrites)) {
+    if (!original.has(id)) throw new Error(`no story ${id} to reshape`)
+    const problem = storyReshapeProblem(original.get(id), body)
+    if (problem) throw new Error(`story ${id}: ${problem}`)
+  }
+  if (Object.keys(rewrites).length > 0) {
+    text = text.replace(/^(### Story (\d+\.\d+)[^\n]*\n)([\s\S]*?)(?=^#{1,3} |(?![\s\S]))/gmu, (whole, heading, id) => rewrites[id] === undefined ? whole : heading + '\n' + rewrites[id].replace(/^\n+/u, '').replace(/\n*$/u, '\n\n'))
+    const after = new Map(stories(text))
+    for (const [id, body] of original) if (rewrites[id] === undefined && after.get(id) !== body) throw new Error(`normalization would change story ${id}`)
+  }
   const temporary = `${path}.normalize-${process.pid}.tmp`
   try {
     writeFileSync(temporary, text, { mode: statSync(path).mode & 0o777 })
     if (readFileSync(path, 'utf8') !== before) throw new Error('epic changed during normalization')
     renameSync(temporary, path)
   } finally { rmSync(temporary, { force: true }) }
-  return { before_sha256: sha256(before), after_sha256: sha256(text), story_sha256: sha256(JSON.stringify(originalStories)), story_bytes_unchanged: true }
+  const reshaped = Object.keys(rewrites)
+  return { before_sha256: sha256(before), after_sha256: sha256(text), story_sha256: sha256(JSON.stringify(originalStories)), story_bytes_unchanged: reshaped.length === 0, stories_reshaped: reshaped, story_words_unchanged: true }
+}
+
+const ADDED_LINE = /^\*\*(Owner|Verification):\*\*\s*(.*)$/u
+const QUOTED = /“([^”]+)”/gu
+/** A story's requirement words, in order: list markers, the acceptance label's spelling and spacing set aside. */
+function storyWords(text) {
+  return text
+    .replace(/\*\*Acceptance(?: [Cc]riteria)?:?\*\*:?/gu, '⟨AC⟩')
+    .replace(/\*\*Acceptance \(([^)\n]*)\):\*\*/gu, '⟨AC⟩ ($1)')
+    .replace(/^[ \t]*(?:\d+\.|[-*+])[ \t]+/gmu, '')
+    .replace(/\s+/gu, ' ').trim()
+}
+/** Why a reshaped story body is not the original's presentation change, or null (constrained option B). */
+export function storyReshapeProblem(before, after) {
+  const kept = new Set(before.split('\n'))
+  const words = storyWords(before)
+  const remaining = []
+  for (const line of after.split('\n')) {
+    const added = kept.has(line) ? null : ADDED_LINE.exec(line)
+    if (!added) { remaining.push(line); continue }
+    const [, kind, value] = added
+    const quotes = [...value.matchAll(QUOTED)].map((match) => match[1])
+    for (const quote of quotes) if (!words.includes(storyWords(quote))) return `${kind} quotes words the story does not hold: “${quote}”`
+    if (kind === 'Owner' && !/^none\.?$/u.test(value) && quotes.length === 0) return `an added Owner line other than none must quote the story's own owner step`
+    if (kind === 'Verification' && quotes.length === 0 && !/^none recorded in the moved text\b/u.test(value)) return `an added Verification line must quote an existing check, or say "none recorded in the moved text"`
+  }
+  if (storyWords(remaining.join('\n')) !== words) return 'its requirement words changed (only labels, list markers, spacing and added Owner and Verification lines may)'
+  return null
 }
 
 // ---------------------------------------------------------------------------------------------

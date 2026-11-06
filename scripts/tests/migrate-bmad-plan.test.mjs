@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { archive, checkLinks, checkSpans, normalizeEpic, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, selectUnfinishedPlan, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
+import { archive, checkLinks, checkSpans, normalizeEpic, storyReshapeProblem, rehearseRollback, reverseRewrites, rewriteLinks, segmentEpics, selectUnfinishedPlan, stagePlan, verifyTree } from '../plan/migrate-bmad-plan.mjs'
 
 const BMN = resolve(import.meta.dirname, '../../apps/desktop/bin/bmn')
 const roots = []
@@ -240,6 +240,29 @@ describe('moving a BMAD plan into plan/ (Story 77.6)', () => {
     rmSync(join(root, 'plan/allowances/023.yaml'))
     writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n' + story)
     expect(() => normalizeEpic({ path, additions })).toThrow('missing normalization content for Prepared')
+  })
+  it('reshapes a story only in presentation: label, numbering, Owner and a quoted Verification (BMN 109.1, constrained B)', () => {
+    const before = '**Do:** run the soak.\n\n**Acceptance (★, scaled to four hours):**\n- At least 46 of 48 slots succeed.\n- Memory stays within 25%.\n\n'
+    const good = '**Owner:** none\n\n**Do:** run the soak.\n\n**Acceptance criteria:** (★, scaled to four hours)\n1. At least 46 of 48 slots succeed.\n2. Memory stays within 25%.\n\n**Verification:** Existing check in AC1: “At least 46 of 48 slots succeed.”\n'
+    expect(storyReshapeProblem(before, good)).toBeNull()
+    expect(storyReshapeProblem(before, good.replace('46 of 48', '45 of 48'))).toMatch(/requirement words changed/u)
+    expect(storyReshapeProblem(before, good.replace('2. Memory stays within 25%.\n', ''))).toMatch(/requirement words changed/u)
+    expect(storyReshapeProblem(before, good.replace('“At least 46 of 48 slots succeed.”', '“the soak passes in CI”'))).toMatch(/does not hold/u)
+    expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** a new unit test.\n'))).toMatch(/must quote an existing check/u)
+    expect(storyReshapeProblem(before, good.replace(/\*\*Verification:\*\*.*\n/u, '**Verification:** none recorded in the moved text; a gap for his batch.\n'))).toBeNull()
+    expect(storyReshapeProblem(before, good.replace('**Owner:** none', '**Owner:** at the end'))).toMatch(/must quote the story/u)
+    const givens = '**Acceptance Criteria:**\n\n**Given** a clone\n**When** I run the gate\n**Then** it passes\n'
+    expect(storyReshapeProblem(givens, '**Owner:** none\n\n**Acceptance criteria:**\n\n1. **Given** a clone **When** I run the gate **Then** it passes\n\n**Verification:** Existing check: “**When** I run the gate **Then** it passes”\n')).toBeNull()
+    const { root } = fixture(), path = join(root, '023-reshape.md')
+    writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n## Story 23.1: Soak\n\n' + before + '## Story 23.2: Other\n\nUntouched.\n')
+    const additions = { Outcome: 'Kept.', Why: 'Synthetic.', 'Boundary and dependencies': 'Alone.', 'Run needs': 'None.', Prepared: 'none, because synthetic.', 'Truth impact': 'none', Challenges: '- **Scale:** small.' }
+    const result = normalizeEpic({ path, additions: { ...additions, stories: { '23.1': good } } })
+    const text = readFileSync(path, 'utf8')
+    expect(text).toContain('### Story 23.1: Soak\n\n**Owner:** none\n')
+    expect(text).toContain('### Story 23.2: Other\n\nUntouched.\n')
+    expect(result.stories_reshaped).toEqual(['23.1'])
+    writeFileSync(path, '<!-- bmn-plan: bmad-legacy -->\n# Epic 23: fixture\n\n## Story 23.1: Soak\n\n' + before)
+    expect(() => normalizeEpic({ path, additions: { ...additions, stories: { '23.1': good.replace('25%', '30%') } } })).toThrow('story 23.1: its requirement words changed')
   })
   it('preserves opaque and duplicate legacy IDs explicitly without weakening new row checks (107.4)', () => {
     const { root, repo } = fixture()
