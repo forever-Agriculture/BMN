@@ -393,8 +393,10 @@ newline and tab as the only control characters. `--key` makes a retry safe: the 
 same message returns the first result. Several messages may wait from one sender to one receiver
 (Story 110.2): up to the receiver's 5 waiting, 30 seconds apart and inside the hourly limits, and
 each event hands over one, oldest first. A receiver's full queue refuses the send, naming who may
-free it. `bmn tell cancel <id>` withdraws the sender's own message while it waits: a claim already
-made stays as it is, and an expired message or a handoff cannot be withdrawn this way.
+free it: the sender itself and other senders in its workspace; when only senders it may not see wait
+(another workspace's handoffs), it says to try again later. `bmn tell cancel <id>` withdraws the
+sender's own message while it waits: a claim already made stays as it is, and an expired message or
+a handoff cannot be withdrawn this way.
 
 A send's answer and `bmn tell status` name the receiver now, in one word from BMN's latest hook
 report: *working*, *resting*, *waiting on the owner* (a question or permission card is open) or *not
@@ -459,9 +461,11 @@ its stamp, the sender's folder and where it stands. It has no Paste, Pause or Re
   them; selecting the session clears its reminder and does not count against it. Not over a draft,
   a dialog, a stop, a shell in front, a replaced run or a sub-agent, and not when its provider may
   not read that message or when BMN has not yet heard where its agent sends work. `bmn tell
-  status` shows the sender *woken at* a time, or *not woken* and why. Each session holds a **wake
-  depth**: your prompt or a run's start sets it to 0, a message handed to the session raises it to
-  that message's depth if higher, and a message sent has the session's depth plus 1. Only depth 1
+  status` shows the sender *woken at* a time, or *not woken* and why once BMN's wake sweep has
+  weighed it since BMN started (the reasons are kept in memory, for the newest messages only);
+  before that, neither. Each session holds a **wake depth**: your prompt or a run's start sets it
+  to 0, a message handed to the session raises it to that message's depth if higher, and a message
+  sent has the session's depth plus 1. Only depth 1
   and 2 wake anyone, so a question and its reply get through and two agents cannot keep each other
   running; BMN's own line resets nothing, and a depth BMN cannot read (a run it did not see start,
   after BMN restarted) wakes no one. At most 3 wakes an hour for two sessions and 12 for a workspace;
@@ -480,8 +484,10 @@ agent sends work, taking and reporting. A resting agent reads a message at the f
 turn. A message not collected within 24 hours is no longer handed over: it reads *expired*, and
 nothing is deleted by that; a message stored before Story 110.2 keeps its two hours, and a handoff
 always has two. When a message expires undelivered, its sender's agent gets one line at its next
-tool call, naming the receiver and the message's first words, once; the words are left out when the
-provider the hook resolved for that event may not see private work from the folder it was sent from.
+tool call where its app hands messages over (Claude Code and Codex; an OpenCode sender is not told),
+naming the receiver and the message's first words, once (it counts as told when the hook asks, so
+a hook that fails then is not told again); the words are left out when the provider the hook
+resolved for that event may not see private work from the folder it was sent from.
 
 A message speaks for its session, not for one process in it. `bmn tell` is refused when, by the
 time BMN passes the message to its store, the terminal runs another process than the one that sent
