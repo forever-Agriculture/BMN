@@ -439,24 +439,34 @@ export function carryBaseline(repo, anchor, projection, baseline) {
   }
 }
 /** The reader seeds gos through the cut only: an approval event after it, even one later reverted, must not vanish silently. */
+/**
+ * Each audited commit answers to its own parents, never to whichever commit a flattened walk listed before it:
+ * a side branch's older board is not a removal. A commit on the tip's first-parent line answers to its first
+ * parent, so whatever reaches the main line counts once there; any other commit only for what none of its parents held.
+ */
 export function approvalEventsAfterCut(repo, source, anchor, tips) {
-  const events = []
-  const boardAt = commit => { const read = spawnSync('git', ['-C', repo, 'show', `${commit}:${source}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }); return read.status === 0 ? rowsOf(read.stdout) : null }
+  const events = [], boards = new Map()
+  const boardAt = commit => {
+    if (!boards.has(commit)) { const read = spawnSync('git', ['-C', repo, 'show', `${commit}:${source}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }); boards.set(commit, read.status === 0 ? rowsOf(read.stdout) : null) }
+    return boards.get(commit)
+  }
+  const changed = (old, now) => goTokens(old) !== goTokens(now) || (Boolean(old) && (!now || (WITHDRAWN.has(now.status) && !WITHDRAWN.has(old.status))))
   for (const tip of new Set(tips)) {
-    let previous = boardAt(anchor)
-    if (!previous) continue
+    if (!boardAt(anchor)) continue
+    const mainline = new Set(textGit(repo, ['rev-list', '--first-parent', `${anchor}..${tip}`]).split('\n').filter(Boolean))
     for (const commit of textGit(repo, ['rev-list', '--reverse', '--topo-order', '--full-history', `${anchor}..${tip}`, '--', source]).split('\n').filter(Boolean)) {
-      const rows = boardAt(commit)
+      const all = textGit(repo, ['rev-parse', `${commit}^@`]).split('\n').filter(Boolean)
+      const before = (mainline.has(commit) ? all.slice(0, 1) : all).map(boardAt), rows = boardAt(commit)
       if (!rows) {
         if (spawnSync('git', ['-C', repo, 'cat-file', '-e', `${commit}:plan/migration.json`]).status === 0) continue // The move's own retirement of the board.
-        events.push({ commit, key: 'board removed', before: null, after: null }); continue
+        if (before.every(Boolean)) events.push({ commit, key: 'board removed', before: null, after: null })
+        continue
       }
-      for (const key of new Set([...previous.keys(), ...rows.keys()])) {
+      for (const key of new Set([rows, ...before].flatMap(board => [...(board?.keys() ?? [])]))) {
         if (!/^epic-\d+$/u.test(key)) continue
-        const old = previous.get(key), now = rows.get(key)
-        if (goTokens(old) !== goTokens(now) || (Boolean(old) && (!now || (WITHDRAWN.has(now.status) && !WITHDRAWN.has(old.status))))) events.push({ commit, key, before: old ?? null, after: now ?? null })
+        const now = rows.get(key), olds = before.map(board => board?.get(key))
+        if (olds.every(old => changed(old, now))) events.push({ commit, key, before: olds[0] ?? null, after: now ?? null })
       }
-      previous = rows
     }
   }
   return events

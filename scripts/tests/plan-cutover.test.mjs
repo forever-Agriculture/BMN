@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirS
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { applyFence, carryBaseline, cutoverPlan, fenceInventory, mergeStagedPlan, migrationPaths, planFingerprint as planFingerprintOf, reconcilePlan, rollbackPlan, saveJournal, startWatchdog, withMigrationWriter } from '../plan/plan-cutover.mjs'
+import { applyFence, approvalEventsAfterCut, carryBaseline, cutoverPlan, fenceInventory, mergeStagedPlan, migrationPaths, planFingerprint as planFingerprintOf, reconcilePlan, rollbackPlan, saveJournal, startWatchdog, withMigrationWriter } from '../plan/plan-cutover.mjs'
 import { archive, checkSpans, stagePlan } from '../plan/migrate-bmad-plan.mjs'
 import { prepareMoveBranch } from '../plan/prepare-move-branch.mjs'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
@@ -952,5 +952,41 @@ describe('D15 cutover', () => {
     expect(images).toContain('LOCAL\n')
     expect(images).toContain('OTHER WORKTREE\n')
     expect(readFileSync(join(linked, path), 'utf8')).toBe('OTHER WORKTREE\n')
+  })
+})
+
+describe('approval history after a cut', () => {
+  const board = 'sprint.yaml'
+  const write = (repo, rows, message) => { file(repo, board, `development_status:\n${rows}`); git(repo, 'add', '.'); git(repo, 'commit', '-qm', message); return git(repo, 'rev-parse', 'HEAD') }
+  function history() {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-audit-')); roots.push(root)
+    const repo = join(root, 'repo'); mkdirSync(repo); git(repo, 'init', '-qb', 'main')
+    const early = write(repo, '  epic-7: in-progress\n', 'early board')
+    const anchor = write(repo, '  epic-7: in-progress\n  epic-8: in-progress # go 2026-11-01\n', 'cut here')
+    return { repo, early, anchor }
+  }
+
+  it('reads a side branch cut from an older board as that branch, not as removed rows (b2, 6 Nov)', () => {
+    const { repo, early, anchor } = history()
+    git(repo, 'checkout', '-qb', 'old', early)
+    write(repo, '  epic-7: in-progress # notes only\n', 'older branch edits its own board')
+    git(repo, 'checkout', '-q', 'main')
+    git(repo, 'merge', '-q', '--no-ff', '--no-commit', '-X', 'ours', 'old')
+    write(repo, '  epic-7: in-progress # notes only\n  epic-8: in-progress # go 2026-11-01\n', 'merge old, keeping both rows')
+    expect(git(repo, 'rev-list', '--parents', '-n1', 'HEAD').split(' ')).toHaveLength(3)
+    expect(approvalEventsAfterCut(repo, board, anchor, ['main'])).toEqual([])
+  })
+
+  it('still finds a go recorded on a side branch and one a merge brings to the main line', () => {
+    const { repo, early, anchor } = history()
+    git(repo, 'checkout', '-qb', 'side', anchor)
+    const side = write(repo, '  epic-7: in-progress # go 2026-11-02\n  epic-8: in-progress # go 2026-11-01\n', 'go on a side branch')
+    git(repo, 'checkout', '-qb', 'older', early)
+    const older = write(repo, '  epic-7: withdrawn\n', 'withdrawn on an older branch')
+    git(repo, 'checkout', '-q', 'main')
+    git(repo, 'merge', '-q', '--no-ff', 'side', '-m', 'merge side')
+    const events = approvalEventsAfterCut(repo, board, anchor, ['main', 'older'])
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ commit: side, key: 'epic-7' }), expect.objectContaining({ commit: older, key: 'epic-7', after: expect.objectContaining({ status: 'withdrawn' }) })]))
+    expect(events.filter(event => event.key === 'epic-8')).toEqual([])
   })
 })
