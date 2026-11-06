@@ -84,7 +84,7 @@ function go(main: string, home: string): ReturnType<typeof bmn> {
   return result
 }
 function goFor(allowances?: string): { main: string; plan: string; home: string; commit: string } {
-  const made = project({ allowances })
+  const made = project(allowances === undefined ? {} : { allowances })
   return { ...made, commit: go(made.main, made.home).json.commit }
 }
 function read(main: string, home: string, ...args: string[]): ReturnType<typeof JSON.parse> {

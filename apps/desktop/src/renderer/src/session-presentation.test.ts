@@ -546,6 +546,18 @@ describe('session presentation', () => {
     expect(requestsAnsweredByTyping(records, 's3')).toEqual([])
   })
 
+  it('keeps an agent\'s bmn ask card open when the owner types into its session', () => {
+    // 2026-11-05: three `bmn ask` cards closed 19 s after opening as "Answered in the terminal" when he typed an
+    // unrelated message into the session; Telegram had them, BMN no longer did. A card is answered on the card.
+    const records = [
+      { ...request('ask-question', 's1', '2026-09-14T11:10:00.000Z'), openedBy: 'cli' as const },
+      { ...request('ask-permission', 's1', '2026-09-14T11:10:00.000Z'), kind: 'permission' as const, openedBy: 'cli' as const },
+      { ...request('ask-notice', 's1', '2026-09-14T11:10:00.000Z'), kind: 'notice' as const, openedBy: 'cli' as const },
+      { ...request('native', 's1', '2026-09-14T11:00:00.000Z'), openedBy: 'hook:claude:PermissionRequest' as const }
+    ]
+    expect(requestsAnsweredByTyping(records, 's1').map((record) => record.requestId)).toEqual(['native'])
+  })
+
   it('clears only notice reminders on explicit navigation (59.1)', () => {
     const prompt = request('prompt', 's1', '2026-09-14T11:00:00.000Z')
     expect(attentionActionWhenOpened(prompt)).toBeNull()

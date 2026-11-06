@@ -164,7 +164,8 @@ function fakeHandlers(current: Map<string, string>) {
     askGrant: vi.fn<ControlHandlers['askGrant']>(async (p) => ({ outcome: 'opened', runId: p.runId, cardRevision: 1, state: 'open' })),
     grantStatus: vi.fn<ControlHandlers['grantStatus']>(async () => ({ departure: null, runs: [] })),
     useGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded', left: 2, periodId: 'p-1' })),
-    reportGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded' }))
+    reportGrant: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded' })),
+    messageDestination: vi.fn<ControlHandlers['messageDestination']>(() => ({ recorded: true }))
   } satisfies ControlHandlers
 }
 

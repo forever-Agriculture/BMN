@@ -896,7 +896,7 @@ export class CompanionService {
             return { refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL }
           }
           const opened = this.publicAttention(await this.openAttention(p))
-          if (p.kind === 'notice' && TURN_KEY.test(p.requestKey)) this.finishedTurns.set(p.sessionId, { incarnationId: p.incarnationId, at: this.iso() })
+          if (p.kind === 'notice' && TURN_KEY.test(p.requestKey) && p.incarnationId !== null) this.finishedTurns.set(p.sessionId, { incarnationId: p.incarnationId, at: this.iso() })
           return opened
         }),
         prepareHandoff: (p) => this.controlCall(() => this.queueAgentHandoff(p)),

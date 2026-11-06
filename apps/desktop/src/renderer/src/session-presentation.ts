@@ -481,10 +481,12 @@ export function workspaceAttention(
 
 /**
  * The open requests the owner answers by typing, pasting or dictating into their session, the way agterm clears a
- * session's status on a keystroke. Reviews and handoffs wait for their own owner action.
+ * session's status on a keystroke. Reviews, handoffs and an agent's `bmn ask` card (opened by `cli`, answered on the card,
+ * in BMN or on Telegram) wait for their own owner action.
  */
 export function requestsAnsweredByTyping(records: readonly AttentionRecord[], sessionId: string): AttentionRecord[] {
-  return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review' && record.kind !== 'handoff')
+  return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review' && record.kind !== 'handoff' &&
+    record.openedBy !== 'cli')
 }
 
 type OpenAttentionAction = 'dismiss-reminder' | null

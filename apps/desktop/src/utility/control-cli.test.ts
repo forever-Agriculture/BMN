@@ -126,7 +126,8 @@ async function cliFixture() {
     askGrant: vi.fn<ControlHandlers['askGrant']>(async (p) => ({ outcome: 'opened', periodId: 'p-1', runId: p.runId, cardRevision: 1, state: p.card.nothing ? 'nothing' : 'open' })),
     grantStatus: vi.fn<ControlHandlers['grantStatus']>(async () => ({ departure: null, runs: [] })),
     useGrant: vi.fn<ControlHandlers['useGrant']>(async () => ({ outcome: 'recorded', left: 2, periodId: 'p-1' })),
-    reportGrant: vi.fn<ControlHandlers['reportGrant']>(async () => ({ outcome: 'recorded' }))
+    reportGrant: vi.fn<ControlHandlers['reportGrant']>(async () => ({ outcome: 'recorded' })),
+    messageDestination: vi.fn<ControlHandlers['messageDestination']>(() => ({ recorded: true }))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
   await server.listen()
