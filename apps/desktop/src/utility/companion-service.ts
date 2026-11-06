@@ -1967,9 +1967,10 @@ export class CompanionService {
         return {
           sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name, live, started: session.lastProcess !== null,
           dot: card ? 'needs-you' : live ? working ? 'running' : 'running-idle' : session.lastProcess ? 'exited' : 'idle',
-          // One rule with the sheet (main.tsx nowSessions): this run's hooks reported an agent. He types agents inside shells,
+          // One rule and one record with the sheet (main.tsx nowSessions reads this same origin list): this run's hooks
+          // reported an agent that has not ended (SessionEnd clears it, the shell staying). He types agents inside shells,
           // and a launch program or a foreground process proves nothing the design asks for ("hooks decide").
-          agent: live && this.hookObservations.get(session.sessionId)?.incarnationId === incarnation,
+          agent: live && this.hookOrigins.get(session.sessionId)?.incarnationId === incarnation,
           working, progressLabel: label, title: null,
           card: card ? { requestId: card.requestId, title: card.title } : null
         }

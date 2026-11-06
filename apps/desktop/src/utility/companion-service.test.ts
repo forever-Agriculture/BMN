@@ -3414,6 +3414,9 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     expect((await read()).agentRunning).toBe(false)
     await handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'Stop', source: null, toolName: null, effects: [] })
     expect((await read()).agentRunning).toBe(true)
+    // The agent ends and its shell stays: the sheet's origin list drops it, and so does bmn now.
+    await handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'SessionEnd', source: null, toolName: null, effects: [] })
+    expect((await read()).agentRunning).toBe(false)
   })
 
   it('keeps each workspace\'s runs to itself in bmn now when two workspaces share one repository (110.9, D10)', async () => {
