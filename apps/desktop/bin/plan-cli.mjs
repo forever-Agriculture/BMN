@@ -405,6 +405,9 @@ export async function setRow(boardPath, { key, status, note, expect, environment
       const changed = replaceRow(before, key, status, note)
       if (changed === null) throw new PlanError('UNKNOWN_ROW', `no row ${key} in ${boardPath}`)
       if (changed.token !== expect) return { outcome: 'conflict', current: { key, ...changed.before, token: changed.token } }
+      // The queue holds unfinished epics only (docs/planning.md): a finished epic leaves it in the same write.
+      const finished = /^epic-(\d+)$/u.exec(key)
+      if (finished && FINISHED_STATUSES.includes(status)) changed.text = removeFromQueue(changed.text, Number(finished[1])) ?? changed.text
       if (changed.text === before) return { outcome: 'unchanged', token: changed.token }
       seam('read', attempt)
       const kept = keepVersion(boardPath, before, environment)
@@ -532,6 +535,30 @@ export function addToQueue(text, epic) {
   if (!empty) return null
   lines.splice(at, 1, `queue:${empty[1] ? ` ${empty[1]}` : ''}${ending}`, `  - ${epic}${ending}`)
   return lines.join('\n')
+}
+
+/** The board without `epic` in its block-list `queue:` (unchanged when absent); null for a queue written in another form. */
+export function removeFromQueue(text, epic) {
+  const lines = text.split('\n')
+  const at = lines.findIndex((line) => /^queue:/u.test(line))
+  if (at === -1) return text
+  const ending = lines[at].endsWith('\r') ? '\r' : ''
+  const head = lines[at].slice(0, lines[at].length - ending.length)
+  if (/^queue:[ \t]*\[[ \t]*\][ \t]*(?:#.*)?$/u.test(head)) return text
+  if (!/^queue:[ \t]*(?:#.*)?$/u.test(head)) return null
+  const items = []
+  for (let index = at + 1; index < lines.length; index++) {
+    const line = lines[index].replace(/\r$/u, '')
+    if (/^[ \t]*(?:#.*)?$/u.test(line)) continue
+    const item = /^[ \t]+-[ \t]+['"]?(?:epic-)?(\d+)['"]?[ \t]*(?:#.*)?$/u.exec(line)
+    if (!item) break
+    items.push({ index, epic: Number(item[1]) })
+  }
+  const drop = items.filter((item) => item.epic === epic).map((item) => item.index)
+  if (drop.length === 0) return text
+  const kept = lines.filter((_, index) => !drop.includes(index))
+  if (drop.length === items.length) kept[at] = `${head.replace(/^queue:/u, 'queue: []')}${ending}`.replace(/^queue: \[\][ \t]+(#)/u, 'queue: [] $1')
+  return kept.join('\n')
 }
 
 function goNote(date, note) {

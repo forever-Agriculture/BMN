@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolvePlan, rowToken } from '../../bin/plan-board.mjs'
-import { addToQueue, approvalText, recordGo } from '../../bin/plan-cli.mjs'
+import { addToQueue, approvalText, recordGo, removeFromQueue } from '../../bin/plan-cli.mjs'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -473,5 +473,29 @@ describe('the approved text and the queue', () => {
     expect(addToQueue('queue:\n  - 3\n  - 5 # next\ndevelopment_status:\n', 7)).toBe('queue:\n  - 3\n  - 5 # next\n  - 7\ndevelopment_status:\n')
     expect(addToQueue('queue:\n  - 7\ndevelopment_status:\n', 7)).toBe('queue:\n  - 7\ndevelopment_status:\n')
     expect(addToQueue('queue: [3]\ndevelopment_status:\n', 7)).toBeNull()
+  })
+
+  it('takes a finished epic out of a block-list queue; an absent one or an inline list it leaves (Epic 111 F1)', () => {
+    expect(removeFromQueue('queue:\n  - 3\n  - 7 # next\n  - 9\ndevelopment_status:\n', 7)).toBe('queue:\n  - 3\n  - 9\ndevelopment_status:\n')
+    expect(removeFromQueue('queue:\n  - 7\ndevelopment_status:\n', 7)).toBe('queue: []\ndevelopment_status:\n')
+    expect(removeFromQueue('queue: # order\r\n  - 7\r\ndevelopment_status:\r\n', 7)).toBe('queue: [] # order\r\ndevelopment_status:\r\n')
+    expect(removeFromQueue('queue:\n  - 3\ndevelopment_status:\n', 7)).toBe('queue:\n  - 3\ndevelopment_status:\n')
+    expect(removeFromQueue('queue: []\ndevelopment_status:\n', 7)).toBe('queue: []\ndevelopment_status:\n')
+    expect(removeFromQueue('development_status:\n', 7)).toBe('development_status:\n')
+    expect(removeFromQueue('queue: [7]\ndevelopment_status:\n', 7)).toBeNull()
+  })
+
+  it('an epic set done or dropped leaves the queue in the same write, so the board still passes check (Epic 111 F1)', () => {
+    const { main, plan, home } = project()
+    const queued = BOARD.replace('queue: []', 'queue:\n  - 7').replace('  epic-7: backlog # Suggested lead: Opus · fixture\n  7-1-one: backlog', '  epic-7: in-progress # Suggested lead: Opus · fixture\n  7-1-one: done')
+    file(plan, 'status.yaml', queued)
+    expect(bmn(main, home, ['check']).code).toBe(0)
+    expect(bmn(main, home, ['set', 'epic-7', 'done', '--expect', token(main, home)]).code).toBe(0)
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toContain('queue: []\n')
+    const check = bmn(main, home, ['check'])
+    expect([check.code, check.out + check.err]).toEqual([0, expect.not.stringContaining('which is done')])
+    file(plan, 'status.yaml', queued)
+    expect(bmn(main, home, ['set', 'epic-7', 'dropped', '--note', 'not needed', '--expect', token(main, home)]).code).toBe(0)
+    expect(readFileSync(join(plan, 'status.yaml'), 'utf8')).toContain('queue: []\n')
   })
 })
