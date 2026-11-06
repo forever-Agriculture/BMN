@@ -1,9 +1,9 @@
 ---
 name: plan
 description: >-
-  Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml, or a BMAD project's own files). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
+  Plan a project's work with the owner: frame a project, plan or revise epics and stories with testable criteria, check readiness before his go, and keep the board he reads (plan/status.yaml). Use for any planning, epic or story writing, readiness check, change of course, brainstorm, idea critique or planning research in any project; not for implementation.
 ---
-# MODULE: SKILL.md - Story 77.3 (revision 7: his go recorded and read back with bmn plan go, Epic 96.1; revision 6: owner steps only before the go or at the end, Run needs, design during planning, Epic 90; revision 5: a BMAD project read through one table, Sol review F8; revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format (or a BMAD project's existing files) to at least BMAD's standard, with methods loaded on demand
+# MODULE: SKILL.md - Story 77.3 (revision 8: a BMAD project is read only and names the move, Epic 108.6; revision 7: his go recorded and read back with bmn plan go, Epic 96.1; revision 6: owner steps only before the go or at the end, Run needs, design during planning, Epic 90; revision 5: a BMAD project read through one table, Sol review F8; revision 4: vision and architecture as the foundation, owner 2026-10-17): the plan skill: how any agent plans a project in BMN's own format to at least BMAD's standard, with methods loaded on demand
 
 # Plan
 
@@ -11,30 +11,14 @@ Planning turns the owner's intent into epics an implementing agent can deliver w
 
 ## First: which plan
 
-Run `bmn plan status --json` in the project (no BMN needed). It names the product root, the plan root, the board, the format (`bmn-plan` or `bmad`) and the history mode.
+Run `bmn plan status --json` in the project (no BMN needed). It names the product root, the plan root, the board, the format (`bmn-plan`, or `bmad` for a project not yet moved) and the history mode.
 
 - **`bmn-plan`**: write `plan/VISION.md`, `plan/PLAN.md`, `plan/epics/NNN-slug.md` and rows in `plan/status.yaml`. When `bmad_copy: true` declares a version-2 copy, run `bmn plan sync` before reading rows; `set` and `publish` also synchronize. Both boards include every row; never exclude a colleague's rows. A disputed go holds its whole epic for explicit resolution. A new plan epic's row reaches the retained board on the next sync; its epic text stays in `plan/`. Follow `PLAN.md`'s next epic number after an unfinished-only move.
-- **`bmad`**: write the project's existing BMAD files in their existing shape (its epics file or epic files, its `sprint-status.yaml`), with the same rules below read through [In a BMAD project](#in-a-bmad-project). Never create `plan/` or any of its files in a BMAD project and never reformat or migrate its files.
+- **`bmad`** (not yet moved): read its files as they are and write nothing there. `bmn plan set`, `go` and `allow` refuse it with `NEEDS_MOVE`, naming BMN's move tool. New planning there starts with one card to the owner recommending the move (`docs/planning.md`, Moving a BMAD plan safely); never create `plan/` beside it or migrate it yourself.
 - **No plan yet** (`NO_PLAN`): create `plan/` from the templates, and add `/plan/` to `.gitignore` only when the owner says the plan stays out of the product repository (then `git init` inside `plan/`, no remote).
 - **An error** (`BOTH_PLANS`, `UNKNOWN_SCHEMA`, `MALFORMED`): stop and tell the owner; never pick one plan yourself.
 
 Read `VISION.md` (what the project is for and its principles) and `PLAN.md` (the frame and its Architecture), then only the epic files and rows your task needs; open references and logs on demand. A `bmn-plan` project without `VISION.md` gets one first ([methods/vision.md](methods/vision.md)).
-
-### In a BMAD project
-
-This skill and its methods name BMN's files and statuses. In a `bmad` project read each name through this table, keep BMAD's shape and vocabulary, and never write anything the table does not name:
-
-| The skill says | In a BMAD project |
-| --- | --- |
-| `VISION.md`, its principles | the project's existing vision: its product brief or PRD, else a `## Vision` section in the epics file's front matter, added only with the owner's yes (a card) |
-| `PLAN.md`, its Architecture | the existing PRD, architecture and UX documents and the epics file's front matter |
-| `plan/epics/NNN-slug.md` | the project's epics file (or its epic files), in its existing heading shape |
-| `plan/references/<x>/` | the folder beside its planning files (`_bmad-output/planning-artifacts/<x>/` unless its config names another) |
-| status `ready` and the `queue` | a story `ready-for-dev`; an epic's go is a dated `go YYYY-MM-DD` comment on its row, committed with the product repository (`bmn plan go` is for BMN's format); the order is the epics file's |
-| `blocked`, `paused`, `dropped` | the row keeps its BMAD status, with a dated comment naming the state and its reason |
-| `bmn plan set` | the same command; it takes BMAD's statuses (`backlog`, `ready-for-dev`, `in-progress`, `review`, `done`) |
-
-Every other rule holds as written.
 
 ## The rules every plan keeps
 
@@ -49,13 +33,11 @@ Every other rule holds as written.
 8. **Design during planning.** For an epic that adds or changes screens, the team's designer designs ([methods/design.md](methods/design.md): flows, states, sizes, interaction) and the owner approves it before the go; the epic cites the approved design, no design story runs inside it, and the design becomes a truth document.
 9. **Consult when it pays.** When the owner asks, or a named risk calls for it (security, privacy, data loss, a migration, a contract other teams depend on), ask a teammate with `bmn team ask --role consultant|epic-reviewer` (read-only, a stable `--key`), naming where his recorded decisions on that area live (the plan's Decisions, epic Logs, shared memory) and asking it to check them before advising; apply what holds, and record each finding's disposition in the epic's Reviews or a `references/` file. Advice is not a decision.
 10. **Truth impact.** Every epic names the truth documents and contracts it adds, changes or removes (or `none` with a reason). Truth lives in the project's docs; the epic proposes the change.
-11. **Readiness before the go.** Run [methods/readiness.md](methods/readiness.md) before asking for his go; it ends in one batch of cards, the go last, and each epic from 107 on answers `## Challenges`. His steps sit only before the go or at the end (each story's **Owner:** line), and `## Run needs` lists what the run may need from him: extra repair rounds (4 by default), deferrable criteria, a money cap, named actions for an Away card, `**Messages:**` by named person, destination and purpose, and `**Prepared:**`, what the run will need from outside itself with how and when each was checked. His go is recorded at once, before any run, with `bmn plan go N --source "<his quoted words with their time>" --approved sha256:<approval text> --expect <row token>` (both from `bmn plan status --epic N --json`, read when you asked; docs/planning.md, Recording his go): the row becomes `ready` with `go YYYY-MM-DD` in its note and the epic joins `queue` in one commit naming his act and what he approved, leaving other work uncommitted (a BMAD project: the table above). Read it back with dev-auto's `python3 scripts/run_needs.py N --project P`, run from its installed skill folder: GO with that approved text, or fix what it names. It approves the Run needs as his instruction for the epic's runs, read from that commit. A refusal names the missing fact; changed terms need a new card on the current text, never a go recorded on text he did not see. The go never covers push, merge or deploy; implementing stays with the invocation that selects the work.
+11. **Readiness before the go.** Run [methods/readiness.md](methods/readiness.md) before asking for his go; it ends in one batch of cards, the go last, and each epic from 107 on answers `## Challenges`. His steps sit only before the go or at the end (each story's **Owner:** line), and `## Run needs` lists what the run may need from him: extra repair rounds (4 by default), deferrable criteria, a money cap, named actions for an Away card, `**Messages:**` by named person, destination and purpose, and `**Prepared:**`, what the run will need from outside itself with how and when each was checked. His go is recorded at once, before any run, with `bmn plan go N --source "<his quoted words with their time>" --approved sha256:<approval text> --expect <row token>` (both from `bmn plan status --epic N --json`, read when you asked; docs/planning.md, Recording his go): the row becomes `ready` with `go YYYY-MM-DD` in its note and the epic joins `queue` in one commit naming his act and what he approved, leaving other work uncommitted. Read it back with dev-auto's `python3 scripts/run_needs.py N --project P`, run from its installed skill folder: GO with that approved text, or fix what it names. It approves the Run needs as his instruction for the epic's runs, read from that commit. A refusal names the missing fact; changed terms need a new card on the current text, never a go recorded on text he did not see. The go never covers push, merge or deploy; implementing stays with the invocation that selects the work.
 12. **One file of what a run may use.** Planning a new epic writes `plan/allowances/NNN.yaml` from [templates/allowances.yaml](templates/allowances.yaml), with 4 repair rounds by default, and `## Run needs` becomes one line pointing to it. A lead raises a limit up to its ceiling with `bmn plan allow`; his recorded words change anything, the ceiling included. A card recommended during a run writes a limit that finishes the work, never one more slice, and no agent proposes a limit narrower than the file's. An epic over 10 stories or 50 criteria is split before he sees it.
 13. **Check before handing back.** `bmn plan check` passes (it is structural only; your readiness pass is the content check).
 
 ## Writing an epic
-
-In a BMAD project, write the epic in its epics file in the shape its other epics have, with this section's content; the paths and statuses below are BMN's format's.
 
 Copy `templates/epic.md` to `plan/epics/NNN-slug.md` (three digits at least). Fill Outcome, Why (with the principles it serves), Boundary and dependencies (order of stories, what is out of scope), Truth impact and Stories; add What exists today, Requirements, Decisions, Assumptions and Rollout when they carry weight. Keep an active epic under 60 KiB: measurements and long evidence go to `plan/references/<epic>/` and are linked.
 

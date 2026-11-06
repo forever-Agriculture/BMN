@@ -53,6 +53,18 @@ describe('D13 canonical plan', () => {
     expect(await runPlanCommand(['set', '1-1-probe', 'review', '--expect', rowToken('1-1-probe', 'backlog', ''), '--project', first, '--json'])).toBe(1)
     expect(readFileSync(join(first, 'plan/status.yaml'), 'utf8')).toBe(before)
   })
+  it('writes a declared bmad_board only through the two-way sync: set from any worktree leaves it as it was (108.6 AC3)', async () => {
+    const { first, main } = fixture()
+    const retained = '_bmad-output/implementation-artifacts/sprint-status.yaml'
+    const before = [readFileSync(join(main, retained), 'utf8'), readFileSync(join(first, retained), 'utf8')]
+    for (const from of [first, main]) {
+      const status = (from === first ? 'in-progress' : 'review')
+      const current = readFileSync(join(main, 'plan/status.yaml'), 'utf8').match(/1-1-probe: (\S+)/u)[1]
+      expect(await runPlanCommand(['set', '1-1-probe', status, '--expect', rowToken('1-1-probe', current, ''), '--project', from, '--json'])).toBe(0)
+    }
+    expect(readFileSync(join(main, 'plan/status.yaml'), 'utf8')).toContain('1-1-probe: review')
+    expect([readFileSync(join(main, retained), 'utf8'), readFileSync(join(first, retained), 'utf8')]).toEqual(before)
+  })
   it('keeps BOTH_PLANS when the BMAD board has not been declared', async () => {
     const { first, main } = fixture()
     file(main, 'plan/status.yaml', board.replace(/^bmad_board:.*\n/mu, ''))

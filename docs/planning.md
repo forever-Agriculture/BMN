@@ -1,7 +1,7 @@
 # MODULE: planning.md - plan format, canonical locations, guarded row writes and publication
 # Planning
 
-How a project is planned with BMN (Epic 77): one small format in the project, one board the owner reads and edits, one command that reads, checks and changes it (`bmn plan`), and one planning skill (`plan`) that BMN installs into every agent app. BMAD projects keep working: every reader takes BMAD's board too.
+How a project is planned with BMN (Epic 77): one small format in the project, one board the owner reads and edits, one command that reads, checks and changes it (`bmn plan`), and one planning skill (`plan`) that BMN installs into every agent app. A project not yet moved from BMAD is read as before, and nothing writes or runs it until it moves (Epic 108): `set`, `go` and `allow` refuse it with `NEEDS_MOVE`, naming the move tool ([Moving a BMAD plan safely](#moving-a-bmad-plan-safely)), and so does dev-auto's start. A moved plan may retain a BMAD board for a colleague (`bmad_board`, b2buster for Artem); the two-way sync is its only writer.
 
 ## The plan folder
 
@@ -82,7 +82,7 @@ development_status:
 | `done` | Verified acceptance; the note names the branch and, once delivered, the default-branch commit (dev-auto's board convention). |
 | `dropped` | Not to be done; the note names the decision. |
 
-A BMAD board (`sprint-status.yaml`) keeps BMAD's statuses (`backlog`, `ready-for-dev`, `in-progress`, `review`, `done`, `optional`) and its comments as they are.
+A BMAD board (`sprint-status.yaml`) is read with BMAD's statuses (`backlog`, `ready-for-dev`, `in-progress`, `review`, `done`, `optional`) and its comments as they are; only a retained board's two-way sync writes one.
 
 ## Where a plan is found
 
@@ -90,7 +90,7 @@ Every reader (`bmn plan`, the app's Now sheet, dev-auto through `bmn plan status
 
 1. The product repository: Git's top level for the directory, and from inside `plan/` with its own `.git` the repository that encloses it.
 2. The default checkout is the worktree on the branch named by `origin/HEAD`. If that reference is absent or its branch is gone, a read-only `git ls-remote --symref origin HEAD` asks the remote. With no remote, the existing local worktree convention remains. The first worktree is never substituted for an unavailable remote default.
-3. BMN's `plan/status.yaml` in that checkout is canonical from every linked worktree, tracked or ignored. Its `bmad_board: <repository-relative path>` may explicitly retain a BMAD board, and then BMN's plan wins even from an old branch. Without that declaration, both plans remain `BOTH_PLANS`. Unknown schemas and malformed own boards are errors. A project still on BMAD keeps its configured/default board convention.
+3. BMN's `plan/status.yaml` in that checkout is canonical from every linked worktree, tracked or ignored. Its `bmad_board: <repository-relative path>` may explicitly retain a BMAD board, and then BMN's plan wins even from an old branch. Without that declaration, both plans remain `BOTH_PLANS`. Unknown schemas and malformed own boards are errors. A project still on BMAD is read at its configured/default board, and only read.
 4. Without a checkout on the remote default branch, `status` reads locally and reports `default_available: false`; `set` and `go` refuse `NO_DEFAULT_CHECKOUT`, naming how to add one. An unavailable remote does not grant local approval authority.
 
 `bmn plan status --json` reports `product_root`, `default_checkout`, `default_branch`, `default_available`, `run_checkout`, `plan_root`, `board`, `board_checkout`, `format`, `tracked` and `history`. A tracked BMN plan also reports `unpublished` and the epic numbers in publication `conflicts`.
@@ -99,7 +99,7 @@ Every reader (`bmn plan`, the app's Now sheet, dev-auto through `bmn plan status
 
 A plan the product repository ignores keeps its history in its own local Git repository inside `plan/`, with no remote (`history: plan-repository`). That is history, not a backup. The planning skill commits the plan files it changed at each planning checkpoint, after first committing separately whatever was uncommitted there (the owner's and dev-auto's board edits); it never stages other files. dev-auto commits nothing in `plan/.git`.
 
-A tracked BMN plan uses the default checkout's product history (`history: product-repository`); reads, row writes and go commits use that same location from every worktree. BMAD retains its existing two-checkout write behavior. Only an ignored plan has its own repository.
+A tracked BMN plan uses the default checkout's product history (`history: product-repository`); reads, row writes and go commits use that same location from every worktree. Only an ignored plan has its own repository.
 
 BMN's own plan is ignored by BMN's public repository (`/plan/` in `.gitignore`).
 
@@ -111,7 +111,7 @@ Works with BMN closed, on either format. Exit 0 done or clean, 1 findings or a r
 - `bmn plan allowances N [--at COMMIT] [--json] [--project P]` is the one reader of `plan/allowances/NNN.yaml` (see [One file of what a run may use](#one-file-of-what-a-run-may-use)). `bmn plan allow N CHANGE... --reason R --expect TOKEN [--source WORDS]` changes it in one commit with no new go.
 - **Messages and people.** `**Messages:**` in Run needs names each allowed message as `<person>, on <destination>: <purpose>`, one sentence each, or `none`; `run_needs.py` prints them and `spend_ledger.py message` reserves each use. `person` is a Prepared kind: who owns or accepts what, with its check and date. From Epic 107 on an epic answers `## Challenges` (Scale, Origin, Verified, Exists, People), which `bmn plan check` requires by label.
 - `bmn plan check [--json] [--project P]` is structural validation, one finding per line: duplicate keys, malformed rows, unknown statuses, notes over 160 characters, story headings without rows and rows without headings, duplicate epic, story or criterion identifiers (two board keys for one epic or story among them), repeated header lines, a story row whose epic has neither a row nor a file, missing required sections of the frame or an epic, stories without criteria or Verification, a queue naming an unknown, duplicate or finished epic or missing a `ready` one, a `done` epic with a story neither `done` nor `dropped`, a `blocked`, `paused` or `dropped` row without a reason, a non-legacy file over its ceiling, from Epic 103 on a `## Run needs` with no `**Prepared:**` line or a bare `none` (`none, because <reason>` passes; from Epic 104 on each need also names a target, `check:` and `checked <date>`, an owner step only its target, the same form dev-auto's `run_needs.py` reads; Epic 103's own approved line stays as it is, since Prepared is inside the text a go approves, so a changed need asks a new go), and from Epic 90 on a missing `## Run needs`, a story without an Owner line, a `before the go` story after a `none` story or an `at the end` story before one. For unfinished epic rows with a suggested lead in their epic file, it also reports a missing, stale or repeated hint, with the board line and expected hint. On a BMAD board it checks duplicate keys and row grammar only. Whether the plan says the right thing is for the readiness method and review.
-- `bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P]` changes one row (below). It does not set an epic row `ready` in a plan with history: that is his go, recorded with `go`.
+- `bmn plan set <row> <status> --expect TOKEN [--note TEXT] [--project P]` changes one row (below). It does not set an epic row `ready` in a plan with history: that is his go, recorded with `go`.
 - `bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]` records his go (below).
 
 ### One file of what a run may use
@@ -129,7 +129,7 @@ The planner asks for the go on one card after readiness, holding the epic row's 
 - `--source` names his act: his quoted words with their time (`card 2026-10-26T09:30Z: 'Go'`). A `bmn:SESSION/KEY` reference names a decision record an agent made for itself ([dev-auto](dev-auto.md)), so it is refused. A string is what the planner states, not proof of the act; only a real answer of his is recorded. The go date is the source's date unless `--date` gives one.
 - `--approved` is the approval text he was shown, or the plan commit he approved. Run needs or Decisions that differ from it, committed or not, are refused (`CHANGED_TERMS`): ask again on the current text.
 - It writes one commit of the plan's history holding only the row's change to `ready # go DATE · <note>` and the epic's place last in `queue`, plus the epic file when its approved text is not yet committed (a later edit of it stays uncommitted). Its message carries `Go-Epic`, `Go-Date`, `Approval-Source`, `Approved-Text` and `Approved-File`. Other changed or staged files stay as they were and out of the commit; the board's other uncommitted rows stay uncommitted. The branch moves only if it did not move meanwhile; then the index entry (if it was not staged) and the working board follow, and the commit is read back.
-- Refused, writing nothing (exit 1, the code names the missing fact): `NO_OWNER_GO`, `NO_APPROVED_TEXT`, `CHANGED_TERMS`, `CONFLICT` (a stale token), `FINISHED`, `NO_EPIC`, `NOT_COMMITTED` (the epic's rows are not in the history yet), `UNREADABLE_HISTORY`, `COMMIT_FAILED`, `DETACHED`, `NO_HISTORY`, `NO_DEFAULT_CHECKOUT`, `NO_ALLOWANCES` (a plan with `rules_from_allowances` and no file in what he approved), `BMAD` (a BMAD board keeps its dated go comment).
+- Refused, writing nothing (exit 1, the code names the missing fact): `NO_OWNER_GO`, `NO_APPROVED_TEXT`, `CHANGED_TERMS`, `CONFLICT` (a stale token), `FINISHED`, `NO_EPIC`, `NOT_COMMITTED` (the epic's rows are not in the history yet), `UNREADABLE_HISTORY`, `COMMIT_FAILED`, `DETACHED`, `NO_HISTORY`, `NO_DEFAULT_CHECKOUT`, `NO_ALLOWANCES` (a plan with `rules_from_allowances` and no file in what he approved), `NEEDS_MOVE` (a BMAD board: move the plan first).
 - The same request again finds its commit (`already recorded`) and only completes what a crash left undone, so one act never records two gos. Only a go the working board does not show yet is completed, by the same request over the row it was asked on: `bmn plan go` keeps a pending record of it beside the board's versions until the working board shows the go, a `bmn plan set` changes the row, or a later commit changes it. A retry that writes nothing (another row token, or a board that changed while it was written) keeps the go pending and exits 1 with `board_pending`. A go that stopped while the board was being written, whose row is again the one it was asked on, is refused (`UNCERTAIN`): an unwritten board and one written and put back by hand look the same, so it takes a new go. A go published before is never written again: after a withdrawal, committed or only on the board, it is refused (`WITHDRAWN`) and the row stays as it is.
 
 dev-auto reads the go back with `run_needs.py N`: GO, its commit, the recorded source and the approved text. Each commit `bmn plan go` wrote for the epic is a go, a second one on the same day with new terms included. A go committed by hand before this command stands, its source unrecorded: one committed before 2026-10-27 and before the history's first `Go-Epic` commit. A hand-committed go after either names no act of his and grants nothing (`NO_GO_RECORD`); so does a recorded go missing any of its five trailers, or whose epic, go date, source (his quoted words with their time), file or approved text disagree with what the commit holds; a row put back to `backlog` or `dropped`, or taken off the board, withdraws it, in a later commit or on the board now, until his next go. A plan the product repository tracks is read in its default checkout, where gos are recorded and withdrawn. The approved text is Run needs and Decisions only: a story or criterion changed with the go or after it is not bound to it, and `CHANGED_SINCE_GO` does not name it.
@@ -146,7 +146,7 @@ A moved plan's `migration.json` pins the original board and its pre-move history
 4. keeps the version before in `~/.local/state/bmn/plan-versions/<board hash>/` (the last 20, with `board-path.txt` naming the board);
 5. writes a temporary file with the board's mode, checks that the board is still what it read, and renames it into place. When another row changed in the meantime it reads again and retries, at most 5 times.
 
-A missing `--expect`, an unknown row or status, or a note it would write over 160 characters (1,000 on a BMAD board) is refused with exit 2. A canonical BMN plan changes only in the default checkout. A tracked BMAD board still changes in both copies: both are locked in one order and checked before either is written; `--expect-default` supplies the default row's token when it differs. A refusal after one copy was written names that copy and its token (`written` in `--json`).
+A missing `--expect`, an unknown row or status, or a note it would write over 160 characters is refused with exit 2. A canonical BMN plan changes only in the default checkout. A BMAD board is refused with `NEEDS_MOVE` (exit 1), writing nothing.
 
 ### Publishing a tracked plan
 
@@ -210,6 +210,8 @@ Rollback also refuses `ROLLBACK_COPY_CONFLICT` when a later BMAD edit differs fr
 ## Not worse than BMAD: the parity map
 
 Every row names what runs after BMAD is gone.
+
+**Status (2026-11-06, Epic 108):** BMN and dev-auto write and run BMN plans only. Q-Automations and AI-Invoices moved their unfinished epics and deleted BMAD; b2buster moved and keeps BMAD's board for Artem, written only by the two-way sync; a dormant BMAD project (PICHER_v2) is read and names the move. BMAD's own skills stay in the projects that ship them; BMN neither runs nor installs them.
 
 | BMAD | Ours |
 | --- | --- |

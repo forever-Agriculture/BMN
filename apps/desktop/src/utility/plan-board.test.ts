@@ -642,43 +642,29 @@ release()
     expect(results.map((result) => result.outcome).sort()).toEqual(['changed', 'conflict'])
   })
 
-  it('a tracked board\'s two copies are locked before either is checked: a change in the default copy refuses both (Sol review F3)', async () => {
-    const root = fixture()
-    const tracked = repo(join(root, 'tracked'))
-    const board = 'development_status:\n  epic-4: in-progress\n  4-1-a: in-progress\n'
-    file(tracked, '_bmad-output/implementation-artifacts/sprint-status.yaml', board)
-    git(tracked, 'add', '_bmad-output'); git(tracked, 'commit', '-qm', 'board')
-    const run = join(root, 'run'); git(tracked, 'worktree', 'add', '-qb', 'run', run)
-    const mainBoard = join(tracked, '_bmad-output/implementation-artifacts/sprint-status.yaml')
-    const runBoard = join(run, '_bmad-output/implementation-artifacts/sprint-status.yaml')
-    const home = fixture()
-    // Another writer holds the default copy's lock while the set starts, then changes the same row.
-    const release = await lockBoard(mainBoard)
-    const child = spawn(process.execPath, [BMN, 'plan', 'set', '4-1-a', 'review', '--expect', token(board, '4-1-a'), '--json'], {
-      cwd: run, env: { PATH: process.env.PATH, HOME: home, XDG_STATE_HOME: join(home, 'state'), LC_ALL: 'C' }
-    })
-    let out = ''
-    child.stdout.on('data', (chunk) => { out += chunk })
-    const code = new Promise<number>((done) => child.on('exit', (exit) => done(exit ?? -1)))
-    await new Promise((done) => setTimeout(done, 400))
-    writeFileSync(mainBoard, board.replace('4-1-a: in-progress', '4-1-a: blocked # owner'))
-    release()
-    expect(await code).toBe(1)
-    expect(JSON.parse(out)).toMatchObject({ ok: false, error: { code: 'CONFLICT' }, written: [] })
-    expect(readFileSync(runBoard, 'utf8')).toBe(board)
-    expect(readFileSync(mainBoard, 'utf8')).toContain('4-1-a: blocked # owner')
-  })
-
-  it('changes a BMAD board with BMAD\'s statuses', async () => {
+  it('reads a BMAD board as before, and set and go refuse it with NEEDS_MOVE naming the move tool, writing nothing (108.6 AC2)', async () => {
     const main = repo(join(fixture(), 'main'))
     const text = 'development_status:\n  epic-3: in-progress # a long BMAD comment that stays as it is\n  3-1-a: ready-for-dev\n'
     const path = file(main, '_bmad-output/implementation-artifacts/sprint-status.yaml', text)
-    expect(bmn(main, fixture(), 'set', '3-1-a', 'ready', '--expect', token(text, '3-1-a')).code).toBe(2)
-    expect(bmn(main, fixture(), 'set', '3-1-a', 'review', '--expect', token(text, '3-1-a')).code).toBe(0)
-    expect(readFileSync(path, 'utf8')).toBe(text.replace('3-1-a: ready-for-dev', '3-1-a: review'))
+    const status = JSON.parse(bmn(main, fixture(), 'status', '--json').out)
+    expect(status).toMatchObject({ ok: true, format: 'bmad', total_rows: 2 })
+    expect(status.needs_move).toContain(path)
+    expect(bmn(main, fixture(), 'status').out).toContain('NEEDS_MOVE')
+    expect(bmn(main, fixture(), 'check').code).toBe(0)
+    for (const args of [['set', '3-1-a', 'review', '--expect', token(text, '3-1-a'), '--json'], ['go', '3', '--source', '"Go" 2026-11-06T10:00', '--approved', `sha256:${'0'.repeat(64)}`, '--expect', token(text, 'epic-3'), '--json']]) {
+      const refused = bmn(main, fixture(), ...args)
+      expect(refused.code).toBe(1)
+      const error = JSON.parse(refused.out).error
+      expect(error.code).toBe('NEEDS_MOVE')
+      expect(error.message).toContain(path)
+      expect(error.message).toMatch(/scripts\/plan\/migrate-bmad-plan\.mjs stage --repo REPO/u)
+    }
+    const allow = bmn(main, fixture(), 'allow', '3', 'may+=anything', '--reason', 'r', '--expect', 'x', '--json')
+    expect([allow.code, JSON.parse(allow.out).error.code]).toEqual([1, 'NEEDS_MOVE'])
+    expect(readFileSync(path, 'utf8')).toBe(text)
   })
 
-  it('board paths with real Git: an ignored plan is changed in the default checkout, a tracked board in both copies, his edit on another row kept', async () => {
+  it('board paths with real Git: an ignored plan is changed in the default checkout, his edit on another row kept; a tracked BMAD board is written in neither copy', async () => {
     const root = fixture()
     const main = ownProject(root)
     const child = join(root, 'child'); git(main, 'worktree', 'add', '-qb', 'child', child)
@@ -691,6 +677,7 @@ release()
     expect(readFileSync(path, 'utf8')).toContain('epic-1: done # (owner) accepted')
     expect(existsSync(join(child, 'plan'))).toBe(false)
 
+    // A tracked BMAD board read from a linked worktree is no longer written in either copy (108.6).
     const tracked = repo(join(root, 'tracked'))
     const board = 'development_status:\n  epic-4: in-progress\n  4-1-a: in-progress\n  4-2-b: backlog\n'
     file(tracked, '_bmad-output/implementation-artifacts/sprint-status.yaml', board)
@@ -698,20 +685,10 @@ release()
     const run = join(root, 'run'); git(tracked, 'worktree', 'add', '-qb', 'run', run)
     const mainBoard = join(tracked, '_bmad-output/implementation-artifacts/sprint-status.yaml')
     const runBoard = join(run, '_bmad-output/implementation-artifacts/sprint-status.yaml')
-    writeFileSync(mainBoard, board.replace('4-2-b: backlog', '4-2-b: backlog # owner note'))
-    const plan = await resolvePlan(run)
-    expect(plan).toMatchObject({ tracked: true, boardCheckout: run, boardPath: runBoard })
-    expect(bmn(run, fixture(), 'set', '4-1-a', 'review', '--expect', token(board, '4-1-a')).code).toBe(0)
-    expect(readFileSync(runBoard, 'utf8')).toBe(board.replace('4-1-a: in-progress', '4-1-a: review'))
-    expect(readFileSync(mainBoard, 'utf8')).toBe(board.replace('4-1-a: in-progress', '4-1-a: review').replace('4-2-b: backlog', '4-2-b: backlog # owner note'))
-    // A differing row in the default checkout's copy refuses both copies until its own token is given.
-    const runText = readFileSync(runBoard, 'utf8')
-    const refused = bmn(run, fixture(), 'set', '4-2-b', 'in-progress', '--expect', token(runText, '4-2-b'))
+    expect(await resolvePlan(run)).toMatchObject({ format: 'bmad', tracked: true, boardCheckout: run, boardPath: runBoard })
+    const refused = bmn(run, fixture(), 'set', '4-1-a', 'review', '--expect', token(board, '4-1-a'))
     expect(refused.code).toBe(1)
-    expect(readFileSync(runBoard, 'utf8')).toBe(runText)
-    const both = bmn(run, fixture(), 'set', '4-2-b', 'in-progress', '--expect', token(runText, '4-2-b'), '--expect-default', token(readFileSync(mainBoard, 'utf8'), '4-2-b'))
-    expect(both.code).toBe(0)
-    expect(readFileSync(mainBoard, 'utf8')).toContain('4-2-b: in-progress # owner note')
-    expect(readFileSync(runBoard, 'utf8')).toContain('4-2-b: in-progress\n')
+    expect(readFileSync(runBoard, 'utf8')).toBe(board)
+    expect(readFileSync(mainBoard, 'utf8')).toBe(board)
   })
 })

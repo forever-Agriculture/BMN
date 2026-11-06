@@ -913,7 +913,8 @@ describe('D15 cutover', () => {
       expect(writerOutput).toBe('')
       saveJournal(journal, { ...state, phase: 'ref-committed', fenced: true })
     } finally { await watchdog.release(); if (writerExit) await writerExit }
-    expect(writer.exitCode, writerOutput).toBe(0)
+    // Held through the fence, then refused: the fixture's board is still BMAD, which nothing writes since 108.6.
+    expect([writer.exitCode, JSON.parse(writerOutput).error.code], writerOutput).toEqual([1, 'NEEDS_MOVE'])
     for (const entry of fence) expect(statSync(entry.path).mode & 0o777).toBe(entry.mode)
     expect(readFileSync(path, 'utf8')).toBe('first\nmiddle\nlast\n')
   })

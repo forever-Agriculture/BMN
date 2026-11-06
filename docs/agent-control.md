@@ -152,7 +152,7 @@ Commands:
                                             with numbers, and BMN reads them (bmn judge --help)
   doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
                                             one shared run, also with BMN closed (bmn doctor --help)
-  plan status|check|set|go                  The project's planning board, in BMN's format or BMAD's: print
+  plan status|check|set|go                  The project's planning board in BMN's format (a BMAD one reads only): print
                                             rows, check the plan's structure, change one row safely, record
                                             the owner's go in the plan's history; not the subscription's Plan
                                             use (bmn plan --help)
@@ -3032,7 +3032,7 @@ BMN alone supplies the internal `--startup UUID` option to identify one applicat
 
 ## The project's plan: `bmn plan`
 
-`bmn plan status|check|set|go` reads, checks and changes the project's planning board, in BMN's own format (`plan/`) or BMAD's (`sprint-status.yaml`), with BMN closed: it opens no socket and needs no token. `status --json` is how dev-auto and other agents learn the plan's format and paths and each row's token; `set` changes one row only, under a lock, refusing when the row changed since its token was read; `go` records the owner's go on an epic as one commit of the plan's history naming his act and the approved text, which dev-auto's `run_needs.py` reads back. The format, the resolution rule, the guarantees of `set` and the parity map with BMAD are in [planning.md](planning.md). The name is the project's planning, not the subscription's Plan use (above).
+`bmn plan status|check|set|go` reads, checks and changes the project's planning board in BMN's own format (`plan/`), with BMN closed; a project still on BMAD's `sprint-status.yaml` is read and checked, and `set`, `go` and `allow` refuse it with `NEEDS_MOVE`, naming the move tool (Epic 108): it opens no socket and needs no token. `status --json` is how dev-auto and other agents learn the plan's format and paths and each row's token; `set` changes one row only, under a lock, refusing when the row changed since its token was read; `go` records the owner's go on an epic as one commit of the plan's history naming his act and the approved text, which dev-auto's `run_needs.py` reads back. The format, the resolution rule, the guarantees of `set` and the parity map with BMAD are in [planning.md](planning.md). The name is the project's planning, not the subscription's Plan use (above).
 
 ## A brief for agents
 
@@ -3052,7 +3052,7 @@ What to send, and when
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
   judge ask               typed questions about one text to the team's judge; advice only.
-  plan status|check|set   the project's plan and board (BMN's plan/ or BMAD's); set changes one row
+  plan status|check|set   the project's BMN plan and board (BMAD: read only); set changes one row
                           with the token status --json gives. Not the subscription's Plan use.
   policy --repo OWNER/NAME  the owner's push and merge policy for that repository; read it before
                           each push, merge and pull-request write.

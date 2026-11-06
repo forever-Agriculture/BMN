@@ -800,7 +800,7 @@ function atomicWrite(path, text) {
 export async function recordAllow(plan, epic, { changes: words, reason, source, expect, seam = () => {} }) {
   const { lockBoard } = await import('./plan-cli.mjs')
   if (plan.defaultAvailable === false) throw new AllowRefusal('NO_DEFAULT_CHECKOUT', `no checkout holds origin/${plan.defaultBranch ?? '<default>'}; add one with git worktree add`)
-  if (plan.format !== 'bmn-plan') throw new AllowRefusal('BMAD', 'an allowances file belongs to a BMN-format plan; a BMAD plan gets one when it moves')
+  if (plan.format !== 'bmn-plan') throw new AllowRefusal('NEEDS_MOVE', 'an allowances file belongs to a BMN-format plan; move this BMAD plan first (docs/planning.md, "Moving a BMAD plan safely")')
   if (plan.history === 'none') throw new AllowRefusal('NO_HISTORY', `${plan.planRoot} keeps no Git history, so no change can be recorded there`)
   const why = typeof reason === 'string' ? reason.trim() : ''
   if (why === '' || /[\r\n]/u.test(why) || [...why].length > 500) throw new AllowRefusal('NO_REASON', '--reason is one line of at most 500 characters: why the limit changes')

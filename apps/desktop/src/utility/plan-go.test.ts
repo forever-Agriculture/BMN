@@ -265,7 +265,7 @@ describe('what cannot be recorded is refused and leaves everything as it was (St
     file(root, '_bmad-output/implementation-artifacts/sprint-status.yaml', 'development_status:\n  epic-7: backlog\n')
     git(root, 'add', '-A'); git(root, 'commit', '-qm', 'docs: bmad')
     const bmad = bmn(root, none.home, ['go', '7', '--source', SOURCE, '--approved', 'sha256:' + '0'.repeat(64), '--expect', rowToken('epic-7', 'backlog', ''), '--json'])
-    expect([bmad.code, bmad.json.error.code]).toEqual([1, 'BMAD'])
+    expect([bmad.code, bmad.json.error.code]).toEqual([1, 'NEEDS_MOVE'])
   })
 
   it('an epic row is not set to ready by hand through bmn plan set; story rows and other statuses still are', () => {

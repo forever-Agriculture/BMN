@@ -171,7 +171,7 @@ Commands:
                                             with numbers, and BMN reads them (bmn judge --help)
   doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
                                             one shared run, also with BMN closed (bmn doctor --help)
-  plan status|check|set|go                  The project's planning board, in BMN's format or BMAD's: print
+  plan status|check|set|go                  The project's planning board in BMN's format (a BMAD one reads only): print
                                             rows, check the plan's structure, change one row safely, record
                                             the owner's go in the plan's history; not the subscription's Plan
                                             use (bmn plan --help)
@@ -269,7 +269,7 @@ What to send, and when
   resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
   research ask            one public question to the web (--question-file <path> or -).
   judge ask               typed questions about one text to the team's judge; advice only.
-  plan status|check|set   the project's plan and board (BMN's plan/ or BMAD's); set changes one row
+  plan status|check|set   the project's BMN plan and board (BMAD: read only); set changes one row
                           with the token status --json gives. Not the subscription's Plan use.
   policy --repo OWNER/NAME  the owner's push and merge policy for that repository; read it before
                           each push, merge and pull-request write.

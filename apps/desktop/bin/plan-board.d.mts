@@ -2,7 +2,6 @@
 export declare const FORMAT: 'bmn-plan'
 export declare const NOTE_LIMIT: number
 export declare const STATUSES: string[]
-export declare const BMAD_STATUSES: string[]
 export declare const EXIT: { ok: 0; findings: 1; unable: 2 }
 export declare const ROW: RegExp
 
@@ -56,6 +55,7 @@ export declare function suggestedLeadHint(text: string): string | null
 export declare function epicLeadHint(planRoot: string, key: string): string | null
 export declare function withLeadHint(note: string, hint: string, date?: string): { note: string; clipped: boolean }
 export declare function resolvePlan(start: string): Promise<ResolvedPlan>
+export declare function needsMove(boardPath: string): string
 export declare function defaultLocation(root: string): Promise<{checkout: string; available: boolean; remote: boolean; branch?: string | null}>
 export declare function readBoard(path: string, options?: { epics?: number[] }): Promise<Board>
 export declare function readEpicFile(path: string): EpicFile

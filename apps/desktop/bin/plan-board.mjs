@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createInterface } from 'node:readline'
 import { insideDirectory } from './shared-helpers.mjs'
 import { SIZE_LIMIT, allowanceFileName, allowanceFindings, ownerApprovedSize } from './plan-allowances.mjs'
@@ -24,7 +25,6 @@ const EPIC_LIMIT = 60 * 1024
 export const STATUSES = ['backlog', 'ready', 'in-progress', 'review', 'blocked', 'paused', 'done', 'dropped']
 const REASON_STATUSES = ['blocked', 'paused', 'dropped']
 const FINISHED = ['done', 'dropped']
-export const BMAD_STATUSES = ['backlog', 'ready-for-dev', 'in-progress', 'review', 'done', 'optional', 'contexted', 'drafted']
 const LEGACY_MARKER = /^<!--\s*bmn-plan:\s*bmad-legacy\b([^>]*)-->\s*$/u
 const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signals', 'Standing constraints', 'Architecture', 'Decisions', 'Truth documents']
 /** The foundation every plan builds on (owner, 2026-10-17): what the project is for and its numbered principles. */
@@ -55,6 +55,16 @@ const OWNER_LINE = /^\*\*Owner:\*\*\s*(?:(none|before the go|at the end)(?=[\s.,
 const OWNER_ORDER = ['before the go', 'none', 'at the end']
 const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }
+/** BMN's move tool, beside this file in the repository and in the packaged app alike. */
+const MOVE_TOOL = fileURLToPath(new URL('../../../scripts/plan/migrate-bmad-plan.mjs', import.meta.url))
+
+/**
+ * A project still on a BMAD board is read as before, never written or run (Epic 108, R108-FR18): every writer and
+ * dev-auto's start name the move instead. dev-auto's run_needs.py prints the same words.
+ */
+export function needsMove(boardPath) {
+  return `${boardPath} is a BMAD board; BMN no longer writes it or runs it. Move the plan first: node ${MOVE_TOOL} stage --repo REPO --stage STAGING/plan, then its cutover (docs/planning.md, "Moving a BMAD plan safely")`
+}
 
 export class PlanError extends Error {
   constructor(code, message) { super(message); this.code = code }

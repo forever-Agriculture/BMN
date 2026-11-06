@@ -6,12 +6,12 @@ import { homedir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { AllowRefusal, DECISION_REFERENCE, SOURCE_QUOTE, SOURCE_TIME, allowanceFileName, allowanceName, allowancePathAt, allowanceText, allowanceTextAt, parseAllowances, readAllowances, recordAllow } from './plan-allowances.mjs'
 import {
-  BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, epicLeadHint, readBoard, resolvePlan, rowToken, withLeadHint
+  EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, epicLeadHint, needsMove, readBoard, resolvePlan, rowToken, withLeadHint
 } from './plan-board.mjs'
 
 const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan check [--json] [--project P]
-       bmn plan set <row> <status> --expect TOKEN [--expect-default TOKEN] [--note TEXT] [--project P] [--json]
+       bmn plan set <row> <status> --expect TOKEN [--note TEXT] [--project P] [--json]
        bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]
        bmn plan allowances <epic> [--at COMMIT] [--project P] [--json]
        bmn plan allow <epic> CHANGE... --reason R --expect TOKEN [--source TEXT] [--project P] [--json]
@@ -20,7 +20,8 @@ const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan sync [--project P] [--json]
 
 The project's planning: its plan and its board, in BMN's own format (plan/PLAN.md, plan/status.yaml,
-plan/epics/NNN-slug.md; docs/planning.md) or in BMAD's (_bmad-output/.../sprint-status.yaml). This is
+plan/epics/NNN-slug.md; docs/planning.md). A project still on BMAD's board (_bmad-output/.../sprint-status.yaml)
+is read by status and check as before; set and go refuse it with NEEDS_MOVE, naming the move tool. This is
 not the subscription's Plan use. It needs no BMN running.
 
 status  prints the board's rows, every one of them, with the resolved paths: product root, default and
@@ -39,10 +40,9 @@ set     changes one row's status (and note with --note; without it the note is k
         the row still matches TOKEN, the row token status --json printed. It locks the board, rereads it,
         changes that one line, keeps every other byte and the file's mode, and writes atomically; the
         version before is kept in ~/.local/state/bmn/plan-versions (the last 20). An epic --note keeps its
-        canonical suggested lead and any go head, clipping run text with … when needed (reported in output). A board tracked by the
-        product repository and read from a linked worktree is changed in both copies, the default
-        checkout's too; when that copy's row differs, --expect-default gives its token. An epic row of a
-        plan with Git history is not set to ready this way: its go is recorded with go.
+        canonical suggested lead and any go head, clipping run text with … when needed (reported in output). The plan
+        is one board, the default checkout's, from every worktree. An epic row of a plan with Git history is not
+        set to ready this way: its go is recorded with go.
 go      records the owner's go on one epic of a BMN-format plan with Git history, before its run starts: the
         row becomes ready with go DATE in its note and joins the queue, in one commit of the plan's history
         that holds only that change (and the approved epic file, when its approved text is not yet
@@ -64,7 +64,7 @@ allow   changes that file in one commit naming who, why and each field's before 
         time. A limit with any use cannot be renamed or removed and its per and unit stay, source or not. A tracked plan
         publishes the change: it stands here at once, and a refused publish only prints unpublished.
 
-Statuses (BMN's format): ${STATUSES.join(', ')}. BMAD boards take BMAD's: ${BMAD_STATUSES.join(', ')}.
+Statuses: ${STATUSES.join(', ')}.
 Exit status: 0 done or no findings, 1 findings (check) or a refused or conflicting change (set, go, allow),
              2 usage error, unknown row or status, or a plan that cannot be resolved or read`
 
@@ -125,7 +125,9 @@ function resolvedFields(plan) {
   return {
     product_root: plan.productRoot, default_checkout: plan.defaultCheckout, run_checkout: plan.runCheckout, plan_root: plan.planRoot,
     board: plan.boardPath, board_checkout: plan.boardCheckout, format: plan.format, tracked: plan.tracked, history: plan.history,
-    default_available: plan.defaultAvailable !== false, default_branch: plan.defaultBranch ?? null
+    default_available: plan.defaultAvailable !== false, default_branch: plan.defaultBranch ?? null,
+    // dev-auto's run_needs.py prints these words for a BMAD board, so the CLI and the run name one move (108.6 AC2).
+    ...(plan.format === FORMAT ? {} : { needs_move: needsMove(plan.boardPath) })
   }
 }
 
@@ -137,7 +139,8 @@ function headerLines(plan) {
     `run checkout     ${plan.runCheckout}`,
     `plan root        ${plan.planRoot}`,
     `board            ${plan.boardPath}${bytes === null ? '' : ` (${bytes} bytes)`}`,
-    `format           ${plan.format === FORMAT ? `${FORMAT} (BMN)` : 'bmad'}; ${plan.tracked ? 'tracked by the product repository' : 'not tracked: read from the default checkout'}; history ${plan.history}`
+    `format           ${plan.format === FORMAT ? `${FORMAT} (BMN)` : 'bmad'}; ${plan.tracked ? 'tracked by the product repository' : 'not tracked: read from the default checkout'}; history ${plan.history}`,
+    ...(plan.format === FORMAT ? [] : [`NEEDS_MOVE       ${needsMove(plan.boardPath)}`])
   ]
 }
 
@@ -416,7 +419,7 @@ export async function setRow(boardPath, { key, status, note, expect, environment
 }
 
 async function set(argv) {
-  const { positionals, options } = parse(argv, { flags: ['json'], values: ['project', 'expect', 'expect-default', 'note'] })
+  const { positionals, options } = parse(argv, { flags: ['json'], values: ['project', 'expect', 'note'] })
   const json = options.json === true
   if (positionals.length !== 2) throw new PlanUsageError('plan set takes a row and a status: bmn plan set <row> <status> --expect TOKEN')
   const [key, status] = positionals
@@ -424,78 +427,46 @@ async function set(argv) {
   if (options.note !== undefined && /[\r\n]/u.test(options.note)) throw new PlanUsageError('--note is one line')
   let plan
   try { plan = await resolvePlan(options.project ?? process.cwd()) } catch (error) { return failure(error, json) }
-  const own = plan.format === FORMAT
+  if (plan.format !== FORMAT) return refuse(json, 'NEEDS_MOVE', needsMove(plan.boardPath))
   if (plan.defaultAvailable === false) return refuse(json, 'NO_DEFAULT_CHECKOUT', `no checkout holds origin/${plan.defaultBranch ?? '<default>'}; add one with git worktree add <path> ${plan.defaultBranch ?? '<default>'}`)
-  if (!(own ? STATUSES : BMAD_STATUSES).includes(status)) throw new PlanUsageError(`unknown status ${status}; one of ${(own ? STATUSES : BMAD_STATUSES).join(', ')}`)
+  if (!STATUSES.includes(status)) throw new PlanUsageError(`unknown status ${status}; one of ${STATUSES.join(', ')}`)
   // An epic's ready is his go (96.1): set it here and nothing commits it, so the run finds no go.
-  if (own && status === 'ready' && /^epic-\d+$/u.test(key) && plan.history !== 'none') {
+  if (status === 'ready' && /^epic-\d+$/u.test(key) && plan.history !== 'none') {
     return refuse(json, 'GO_NEEDS_RECORD', `${key} becomes ready only with the owner's go recorded in the plan's history: bmn plan go ${key.slice(5)} --source TEXT --approved sha256:HEX --expect TOKEN`)
   }
-  const noteLimit = own ? NOTE_LIMIT : 1000
-  const copies = [{ path: plan.boardPath, expect: options.expect, name: plan.boardCheckout === plan.runCheckout ? 'run checkout' : 'default checkout' }]
-  if (plan.tracked && plan.boardCheckout === plan.runCheckout && plan.runCheckout !== plan.defaultCheckout) {
-    const other = join(plan.defaultCheckout, plan.boardPath.slice(plan.runCheckout.length + 1))
-    copies.push({ path: other, expect: options['expect-default'] ?? options.expect, name: 'default checkout' })
-  }
+  // A canonical plan is one board, the default checkout's, from every worktree (Epic 107).
+  const board = { path: plan.boardPath, expect: options.expect, name: plan.boardCheckout === plan.runCheckout ? 'run checkout' : 'default checkout', note: options.note }
   try {
-    for (const copy of copies) {
-      copy.note = options.note
-      const hint = own && options.note !== undefined ? epicLeadHint(dirname(copy.path), key) : null
-      if (hint) Object.assign(copy, withLeadHint(options.note, hint))
-      if (copy.note !== undefined && [...copy.note].length > noteLimit) throw new PlanUsageError(`--note is ${[...copy.note].length} characters, over ${noteLimit}`)
-    }
+    const hint = options.note !== undefined ? epicLeadHint(dirname(board.path), key) : null
+    if (hint) Object.assign(board, withLeadHint(options.note, hint))
+    if (board.note !== undefined && [...board.note].length > NOTE_LIMIT) throw new PlanUsageError(`--note is ${[...board.note].length} characters, over ${NOTE_LIMIT}`)
   } catch (error) {
     if (error instanceof PlanUsageError) throw error
     return failure(error, json)
   }
   const copier = await import('./plan-bmad-copy.mjs')
-  if (own && copier.isCopiedPlan(plan)) {
+  if (copier.isCopiedPlan(plan)) {
     try {
-      const result = await copier.setWithCopy(plan, { key, status, note: copies[0].note, expect: options.expect })
-      if (result.outcome === 'conflict') return conflict(json, copies[0], key, { before: result.current, token: result.current.token }, [])
+      const result = await copier.setWithCopy(plan, { key, status, note: board.note, expect: options.expect })
+      if (result.outcome === 'conflict') return conflict(json, board, key, { before: result.current, token: result.current.token })
       if (json) out(JSON.stringify({ ok: true, key, status, written: [{ board: plan.boardPath, ...result }], copy: result.copy }, null, 2))
       else out(`${result.outcome} ${key}: ${status} in ${plan.boardPath}; ${result.copy.outcome}`)
       return EXIT.ok
     } catch (error) { return failure(error, json) }
   }
-  // Both copies are locked (in one order, so two writers never wait on each other) and checked before either is
-  // written, so a cooperating writer's change refuses the whole set and changes nothing.
-  const releases = []
-  try {
-    for (const copy of [...copies].sort((one, two) => one.path.localeCompare(two.path))) releases.push(await lockBoard(copy.path))
-  } catch (error) { releases.forEach((release) => release()); return failure(error, json) }
-  try {
-    for (const copy of copies) {
-      let text
-      try { text = readFileSync(copy.path, 'utf8') } catch { return failure(new PlanError('UNREADABLE', `${copy.path} cannot be read`), json) }
-      let found
-      try { found = replaceRow(text, key, status, copy.note) } catch (error) { return failure(error, json) }
-      if (found === null) {
-        if (json) out(JSON.stringify({ ok: false, error: { code: 'UNKNOWN_ROW', message: `no row ${key} in the ${copy.name}'s board ${copy.path}` } }, null, 2))
-        else err(`bmn: UNKNOWN_ROW: no row ${key} in the ${copy.name}'s board ${copy.path}`)
-        return EXIT.unable
-      }
-      if (found.token !== copy.expect) return conflict(json, copy, key, found, [])
-    }
-    // Only a writer that ignores the lock can still change a copy now; whatever was written before is reported.
-    const results = []
-    for (const copy of copies) {
-      let result
-      try { result = await setRow(copy.path, { key, status, note: copy.note, expect: copy.expect, locked: true }) } catch (error) { return failure(error, json, results) }
-      if (result.outcome === 'conflict') return conflict(json, copy, key, { before: result.current, token: result.current.token }, results)
-      if (result.outcome === 'busy') {
-        if (json) out(JSON.stringify({ ok: false, error: { code: 'BUSY', message: `${copy.path} kept changing; nothing written there` }, written: results }, null, 2))
-        else err(`bmn: BUSY: ${copy.path} kept changing while it was written; nothing written there${writtenNote(results)}`)
-        return EXIT.findings
-      }
-      results.push({ board: copy.path, outcome: result.outcome, token: result.token, kept: result.kept ?? null })
-    }
-    const clipped = copies.some((copy) => copy.clipped)
-    if (json) out(JSON.stringify({ ok: true, key, status, written: results, ...(clipped ? { note_clipped: true } : {}) }, null, 2))
-    else out(results.map((one) => `${one.outcome === 'unchanged' ? 'unchanged' : 'set'} ${key}: ${status} in ${one.board} (token ${one.token})`).join('\n'))
-    if (clipped && !json) err(`bmn: note clipped to ${noteLimit} characters; the suggested lead and go head were kept`)
-    return EXIT.ok
-  } finally { releases.forEach((release) => release()) }
+  let result
+  try { result = await setRow(board.path, { key, status, note: board.note, expect: board.expect }) } catch (error) { return failure(error, json) }
+  if (result.outcome === 'conflict') return conflict(json, board, key, { before: result.current, token: result.current.token })
+  if (result.outcome === 'busy') {
+    if (json) out(JSON.stringify({ ok: false, error: { code: 'BUSY', message: `${board.path} kept changing; nothing written there` }, written: [] }, null, 2))
+    else err(`bmn: BUSY: ${board.path} kept changing while it was written; nothing written there`)
+    return EXIT.findings
+  }
+  const written = { board: board.path, outcome: result.outcome, token: result.token, kept: result.kept ?? null }
+  if (json) out(JSON.stringify({ ok: true, key, status, written: [written], ...(board.clipped ? { note_clipped: true } : {}) }, null, 2))
+  else out(`${written.outcome === 'unchanged' ? 'unchanged' : 'set'} ${key}: ${status} in ${written.board} (token ${written.token})`)
+  if (board.clipped && !json) err(`bmn: note clipped to ${NOTE_LIMIT} characters; the suggested lead and go head were kept`)
+  return EXIT.ok
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -653,7 +624,7 @@ export async function recordGo(plan, options) {
 
 async function recordGoCore(plan, { epic, source: given, approved, expect, date, note, now = new Date(), seam = () => {}, locked = false }) {
   if (plan.defaultAvailable === false) throw new GoRefusal('NO_DEFAULT_CHECKOUT', `no checkout holds origin/${plan.defaultBranch ?? '<default>'}; add one with git worktree add <path> ${plan.defaultBranch ?? '<default>'}`)
-  if (plan.format !== FORMAT) throw new GoRefusal('BMAD', 'a BMAD board records its go as the dated go comment the product repository commits; bmn plan go records a BMN-format plan\'s go')
+  if (plan.format !== FORMAT) throw new GoRefusal('NEEDS_MOVE', needsMove(plan.boardPath))
   if (plan.history === 'none') throw new GoRefusal('NO_HISTORY', `${plan.planRoot} keeps no Git history, so no go can be recorded there; give it one (git -C plan init) and commit the plan`)
   const source = typeof given === 'string' ? given.trim() : ''
   if (source === '') throw new GoRefusal('NO_OWNER_GO', 'no owner go named: --source gives his act, his quoted words with their time')
@@ -951,7 +922,7 @@ function writtenNote(results) {
   return results.length ? ` (already written: ${results.map((one) => `${one.board}, token ${one.token}`).join('; ')})` : ''
 }
 
-function conflict(json, copy, key, found, written) {
+function conflict(json, copy, key, found, written = []) {
   const current = { key, status: found.before.status, note: found.before.note, token: found.token }
   if (json) out(JSON.stringify({ ok: false, error: { code: 'CONFLICT', message: `${key} changed in the ${copy.name}'s board since its token was read`, board: copy.path, current }, written }, null, 2))
   else err(`bmn: CONFLICT: ${key} in the ${copy.name}'s board ${copy.path} is now "${current.status}${current.note ? ` # ${current.note}` : ''}" (token ${current.token}); read it again before changing it${writtenNote(written)}`)
