@@ -252,6 +252,20 @@ describe('rules_from_allowances and rules_from_size opt a plan in (110.4 AC5, 11
     const without = project({ allowances: null })
     expect(checkFindings(without.main, without.home)).toEqual([])
   })
+  it('a plan that opted in refuses a go without a file, whatever the epic\'s number, writing nothing', () => {
+    // 7 is under the rule's number: a rewritten older epic still needs its file for a new go (owner, 2026-11-06).
+    const older = project({ allowances: null, board: board(1, 'rules_from_allowances: 8\n') })
+    const before = git(older.plan, 'rev-parse', 'HEAD')
+    const refused = bmn(older.main, older.home, ['go', '7', '--source', SOURCE, '--approved', approved(older.main, older.home), '--expect', rowToken(older.main, older.home), '--json'])
+    expect(refused.json.error.code, refused.out).toBe('NO_ALLOWANCES')
+    expect(refused.json.error.message).toContain('plan/allowances/007.yaml')
+    expect(git(older.plan, 'rev-parse', 'HEAD')).toBe(before)
+    const withFile = project({ board: board(1, 'rules_from_allowances: 8\n') })
+    expect(go(withFile.main, withFile.home).json.commit).toMatch(/^[0-9a-f]{40}$/u)
+    // A plan without the line records a go on Run needs as before.
+    const without = project({ allowances: null })
+    expect(go(without.main, without.home).json.commit).toMatch(/^[0-9a-f]{40}$/u)
+  })
   const big = { epic: epicText(NEEDS, 'None.\n', 11), allowances: null }
   it('reports an unfinished epic over 10 stories with its counts', () => {
     const { main, home } = project({ ...big, board: board(11, 'rules_from_size: 7\n') })

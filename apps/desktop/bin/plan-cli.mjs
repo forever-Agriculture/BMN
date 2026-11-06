@@ -4,7 +4,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { chmodSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
-import { AllowRefusal, DECISION_REFERENCE, SOURCE_QUOTE, SOURCE_TIME, allowanceFileName, allowancePathAt, allowanceText, allowanceTextAt, parseAllowances, readAllowances, recordAllow } from './plan-allowances.mjs'
+import { AllowRefusal, DECISION_REFERENCE, SOURCE_QUOTE, SOURCE_TIME, allowanceFileName, allowanceName, allowancePathAt, allowanceText, allowanceTextAt, parseAllowances, readAllowances, recordAllow } from './plan-allowances.mjs'
 import {
   BMAD_STATUSES, EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, epicLeadHint, readBoard, resolvePlan, rowToken, withLeadHint
 } from './plan-board.mjs'
@@ -726,6 +726,14 @@ async function recordGoCore(plan, { epic, source: given, approved, expect, date,
     const epicIncluded = committedSha !== approvedSha
     if (epicIncluded && workingSha !== approvedSha) {
       throw new GoRefusal('CHANGED_TERMS', `epic ${epic}'s Run needs and Decisions are not the approved text sha256:${approvedSha.slice(0, 12)}… (working copy ${workingSha.slice(0, 12)}…, committed ${committedSha === null ? 'none' : `${committedSha.slice(0, 12)}…`}); ask for the go on the current text`)
+    }
+
+    // A plan that opted in (rules_from_allowances) records every new go with a file, whatever the epic's number,
+    // so a rewritten older epic gets one too (owner, 2026-11-06).
+    const optedIn = (await readBoard(plan.boardPath)).rules.allowances
+    const goHoldsFile = epicIncluded ? workingAllowances !== null : readHistory(() => allowanceTextAt(plan, head, epic)) !== null
+    if (optedIn !== undefined && !goHoldsFile) {
+      throw new GoRefusal('NO_ALLOWANCES', `this plan records every go with an allowances file (rules_from_allowances: ${optedIn}); write plan/allowances/${allowanceName(epic)} from the plan skill's template, point Run needs to it, and ask for the go on that text`)
     }
 
     // The file he approved is one the run can read (110.4): a go never records a file its reader refuses.
