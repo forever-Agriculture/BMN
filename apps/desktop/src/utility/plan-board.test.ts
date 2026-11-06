@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkPlan, readBoard, readEpicFile, resolvePlan, rowToken } from '../../bin/plan-board.mjs'
+import { checkPlan, needsMove, readBoard, readEpicFile, resolvePlan, rowToken } from '../../bin/plan-board.mjs'
 import { KEPT_VERSIONS, keepVersion, lockBoard, replaceRow, setRow, versionsDirectory } from '../../bin/plan-cli.mjs'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -662,6 +662,19 @@ release()
     const allow = bmn(main, fixture(), 'allow', '3', 'may+=anything', '--reason', 'r', '--expect', 'x', '--json')
     expect([allow.code, JSON.parse(allow.out).error.code]).toEqual([1, 'NEEDS_MOVE'])
     expect(readFileSync(path, 'utf8')).toBe(text)
+  })
+
+  it('names a move tool that exists in the repository and in both packaged layouts (108.6 focused review)', () => {
+    const root = fixture()
+    const tool = join(root, 'resources/scripts/plan/migrate-bmad-plan.mjs')
+    file(root, 'resources/scripts/plan/migrate-bmad-plan.mjs', '')
+    for (const at of ['resources/bin', 'resources/apps/desktop/bin']) {
+      for (const name of ['plan-board.mjs', 'shared-helpers.mjs', 'plan-allowances.mjs']) file(root, `${at}/${name}`, readFileSync(resolve(__dirname, '../../bin', name), 'utf8'))
+      const printed = execFileSync(process.execPath, ['--input-type=module', '-e', `import { needsMove } from ${JSON.stringify(join(root, at, 'plan-board.mjs'))}; process.stdout.write(needsMove('B'))`], { encoding: 'utf8' })
+      expect(/node (\S+) stage/u.exec(printed)?.[1], at).toBe(tool)
+    }
+    const own = /node (\S+) stage/u.exec(needsMove('B'))?.[1]
+    expect(own !== undefined && existsSync(own)).toBe(true)
   })
 
   it('board paths with real Git: an ignored plan is changed in the default checkout, his edit on another row kept; a tracked BMAD board is written in neither copy', async () => {

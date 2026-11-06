@@ -55,8 +55,12 @@ const OWNER_LINE = /^\*\*Owner:\*\*\s*(?:(none|before the go|at the end)(?=[\s.,
 const OWNER_ORDER = ['before the go', 'none', 'at the end']
 const BMAD_DEFAULT = '_bmad-output/implementation-artifacts'
 export const EXIT = { ok: 0, findings: 1, unable: 2 }
-/** BMN's move tool, beside this file in the repository and in the packaged app alike. */
-const MOVE_TOOL = fileURLToPath(new URL('../../../scripts/plan/migrate-bmad-plan.mjs', import.meta.url))
+/**
+ * BMN's move tool: `scripts/plan/` from the repository's `apps/desktop/bin/` and from the package's `resources/apps/desktop/bin/`,
+ * one level up from the package's `resources/bin/`, where the installed `bmn` runs (108.6 focused review).
+ */
+const MOVE_TOOL = ['../../../scripts/plan/migrate-bmad-plan.mjs', '../scripts/plan/migrate-bmad-plan.mjs']
+  .map((path) => fileURLToPath(new URL(path, import.meta.url))).find((path) => existsSync(path)) ?? 'scripts/plan/migrate-bmad-plan.mjs in BMN'
 
 /**
  * A project still on a BMAD board is read as before, never written or run (Epic 108, R108-FR18): every writer and
