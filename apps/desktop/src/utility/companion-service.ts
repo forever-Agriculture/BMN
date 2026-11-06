@@ -1967,8 +1967,9 @@ export class CompanionService {
         return {
           sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name, live, started: session.lastProcess !== null,
           dot: card ? 'needs-you' : live ? working ? 'running' : 'running-idle' : session.lastProcess ? 'exited' : 'idle',
-          // As the sheet decides: an agent in front, or this run's hooks reported one (he types agents inside shells).
-          agent: foreground.state === 'agent' || (live && this.hookObservations.get(session.sessionId)?.incarnationId === incarnation),
+          // One rule with the sheet (main.tsx nowSessions): this run's hooks reported an agent. He types agents inside shells,
+          // and a launch program or a foreground process proves nothing the design asks for ("hooks decide").
+          agent: live && this.hookObservations.get(session.sessionId)?.incarnationId === incarnation,
           working, progressLabel: label, title: null,
           card: card ? { requestId: card.requestId, title: card.title } : null
         }

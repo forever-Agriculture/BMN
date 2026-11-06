@@ -1822,7 +1822,8 @@ function App(): React.JSX.Element {
       return {
         sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name,
         dot: sessionStatus(session, isLive, unresolved, observed, observedActivity).dot, live: isLive, started: session.lastProcess !== null,
-        agent: activeHookOrigin(hookOrigins, session, incarnation) !== null || agentTag(session.executable, session.argv) !== 'Shell',
+        // One rule with the host's `bmn now` (companion-service readNow): this run's hooks reported an agent; the launch program proves nothing.
+        agent: activeHookOrigin(hookOrigins, session, incarnation) !== null,
         working: observedActivity?.working ?? false, progressLabel: observed && !observed.stale ? observed.label : null, title,
         card: card ? { requestId: card.requestId, title: card.title } : null
       }

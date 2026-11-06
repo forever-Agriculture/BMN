@@ -358,7 +358,13 @@ export function NowSheet(props: {
           }
           // No new focus: he clicked outside any control or the window went away, or a refresh drew the row anew.
           const from = event.target
-          queueMicrotask(() => { if (from.isConnected) setFocusInside(false) })
+          // A real departure (the row still there and focus not back in the list) also drops the wish to restore focus,
+          // so a later refresh never pulls focus back after he left on purpose.
+          queueMicrotask(() => {
+            if (!from.isConnected || list.contains(document.activeElement)) return
+            wantFocus.current = false
+            setFocusInside(false)
+          })
         }
       }} />
   </Dialog>

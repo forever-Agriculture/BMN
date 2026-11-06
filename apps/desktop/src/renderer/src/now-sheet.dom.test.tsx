@@ -159,6 +159,25 @@ describe('the mounted Now sheet: a refresh keeps rows and focus (Story 110.9 AC6
     expect(sectionOf('s:n')).toBe('Waits on you')
   })
 
+  it('a refresh never pulls focus back after he left the list on purpose, and a quick return keeps it', async () => {
+    const rerender = await mount(createNowMemory())
+    await answer([])
+    expect(focused()).toBe('s:a')
+    // He clicks outside any control: focus goes to the body; the row is still there.
+    await act(async () => { button('s:a').blur(); await Promise.resolve() })
+    expect(focused()).toBe('BODY')
+    const carded = SESSIONS.map((item) => item.sessionId === 'a' ? { ...item, dot: 'needs-you' as const, card: { requestId: 'k', title: 'pick one' } } : item)
+    await rerender(carded)
+    await cardChanged(); await answer([])
+    expect(focused()).toBe('BODY')
+    // Leaving and coming straight back before the deferred check keeps the sheet holding its rows for him.
+    await act(async () => { button('s:b').focus() })
+    await act(async () => { button('s:b').blur(); button('s:b').focus(); await Promise.resolve() })
+    expect(focused()).toBe('s:b')
+    await rerender(SESSIONS)
+    expect(focused()).toBe('s:b')
+  })
+
   it('a focused row that goes hands the focus to the next one', async () => {
     const rerender = await mount(createNowMemory())
     await answer([])

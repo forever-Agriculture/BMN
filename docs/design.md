@@ -219,7 +219,9 @@ Approved by the owner on 2026-11-06 ("Approve as drawn", card `epic110-now-desig
   session and `Done since Wed: …` from the start of the previous working day. An agent's `bmn now` covers its
   own workspace and reads `Waits on the owner.` with no card title (D10), and only runs linked to a session of
   that workspace. A session with no run speaks only by its `bmn progress` label, never its terminal title, so
-  the clipboard and `bmn now` say the same ([d9]).
+  the clipboard and `bmn now` say the same ([d9]). Both count a session as running an agent by one rule: this
+  run's hooks reported one (he types agents inside shells; a launch program or foreground process decides nothing).
+  Leaving the list on purpose ends the hold on focus: a later refresh never pulls focus back.
 - **Scrollbar.** BMN's 8 px thumb (as the palette's), rimmed in the sheet's colour; the list and the column
   labels both keep a stable gutter, so labels stay over their values.
 
