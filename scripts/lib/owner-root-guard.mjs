@@ -19,9 +19,12 @@ export function fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readd
 
 /** Fails when a run added, removed or modified anything under the owner's real roots. */
 export function assertOwnerRootsUnchanged(before, after, phase) {
+  // The owner's roots hold hundreds of thousands of entries; Sets keep the comparison linear.
+  const beforeSet = new Set(before)
+  const afterSet = new Set(after)
   const changed = [
-    ...before.filter((entry) => !after.includes(entry)),
-    ...after.filter((entry) => !before.includes(entry))
+    ...before.filter((entry) => !afterSet.has(entry)),
+    ...after.filter((entry) => !beforeSet.has(entry))
   ].map((entry) => entry.split('\t')[0])
   if (changed.length > 0) {
     throw new Error(`real XDG roots changed ${phase}; changed: ${[...new Set(changed)].slice(0, 10).join(', ')}`)

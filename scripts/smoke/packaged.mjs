@@ -125,9 +125,10 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
-  // A timeout keeps the output so far; its last lines name the phase the self-test was in.
+  // A timeout keeps the output so far; the self-test prints its phases on stderr, so its last lines
+  // name the phase it was in.
   if (result.error) {
-    throw new Error(`packaged self-test failed: ${result.error.message}; last output=${JSON.stringify(result.stdout?.slice(-1_000) ?? '')}`)
+    throw new Error(`packaged self-test failed: ${result.error.message}; last stderr=${JSON.stringify(result.stderr?.slice(-2_000) ?? '')}`)
   }
   if (result.signal) throw new Error(`packaged self-test terminated by ${result.signal}`)
   if (result.status !== 0) {

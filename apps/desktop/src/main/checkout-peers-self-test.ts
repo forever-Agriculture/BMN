@@ -64,10 +64,9 @@ export async function runCheckoutPeersSelfTest(window: BrowserWindow, params: {
     const counters = () => Object.fromEntries(Object.entries(window.__aitermTest?.snapshots() ?? {})
       .map(([id, state]) => [id, { refits: state.refits, inputEvents: state.inputEvents,
         cols: state.cols, rows: state.rows }]));
-    const frame = () => new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('checkout peers: setup frame stalled')), 3000);
-      requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
-    });
+    // The self-test window is hidden, where Chromium may withhold animation frames for seconds;
+    // a tick is a frame or one second, and the settled check below still compares every tick.
+    const frame = () => new Promise((resolve) => { requestAnimationFrame(resolve); setTimeout(resolve, 1000) });
     const settledIds = JSON.stringify([expectedId]);
     const sameVisibleLayout = async () => {
       const host = await window.aiTerminal.getLayout(workspaceId);
