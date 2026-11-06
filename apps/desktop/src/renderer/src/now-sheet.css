@@ -82,6 +82,34 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* The labels above keep the same room for the scrollbar, so they stay over their values when the list scrolls. */
+  scrollbar-gutter: stable;
+}
+
+/* BMN's 8 px scrollbar, as the palette's (styles/cards-and-palette.css); the thumb is rimmed in the sheet's own colour. */
+.now-dialog .n-scroll::-webkit-scrollbar { width: 8px; }
+.now-dialog .n-scroll::-webkit-scrollbar-track { background: transparent; }
+
+.now-dialog .n-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid color-mix(in srgb, var(--identity) 3%, var(--raised));
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.now-dialog .n-scroll::-webkit-scrollbar-button {
+  -webkit-appearance: none;
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.now-dialog .n-scroll::-webkit-scrollbar-button:vertical:start:decrement,
+.now-dialog .n-scroll::-webkit-scrollbar-button:vertical:end:increment {
+  -webkit-appearance: none;
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .now-dialog .n-cols,
@@ -94,6 +122,8 @@
 
 .now-dialog .n-cols {
   flex: none;
+  overflow: hidden;
+  scrollbar-gutter: stable;
   padding: 0 32px 0 8px;
   color: var(--faint);
   font-size: 11px;

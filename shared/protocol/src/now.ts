@@ -67,7 +67,7 @@ export interface NowRow {
   story: string | null
   /** `2 of 3` stories done. */
   of: string | null
-  /** A session without a run: the words its standup line says; null leaves it out. */
+  /** A session without a run: its `bmn progress` label, the words its standup line says ([d9]); null leaves it out. */
   say: string | null
   stopped: boolean
   done: boolean
@@ -335,8 +335,9 @@ function sessionRow(session: NowSessionInput, context: RowContext): NowRow {
   if (!session.agent) return { ...base, doing: 'Shell, no agent' }
   const word = session.working ? 'Working' : 'Idle'
   const doing = session.progressLabel ? `${word}: ${session.progressLabel}` : session.title ?? word
-  // The agent's own progress label always speaks for it; a title only while it works. An idle session says nothing.
-  return { ...base, doing, say: session.progressLabel ?? (session.working ? session.title : null) }
+  // [d9] The standup speaks a session by its own `bmn progress` label only; the terminal title stays in the Doing column,
+  // since the host's `bmn now` has no titles and the clipboard and the CLI must say the same.
+  return { ...base, doing, say: session.progressLabel }
 }
 
 /** Which run, if any, a session's row shows: its unfinished run, or the finished one of a session that no longer runs. */
@@ -367,7 +368,11 @@ export function buildNow(input: NowInput): NowView {
   const context: RowContext = { audience: input.audience, home: input.home ?? null }
   const covered = new Set(input.workspaces.map((workspace) => workspace.workspaceId))
   const sessions = input.sessions.filter((session) => covered.has(session.workspaceId))
-  const runs = (input.runs ?? []).filter((run) => run.ownership !== 'copy')
+  const known = new Set(sessions.map((session) => session.sessionId))
+  // D10: an agent sees only runs linked (D14) to a session of its own workspace; a run with no session, or another
+  // workspace's, can share the repository through a worktree and must never show (second guard; the host filters first).
+  const runs = (input.runs ?? []).filter((run) => run.ownership !== 'copy' &&
+    (input.audience === 'owner' || (run.sessionId != null && known.has(run.sessionId))))
   const { attached, rest } = attachRuns(sessions, runs)
   const rows: NowRow[] = []
   const runWorkspace = new Map<DevAutoRun, string | null>()

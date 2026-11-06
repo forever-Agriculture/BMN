@@ -59,10 +59,14 @@ const text = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').replace
 
 describe('the Now sheet, state by state (Story 110.9 AC6)', () => {
   it('12 sessions: the head counts and calls only the waiting ones gold; sections in order; Copy standup ready', () => {
-    const markup = draw(view())
-    expect(text(markup)).toContain('Read 09:40 · 9 sessions · 1 waits on you Copy standup')
+    const twelve = [...SESSIONS, session('q42', 'wq', { name: 'Q-Automations-42' }), session('b108', 'wb', { name: 'BMN-108-109' }),
+      session('p111', 'wp', { name: 'Pet-111-127' })]
+    const markup = draw(view({ sessions: twelve }))
+    expect(text(markup)).toContain('Read 09:40 · 12 sessions · 1 waits on you Copy standup')
+    // Twelve rows outside Not running, the design's twelve sessions.
+    expect(markup.slice(0, markup.indexOf('<section><button type="button" class="n-sec"')).match(/class="n-main"/g)).toHaveLength(12)
     expect(markup.match(/status-dot needs-you/g)).toHaveLength(2)
-    expect([...markup.matchAll(/<h3 class="n-sec"><span>([^<]+)<\/span><b>(\d+)<\/b>/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(['Waits on you 1', 'Q-Automations 3', 'BMN 3', 'Pet 2'])
+    expect([...markup.matchAll(/<h3 class="n-sec"><span>([^<]+)<\/span><b>(\d+)<\/b>/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(['Waits on you 1', 'Q-Automations 4', 'BMN 4', 'Pet 3'])
     expect(markup).toContain('<button type="button" class="n-sec" aria-expanded="false" aria-controls="now-not-running">')
     expect(markup).toContain('<span>Not running</span><b>2</b>')
     expect(markup).not.toMatch(/class="plate" disabled/)
@@ -161,10 +165,20 @@ describe('the Now sheet, state by state (Story 110.9 AC6)', () => {
 
 describe('a refresh never moves focus or a row under him (Story 110.9 AC6)', () => {
   const sections = (pairs: Array<[string, string[]]>): NowSection[] => pairs.map(([id, keys]) => ({ id, kind: id === 'not-running' ? 'not-running' : id === 'you' ? 'you' : 'project', title: id, workspaceId: null, keys }))
-  it('keeps each row in the section it is shown in while held, and adopts the new sections once let go', () => {
+  it('keeps each row in the section it is shown in while held, a new row after every shown one, and adopts the new sections once let go', () => {
     const shown = sections([['you', ['a']], ['w:1', ['b', 'c']], ['not-running', ['d']]])
     const next = sections([['w:1', ['a', 'b']], ['not-running', ['c', 'd']], ['w:2', ['e']]])
-    expect(heldSections(shown, next, true)).toEqual(sections([['you', ['a']], ['w:1', ['b', 'c']], ['w:2', ['e']], ['not-running', ['d']]]))
+    expect(heldSections(shown, next, true)).toEqual(sections([['you', ['a']], ['w:1', ['b', 'c']], ['not-running', ['d']], ['w:2', ['e']]]))
+    // A new row of a section shown above comes last, under its own title; the next new one of that section joins it.
+    const card = heldSections(shown, sections([['you', ['x', 'a']], ['w:1', ['b', 'c']], ['not-running', ['d']]]), true)
+    expect(card.map((section) => [section.id, section.title, section.keys])).toEqual([['you', 'you', ['a']], ['w:1', 'w:1', ['b', 'c']],
+      ['not-running', 'not-running', ['d']], ['you:new', 'you', ['x']]])
+    expect(heldSections(card, sections([['you', ['y', 'x', 'a']], ['w:1', ['b', 'c']], ['not-running', ['d']]]), true).at(-1)?.keys).toEqual(['x', 'y'])
+    // A third new row of another section, then a fourth of the first: each block comes last with its own id.
+    const mixed = heldSections(card, sections([['you', ['x', 'a']], ['w:1', ['f', 'b', 'c']], ['not-running', ['d']]]), true)
+    const again = heldSections(mixed, sections([['you', ['g', 'x', 'a']], ['w:1', ['f', 'b', 'c']], ['not-running', ['d']]]), true)
+    expect(again.map((section) => [section.id, section.keys])).toEqual([['you', ['a']], ['w:1', ['b', 'c']], ['not-running', ['d']],
+      ['you:new', ['x']], ['w:1:new', ['f']], ['you:new2', ['g']]])
     expect(heldSections(shown, next, false)).toEqual(next)
     // A row that went is gone even while held; a section left empty goes with it.
     expect(heldSections(shown, sections([['w:1', ['b', 'c']], ['not-running', ['d']]]), true)).toEqual(sections([['w:1', ['b', 'c']], ['not-running', ['d']]]))

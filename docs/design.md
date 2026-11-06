@@ -205,8 +205,10 @@ Approved by the owner on 2026-11-06 ("Approve as drawn", card `epic110-now-desig
   Enter opens the session (its card in front) and closes the sheet. Tab steps list, Copy standup, ×; Esc
   closes. It opens on the row he left, same scroll, same rows open, else the first row. F1 ring on focus.
 - **Refresh.** Cards and hooks show at once; runs are read every 30 s while open (Story 75.7). Words change in
-  place; a row changes section only once pointer and focus left the list; if a focused row goes, focus takes
-  the next. Loading: rows at once from memory, run words fill in place, Copy disabled until the read returns.
+  place. While pointer or focus is in the list, the first placement shown with a read (a remembered one too)
+  holds: no row changes section, and a new row comes after every shown one, under its section's title; all take
+  their own places once he leaves the list. Focus is never lost: a row drawn anew keeps it, a row that went
+  hands it to the next. Loading: rows at once from memory, run words fill in place, Copy disabled until the read returns.
   Stale: the head says `stale` with one alert line, rows keep their last words.
 - **Sizes.** At a sheet of 600 px and under, down to BMN's 320: name and time, then doing, then the wait
   (`Waits on …`); the column labels and "+ wait" go. The sheet's padding narrows at a 680 px window.
@@ -215,7 +217,11 @@ Approved by the owner on 2026-11-06 ("Approve as drawn", card `epic110-now-desig
 - **Standup text.** Copy standup and `bmn now` give one generator's text (`@bmn/protocol` `standupText`):
   `Thu 5 Nov, 09:40. 12 sessions, 2 wait on me.` (or `No agent running.`), then per workspace one line per
   session and `Done since Wed: …` from the start of the previous working day. An agent's `bmn now` covers its
-  own workspace and reads `Waits on the owner.` with no card title (D10).
+  own workspace and reads `Waits on the owner.` with no card title (D10), and only runs linked to a session of
+  that workspace. A session with no run speaks only by its `bmn progress` label, never its terminal title, so
+  the clipboard and `bmn now` say the same ([d9]).
+- **Scrollbar.** BMN's 8 px thumb (as the palette's), rimmed in the sheet's colour; the list and the column
+  labels both keep a stable gutter, so labels stay over their values.
 
 ## Reviews
 

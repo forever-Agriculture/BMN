@@ -323,7 +323,7 @@ async function walkStates(application, context) {
   await step('Files side panel', 'palette: Show files', () => palette('Show files'), true)
   await step('Hook events dialog', 'palette: Hook events…', () => palette('Hook events…'), true)
   await step('Plan use dialog', 'palette: Plan use…', () => palette('Plan use…'), true)
-  await step('dev-auto runs dialog', 'palette: dev-auto runs…', () => palette('dev-auto runs…'), true)
+  await step('Now sheet', 'palette: Now…', () => palette('Now…'), true)
   await step('Review results dialog', 'palette: Review results…', () => palette('Review results…'), true)
   await step('Messages dialog', 'palette: Messages…', () => palette('Messages…'), true)
   await step('Quick Look', 'palette: Project files…', () => palette('Project files…'), true)

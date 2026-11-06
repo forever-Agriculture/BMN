@@ -117,17 +117,22 @@ describe('the rows (Story 110.9 AC1, AC2, AC4)', () => {
       sessions: SESSIONS.map((item) => item.sessionId === 'BMN-110' ? { ...item, dot: 'running-idle', working: false } : item) })
     expect(idle.rows.find((item) => item.key === 's:BMN-110')).toMatchObject({ doing: 'Idle at 110.3', of: '2 of 3' })
   })
-  it('without a run: the progress label, else the title, else Working or Idle; a live shell says so', () => {
+  it('without a run: the progress label, else the title, else Working or Idle; only the label speaks ([d9])', () => {
     expect(row('q-review')).toMatchObject({ doing: 'Working: Review PR comments', say: 'Review PR comments', left: null })
     expect(row('bmn-notes')).toMatchObject({ doing: 'Idle', say: null })
-    // The agent's own label speaks for it while it rests too; a title only while it works.
+    // The agent's own label speaks for it while it rests too; a title never speaks, so Copy and `bmn now` agree ([d9]).
     const resting = buildNow({ now: NOW, audience: 'owner', workspaces: WORKSPACES, runs: [], sessions: [
       session('a', 'wb', { working: false, dot: 'running-idle', progressLabel: 'Review PR comments' }),
       session('b', 'wb', { working: false, dot: 'running-idle', title: 'Old title' })] })
     expect(resting.rows.map((item) => [item.doing, item.say])).toEqual([['Idle: Review PR comments', 'Review PR comments'], ['Old title', null]])
     const titled = buildNow({ now: NOW, audience: 'owner', workspaces: WORKSPACES, runs: [], sessions: [
       session('spike', 'wb', { title: 'Comparing hook payloads' }), session('shell', 'wb', { agent: false, dot: 'running-idle' })] })
-    expect(titled.rows.map((item) => item.doing)).toEqual(['Comparing hook payloads', 'Shell, no agent'])
+    expect(titled.rows.map((item) => [item.doing, item.say])).toEqual([['Comparing hook payloads', null], ['Shell, no agent', null]])
+    // The sheet knows the title, the host does not; both say the same.
+    const text = (title: string | null): string => nowReport(buildNow({ now: NOW, audience: 'owner', workspaces: WORKSPACES, runs: [],
+      sessions: [session('spike', 'wb', { title }), session('labelled', 'wb', { title, progressLabel: 'Review PR comments' })] }), WORKSPACES).text
+    expect(text('Comparing hook payloads')).toBe(text(null))
+    expect(text(null)).toBe('Thu 5 Nov, 09:40. 2 sessions, nothing waits on me.\n\nBMN\nlabelled: Review PR comments.')
   })
   it('explains a run in label and value rows, the card a button and the folder under home', () => {
     expect(row('Q-Automations-40').fold.map((item) => item.label)).toEqual(['Status', 'Card', 'Time left', 'Stories', 'Decided', 'Folder'])
@@ -247,5 +252,15 @@ Done since Wed: 117.`)
     for (const hidden of ['approve TEST deploy', 'test data stays synthetic', 'card-40', '"fold"']) expect(json).not.toContain(hidden)
     const owner = JSON.stringify(nowReport(buildNow({ now: NOW, audience: 'owner', workspaces: WORKSPACES, sessions: SESSIONS, runs: RUNS }), WORKSPACES))
     expect(owner).toContain('approve TEST deploy')
+  })
+
+  it("never shows an agent a run without a session of its own workspace (D10), though the owner sees it", () => {
+    const foreign = [...RUNS, run({ workspaceIds: ['wq', 'wb'], sessionId: 'other-workspace-session', board: board(77, 3, 1, 'secret-story'),
+      waitingOn: 'Secret wait', finishedStories: took(['77.1', 30, local(4, 12)]) })]
+    const agent = nowReport(buildNow({ now: NOW, audience: 'agent', workspaces: [WORKSPACES[0]!], sessions: SESSIONS, runs: foreign }), [WORKSPACES[0]!])
+    const json = JSON.stringify(agent)
+    for (const hidden of ['secret', 'Secret wait', '77.1', '77.2']) expect(json).not.toContain(hidden)
+    const owner = nowReport(buildNow({ now: NOW, audience: 'owner', workspaces: WORKSPACES, sessions: SESSIONS, runs: foreign }), WORKSPACES)
+    expect(JSON.stringify(owner)).toContain('77.2 secret story')
   })
 })

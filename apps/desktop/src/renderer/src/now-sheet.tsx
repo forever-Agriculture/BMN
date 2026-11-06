@@ -3,7 +3,7 @@
 // It replaces the dev-auto runs dialog and keeps its bounded read, its 30 s self-refresh and its generation guard. The rows,
 // words and the standup text come from @bmn/protocol's `buildNow`, the one builder `bmn now` uses too. Design: the approved
 // `.dev-auto/evidence/110/now-design/index.html` (docs/design.md, "Now sheet").
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   buildNow,
   nowClock,
@@ -36,8 +36,10 @@ export function createNowMemory(): NowMemory {
 type Workspaces = ReadonlyArray<{ workspaceId: string; name: string }>
 
 /**
- * A refresh never moves a row under him: while the pointer or the focus is in the list, every row keeps the section it is
- * shown in. Words still change in place, a row that went is gone, and a new row joins its own section.
+ * A refresh never moves a row under him: while the pointer or the focus is in the list, every row keeps the section and
+ * the place it is shown in. Words still change in place and a row that went is gone; a new row never lands above or
+ * between shown rows: it joins the last section when that is its own, else it comes after everything under its own
+ * section's title. Once he leaves the list, every row takes its own place again.
  */
 export function heldSections(shown: readonly NowSection[] | null, next: readonly NowSection[], hold: boolean): NowSection[] {
   if (!hold || shown === null) return [...next]
@@ -47,9 +49,14 @@ export function heldSections(shown: readonly NowSection[] | null, next: readonly
   for (const section of next) {
     const added = section.keys.filter((key) => !shownKeys.has(key))
     if (added.length === 0) continue
-    const into = kept.find((item) => item.id === section.id)
-    if (into) into.keys.push(...added)
-    else kept.splice(Math.min(next.indexOf(section), kept.length), 0, { ...section, keys: added })
+    const last = kept.at(-1)
+    if (last && (last.id === section.id || last.id.startsWith(`${section.id}:new`))) {
+      last.keys.push(...added)
+      continue
+    }
+    let id = section.id
+    for (let count = 1; kept.some((item) => item.id === id); count += 1) id = `${section.id}:new${count === 1 ? '' : count}`
+    kept.push({ ...section, id, keys: added })
   }
   return kept.filter((section) => section.keys.length > 0)
 }
@@ -160,7 +167,7 @@ export function NowSheetView(props: NowSheetViewProps & { scrollRef?: React.Ref<
         const rows = section.keys.flatMap((key) => byKey.get(key) ?? [])
         const items = rows.map((row) => <RowItem key={row.key} row={row} props={props} loading={loading} />)
         if (section.kind === 'not-running') {
-          const id = 'now-not-running'
+          const id = `now-${section.id.replace(/[^A-Za-z0-9_-]/gu, '_')}`
           return <section key={section.id}>
             <button type="button" className="n-sec" aria-expanded={props.notRunningOpen} aria-controls={id} onClick={() => props.onToggleNotRunning?.()}>
               <Icon name="chevron" size={12} /><span>{section.title}</span><b>{rows.length}</b></button>
@@ -227,23 +234,39 @@ export function NowSheet(props: {
 
   const view = useMemo(() => buildNow({ now: new Date(), audience: 'owner', workspaces: props.workspaces, sessions: props.sessions,
     runs: result?.runs ?? null, home: props.home }), [props.workspaces, props.sessions, props.home, result])
-  // This opening's first read places every row; after it, rows keep their section while he is in the list.
-  const shown = useRef<{ sections: NowSection[]; settled: boolean } | null>(null)
-  const hold = (pointerInside || focusInside) && shown.current !== null && shown.current.settled
-  const sections = heldSections(shown.current?.sections ?? null, view.sections, hold)
+  // The first placement shown with a read of the runs in this opening (a remembered one too) holds while he is in the list;
+  // the rows shown while nothing was read yet hold nothing.
+  const shown = useRef<NowSection[] | null>(null)
+  const hold = (pointerInside || focusInside) && shown.current !== null
+  const sections = heldSections(shown.current, view.sections, hold)
   const order = visibleKeys(sections, notRunningOpen)
   const lastOrder = useRef<string[]>(order)
   const target = focusAfter(lastOrder.current, order, focusKey)
+  // The row button that has the focus, and whether he left the list for something else (then nothing takes it back).
+  const focused = useRef<HTMLElement | null>(null)
+  const wantFocus = useRef(false)
   useEffect(() => {
-    shown.current = { sections, settled: fresh }
+    if (result !== null) shown.current = sections
     lastOrder.current = order
   })
-  useEffect(() => {
-    if (target === focusKey) return
-    setFocusKey(target)
-    memory.key = target
-    if (focusInside && target !== null) scroll.current?.querySelector<HTMLElement>(`.n-main[data-key="${CSS.escape(target)}"]`)?.focus()
-  }, [target, focusKey, focusInside])
+  // Focus is never lost to a refresh: a row that moved section is drawn anew and takes the focus back; a row that went, or
+  // was folded away, hands it to the next row. Before paint, so the keyboard never lands on the page.
+  useLayoutEffect(() => {
+    if (target !== focusKey) {
+      setFocusKey(target)
+      memory.key = target
+    }
+    const before = focused.current
+    if (!wantFocus.current || target === null || before === null) return
+    const dialog = scroll.current?.closest('dialog') ?? null
+    const active = document.activeElement
+    const inside = active instanceof HTMLElement && active !== dialog && dialog?.contains(active) === true
+    const removed = !before.isConnected && !inside
+    const handedOn = target !== focusKey && active === before
+    if (!removed && !handedOn) return
+    const button = scroll.current?.querySelector<HTMLElement>(`.n-main[data-key="${CSS.escape(target)}"]`)
+    if (button && button !== active) button.focus({ preventScroll: true })
+  })
   // Opens on the row he left, at the same scroll. This runs after the dialog's own effect opened it and focused that row.
   useEffect(() => {
     const list = scroll.current
@@ -319,8 +342,24 @@ export function NowSheet(props: {
         onScroll: (event) => { memory.scrollTop = event.currentTarget.scrollTop },
         onPointerEnter: () => setPointerInside(true),
         onPointerLeave: () => setPointerInside(false),
-        onFocus: () => setFocusInside(true),
-        onBlur: (event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusInside(false) }
+        onFocus: (event) => {
+          setFocusInside(true)
+          wantFocus.current = true
+          if (event.target instanceof HTMLElement && event.target.classList.contains('n-main')) focused.current = event.target
+        },
+        onBlur: (event) => {
+          const list = event.currentTarget
+          const next = event.relatedTarget as Node | null
+          if (list.contains(next)) return
+          if (next !== null) {
+            wantFocus.current = false
+            setFocusInside(false)
+            return
+          }
+          // No new focus: he clicked outside any control or the window went away, or a refresh drew the row anew.
+          const from = event.target
+          queueMicrotask(() => { if (from.isConnected) setFocusInside(false) })
+        }
       }} />
   </Dialog>
 }

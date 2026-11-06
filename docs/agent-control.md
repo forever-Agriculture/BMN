@@ -2894,9 +2894,11 @@ caller's workspace with what it does, who it waits on and a time left only where
 stories finished since the start of the previous working day. `--json` gives the same rows as data, by section.
 A session's token covers its own workspace only, as `bmn peers` does, and states and labels only: a session
 waiting on a card reads `Waits on the owner.` with no card title, and no row carries a message, a card or the
-handoff's own text (D10). The owner's token (`--owner`) covers every workspace with card titles, as his sheet
-and Copy standup do. One generator (`@bmn/protocol`'s `standupText`) writes both. BMN knows the terminal title
-only in the window, so a session with no run reads its `bmn progress` label, else the hook's Working or Idle.
+handoff's own text (D10). A run shows to a session only when it is linked to a session of that workspace: a
+repository's other worktrees, led from another workspace or by nobody, never show. The owner's token (`--owner`)
+covers every workspace with card titles, as his sheet and Copy standup do. One generator (`@bmn/protocol`'s
+`standupText`) writes both. A session with no run speaks only by its `bmn progress` label, never its terminal
+title (which BMN knows only in the window), so Copy standup and `bmn now` give the same text.
 
 ```bash
 bmn now          # Thu 5 Nov, 09:40. 3 sessions, 1 waits on the owner. …

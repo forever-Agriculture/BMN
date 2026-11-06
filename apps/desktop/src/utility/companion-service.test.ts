@@ -1,5 +1,6 @@
 // MODULE: companion-service.test.ts - backup export/verify completeness and artifact reconciliation against the real store
 import { createHash, randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -3409,10 +3410,49 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
   it('counts an agent its hooks reported in bmn now, as the sheet does, though a shell is in front (110.9)', async () => {
     const manager = service['options'].manager
     manager.foregroundProcessIdentity = () => null
-    const read = (): Promise<NowReport> => service['control']['options'].handlers.readNow({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })
+    const read = (): Promise<NowReport> => service['control']['options'].handlers.readNow({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' }) as Promise<NowReport>
     expect((await read()).agentRunning).toBe(false)
     await handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'Stop', source: null, toolName: null, effects: [] })
     expect((await read()).agentRunning).toBe(true)
+  })
+
+  it('keeps each workspace\'s runs to itself in bmn now when two workspaces share one repository (110.9, D10)', async () => {
+    const git = (cwd: string, ...args: string[]): string => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim()
+    const a = join(root, 'repo-a'), b = join(root, 'repo-b'), c = join(root, 'repo-c')
+    await mkdir(a, { recursive: true }); git(a, 'init', '-qb', 'main')
+    git(a, '-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'base')
+    git(a, 'worktree', 'add', '-qb', 'dev-auto/epic-77', b); git(a, 'worktree', 'add', '-qb', 'dev-auto/epic-88', c)
+    const handoff = (checkout: string, branch: string, epic: number, wait: string): string =>
+      `- Project / selected epics: Fixture; epics ${epic}\n- Owning checkout and branch: ${checkout} / ${branch}\n## Progress\n- Waiting on: ${wait}\n` +
+      `- Finished stories:\n  ${epic}.1 2026-11-05T08:00:00Z 2026-11-05T09:00:00Z\n## Resume\n- Status: ACTIVE\n`
+    const write = async (checkout: string, path: string, text: string): Promise<void> => {
+      await mkdir(join(checkout, path, '..'), { recursive: true }); await writeFile(join(checkout, path), text)
+    }
+    await write(a, '.dev-auto/handoff.md', handoff(a, 'main', 66, 'Alpha wait'))
+    await write(b, '.dev-auto/handoff.md', handoff(b, 'dev-auto/epic-77', 77, 'Bravo wait'))
+    await write(c, '.dev-auto/handoff.md', handoff(c, 'dev-auto/epic-88', 88, 'Charlie wait'))
+    await write(a, '_bmad-output/implementation-artifacts/sprint-status.yaml', 'development_status:\n  epic-66: in-progress\n  66-1-alpha-one: done\n' +
+      '  66-2-alpha-story: in-progress\n  epic-77: in-progress\n  77-1-bravo-one: done\n  77-2-bravo-story: in-progress\n' +
+      '  epic-88: in-progress\n  88-1-charlie-one: done\n  88-2-charlie-story: in-progress\n')
+    clock = '2026-11-05T12:00:00.000Z'
+    createWorkspace(database, { name: 'Alpha', defaultCwd: a }, 'wa', now)
+    createWorkspace(database, { name: 'Bravo', defaultCwd: b }, 'wb', now)
+    for (const [id, workspace, cwd] of [['sa', 'wa', a], ['sb', 'wb', b]] as const) {
+      database.prepare(`INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+        VALUES (?, ?, ?, ?, '/bin/bash', '[]', 1, ?, 0)`).run(id, workspace, id, cwd, now)
+      liveIncarnations.set(id, `incarnation-${id}`); reportedProcesses.set(id, `incarnation-${id}`); liveDirectories.set(id, cwd)
+    }
+    const read = (sessionId: string): Promise<NowReport> =>
+      handlers().readNow({ kind: 'session', sessionId, incarnationId: `incarnation-${sessionId}` }) as Promise<NowReport>
+    const alpha = JSON.stringify(await read('sa')), bravo = JSON.stringify(await read('sb'))
+    expect(alpha).toContain('66.2 alpha story'); expect(alpha).toContain('Alpha wait')
+    expect(bravo).toContain('77.2 bravo story'); expect(bravo).toContain('Bravo wait')
+    // Neither reads the other's run, nor the run in the third worktree that no session leads: story, wait or done ids.
+    for (const hidden of ['bravo', 'Bravo wait', '77.1', '77.2', 'charlie', 'Charlie wait', '88.1', '88.2']) expect(alpha).not.toContain(hidden)
+    for (const hidden of ['alpha', 'Alpha wait', '66.1', '66.2', 'charlie', 'Charlie wait', '88.1', '88.2']) expect(bravo).not.toContain(hidden)
+    // The owner sees every run, the unled one under Not running.
+    const owner = await handlers().readNow({ kind: 'owner' })
+    for (const shown of ['66.2 alpha story', '77.2 bravo story', '88.2 charlie story']) expect(JSON.stringify(owner)).toContain(shown)
   })
 
   it('lists peers with the agent in front there now, and stamps a message with the sender\'s', async () => {

@@ -1944,10 +1944,14 @@ export class CompanionService {
       const directory = this.options.manager.liveLaunchDirectory(session.sessionId)
       return directory ? [[session.sessionId, directory] as const] : []
     }))
-    const runs = covered.length === 0 ? [] : (await readDevAutoRuns(workspaces, sessions, attention,
+    const read = covered.length === 0 ? [] : (await readDevAutoRuns(workspaces, sessions, attention,
       scope.kind === 'owner' ? undefined : covered[0]!.workspaceId, undefined, liveDirectories,
       await this.sessionConversations(sessions, attention))).runs
     const ids = new Set(covered.map((workspace) => workspace.workspaceId))
+    // D10: the reader lists every worktree of a repository, so another workspace's run can come back; an agent sees only
+    // runs linked (D14) to a session of its own workspace (buildNow guards this again).
+    const ownSessions = new Set(sessions.filter((session) => ids.has(session.workspaceId)).map((session) => session.sessionId))
+    const runs = scope.kind === 'owner' ? read : read.filter((run) => run.sessionId != null && ownSessions.has(run.sessionId))
     const inputs = sessions.filter((session) => session.archivedAt === null && ids.has(session.workspaceId))
       .toSorted((left, right) => left.position - right.position || left.createdAt.localeCompare(right.createdAt) || left.sessionId.localeCompare(right.sessionId))
       .map((session): NowSessionInput => {
