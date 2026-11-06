@@ -407,7 +407,8 @@ export function mergedMoveOf(repo, upstream) {
   if (read.status !== 0) return null
   let metadata
   try { metadata = JSON.parse(read.stdout) } catch { throw new PlanError('MOVE_BOUNDARY_UNCONFIRMED', 'the upstream migration record is unreadable') }
-  const added = textGit(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-filter=A', '--format=%H', head, '--', 'plan/migration.json']).split('\n').filter(Boolean)
+  // A recut merges the previous cut as its second parent; read each merge against its first parent so it counts as the move.
+  const added = textGit(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-merges=first-parent', '--no-patch', '--diff-filter=A', '--format=%H', head, '--', 'plan/migration.json']).split('\n').filter(Boolean)
   const commit = added.find(id => spawnSync('git', ['-C', repo, 'rev-parse', `${id}^1`], { encoding: 'utf8' }).stdout.trim() === metadata.history_head)
   if (metadata.version !== 1 || !commit) throw new PlanError('MOVE_BOUNDARY_UNCONFIRMED', `upstream's move commit does not descend directly from ${metadata.history_head}; it was squashed or rebased after master advanced`)
   return { head, anchor: metadata.history_head, commit, source_board: metadata.source_board, unfinished_only: metadata.unfinished_only === true }

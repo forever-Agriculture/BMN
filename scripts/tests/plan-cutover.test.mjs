@@ -400,7 +400,7 @@ describe('D15 cutover', () => {
   })
   const visionText = words => `# Vision\n\n## Vision\n\n${words}\n\n## Principles\n\n1. One rule.\n`
   // A PR's move merged remotely: fixture cut from A, plan edited upstream, the default checkout still on the old board.
-  async function mergedFixture({ keepBmad = false, afterCut = () => {}, moveCheckout = false, productBoth = false, platform = false } = {}) {
+  async function mergedFixture({ keepBmad = false, afterCut = () => {}, moveCheckout = false, productBoth = false, platform = false, recut = false } = {}) {
     const f = fixture(), board = '_bmad-output/implementation-artifacts/sprint-status.yaml'
     if (platform) { file(f.repo, 'docs/platform/README.md', 'old index\n'); file(f.repo, 'docs/platform/epic-7-probe.md', '# Epic 7: Probe contract\n'); git(f.repo, 'add', '.'); git(f.repo, 'commit', '-qm', 'platform') }
     const bothLines = Array.from({ length: 12 }, (_, at) => `line ${at + 1}\n`).join('')
@@ -416,6 +416,14 @@ describe('D15 cutover', () => {
     git(publish, 'add', '-A'); git(publish, 'commit', '-qm', 'move'); const moveCommit = git(publish, 'rev-parse', 'HEAD')
     git(publish, 'switch', '-q', 'main'); file(publish, 'upstream-product.txt', 'incoming product\n'); if (productBoth) file(publish, 'both.sh', bothLines.replace('line 9\n', 'line 9 upstream\n')); if (platform) { file(publish, 'docs/platform/README.md', 'new index\n'); file(publish, 'docs/platform/epic-9-new.md', '# Epic 9: added on master\n') } git(publish, 'add', '.'); git(publish, 'commit', '-qm', 'product on master')
     afterCut(publish, board)
+    if (recut) {
+      // The cut is rebuilt on the advanced master without a force push: first parent the new tip, second the previous cut.
+      const tip = git(publish, 'rev-parse', 'main')
+      git(publish, 'switch', '-qc', 'recut', 'main'); git(publish, 'checkout', 'move', '--', 'plan'); if (!keepBmad) git(publish, 'rm', '-rqf', '--ignore-unmatch', '_bmad-output')
+      const record = JSON.parse(readFileSync(join(publish, 'plan/migration.json'), 'utf8')); file(publish, 'plan/migration.json', JSON.stringify({ ...record, history_head: tip }, null, 2) + '\n')
+      git(publish, 'add', '-A'); const tree = git(publish, 'write-tree')
+      const rebuilt = git(publish, 'commit-tree', tree, '-p', tip, '-p', 'move', '-m', 'recut'); git(publish, 'reset', '-q', '--hard'); git(publish, 'switch', '-q', 'main'); git(publish, 'branch', '-qf', 'move', rebuilt); git(publish, 'branch', '-qD', 'recut')
+    }
     git(publish, 'merge', '-q', '--no-ff', '-m', 'Merge move', 'move'); git(publish, 'push', '-q', 'origin', 'main'); git(f.repo, 'fetch', '-q', 'origin')
     if (moveCheckout) { git(f.repo, 'merge', '-q', '--ff-only', 'origin/main') }
     return { ...f, board, anchor, moveCommit, baseline: { projection: first.projection, fingerprint: planFingerprintOf(first.projection), date }, publish }
@@ -438,6 +446,13 @@ describe('D15 cutover', () => {
     expect(git(f.repo, 'status', '--short', '--', 'upstream-product.txt', 'plan')).toBe('')
     expect((await resolvePlan(f.repo)).format).toBe('bmn-plan')
     expect((await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })).outcome).toBe('already-moved')
+  }, 30_000)
+  it('finds a recut move whose commit merges the previous cut, as its first parent is the advanced master', async () => {
+    const f = await mergedFixture({ recut: true })
+    const result = await move({ repo: f.repo, upstream: 'origin/main', handover: handover(f.repo), baseline: f.baseline })
+    expect(result.outcome).toBe('moved')
+    expect(readFileSync(join(f.repo, 'upstream-product.txt'), 'utf8')).toBe('incoming product\n')
+    expect(readFileSync(join(f.repo, 'plan/VISION.md'), 'utf8')).toBe(visionText('edited on the branch'))
   }, 30_000)
   it('reconciles a checkout that already pulled the merged move, keeping its live plan edits', async () => {
     const f = await mergedFixture({ moveCheckout: true })
