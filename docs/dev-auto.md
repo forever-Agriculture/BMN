@@ -87,9 +87,11 @@ board that cannot be read grants nothing):
 an edit made after the go does not count until you give a new go, and the run tells you about it. At start and
 at every resume the run keeps the same go, its rounds left and its money in its handoff, and asks you nothing
 about them. Every run has at least 4 extra repair rounds per boundary (your card, 2026-11-04): the greater of 4
-and its go's number. An epic without Run needs, or without a recorded go, also has the 4, without deferrals; the
-run continues under your invocation, explains in its handoff why the record is missing, and never asks you to
-restate the approval or records a go itself. A go you withdrew, or one that cannot be confirmed, gives no rounds,
+and its go's number, unless the epic's allowances file names its own `repair_rounds`, which is then the
+number (Epic 110 D13: your 2 means 2). An epic without Run needs, or without a recorded go, also has
+the 4, without deferrals; the run continues under your invocation, explains in its handoff why the record
+is missing, and never asks you to restate the approval or records a go itself. A go you withdrew, or one
+that cannot be confirmed, gives no rounds,
 your later narrower word holds (`spend_ledger.py limit`), and what was used stays used.
 
 A run decides a technical point itself only when the evidence is complete; otherwise it asks the consultant
