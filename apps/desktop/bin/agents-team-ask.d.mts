@@ -5,6 +5,8 @@ export declare class AskUsageError extends Error {}
 export declare function filePrompt(question: string, files: { label: string; sha256: string; bytes: Buffer }[]): string
 export declare const ACCESS_GONE: string
 export declare const WIDE_READ_GONE: string
+/** A reviewer's vision as the asking command found it (Epic 112): whole, by its real path and hash, or left out and why. */
+export type AskVision = { path: string; real: string; sha256: string; bytes?: number; omitted?: undefined } | { path: string | null; omitted: string; real?: undefined; sha256?: undefined }
 export interface AskAsked {
   role: string; question: string; agent?: string; effort?: string; smallWork?: boolean; recheckOf?: string; project?: string
   /** Gone in 72.9: given, the ask is refused with the new spelling. */
@@ -13,6 +15,8 @@ export interface AskAsked {
   qa?: { brief: Record<string, unknown> }
   /** A browser ask (74.3): the asker's app, its `--disposable` statement and whether the teammate may click and type. */
   browser?: { origin: string; disposable?: boolean; interact?: boolean } | null
+  /** Epic 112: the project's vision the asking command found for a reviewer, or why it was left out. */
+  vision?: AskVision | null
   key?: string; keyScope?: string; requestSha256?: string; askedBy?: { kind: string; session?: string; app?: string }; inputHashes?: { files?: string[]; images?: string[] }
 }
 export interface PreparedAsk {

@@ -1,8 +1,14 @@
 // MODULE: agents-team-vision.mjs - Epic 112: a reviewer's ask is given the project's plan/VISION.md, found from any worktree, read whole or not at all
 import { lstatSync } from 'node:fs'
 import { join } from 'node:path'
-import { FORMAT, PlanError, VISION_LIMIT, resolvePlan } from './plan-board.mjs'
 import { InputRefusal, textFile } from './agents-team-inputs.mjs'
+
+/**
+ * The plan check's ceiling for a vision (plan-board.mjs VISION_LIMIT; a test holds the two equal). The plan reader
+ * itself is handed in by the `bmn` entry point: team-state modules stay a closed import graph (R60-NFR3).
+ */
+export const VISION_LIMIT = 8 * 1024
+const PLAN_FORMAT = 'bmn-plan'
 
 /**
  * The implementation reviews dev-auto asks through BMN (R112-FR1). The quick pre-reviews only map
@@ -15,22 +21,23 @@ const NO_PLAN = new Set(['NO_PROJECT', 'NO_REPOSITORY', 'NO_PLAN'])
 
 /**
  * The project's vision for a reviewer's ask, found as the plan is found from that folder (D2: the
- * canonical plan, from a linked worktree without plan/ too). Returns null when the role is not a
+ * canonical plan, from a linked worktree without plan/ too) by the `resolvePlan` handed in. Returns null when the role is not a
  * reviewer, the ask has no project or the project has no BMN-format plan with a VISION.md;
  * `{ path, real, sha256, bytes }` when the whole file is given; `{ path, omitted }` when the ask goes
  * without it and why (over the plan check's ceiling, unreadable, not text, or holding a credential):
  * an ask never carries part of a vision (112.1 AC3).
  */
-export async function reviewVision(role, project, { home } = {}) {
+export async function reviewVision(role, project, { home, resolvePlan = null } = {}) {
   if (!VISION_ROLES.includes(role) || project === null || project === undefined) return null
+  if (typeof resolvePlan !== 'function') return { path: null, omitted: 'this command was given no plan reader, so the project\'s vision was not looked for' }
   let plan
   try {
     plan = await resolvePlan(project)
   } catch (error) {
-    if (error instanceof PlanError && NO_PLAN.has(error.code)) return null
-    return { path: null, omitted: `the project's plan could not be read (${error instanceof PlanError ? error.code : 'error'}), so its vision was not given` }
+    if (typeof error?.code === 'string' && NO_PLAN.has(error.code)) return null
+    return { path: null, omitted: `the project's plan could not be read (${typeof error?.code === 'string' ? error.code : 'error'}), so its vision was not given` }
   }
-  if (plan.format !== FORMAT) return null
+  if (plan.format !== PLAN_FORMAT) return null
   const path = join(plan.planRoot, 'VISION.md')
   let stat
   try {

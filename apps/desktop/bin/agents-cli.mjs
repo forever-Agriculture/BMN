@@ -118,11 +118,12 @@ function approvedData() {
   return readApprovedWithFile()
 }
 
-export async function runTeam(argv) {
+export async function runTeam(argv, { resolvePlan = null } = {}) {
   // Epic 72: `bmn team ask` and `bmn team asks`; a bare `bmn team` is the team as before.
+  // Epic 112: the entry point hands in the plan reader, which finds a reviewer's vision.
   if (argv[0] === 'ask' || argv[0] === 'asks') {
     const { runTeamAsk, runTeamAsks } = await import('./agents-team-cli.mjs')
-    return argv[0] === 'ask' ? runTeamAsk(argv.slice(1)) : runTeamAsks(argv.slice(1))
+    return argv[0] === 'ask' ? runTeamAsk(argv.slice(1), { resolvePlan }) : runTeamAsks(argv.slice(1))
   }
   let parsed
   try {

@@ -173,6 +173,8 @@ export interface AskInputs { agent: string; role: string; effort: string; data: 
 export interface AskReceipt extends Omit<ReceiptBase, 'cwd'> {
   mode: 'ask'; role: string; form: import('./agents-team-forms.mjs').AskFormName; reads: { scope: string; words: string; folder: string }; project: string | null; cwd: string; pictures?: number
   run: string; data: 'public' | 'private'; consent: AskConsent[]; inputs_sha256: string
+  /** Epic 112: the project's vision a reviewer was given, by path, place among the files and hash, or why it was left out. */
+  vision?: { path: string; file: number; bytes: number; sha256: string } | { path: string | null; omitted: string }
   snapshots: { executable: { launcher: string; payload: string }; environment: string; rules: string | null; prompt: string; message?: string; git?: string }
   harness_version: { version: string | null; state: string; form_checked_on: { version: string; on: string } }
 }

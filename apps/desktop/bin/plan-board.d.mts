@@ -1,6 +1,7 @@
 // MODULE: plan-board.d.mts - types for plan-board.mjs (Epic 77: one resolver, reader and check for a project's plan)
 export declare const FORMAT: 'bmn-plan'
 export declare const NOTE_LIMIT: number
+export declare const VISION_LIMIT: number
 export declare const STATUSES: string[]
 export declare const EXIT: { ok: 0; findings: 1; unable: 2 }
 export declare const ROW: RegExp
@@ -48,6 +49,8 @@ export interface EpicFile {
   suggestedLead: string | null
   sections: string[]
   stories: Array<{ id: string; epic: number; line: number; criteria: Array<{ id: number; line: number }>; verification: boolean }>
+  /** The ## Why heading's line and whether it names a **Serves:** line (Epic 112), or null without the section. */
+  why: { line: number; serves: boolean } | null
 }
 
 export declare function rowToken(key: string, status: string, note: string): string
@@ -60,5 +63,5 @@ export declare function defaultLocation(root: string): Promise<{checkout: string
 export declare function readBoard(path: string, options?: { epics?: number[] }): Promise<Board>
 export declare function readEpicFile(path: string): EpicFile
 export declare function boardProblems(board: Board, boardName: string): Array<{ where: string; reason: string }>
-export declare function checkPlan(resolved: ResolvedPlan): Promise<{ findings: Array<{ where: string; reason: string }>; board: Board }>
+export declare function checkPlan(resolved: ResolvedPlan): Promise<{ findings: Array<{ where: string; reason: string }>; warnings: Array<{ where: string; reason: string }>; board: Board }>
 export declare function boardBytes(path: string): number | null

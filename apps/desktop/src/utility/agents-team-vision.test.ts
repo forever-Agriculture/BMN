@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { teamRunsDirectory } from '../../bin/agents-check.mjs'
 import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { AskUsageError, prepareAsk } from '../../bin/agents-team-ask.mjs'
-import { VISION_ROLES, reviewVision } from '../../bin/agents-team-vision.mjs'
+import { VISION_LIMIT, VISION_ROLES, reviewVision } from '../../bin/agents-team-vision.mjs'
+import { VISION_LIMIT as CHECK_LIMIT, resolvePlan } from '../../bin/plan-board.mjs'
 import { SCOPES, leftovers as harnessLeftovers, ownSystemd, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -54,7 +55,7 @@ function planned(vision: string | Buffer | null = VISION): { main: string; workt
 
 /** The ask the asking command makes for a reviewer: the vision found, added to the files and named in the request. */
 async function reviewerAsk(role: string, project: string, extra: Partial<Parameters<typeof prepareAsk>[0]> = {}) {
-  const vision = await reviewVision(role, project, { home })
+  const vision = await reviewVision(role, project, { home, resolvePlan })
   const files = [...(extra.files ?? [])]
   if (vision?.real !== undefined && !files.includes(vision.real)) files.push(vision.real)
   const request = { role, question: 'Review the change.', project, files, ...(vision === null ? {} : { vision }) }
@@ -94,7 +95,10 @@ describe('a reviewer is given the vision (112.1 AC1)', () => {
 
   it('a consultant, a designer and a pre-reviewer get no vision; a project without a vision or without a plan is unchanged', async () => {
     const { worktree } = planned()
-    for (const role of ['consultant', 'designer', 'pre-reviewer', 'qa', 'helper']) expect(await reviewVision(role, worktree, { home })).toBeNull()
+    for (const role of ['consultant', 'designer', 'pre-reviewer', 'qa', 'helper']) expect(await reviewVision(role, worktree, { home, resolvePlan })).toBeNull()
+    // The ceiling is the plan check's, and a command handed no plan reader says so rather than skipping in silence.
+    expect(VISION_LIMIT).toBe(CHECK_LIMIT)
+    expect(await reviewVision('epic-reviewer', worktree, { home })).toEqual({ path: null, omitted: expect.stringContaining('no plan reader') })
     const plain = await reviewerAsk('consultant', worktree)
     expect(plain.prepared.manifest).not.toHaveProperty('vision')
     expect(plain.prepared.verdict.receipt).not.toHaveProperty('vision')
@@ -103,13 +107,13 @@ describe('a reviewer is given the vision (112.1 AC1)', () => {
     expect(() => prepareAsk({ role: 'consultant', question: 'x', project: worktree, files: [], vision: { path: 'v', real: 'v', sha256: 'x' } }, { environment: env, cwd: worktree, home })).toThrow(AskUsageError)
     rmSync(join(home, 'code'), { recursive: true, force: true })
     const { worktree: bare } = planned(null)
-    expect(await reviewVision('epic-reviewer', bare, { home })).toBeNull()
+    expect(await reviewVision('epic-reviewer', bare, { home, resolvePlan })).toBeNull()
     const none = await reviewerAsk('epic-reviewer', bare)
     expect(none.prepared.manifest).not.toHaveProperty('vision')
     // No plan at all, and no project.
     rmSync(join(home, 'code/app/plan'), { recursive: true, force: true })
-    expect(await reviewVision('epic-reviewer', bare, { home })).toBeNull()
-    expect(await reviewVision('epic-reviewer', null, { home })).toBeNull()
+    expect(await reviewVision('epic-reviewer', bare, { home, resolvePlan })).toBeNull()
+    expect(await reviewVision('epic-reviewer', null, { home, resolvePlan })).toBeNull()
   })
 })
 
@@ -120,7 +124,7 @@ describe('the vision once, by its bytes (112.1 AC2)', () => {
     const prompt = readFileSync(join(prepared.folder, ASK_RUN_FILES.prompt), 'utf8')
     expect(prompt.match(/BEGIN FILE/gu)).toHaveLength(1)
     expect(prepared.manifest.files).toHaveLength(1)
-    const vision = await reviewVision('epic-reviewer', worktree, { home })
+    const vision = await reviewVision('epic-reviewer', worktree, { home, resolvePlan })
     writeFileSync(visionPath, `${VISION}- **P2. Another.**\n`)
     expect(() => prepareAsk({ role: 'epic-reviewer', question: 'x', project: worktree, files: [visionPath], vision: vision! }, { environment: env, cwd: worktree, home })).toThrow(/changed while the ask was being made/u)
   })

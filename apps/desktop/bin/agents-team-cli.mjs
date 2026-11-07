@@ -371,7 +371,7 @@ function printFeatures(asJson, environment) {
   return EXIT.ok
 }
 
-export async function runTeamAsk(argv, { environment = process.env, cwd = process.cwd(), now = () => new Date() } = {}) {
+export async function runTeamAsk(argv, { environment = process.env, cwd = process.cwd(), now = () => new Date(), resolvePlan = null } = {}) {
   let options
   try {
     options = readAskOptions(argv)
@@ -441,7 +441,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const role = options.role ?? (options.origin !== undefined ? BROWSER_ROLE : DESIGNER_ROLE)
   // A reviewer is given the project's vision by BMN, not by a line asking the lead to (Epic 112 D2): it joins the files
   // before their hashes, so scanning, consent, limits and INPUT_CHANGED hold for it as for any file, and is sent once.
-  const vision = await reviewVision(role, project, { home })
+  const vision = await reviewVision(role, project, { home, resolvePlan })
   let visionIndex = -1
   if (vision?.real !== undefined) {
     visionIndex = files.findIndex((path) => { try { return realpathSync(path) === vision.real } catch { return false } })
