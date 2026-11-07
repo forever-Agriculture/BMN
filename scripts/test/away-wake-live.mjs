@@ -143,7 +143,8 @@ async function startNightProxy() {
     port: server.address().port, hosts,
     cut: () => { down = true; for (const socket of tunnels) socket.destroy(); tunnels.clear() },
     restore: () => { down = false },
-    close: () => { for (const socket of tunnels) socket.destroy(); return new Promise((done) => server.close(done)) }
+    // Closed without waiting: a tunnel Claude opened while the run ended would hold the close and the run's last await (run 4, exit 13).
+    close: () => { down = true; for (const socket of tunnels) socket.destroy(); server.closeAllConnections(); server.close() }
   }
 }
 
@@ -570,7 +571,7 @@ async function run(scenario, binary) {
       const closed = await Promise.race([application.close().then(() => true, () => true), sleep(15_000).then(() => false)])
       if (!closed) application.process().kill('SIGKILL')
     }
-  }) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); await proxy.close() } }
+  }) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); proxy.close() } }
 }
 
 for (const app of (args[2] ?? 'claude,codex').split(',')) {
