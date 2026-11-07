@@ -1,3 +1,4 @@
+# MODULE: readiness.md - check that the approved plan supports autonomous implementation
 # Readiness
 
 Run before asking the owner for his go on an epic (or a set of epics). The question: **could an implementing agent build these stories without inventing a decision nothing records?** `bmn plan check` covers structure; this is the content check.
@@ -17,7 +18,7 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 11. **Design and rollout, when they apply.** A screen story cites an approved design and names its states and sizes ([design.md](design.md)). An epic that changes stored data, compatibility or the installed release has a Rollout section with recovery and an installed-build check.
 12. **Order, gates and independence.** The epic depends on no unfinished epic, and its Boundary says how it stays mergeable on its own branch beside the others. Stop gates (measure first) come first; owner-only checks are their own story; the Boundary names what is out of scope.
 
-13. **The allowances file, limit by limit.** The epic has `plan/allowances/NNN.yaml` from the [template](../templates/allowances.yaml), 4 repair rounds by default, and `bmn plan check` is clean. Walk each limit: is it enough for this epic, is its ceiling what a lead may reach alone, and what happens at the ceiling (the story parks; or one card if the epic says so)? `may` names each action and target he approves; `stays_out` names what no run asks to cross. A card a run may raise has a recommended answer that writes a limit that finishes the work, not one more slice, and no agent proposes a limit narrower than the file's.
+13. **The allowances file, end to end.** The epic has `plan/allowances/NNN.yaml` from the [template](../templates/allowances.yaml), 4 repair rounds by default, and `bmn plan check` is clean. Walk every story through implementation, review/rechecks, repairs, QA/retests, packaging, delivery and cleanup. For each expected operation, identify its command and target, authority source, prerequisite/access check and cost basis; record these in the epic's verification and allowances `may`, `prepared` and limits as applicable. Size each limit for the expected work plus justified contingency, and set its ceiling to what the lead may reach alone. A known permission gap, unbudgeted paid step or predictable extra review is a readiness finding, never “ask during implementation.” `stays_out` remains binding. An unforeseen gap can use one amendment card showing exact before/after, reason, cost/exposure and work unlocked; only his approval changes the recorded file through `bmn plan allow`, with usage preserved. Pending approval parks affected work only; Away and external refusals still hold. Recommend enough to finish, never one more slice or a narrower limit than the file's.
 
 14. **Size.** Over 10 stories or 50 criteria, split the epic before he sees it; only his quoted word for that size in Decisions keeps it whole (`bmn plan check` reports it from `rules_from_size` on).
 
@@ -25,7 +26,7 @@ Run before asking the owner for his go on an epic (or a set of epics). The quest
 
 16. **People and messages.** Walk every repository the stories touch and every acceptance step, by name: who owns it, who accepts, did they agree. Each is a `person` line in Prepared with its check and date, or a named message in `**Messages:**` (person, destination, purpose; only facts or access). A person's answer the plan needs and does not have is a fact to ask them now, not at run time.
 17. **Challenges.** Each `## Challenges` answer holds against the code and the people named (Scale, Origin, Verified, Exists, People). The lead answers; the epic reviewer checks.
-18. **One batch.** Everything only he can decide goes in one batch of cards here, the go last, each with your recommendation and its fallback if he does not answer. Nothing found later reaches him unless it is reserved (irreversible, money beyond the plan, private data, no work can proceed): it goes in the epic, and the run decides or parks.
+18. **One batch.** Everything only he can decide and that planning can foresee goes in one batch of cards here, the go last, each with your recommendation and its fallback if he does not answer. Later technical choices stay with the run. A genuinely unforeseen allowance or permission gap follows the amendment-card rule above; other reserved decisions follow dev-auto's question timing. Do not make routine execution depend on later answers.
 
 ## Verdict
 
