@@ -945,6 +945,16 @@ describe('bmn hook', () => {
     })
   })
 
+  it('reports a turn an API error ended (StopFailure) as a finished-turn notice, so the Away wake can wake it (Epic 111 F17)', async () => {
+    const fixture = await cliFixture()
+
+    const failed = await runHook(fixture, 'claude', { hook_event_name: 'StopFailure', error: 'server_error', last_assistant_message: 'API Error: Connection lost mid-response.' })
+
+    expect(failed).toEqual(QUIET)
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual(['claude:permission', 'claude:question'])
+    expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({ requestKey: 'claude:turn', kind: 'notice', title: 'Claude stopped on an error', body: 'server_error' })
+  })
+
   it('reports nothing when a turn ends with background work or a scheduled wake-up still pending', async () => {
     const fixture = await cliFixture()
     const stop = { hook_event_name: 'Stop', last_assistant_message: 'Waiting for the test run.' }
@@ -2382,7 +2392,7 @@ const DOCUMENTED_CLAUDE = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/
 const OLDER_CLAUDE = '[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
 const CLAUDE_EVENTS = [
   'Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop',
-  'SessionStart', 'SessionEnd'
+  'StopFailure', 'SessionStart', 'SessionEnd'
 ]
 const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
 const DOCUMENTED_CODEX = DOCUMENTED_CLAUDE.replace('bmn hook claude', 'bmn hook codex')
@@ -3622,7 +3632,7 @@ describe('bmn hooks install', () => {
       { matcher: 'AskUserQuestion|Bash', hooks: [{ type: 'command', timeout: 5, command: GUARD_CLAUDE }] }
     ])
     expect(install.stdout).toContain(
-      'Notification, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd'
+      'Notification, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, UserPromptSubmit, StopFailure, SessionStart, SessionEnd'
     )
     // The diff removes only that one older line.
     expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toHaveLength(1)
@@ -4723,7 +4733,7 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(first.code).toBe(1)
     expect(first.report).toMatchObject({
       state: 'installed',
-      installed: ['PreToolUse', 'PermissionRequest', 'PostToolUseFailure', 'UserPromptSubmit', 'SessionStart'],
+      installed: ['PreToolUse', 'PermissionRequest', 'PostToolUseFailure', 'UserPromptSubmit', 'StopFailure', 'SessionStart'],
       older: ['Notification'],
       left: [{ event: 'PostToolUse', why: 'gated' }, { event: 'Stop', why: 'foreign' }, { event: 'SessionEnd', why: 'changed' }]
     })
@@ -4735,7 +4745,7 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     const text = await readFile(path, 'utf8')
     const second = await runHooks(['install', 'claude', '--absent', '--yes', '--file', path])
     expect(second.code).toBe(1)
-    expect(second.stdout).toContain('in place: 6 (Notification in an older wording)')
+    expect(second.stdout).toContain('in place: 7 (Notification in an older wording)')
     expect(second.stdout).toContain('PostToolUse: gated, left as it is')
     expect(second.stdout).toContain('Stop: not BMN\'s, left as it is')
     expect(second.stdout).toContain('SessionEnd: changed, left as it is')

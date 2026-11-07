@@ -16,7 +16,7 @@ import { doctorWorker, loadDoctorState, readDoctorView } from '../../bin/doctor.
 import { observeHookWrites } from './test-fixtures/hook-write-observer'
 
 const REQUIRED = {
-  claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
+  claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionStart', 'SessionEnd'],
   codex: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
   opencode: ['plugin', 'cli.json']
 }
@@ -135,7 +135,7 @@ describe('Doctor hooks producer contract', () => {
           XDG_STATE_HOME: join(home, '.local/state'), XDG_CACHE_HOME: join(home, '.cache') } })
       const actual = JSON.parse(text)
       expect(actual.ok).toBe(true)
-      expect(actual.agents.map((row: { events: unknown[] }) => row.events.length)).toEqual([9, 9, 2])
+      expect(actual.agents.map((row: { events: unknown[] }) => row.events.length)).toEqual([10, 9, 2])
       expect(parseBmnDoctor('hooks', text, 0)).toEqual({ state: 'passed', problems: [] })
     } finally { rmSync(home, { recursive: true, force: true }) }
   }, 150_000)

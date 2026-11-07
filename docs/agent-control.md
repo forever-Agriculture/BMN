@@ -896,7 +896,7 @@ harmless.
   still reads `missing` unless it is one of the three exactly.
 
 **The entries, for wiring by hand.** `~/.claude/settings.json` needs `Notification`, `PreToolUse`, `PermissionRequest`,
-`PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
+`PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `StopFailure`, `SessionStart` and `SessionEnd`, next to any hooks
 already there:
 
 ```json
@@ -1153,11 +1153,15 @@ the next one after now; missed times are not made up. Back, or only leaving, typ
 own times.
 
 A session is woken only when all of these hold: it runs Claude Code, Codex or OpenCode; its latest hook event is a
-finished turn reported after he left (for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
+finished turn reported after he left (for Claude Code a `Stop`, or a `StopFailure`: a turn an API error such as a lost
+connection ended; a compaction, Claude Code's own while idle included, keeps the event before it as the latest; for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
 plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`, and only from a plugin whose events carry
 `bmn_plugin` 1, its promise that it marks the interrupt and reports quitting: BMN's earlier plugins reported the owner's
 stop as a finished turn, and the plugin file on disk says nothing about what a running OpenCode loaded or about a stop
-reported before (2.0.29 reloads a changed file by itself); Story 96.3), with its `turn` notice open for at least 15 minutes and no other request of it open; and, checked
+reported before (2.0.29 reloads a changed file by itself); Story 96.3), at least 15 minutes after BMN saw that turn
+finish (the time BMN keeps for a message's wake, or after a BMN restart the still-open `turn` notice; opening the session,
+which clears that reminder, does not stop the wake), and no question or permission of the app itself open (an agent's
+own `bmn ask` card or a notice does not hold it: his card, 2026-11-07, Epic 111 F17-F19); and, checked
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim

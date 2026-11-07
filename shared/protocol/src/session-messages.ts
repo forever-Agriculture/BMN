@@ -216,7 +216,7 @@ export type SessionReceiverWord = (typeof SESSION_RECEIVER_WORDS)[number]
 
 /** The hook events that mean a turn is over: a finished one, or the owner's stop. */
 const RESTING_EVENTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  claude: ['Stop', 'Notification'], codex: ['Stop', 'Interrupt']
+  claude: ['Stop', 'StopFailure', 'Notification'], codex: ['Stop', 'Interrupt']
 })
 
 /** The word for a receiver, from what holds its terminal, its open cards and its latest hook report. */

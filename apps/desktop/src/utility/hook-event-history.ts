@@ -9,7 +9,7 @@ export const HOOK_HISTORY_FILE = 'hook-events.json'
 export const HOOK_HISTORY_MAX_BYTES = 1024 * 1024
 const HOOK_HISTORY_MAX_ROWS = 1024
 const EVENTS = new Set(['other', 'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
-  'PermissionRequest', 'Notification', 'Stop', 'SubagentStop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact',
+  'PermissionRequest', 'Notification', 'Stop', 'StopFailure', 'SubagentStop', 'SessionEnd', 'Interrupt', 'PreCompact', 'PostCompact',
   'sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd', 'session.created', 'session.idle',
   'session.compacted', 'tool.execute.after', 'permission.asked', 'permission.updated', 'permission.replied',
   'question.asked', 'question.replied', 'question.rejected', 'osc:9', 'osc:777', 'osc:99'])

@@ -68,7 +68,7 @@ const completeApps = (rows, key) => rows.length === 3 &&
   rows.every((row) => ['claude', 'codex', 'opencode'].includes(row?.[key]))
 // The producer's qualified vocabulary, not arbitrary state prefixes or user-provided optional flags.
 const HOOK_EVENTS = Object.freeze({
-  claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
+  claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionStart', 'SessionEnd'],
   codex: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
   opencode: ['plugin', 'cli.json']
 })

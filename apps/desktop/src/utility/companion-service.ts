@@ -561,6 +561,10 @@ export class CompanionService {
       observations: () => this.hookObservations.values(),
       observation: (sessionId) => this.hookObservations.get(sessionId),
       openAttention: async () => (await options.database.companion('listAttention')).filter((row) => row.state === 'open'),
+      finishedTurn: (sessionId, incarnationId) => {
+        const turn = this.finishedTurns.get(sessionId)
+        return turn?.incarnationId === incarnationId ? turn.at : null
+      },
       liveIncarnation: (sessionId) => options.manager.liveIncarnationId(sessionId),
       foreground: (sessionId) => options.manager.foregroundProcessIdentity(sessionId),
       generation: (sessionId) => this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 },
@@ -2667,7 +2671,12 @@ export class CompanionService {
           if (ended) this.options.manager.stopScreenMirror(p.sessionId)
           else this.options.manager.screenMirror(p.sessionId, p.incarnationId)
         }
-        this.hookObservations.set(p.sessionId, {
+        // A compaction keeps the same conversation and its requests (`bmn-hooks.mjs` opens nothing for it), so it does not
+        // replace what the run last reported: an idle session Claude Code compacts by itself still reads as resting, and the
+        // Away wake still sees its finished turn (Epic 111 F18). `hookCompactions` below still counts it.
+        const lastSeen = this.hookObservations.get(p.sessionId)
+        const keepsLatest = p.event === 'SessionStart' && p.source === 'compact' && lastSeen?.incarnationId === p.incarnationId
+        if (!keepsLatest) this.hookObservations.set(p.sessionId, {
           sessionId: p.sessionId,
           incarnationId: p.incarnationId,
           agent: p.agent,

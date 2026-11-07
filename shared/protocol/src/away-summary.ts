@@ -236,6 +236,7 @@ export function awayWentOnWords(record: Pick<AttentionRecord, 'state' | 'resolve
   const event = /^hook:[^:]+:(.+)$/.exec(by)?.[1]
   switch (event) {
     case 'Stop': return 'Closed when the agent ended its turn'
+    case 'StopFailure': return 'Closed when an error ended the agent\'s turn'
     case 'SessionEnd': return 'Closed when the session ended'
     case 'UserPromptSubmit': return 'Closed by a new message to the agent'
     case undefined: return 'Closed without your answer'

@@ -26,6 +26,8 @@ function world(now0 = T + 2 * HOUR) {
   const written: Array<{ sessionId: string; text: string }> = []
   const logs: string[] = []
   let beforeScreen: (() => void) | undefined
+  // BMN's in-memory record of each run's last finished turn (the message wake's, Story 110.3); empty unless a case sets it.
+  const finished = new Map<string, string>()
   // An OpenCode session runs the current plugin unless the case says otherwise (Story 96.3).
   const add = (sessionId: string, agent: string, extra: Partial<Session> & { event?: string; observedAt?: string; source?: string | null; plugin?: number | null } = {}): void => {
     const { event, observedAt, source, plugin, ...rest } = extra
@@ -43,6 +45,7 @@ function world(now0 = T + 2 * HOUR) {
     observations: () => [...sessions.values()].map((session) => session.seen),
     observation: (id) => sessions.get(id)?.seen,
     openAttention: async () => attention,
+    finishedTurn: (id, incarnationId) => sessions.get(id)?.seen.incarnationId === incarnationId ? finished.get(id) ?? null : null,
     liveIncarnation: (id) => sessions.get(id)?.live,
     foreground: (id) => sessions.get(id)?.front ?? null,
     generation: (id) => ({ generation: sessions.get(id)?.generation ?? 0, pending: sessions.get(id)?.pending ?? 0 }),
@@ -55,7 +58,7 @@ function world(now0 = T + 2 * HOUR) {
     log: (line) => logs.push(line)
   })
   return {
-    add, make, sessions, written, logs,
+    add, make, sessions, written, logs, finished,
     set now(value: number) { now = value },
     set away(value: AwayRecord) { away = value },
     get attention() { return attention }, set attention(value: WakeAttention[]) { attention = value },
@@ -142,7 +145,7 @@ describe('the Away wake-up (Story 90.6)', () => {
       other: 'other sessions are not woken (no recorded idle prompt)',
       busy: 'its latest event is PreToolUse, not a finished turn',
       before: 'no hook event since the owner left',
-      noturn: 'no open finished-turn notice',
+      noturn: 'BMN did not see this run finish a turn',
       fresh: 'its turn finished less than 15 minutes ago',
       dialog: 'another request of it is open'
     })
@@ -449,5 +452,57 @@ describe('the Away wake-up for an OpenCode whose loaded plugin may be an earlier
     await wake.sweep()
     w.now = T + 2 * HOUR; await wake.sweep()
     expect(w.written.map((row) => row.sessionId).sort()).toEqual(['c', 'x'])
+  })
+})
+
+describe('the Away wake-up after his night of 2026-11-06 (Epic 111 F17, F19)', () => {
+  it('wakes a Claude session whose turn an API error ended (StopFailure), as it wakes one after Stop', async () => {
+    const w = world(T)
+    w.add('a', 'claude', { event: 'StopFailure' })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 'a', text: AWAY_WAKE_LINE }])
+  })
+
+  it('wakes a session he opened after its turn finished: the cleared notice is no proof, BMN\'s finish time is', async () => {
+    const w = world(T)
+    w.add('a', 'claude')
+    w.attention = []
+    w.finished.set('a', at(T + HOUR))
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 'a', text: AWAY_WAKE_LINE }])
+  })
+
+  it('still skips a session whose finish BMN never saw, and one that finished under 15 minutes ago', async () => {
+    const w = world(T)
+    w.add('a', 'claude')
+    w.attention = []
+    w.add('b', 'claude')
+    w.attention = w.attention.filter((row) => row.sessionId !== 'b')
+    w.finished.set('b', at(T + 2 * HOUR - 60_000))
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs.join('\n')).toContain('BMN did not see this run finish a turn')
+    expect(w.logs.join('\n')).toContain('its turn finished less than 15 minutes ago')
+  })
+
+  it('an agent\'s own bmn ask card or another notice does not hold it; the app\'s own question or permission does', async () => {
+    const w = world(T)
+    w.add('a', 'claude')
+    w.add('b', 'claude')
+    w.add('c', 'codex')
+    w.attention.push({ sessionId: 'a', requestKey: 'deploy-go', kind: 'question', state: 'open', openedAt: at(T + HOUR), openedBy: 'cli' })
+    w.attention.push({ sessionId: 'a', requestKey: 'watch:repeat', kind: 'notice', state: 'open', openedAt: at(T + HOUR), openedBy: 'bmn' })
+    w.attention.push({ sessionId: 'b', requestKey: 'claude:question', kind: 'question', state: 'open', openedAt: at(T + HOUR), openedBy: 'hook:claude:PreToolUse' })
+    w.attention.push({ sessionId: 'c', requestKey: 'codex:permission', kind: 'permission', state: 'open', openedAt: at(T + HOUR), openedBy: 'hook:codex:PermissionRequest' })
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toEqual([{ sessionId: 'a', text: AWAY_WAKE_LINE }])
   })
 })

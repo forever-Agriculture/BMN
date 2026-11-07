@@ -35,6 +35,8 @@ export interface WakeAttention {
   kind: string
   state: string
   openedAt: string
+  /** `cli` for an agent's own `bmn ask` card; a hook's or BMN's otherwise. */
+  openedBy?: string | null
 }
 
 /** What proves a session idle (Stories 90.6, 110.3): shared by the Away wake and a message's wake. */
@@ -55,6 +57,11 @@ export interface AwayWakeOptions extends WakeProof {
   away(): AwayRecord
   observations(): Iterable<WakeObservation>
   openAttention(): Promise<readonly WakeAttention[]>
+  /**
+   * When this run last finished a turn, as BMN saw it, or null (the message wake's record, Story 110.3): opening a session
+   * clears its reminder, but the session still rests, and the owner wants it woken (Epic 111 F19, his card 2026-11-07).
+   */
+  finishedTurn(sessionId: string, incarnationId: string): string | null
   log(line: string): void
   everyMs?: number
   quietMs?: number
@@ -64,7 +71,7 @@ export interface AwayWakeOptions extends WakeProof {
  * Which agents report a finished turn with which hook events (Claude's idle_prompt Notification repeats its Stop;
  * BMN's OpenCode plugin reports a root run that succeeded, or that the owner stopped, as `session.idle`).
  */
-const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'Notification'], codex: ['Stop'], opencode: ['session.idle'] }
+const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'StopFailure', 'Notification'], codex: ['Stop'], opencode: ['session.idle'] }
 /**
  * The promise an OpenCode session's loaded plugin must make (Story 96.3): its events carry `bmn_plugin` 1 or later once
  * it reports the owner's stop as `interrupted` and quitting as `tui.exit`. BMN's earlier plugins reported a stop as a
@@ -160,6 +167,15 @@ export class AwayWake {
     if (Date.parse(seen.observedAt) <= since && isWakeApp(seen.agent) && finishedOwnTurn(seen) === null) return 'no hook event since the owner left'
     return typeIfIdle(this.options, {
       seen, generation, open, quietMs: this.options.quietMs ?? AWAY_WAKE_QUIET_MS, quietWords: 'its turn finished less than 15 minutes ago', line: AWAY_WAKE_LINE,
+      // The record lives in memory; after a BMN restart the still-open notice (kept in the database) says when instead.
+      finished: {
+        at: this.options.finishedTurn(seen.sessionId, seen.incarnationId) ?? open.find((row) => row.sessionId === seen.sessionId &&
+          row.state === 'open' && row.kind === 'notice' && row.requestKey === `${seen.agent}:turn`)?.openedAt ?? null,
+        unknown: 'BMN did not see this run finish a turn'
+      },
+      // Only the app's own question or permission holds it: its dialog waits for him. An agent's own `bmn ask` card or a notice
+      // does not; a resting agent that asked him can still find other work or a way past it (his card, 2026-11-07).
+      holds: (row) => (row.kind === 'question' || row.kind === 'permission') && row.openedBy !== 'cli',
       stillAllowed: () => {
         const now = this.options.away()
         return now.state !== 'away' || now.periodId !== period ? 'the owner is no longer away in this period' : null
@@ -197,6 +213,8 @@ export async function typeIfIdle(proof: WakeProof, p: {
    * session clears its reminder, and a session the owner has looked at can still rest (110.3). The Away wake keeps the notice.
    */
   finished?: { at: string | null; unknown: string }
+  /** Which of the session's other open requests keep it from being woken; every one when absent. */
+  holds?(row: WakeAttention): boolean
   /** Read in the last, synchronous checks. */
   stillAllowed(): string | null
   claim?(): Promise<string | null>
@@ -211,7 +229,7 @@ export async function typeIfIdle(proof: WakeProof, p: {
   const finishedAt = p.finished ? p.finished.at : turn?.openedAt ?? null
   if (finishedAt === null) return p.finished ? p.finished.unknown : 'no open finished-turn notice'
   if (proof.now().getTime() - Date.parse(finishedAt) < p.quietMs) return p.quietWords
-  if (mine.some((row) => row !== turn)) return 'another request of it is open'
+  if (mine.some((row) => row !== turn && (p.holds?.(row) ?? true))) return 'another request of it is open'
   const refused = p.stillAllowed()
   if (refused !== null) return refused
   const claimed = await p.claim?.()

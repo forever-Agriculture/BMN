@@ -611,6 +611,14 @@ function hookRequests(agent, event, permissionRef = null) {
         ...open('turn', 'notice', `${name} finished its turn`, bodyText(event.last_assistant_message))
       ]
     }
+    case 'StopFailure':
+      // Claude Code ends a turn that an API error cut short (a lost connection, an overloaded server) with StopFailure, not
+      // Stop. Its agent then rests at its prompt as after Stop, so it opens the same finished-turn notice, which the Away
+      // wake and a message's wake read (Epic 111 F17: two sessions lost the night to such an end).
+      return [
+        ...withdraw('permission', 'question'),
+        ...open('turn', 'notice', `${name} stopped on an error`, bodyText(typeof event.error === 'string' ? event.error : event.last_assistant_message))
+      ]
     case 'SessionStart': {
       // Compaction keeps the same conversation and the same open requests.
       if (event.source === 'compact') return []
@@ -647,7 +655,7 @@ function openCodeSubagent(event) {
 const HOOK_FILES = {
   claude: {
     path: ['.claude', 'settings.json'],
-    events: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
+    events: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionStart', 'SessionEnd'],
     optional: [],
     // BMN needs PreToolUse for the question dialog and, since Story 83.4, for the command guard on Bash; it blocks
     // every tool until it returns, so the entry is gated to those two. Measured on 2.1.302 (Story 83.1): the matcher

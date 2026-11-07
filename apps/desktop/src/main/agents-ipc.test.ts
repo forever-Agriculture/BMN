@@ -681,7 +681,7 @@ describe('BMN\'s hook entries install themselves at start (Story 75.9 AC3)', () 
     expect(first?.state).toBe('checked')
     const apps = first?.state === 'checked' ? first.apps : []
     expect(apps.map((app) => [app.harness, app.state, app.installed.length, app.left])).toEqual([
-      ['claude', 'installed', 8, [{ event: 'Stop', why: 'foreign' }]], ['codex', 'not-set-up', 0, []], ['opencode', 'not-set-up', 0, []]
+      ['claude', 'installed', 9, [{ event: 'Stop', why: 'foreign' }]], ['codex', 'not-set-up', 0, []], ['opencode', 'not-set-up', 0, []]
     ])
     const settings = JSON.parse(file('.claude/settings.json')) as { theme: string; hooks: Record<string, unknown[]> }
     expect(settings.theme).toBe('dark')

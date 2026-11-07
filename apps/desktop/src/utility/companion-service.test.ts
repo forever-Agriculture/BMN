@@ -2306,6 +2306,19 @@ describe('hook observation summary', () => {
     await expect(observation({ sessionId: 's3' })).resolves.toMatchObject({ compaction: { count: 1 } })
   })
 
+  it('keeps a resting run\'s finished turn as its latest event through a compaction, so the Away wake still sees it (Epic 111 F18)', async () => {
+    await observe({ sessionId: 's1', event: 'Stop' })
+    clock = '2026-09-14T12:30:00.000Z'
+    // Claude Code 2.1.319 compacts an idle session by itself ("Compacted while idle") and reports SessionStart compact.
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact' })
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({
+      event: 'Stop', compaction: { lastAt: '2026-09-14T12:30:00.000Z', count: 1 }
+    })
+    // A compaction that is the run's first report still stands as its latest.
+    await observe({ sessionId: 's2', event: 'SessionStart', source: 'compact' })
+    await expect(observation({ sessionId: 's2' })).resolves.toMatchObject({ event: 'SessionStart' })
+  })
+
   it('does not count a new conversation, a resume or a clear as a compaction', async () => {
     for (const source of ['startup', 'resume', 'clear']) {
       await observe({ sessionId: 's1', event: 'SessionStart', source })

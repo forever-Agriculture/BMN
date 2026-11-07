@@ -4046,7 +4046,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     mkdirSync(syntheticClaudeConfigDir, { recursive: true })
     const configuredClaudeEvents = [
       'Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit',
-      'Stop', 'SessionStart', 'SessionEnd'
+      'Stop', 'StopFailure', 'SessionStart', 'SessionEnd'
     ]
     writeFileSync(syntheticClaudeSettings, `${JSON.stringify({ hooks: Object.fromEntries(
       configuredClaudeEvents.map((event) => [event, [{ hooks: [{ type: 'command', command: 'bmn hook claude' }] }]])
