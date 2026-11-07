@@ -141,6 +141,13 @@ and the morning summary shows those reports apart from BMN's own record. What co
 expiry, the counts it records) and what is the run's rule are in [agent-control.md](agent-control.md), "The
 Away grant".
 
+## Reviews see the vision
+
+BMN gives `focused-reviewer`, `epic-reviewer` and `final-reviewer` asks the project's `plan/VISION.md`
+([agent-control.md](agent-control.md), "A reviewer is given the project's vision"); dev-auto's review brief
+asks as question 6 whether a change works against it, and SKILL.md handles such a finding by Epic 112's
+D1: repaired and recorded "against Pn" when the repair keeps the requirements, criteria, permissions and
+limits, otherwise the story is parked under Needs your decision.
 
 ## Manual QA in the review phase
 
