@@ -11,7 +11,10 @@
 // stays alone, the finished turn of the plugin OpenCode 2.0.29 reloads by itself is woken once, a turn after the copy of
 // the October 14 file is put back (a rollback) is left alone, and after the next start-up install and a restart one
 // finished turn (with three tool calls) is woken once while the owner's stop and quitting are not.
-// Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,codex,opencode,opencode-upgrade] [--opencode PATH]... [--binary PATH]
+// `claude-night` (Epic 111 F17-F19) replays the owner's night of 2026-11-06/07 in real Claude Code: a finished turn whose notice
+// a look cleared, a compaction after a finished turn, and a turn an API error ended (an unknown model); each is woken once.
+// Claude Code reports that error as StopFailure, which a profile gets from BMN's next hooks install; the run adds it with --settings.
+// Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,claude-night,codex,opencode,opencode-upgrade] [--opencode PATH]... [--binary PATH]
 //   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -211,21 +214,26 @@ function openCodeProfile(binary, port, earlier = false) {
 
 async function run(scenario, binary) {
   const upgrade = scenario === 'opencode-upgrade'
-  const app = upgrade ? 'opencode' : scenario
+  const night = scenario === 'claude-night'
+  // The night's woken turns run on the profile's own model; four minutes let each end before the next step is arranged.
+  const every = night ? 240_000 : EVERY_MS
+  const app = upgrade ? 'opencode' : night ? 'claude' : scenario
   let readme = ''
   const standIn = app === 'opencode' ? await startStandIn(() => readme) : null
   const openCode = standIn ? openCodeProfile(binary, standIn.port, upgrade) : null
   if (openCode) readme = openCode.readme
-  const name = openCode ? `opencode${upgrade ? '-upgrade' : ''} ${openCode.version}` : app
+  const name = openCode ? `opencode${upgrade ? '-upgrade' : ''} ${openCode.version}` : scenario
+  const nightSettings = join(scratch, 'claude-night-settings.json')
+  if (night) writeFileSync(nightSettings, `${JSON.stringify({ hooks: { StopFailure: [{ hooks: [{ type: 'command', command: 'bmn hook claude', timeout: 3600 }] }] } }, null, 2)}\n`)
   if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
-  const command = app === 'claude' ? `claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  const command = app === 'claude' ? `claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {
       ...caller, SHELL: '/bin/bash',
       XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
       BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'), BMN_STATE_HOME: join(roots.state, 'bmn'), BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
-      BMN_TEST_AWAY_WAKE_EVERY_MS: String(EVERY_MS), BMN_TEST_AWAY_WAKE_QUIET_MS: '5000',
+      BMN_TEST_AWAY_WAKE_EVERY_MS: String(every), BMN_TEST_AWAY_WAKE_QUIET_MS: '5000',
       ...(wayland ? { WAYLAND_DISPLAY: wayland } : {})
     }
     const socket = join(roots.runtime, 'bmn/control/control.sock')
@@ -282,9 +290,9 @@ async function run(scenario, binary) {
       const state = {}
       // Each tick: arrange the session, wait until the 30 s sweep has certainly run, read BMN's app log and its snapshot.
       const tick = async (n, arrange, lead = 50_000) => {
-        await sleep(Math.max(0, T + n * EVERY_MS - lead - Date.now()))
+        await sleep(Math.max(0, T + n * every - lead - Date.now()))
         if (arrange) await arrange()
-        await sleep(Math.max(0, T + n * EVERY_MS + SETTLE_MS - Date.now()))
+        await sleep(Math.max(0, T + n * every + SETTLE_MS - Date.now()))
         state[`tick${n}`] = { logs: ticks(n), snapshot: (() => { try { return bmn('snapshot') } catch (error) { return String(error) } })(), screen: (await screen()).split('\n').slice(-8) }
         return ticks(n)
       }
@@ -420,6 +428,36 @@ async function run(scenario, binary) {
         check(`${name}: OpenCode received the wake line only once overall`, wakes() === 1, { wakes: wakes() })
         check(`${name}: OpenCode reached nothing but the stand-in model`, standIn.refused.length === 0, { refused: standIn.refused })
         report[`${name}Asked`] = standIn.requests
+      } else if (night) {
+        const typedIn = (lines) => lines.filter((line) => line.includes('typed')).length === 1
+        const cards = async () => (await page.evaluate(() => globalThis.aiTerminal.listAttention())).filter((row) => row.sessionId === sessionId)
+          .map((row) => ({ key: row.requestKey, kind: row.kind, state: row.state, by: row.resolvedBy ?? null, resolution: row.resolution ?? null, title: row.title ?? null }))
+        const idle = async () => { for (let waited = 0; waited < 90_000 && !(await atPrompt()); waited += 3_000) await sleep(3_000) }
+        const latest = async () => (await hookEvents()).map((event) => ({ event: event.event, source: event.source ?? null })).slice(-4)
+        // F19: his look at a session that finished clears its notice (main.tsx navigateAttention); the wake still comes.
+        const one = await tick(1, async () => {
+          await idle(); await page.locator('.session-row').first().click(); await sleep(3_000)
+          state.afterLook = await cards()
+        })
+        check(`${name}: the look cleared the finished turn's notice ("Opened in BMN")`, (state.afterLook ?? []).some((row) => row.key === 'claude:turn' && row.state !== 'open' && /Opened in BMN/u.test(row.resolution ?? '')), { cards: state.afterLook })
+        check(`${name}: tick 1 wakes the session whose notice a look cleared (F19)`, typedIn(one), { logs: one })
+        // F18: a compaction after a finished turn reports SessionStart (source compact); the session still rests.
+        const two = await tick(2, async () => {
+          await idle(); await type('/compact'); await sleep(45_000)
+          state.afterCompact = await latest()
+        }, 150_000)
+        check(`${name}: the compaction reported SessionStart from compact after the finished turn`, (state.afterCompact ?? []).some((event) => event.event === 'SessionStart' && event.source === 'compact'), { events: state.afterCompact })
+        check(`${name}: tick 2 wakes the session after its compaction (F18)`, typedIn(two), { logs: two })
+        // F17: a turn an API error ends (an unknown model) reports StopFailure and opens the notice; the wake still comes.
+        const three = await tick(3, async () => {
+          await idle(); await type('/model claude-e111-no-such-model'); await sleep(4_000)
+          await type('Reply with the single word ok.'); await sleep(30_000)
+          state.afterError = { events: await latest(), cards: await cards() }
+        }, 150_000)
+        check(`${name}: the API error ended the turn as StopFailure`, (state.afterError?.events ?? []).some((event) => event.event === 'StopFailure'), state.afterError)
+        check(`${name}: the error opened the turn notice "stopped on an error"`, (state.afterError?.cards ?? []).some((row) => row.key === 'claude:turn' && /stopped on an error/u.test(row.title ?? '')), state.afterError)
+        check(`${name}: tick 3 wakes the session an API error stopped (F17)`, typedIn(three), { logs: three })
+        check(`${name}: the agent received the wake line only where a tick says it typed one`, wakesInTranscript(app, started) === logs().filter((line) => line.includes('typed the wake line')).length, { count: wakesInTranscript(app, started) })
       } else {
         const one = await tick(1)
         check(`${app}: tick 1 types the line once into the idle session`, one.filter((line) => line.includes('typed')).length === 1, { logs: one })
