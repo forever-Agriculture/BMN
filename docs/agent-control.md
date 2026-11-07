@@ -1159,8 +1159,10 @@ plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`, and on
 `bmn_plugin` 1, its promise that it marks the interrupt and reports quitting: BMN's earlier plugins reported the owner's
 stop as a finished turn, and the plugin file on disk says nothing about what a running OpenCode loaded or about a stop
 reported before (2.0.29 reloads a changed file by itself); Story 96.3), at least 15 minutes after BMN saw that turn
-finish (the time BMN keeps for a message's wake, or after a BMN restart the still-open `turn` notice; opening the session,
-which clears that reminder, does not stop the wake), and no question or permission of the app itself open (an agent's
+finish (the time BMN keeps for a message's wake, else the still-open `turn` notice's; opening the session, which clears
+that reminder, does not stop the wake). BMN keeps a run's latest event and that time in memory only, so after a restart of
+BMN a session it saw finish before is not woken until it reports a finished turn again: a restart fails safe, typing
+nothing. And no question or permission of the app itself open (an agent's
 own `bmn ask` card or a notice does not hold it: his card, 2026-11-07, Epic 111 F17-F19); and, checked
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
