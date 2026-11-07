@@ -26,7 +26,9 @@ const ownerRoots = [
 ]
 
 // The owner may already use the app, so the smoke proves it leaves their real roots untouched.
-// Quit BMN first; a running copy would change these files during the smoke.
+// Quit BMN first; a running copy would change these files during the smoke. Team asks other sessions started
+// before the smoke keep writing in their own run folders and are left out of the check.
+const ownerRunFolders = [join(homedir(), '.config/bmn/agents/state/team/runs')]
 const ownerFingerprint = () => fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readdirSync })
 
 function parseReceipt(stdout) {
@@ -154,6 +156,6 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
   ) {
     throw new Error(`packaged self-test receipt was incomplete: ${JSON.stringify(receipt)}`)
   }
-  assertOwnerRootsUnchanged(ownerRootsBefore, ownerFingerprint(), 'during packaged smoke')
+  assertOwnerRootsUnchanged(ownerRootsBefore, ownerFingerprint(), 'during packaged smoke', { runFolders: ownerRunFolders })
   console.log(JSON.stringify({ packagedSmoke: 'passed', binary: packagedBinary, voiceEngine: packagedWhisper, ...receipt }))
 })

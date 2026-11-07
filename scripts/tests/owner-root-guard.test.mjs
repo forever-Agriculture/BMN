@@ -38,4 +38,18 @@ describe('owner root guard', () => {
       .toThrow(/changed after test.*\/owner\/config\/db/i)
     expect(() => assertOwnerRootsUnchanged([], ['/owner/data\tdir\t3'], 'after test')).toThrow(/\/owner\/data/)
   })
+
+  it('leaves out writes inside a team ask run that was there before, and still refuses a new run', () => {
+    const runs = '/owner/config/runs'
+    const before = [`${runs}\tdir\t1`, `${runs}/old\tdir\t1`, `${runs}/old/events.jsonl\t7\t1`]
+    const grown = [`${runs}\tdir\t1`, `${runs}/old\tdir\t2`, `${runs}/old/events.jsonl\t9\t2`, `${runs}/old/stderr.txt\t3\t2`]
+    expect(() => assertOwnerRootsUnchanged(before, grown, 'during smoke', { runFolders: [runs] })).not.toThrow()
+    expect(() => assertOwnerRootsUnchanged(before, grown, 'during smoke')).toThrow(/\/owner\/config\/runs\/old/)
+    const added = [`${runs}\tdir\t3`, ...before.slice(1), `${runs}/new\tdir\t3`]
+    expect(() => assertOwnerRootsUnchanged(before, added, 'during smoke', { runFolders: [runs] })).toThrow(/runs\/new/)
+    // Only direct children of a run folder count as runs: a deeper folder that existed before excuses nothing beside it.
+    const nested = [...before, `${runs}/old/inputs\tdir\t1`]
+    expect(() => assertOwnerRootsUnchanged(nested, [...nested, '/owner/config/db\t1\t1'], 'during smoke', { runFolders: [runs] }))
+      .toThrow(/\/owner\/config\/db/)
+  })
 })
