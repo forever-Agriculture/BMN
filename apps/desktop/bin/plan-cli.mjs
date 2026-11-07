@@ -34,6 +34,8 @@ check   structural validation, one finding per line: duplicate keys, malformed r
         epic with unfinished stories, blocked/paused/dropped rows without a reason, files over their
         ceiling, and from Epic 90 on a missing Run needs section or Owner line, or an owner step
         between unattended stories, and a missing/stale/repeated suggested-lead hint on an unfinished epic.
+        It also warns, still passing (exit 0, ok true; --json lists them under warnings), about an
+        unfinished non-legacy epic whose ## Why has no **Serves:** line (Epic 112).
         A BMAD board is checked for duplicate keys and row grammar only. Whether the plan says
         the right thing is the readiness method's and review's, not this command's.
 set     changes one row's status (and note with --note; without it the note is kept) after checking that
@@ -220,9 +222,14 @@ async function check(argv) {
     result = await checkPlan(plan)
     result.findings.push(...await (await import('./plan-bmad-copy.mjs')).copyFindings(plan, { recover: true }))
   } catch (error) { return failure(error, json) }
-  if (json) out(JSON.stringify({ ok: result.findings.length === 0, ...resolvedFields(plan), findings: result.findings }, null, 2))
-  else if (result.findings.length === 0) out(`PASS: ${plan.format === FORMAT ? 'plan' : 'BMAD board'} ${plan.boardPath} (${result.board.totalRows} rows; structure only)`)
-  else out(result.findings.map((finding) => `${finding.where}: ${finding.reason}`).join('\n'))
+  // Warnings never change the result (Epic 112, D3): listed after it, under their own key in --json.
+  const warnings = result.warnings ?? []
+  if (json) out(JSON.stringify({ ok: result.findings.length === 0, ...resolvedFields(plan), findings: result.findings, warnings }, null, 2))
+  else {
+    if (result.findings.length === 0) out(`PASS: ${plan.format === FORMAT ? 'plan' : 'BMAD board'} ${plan.boardPath} (${result.board.totalRows} rows; structure only)`)
+    else out(result.findings.map((finding) => `${finding.where}: ${finding.reason}`).join('\n'))
+    if (warnings.length > 0) out(warnings.map((warning) => `warning: ${warning.where}: ${warning.reason}`).join('\n'))
+  }
   return result.findings.length === 0 ? EXIT.ok : EXIT.findings
 }
 

@@ -310,7 +310,8 @@ development_status:
     for (const reason of expected) expect(reasons).toContain(reason)
     const result = bmn(main, fixture(), 'check')
     expect(result.code).toBe(1)
-    expect(result.out.trim().split('\n')).toHaveLength(findings.length)
+    // One line per finding; warnings follow on lines of their own (Epic 112, D3).
+    expect(result.out.trim().split('\n').filter((line) => !line.startsWith('warning: '))).toHaveLength(findings.length)
   })
 
   it('finds two keys for one story, an orphan story and a repeated header, and status refuses that board (Sol review F7)', async () => {
@@ -706,5 +707,49 @@ release()
     expect(refused.code).toBe(1)
     expect(readFileSync(runBoard, 'utf8')).toBe(board)
     expect(readFileSync(mainBoard, 'utf8')).toBe(board)
+  })
+})
+
+describe('the check warns about an unfinished epic that names no principle it serves (Story 112.3)', () => {
+  const serving = (number: number): string => epicText(number, [1]).replace('The owner, 2026-10-17: "make it".', 'The owner, 2026-10-17: "make it". **Serves:** P1, P2.')
+  const legacy = (number: number): string => `<!-- bmn-plan: bmad-legacy -->\n# Epic ${number}: Old ${number}\n\n## Why\n\nBefore the template.\n\n### Story ${number}.1: Old part\n\n**Acceptance criteria:**\n1. **Given** a, **then** b.\n`
+  const project = (): string => {
+    const main = ownProject(fixture())
+    file(main, 'plan/status.yaml', `${BOARD}  epic-3: backlog # planned\n  3-1-part: backlog\n  epic-4: backlog # planned\n  4-1-part: backlog\n`)
+    file(main, 'plan/epics/003-legacy.md', legacy(3))
+    file(main, 'plan/epics/004-serving.md', serving(4))
+    return main
+  }
+
+  it('exactly the unfinished non-legacy epic without **Serves:** is warned about with its file:line; the check still passes (AC1)', async () => {
+    const main = project()
+    const result = await checkPlan(await resolvePlan(main))
+    expect(result.findings).toEqual([])
+    // Epic 1 is done, 3 is legacy and 4 names what it serves: only 2 is warned about, at its ## Why line.
+    const why = readFileSync(join(main, 'plan/epics/002-second.md'), 'utf8').split('\n').indexOf('## Why') + 1
+    expect(result.warnings).toEqual([{ where: `plan/epics/002-second.md:${why}`, reason: 'its ## Why has no **Serves:** line naming the principles of plan/VISION.md it serves' }])
+    const home = fixture()
+    const text = bmn(main, home, 'check')
+    expect(text.code, text.err).toBe(0)
+    expect(text.out).toMatch(/^PASS: plan .*\nwarning: plan\/epics\/002-second\.md:\d+: its ## Why has no \*\*Serves:\*\* line/u)
+    const json = bmn(main, home, 'check', '--json')
+    expect(json.code).toBe(0)
+    const parsed = JSON.parse(json.out)
+    expect(parsed).toMatchObject({ ok: true, findings: [], warnings: [{ where: `plan/epics/002-second.md:${why}` }] })
+    // Serves named: nothing to warn about.
+    file(main, 'plan/epics/002-second.md', serving(2))
+    expect((await checkPlan(await resolvePlan(main))).warnings).toEqual([])
+    expect(bmn(main, home, 'check').out).not.toContain('warning:')
+  })
+
+  it('a plan with an error and a warning fails on the error alone (AC1)', async () => {
+    const main = project()
+    file(main, 'plan/epics/004-serving.md', serving(4).replace('**Verification:** unit tests.\n', ''))
+    const result = await checkPlan(await resolvePlan(main))
+    expect(result.findings.map((finding) => finding.reason)).toEqual(['Story 4.1 has no **Verification:**'])
+    expect(result.warnings).toHaveLength(1)
+    const json = bmn(main, fixture(), 'check', '--json')
+    expect(json.code).toBe(1)
+    expect(JSON.parse(json.out)).toMatchObject({ ok: false, findings: [{ reason: 'Story 4.1 has no **Verification:**' }], warnings: [{ where: expect.stringMatching(/^plan\/epics\/002-second\.md:\d+$/u) }] })
   })
 })

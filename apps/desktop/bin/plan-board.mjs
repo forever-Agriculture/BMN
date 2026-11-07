@@ -30,6 +30,7 @@ const PLAN_SECTIONS = ['Purpose', 'Users', 'Goals', 'Non-goals', 'Success signal
 /** The foundation every plan builds on (owner, 2026-10-17): what the project is for and its numbered principles. */
 const VISION_SECTIONS = ['Vision', 'Principles']
 const EPIC_SECTIONS = ['Outcome', 'Why', 'Boundary and dependencies', 'Truth impact', 'Stories']
+const SERVES = /\*\*Serves:?\*\*/u
 /** Epics from 90 on are planned to run without asking (Epic 90, 90.2 AC5): Run needs, and each story's Owner line in order. */
 const RUN_NEEDS_FROM = 1
 /** Epics from 103 on list what their run will need from outside itself before his go (Story 103.4, R103-FR1). */
@@ -419,6 +420,14 @@ export function readEpicFile(path) {
   const challengeText = /^## Challenges\s*$(.*?)(?=^## |(?![\s\S]))/msu.exec(text)?.[1] ?? ''
   const challenges = [...challengeText.matchAll(/^\s*[-*]?\s*\*\*(.+?):\*\*\s*\S/gmu)].map((match) => match[1])
   const decisions = /^## Decisions\s*$(.*?)(?=^## |(?![\s\S]))/msu.exec(text)?.[1] ?? ''
+  // The Why and whether it names the principles the epic serves (Epic 112, D3): the template's **Serves:**, inline or on its own line.
+  const whyStart = lines.findIndex((line) => /^## Why\s*$/u.test(line))
+  let why = null
+  if (whyStart >= 0) {
+    let end = lines.findIndex((line, index) => index > whyStart && /^#{1,2} /u.test(line))
+    if (end < 0) end = lines.length
+    why = { line: whyStart + 1, serves: lines.slice(whyStart + 1, end).some((line) => SERVES.test(line)) }
+  }
   const stories = []
   let current = null
   let inCriteria = false
@@ -446,7 +455,7 @@ export function readEpicFile(path) {
     const criterion = inCriteria ? /^(\d+)\.\s/u.exec(line) : null
     if (criterion) current.criteria.push({ id: Number(criterion[1]), line: index + 1 })
   })
-  return { path, bytes: Buffer.byteLength(text), challenges, decisions, legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines) }
+  return { path, bytes: Buffer.byteLength(text), challenges, decisions, legacy: legacy !== null, legacyNote: legacy?.[1]?.trim() ?? null, epic: epicHeading ? Number(epicHeading[1]) : null, suggestedLead: suggestedLeadHint(text), sections, stories, prepared: preparedLine(lines), why }
 }
 
 function epicFiles(planRoot) {
@@ -460,12 +469,15 @@ function epicFiles(planRoot) {
 export async function checkPlan(resolved) {
   const findings = []
   const add = (where, reason) => findings.push({ where, reason })
+  // Warnings are listed and leave the check passing (Epic 112, D3): callers that count findings are unchanged.
+  const warnings = []
+  const warn = (where, reason) => warnings.push({ where, reason })
   const board = await readBoard(resolved.boardPath)
   const boardName = relative(resolved.productRoot, resolved.boardPath) || resolved.boardPath
   if (resolved.format === 'bmad') {
     for (const duplicate of board.duplicates) add(`${boardName}:${duplicate.line}`, `duplicate key ${duplicate.key} (first at line ${duplicate.first})`)
     for (const bad of board.malformed) add(`${boardName}:${bad.line}`, bad.where === 'queue' ? `queue item is not an epic number: ${bad.text.trim()}` : `malformed row: ${bad.text.trim()}`)
-    return { findings, board }
+    return { findings, warnings, board }
   }
   findings.push(...boardProblems(board, boardName))
 
@@ -545,6 +557,8 @@ export async function checkPlan(resolved) {
     if (!epic.legacy) {
       for (const section of EPIC_SECTIONS) if (!epic.sections.includes(section)) add(at, `missing section ## ${section}`)
       if (epic.bytes > EPIC_LIMIT) add(at, `${epic.bytes} bytes, over the ${EPIC_LIMIT}-byte ceiling`)
+      // An unfinished epic should say which of the vision's principles it serves (R112-FR4); legacy epics predate the template.
+      if (row && !FINISHED.includes(row.status) && epic.why !== null && !epic.why.serves) warn(`${at}:${epic.why.line}`, 'its ## Why has no **Serves:** line naming the principles of plan/VISION.md it serves')
     }
     const storyIds = new Set()
     for (const story of epic.stories) {
@@ -575,7 +589,7 @@ export async function checkPlan(resolved) {
     if (epicsSeen.has(row.epic)) { if (!headingStories.has(row.story)) add(`${boardName}:${row.line}`, `${row.key} has no "### Story ${row.story}" heading`) }
     else if (!epicRows.has(row.epic)) add(`${boardName}:${row.line}`, `${row.key} belongs to epic ${row.epic}, which has neither an epic-${row.epic} row nor an epic file`)
   }
-  return { findings, board }
+  return { findings, warnings, board }
 }
 
 /** The owner's steps sit only before the go or at the end (Epic 90, D1): never between unattended stories. */
