@@ -20,6 +20,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { connect as connectTcp } from 'node:net'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -114,6 +115,37 @@ function shippedPlugin(commit, file) {
 }
 /** The plugin OpenCode still loaded on the owner's computer on 2026-10-26, and its SHA-256 (EARLIER_OPENCODE_PLUGINS). */
 const OCTOBER_14 = { commit: '033eb7d88f', file: 'apps/desktop/bin/bmn', sha256: '4cebff68da6edb803b706447ca3ce2de3f5976f6c0db466d1b6cee8db0d99fde' }
+
+/**
+ * The night's network (Epic 111 F17): a loopback CONNECT proxy Claude Code reaches its provider through. It relays the
+ * encrypted tunnel only to Anthropic's and Claude's hosts, reads nothing inside it and records each host; `cut()` drops
+ * every tunnel and refuses new ones, as a lost connection does, and `restore()` lets them through again.
+ */
+async function startNightProxy() {
+  const hosts = new Map()
+  const tunnels = new Set()
+  let down = false
+  const allowed = (host) => /(^|\.)(anthropic\.com|claude\.ai|claude\.com)$/u.test(host)
+  const server = createServer((request, response) => { response.writeHead(403).end() })
+  server.on('connect', (request, client, head) => {
+    const [host, port] = String(request.url).split(':')
+    hosts.set(host, (hosts.get(host) ?? 0) + 1)
+    client.on('error', () => {})
+    if (down || !allowed(host) || port !== '443') { client.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); return }
+    const upstream = connectTcp(443, host, () => { client.write('HTTP/1.1 200 Connection Established\r\n\r\n'); if (head.length) upstream.write(head); upstream.pipe(client); client.pipe(upstream) })
+    upstream.on('error', () => client.destroy())
+    tunnels.add(client); tunnels.add(upstream)
+    const forget = () => { tunnels.delete(client); tunnels.delete(upstream) }
+    client.on('close', forget); upstream.on('close', forget)
+  })
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  return {
+    port: server.address().port, hosts,
+    cut: () => { down = true; for (const socket of tunnels) socket.destroy(); tunnels.clear() },
+    restore: () => { down = false },
+    close: () => { for (const socket of tunnels) socket.destroy(); return new Promise((done) => server.close(done)) }
+  }
+}
 
 /**
  * OpenCode's model for the run: a loopback Chat Completions stand-in that records each prompt and answers "ok". A prompt
@@ -225,12 +257,14 @@ async function run(scenario, binary) {
   if (openCode) readme = openCode.readme
   const name = openCode ? `opencode${upgrade ? '-upgrade' : ''} ${openCode.version}` : scenario
   const nightSettings = join(scratch, 'claude-night-settings.json')
+  const proxy = night ? await startNightProxy() : null
   if (night) writeFileSync(nightSettings, `${JSON.stringify({ hooks: { StopFailure: [{ hooks: [{ type: 'command', command: 'bmn hook claude', timeout: 3600 }] }] } }, null, 2)}\n`)
   if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
   // Claude Code with his real profile installs itself into whatever XDG_DATA_HOME it sees and points his `claude` link there;
   // the run's data root is deleted at the end (Epic 111 F20): it starts with his own data folder and its updater off.
   const claudeData = process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share')
-  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  const through = proxy ? `HTTPS_PROXY='http://127.0.0.1:${proxy.port}' HTTP_PROXY='http://127.0.0.1:${proxy.port}' NO_PROXY='127.0.0.1,localhost' CLAUDE_CODE_MAX_RETRIES=2 ` : ''
+  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 ${through}claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {
@@ -454,17 +488,21 @@ async function run(scenario, binary) {
         check(`${name}: tick 2 wakes the session after its compaction (F18)`, typedIn(two), { logs: two })
         // F17: a turn an API error ends (an unknown model) reports StopFailure and opens the notice; the wake still comes.
         const three = await tick(3, async () => {
-          // A lost connection, as on his night: the same Claude Code restarted in the session behind a closed loopback proxy, no
-          // retries. Its provider stays the team's (a changed base URL is refused before the turn by BMN's provider check, run 2).
-          await idle(); await type('/exit'); await sleep(5_000)
-          await type(command.replace('env ', "env HTTPS_PROXY='http://127.0.0.1:9' HTTP_PROXY='http://127.0.0.1:9' CLAUDE_CODE_MAX_RETRIES=0 "))
-          for (let waited = 0; waited < 60_000 && !(await atPrompt()); waited += 3_000) await sleep(3_000)
+          // A lost connection, as on his night (Pet-129): the running Claude Code's network is cut for its turn, then comes back
+          // before the tick. Its provider stays the team's (a changed base URL is refused by BMN's provider check, run 2), and the
+          // same Claude keeps running (a restart in the pane leaves the old prompt box on screen, which the wake rightly refuses, run 3).
+          await idle(); proxy.cut()
           await type('Reply with the single word ok.'); await sleep(30_000)
-          state.afterError = { events: await latest(), cards: await cards() }
+          state.afterError = { events: await latest(), cards: await cards(), screen: (await screen()).split('\n').slice(-8) }
+          proxy.restore()
         }, 150_000)
         check(`${name}: the API error ended the turn as StopFailure`, (state.afterError?.events ?? []).some((event) => event.event === 'StopFailure'), state.afterError)
         check(`${name}: the error opened the turn notice "stopped on an error"`, (state.afterError?.cards ?? []).some((row) => row.key === 'claude:turn' && /stopped on an error/u.test(row.title ?? '')), state.afterError)
         check(`${name}: tick 3 wakes the session an API error stopped (F17)`, typedIn(three), { logs: three })
+        // The connection is back: the woken turn reaches the model and ends as a plain finished turn.
+        for (let waited = 0; waited < 90_000 && !(await latest()).some((event, index, all) => index === all.length - 1 && event.event === 'Stop'); waited += 5_000) await sleep(5_000)
+        state.afterWake = await latest()
+        check(`${name}: the woken session reached its model again and finished its turn`, state.afterWake.at(-1)?.event === 'Stop' && state.afterWake.some((event) => event.event === 'UserPromptSubmit'), { events: state.afterWake })
         check(`${name}: the agent received the wake line only where a tick says it typed one`, wakesInTranscript(app, started) === logs().filter((line) => line.includes('typed the wake line')).length, { count: wakesInTranscript(app, started) })
       } else {
         const one = await tick(1)
@@ -532,7 +570,7 @@ async function run(scenario, binary) {
       const closed = await Promise.race([application.close().then(() => true, () => true), sleep(15_000).then(() => false)])
       if (!closed) application.process().kill('SIGKILL')
     }
-  }) } finally { await standIn?.close() }
+  }) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); await proxy.close() } }
 }
 
 for (const app of (args[2] ?? 'claude,codex').split(',')) {
