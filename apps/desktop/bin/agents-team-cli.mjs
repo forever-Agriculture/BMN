@@ -19,6 +19,7 @@ import { scopeStarts, startTeamSupervisor, writeWhole } from './agents-team-supe
 import { nestedAsk } from './agents-team-nested.mjs'
 import { BROWSER_LIMIT_WORDS, BROWSER_ROLE, browserOrigin } from './agents-team-browser.mjs'
 import { qaAskInputs } from './agents-team-qa.mjs'
+import { reviewVision } from './agents-team-vision.mjs'
 import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterrupted, releaseReservation, requestHash, reserveAsk } from './agents-team-places.mjs'
 
 const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
@@ -437,10 +438,20 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     if (error instanceof InputRefusal) return refused(asJson, error.code, error.message)
     throw error
   }
+  const role = options.role ?? (options.origin !== undefined ? BROWSER_ROLE : DESIGNER_ROLE)
+  // A reviewer is given the project's vision by BMN, not by a line asking the lead to (Epic 112 D2): it joins the files
+  // before their hashes, so scanning, consent, limits and INPUT_CHANGED hold for it as for any file, and is sent once.
+  const vision = await reviewVision(role, project, { home })
+  let visionIndex = -1
+  if (vision?.real !== undefined) {
+    visionIndex = files.findIndex((path) => { try { return realpathSync(path) === vision.real } catch { return false } })
+    if (visionIndex === -1) visionIndex = files.push(vision.real) - 1
+  }
   const request = {
-    role: options.role ?? (options.origin !== undefined ? BROWSER_ROLE : DESIGNER_ROLE), question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
+    role, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
     project: options.project, files, images, data: options.data,
     ...(qa === null ? {} : { qa: { brief: qa.brief } }),
+    ...(vision === null ? {} : { vision: vision.real === undefined ? { path: vision.path, omitted: vision.omitted } : { path: vision.path, real: vision.real, sha256: vision.sha256 } }),
     ...(options.origin === undefined ? {} : { browser: { origin: options.origin, disposable: options.disposable === true, interact: qa !== null || options.interact === true } })
   }
   const runs = teamRunsDirectory()
@@ -448,6 +459,8 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const scope = keyScope(asker)
   // Each input is hashed once: the request's hash names these bytes, and the ask refuses to send any other (INPUT_CHANGED).
   const inputHashes = { files: files.map((path) => fileHash(path)), images: images.map((path) => fileHash(path, LIMITS.picture)) }
+  // The vision's bytes are the ones read whole above: any change after that read refuses the ask (112.1 AC3).
+  if (visionIndex !== -1) inputHashes.files[visionIndex] = vision.sha256
   const hash = requestHash({ ...request, project, files: files.map((path, index) => ({ path, sha256: inputHashes.files[index] })), images: images.map((path, index) => ({ path, sha256: inputHashes.images[index] })), timeLimitMinutes: minutes })
   let reservation
   try {
@@ -502,8 +515,14 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     else out(id)
     return EXIT.ok
   }
-  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}${request.browser === undefined ? '' : `; it has a browser for ${request.browser.origin}${request.browser.interact ? ', to look and interact' : ', to look only'}`}; run ${id}, key ${key}, supervisor ${started.pid}`)
+  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}${visionWords(prepared.manifest.vision)}${request.browser === undefined ? '' : `; it has a browser for ${request.browser.origin}${request.browser.interact ? ', to look and interact' : ', to look only'}`}; run ${id}, key ${key}, supervisor ${started.pid}`)
   return followRun(prepared.folder, id, asJson)
+}
+
+/** What the start line says of the project's vision: given with its hash, or left out and why (Epic 112). */
+function visionWords(vision) {
+  if (vision === undefined) return ''
+  return vision.sha256 !== undefined ? `; it is given the project's vision ${vision.path} (sha256 ${vision.sha256.slice(0, 12)})` : `; without the project's vision: ${vision.omitted}`
 }
 
 /** Waits for a run in the foreground: closing this command only detaches it, and the run's supervisor goes on. */

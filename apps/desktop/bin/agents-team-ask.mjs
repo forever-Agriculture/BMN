@@ -16,6 +16,7 @@ import { pictureFile } from './agents-team-pictures.mjs'
 import { ASK_GIT } from './agents-team-run.mjs'
 import { BROWSER_STATEMENT, browserInstalled, browserOrigin, browserPrompt, browserTools } from './agents-team-browser.mjs'
 import { qaAskInputs } from './agents-team-qa.mjs'
+import { VISION_ROLES, visionPrompt } from './agents-team-vision.mjs'
 
 /**
  * Making an ask ready follows one order, so that nothing is written before it is allowed: the
@@ -129,6 +130,17 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     const qa = qaAskInputs(files[0], { cwd, home, origin: browser.origin })
     if (request.question !== qa.question || images.length || files.length !== qa.files.length || texts.some((file, index) => file.real !== qa.files[index]) || JSON.stringify(request.qa.brief) !== JSON.stringify(qa.brief)) throw new InputRefusal('QA_INPUT_MISMATCH', 'QA inputs must be the curated brief and shared skill, without extra instructions or files')
   } else if (request.qa !== undefined) throw new AskUsageError('only the qa role takes a QA brief')
+  // The project's vision the asking command found for a reviewer (Epic 112): one of the files, or the reason it was left out.
+  let vision = null
+  if (request.vision !== undefined && request.vision !== null) {
+    if (!VISION_ROLES.includes(request.role)) throw new AskUsageError(`only ${VISION_ROLES.join(', ')} asks take the project's vision`)
+    if (typeof request.vision.omitted === 'string') vision = { path: request.vision.path ?? null, omitted: request.vision.omitted }
+    else {
+      const index = texts.findIndex((file) => file.real === request.vision.real)
+      if (index === -1 || texts[index].sha256 !== request.vision.sha256) throw new InputRefusal('INPUT_CHANGED', `${request.vision.path} changed while the ask was being made; nothing was sent: ask again with another key`)
+      vision = { index }
+    }
+  }
   const promptBytes = Buffer.byteLength(request.question) + texts.reduce((sum, file) => sum + file.bytes.length, 0)
   if (promptBytes > LIMITS.prompt) throw new InputRefusal('INPUT_TOO_LARGE', `the question and the files' text are ${Math.round(promptBytes / 1024)} KiB together, over the limit of ${LIMITS.prompt / 1024 / 1024} MiB`)
   const project = request.qa === undefined ? askProject(request.project, { cwd, home }) : null
@@ -247,7 +259,9 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   })
   // A file of the project is named by its path in it; any other by the path the asker gave.
   const nameOf = (file) => (project !== null && !relative(project, file.real).startsWith('..') ? relative(project, file.real) : file.path)
-  let prompt = picturePrompt(filePrompt(request.question, texts.map((file) => ({ ...file, label: nameOf(file) }))), pictures.map((picture) => ({ ...picture, label: nameOf(picture) })))
+  let prompt = filePrompt(request.question, texts.map((file) => ({ ...file, label: nameOf(file) })))
+  if (vision?.index !== undefined) prompt = visionPrompt(prompt, { file: `${vision.index + 1}/${texts.length}`, label: nameOf(texts[vision.index]), sha256: texts[vision.index].sha256 })
+  prompt = picturePrompt(prompt, pictures.map((picture) => ({ ...picture, label: nameOf(picture) })))
   if (project !== null && ASK_READS[form].scope !== 'text') prompt = projectPrompt(prompt, project)
   if (browser !== null) prompt = browserPrompt(prompt, browser)
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
@@ -275,6 +289,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     })),
     ...(browser === null ? {} : { browser: { ...browser, tools: browserTools(browser.interact, browser.qa), statement: BROWSER_STATEMENT } }),
     ...(request.qa === undefined ? {} : { qa: request.qa }),
+    // The vision by its file and hash, or why it was left out (R112-FR1, 112.1 AC3); asks made before Epic 112 have none.
+    ...(vision === null ? {} : { vision: vision.index === undefined ? vision : { path: texts[vision.index].real, file: vision.index + 1, bytes: texts[vision.index].bytes.length, sha256: texts[vision.index].sha256 } }),
     prompt_sha256: sha256Of(Buffer.from(prompt))
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)

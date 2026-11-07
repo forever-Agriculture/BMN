@@ -2292,6 +2292,22 @@ the new spelling (`--project` names the folder, `--file` gives files). Foregroun
 standard output and progress to standard error. Closing the waiting command, tool call or window
 only detaches it: the run's supervisor owns the run (below).
 
+### A reviewer is given the project's vision
+
+An ask in `focused-reviewer`, `epic-reviewer` or `final-reviewer` (Epic 112) carries the project's
+`plan/VISION.md` when its project has a BMN-format plan with one, found the way `bmn plan` finds the plan,
+so from a linked worktree without `plan/` too (`apps/desktop/bin/agents-team-vision.mjs`). BMN adds it
+to the files before their hashes, so it is scanned, judged for consent and bound to the request's hash
+and `INPUT_CHANGED` like any `--file`; given also with `--file`, it is sent once. One instruction follows
+it: report any change that works against a principle or a "We refuse" line, quoting the line and the
+code's `file:line` with the consequence. The run's manifest and receipt name it under `vision`
+(`path`, `file`, `bytes`, `sha256`), and the start line says so. A vision over the plan check's 8 KiB
+ceiling, not UTF-8 text, holding a credential or in a plan that cannot be read is left out whole: the
+ask runs without it and `vision.omitted` says why. A `--recheck-of` ask reads the vision as it is now; a
+retry with the same key finds its run only while the vision is unchanged (`KEY_CONFLICT` otherwise).
+Other roles (the quick pre-reviews, consultants, helpers, designers, QA) and projects without a vision
+get nothing new, and records made before have no `vision`.
+
 ### Checking a manual QA report
 
 BMN ships `manual-qa` for Claude Code and Codex from the same source. It teaches testing the user's

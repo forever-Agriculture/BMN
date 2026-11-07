@@ -241,6 +241,9 @@ extraResources:
     to: bin/agents-team-browser.mjs
   - from: bin/agents-team-qa.mjs
     to: bin/agents-team-qa.mjs
+  # Epic 112: a reviewer's ask carries the project's VISION.md.
+  - from: bin/agents-team-vision.mjs
+    to: bin/agents-team-vision.mjs
   - from: bin/ask-browser-relay.mjs
     to: bin/ask-browser-relay.mjs
   - from: bin/ask-browser-config.json

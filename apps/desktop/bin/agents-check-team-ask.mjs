@@ -287,6 +287,8 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
         : agent.harness === 'claude' ? { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'WebSearch', 'Agent'] }
           : { mode: 'read-only', source: '--agent', agent: own.agent, tools: form === 'opencode-reader' ? ['read', 'glob', 'grep', 'list', 'git log', 'git show', 'git diff', 'git blame', 'websearch', `subagent ${OPENCODE_ASK_AGENTS.subagent}`] : [] },
       run: basename(folder), data: label, consent,
+      // The project's vision the reviewer was given, by path and hash, or why it was not (Epic 112); bound with the manifest below.
+      ...(isObject(manifest.vision) ? { vision: manifest.vision } : {}),
       inputs_sha256: sha256(canonicalJson(manifest)),
       snapshots: {
         executable: { launcher: identity.launcher.sha256, payload: identity.payload.sha256 },
