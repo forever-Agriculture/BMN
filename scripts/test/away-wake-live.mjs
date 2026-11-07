@@ -454,9 +454,10 @@ async function run(scenario, binary) {
         check(`${name}: tick 2 wakes the session after its compaction (F18)`, typedIn(two), { logs: two })
         // F17: a turn an API error ends (an unknown model) reports StopFailure and opens the notice; the wake still comes.
         const three = await tick(3, async () => {
-          // A lost connection, as on his night: the same Claude Code restarted in the session against a closed loopback port, no retries.
+          // A lost connection, as on his night: the same Claude Code restarted in the session behind a closed loopback proxy, no
+          // retries. Its provider stays the team's (a changed base URL is refused before the turn by BMN's provider check, run 2).
           await idle(); await type('/exit'); await sleep(5_000)
-          await type(command.replace('env ', "env ANTHROPIC_BASE_URL='http://127.0.0.1:9' CLAUDE_CODE_MAX_RETRIES=0 "))
+          await type(command.replace('env ', "env HTTPS_PROXY='http://127.0.0.1:9' HTTP_PROXY='http://127.0.0.1:9' CLAUDE_CODE_MAX_RETRIES=0 "))
           for (let waited = 0; waited < 60_000 && !(await atPrompt()); waited += 3_000) await sleep(3_000)
           await type('Reply with the single word ok.'); await sleep(30_000)
           state.afterError = { events: await latest(), cards: await cards() }
@@ -485,7 +486,13 @@ async function run(scenario, binary) {
           await type(`Use your ${asking} tool to ask the owner one question: which colour, with the options Blue and Green. Then wait for the answer.`)
         })
         state.questionScreen = (await screen()).split('\n').slice(-14)
-        check(`${app}: tick 4 skips a session with a question open`, skipped(four), { logs: four })
+        // While he is away BMN refuses the app's blocking question, so the agent leaves its own `bmn ask` card and ends its turn.
+        // That card does not hold the wake (his card, 2026-11-07, Epic 111 F19); the app's own open question does.
+        const questions = (await page.evaluate(() => globalThis.aiTerminal.listAttention())).filter((row) => row.sessionId === sessionId && row.state === 'open' && row.kind === 'question')
+        state.questionCards = questions.map((row) => ({ key: row.requestKey, openedBy: row.openedBy ?? null }))
+        const ownOnly = questions.length > 0 && questions.every((row) => row.openedBy === 'cli')
+        check(ownOnly ? `${app}: tick 4 wakes a session whose only open question is its own bmn ask card (F19)` : `${app}: tick 4 skips a session with the app's question open`,
+          ownOnly ? four.filter((line) => line.includes('typed')).length === 1 : skipped(four), { logs: four, cards: state.questionCards })
         await input.focus(); await page.keyboard.press('Escape'); await sleep(1_500); await page.keyboard.press('Control+U')
         // A stop: the owner's Escape during a long tool call, with the prompt empty afterwards.
         const five = await tick(5, async () => {
