@@ -442,10 +442,17 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   // A reviewer is given the project's vision by BMN, not by a line asking the lead to (Epic 112 D2): it joins the files
   // before their hashes, so scanning, consent, limits and INPUT_CHANGED hold for it as for any file, and is sent once.
   const vision = await reviewVision(role, project, { home, resolvePlan })
+  // The vision as a file of this ask: given once, or, left out, not at all, even where the asker named it with --file (112.1 AC3).
+  const isVision = (path) => {
+    if (path === vision.path) return true
+    try { return realpathSync(path) === (vision.real ?? realpathSync(vision.path)) } catch { return false }
+  }
   let visionIndex = -1
   if (vision?.real !== undefined) {
-    visionIndex = files.findIndex((path) => { try { return realpathSync(path) === vision.real } catch { return false } })
+    visionIndex = files.findIndex(isVision)
     if (visionIndex === -1) visionIndex = files.push(vision.real) - 1
+  } else if (vision?.path) {
+    for (let index = files.length - 1; index >= 0; index -= 1) if (isVision(files[index])) files.splice(index, 1)
   }
   const request = {
     role, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],

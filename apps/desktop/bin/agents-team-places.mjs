@@ -92,6 +92,9 @@ export function requestHash(request) {
     data: request.data === 'public' ? 'public' : 'private', time_limit_minutes: request.timeLimitMinutes,
     // A browser ask (74.3): where the app answers, whether the teammate may click, and the asker's statement.
     // Only a browser ask carries it, so every other ask's hash stays the one it had.
+    // A reviewer's vision (Epic 112): its bytes are among the files when given; whether and why it was left out is bound here.
+    // Only an ask that looked for one carries it, so every other ask's hash stays the one it had.
+    ...(request.vision === undefined || request.vision === null ? {} : { vision: { path: request.vision.path ?? null, omitted: request.vision.omitted ?? null } }),
     ...(request.browser === undefined || request.browser === null ? {} : {
       browser: { origin: request.browser.origin ?? null, interact: request.browser.interact === true, disposable: request.browser.disposable === true }
     })

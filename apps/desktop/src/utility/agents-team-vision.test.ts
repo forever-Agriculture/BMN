@@ -10,6 +10,7 @@ import { ASK_RUN_FILES } from '../../bin/agents-team-forms.mjs'
 import { AskUsageError, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { VISION_LIMIT, VISION_ROLES, reviewVision } from '../../bin/agents-team-vision.mjs'
 import { VISION_LIMIT as CHECK_LIMIT, resolvePlan } from '../../bin/plan-board.mjs'
+import { requestHash } from '../../bin/agents-team-places.mjs'
 import { SCOPES, leftovers as harnessLeftovers, ownSystemd, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -166,6 +167,17 @@ describe('whole or not at all (112.1 AC3)', () => {
   })
 })
 
+describe('the request hash binds whether the vision was left out (full review)', () => {
+  it('no vision, a left-out one and a different reason make different hashes; other asks keep theirs', () => {
+    const base = { role: 'epic-reviewer', question: 'Review it.', timeLimitMinutes: 30, files: [] }
+    const absent = requestHash(base)
+    const big = requestHash({ ...base, vision: { path: '/p/plan/VISION.md', omitted: 'is 9000 bytes, over the ceiling' } })
+    const unreadable = requestHash({ ...base, vision: { path: '/p/plan/VISION.md', omitted: 'cannot be read' } })
+    expect(new Set([absent, big, unreadable]).size).toBe(3)
+    expect(requestHash({ ...base, vision: null })).toBe(absent)
+  })
+})
+
 describe.skipIf(!SCOPES)('bmn team ask with the vision (112.1 AC1, AC2)', { timeout: 60_000 }, () => {
   const bmn = (args: string[], cwd: string): Promise<{ code: number | null; stdout: string; stderr: string }> => new Promise((done) => {
     const child = spawn(process.execPath, [BMN, ...args], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...ownSystemd() }, cwd, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -213,5 +225,29 @@ describe.skipIf(!SCOPES)('bmn team ask with the vision (112.1 AC1, AC2)', { time
     expect(consult.code, consult.stderr).toBe(0)
     expect(consult.stderr).not.toContain('project\'s vision')
     expect(manifest(runOf(consult.stderr))).not.toHaveProperty('vision')
+  })
+
+  it('a left-out vision named also with --file is still left out: over the ceiling, or unreadable (full review F1)', async () => {
+    const { worktree, visionPath } = planned(`${VISION}${'x'.repeat(8 * 1024)}\n`)
+    const big = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Review it.', '--file', visionPath, '--key', `${day()}-vision-5`], worktree)
+    expect(big.code, big.stderr).toBe(0)
+    expect(big.stderr).toContain('without the project\'s vision:')
+    const bigId = runOf(big.stderr)
+    expect(manifest(bigId).files).toEqual([])
+    expect(manifest(bigId).vision).toEqual({ path: visionPath, omitted: expect.stringMatching(/over the 8192-byte ceiling/u) })
+    expect(JSON.parse(readFileSync(join(teamRunsDirectory(), bigId, ASK_RUN_FILES.receipt), 'utf8')).vision).toEqual(manifest(bigId).vision)
+    expect(readFileSync(join(teamRunsDirectory(), bigId, ASK_RUN_FILES.prompt), 'utf8')).not.toContain('No hard-coded segment')
+    if (process.getuid?.() === 0) return
+    writeFileSync(visionPath, VISION)
+    chmodSync(visionPath, 0o000)
+    try {
+      const shut = await bmn(['team', 'ask', '--role', 'epic-reviewer', '--question', 'Review it.', '--file', visionPath, '--key', `${day()}-vision-6`], worktree)
+      expect(shut.code, shut.stderr).toBe(0)
+      const shutId = runOf(shut.stderr)
+      expect(manifest(shutId).files).toEqual([])
+      expect(manifest(shutId).vision).toEqual({ path: visionPath, omitted: expect.stringMatching(/cannot be read/u) })
+    } finally {
+      chmodSync(visionPath, 0o644)
+    }
   })
 })

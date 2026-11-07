@@ -9,6 +9,8 @@ export interface HashedRequest {
   role: string; question: string; agent?: string | undefined; effort?: string | undefined; smallWork?: boolean; recheckOf?: string | undefined; project?: string | null | undefined
   files?: Array<{ path: string; sha256: string }>; images?: Array<{ path: string; sha256: string }>; data?: string | undefined; timeLimitMinutes: number
   browser?: { origin: string; interact?: boolean; disposable?: boolean } | null
+  /** Epic 112: a reviewer's vision, its path and why it was left out, if it was. */
+  vision?: { path: string | null; omitted?: string } | null
 }
 export declare function requestHash(request: HashedRequest): string
 export declare function keyPath(runs: string, scope: string, key: string): string
