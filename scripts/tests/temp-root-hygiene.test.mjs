@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -107,5 +107,28 @@ describe('temporary root hygiene', () => {
 
     expect(existsSync(developmentRoot.root)).toBe(false)
     expect(existsSync(outerRoot)).toBe(true)
+  })
+
+  // Epic 111 F20: Claude Code started inside a run re-pointed the owner's `claude` link into the run's root, then deleted.
+  it('fails loudly, naming the way back, when a run points the claude link into its root', async () => {
+    const outerRoot = harnessRoot()
+    const bin = join(harnessRoot(), 'bin'); mkdirSync(bin)
+    const link = join(bin, 'claude')
+    symlinkSync('/synthetic/share/claude/versions/9.9.9', link)
+    await expect(withTemporaryRoot(temporaryRootContracts.electronDevelopment, async (temporaryRoot) => {
+      rmSync(link); symlinkSync(join(temporaryRoot.roots.data, 'claude/versions/9.9.9'), link)
+    }, outerRoot, link)).rejects.toThrow("ln -sfn '/synthetic/share/claude/versions/9.9.9'")
+  })
+
+  it('leaves a claude link the run did not move, or moved elsewhere, alone', async () => {
+    const outerRoot = harnessRoot()
+    const bin = join(harnessRoot(), 'bin'); mkdirSync(bin)
+    const link = join(bin, 'claude')
+    symlinkSync('/synthetic/share/claude/versions/9.9.9', link)
+    await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async () => {}, outerRoot, link)
+    await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async () => {
+      rmSync(link); symlinkSync('/synthetic/share/claude/versions/9.9.10', link)
+    }, outerRoot, link)
+    expect(readlinkSync(link)).toBe('/synthetic/share/claude/versions/9.9.10')
   })
 })

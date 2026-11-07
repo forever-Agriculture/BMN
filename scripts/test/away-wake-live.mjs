@@ -12,7 +12,7 @@
 // the October 14 file is put back (a rollback) is left alone, and after the next start-up install and a restart one
 // finished turn (with three tool calls) is woken once while the owner's stop and quitting are not.
 // `claude-night` (Epic 111 F17-F19) replays the owner's night of 2026-11-06/07 in real Claude Code: a finished turn whose notice
-// a look cleared, a compaction after a finished turn, and a turn an API error ended (an unknown model); each is woken once.
+// a look cleared, a compaction after a finished turn, and a turn a lost connection ended (a closed loopback port); each is woken once.
 // Claude Code reports that error as StopFailure, which a profile gets from BMN's next hooks install; the run adds it with --settings.
 // Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,claude-night,codex,opencode,opencode-upgrade] [--opencode PATH]... [--binary PATH]
 //   (needs `pnpm --filter @bmn/desktop build` first)
@@ -91,7 +91,8 @@ function wakesInTranscript(app, since) {
       if (!line.includes(WAKE)) continue
       try {
         const entry = JSON.parse(line)
-        const user = app === 'claude' ? entry.type === 'user' : entry.payload?.type === 'message' && entry.payload?.role === 'user'
+        // A compaction's summary is written as a user entry and may quote the line; it is no turn the agent received.
+        const user = app === 'claude' ? entry.type === 'user' && entry.isCompactSummary !== true : entry.payload?.type === 'message' && entry.payload?.role === 'user'
         if (user) count += 1
       } catch { /* a partial line */ }
     }
@@ -226,7 +227,10 @@ async function run(scenario, binary) {
   const nightSettings = join(scratch, 'claude-night-settings.json')
   if (night) writeFileSync(nightSettings, `${JSON.stringify({ hooks: { StopFailure: [{ hooks: [{ type: 'command', command: 'bmn hook claude', timeout: 3600 }] }] } }, null, 2)}\n`)
   if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
-  const command = app === 'claude' ? `claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  // Claude Code with his real profile installs itself into whatever XDG_DATA_HOME it sees and points his `claude` link there;
+  // the run's data root is deleted at the end (Epic 111 F20): it starts with his own data folder and its updater off.
+  const claudeData = process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share')
+  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {
@@ -450,7 +454,10 @@ async function run(scenario, binary) {
         check(`${name}: tick 2 wakes the session after its compaction (F18)`, typedIn(two), { logs: two })
         // F17: a turn an API error ends (an unknown model) reports StopFailure and opens the notice; the wake still comes.
         const three = await tick(3, async () => {
-          await idle(); await type('/model claude-e111-no-such-model'); await sleep(4_000)
+          // A lost connection, as on his night: the same Claude Code restarted in the session against a closed loopback port, no retries.
+          await idle(); await type('/exit'); await sleep(5_000)
+          await type(command.replace('env ', "env ANTHROPIC_BASE_URL='http://127.0.0.1:9' CLAUDE_CODE_MAX_RETRIES=0 "))
+          for (let waited = 0; waited < 60_000 && !(await atPrompt()); waited += 3_000) await sleep(3_000)
           await type('Reply with the single word ok.'); await sleep(30_000)
           state.afterError = { events: await latest(), cards: await cards() }
         }, 150_000)
