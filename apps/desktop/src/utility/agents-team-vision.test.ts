@@ -1,7 +1,7 @@
 // MODULE: agents-team-vision.test.ts - Story 112.1: a reviewer's ask carries the project's plan/VISION.md from any worktree, whole or not at all, named with its hash in the manifest and receipt; other roles and projects without a vision are unchanged; a synthetic team, stand-in apps and made-up projects, no provider reached
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -148,6 +148,20 @@ describe('whole or not at all (112.1 AC3)', () => {
       expect(prepared.manifest.vision).toEqual(vision)
       expect(prepared.verdict.receipt?.vision).toEqual(vision)
       expect(readFileSync(join(prepared.folder, ASK_RUN_FILES.prompt), 'utf8')).not.toContain('P1.')
+    }
+  })
+
+  it.skipIf(process.getuid?.() === 0)('a vision the asker cannot read is left out with the reason (pre-review gap)', async () => {
+    const { worktree, visionPath } = planned()
+    chmodSync(visionPath, 0o000)
+    try {
+      const { vision, prepared } = await reviewerAsk('epic-reviewer', worktree)
+      expect(vision).toEqual({ path: visionPath, omitted: expect.stringMatching(/cannot be read, so it was not given$/u) })
+      expect(prepared.verdict.verdict).toBe('PASS')
+      expect(prepared.manifest.files).toHaveLength(0)
+      expect(prepared.verdict.receipt?.vision).toEqual(vision)
+    } finally {
+      chmodSync(visionPath, 0o644)
     }
   })
 })
