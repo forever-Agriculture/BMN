@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // MODULE: session-activity-live.mjs - declared synthetic host/CLI checks and fixed Now presentation fixtures
-/* global window, document, getComputedStyle, innerWidth, matchMedia, requestAnimationFrame */
+/* global window, document, getComputedStyle, innerWidth, matchMedia, requestAnimationFrame, MutationObserver */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { chromium } from 'playwright'
 import { atomicJson, disposableEnvironment, processIdentity } from '../qa/bench-lib.mjs'
@@ -68,7 +68,10 @@ async function executed(id, command, name) {
   await send(id, `{ ${command}; } > ${quote(marker + '.stdout')} 2> ${quote(marker + '.stderr')}; qa_exit=$?; printf '%s' "$qa_exit" > ${quote(marker + '.exit')}; printf done > ${quote(marker)}`)
   await wait(() => existsSync(marker) && readFileSync(marker, 'utf8') === 'done', name)
   const evidence = { command, sessionId: id, completedAt: Date.now(), stdout: readFileSync(marker + '.stdout', 'utf8'), stderr: readFileSync(marker + '.stderr', 'utf8'), exit: readFileSync(marker + '.exit', 'utf8') }
-  save(`executed-${name}.json`, evidence); assert.equal(evidence.exit, '0', evidence.stderr)
+  save(`executed-${basename(marker)}.json`, evidence)
+  for (const suffix of ['', '.stdout', '.stderr', '.exit']) copyFileSync(marker + suffix, join(output, basename(marker + suffix)))
+  assert.equal(evidence.exit, '0', evidence.stderr)
+  return evidence
 }
 const browser = await chromium.connectOverCDP(state.cdp)
 const page = browser.contexts()[0].pages().find(candidate => candidate.url().includes('/renderer/'))
@@ -78,7 +81,11 @@ async function action(args) {
   const response = await fetch(state.control + '/action', { method: 'POST', headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' }, body: JSON.stringify(args) })
   const result = await response.json(); assert.ok(response.ok, result.error); return result
 }
-async function shot(name) { assert.ok(captures.length < 20); captures.push((await action(['screenshot', `${values.stage}-${name}`])).screenshot); save('captures.json', captures) }
+async function shot(name) {
+  const prior = readFileSync(join(state.run, 'actions.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  assert.ok(prior.filter(item => item.result?.screenshot).length < 20, 'Twenty captures total across all phases')
+  captures.push((await action(['screenshot', `${values.stage}-${name}`])).screenshot); save('captures.json', captures)
+}
 const row = (report, id) => report.sections.flatMap(section => section.rows).find(item => item.sessionId === id)
 const select = async id => {
   await action(['click', `.session-row > button[data-session-id="${id}"]`])
@@ -145,15 +152,19 @@ try {
     await executed(observer.sessionId, `bmn now --json > ${quote(path)} 2> ${quote(path + '.stderr')}; printf '%s' "$?" > ${quote(code)}`, label)
     assert.equal(readFileSync(code, 'utf8'), '0', readFileSync(path + '.stderr', 'utf8'))
     const report = JSON.parse(readFileSync(path)); save(`${label}-agent.json`, report)
-    return row(report, receiver.sessionId)
+    assert.equal(report.audience, 'agent')
+    return { at: Date.parse(report.at), row: row(report, receiver.sessionId) }
   }
+  const sessionCli = async (args, label) => JSON.parse((await executed(receiver.sessionId, ['bmn', ...args, '--json'].map(quote).join(' '), label)).stdout)
+  const noticeKey = `qa1139-notice-${state.runId}`, questionKey = `qa1139-question-${state.runId}`
   await select(observer.sessionId)
-  await cli(['ask', 'qa1139-notice', 'Synthetic finished turn', '--kind', 'notice', '--body', 'Synthetic local reminder', '--session', receiver.sessionId])
+  const noticeReceipt = await sessionCli(['ask', noticeKey, 'Synthetic finished turn', '--kind', 'notice', '--body', 'Synthetic local reminder'], 'notice-open')
   await pause(2200)
-  const notice = (await snapshot()).attention.find(item => item.requestKey === 'qa1139-notice')
+  const notice = (await snapshot()).attention.find(item => item.requestId === noticeReceipt.requestId)
   assert.equal(notice?.state, 'open'); assert.equal(notice.incarnationId, receiver.activity.incarnationId)
+  assert.equal(notice.sessionId, receiver.sessionId); assert.equal(notice.kind, 'notice'); assert.equal(notice.requestKey, noticeKey)
   const idleOwner = row(await cli(['now']), receiver.sessionId), idleAgent = await agentNow('resting')
-  assert.equal(idleOwner.dot, 'running-idle'); assert.equal(idleAgent.dot, 'running-idle')
+  assert.equal(idleOwner.dot, 'running-idle'); assert.equal(idleAgent.row.dot, 'running-idle')
   assert.match(await sidebarDot(receiver.sessionId), /running-idle/); await shot('notice-sidebar')
   await showNow(); assert.match(await nowDot(receiver.sessionId), /running-idle/); await shot('notice-now'); await hideNow()
   observations.notice = { notice, idleOwner, idleAgent }
@@ -161,26 +172,68 @@ try {
   await send(receiver.sessionId, "qa_tick=0; while [ \"$qa_tick\" -lt 120 ]; do printf '__QA_PULSE_%s__\\n' \"$qa_tick\"; qa_tick=$((qa_tick+1)); sleep 0.25; done")
   await page.waitForFunction(id => [...document.querySelectorAll(`.session-terminal[data-session-id="${id}"] .xterm-rows`)].some(node => node.textContent.includes('__QA_PULSE_2__')), receiver.sessionId)
   const workingOwner = row(await cli(['now']), receiver.sessionId), workingAgent = await agentNow('working')
-  assert.equal(workingOwner.dot, 'running'); assert.equal(workingAgent.dot, 'running')
+  assert.equal(workingOwner.dot, 'running'); assert.equal(workingAgent.row.dot, 'running')
   await showNow(); assert.equal(await nowDot(receiver.sessionId), 'status-dot running'); assert.equal(await sidebarDot(receiver.sessionId), 'status-dot running'); await shot('working-three-views'); await hideNow()
+  assert.equal((await snapshot()).attention.find(item => item.requestId === notice.requestId)?.state, 'open')
   await select(receiver.sessionId); assert.ok(Date.now() - pulseStartedAt < 29000); await action(['press', 'Control+c'])
-  await page.waitForFunction(id => document.querySelector(`.session-terminal[data-session-id="${id}"] .xterm-rows`)?.textContent.includes('^C'), receiver.sessionId)
-  const idle = await wait(async () => {
-    const current = (await snapshot()).sessions.find(item => item.sessionId === receiver.sessionId)
-    const word = await page.evaluate(id => window.__bmnActivity.words()[id], receiver.sessionId)
-    return word === 'Idle' && { observedAt: Date.now(), lastOutputAt: current.activity.lastOutputAt }
-  }, 'resting after actual Control-C')
-  assert.ok(idle.observedAt - idle.lastOutputAt <= 2000, JSON.stringify(idle))
-  const stoppedAgent = await agentNow('interrupted'), stoppedOwner = row(await cli(['now']), receiver.sessionId)
-  assert.equal(stoppedAgent.dot, 'running-idle'); assert.equal(stoppedOwner.dot, 'running-idle')
-  observations.activity = { workingOwner, workingAgent, idle, elapsedMs: idle.observedAt - idle.lastOutputAt, stoppedAgent, stoppedOwner,
+  await page.waitForFunction(id => {
+    const lines = [...(document.querySelector(`.session-terminal[data-session-id="${id}"] .xterm-rows`)?.children ?? [])].map(node => node.textContent.trim()).filter(Boolean)
+    return lines.some(line => line.includes('^C')) && /^bash-[\d.]+\$$/u.test(lines.at(-1) ?? '')
+  }, receiver.sessionId)
+  await showNow()
+  const ui = [], owner = [], agent = [], sampleDeadline = Date.now() + 4500
+  // Observe class commits directly: a polling interval must not add apparent latency to a near-boundary UI change.
+  const monitor = page.evaluate(id => new Promise(resolveSamples => {
+    const samples = []
+    const read = () => ({ at: Date.now(),
+      sidebar: document.querySelector(`.session-row > button[data-session-id="${id}"] .status-dot`)?.className,
+      now: document.querySelector(`.n-main[data-key="s:${id}"] .status-dot`)?.className })
+    const observer = new MutationObserver(() => {
+      const next = read(), previous = samples.at(-1)
+      if (next.sidebar !== previous?.sidebar || next.now !== previous?.now) samples.push(next)
+      if (next.sidebar === 'status-dot running-idle' && next.now === 'status-dot running-idle') finish()
+    })
+    const finish = () => { clearTimeout(timer); observer.disconnect(); resolveSamples(samples) }
+    const timer = setTimeout(finish, 4500)
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] })
+    const initial = read(); samples.push(initial)
+    if (initial.sidebar === 'status-dot running-idle' && initial.now === 'status-dot running-idle') finish()
+  }), receiver.sessionId).then(samples => { ui.push(...samples) })
+  const complete = () => owner.some(item => item.row.dot === 'running-idle') && agent.some(item => item.row.dot === 'running-idle') && ui.some(item => item.sidebar === 'status-dot running-idle' && item.now === 'status-dot running-idle')
+  try {
+    do {
+      const report = await cli(['now']); assert.equal(report.audience, 'owner')
+      owner.push({ at: Date.parse(report.at), row: row(report, receiver.sessionId) })
+      if (complete()) break
+      agent.push(await agentNow(`interrupt-sample-${agent.length}`))
+    } while (!complete() && Date.now() < sampleDeadline)
+  } finally { await monitor }
+  const finalSession = (await snapshot()).sessions.find(item => item.sessionId === receiver.sessionId)
+  assert.equal(finalSession.activity.incarnationId, receiver.activity.incarnationId)
+  const lastOutputAt = finalSession.activity.lastOutputAt
+  const firstResting = {
+    sidebar: ui.find(item => item.sidebar === 'status-dot running-idle')?.at,
+    now: ui.find(item => item.now === 'status-dot running-idle')?.at,
+    owner: owner.find(item => item.row.dot === 'running-idle')?.at,
+    agent: agent.find(item => item.row.dot === 'running-idle')?.at
+  }
+  observations.activity = { workingOwner, workingAgent, lastOutputAt, firstResting, ui, owner, agent,
     nativeAgentCondition: 'UNVERIFIED: actual shell output/interrupt, no native-agent tool hook.' }
-  observations.noticeAfterExplicitOpen = (await snapshot()).attention.find(item => item.requestKey === 'qa1139-notice')
-  assert.equal(observations.noticeAfterExplicitOpen.state, 'withdrawn')
-  await cli(['ask', 'qa1139-question', 'Choose synthetic layout', '--kind', 'question', '--body', 'Disposable preference', '--session', receiver.sessionId])
-  const question = (await snapshot()).attention.find(item => item.requestKey === 'qa1139-question')
+  save('observations.json', observations)
+  for (const [view, at] of Object.entries(firstResting)) assert.ok(at >= lastOutputAt && at - lastOutputAt <= 2000, JSON.stringify({ view, at, lastOutputAt, elapsed: at - lastOutputAt }))
+  await pause(300)
+  assert.equal((await snapshot()).sessions.find(item => item.sessionId === receiver.sessionId).activity.lastOutputAt, lastOutputAt, 'Silence must persist after the returned prompt')
+  assert.equal(await nowDot(receiver.sessionId), 'status-dot running-idle'); assert.equal(await sidebarDot(receiver.sessionId), 'status-dot running-idle')
+  await shot('resting-three-views'); await hideNow()
+  observations.noticeAfterExplicitOpen = await wait(async () => (await snapshot()).attention.find(item => item.requestId === notice.requestId && item.state === 'withdrawn'), 'exact notice dismissed after explicit navigation')
+  const questionReceipt = await sessionCli(['ask', questionKey, 'Choose synthetic layout', '--kind', 'question', '--body', 'Disposable preference'], 'question-open')
+  const question = (await snapshot()).attention.find(item => item.requestId === questionReceipt.requestId)
   assert.equal(question.state, 'open'); assert.equal(question.incarnationId, receiver.activity.incarnationId)
+  assert.equal(question.sessionId, receiver.sessionId); assert.equal(question.kind, 'question'); assert.equal(question.requestKey, questionKey)
   assert.equal(row(await cli(['now']), receiver.sessionId).dot, 'needs-you')
+  const waitingAgent = await agentNow('waiting')
+  assert.equal(waitingAgent.row.dot, 'needs-you'); assert.equal(Object.hasOwn(waitingAgent.row, 'cardRequestId'), false)
+  assert.equal(await sidebarDot(receiver.sessionId), 'status-dot needs-you')
   await showNow(); await page.locator(`.n-main[data-key="s:${receiver.sessionId}"]`).focus()
   await page.waitForFunction(id => document.querySelector(`.n-main[data-key="s:${id}"] .status-dot`)?.classList.contains('needs-you'), receiver.sessionId)
   assert.equal(await page.locator('.n-scroll button[tabindex="0"]').count(), 1); await shot('waiting-list')
@@ -188,7 +241,9 @@ try {
   await page.waitForFunction(id => document.activeElement?.closest('[data-request-id]')?.getAttribute('data-request-id') === id, question.requestId)
   observations.focus = await page.evaluate(() => ({ active: document.activeElement.outerHTML, card: document.activeElement.closest('[data-request-id]')?.getAttribute('data-request-id') }))
   await shot('opened-card'); await action(['press', 'Escape'])
-  await cli(['withdraw', 'qa1139-question', '--session', receiver.sessionId])
+  assert.equal((await snapshot()).attention.find(item => item.requestId === question.requestId)?.incarnationId, question.incarnationId)
+  await sessionCli(['withdraw', questionKey], 'question-withdraw')
+  await wait(async () => (await snapshot()).attention.find(item => item.requestId === question.requestId && item.incarnationId === question.incarnationId && item.state === 'withdrawn'), 'exact question withdrawn')
   save('observations.json', observations)
   }
 
