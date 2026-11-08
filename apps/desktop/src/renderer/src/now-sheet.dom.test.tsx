@@ -126,11 +126,12 @@ describe('the mounted Now sheet: a refresh keeps rows and focus (Story 110.9 AC6
     await show('success')
     expect(container.textContent).toContain('Read ')
     await show('pending')
-    // Observe the real current semantics; the fixture must not invent the approved heading.
-    expect(container.textContent).toContain('Read ')
+    expect(container.querySelector('.n-words')?.textContent).toBe('Reading runs…')
+    expect(container.querySelector<HTMLButtonElement>('.n-head button.plate')?.disabled).toBe(true)
+    expect(rows()).toHaveLength(3)
     await show('reject')
     expect(container.querySelector('.n-words')?.textContent).toContain('stale')
-    expect(container.querySelector<HTMLButtonElement>('.n-head button.plate')?.disabled).toBe(false)
+    expect(container.querySelector<HTMLButtonElement>('.n-head button.plate')?.disabled).toBe(true)
     await show('success')
     vi.useFakeTimers()
     await show('pending')
@@ -141,6 +142,21 @@ describe('the mounted Now sheet: a refresh keeps rows and focus (Story 110.9 AC6
     expect(rows()).not.toContain('s:qa-session-1')
     expect(liveMemory.result?.runs).toEqual([])
     expect(fixtureMemory.result?.runs).toEqual([])
+  })
+
+  it('disables Copy after a successful read is followed by a failed refresh', async () => {
+    container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    const memory = createNowMemory()
+    const show = async (preset: NowTestPreset, sequence: number): Promise<void> => {
+      await act(async () => root!.render(createElement(NowSheet, { workspaces: WORKSPACES, sessions: SESSIONS,
+        home: null, currentSessionId: null, memory, testRead: { preset, sequence }, onOpenRow: () => undefined, onClose: () => undefined })))
+    }
+    await show('success', 1)
+    expect(container.querySelector<HTMLButtonElement>('.n-head button.plate')?.disabled).toBe(false)
+    await show('reject', 2)
+    expect(container.querySelector('.n-alert')?.textContent).toContain('Rows show')
+    expect(container.querySelector<HTMLButtonElement>('.n-head button.plate')?.disabled).toBe(true)
+    expect(rows()).toHaveLength(3)
   })
 
   it('has one list Tab stop across stopped-group expansion and card details', async () => {

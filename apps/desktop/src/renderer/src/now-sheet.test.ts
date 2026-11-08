@@ -213,7 +213,7 @@ describe('a refresh never moves focus or a row under him (Story 110.9 AC6)', () 
 })
 
 describe('back to the row he left (Story 110.9 AC1)', () => {
-  it('opens on the remembered row with its rows and Not running open, and the last read\'s words at once', () => {
+  it('opens on the remembered row with its rows and folds intact while the next read is pending', () => {
     const memory = { ...createNowMemory(), key: 's:b110', open: ['s:q41'], notRunningOpen: true,
       result: { runs: RUNS, skipped: 0, issues: [], observedAt: READ } satisfies DevAutoRunsResult }
     const markup = renderToStaticMarkup(createElement(NowSheet, { workspaces: WORKSPACES, sessions: SESSIONS, home: '/home/me', currentSessionId: 'b110',
@@ -222,7 +222,7 @@ describe('back to the row he left (Story 110.9 AC1)', () => {
     expect(markup.match(/tabindex="0"/g)).toHaveLength(1)
     expect(markup).toContain('<dl class="n-fold" id="now-fold-s_q41">')
     expect(markup).toContain('<ul class="n-list" id="now-not-running">')
-    expect(text(markup)).toContain('Read 09:40')
+    expect(text(markup)).toContain('Reading runs…')
     // Copy waits for this opening's own read.
     expect(markup).toContain('class="plate" disabled=""')
     expect(markup).toContain('aria-label="Now"')

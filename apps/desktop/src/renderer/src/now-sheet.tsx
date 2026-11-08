@@ -189,7 +189,7 @@ function RowItem({ row, props, loading }: { row: NowRow; props: NowSheetViewProp
 /** The sheet's body, everything it shows from explicit state; the renderer tests draw each designed state through it. */
 export function NowSheetView(props: NowSheetViewProps & { scrollRef?: React.Ref<HTMLDivElement>; listHandlers?: React.HTMLAttributes<HTMLDivElement> }): React.JSX.Element {
   const byKey = new Map(props.view.rows.map((row) => [row.key, row]))
-  const loading = props.head.kind === 'loading' || props.head.kind === 'failed' && props.view.loading
+  const loading = props.view.loading && (props.head.kind === 'loading' || props.head.kind === 'failed')
   const stale = props.head.kind === 'stale' || props.head.kind === 'failed'
   return <div className="n-box">
     {stale ? <p className="n-alert" role="alert">{props.head.kind === 'stale'
@@ -239,7 +239,7 @@ export function NowSheet(props: {
   const workspaces = fixture?.workspaces ?? props.workspaces
   const sessions = fixture?.sessions ?? props.sessions
   const [result, setResult] = useState<DevAutoRunsResult | null>(memory.result)
-  const [fresh, setFresh] = useState(false)
+  const [reading, setReading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set(memory.open))
   const [notRunningOpen, setNotRunningOpen] = useState(memory.notRunningOpen)
@@ -252,15 +252,21 @@ export function NowSheet(props: {
   const scroll = useRef<HTMLDivElement>(null)
   const load = async (): Promise<void> => {
     const request = ++generation.current
+    setReading(true)
+    setFailed(false)
+    setCopy('ready')
     try {
       const snapshot = await boundedRead(props.testRead ? readNowTestPreset(props.testRead.preset) : window.aiTerminal.readDevAutoRuns())
       if (!mounted.current || generation.current !== request) return
       memory.result = snapshot
       setResult(snapshot)
-      setFresh(true)
+      setReading(false)
       setFailed(false)
     } catch {
-      if (mounted.current && generation.current === request) setFailed(true)
+      if (mounted.current && generation.current === request) {
+        setReading(false)
+        setFailed(true)
+      }
     }
   }
   useEffect(() => {
@@ -375,10 +381,10 @@ export function NowSheet(props: {
       runs: result?.runs ?? null, home: props.home }), workspaces)
     window.aiTerminal.writeClipboardText(text).then(() => setCopy('copied'), () => setCopy('failed'))
   }
-  const head: NowHead = result === null ? failed ? { kind: 'failed' } : { kind: 'loading' }
+  const head: NowHead = reading ? { kind: 'loading' } : result === null ? { kind: 'failed' }
     : failed ? { kind: 'stale', at: result.observedAt } : { kind: 'read', at: result.observedAt }
   return <Dialog label="Now" onClose={props.onClose} className="now-dialog">
-    <NowSheetView view={view} sections={sections} head={head} copy={!fresh ? 'disabled' : copy} open={open}
+    <NowSheetView view={view} sections={sections} head={head} copy={reading || failed || result === null ? 'disabled' : copy} open={open}
       notRunningOpen={notRunningOpen} focusKey={order.includes(focusKey ?? '') ? focusKey : order[0] ?? null}
       currentSessionId={props.currentSessionId} onRow={onRow} onToggle={toggle} onCopy={onCopy}
       onFocusRow={(key) => { setFocusKey(key); memory.key = key }}
