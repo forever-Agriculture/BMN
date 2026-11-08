@@ -205,6 +205,36 @@ describe('the wake depth (110.3 AC3)', () => {
   })
 })
 
+describe('a message past its pair\'s limit holds up no other pair (113.7 AC2-AC3)', () => {
+  it('the next message, from a sender within its limits, wakes the receiver once; the limited one keeps its reason', async () => {
+    const w = world()
+    const PAIR = 'these two sessions had 3 wakes in the last hour; it waits for the receiver\'s next turn'
+    w.state.candidates = [{ messageId: 'limited', wakeDepth: 1, wokenAt: null }, { messageId: 'other', wakeDepth: 1, wokenAt: null }]
+    const claim = (messageId: string) => {
+      w.claimed.push(messageId)
+      if (messageId === 'limited') return { claimed: false as const, reason: PAIR }
+      w.state.candidates.find((one) => one.messageId === messageId)!.wokenAt = at(T)
+      return { claimed: true as const, at: at(T) }
+    }
+    ;(w.wake as unknown as { options: { claim: (id: string) => Promise<ReturnType<typeof claim>> } }).options.claim = async (messageId) => claim(messageId)
+    await w.wake.sweep()
+    expect(w.claimed).toEqual(['limited', 'other'])
+    expect(w.written).toEqual([{ sessionId: 'b', text: SESSION_MESSAGE_WAKE_LINE }])
+    expect(w.notes.get('limited')).toBe(PAIR)
+    expect(w.notes.get('other')).toBeNull()
+  })
+
+  it('every message limited: nothing typed, each keeps its own reason', async () => {
+    const w = world()
+    w.state.candidates = [{ messageId: 'm1', wakeDepth: 1, wokenAt: null }, { messageId: 'm2', wakeDepth: 1, wokenAt: null }]
+    w.state.claim = { claimed: false, reason: 'this workspace had 12 wakes in the last hour; it waits for the receiver\'s next turn' }
+    await w.wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.notes.get('m1')).toMatch(/12 wakes/u)
+    expect(w.notes.get('m2')).toMatch(/12 wakes/u)
+  })
+})
+
 describe('a sweep overlapping another types nothing twice', () => {
   it('holds one sweep at a time', async () => {
     const w = world()

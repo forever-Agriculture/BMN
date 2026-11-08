@@ -89,8 +89,10 @@ export class MessageWake {
     }
     if (chosen === null) return
     const quietMs = this.options.quietMs ?? SESSION_MESSAGE_WAKE_QUIET_MS
-    const message = chosen
+    let message = chosen
     let claimedAt: string | null = null
+    // A message past its own pair's limit keeps its reason and holds up none behind it (113.7): each is claimed in turn.
+    const limited = new Set<string>()
     const reason = await typeIfIdle(this.options, {
       seen, generation, open, quietMs, quietWords: `its turn finished less than ${Math.round(quietMs / 60_000)} minutes ago`, line: SESSION_MESSAGE_WAKE_LINE,
       finished: { at: this.options.finishedTurn(sessionId, seen.incarnationId), unknown: 'BMN did not see this run finish a turn with nothing in flight' },
@@ -99,20 +101,26 @@ export class MessageWake {
         return typed !== null && this.options.now().getTime() - typed < quietMs ? 'BMN typed into it a moment ago' : null
       },
       claim: async () => {
-        const claim = await this.options.claim(message.messageId)
-        if (!claim.claimed) return claim.reason
-        claimedAt = claim.at
-        return null
+        let refused: string | null = null
+        for (const each of [chosen, ...behind]) {
+          const claim = await this.options.claim(each.messageId)
+          if (claim.claimed) { message = each; claimedAt = claim.at; return null }
+          limited.add(each.messageId)
+          this.options.note(each.messageId, claim.reason)
+          refused ??= claim.reason
+        }
+        return refused
       },
       unclaim: async () => { if (claimedAt !== null) await this.options.release(message.messageId, claimedAt).catch(() => undefined) }
     })
+    const others = [chosen, ...behind].filter((each) => each !== message && !limited.has(each.messageId))
     if (reason === null) {
       this.options.note(message.messageId, null)
-      say(behind, 'another message woke it first; this one comes after')
+      say(others, 'another message woke it first; this one comes after')
       this.options.log(`message wake: typed the wake line into ${sessionId} for ${message.messageId}`)
       return
     }
-    say([message, ...behind], reason)
+    say([chosen, ...behind].filter((each) => !limited.has(each.messageId)), reason)
     this.options.log(`message wake: skipped ${sessionId}: ${reason}`)
   }
 }
