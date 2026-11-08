@@ -544,7 +544,9 @@ function cardRecords(event, requests, outcomes) {
     if (method === undefined || records.length >= 16) return
     const outcome = outcomes[index]
     const result = isObject(outcome?.result) ? outcome.result : undefined
-    const word = outcome === undefined || outcome.error !== undefined || result === undefined ? 'error'
+    // Closing a request that is not open is the host's NOT_FOUND: nothing changed, which is not an error (113.5 live run).
+    const word = outcome?.error?.code === 'NOT_FOUND' && method !== 'open' ? 'unchanged'
+      : outcome === undefined || outcome.error !== undefined || result === undefined ? 'error'
       : result.refused === true ? 'refused' : result.changed === false ? 'unchanged'
         : { open: 'opened', withdraw: 'withdrew', resolve: 'answered' }[method]
     const params = request.params

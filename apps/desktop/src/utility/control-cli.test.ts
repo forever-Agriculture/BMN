@@ -2015,6 +2015,19 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       }
     })
 
+    it('records closing a request that is not open as unchanged, and any other failure as an error (Story 113.5 live run)', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      fixture.handlers.resolveAttention.mockRejectedValue(new ControlError(ERROR_CODES.notFound, 'No open request'))
+      fixture.handlers.withdrawAttention.mockRejectedValue(new ControlError(ERROR_CODES.ioError, 'disk full'))
+      const prompt = JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt: 'synthetic', cwd: session.workspace, session_id: SESSION, transcript_path: session.record })
+      await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: prompt })
+      const observed = fixture.handlers.observeHookEvent.mock.calls.at(-1)?.[0] as { hookRun?: { cards: Array<Record<string, unknown>> } } | undefined
+      const cards = observed?.hookRun?.cards ?? []
+      expect(cards.filter(card => card.method === 'resolve').map(card => card.outcome)).toEqual(['unchanged', 'unchanged'])
+      expect(cards.filter(card => card.method === 'withdraw').map(card => card.outcome)).toEqual(['error'])
+    })
+
     it('offers nothing for a sub-agent\'s question, so nothing changes there', async () => {
       const fixture = await cliFixture()
       const session = await claudeSession(fixture.root)
