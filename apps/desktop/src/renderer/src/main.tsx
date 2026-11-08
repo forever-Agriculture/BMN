@@ -62,7 +62,7 @@ import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
 import { SessionMessagesDialog } from './session-messages-dialog'
 import { mergeSessionActivity } from '@bmn/protocol'
-import { NowSheet, createNowMemory } from './now-sheet'
+import { NowSheet, createNowMemory, createNowTestControl, type NowTestPreset } from './now-sheet'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { SessionPortsSection, portDetail, portsFor } from './session-ports'
@@ -243,6 +243,9 @@ function App(): React.JSX.Element {
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
   /** Story 110.9: the row, scroll and open rows the Now sheet comes back on, and its last read of the runs. */
   const nowMemory = useRef(createNowMemory())
+  const nowFixtureMemory = useRef(createNowMemory())
+  const nowFixtureSequence = useRef(0)
+  const [nowFixture, setNowFixture] = useState<{ preset: NowTestPreset; sequence: number }>()
   /** What the owner is looking at now, for the start-up offer that must not talk over it. */
   const dialogRef = useRef<ShellDialog | null>(null)
   /** What the newest update or quit interrupted, so the palette knows whether there is an offer. */
@@ -516,6 +519,17 @@ function App(): React.JSX.Element {
     return () => {
       delete window.__bmnActivity
     }
+  }, [startup?.testMode])
+
+  useEffect(() => {
+    const control = createNowTestControl(startup?.testMode === true, (preset) => {
+      if (preset === undefined) nowFixtureMemory.current = createNowMemory()
+      setNowFixture(preset === undefined ? undefined : { preset, sequence: ++nowFixtureSequence.current })
+    })
+    if (control === null) return
+    const target = window as Window & { __bmnNowFixture?: typeof control }
+    target.__bmnNowFixture = control
+    return () => { delete target.__bmnNowFixture }
   }, [startup?.testMode])
 
   /**
@@ -2863,8 +2877,11 @@ function App(): React.JSX.Element {
           } : undefined}
         />
       ) : null}
-      {dialog?.kind === 'now' ? <NowSheet workspaces={nowWorkspaces} sessions={nowSessions} home={home}
-        currentSessionId={selectedSessionId} memory={nowMemory.current} onClose={() => setDialog(null)}
+      {dialog?.kind === 'now' ? <NowSheet key={startup?.testMode === true && nowFixture ? 'fixture' : 'live'}
+        workspaces={nowWorkspaces} sessions={nowSessions} home={home}
+        testRead={startup?.testMode === true ? nowFixture : undefined}
+        currentSessionId={selectedSessionId} memory={startup?.testMode === true && nowFixture ? nowFixtureMemory.current : nowMemory.current}
+        onClose={() => setDialog(null)}
         onOpenRow={(row) => {
           setDialog(null)
           const card = row.cardRequestId === null ? undefined : attention.find((request) => request.requestId === row.cardRequestId)

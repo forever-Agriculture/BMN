@@ -3,11 +3,25 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { buildNow, type DevAutoRun, type DevAutoRunsResult, type NowSection, type NowSessionInput, type NowView } from '@bmn/protocol'
-import { NowSheet, NowSheetView, createNowMemory, focusAfter, heldSections, rowWords, visibleKeys, type NowHead, type NowSheetViewProps } from './now-sheet'
+import { NowSheet, NowSheetView, createNowMemory, createNowTestControl, NOW_TEST_PRESETS, focusAfter, heldSections, rowWords, visibleKeys, type NowHead, type NowSheetViewProps } from './now-sheet'
 
 const NOW = new Date(2026, 10, 5, 9, 40)
 const READ = new Date(2026, 10, 5, 9, 40).toISOString()
 const MIN = 60_000
+
+describe('isolated Now QA controls', () => {
+  it('has no control in normal mode and accepts only fixed preset names in test mode', () => {
+    const selected: unknown[] = []
+    expect(createNowTestControl(false, (value) => selected.push(value))).toBeNull()
+    const control = createNowTestControl(true, (value) => selected.push(value))!
+    for (const preset of NOW_TEST_PRESETS) control.select(preset)
+    control.select('reset')
+    expect(selected).toEqual([...NOW_TEST_PRESETS, undefined])
+    for (const invalid of [null, {}, { preset: 'success' }, 'arbitrary', 1]) expect(() => control.select(invalid)).toThrow('Unknown Now QA preset')
+    expect(selected).toHaveLength(NOW_TEST_PRESETS.length + 1)
+    expect(Object.isFrozen(control)).toBe(true)
+  })
+})
 
 function session(id: string, workspaceId: string, over: Partial<NowSessionInput> = {}): NowSessionInput {
   return { sessionId: id, workspaceId, name: id, dot: 'running', live: true, started: true, agent: true, working: true,

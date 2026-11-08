@@ -4,7 +4,7 @@ import { buildNow, type DevAutoRun, type DevAutoRunsResult, type NowSessionInput
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NowSheet, createNowMemory, type NowMemory } from './now-sheet'
+import { NowSheet, createNowMemory, type NowMemory, type NowTestPreset } from './now-sheet'
 
 let root: Root | undefined
 let container: HTMLDivElement | undefined
@@ -63,6 +63,7 @@ afterEach(async () => {
   if (bridge) Object.defineProperty(window, 'aiTerminal', bridge)
   else Reflect.deleteProperty(window, 'aiTerminal')
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 async function mount(memory: NowMemory, sessions: NowSessionInput[] = SESSIONS): Promise<(next: NowSessionInput[]) => Promise<void>> {
@@ -92,6 +93,56 @@ const key = async (name: string): Promise<void> => {
 }
 
 describe('the mounted Now sheet: a refresh keeps rows and focus (Story 110.9 AC6)', () => {
+  it('uses fixed local inputs for empty, partial and exactly 100 sessions, without calling the live reader', async () => {
+    container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    const memory = createNowMemory()
+    let sequence = 0
+    const show = async (preset: NowTestPreset): Promise<void> => {
+      await act(async () => root!.render(createElement(NowSheet, { workspaces: WORKSPACES, sessions: SESSIONS, home: null,
+        currentSessionId: null, memory, testRead: { preset, sequence: ++sequence }, onOpenRow: () => undefined, onClose: () => undefined })))
+    }
+    await show('empty')
+    expect(rows()).toHaveLength(0)
+    await show('partial')
+    expect(rows()).toHaveLength(3)
+    expect(container.textContent).toContain('Synthetic unreadable handoff')
+    await show('many')
+    expect(rows()).toHaveLength(100)
+    expect(container.textContent).toContain('Synthetic session 100 with a long name')
+    expect(reads).toHaveLength(0)
+  })
+
+  it('keeps actual read transitions and invalidates a pending fixture when reset to live inputs', async () => {
+    container = document.createElement('div'); document.body.append(container); root = createRoot(container)
+    const fixtureMemory = createNowMemory(), liveMemory = createNowMemory()
+    let sequence = 0
+    const show = async (preset?: NowTestPreset): Promise<void> => {
+      await act(async () => root!.render(createElement(NowSheet, { key: preset ? 'fixture' : 'live', workspaces: WORKSPACES,
+        sessions: SESSIONS, home: null, currentSessionId: null, memory: preset ? fixtureMemory : liveMemory,
+        testRead: preset ? { preset, sequence: ++sequence } : undefined, onOpenRow: () => undefined, onClose: () => undefined })))
+    }
+    await show('reject')
+    expect(container.textContent).toContain('Could not read')
+    await show('success')
+    expect(container.textContent).toContain('Read ')
+    await show('pending')
+    // Observe the real current semantics; the fixture must not invent the approved heading.
+    expect(container.textContent).toContain('Read ')
+    await show('reject')
+    expect(container.querySelector('.n-words')?.textContent).toContain('stale')
+    expect(container.querySelector<HTMLButtonElement>('.n-head button.plate')?.disabled).toBe(false)
+    await show('success')
+    vi.useFakeTimers()
+    await show('pending')
+    await show()
+    await answer([])
+    await act(async () => { await vi.advanceTimersByTimeAsync(5100) })
+    expect(rows()).toContain('s:a')
+    expect(rows()).not.toContain('s:qa-session-1')
+    expect(liveMemory.result?.runs).toEqual([])
+    expect(fixtureMemory.result?.runs).toEqual([])
+  })
+
   it('has one list Tab stop across stopped-group expansion and card details', async () => {
     const waiting = session('q', 'wq', { card: { requestId: 'card', title: 'Scope question' }, dot: 'needs-you' })
     const stopped = session('stopped', 'wp', { live: false, working: false, dot: 'exited' })

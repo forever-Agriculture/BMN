@@ -9,6 +9,7 @@ import {
   nowClock,
   standupText,
   type DevAutoRunsResult,
+  type DevAutoRun,
   type NowRow,
   type NowSection,
   type NowSessionInput,
@@ -31,6 +32,39 @@ export interface NowMemory {
 
 export function createNowMemory(): NowMemory {
   return { key: null, scrollTop: 0, open: [], notRunningOpen: false, result: null }
+}
+
+/** Fixed presentation fixtures, available only through the isolated test-mode shell. */
+export const NOW_TEST_PRESETS = ['success', 'pending', 'reject', 'partial', 'many', 'empty'] as const
+export type NowTestPreset = (typeof NOW_TEST_PRESETS)[number]
+export function createNowTestControl(enabled: boolean, select: (preset: NowTestPreset | undefined) => void): {
+  select(preset: unknown): void
+} | null {
+  if (!enabled) return null
+  return Object.freeze({ select(value: unknown): void {
+    if (value === 'reset') { select(undefined); return }
+    if (typeof value !== 'string' || !(NOW_TEST_PRESETS as readonly string[]).includes(value)) throw new Error('Unknown Now QA preset')
+    select(value as NowTestPreset)
+  } })
+}
+
+function nowTestInputs(preset: NowTestPreset): { workspaces: Workspaces; sessions: NowSessionInput[] } {
+  const count = preset === 'empty' ? 0 : preset === 'many' ? 100 : 3
+  return { workspaces: [{ workspaceId: 'qa-fixture', name: 'Synthetic QA' }],
+    sessions: Array.from({ length: count }, (_, index) => ({ sessionId: `qa-session-${index + 1}`, workspaceId: 'qa-fixture',
+      name: preset === 'many' ? `Synthetic session ${index + 1} with a long name whose complete accessible text remains available` : `Synthetic session ${index + 1}`,
+      dot: preset === 'many' && index % 10 === 9 ? 'exited' : 'running-idle',
+      live: preset !== 'many' || index % 10 !== 9, started: true, agent: true, working: false, progressLabel: null, title: null, card: null })) }
+}
+function readNowTestPreset(preset: NowTestPreset): Promise<DevAutoRunsResult> {
+  if (preset === 'pending') return new Promise(() => {}) // boundedRead retains its ordinary five-second deadline.
+  if (preset === 'reject') return Promise.reject(new Error('Synthetic Now read failure'))
+  const runs: DevAutoRun[] = preset !== 'partial' ? [] : [{ workspaceIds: ['qa-fixture'], checkout: '/synthetic/qa',
+    branch: 'qa-fixture', project: null, status: null, nextAction: null, decisions: [], runId: null,
+    decisionEntries: [], omittedDecisions: 0, finished: false, updatedAt: null, ownership: 'own', ownerCheckout: null,
+    ownerBranch: null, unavailable: 'Synthetic unreadable handoff', board: { checkout: null, rows: [], unavailable: null }, ownerItems: [], waitingOn: null,
+    finishedStories: [], skippedFinishedStories: 0, leadConversations: [], sessionId: 'qa-session-1', sessionLink: null }]
+  return Promise.resolve({ runs, skipped: 0, issues: [], observedAt: new Date().toISOString() })
 }
 
 type Workspaces = ReadonlyArray<{ workspaceId: string; name: string }>
@@ -196,10 +230,14 @@ export function NowSheet(props: {
   home: string | null
   currentSessionId: string | null
   memory: NowMemory
+  testRead?: { preset: NowTestPreset; sequence: number } | undefined
   onOpenRow(row: NowRow): void
   onClose(): void
 }): React.JSX.Element {
   const { memory } = props
+  const fixture = useMemo(() => props.testRead ? nowTestInputs(props.testRead.preset) : null, [props.testRead?.preset])
+  const workspaces = fixture?.workspaces ?? props.workspaces
+  const sessions = fixture?.sessions ?? props.sessions
   const [result, setResult] = useState<DevAutoRunsResult | null>(memory.result)
   const [fresh, setFresh] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -215,7 +253,7 @@ export function NowSheet(props: {
   const load = async (): Promise<void> => {
     const request = ++generation.current
     try {
-      const snapshot = await boundedRead(window.aiTerminal.readDevAutoRuns())
+      const snapshot = await boundedRead(props.testRead ? readNowTestPreset(props.testRead.preset) : window.aiTerminal.readDevAutoRuns())
       if (!mounted.current || generation.current !== request) return
       memory.result = snapshot
       setResult(snapshot)
@@ -229,13 +267,13 @@ export function NowSheet(props: {
     mounted.current = true
     void load()
     return () => { mounted.current = false; generation.current++ }
-  }, [])
+  }, [props.testRead?.sequence])
   // Story 75.7: dev-auto writes its files outside BMN, so they are read again every 30 s while this is on screen, when the
   // window comes back and when a card changes; the read is bounded and what was shown stays meanwhile.
   useSelfRefresh(load, { topics: ['attention'], everyMs: SELF_REFRESH_MS })
 
-  const view = useMemo(() => buildNow({ now: new Date(), audience: 'owner', workspaces: props.workspaces, sessions: props.sessions,
-    runs: result?.runs ?? null, home: props.home }), [props.workspaces, props.sessions, props.home, result])
+  const view = useMemo(() => buildNow({ now: new Date(), audience: 'owner', workspaces, sessions,
+    runs: result?.runs ?? null, home: props.home }), [workspaces, sessions, props.home, result])
   // The first placement shown with a read of the runs in this opening (a remembered one too) holds while he is in the list;
   // the rows shown while nothing was read yet hold nothing.
   const shown = useRef<NowSection[] | null>(null)
@@ -329,12 +367,12 @@ export function NowSheet(props: {
     setFocusKey(row.key)
     memory.key = row.key
     // A run with no session only opens its row; every other row opens its session, with its card in front.
-    if (row.sessionId === null) toggle(row.key)
+    if (row.sessionId === null || props.testRead) toggle(row.key)
     else props.onOpenRow(row)
   }
   const onCopy = (): void => {
-    const text = standupText(buildNow({ now: new Date(), audience: 'owner', workspaces: props.workspaces, sessions: props.sessions,
-      runs: result?.runs ?? null, home: props.home }), props.workspaces)
+    const text = standupText(buildNow({ now: new Date(), audience: 'owner', workspaces, sessions,
+      runs: result?.runs ?? null, home: props.home }), workspaces)
     window.aiTerminal.writeClipboardText(text).then(() => setCopy('copied'), () => setCopy('failed'))
   }
   const head: NowHead = result === null ? failed ? { kind: 'failed' } : { kind: 'loading' }
