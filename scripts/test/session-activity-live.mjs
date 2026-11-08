@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // MODULE: session-activity-live.mjs - declared synthetic host/CLI checks and fixed Now presentation fixtures
-/* global window, document, getComputedStyle, innerWidth, matchMedia */
+/* global window, document, getComputedStyle, innerWidth, matchMedia, requestAnimationFrame */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -8,10 +8,11 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { chromium } from 'playwright'
-import { disposableEnvironment, processIdentity } from '../qa/bench-lib.mjs'
+import { atomicJson, disposableEnvironment, processIdentity } from '../qa/bench-lib.mjs'
 
-const { values } = parseArgs({ options: { checkout: { type: 'string' }, output: { type: 'string' } } })
+const { values } = parseArgs({ options: { checkout: { type: 'string' }, output: { type: 'string' }, stage: { type: 'string' } } })
 assert.ok(values.checkout && values.output, 'Expected --checkout BUILT_BENCH --output NEW_DIRECTORY')
+assert.ok(['presentation', 'prepare', 'host'].includes(values.stage), 'Expected fixed --stage presentation|prepare|host')
 const checkout = realpathSync(values.checkout), output = resolve(values.output)
 assert.ok(!existsSync(output), 'Preserve prior evidence: output directory must be new')
 mkdirSync(output, { recursive: true })
@@ -26,17 +27,21 @@ const driverSha256 = createHash('sha256').update(readFileSync(new URL(import.met
 const seed = JSON.parse(readFileSync(join(state.run, 'bench/seed.json')))
 assert.equal(seed.driverSha256, driverSha256, 'Driver differs from the seed reserved before launch')
 assert.deepEqual(seed.presets, ['success', 'pending', 'reject', 'partial', 'many', 'empty', 'reset'])
+assert.deepEqual(seed.phases, ['presentation', 'prepare', 'host'])
 assert.equal(processIdentity(state.pid)?.start_ticks, state.start_ticks, 'Bench process identity changed')
 const save = (name, data) => writeFileSync(join(output, name), JSON.stringify(data, null, 2) + '\n')
-save('binding.json', { runId: state.runId, candidateSha256: state.candidateSha256,
-  driverSha256, actors })
+const binding = { runId: state.runId, candidateSha256: state.candidateSha256, driverSha256 }
+save('binding.json', { ...binding, phase: values.stage, actors })
+const phaseDeadline = values.stage === 'prepare' ? Date.now() + 30000 : Infinity
+const checkDeadline = () => assert.ok(Date.now() < phaseDeadline, 'Preparation exceeded its thirty-second deadline')
 const pause = ms => new Promise(resolvePause => setTimeout(resolvePause, ms))
 const wait = async (predicate, label, timeout = 5000) => {
   const deadline = Date.now() + timeout
-  do { const result = await predicate(); if (result) return result; await pause(40) } while (Date.now() < deadline)
+  do { checkDeadline(); const result = await predicate(); if (result) return result; await pause(40) } while (Date.now() < deadline)
   throw new Error(`Missing executed acknowledgment: ${label}`)
 }
 async function cli(args) {
+  checkDeadline()
   const record = { args, startedAt: Date.now(), scope: 'disposable owner controller', stdout: '', stderr: '' }
   commands.push(record)
   try {
@@ -45,7 +50,7 @@ async function cli(args) {
         { cwd: join(state.root, 'synthetic-project'), env: environment, stdio: ['ignore', 'pipe', 'pipe'] })
       actors.push(processIdentity(child.pid)); save('actors.json', actors)
       // The CLI owns its socket deadline. A probe deadline stops the method without signaling a reused numeric PID.
-      const timer = setTimeout(() => { record.timedOut = true; reject(new Error('Disposable CLI exceeded ten seconds')) }, 10000)
+      const timer = setTimeout(() => { record.timedOut = true; reject(new Error('Disposable CLI exceeded its deadline')) }, Math.min(10000, phaseDeadline - Date.now()))
       child.stdout.on('data', data => { record.stdout += data }); child.stderr.on('data', data => { record.stderr += data })
       child.once('error', reject)
       child.once('close', (code, signal) => {
@@ -60,17 +65,20 @@ const quote = text => `'${text.replaceAll("'", "'\\''")}'`
 async function send(id, command) { return cli(['send', command, '--session', id, '--submit', '--key', `qa1139-${randomUUID()}`]) }
 async function executed(id, command, name) {
   const marker = join(state.root, 'synthetic-project', `${name}-${randomUUID()}.done`)
-  await send(id, `${command}; printf done > ${quote(marker)}`)
+  await send(id, `{ ${command}; } > ${quote(marker + '.stdout')} 2> ${quote(marker + '.stderr')}; qa_exit=$?; printf '%s' "$qa_exit" > ${quote(marker + '.exit')}; printf done > ${quote(marker)}`)
   await wait(() => existsSync(marker) && readFileSync(marker, 'utf8') === 'done', name)
+  const evidence = { command, sessionId: id, completedAt: Date.now(), stdout: readFileSync(marker + '.stdout', 'utf8'), stderr: readFileSync(marker + '.stderr', 'utf8'), exit: readFileSync(marker + '.exit', 'utf8') }
+  save(`executed-${name}.json`, evidence); assert.equal(evidence.exit, '0', evidence.stderr)
 }
 const browser = await chromium.connectOverCDP(state.cdp)
 const page = browser.contexts()[0].pages().find(candidate => candidate.url().includes('/renderer/'))
 assert.ok(page); page.setDefaultTimeout(5000)
 async function action(args) {
+  checkDeadline()
   const response = await fetch(state.control + '/action', { method: 'POST', headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' }, body: JSON.stringify(args) })
   const result = await response.json(); assert.ok(response.ok, result.error); return result
 }
-async function shot(name) { captures.push((await action(['screenshot', name])).screenshot); save('captures.json', captures) }
+async function shot(name) { assert.ok(captures.length < 20); captures.push((await action(['screenshot', `${values.stage}-${name}`])).screenshot); save('captures.json', captures) }
 const row = (report, id) => report.sections.flatMap(section => section.rows).find(item => item.sessionId === id)
 const select = async id => {
   await action(['click', `.session-row > button[data-session-id="${id}"]`])
@@ -81,11 +89,16 @@ const showNow = async () => { if (!await page.locator('dialog.now-dialog[open]')
 const hideNow = async () => { if (await page.locator('dialog.now-dialog[open]').count()) await action(['press', 'Escape']) }
 const sidebarDot = id => page.locator(`.session-row > button[data-session-id="${id}"] .status-dot`).getAttribute('class')
 const nowDot = id => page.locator(`.n-main[data-key="s:${id}"] .status-dot`).getAttribute('class')
+const preparationTimer = values.stage === 'prepare' ? setTimeout(() => { void browser.close() }, phaseDeadline - Date.now()) : null
 try {
   // All test records come through the normal UI/CLI; no host observations or native hooks are invented.
-  const preflightDeadline = Date.now() + 30000
-  const receiver = (await snapshot()).sessions.find(session => session.name === 'Review shell')
+  const baseline = (await snapshot()).sessions
+  const receiver = baseline.find(session => session.name === 'Review shell')
   assert.ok(receiver?.activity?.incarnationId)
+  const journalPath = join(state.run, 'session-activity-prepared.json')
+  if (values.stage === 'prepare') {
+  assert.ok(!existsSync(journalPath), 'Preparation already has a receipt')
+  const baselineIds = new Set(baseline.map(session => session.sessionId))
   await action(['click', 'button[aria-label="Command palette"]'])
   await action(['click', '#palette-new-session'])
   await page.getByRole('textbox', { name: 'Session name', exact: true }).fill('Observer shell')
@@ -93,14 +106,37 @@ try {
   await form.getByText('Advanced', { exact: true }).click()
   await form.getByRole('textbox', { name: 'Arguments', exact: true }).fill('--noprofile --norc')
   await page.getByRole('button', { name: 'Create session', exact: true }).click()
-  const observer = (await snapshot()).sessions.find(session => session.name === 'Observer shell')
+  await page.getByRole('button', { name: 'Actions for Observer shell', exact: true }).waitFor()
+  const observer = await wait(async () => {
+    const matches = (await snapshot()).sessions.filter(session => session.name === 'Observer shell' && !baselineIds.has(session.sessionId))
+    assert.ok(matches.length <= 1, 'Ambiguous created Observer')
+    const session = matches[0]
+    return session?.lastProcess?.state === 'live' && session.activity?.incarnationId === session.lastProcess.incarnationId && session
+  }, 'new Observer live record')
   assert.equal(observer.workspaceId, receiver.workspaceId)
+  await page.locator(`.session-row > button[data-session-id="${observer.sessionId}"]`).waitFor()
   for (const session of [receiver, observer]) {
     await select(session.sessionId)
     await executed(session.sessionId, `printf '__QA_PREFLIGHT_${session.sessionId}__\\n'`, 'preflight')
   }
-  assert.ok(Date.now() < preflightDeadline, 'Preflight exceeded thirty seconds')
-  observations.preflight = { receiver, observer, elapsedMs: 30000 - (preflightDeadline - Date.now()) }; save('observations.json', observations)
+  const confirmed = (await snapshot()).sessions
+  for (const session of [receiver, observer]) assert.equal(confirmed.find(item => item.sessionId === session.sessionId)?.activity?.incarnationId, session.activity.incarnationId)
+  checkDeadline()
+  const journal = { ...binding, preparedAt: Date.now(), receiver, observer, actors }
+  atomicJson(journalPath, journal); assert.deepEqual(JSON.parse(readFileSync(journalPath)), journal)
+  observations.preflight = { receiver, observer, completedAt: Date.now() }; save('observations.json', observations)
+  await shot('prepared-shells')
+  }
+  if (values.stage === 'host') {
+  const journal = JSON.parse(readFileSync(journalPath))
+  for (const [key, value] of Object.entries(binding)) assert.equal(journal[key], value)
+  assert.ok(Date.now() - journal.preparedAt < 120000, 'Preparation receipt is stale')
+  const observer = baseline.find(session => session.sessionId === journal.observer.sessionId)
+  for (const session of [receiver, observer]) {
+    const expected = session.sessionId === receiver.sessionId ? journal.receiver : journal.observer
+    assert.equal(session.lastProcess.state, 'live'); assert.equal(session.activity.incarnationId, expected.activity.incarnationId)
+    await page.locator(`.session-row > button[data-session-id="${session.sessionId}"]`).waitFor()
+  }
   const agentNow = async label => {
     const path = join(state.root, 'synthetic-project', `${label}-${randomUUID()}.json`), code = path + '.exit'
     await executed(observer.sessionId, `bmn now --json > ${quote(path)} 2> ${quote(path + '.stderr')}; printf '%s' "$?" > ${quote(code)}`, label)
@@ -151,16 +187,32 @@ try {
   await shot('opened-card'); await action(['press', 'Escape'])
   await cli(['withdraw', 'qa1139-question', '--session', receiver.sessionId])
   save('observations.json', observations)
+  }
 
+  if (values.stage === 'presentation') {
   // Presentation evidence is explicitly synthetic, using fixed local props and the real bounded read path.
   const preset = async name => {
-    await page.evaluate(value => window.__bmnNowFixture.select(value), name)
-    await page.waitForTimeout(50)
+    if (name === 'reset') { await page.evaluate(() => window.__bmnNowFixture.select('reset')); return }
+    const read = await page.evaluate(value => new Promise((resolveRead, rejectRead) => {
+      const original = window.setTimeout
+      const guard = original(() => { window.setTimeout = original; rejectRead(new Error('No bounded read started for preset')) }, 2000)
+      window.setTimeout = function (handler, delay, ...args) {
+        const timer = original.call(window, handler, delay, ...args)
+        if (delay === 5000 && String(handler).includes('The read timed out')) {
+          window.setTimeout = original; clearTimeout(guard); resolveRead({ preset: value, startedAt: Date.now() })
+        }
+        return timer
+      }
+      window.__bmnNowFixture.select(value)
+    }), name)
+    await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))))
+    if (name === 'pending') assert.ok(Date.now() - read.startedAt < 2000, 'Pending capture must remain inside its real five-second deadline')
+    observations.reads ??= []; observations.reads.push(read)
   }
   const readState = () => page.evaluate(() => ({ heading: document.querySelector('.n-words')?.textContent,
     copyDisabled: document.querySelector('.n-head button.plate')?.disabled, rows: document.querySelectorAll('.n-main').length,
     alert: document.querySelector('.n-alert')?.textContent ?? null }))
-  await preset('reset'); await preset('pending'); await showNow(); observations.coldPending = await readState(); await shot('cold-loading')
+  await showNow(); await preset('reset'); await preset('pending'); observations.coldPending = await readState(); await shot('cold-loading')
   assert.match(observations.coldPending.heading, /Reading runs/); assert.equal(observations.coldPending.copyDisabled, true)
   await preset('reject'); await page.locator('.n-alert').waitFor(); observations.coldReject = await readState(); await shot('first-read-failed')
   await preset('success'); await wait(async () => (await readState()).heading?.startsWith('Read '), 'successful fixture read')
@@ -193,9 +245,10 @@ try {
   await preset('reset'); await page.setViewportSize({ width: 1000, height: 700 })
   await wait(async () => await page.locator(`.n-main[data-key="s:${receiver.sessionId}"]`).count(), 'live inputs after fixture reset')
   observations.reset = { liveInputsRestored: true }
+  }
   save('observations.json', observations); save('findings.json', findings)
-  console.log(JSON.stringify({ runId: state.runId, output, shellMechanics: 'PASS', nativeAgentCondition: 'UNVERIFIED', findings }))
+  console.log(JSON.stringify({ runId: state.runId, phase: values.stage, output, phaseCompleted: true, nativeAgentCondition: 'UNVERIFIED', findings }))
 } catch (error) {
   save('failure.json', { message: error.message, stack: error.stack }); save('observations.json', observations); save('findings.json', findings)
   throw error
-} finally { save('actors.json', actors); await browser.close() }
+} finally { if (preparationTimer !== null) clearTimeout(preparationTimer); save('actors.json', actors); await browser.close() }
