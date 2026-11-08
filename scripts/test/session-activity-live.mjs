@@ -86,7 +86,8 @@ try {
   const preflightDeadline = Date.now() + 30000
   const receiver = (await snapshot()).sessions.find(session => session.name === 'Review shell')
   assert.ok(receiver?.activity?.incarnationId)
-  await page.getByRole('button', { name: 'New session', exact: true }).click()
+  await action(['click', 'button[aria-label="Command palette"]'])
+  await action(['click', '#palette-new-session'])
   await page.getByRole('textbox', { name: 'Session name', exact: true }).fill('Observer shell')
   const form = page.getByRole('complementary', { name: 'New session', exact: true })
   await form.getByText('Advanced', { exact: true }).click()
