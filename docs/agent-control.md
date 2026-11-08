@@ -939,8 +939,8 @@ from the folder's `origin`. The repository's owner and default branch come from 
 with each account signed in to `gh` in turn, as Health does, so a repository only a second account can see is still
 read.
 
-- **In force** only while at least one owner is allowed and the rules master carries the pointer `bmn policy
-  --repo`. Otherwise, and when BMN is closed or its store cannot be read, it prints why and authorizes nothing:
+- **In force** only while at least one owner is allowed and every team app's installed rules carry the pointer
+  `bmn policy --repo` (BMN's own rules block writes it; restoring a file without it takes it away). Otherwise, and when BMN is closed or its store cannot be read, it prints why and authorizes nothing:
   every push, merge and pull-request write asks the owner.
 - **PRs only**, a repository's level until he raises it, and the level of a repository the agent's `gh` cannot
   read: push branches other than the default one (never forced, never deleting) and create, edit, mark ready and
@@ -1326,7 +1326,10 @@ the one form under [Checking an OpenCode helper run](#checking-an-opencode-helpe
 public-only destination may receive; one `<!-- bmn:team -->`, even inside a sentence, becomes the approved team's names
 by app (at most 400 bytes). An app whose approved destination may not receive private work gets only the public
 sections, and OpenCode always does (owner decisions 2026-10-10 and 2026-10-14, see below). Each rendering starts with a
-line naming the master and its hash. **Integrations › Rules** edits it; rules that would not render are not saved, and
+line naming the master and its hash and ends with BMN's own rules (`apps/desktop/bin/agents-bmn-rules.mjs`): the
+`bmn policy --repo` pointer and the standing dev-auto dispatch and session-to-session consents, so an app's approval
+reviewer, which reads only its global file, sees them while the master keeps his general rules only (owner,
+2026-11-08). A BMN update that changes them makes every file stale until **Save…** or `bmn rules install`. **Integrations › Rules** edits it; rules that would not render are not saved, and
 a save keeps the text it replaces and refuses a change or swapped link made meanwhile. **Save…** shows the rules'
 difference and every app file's (a link, a hand-written file or an outside edit it replaces included), then writes the
 rules and every file; an app whose destination no longer matches is named and not written, and a file that cannot be

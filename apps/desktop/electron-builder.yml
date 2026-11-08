@@ -105,6 +105,8 @@ extraResources:
     to: bin/agents-check-team-ask.mjs
   - from: bin/agents-rules.mjs
     to: bin/agents-rules.mjs
+  - from: bin/agents-bmn-rules.mjs
+    to: bin/agents-bmn-rules.mjs
   # Story79.4: shared admission and setup-owned configuration transactions.
   - from: bin/defaults-admission.mjs
     to: bin/defaults-admission.mjs

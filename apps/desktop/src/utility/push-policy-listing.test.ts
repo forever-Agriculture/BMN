@@ -97,7 +97,7 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
 
   it('is not in force without the master\'s pointer, and an unreadable store shows every owner denied', async () => {
     const allowed = stored({ owners: [{ login: 'octo', allowed: true, changedAt: '2026-10-18T19:00:00.000Z' }] })
-    expect((await pushPolicyView(allowed, [], reader(false))).standing).toEqual({ authorizes: false, why: 'the rules master does not carry the policy pointer' })
+    expect((await pushPolicyView(allowed, [], reader(false))).standing).toEqual({ authorizes: false, why: 'the installed rules do not carry the policy pointer' })
     const unknown = await pushPolicyView(readPushPolicy('{"version":1}'), Object.keys(REMOTES), reader())
     expect(unknown.state).toBe('unknown')
     expect(unknown.owners.every((owner) => !owner.allowed)).toBe(true)

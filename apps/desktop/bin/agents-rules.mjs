@@ -13,6 +13,7 @@ import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { absoluteUncollapsed, pathState, replaceFileSafely, resolvedPath, restorePathState, sameState } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
+import { BMN_RULES, PUSH_POLICY_POINTER } from './agents-bmn-rules.mjs'
 import { canonicalRoute } from './shared-helpers.mjs'
 
 /**
@@ -213,6 +214,8 @@ export function render(master, harness, generation, { kind = null, team = null }
   } else {
     body = renderLines(master.parts, harness, phrase).join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
   }
+  // BMN's own rules hold no private work, so every rendering carries them (owner, 2026-11-08).
+  body = `${body}\n\n${BMN_RULES}`
   const text = `${header}\n\n${body}\n`
   return { harness, text, hash: sha256(text), kind: used, reason: decision.reason, team_form: phrase.form, bytes: Buffer.byteLength(text) }
 }
@@ -317,6 +320,25 @@ export function checkTargets(environment = process.env) {
     if (records[path] !== hash) return { ...base, state: 'edited-outside' }
     if (hash !== rendering.hash) return { ...base, state: 'stale' }
     return { ...base, state: 'current' }
+  })
+}
+
+/**
+ * Whether the push-policy pointer is installed for every app the approved team uses (Story 83.3, revocable;
+ * owner 2026-11-08 moved it out of the master into BMN's own block). The apps are the approved team's, never
+ * whichever files happen to exist; a missing, unreadable or pointer-less file of one of them answers false.
+ * Null when no approved team can be read.
+ */
+export function installedPolicyPointer(environment = process.env) {
+  const generation = approvedOrNull()
+  if (generation === null) return null
+  const apps = HARNESSES.filter((harness) => generation.data.agents.some((agent) => agent.harness === harness && agentState(agent) === 'active' && !isCalled(agent)))
+  if (apps.length === 0) return false
+  return apps.every((harness) => {
+    try {
+      const state = pathState(targetPath(harness, environment))
+      return state.kind === 'file' && state.text.includes(PUSH_POLICY_POINTER)
+    } catch { return false }
   })
 }
 

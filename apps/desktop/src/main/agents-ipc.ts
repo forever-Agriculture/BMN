@@ -7,7 +7,6 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
   ERROR_CODES,
-  PUSH_POLICY_POINTER,
   RETIRED_APP_LINE,
   ROSTER_APP_NAMES,
   isRetiredApp,
@@ -73,7 +72,7 @@ import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnly
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
-  applyTeamUpdate, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, saveRules, type RulesHarness, type SavePlan, type SaveResult
+  applyTeamUpdate, installedPolicyPointer, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, saveRules, type RulesHarness, type SavePlan, type SaveResult
 } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely, writeAtomically } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
@@ -937,8 +936,9 @@ export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAns
   if (question.kind === 'qa-launch') return { failed: true } // The entry point owns session creation.
   if (question.kind === 'source-root') return { root: workspaceRoot(question.folder) }
   if (question.kind === 'policy-pointer') {
-    // Story 83.3: the push policy authorizes nothing unless the master points to it; Rules Undo takes the pointer away.
-    try { return { pointer: readFileSync(masterPath(), 'utf8').includes(PUSH_POLICY_POINTER) } } catch { return { pointer: null } }
+    // Story 83.3: the push policy authorizes nothing unless every team app's installed rules point to it; restoring
+    // a file without the pointer takes it away. Since 2026-11-08 BMN's own block carries it, not the owner's master.
+    try { return { pointer: installedPolicyPointer() } } catch { return { pointer: null } }
   }
   const data = readApproved().data
   const { destination } = question
