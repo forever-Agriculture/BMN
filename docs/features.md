@@ -184,9 +184,11 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
   palette while the mouse is captured.
 - **Font size** with `Ctrl +`, `Ctrl −`, `Ctrl 0`.
 
-Every pane header shows a status dot and a word: *Running*, *Waiting for your response*,
-*Update available*, *Process exited*, *Interrupted*, *Not started*. An open request for your
-attention outranks the process state. The footer shows what typing will do and holds **Speak**,
+Every pane header shows a status dot and a word: *Working*, *Idle*, *Running*, *Waiting for your response*,
+*Process exited*, *Interrupted*, *Not started*. Sidebar, Now and `bmn now` share the host's observation
+of the current process: silence returns it to resting within 1.5–2 seconds. An unread finished-turn
+reminder stays until you open the session, without a gold status dot. A current request card waits
+on you everywhere and outranks activity. The footer shows what typing will do and holds **Speak**,
 **Attach** and **Paste image**; dragging files onto a pane attaches them to the session.
 
 **Dev servers.** A server a session starts (`pnpm dev`, a preview, `python3 -m http.server`) shows as a plate such as

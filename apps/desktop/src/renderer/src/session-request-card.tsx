@@ -13,6 +13,7 @@ export function SessionRequestCard(props: {
   place(sessionId: string): SessionPlace
   now: number
   anchor: HTMLElement | null
+  focusRequestId?: string | undefined
   onAcknowledge(request: AttentionRecord): void
   onMarkAnswered(request: AttentionRecord): void
   onAnswerGrant?(request: AttentionRecord, choice: 0 | 1): void
@@ -34,7 +35,15 @@ export function SessionRequestCard(props: {
   }, [])
 
   useEffect(() => {
-    element.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+    const article = props.focusRequestId
+      ? element.current?.querySelector<HTMLElement>(`article[data-request-id="${CSS.escape(props.focusRequestId)}"]`) : null
+    const target = article?.querySelector<HTMLButtonElement>('button:not(:disabled)')
+      ?? element.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')
+    target?.focus({ preventScroll: true })
+    article?.scrollIntoView({ block: 'nearest' })
+  }, [props.focusRequestId])
+
+  useEffect(() => {
     const outside = (event: PointerEvent): void => {
       const target = event.target as Node
       if (!element.current?.contains(target) && !props.anchor?.contains(target)) onClose.current(false)

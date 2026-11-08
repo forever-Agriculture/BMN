@@ -141,6 +141,7 @@ beforeEach(() => {
   screens = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
+    sessionActivity: () => null,
     foregroundProcessIdentity: (sessionId: string) => liveIncarnations.has(sessionId) ? `synthetic-foreground:${sessionId}` : null,
     liveSessionIds: () => [...liveIncarnations.keys()],
     liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
@@ -3418,6 +3419,19 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     // A session still sees only itself in session.list.
     const own = await handlers().listSessions({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' }) as SessionRecord[]
     expect(own.map((session) => session.sessionId)).toEqual(['s1'])
+  })
+
+  it('bmn now expires host output activity even when an interrupted tool emits no further hook', async () => {
+    const base = Date.parse(clock)
+    const manager = service['options'].manager
+    manager.sessionActivity = id => id === 's2' ? { incarnationId: 'incarnation-2', liveSince: base, lastOutputAt: base } : null
+    await handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex', event: 'PreToolUse', source: null, toolName: 'exec_command', effects: [] })
+    const row = async () => ((await handlers().readNow({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })) as NowReport)
+      .sections.flatMap(section => section.rows).find(row => row.sessionId === 's2')!
+    expect((await row()).dot).toBe('running')
+    clock = new Date(base + 2000).toISOString()
+    expect((await row()).dot).toBe('running-idle')
+    expect((await row()).doing).toBe('Idle')
   })
 
   it('counts an agent its hooks reported in bmn now, as the sheet does, though a shell is in front (110.9)', async () => {

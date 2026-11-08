@@ -4,12 +4,8 @@
 // scrapes the screen, and nothing here acts: the result is a word and a mark for the sidebar, the pane heading and the
 // palette. Output activity alone decides Working; the title may only refine the resting word.
 
-/** The renderer re-derives every live session on this tick, which also caps presentation updates at two per second. */
-export const ACTIVITY_TICK_MS = 500
-/** Silence this long reads as idle; with the tick the word lands 1.5-2.0 s after the last byte. */
-export const ACTIVITY_IDLE_AFTER_MS = 1_500
-/** A fresh incarnation that has printed nothing yet reads as starting, not idle. */
-export const ACTIVITY_START_GRACE_MS = 3_000
+import { sessionActivityState, type SessionActivityObservation } from '@bmn/protocol'
+export { ACTIVITY_TICK_MS, ACTIVITY_IDLE_AFTER_MS, ACTIVITY_START_GRACE_MS } from '@bmn/protocol'
 /** A title is a display string, never a key; a runaway title is cut, not rejected. */
 export const TERMINAL_TITLE_MAX = 256
 
@@ -24,14 +20,8 @@ export interface SessionActivity {
 }
 
 /** What the renderer has observed about one live incarnation. Times are epoch milliseconds. */
-export interface ActivityObservation {
-  /** The incarnation this observation belongs to; a new one starts a new observation. */
-  incarnationId: string
-  /** When the renderer first saw this incarnation live. */
-  liveSince: number
-  /** The last output event for this incarnation, or null when none has arrived. */
-  lastOutputAt: number | null
-  /** The newest terminal title, already capped, or null when the harness has set none. */
+export interface ActivityObservation extends SessionActivityObservation {
+  /** Display-only terminal title; it never determines whether output is active. */
   title: string | null
 }
 
@@ -68,13 +58,8 @@ export function titleWord(title: string | null): ActivityWord | null {
  */
 export function sessionActivity(observation: ActivityObservation, now: number): SessionActivity {
   const title = observation.title
-  if (observation.lastOutputAt !== null && now - observation.lastOutputAt < ACTIVITY_IDLE_AFTER_MS) {
-    return { word: 'Working', working: true, title }
-  }
-  if (observation.lastOutputAt === null && now - observation.liveSince < ACTIVITY_START_GRACE_MS) {
-    return { word: 'Running', working: false, title }
-  }
-  return { word: titleWord(title) ?? 'Idle', working: false, title }
+  const state = sessionActivityState(observation, now)
+  return { ...state, word: state.word === 'Idle' ? titleWord(title) ?? 'Idle' : state.word, title }
 }
 
 /** One word per observed session, for the tick that refreshes them all. */

@@ -522,7 +522,8 @@ async function fixture(
     consumerBytes: number
     hostBytes: number
     acknowledgementDeadlineMs?: number
-  }
+  },
+  extra: Partial<ConstructorParameters<typeof SessionManager>[0]> = {}
 ): Promise<{
   manager: SessionManager
   pty: FakePty
@@ -544,7 +545,8 @@ async function fixture(
     processStartIdentity: async () => 'linux-proc-start:12345',
     sendTerminalMessage: (message) => sent.push(message),
     ...(undeliveredOutputLimitBytes === undefined ? {} : { undeliveredOutputLimitBytes }),
-    ...(outputQueueLimits === undefined ? {} : { outputQueueLimits })
+    ...(outputQueueLimits === undefined ? {} : { outputQueueLimits }),
+    ...extra
   })
   return { manager, pty, store, savedOutputStore, sent, cwd }
 }
@@ -581,6 +583,73 @@ async function flowFixture(
   })
   return { manager, pty, store, harness, cwd }
 }
+
+describe('host-owned per-incarnation activity', () => {
+  it('projects initial activity without changing stored process state, then observes output without a view', async () => {
+    let clock = 1000
+    const changes: unknown[] = []
+    const { manager, pty, store, cwd } = await fixture(undefined, undefined, {
+      activityNow: () => clock, onActivity: (_id, value) => changes.push(value)
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const stored = { ...(await store.listSessions(DEFAULT_SESSION_CREATION.workspaceId))[0]!,
+      lastProcess: { incarnationId: created.incarnationId, state: 'live' as const, exitCode: null, signal: null, detail: null } }
+    const read = () => manager.sessionWithCurrentProcessState(stored).activity
+    expect(read()).toEqual({ incarnationId: created.incarnationId, liveSince: 1000, lastOutputAt: null })
+    pty.emit('')
+    expect(changes).toHaveLength(0)
+    clock = 1100; pty.emit('output without any attachment')
+    expect(read()).toEqual({ incarnationId: created.incarnationId, liveSince: 1000, lastOutputAt: 1100 })
+    expect(changes).toEqual([read()])
+    const attachment = manager.attach(created)
+    expect(read()?.lastOutputAt).toBe(1100)
+    manager.detach({ attachmentId: attachment.attachmentId })
+    pty.emitExit({ exitCode: 0 })
+    expect(manager.sessionActivity(created.sessionId)).toBeNull()
+  })
+
+  it('retires old output callbacks and timers across exit and restart of the same session', async () => {
+    let clock = 1000
+    const changes: unknown[] = []
+    const { manager, pty, cwd } = await fixture(undefined, undefined, {
+      activityNow: () => clock, onActivity: (_id, value) => changes.push(value)
+    })
+    const subscription = vi.spyOn(pty, 'onData')
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const oldOutput = subscription.mock.calls[0]![0]
+    pty.emit('first'); clock = 1100; pty.emit('queued')
+    pty.emitExit({ exitCode: 0 })
+    await vi.waitFor(() => expect(manager.sessionActivity(created.sessionId)).toBeNull())
+    clock = 5000
+    const next = await manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })
+    expect(next.incarnationId).not.toBe(created.incarnationId)
+    const expected = { incarnationId: next.incarnationId, liveSince: 5000, lastOutputAt: null }
+    expect(manager.sessionActivity(created.sessionId)).toEqual(expected)
+    oldOutput('late output from the old incarnation')
+    expect(manager.sessionActivity(created.sessionId)).toEqual(expected)
+    pty.emitExit({ exitCode: 0 })
+  })
+
+  it('coalesces ordinary metadata and flushes the last timestamp even after output stops', async () => {
+    let clock = 1000
+    const changes: unknown[] = []
+    const { manager, pty, cwd } = await fixture(undefined, undefined, {
+      activityNow: () => clock, onActivity: (_id, value) => changes.push(value)
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    vi.useFakeTimers()
+    try {
+      pty.emit('first'); clock = 1100; pty.emit('second'); clock = 1200; pty.emit('last')
+      expect(changes).toHaveLength(1)
+      clock = 1500; await vi.advanceTimersByTimeAsync(500)
+      expect(changes).toHaveLength(2)
+      expect(changes[1]).toMatchObject({ incarnationId: created.incarnationId, lastOutputAt: 1200 })
+      clock = 3000; pty.emit('new burst')
+      expect(changes).toHaveLength(3)
+      pty.emitExit({ exitCode: 0 })
+    } finally { vi.useRealTimers() }
+  })
+})
 
 describe('shell session lifecycle', () => {
   it.each(['before-attach', 'before-activation', 'during-record'] as const)('delivers setup output and exit when the command ends %s', async phase => {

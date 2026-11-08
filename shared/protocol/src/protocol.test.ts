@@ -610,8 +610,9 @@ describe('app events', () => {
   // every declared topic must pass: 'conversations' was declared and rejected, and a hook-driven
   // rebinding never reached the renderer.
   it.each(APP_EVENT_TOPICS)('carries the %s topic across the process boundary', (topic) => {
-    expect(isAppEventMessage({ kind: 'app-event', topic, sessionId: 'session-1' })).toBe(true)
-    expect(isAppEventMessage({ kind: 'app-event', topic, sessionId: null })).toBe(true)
+    const activity = topic === 'activity' ? { activity: { incarnationId: 'i', liveSince: 1, lastOutputAt: null } } : {}
+    expect(isAppEventMessage({ kind: 'app-event', topic, sessionId: 'session-1', ...activity })).toBe(true)
+    expect(isAppEventMessage({ kind: 'app-event', topic, sessionId: null, ...activity })).toBe(topic !== 'activity')
   })
 
   it('refuses a message that is not a declared app event', () => {

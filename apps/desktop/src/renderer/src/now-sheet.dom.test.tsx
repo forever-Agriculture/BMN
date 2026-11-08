@@ -92,6 +92,23 @@ const key = async (name: string): Promise<void> => {
 }
 
 describe('the mounted Now sheet: a refresh keeps rows and focus (Story 110.9 AC6)', () => {
+  it('has one list Tab stop across stopped-group expansion and card details', async () => {
+    const waiting = session('q', 'wq', { card: { requestId: 'card', title: 'Scope question' }, dot: 'needs-you' })
+    const stopped = session('stopped', 'wp', { live: false, working: false, dot: 'exited' })
+    await mount({ ...createNowMemory(), result: result([]) }, [waiting, stopped])
+    const tabStops = () => [...container!.querySelectorAll<HTMLElement>('.n-scroll button')]
+      .filter(button => !button.closest('[hidden]') && button.tabIndex === 0)
+    expect(tabStops()).toHaveLength(1)
+    await key('ArrowRight')
+    expect(tabStops()).toHaveLength(1)
+    await key('End')
+    expect(document.activeElement?.textContent).toContain('Not running')
+    await key('ArrowRight')
+    await key('ArrowDown')
+    expect(focused()).toBe('s:stopped')
+    expect(tabStops()).toHaveLength(1)
+  })
+
   it('reopened on a remembered unfinished run, a read that finished it keeps the row and the focus where they are', async () => {
     const stopped = run({ sessionId: 'p' })
     const memory = { ...createNowMemory(), key: 's:p', notRunningOpen: true, result: result([stopped]) }

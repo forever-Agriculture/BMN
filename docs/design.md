@@ -201,8 +201,14 @@ Approved by the owner on 2026-11-06 ("Approve as drawn", card `epic110-now-desig
   an open card, else the handoff's `Waiting on`, blank for nobody, `unknown` (faint) when unreadable. Left is
   `about X-Y h` or `about X-Y days` (+ wait when Waits on is not blank), `done`, or `no estimate` (faint).
 - **Gold.** Only the dots of Waits on you and the current session's bar (F2). Nothing waits on you: no gold.
+- **Shared activity (113.9).** The PTY host owns one observation per incarnation, including output with no
+  attached view. Sidebar, Now and CLI use its timestamps: after 1,500 ms of silence, the 500 ms tick makes
+  the resting mark visible within 1.5–2.0 seconds. Unread finished-turn notices keep their reminder without
+  gold; only a current request card waits on the owner. A restarted process inherits no activity.
 - **Keys and focus.** The list is one Tab stop (roving tabindex): ↑ ↓ Home End move, → ← open and close a row,
-  Enter opens the session (its card in front) and closes the sheet. Tab steps list, Copy standup, ×; Esc
+  Enter opens the session (its card in front, first enabled action focused) and closes the sheet. The
+  Not running fold participates in the same roving sequence; its detail links add no Tab stops.
+  Tab steps list, Copy standup, ×; Esc
   closes. It opens on the row he left, same scroll, same rows open, else the first row. F1 ring on focus.
 - **Refresh.** Cards and hooks show at once; runs are read every 30 s while open (Story 75.7). Words change in
   place. While pointer or focus is in the list, the first placement shown with a read (a remembered one too)

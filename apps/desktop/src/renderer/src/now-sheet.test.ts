@@ -67,7 +67,7 @@ describe('the Now sheet, state by state (Story 110.9 AC6)', () => {
     expect(markup.slice(0, markup.indexOf('<section><button type="button" class="n-sec"')).match(/class="n-main"/g)).toHaveLength(12)
     expect(markup.match(/status-dot needs-you/g)).toHaveLength(2)
     expect([...markup.matchAll(/<h3 class="n-sec"><span>([^<]+)<\/span><b>(\d+)<\/b>/g)].map((m) => `${m[1]} ${m[2]}`)).toEqual(['Waits on you 1', 'Q-Automations 4', 'BMN 4', 'Pet 3'])
-    expect(markup).toContain('<button type="button" class="n-sec" aria-expanded="false" aria-controls="now-not-running">')
+    expect(markup).toContain('data-now-key="fold:not-running" tabindex="-1" aria-expanded="false" aria-controls="now-not-running"')
     expect(markup).toContain('<span>Not running</span><b>2</b>')
     expect(markup).not.toMatch(/class="plate" disabled/)
     // Only the focused row is a Tab stop (roving tabindex).
@@ -80,7 +80,7 @@ describe('the Now sheet, state by state (Story 110.9 AC6)', () => {
     expect(markup).toMatch(/<button type="button" class="n-chev" tabindex="-1" aria-expanded="true" aria-controls="now-fold-s_q40" aria-label="Explain Q-Automations-40">/)
     expect(markup).toContain('<dl class="n-fold" id="now-fold-s_q40">')
     expect(text(markup)).toContain('Time left About 2-4 h of work. 3 stories left; its 4 finished stories took 40 min to 1 h 20 each. The wait for you is not counted.')
-    expect(markup).toContain('<dt>Card</dt><dd><button type="button" class="link">approve TEST deploy</button></dd>')
+    expect(markup).toContain('<dt>Card</dt><dd><button type="button" class="link" tabindex="-1">approve TEST deploy</button></dd>')
     expect(markup).toContain('<span class="path" title="~/code/q-automations-40 on dev-auto/epic">~/code/q-automations-40 on dev-auto/epic</span>')
     expect(markup).toMatch(/<dl class="n-fold" id="now-fold-s_q41" hidden="">/)
   })
@@ -193,8 +193,8 @@ describe('a refresh never moves focus or a row under him (Story 110.9 AC6)', () 
   })
   it('walks only rows he can see: Not running only when it is open', () => {
     const s = sections([['w:1', ['a', 'b']], ['not-running', ['c']]])
-    expect(visibleKeys(s, false)).toEqual(['a', 'b'])
-    expect(visibleKeys(s, true)).toEqual(['a', 'b', 'c'])
+    expect(visibleKeys(s, false)).toEqual(['a', 'b', 'fold:not-running'])
+    expect(visibleKeys(s, true)).toEqual(['a', 'b', 'fold:not-running', 'c'])
   })
 })
 
@@ -204,7 +204,7 @@ describe('back to the row he left (Story 110.9 AC1)', () => {
       result: { runs: RUNS, skipped: 0, issues: [], observedAt: READ } satisfies DevAutoRunsResult }
     const markup = renderToStaticMarkup(createElement(NowSheet, { workspaces: WORKSPACES, sessions: SESSIONS, home: '/home/me', currentSessionId: 'b110',
       memory, onOpenRow: () => undefined, onClose: () => undefined }))
-    expect(markup).toMatch(/data-key="s:b110" tabindex="0"/)
+    expect(markup).toMatch(/data-key="s:b110"[^>]*tabindex="0"/)
     expect(markup.match(/tabindex="0"/g)).toHaveLength(1)
     expect(markup).toContain('<dl class="n-fold" id="now-fold-s_q41">')
     expect(markup).toContain('<ul class="n-list" id="now-not-running">')
@@ -216,7 +216,7 @@ describe('back to the row he left (Story 110.9 AC1)', () => {
   it('starts on the first row when nothing is remembered', () => {
     const markup = renderToStaticMarkup(createElement(NowSheet, { workspaces: WORKSPACES, sessions: SESSIONS, home: null, currentSessionId: null,
       memory: createNowMemory(), onOpenRow: () => undefined, onClose: () => undefined }))
-    expect(markup).toMatch(/data-key="s:q40" tabindex="0"/)
+    expect(markup).toMatch(/data-key="s:q40"[^>]*tabindex="0"/)
     expect(text(markup)).toContain('Reading runs…')
   })
 })

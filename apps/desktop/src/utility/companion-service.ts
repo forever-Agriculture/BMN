@@ -7,6 +7,7 @@ import { basename, dirname, extname, isAbsolute, join, relative } from 'node:pat
 import {
   ERROR_CODES,
   pushPolicyStatus,
+  sessionActivityState,
   agentStartBrief,
   type AwayNight,
   awayNightLines,
@@ -1249,6 +1250,10 @@ export class CompanionService {
     this.ports.output(sessionId, bytes)
   }
 
+  sessionActivityChanged(sessionId: string, activity: import('@bmn/protocol').SessionActivityObservation): void {
+    this.options.emit({ kind: 'app-event', topic: 'activity', sessionId, activity })
+  }
+
   /** Called for every session process transition so exit notices and the session cache stay current. */
   sessionStateChanged(sessionId: string, state: string): void {
     if (state === 'exited') this.turns?.sessionEnded(sessionId)
@@ -1995,8 +2000,7 @@ export class CompanionService {
           .toSorted((left, right) => left.openedAt.localeCompare(right.openedAt))[0]
         const label = progress.filter((record) => record.sessionId === session.sessionId && (!live || record.incarnationId === incarnation))
           .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))[0]?.label ?? null
-        const foreground = this.sessionForeground(session.sessionId)
-        const working = sessionReceiverWord({ foreground, openCard: false, latest: this.hookObservations.get(session.sessionId) }) === 'working'
+        const working = sessionActivityState(this.options.manager.sessionActivity(session.sessionId), this.now().getTime()).working
         return {
           sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name, live, started: session.lastProcess !== null,
           dot: card ? 'needs-you' : live ? working ? 'running' : 'running-idle' : session.lastProcess ? 'exited' : 'idle',

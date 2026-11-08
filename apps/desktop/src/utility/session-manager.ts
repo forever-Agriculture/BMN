@@ -7,6 +7,9 @@ import { join, resolve } from 'node:path'
 import { kill as signalProcessByPid } from 'node:process'
 import {
   ERROR_CODES,
+  ACTIVITY_TICK_MS,
+  sessionActivityState,
+  type SessionActivityObservation,
   MAX_TERMINAL_CHUNK_BYTES,
   RETIRED_APP_LINE,
   TERMINAL_UNDELIVERED_OUTPUT_BYTES,
@@ -316,6 +319,8 @@ interface SessionManagerOptions {
   onSessionStateChange?: (message: SessionProcessStateChangedMessage) => void
   /** Every chunk a session's program writes, before any view sees it; it must return quickly. */
   onOutput?: (sessionId: string, bytes: Uint8Array) => void
+  activityNow?: () => number
+  onActivity?: (sessionId: string, activity: SessionActivityObservation) => void
   /** Story 42.1: text a program asked, with OSC 52, to put on the clipboard while a window had its view. */
   onProgramCopy?: (message: ProgramCopyMessage) => void
   /** Story 43.1: the PATH every process this manager starts sees; a reported resume command must resolve on it. */
@@ -332,6 +337,9 @@ interface UndeliveredOutputState {
 }
 
 interface LiveSession extends SessionIdentity {
+  activity: SessionActivityObservation
+  activityPublishedAt: number
+  activityTimer?: ReturnType<typeof setTimeout>
   pty: PtyLike
   /** Host ownership survives a failed record write until the process confirms exit. */
   ownership: Pick<SessionRecord, 'workspaceId' | 'name' | 'setup'>
@@ -608,6 +616,8 @@ export class SessionManager {
   private readonly capabilityProbeTimeoutMs: number
   private readonly onSessionStateChange: (message: SessionProcessStateChangedMessage) => void
   private readonly onOutput: ((sessionId: string, bytes: Uint8Array) => void) | undefined
+  private readonly activityNow: () => number
+  private readonly onActivity: SessionManagerOptions['onActivity']
   private readonly onProgramCopy: ((message: ProgramCopyMessage) => void) | undefined
   private readonly claudeSessionIdCapabilities = new Map<string, Promise<ClaudeCapabilityProbeResult>>()
   private readonly conversationBindings = new Map<string, PersistedConversationBinding>()
@@ -627,6 +637,8 @@ export class SessionManager {
   private readonly cohortResumeActions = new Map<string, Promise<SessionCohortResumeResult>>()
 
   constructor(options: SessionManagerOptions) {
+    this.activityNow = options.activityNow ?? Date.now
+    this.onActivity = options.onActivity
     this.store = options.store
     this.spawnPty = options.spawnPty
     this.identifyProcess = options.processStartIdentity ?? processStartIdentity
@@ -1519,6 +1531,8 @@ export class SessionManager {
       cwd: params.cwd,
       executable: params.executable,
       captureStartedAt,
+      activity: { incarnationId, liveSince: this.activityNow(), lastOutputAt: null },
+      activityPublishedAt: -Infinity,
       outputFramer: new TerminalByteFramer(),
       decsetModes: new DecsetModeTracker(),
       programCopy: new Osc52Reader(),
@@ -2390,12 +2404,45 @@ export class SessionManager {
   sessionWithCurrentProcessState(record: SessionRecord): SessionRecord {
     const last = record.lastProcess
     if (!last) return record
+    const activity = this.sessionActivity(record.sessionId)
+    if (activity?.incarnationId === last.incarnationId) record = { ...record, activity }
+    else if (record.activity) record = { ...record, activity: null }
     const state = this.currentProcessState(record.sessionId, last.incarnationId, last.state)
     if (state === last.state) return record
     const lastProcess: SessionProcessStatus = state === 'live'
       ? { incarnationId: last.incarnationId, state, exitCode: null, signal: null, detail: null }
       : { ...last, state }
     return { ...record, lastProcess }
+  }
+
+  /** One current host observation, including output produced while no view is attached. */
+  sessionActivity(sessionId: string): SessionActivityObservation | null {
+    const session = this.sessions.get(sessionId)
+    return session && !session.exited ? { ...session.activity } : null
+  }
+
+  private publishSessionActivity(session: LiveSession): void {
+    if (session.exited || this.sessions.get(session.sessionId) !== session) return
+    session.activityPublishedAt = this.activityNow()
+    try { this.onActivity?.(session.sessionId, { ...session.activity }) } catch { /* metadata never costs output */ }
+  }
+
+  private observeSessionOutput(session: LiveSession, bytes: Uint8Array): void {
+    if (!bytes.byteLength || session.exited || this.sessions.get(session.sessionId) !== session) return
+    const now = Math.max(this.activityNow(), session.activity.lastOutputAt ?? session.activity.liveSince)
+    const wasWorking = sessionActivityState(session.activity, now).working
+    session.activity = { ...session.activity, lastOutputAt: now }
+    if (!wasWorking || now - session.activityPublishedAt >= ACTIVITY_TICK_MS) {
+      if (session.activityTimer) clearTimeout(session.activityTimer)
+      delete session.activityTimer
+      this.publishSessionActivity(session)
+    } else if (!session.activityTimer) {
+      session.activityTimer = setTimeout(() => {
+        delete session.activityTimer
+        this.publishSessionActivity(session)
+      }, ACTIVITY_TICK_MS - (now - session.activityPublishedAt))
+      session.activityTimer.unref()
+    }
   }
 
   /**
@@ -2515,6 +2562,7 @@ export class SessionManager {
   }
 
   private onPtyData(session: LiveSession, bytes: Uint8Array): void {
+    this.observeSessionOutput(session, bytes)
     // Read before anything is queued or dropped: the mode set must follow the program even when
     // the view is gone, because that is exactly when the next view will need it.
     session.decsetModes.read(bytes)
@@ -2567,6 +2615,8 @@ export class SessionManager {
   private async onPtyExit(session: LiveSession, exit: IncarnationExit): Promise<void> {
     if (session.exited) return session.exitComplete
     session.exited = true
+    if (session.activityTimer) clearTimeout(session.activityTimer)
+    delete session.activityTimer
     // The program is gone; its modes go with it, so nothing stale can reach a later view.
     session.decsetModes.clear()
     session.mirror?.dispose()
@@ -2708,6 +2758,7 @@ export class SessionManager {
   private removeIfCurrent(target: LiveSession | ConversationReservation): void {
     if ('pty' in target) {
       if (this.sessions.get(target.sessionId) !== target) return
+      if (target.activityTimer) clearTimeout(target.activityTimer)
       this.sessions.delete(target.sessionId)
       const reservation = target.conversationReservation
       if (

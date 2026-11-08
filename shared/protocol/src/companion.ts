@@ -7,6 +7,7 @@ import type { ManualChoices } from './manual-choices'
 import { DEFAULT_TELEGRAM_QUIET_HOURS, type TelegramQuietHours } from './telegram-quiet'
 import { DEFAULT_TELEGRAM_MORNING_DIGEST, type TelegramMorningDigest } from './telegram-digest'
 import { DEFAULT_TELEGRAM_HEALTH_ALERTS, type TelegramHealthAlerts } from './telegram-health'
+import { isSessionActivityObservation, type SessionActivityObservation } from './session-activity'
 
 type ArtifactDirection = 'input' | 'output'
 type ArtifactSource = 'owner' | 'agent' | 'telegram'
@@ -810,6 +811,7 @@ export function telegramOwnerCue(
 
 /** One list, because a topic the validator does not know is a message the window never receives. */
 export const APP_EVENT_TOPICS = [
+  'activity',
   'catalogue',
   'artifacts',
   'attention',
@@ -833,6 +835,8 @@ export interface AppEventMessage {
   kind: 'app-event'
   topic: AppEventTopic
   sessionId: string | null
+  /** Only an activity event carries this host-owned current-incarnation observation. */
+  activity?: SessionActivityObservation
   /** Story 32.2: on a `telegram` event, the entry into `conflict` or `unauthorized` that raised it. */
   telegramEntry?: TelegramOwnerEntry
 }
@@ -845,6 +849,9 @@ export function isAppEventMessage(value: unknown): value is AppEventMessage {
     typeof candidate.topic === 'string' &&
     (APP_EVENT_TOPICS as readonly string[]).includes(candidate.topic) &&
     (candidate.sessionId === null || typeof candidate.sessionId === 'string') &&
+    (candidate.topic === 'activity'
+      ? typeof candidate.sessionId === 'string' && isSessionActivityObservation(candidate.activity)
+      : candidate.activity === undefined) &&
     (candidate.telegramEntry === undefined ||
       (candidate.topic === 'telegram' && isTelegramOwnerEntry(candidate.telegramEntry)))
   )

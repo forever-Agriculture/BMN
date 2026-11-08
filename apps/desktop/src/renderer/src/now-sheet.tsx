@@ -76,7 +76,7 @@ export function focusAfter(before: readonly string[], after: readonly string[], 
 
 /** The rows the keyboard walks: every shown section's, the folded Not running only when it is open. */
 export function visibleKeys(sections: readonly NowSection[], notRunningOpen: boolean): string[] {
-  return sections.flatMap((section) => section.kind === 'not-running' && !notRunningOpen ? [] : section.keys)
+  return sections.flatMap(section => section.kind === 'not-running' ? [`fold:${section.id}`, ...(notRunningOpen ? section.keys : [])] : section.keys)
 }
 
 /** The row's whole sentence, for its label and tooltip. */
@@ -131,7 +131,7 @@ function RowItem({ row, props, loading }: { row: NowRow; props: NowSheetViewProp
         : <span className="c-left is-faint">no estimate</span>
   const hasFold = row.fold.length > 0 && !loading
   return <li className={`n-row${props.currentSessionId !== null && row.sessionId === props.currentSessionId ? ' is-current' : ''}${row.stopped ? ' is-stopped' : ''}`} data-key={row.key}>
-    <button type="button" className="n-main" data-key={row.key} tabIndex={props.focusKey === row.key ? 0 : -1} aria-label={words} title={words}
+    <button type="button" className="n-main" data-key={row.key} data-now-key={row.key} tabIndex={props.focusKey === row.key ? 0 : -1} aria-label={words} title={words}
       onClick={() => props.onRow?.(row)} onFocus={() => props.onFocusRow?.(row.key)}>
       <span className={`status-dot ${row.dot}`} aria-hidden="true" />
       <span className="c-name">{row.name}</span>
@@ -145,7 +145,7 @@ function RowItem({ row, props, loading }: { row: NowRow; props: NowSheetViewProp
         onClick={() => props.onToggle?.(row.key)}><Icon name="chevron" size={14} /></button>
       <dl className="n-fold" id={foldId} hidden={!isOpen}>{row.fold.map((item) => <div key={item.label} className="n-pair">
         <dt>{item.label}</dt>
-        <dd>{item.kind === 'card' ? <button type="button" className="link" onClick={() => props.onRow?.(row)}>{item.value}</button>
+        <dd>{item.kind === 'card' ? <button type="button" className="link" tabIndex={-1} onClick={() => props.onRow?.(row)}>{item.value}</button>
           : item.kind === 'path' ? <span className="path" title={item.value}>{item.value}</span> : item.value}</dd>
       </div>)}</dl>
     </> : <span />}
@@ -169,7 +169,9 @@ export function NowSheetView(props: NowSheetViewProps & { scrollRef?: React.Ref<
         if (section.kind === 'not-running') {
           const id = `now-${section.id.replace(/[^A-Za-z0-9_-]/gu, '_')}`
           return <section key={section.id}>
-            <button type="button" className="n-sec" aria-expanded={props.notRunningOpen} aria-controls={id} onClick={() => props.onToggleNotRunning?.()}>
+            <button type="button" className="n-sec" data-key={`fold:${section.id}`} data-now-key={`fold:${section.id}`}
+              tabIndex={props.focusKey === `fold:${section.id}` ? 0 : -1} onFocus={() => props.onFocusRow?.(`fold:${section.id}`)}
+              aria-expanded={props.notRunningOpen} aria-controls={id} onClick={() => props.onToggleNotRunning?.()}>
               <Icon name="chevron" size={12} /><span>{section.title}</span><b>{rows.length}</b></button>
             <ul className="n-list" id={id} hidden={!props.notRunningOpen}>{items}</ul>
           </section>
@@ -264,7 +266,7 @@ export function NowSheet(props: {
     const removed = !before.isConnected && !inside
     const handedOn = target !== focusKey && active === before
     if (!removed && !handedOn) return
-    const button = scroll.current?.querySelector<HTMLElement>(`.n-main[data-key="${CSS.escape(target)}"]`)
+    const button = scroll.current?.querySelector<HTMLElement>(`[data-now-key="${CSS.escape(target)}"]`)
     if (button && button !== active) button.focus({ preventScroll: true })
   })
   // Opens on the row he left, at the same scroll. This runs after the dialog's own effect opened it and focused that row.
@@ -273,7 +275,7 @@ export function NowSheet(props: {
     if (!list) return
     list.scrollTop = memory.scrollTop
     const key = focusAfter(order, order, memory.key)
-    if (key !== null) list.querySelector<HTMLElement>(`.n-main[data-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
+    if (key !== null) list.querySelector<HTMLElement>(`[data-now-key="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
   }, [])
   useEffect(() => {
     if (copy === 'ready') return
@@ -285,7 +287,7 @@ export function NowSheet(props: {
     if (key === undefined) return
     setFocusKey(key)
     memory.key = key
-    const button = scroll.current?.querySelector<HTMLElement>(`.n-main[data-key="${CSS.escape(key)}"]`)
+    const button = scroll.current?.querySelector<HTMLElement>(`[data-now-key="${CSS.escape(key)}"]`)
     button?.focus()
     button?.scrollIntoView({ block: 'nearest' })
   }
@@ -299,7 +301,7 @@ export function NowSheet(props: {
     })
   }
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    const button = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('.n-main') : null
+    const button = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>('[data-now-key]') : null
     if (!button) return
     const key = button.dataset.key ?? null
     const at = key === null ? -1 : order.indexOf(key)
@@ -307,6 +309,13 @@ export function NowSheet(props: {
     if (go !== undefined) {
       event.preventDefault()
       moveTo(go)
+      return
+    }
+    if (key?.startsWith('fold:')) {
+      if ((event.key === 'ArrowRight' && !notRunningOpen) || (event.key === 'ArrowLeft' && notRunningOpen)) {
+        event.preventDefault()
+        setNotRunningOpen(value => { memory.notRunningOpen = !value; return !value })
+      }
       return
     }
     const row = view.rows.find((item) => item.key === key)
@@ -345,7 +354,7 @@ export function NowSheet(props: {
         onFocus: (event) => {
           setFocusInside(true)
           wantFocus.current = true
-          if (event.target instanceof HTMLElement && event.target.classList.contains('n-main')) focused.current = event.target
+          if (event.target instanceof HTMLElement && event.target.hasAttribute('data-now-key')) focused.current = event.target
         },
         onBlur: (event) => {
           const list = event.currentTarget

@@ -142,6 +142,15 @@ describe('a view that outlives its process', () => {
 })
 
 describe('session presentation', () => {
+  it('keeps a finished-turn reminder resting without gold, while a real card still wins', () => {
+    const session = { sessionId: 's1', lastProcess: null }
+    const notice = { ...request('done', 's1', '2026-09-14T11:00:00.000Z'), kind: 'notice' as const }
+    const resting = { word: 'Idle' as const, working: false, title: null }
+    expect(sessionStatus(session, true, [notice], null, resting)).toEqual({ dot: 'running-idle', word: 'Idle' })
+    expect(notice.state).toBe('open')
+    expect(sessionStatus(session, true, [notice, request('card', 's1', notice.openedAt)], null, resting).dot).toBe('needs-you')
+  })
+
   it('ranks actionable requests above updates, observed failures, and process state', () => {
     const session = { sessionId: 's1', lastProcess: null }
     expect(sessionStatus(session, true, [request('r1', 's1', '2026-09-14T11:00:00.000Z')])).toEqual({
@@ -149,7 +158,7 @@ describe('session presentation', () => {
       word: 'Waiting for your response'
     })
     const update = { ...request('turn', 's1', '2026-09-14T11:00:00.000Z'), kind: 'notice' as const }
-    expect(sessionStatus(session, true, [update])).toEqual({ dot: 'needs-you', word: 'Update available' })
+    expect(sessionStatus(session, true, [update])).toEqual({ dot: 'running-idle', word: 'Idle' })
     const failed = {
       label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false,
       detail: null, evidence: [], evidenceWord: 'No evidence attached',
@@ -183,7 +192,7 @@ describe('session presentation', () => {
     const update = { ...request('turn', 's1', '2026-09-14T11:00:00.000Z'), kind: 'notice' as const }
     expect(sessionStatus(session, true, [request('r1', 's1', '2026-09-14T11:00:00.000Z')], null, resting).word)
       .toBe('Waiting for your response')
-    expect(sessionStatus(session, true, [update], null, working).word).toBe('Update available')
+    expect(sessionStatus(session, true, [update], null, working).word).toBe('Working')
     const failed = {
       label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false,
       detail: null, evidence: [], evidenceWord: 'No evidence attached',

@@ -42,10 +42,10 @@ interface SessionStatusPresentation {
  * not ended" -- without this the row keeps calling a finished session Running.
  */
 export function sessionProcessLive(
-  session: Pick<SessionRecord, 'lastProcess'>,
+  session: Pick<SessionRecord, 'lastProcess' | 'activity'>,
   liveIncarnationId: string | undefined
 ): boolean {
-  if (!liveIncarnationId) return false
+  if (!liveIncarnationId) return session.lastProcess?.state === 'live' && session.activity?.incarnationId === session.lastProcess.incarnationId
   const last = session.lastProcess
   return !(last?.incarnationId === liveIncarnationId && last.state !== 'live')
 }
@@ -64,8 +64,8 @@ export function sessionStatus(
   if (progress && !progress.stale && (progress.state === 'failed' || progress.state === 'blocked')) {
     return { dot: 'exited', word: `${progress.word} · ${progress.source}, ${progress.age}` }
   }
-  if (attention === 'update') return { dot: 'needs-you', word: 'Update available' }
   if (live) {
+    if (!activity && attention === 'update') return { dot: 'running-idle', word: 'Idle' }
     if (!activity) return { dot: 'running', word: 'Running' }
     return { dot: activity.working ? 'running' : 'running-idle', word: activity.word }
   }

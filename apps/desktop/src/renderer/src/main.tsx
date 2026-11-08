@@ -61,6 +61,7 @@ import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
 import { SessionMessagesDialog } from './session-messages-dialog'
+import { mergeSessionActivity } from '@bmn/protocol'
 import { NowSheet, createNowMemory } from './now-sheet'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
@@ -257,7 +258,7 @@ function App(): React.JSX.Element {
       setClosePrompt(null)
     }
   }, [closePrompt, dialog?.kind])
-  const [requestCard, setRequestCard] = useState<{ sessionId: string; anchor: HTMLElement | null } | null>(null)
+  const [requestCard, setRequestCard] = useState<{ sessionId: string; anchor: HTMLElement | null; requestId?: string } | null>(null)
   /** Story 60.8: what each session's prompt guard last stopped or warned about, and the one card that is open. */
   const [guardStops, setGuardStops] = useState<GuardStop[]>([])
   const [guardCard, setGuardCard] = useState<{ sessionId: string; anchor: HTMLElement | null; busy: boolean; refusal: string | null } | null>(null)
@@ -276,6 +277,7 @@ function App(): React.JSX.Element {
   const navigationEpoch = useRef({ sessionId: null as string | null, epoch: 0 })
   const recentSessions = useRef<string[]>([])
   const catalogueReadSequence = useRef(0)
+  const workspaceReadSequence = useRef(new Map<string, number>())
   const [armed, setArmed] = useState(false)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -284,6 +286,13 @@ function App(): React.JSX.Element {
    * live. Display only - nothing here opens, resolves or withdraws a request, writes to a PTY or notifies.
    */
   const observations = useRef(new Map<string, ActivityObservation>())
+  const pendingActivity = useRef(new Map<string, import('@bmn/protocol').SessionActivityObservation[]>())
+  const confirmedIncarnation = (record: SessionRecord | undefined): string | null => {
+    if (!record) return null
+    if (record.lastProcess?.state === 'live') return record.lastProcess.incarnationId
+    const attached = liveRef.current.get(record.sessionId)?.incarnationId
+    return attached && attached !== record.lastProcess?.incarnationId && exited.current.get(record.sessionId) !== attached ? attached : null
+  }
   /** The incarnation whose exit the window has seen, so a stale `live` entry is not observed again. */
   const exited = useRef(new Map<string, string>())
   const [activity, setActivity] = useState<Record<string, SessionActivity>>({})
@@ -460,28 +469,34 @@ function App(): React.JSX.Element {
     }
   }
 
-  // One observation per live incarnation: a restart starts a fresh one, and a session that is no longer live has none.
+  // Host timestamps survive reattachment, delayed reads and output without a terminal view.
   useEffect(() => {
-    const started = Date.now()
-    for (const [sessionId, startup] of Object.entries(live)) {
-      if (exited.current.get(sessionId) === startup.incarnationId) continue
-      const observed = observations.current.get(sessionId)
-      if (observed?.incarnationId === startup.incarnationId) continue
-      observations.current.set(sessionId, {
-        incarnationId: startup.incarnationId,
-        liveSince: started,
-        lastOutputAt: null,
-        title: null
-      })
+    const confirmed = new Set<string>()
+    for (const record of sessions) {
+      const incarnation = confirmedIncarnation(record)
+      if (!incarnation) continue
+      confirmed.add(record.sessionId)
+      const before = observations.current.get(record.sessionId)
+      let observed = before?.incarnationId === incarnation ? before : null
+      if (record.activity) {
+        const merged = mergeSessionActivity(observed, record.activity, incarnation)
+        if (merged) observed = { ...merged, title: before?.incarnationId === incarnation ? before.title : null }
+      }
+      for (const pending of pendingActivity.current.get(record.sessionId) ?? []) {
+        const merged = mergeSessionActivity(observed, pending, incarnation)
+        if (merged) observed = { ...merged, title: before?.incarnationId === incarnation ? before.title : null }
+      }
+      pendingActivity.current.delete(record.sessionId)
+      if (!observed) continue
+      if (before?.incarnationId !== incarnation) {
+        delete activityRef.current[record.sessionId]
+        delete activityPublishedAt.current[record.sessionId]
+      }
+      observations.current.set(record.sessionId, observed)
     }
-    for (const sessionId of [...observations.current.keys()]) {
-      if (!(sessionId in live)) observations.current.delete(sessionId)
-    }
-    for (const sessionId of [...exited.current.keys()]) {
-      if (!(sessionId in live)) exited.current.delete(sessionId)
-    }
+    for (const id of observations.current.keys()) if (!confirmed.has(id)) observations.current.delete(id)
     publishActivity()
-  }, [live])
+  }, [sessions, live])
 
   useEffect(() => {
     const tick = setInterval(publishActivity, ACTIVITY_TICK_MS)
@@ -523,6 +538,7 @@ function App(): React.JSX.Element {
   }, [startup])
 
   const applyStartup = (next: SuccessfulStartup): void => {
+    catalogueReadSequence.current++
     setStartup(next)
     setSetupProgress(next.setup)
     setSetupPage(next.setup?.state === 'active' && next.setup.workspaceId === next.activeWorkspaceId)
@@ -588,11 +604,15 @@ function App(): React.JSX.Element {
     }
   }
 
-  const reloadWorkspaceSessions = (workspaceId: string): Promise<void> =>
-    window.aiTerminal.listSessions(workspaceId).then((refreshed) => {
-      const byId = new Map(refreshed.map((item) => [item.sessionId, item]))
-      setSessions((current) => current.map((item) => byId.get(item.sessionId) ?? item))
-    })
+  const reloadWorkspaceSessions = async (workspaceId: string): Promise<void> => {
+    const epoch = catalogueReadSequence.current
+    const sequence = (workspaceReadSequence.current.get(workspaceId) ?? 0) + 1
+    workspaceReadSequence.current.set(workspaceId, sequence)
+    const refreshed = await window.aiTerminal.listSessions(workspaceId)
+    if (epoch !== catalogueReadSequence.current || sequence !== workspaceReadSequence.current.get(workspaceId)) return
+    const byId = new Map(refreshed.map(item => [item.sessionId, item]))
+    setSessions(current => current.map(item => byId.get(item.sessionId) ?? item))
+  }
 
   const reloadInterruptedCohort = (): Promise<InterruptedSessionCohort | null> =>
     window.aiTerminal.listInterruptedCohort().then((cohort) => {
@@ -640,17 +660,12 @@ function App(): React.JSX.Element {
       const sessionId = sessionFor(message.attachmentId)
       if (!sessionId) return
       controllers.current.get(sessionId)?.output(message)
-      const observed = observations.current.get(sessionId)
-      if (observed) {
-        observed.lastOutputAt = Date.now()
-        // Working shows on the first byte; every other change waits for the tick, which holds the two-per-second cap.
-        if (!activityRef.current[sessionId]?.working) publishActivity()
-      }
       if (!sessionLayoutView(writer.layouts(), sessionsRef.current, sessionId).followTail) {
         setUnread((current) => current[sessionId] ? current : { ...current, [sessionId]: new Date().toISOString() })
       }
     })
     const stopExit = window.aiTerminal.onTerminalExit((message) => {
+      catalogueReadSequence.current++
       for (const run of commandRuns.current) run.exit(message.attachmentId)
       const sessionId = sessionFor(message.attachmentId)
       if (!sessionId) return
@@ -672,6 +687,31 @@ function App(): React.JSX.Element {
       await controller.capture()
     })
     const stopAppEvent = window.aiTerminal.onAppEvent((message) => {
+      if (message.topic === 'activity') {
+        if (!message.sessionId || !message.activity) return
+        const id = message.sessionId, incoming = message.activity
+        const incarnation = confirmedIncarnation(sessionsRef.current.find(record => record.sessionId === id))
+        const before = observations.current.get(id)
+        if (incarnation === incoming.incarnationId) {
+          const next = mergeSessionActivity(before ?? null, incoming, incarnation)
+          if (next) {
+            if (before?.incarnationId !== incarnation) {
+              delete activityRef.current[id]
+              delete activityPublishedAt.current[id]
+            }
+            observations.current.set(id, { ...next, title: before?.incarnationId === incarnation ? before.title : null })
+            publishActivity()
+          }
+        } else if (!before || incoming.liveSince >= before.liveSince) {
+          const pending = pendingActivity.current.get(id) ?? []
+          const previous = pending.find(row => row.incarnationId === incoming.incarnationId)
+          const next = mergeSessionActivity(previous ?? null, incoming, incoming.incarnationId)!
+          pendingActivity.current.set(id, [...pending.filter(row => row.incarnationId !== incoming.incarnationId), next].slice(-2))
+          // Once per new incarnation, never per output chunk. Lifecycle changes also request fresh records.
+          if (!previous) void refresh.catalogue().catch(fail('Session activity refresh failed'))
+        }
+        return
+      }
       void refresh[message.topic](message.sessionId).catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
@@ -1464,10 +1504,10 @@ function App(): React.JSX.Element {
 
   const recordAttentionOpened = (request: AttentionRecord): void => {
     // A handoff request stored before Story 75.5 opens its card, where Dismiss is all it offers.
-    if (request.kind === 'review' || request.kind === 'handoff') {
+    if (isActionableAttention(request)) {
       requestAnimationFrame(() => {
         const anchor = document.querySelector<HTMLElement>(`[data-session-requests="${request.sessionId}"]`)
-        setRequestCard({ sessionId: request.sessionId, anchor })
+        setRequestCard({ sessionId: request.sessionId, anchor, requestId: request.requestId })
       })
     }
   }
@@ -1813,11 +1853,12 @@ function App(): React.JSX.Element {
   /** What the window knows of each session, as the sidebar shows it, for the Now rows; hooks decide whether an agent is in front. */
   const nowSessions = useMemo((): NowSessionInput[] => dialog?.kind !== 'now' ? [] : nowWorkspaces.flatMap((workspace) =>
     visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): NowSessionInput => {
-      const incarnation = live[session.sessionId]?.incarnationId
+      const incarnation = confirmedIncarnation(session) ?? undefined
       const isLive = sessionProcessLive(session, incarnation)
       const observed = observedProgressFor(session)
       const observedActivity = activity[session.sessionId] ?? null
-      const card = unresolved.find((request) => request.sessionId === session.sessionId && isActionableAttention(request))
+      const card = unresolved.find(request => request.sessionId === session.sessionId && isActionableAttention(request) &&
+        (!isLive || request.incarnationId === incarnation))
       const title = observedActivity?.title?.replace(/^[^\p{L}\p{N}]+/u, '').trim() || null
       return {
         sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name,
@@ -2321,6 +2362,7 @@ function App(): React.JSX.Element {
             requests={attention.filter(request => request.sessionId === requestCard.sessionId)}
             cleared={snapshotsFor(requestCard.sessionId)} phone={telegramStatus?.quietHours}
             place={place} now={now} anchor={requestCard.anchor}
+            focusRequestId={requestCard.requestId}
             onAcknowledge={request => {
               void dismissAttentionReminder(window.aiTerminal, request, 'Dismissed in BMN', refresh.attention).catch(fail('Request update failed'))
             }}
