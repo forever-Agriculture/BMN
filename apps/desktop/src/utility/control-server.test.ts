@@ -159,6 +159,7 @@ function fakeHandlers(current: Map<string, string>) {
     awayStatus: vi.fn(async (scope: { kind: string }): Promise<unknown> => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
+    awayNight: vi.fn(async (): Promise<unknown> => ({ periodId: 'p-1', text: 'The wake' })),
     changeAway: vi.fn(async (p: { to: string }): Promise<unknown> => ({ outcome: 'changed', state: p.to, revision: 4 })),
     policyStatus: vi.fn(async (): Promise<unknown> => ({ state: 'read', revision: 0 })),
     leaveAway: vi.fn<ControlHandlers['leaveAway']>(async () => ({ outcome: 'changed', state: 'leaving', periodId: 'p-1' })),
@@ -1749,6 +1750,16 @@ describe('away state (Story 76.3)', () => {
     expectError(await owner.request('away.set', { to: 'away', extra: true }), ERROR_CODES.invalidArgument)
     expectError(await owner.request('away.status', { verbose: true }), ERROR_CODES.invalidArgument)
     expect(fixture.handlers.changeAway).toHaveBeenCalledTimes(3)
+  })
+
+  it('reads the wake\'s account for any scope, with no parameters (Story 113.6)', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expect((await owner.request('away.night', {})).result).toEqual({ periodId: 'p-1', text: 'The wake' })
+    expect((await agent.request('away.night', {})).result).toEqual({ periodId: 'p-1', text: 'The wake' })
+    expectError(await agent.request('away.night', { periodId: 'p-0' }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.awayNight).toHaveBeenCalledTimes(2)
   })
 })
 

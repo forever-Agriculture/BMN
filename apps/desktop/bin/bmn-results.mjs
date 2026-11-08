@@ -64,6 +64,8 @@ function describeResult(command, positionals, options, result) {
       }
       return isObject(result) ? `Outcome ${options.op} for decision ${result.key} reported${result.outcome === 'repeated' ? ' (already reported earlier; not repeated)' : ''}` : 'Outcome reported'
     case 'away':
+      if (options.night) return isObject(result) && typeof result.text === 'string' ? result.text : JSON.stringify(result, null, 2)
+      return describeAway(result)
     case 'back':
       return describeAway(result)
     case 'tell':

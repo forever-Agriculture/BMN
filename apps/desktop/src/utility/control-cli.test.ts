@@ -121,6 +121,7 @@ async function cliFixture() {
     awayStatus: vi.fn<ControlHandlers['awayStatus']>(async (scope) => scope.kind === 'owner'
       ? { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3, note: 'back by 8' }
       : { state: 'away', since: '2026-10-16T19:10:00.000Z', revision: 3 }),
+    awayNight: vi.fn<ControlHandlers['awayNight']>(async () => ({ periodId: 'p-1', woken: [], missed: [{ sessionId: 's-1' }], text: 'The wake: 3 of 4 ticks swept\nmissed while eligible: BMN (claude): its prompt was not empty and idle' })),
     changeAway: vi.fn<ControlHandlers['changeAway']>(async (p) => ({ outcome: 'changed', state: p.to, since: '2026-10-16T19:10:00.000Z', revision: 4 })),
     policyStatus: vi.fn<ControlHandlers['policyStatus']>(async () => pushPolicyStatus(readPushPolicy(undefined), false)),
     leaveAway: vi.fn<ControlHandlers['leaveAway']>(async () => ({ outcome: 'changed', state: 'leaving', periodId: 'p-1', since: '2026-10-19T19:31:00.000Z' })),
@@ -6427,6 +6428,22 @@ describe('bmn away and bmn back (Story 76.3)', () => {
     const refused = await runCli(['away'], { env: fixture.sessionEnv })
     expect(refused.code).toBe(1)
     expect(refused.stderr).toMatch(/^bmn: INVALID_ARGUMENT: An agent names the away revision/)
+  })
+})
+
+describe('bmn away --night (Story 113.6 AC2)', () => {
+  it('prints the wake\'s account to an agent or the owner, the same data with --json, and takes no other option', async () => {
+    const fixture = await cliFixture()
+    const text = await runCli(['away', '--night'], { env: fixture.sessionEnv })
+    expect(text.code).toBe(0)
+    expect(text.stdout).toBe('The wake: 3 of 4 ticks swept\nmissed while eligible: BMN (claude): its prompt was not empty and idle\n')
+    const json = await runCli(['away', '--night', '--json'], { env: fixture.sessionEnv })
+    expect(JSON.parse(json.stdout)).toMatchObject({ periodId: 'p-1', missed: [{ sessionId: 's-1' }] })
+    for (const args of [['away', '--night', '--status'], ['away', '--night', '--revision', '3'], ['away', '--night', '--leaving'], ['away', '--night', '--key', 'k']]) {
+      expect((await runCli(args, { env: fixture.sessionEnv })).code, args.join(' ')).toBe(2)
+    }
+    expect(fixture.handlers.awayNight).toHaveBeenCalledTimes(2)
+    expect(fixture.handlers.changeAway).not.toHaveBeenCalled()
   })
 })
 

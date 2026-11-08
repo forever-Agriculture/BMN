@@ -33,7 +33,7 @@ const PIPED_FIELDS = {
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id', 'ref', 'depends'])
-const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status', 'leaving', 'no-codex-ask'])
+const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status', 'leaving', 'night', 'no-codex-ask'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 /**
  * Story 35.2: what `bmn handoff --outline` prints. bin/bmn runs unbundled, so this is a copy of HANDOFF_OUTLINE in
@@ -101,6 +101,9 @@ Commands:
                                             may each ask him on one card (bmn grant); then say away. Back
                                             while only leaving cancels it
   away --status [--json]                    Away or back, since when, and the revision
+  away --night [--json]                     What the Away wake did with each agent session in the last period:
+                                            woken, skipped and why, missed while eligible, or unknown, and the
+                                            hours no tick was swept. Read-only; no prompt or screen text
   decision record --key K --revision R --choice T --reason T --affects T --reverse T [--ref KIND:ID]... [--depends KEY]...
                                             A consequential choice you made while the owner is away (Decided for
                                             you). BMN binds it to your conversation, process and away period; the

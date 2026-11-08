@@ -13,6 +13,7 @@ import {
   type AwaySessionActivity,
   type AwaySummaryInput
 } from './away-summary'
+import { awayNightAccount } from './away-night'
 import type { AttentionRecord } from './companion'
 import type { DevAutoRun } from './dev-auto'
 
@@ -385,5 +386,34 @@ describe('Waited for you (Story 84.8 [d29])', () => {
     expect(cut.waitedForYou.count).toBe(AWAY_SUMMARY_LIMITS.answeredWaits + 4)
     expect(cut.waitedForYou.more).toBe(`4 more waited; the oldest ${AWAY_SUMMARY_LIMITS.answeredWaits} are shown.`)
     expect(cut.couldNotReadWhy).toBe(`long waits you answered: cut at ${AWAY_SUMMARY_LIMITS.answeredWaits} listings`)
+  })
+})
+
+describe('The wake (Story 113.6 AC2)', () => {
+  const HOUR = 3_600_000
+  const night = awayNightAccount({
+    periodId: 'p-1', since: SINCE, until: ENDED, everyMs: 2 * HOUR,
+    ticks: [1, 2, 4].map((tick) => ({ periodId: 'p-1', tick, at: new Date(Date.parse(SINCE) + tick * 2 * HOUR).toISOString(), processStartedAt: SINCE, state: 'swept' as const, sessionsSeen: 2 })),
+    decisions: [
+      { periodId: 'p-1', tick: 1, at: new Date(Date.parse(SINCE) + 2 * HOUR).toISOString(), sessionId: 's2', incarnationId: 'i2', app: 'codex', foreground: true, generation: 1, prompt: 'busy', outcome: 'skipped', reason: 'prompt-busy' },
+      { periodId: 'p-1', tick: 2, at: new Date(Date.parse(SINCE) + 4 * HOUR).toISOString(), sessionId: 's1', incarnationId: 'i1', app: 'claude', foreground: true, generation: 1, prompt: 'idle', outcome: 'typed', reason: null }
+    ],
+    sessions: [{ sessionId: 's3', app: 'claude' }]
+  })
+
+  it('lists missed and unknown sessions first, then woken and skipped, with the hours no tick was swept', () => {
+    const view = buildAwaySummary(input({ night }))
+    expect(view.wake?.head).toBe('3 of 4 ticks swept')
+    expect(view.wake?.rows.map((row) => [row.state, row.sessionId, row.text])).toEqual([
+      ['missed', 's2', 'its prompt was not empty and idle'],
+      ['unknown', 's3', 'no tick decided it'],
+      ['woken', 's1', 'the wake line was typed']
+    ])
+    expect(view.wake?.hours).toEqual(['04:10–06:10 unknown: BMN swept no tick (the computer asleep, or no record)'])
+  })
+
+  it('says when the record could not be read, and shows nothing from a host that predates it', () => {
+    expect(buildAwaySummary(input({ night: null })).wake).toEqual({ head: '', rows: [], hours: [], more: null, empty: 'The wake\'s record could not be read.' })
+    expect(buildAwaySummary(input()).wake).toBeNull()
   })
 })

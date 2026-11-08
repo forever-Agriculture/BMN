@@ -8,6 +8,8 @@ import {
   ERROR_CODES,
   pushPolicyStatus,
   agentStartBrief,
+  type AwayNight,
+  awayNightLines,
   type PushLevel,
   type PushPolicyChange,
   type PushPolicyView,
@@ -150,7 +152,7 @@ import { TELEGRAM_HELP_TEXT, awayReplyText, backReplyText, telegramAwayCommand, 
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
-import { AwayWake } from './away-wake'
+import { AWAY_WAKE_EVERY_MS, AwayWake } from './away-wake'
 import { MessageWake } from './message-wake'
 import { GrantDepartureNotices } from './agent-grant-notices'
 import { QaSessions, shippedQaAccounts } from './qa-sessions'
@@ -584,6 +586,10 @@ export class CompanionService {
         this.awayWakeWrites = this.awayWakeWrites
           .then(() => this.appendBoundedLog(join(options.roots.state, 'away-wake.log'), entry))
           .catch(() => undefined)
+      },
+      // Story 113.6: the tick's facts go to the database; a failed write leaves that tick unknown in the account.
+      record: (tick, decisions) => {
+        void options.database.companion('recordAwayWake', tick, decisions).catch(() => undefined)
       }
     })
     this.messageWake = new MessageWake({
@@ -928,6 +934,15 @@ export class CompanionService {
         dropTurnMark: (sessionId, requestId) => this.turns?.dropped(sessionId, requestId),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         awayStatus: async (scope) => scope.kind === 'owner' ? this.awayForOwner() : this.awayForAgent(),
+        // Story 113.6: no note or prompt text is in the account, so every scope reads the same one.
+        awayNight: async () => {
+          const record = this.awayRecord
+          if (record.periodId === null || record.since === null) throw new HostControlError(ERROR_CODES.notFound, 'There is no away period yet')
+          const until = record.state === 'away' ? this.iso() : record.endedAt ?? this.iso()
+          const night = await this.awayNight(record.periodId, record.since, until)
+          const names = await this.options.database.companion('awaySessionNames').catch(() => ({}))
+          return { ...night, ongoing: record.state === 'away', text: awayNightLines(night, names).join('\n') }
+        },
         policyStatus: async () => ({
           ...pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
           granted: await this.grantedActions()
@@ -1556,7 +1571,9 @@ export class CompanionService {
         const answeredWaits = await this.options.database.companion('awayAnsweredWaits', {
           since: record.since, until: until ?? now, limit: AWAY_SUMMARY_LIMITS.answeredWaits, minWaitMs: AWAY_SUMMARY_LIMITS.longWaitMinutes * 60_000
         }).catch(() => null)
-        return { away: ownerAwayView(record), ...data, wentOn, answeredWaits }
+        // Story 113.6: the wake's account of the period, up to its end or now while away.
+        const night = await this.awayNight(record.periodId, record.since, until ?? now).catch(() => null)
+        return { away: ownerAwayView(record), ...data, wentOn, answeredWaits, night }
       }
       case METHOD_REGISTRY.awaySummaryShown: {
         const periodId = params.periodId
@@ -1580,6 +1597,11 @@ export class CompanionService {
 
   private iso(): string {
     return this.now().toISOString()
+  }
+
+  /** Story 113.6: the Away wake's account of one period from its kept ticks. */
+  private awayNight(periodId: string, since: string, until: string): Promise<AwayNight> {
+    return this.options.database.companion('awayNightData', { periodId, since, until, everyMs: this.options.awayWake?.everyMs ?? AWAY_WAKE_EVERY_MS })
   }
 
   /**

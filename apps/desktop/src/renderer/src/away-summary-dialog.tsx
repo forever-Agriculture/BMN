@@ -309,6 +309,30 @@ export function AwaySummaryDialog(props: {
             {view.decided.more !== null ? <small className="away-more">{view.decided.more}</small> : null}
           </section>
 
+          {view.wake !== null ? (
+            <section className="inspector-section" aria-label="The wake">
+              <h3><span>The wake</span><span className="away-count">{view.wake.rows.filter((row) => row.state === 'missed').length}</span></h3>
+              {view.wake.head !== '' ? <p className="dialog-note">{view.wake.head}</p> : null}
+              {view.wake.empty !== null ? <p className="dialog-note">{view.wake.empty}</p> : null}
+              {view.wake.rows.length > 0 ? (
+                <ul className="message-list">
+                  {view.wake.rows.map((row) => (
+                    <li key={row.sessionId}>
+                      <button type="button" className="message-row away-wake-row" onClick={() => props.onOpenSession(row.sessionId)}>
+                        <span className="age">{row.time}</span>
+                        <span className="route" title={row.where}>{sessionWords(row.where)}</span>
+                        <span className="state">{row.state}</span>
+                        <span className="first-line" title={row.text}>{row.text}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {view.wake.hours.map((line) => <small key={line} className="away-more">{line}</small>)}
+              {view.wake.more !== null ? <small className="away-more">{view.wake.more}</small> : null}
+            </section>
+          ) : null}
+
           <section className="inspector-section" aria-label="Activity">
             <h3><span>Activity</span></h3>
             {view.activity.empty !== null ? <p className="dialog-note">{view.activity.empty}</p> : (

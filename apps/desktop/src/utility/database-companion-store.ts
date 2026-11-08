@@ -63,6 +63,7 @@ import { QA_GRANT_OPERATIONS, askQaGrant, qaGrantForKey, qaGrantForCard, bindQaG
 import { AWAY_SUMMARY_OPERATIONS } from './database-away-summary'
 import { DECISION_OPERATIONS } from './database-decision-store'
 import { HOOK_CARD_OPERATIONS } from './database-hook-card-store'
+import { AWAY_WAKE_OPERATIONS } from './database-away-wake-store'
 import { invalidWorkspaceStore as invalid, selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 
 interface ArtifactRow {
@@ -1558,7 +1559,8 @@ export const COMPANION_OPERATIONS = Object.freeze({
   answerQaGrantCard,
   ...DECISION_OPERATIONS,
   ...AWAY_SUMMARY_OPERATIONS,
-  ...HOOK_CARD_OPERATIONS
+  ...HOOK_CARD_OPERATIONS,
+  ...AWAY_WAKE_OPERATIONS
 })
 
 export type CompanionOperations = typeof COMPANION_OPERATIONS

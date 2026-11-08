@@ -275,6 +275,8 @@ export interface ControlHandlers {
   clearResumeCommand(p: { sessionId: string; incarnationId: string }): Promise<unknown>
   /** Story 76.3: the owner's said state; the note only to the owner's token (R76-NFR3). */
   awayStatus(scope: ControlScope): Promise<unknown>
+  /** Story 113.6: the Away wake's account of the last period (or this one while away), read by any scope, written by none. */
+  awayNight(): Promise<unknown>
   /** Story 83.3: the push policy's stored facts and standing, for `bmn policy`; read by any scope, written by none. */
   policyStatus(): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
@@ -1686,6 +1688,10 @@ export class ControlServer {
       case 'away.status': {
         closedParams(rawParams, [])
         return handlers.awayStatus(scope)
+      }
+      case 'away.night': {
+        closedParams(rawParams, [])
+        return handlers.awayNight()
       }
       case 'policy.status': {
         closedParams(rawParams, [])

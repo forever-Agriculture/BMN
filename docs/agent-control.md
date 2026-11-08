@@ -82,6 +82,9 @@ Commands:
                                             may each ask him on one card (bmn grant); then say away. Back
                                             while only leaving cancels it
   away --status [--json]                    Away or back, since when, and the revision
+  away --night [--json]                     What the Away wake did with each agent session in the last period:
+                                            woken, skipped and why, missed while eligible, or unknown, and the
+                                            hours no tick was swept. Read-only; no prompt or screen text
   decision record --key K --revision R --choice T --reason T --affects T --reverse T [--ref KIND:ID]... [--depends KEY]...
                                             A consequential choice you made while the owner is away (Decided for
                                             you). BMN binds it to your conversation, process and away period; the
@@ -1212,8 +1215,20 @@ The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your wo
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never
 an approval, an answer to a question or permission, or a resume of a run he stopped. BMN logs each wake and each skipped
 session with its reason in its app log (the bounded local `away-wake.log` under BMN's state folder, beside
-`repeat-watch.log`), and keeps no other record or screen. A test-mode host may shorten the 2 hours and
+`repeat-watch.log`), and keeps no screen. A test-mode host may shorten the 2 hours and
 15 minutes (`BMN_TEST_AWAY_WAKE_EVERY_MS`, `BMN_TEST_AWAY_WAKE_QUIET_MS`); every other build ignores them.
+
+**The night's account (Story 113.6).** BMN also keeps, in its database, which ticks it swept (`away_wake_tick`: the
+period, the tick, when, when that BMN process started) and per tick and session what decided it (`away_wake_decision`:
+the run, the app, whether its agent was in front, the request generation, the prompt as `idle`, `busy` or `none`, typed
+or skipped and a closed reason code). No prompt, screen or message text is kept. The newest 30 rows per session and
+1,024 per period are kept, for the newest 30 periods. From them BMN reads each agent session of the period as woken,
+correctly skipped (with the reason of its last tick), missed while eligible (it passed every early check but BMN could
+not finish the proof: its agent not in front, no screen, a prompt that was not empty and idle, or unreadable state; never
+woken later), or unknown (no tick decided it). Ticks no BMN process swept (BMN not running, the first tick after a
+start, which is never acted on, the computer asleep, or the open requests unreadable) are unknown hours: they never
+count as woken or missed. The account shows as "The wake" in "While you were away", and `bmn away --night [--json]`
+(control method `away.night`, read-only, any scope) prints it for the last period, or this one so far while he is away.
 
 ## The team: team file, check and rules
 

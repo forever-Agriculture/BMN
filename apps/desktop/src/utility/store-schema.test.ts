@@ -23,13 +23,15 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the 36 ordered migrations and only the owned tables', () => {
+  it('contains the 37 ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
       'attention_request',
+      'away_wake_decision',
+      'away_wake_tick',
       'control_receipt',
       'conversation_binding',
       'first_run_setup',
@@ -207,7 +209,7 @@ describe('owned database schema', () => {
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
           { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 },
           { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 },
-          { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }
+          { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }, { version: 36 }, { version: 37 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -325,7 +327,7 @@ describe('owned database schema', () => {
           { version: 19, applied_at: migratedAt },
           { version: 20, applied_at: migratedAt }, { version: 21, applied_at: migratedAt },
           { version: 22, applied_at: migratedAt }, { version: 23, applied_at: migratedAt }, { version: 24, applied_at: migratedAt }, { version: 25, applied_at: migratedAt },
-          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }, { version: 28, applied_at: migratedAt }, { version: 29, applied_at: migratedAt }, { version: 30, applied_at: migratedAt }, { version: 31, applied_at: migratedAt }, { version: 32, applied_at: migratedAt }, { version: 33, applied_at: migratedAt }, { version: 34, applied_at: migratedAt }, { version: 35, applied_at: migratedAt }, { version: 36, applied_at: migratedAt }
+          { version: 26, applied_at: migratedAt }, { version: 27, applied_at: migratedAt }, { version: 28, applied_at: migratedAt }, { version: 29, applied_at: migratedAt }, { version: 30, applied_at: migratedAt }, { version: 31, applied_at: migratedAt }, { version: 32, applied_at: migratedAt }, { version: 33, applied_at: migratedAt }, { version: 34, applied_at: migratedAt }, { version: 35, applied_at: migratedAt }, { version: 36, applied_at: migratedAt }, { version: 37, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -372,7 +374,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 36 })
+        .toEqual({ version: 37 })
     } finally {
       database.close()
     }
@@ -416,7 +418,7 @@ describe('owned database schema', () => {
       // Later migrations add evidence and launch definitions without changing legacy records.
       expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all())
         .toEqual([...tablesBefore, { name: 'qa_audit' }, { name: 'qa_grant' }, { name: 'qa_grant_use' }, { name: 'qa_run' }, { name: 'first_run_setup' }, { name: 'progress_evidence' }, { name: 'launch_set' }, { name: 'session_message' }, { name: 'session_message_pair' },
-          { name: 'turn_capture' }, { name: 'turn_capture_reference' }, { name: 'turn_record' }, { name: 'turn_removal_job' }, { name: 'hook_card_record' }]
+          { name: 'turn_capture' }, { name: 'turn_capture_reference' }, { name: 'turn_record' }, { name: 'turn_removal_job' }, { name: 'hook_card_record' }, { name: 'away_wake_tick' }, { name: 'away_wake_decision' }]
           .sort((left, right) => (left as { name: string }).name.localeCompare((right as { name: string }).name)))
     } finally {
       database.close()
@@ -722,7 +724,7 @@ it('adds messages between sessions at version 26, which version 28 turns on for 
     expect(database.prepare('SELECT COUNT(*) AS count FROM session_message_pair').get()).toEqual({ count: 0 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 36 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 37 })
   } finally { database.close() }
 })
 
@@ -803,7 +805,7 @@ it('adds turn changes at version 27, which version 28 turns on for every existin
     expect(database.prepare('SELECT COUNT(*) AS count FROM turn_removal_job').get()).toEqual({ count: 2 })
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-10-13T02:00:00.000Z')
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 36 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 37 })
   } finally { database.close() }
 })
 
@@ -858,7 +860,7 @@ it('turns messages and turn changes on at version 28 for every workspace and ses
     ])
     expect(rows('SELECT * FROM session ORDER BY session_id')).toEqual(sessionsBefore.map((row) => ({ ...row, receive_messages: 1, setup_purpose_json: null })))
     expect(rows('SELECT * FROM session_message_pair')).toEqual(pairsBefore)
-    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 36 })
+    expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get()).toEqual({ version: 37 })
 
     // A workspace created after the upgrade is on, though the column's declared default is still 0; the record
     // carries no switch.

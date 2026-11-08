@@ -15,7 +15,10 @@
 // a look cleared, a compaction after a finished turn, and a turn a lost connection ended (a closed loopback port); each is woken once.
 // Claude Code reports that error as StopFailure, which a profile gets from BMN's next hooks install; the run adds it with --settings.
 // Usage: node scripts/test/away-wake-live.mjs <scratch-folder> [report.json] [claude,claude-night,codex,opencode,opencode-upgrade] [--opencode PATH]... [--binary PATH]
-//   (needs `pnpm --filter @bmn/desktop build` first)
+// Every scenario ends by reading the night's account back after Back (`bmn away --night --json`, Story 113.6 AC4) and
+// checks it against the wake's own log lines: woken where a line was typed, skipped or missed with the last reason, and
+// no decided tick read as an unknown hour.
+//   (needs `pnpm run build` first: the desktop build and @bmn/protocol's, whose reason codes the account check uses)
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -27,6 +30,8 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 import { testedApp } from '../lib/tested-app.mjs'
+import { AWAY_WAKE_REASONS, awayWakeReasonCode } from '../../shared/protocol/dist/away-night.js'
+import { nightMismatches } from './away-night-check.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
@@ -566,6 +571,14 @@ async function run(scenario, binary) {
       report[`${name}State`] = state
       bmn('back')
       report[`${name}Logs`] = logs()
+      // Story 113.6 AC4: the account BMN keeps of this night, read back as an agent reads it, matches the log of its ticks.
+      let account = null
+      try { account = JSON.parse(bmn('away', '--night', '--json')) } catch (error) { report[`${name}NightError`] = String(error).slice(0, 400) }
+      report[`${name}Night`] = account
+      const mismatches = account === null ? null : nightMismatches(account, report[`${name}Logs`], awayWakeReasonCode, AWAY_WAKE_REASONS)
+      check(`${name}: the night's account read back after Back matches the wake log (113.6)`, mismatches !== null && mismatches.length === 0 &&
+        account.woken.length === report[`${name}Logs`].filter((line) => line.includes('typed the wake line')).map((line) => line.split(' into ')[1]?.split(' ')[0]).filter((id, index, all) => all.indexOf(id) === index).length,
+      { mismatches, woken: account?.woken.length ?? null, unknownSpans: account?.unknownSpans ?? null })
     } finally {
       // A close that hangs (seen once with a shell left in front) must not hold the run: give it 15 s, then end that Electron.
       const closed = await Promise.race([application.close().then(() => true, () => true), sleep(15_000).then(() => false)])

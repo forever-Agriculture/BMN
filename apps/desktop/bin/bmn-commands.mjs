@@ -251,8 +251,15 @@ const COMMANDS = {
   },
   away: {
     args: [],
-    options: ['note', 'status', 'revision', 'key', 'leaving'],
+    options: ['note', 'status', 'revision', 'key', 'leaving', 'night'],
     build: (_positionals, options) => {
+      // Story 113.6: what the Away wake did with each agent session, read-only.
+      if (options.night) {
+        if (options.note !== undefined || options.revision !== undefined || options.key !== undefined || options.leaving || options.status) {
+          throw new UsageError('away --night takes no other option')
+        }
+        return { method: 'away.night', params: {} }
+      }
       if (options.status) {
         if (options.note !== undefined || options.revision !== undefined || options.key !== undefined || options.leaving) {
           throw new UsageError('away --status takes no other option')

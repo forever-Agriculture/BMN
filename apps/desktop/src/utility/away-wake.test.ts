@@ -1,7 +1,7 @@
 // MODULE: away-wake.test.ts - Stories 90.6, 93.3 and 96.3 with a fake clock: ticks, claims, every eligibility and pre-write check, restarts, the recorded idle prompts
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { EMPTY_AWAY_RECORD, type AwayRecord } from '@bmn/protocol'
+import { EMPTY_AWAY_RECORD, type AwayRecord, type AwayWakeDecision, type AwayWakeTick } from '@bmn/protocol'
 import { AWAY_WAKE_LINE, AwayWake, OPENCODE_WAKE_PLUGIN, idlePrompt, testAwayWakeTimes, type WakeAttention, type WakeObservation, type WakeScreen } from './away-wake'
 import { ScreenMirror } from './screen-mirror'
 
@@ -25,6 +25,8 @@ function world(now0 = T + 2 * HOUR) {
   let attention: WakeAttention[] = []
   const written: Array<{ sessionId: string; text: string }> = []
   const logs: string[] = []
+  const records: Array<{ tick: AwayWakeTick; decisions: AwayWakeDecision[] }> = []
+  let unreadable = false
   let beforeScreen: (() => void) | undefined
   // BMN's in-memory record of each run's last finished turn (the message wake's, Story 110.3); empty unless a case sets it.
   const finished = new Map<string, string>()
@@ -44,7 +46,7 @@ function world(now0 = T + 2 * HOUR) {
     away: () => away,
     observations: () => [...sessions.values()].map((session) => session.seen),
     observation: (id) => sessions.get(id)?.seen,
-    openAttention: async () => attention,
+    openAttention: async () => { if (unreadable) throw new Error('database locked'); return attention },
     finishedTurn: (id, incarnationId) => sessions.get(id)?.seen.incarnationId === incarnationId ? finished.get(id) ?? null : null,
     liveIncarnation: (id) => sessions.get(id)?.live,
     foreground: (id) => sessions.get(id)?.front ?? null,
@@ -55,10 +57,12 @@ function world(now0 = T + 2 * HOUR) {
       return session?.screen ? { lines: session.screen, cursor: session.cursor } : null
     },
     write: (sessionId, text) => written.push({ sessionId, text }),
-    log: (line) => logs.push(line)
+    log: (line) => logs.push(line),
+    record: (tick, decisions) => records.push({ tick, decisions })
   })
   return {
-    add, make, sessions, written, logs, finished,
+    add, make, sessions, written, logs, finished, records,
+    set unreadable(value: boolean) { unreadable = value },
     set now(value: number) { now = value },
     set away(value: AwayRecord) { away = value },
     get attention() { return attention }, set attention(value: WakeAttention[]) { attention = value },
@@ -504,5 +508,82 @@ describe('the Away wake-up after his night of 2026-11-06 (Epic 111 F17, F19)', (
     await wake.sweep()
     w.now = T + 2 * HOUR; await wake.sweep()
     expect(w.written).toEqual([{ sessionId: 'a', text: AWAY_WAKE_LINE }])
+  })
+})
+
+describe('the facts of each tick (Story 113.6 AC1)', () => {
+  it('keeps per session the reason code of every early skip, text-free, with no screen facts before the last checks', async () => {
+    const w = world(T)
+    w.add('other', 'other')
+    w.add('busy', 'claude', { event: 'PreToolUse' })
+    w.add('before', 'codex', { observedAt: at(T - 1000) })
+    w.add('noturn', 'claude'); w.attention = w.attention.filter((row) => row.sessionId !== 'noturn')
+    w.add('fresh', 'codex'); w.attention = w.attention.map((row) => row.sessionId === 'fresh' ? { ...row, openedAt: at(T + 2 * HOUR - 10 * 60_000) } : row)
+    w.add('dialog', 'claude'); w.attention.push({ sessionId: 'dialog', requestKey: 'claude:permission', kind: 'permission', state: 'open', openedAt: at(T + HOUR) })
+    w.add('child', 'opencode', { source: 'subagent' })
+    w.add('old-plugin', 'opencode', { plugin: null })
+    w.add('idle', 'claude', { event: 'Notification' })
+    const wake = w.make()
+    await wake.sweep()
+    expect(w.records).toEqual([])
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.records).toHaveLength(1)
+    const { tick, decisions } = w.records[0]!
+    expect(tick).toEqual({ periodId: 'p1', tick: 1, at: at(T + 2 * HOUR), processStartedAt: at(T), state: 'swept', sessionsSeen: 9 })
+    expect(Object.fromEntries(decisions.map((row) => [row.sessionId, row.reason]))).toEqual({
+      other: 'app-not-woken', busy: 'not-finished-turn', before: 'no-event-since-away', noturn: 'finish-unknown', fresh: 'quiet',
+      dialog: 'request-open', child: 'child-or-stop', 'old-plugin': 'plugin-earlier', idle: null
+    })
+    expect(decisions.find((row) => row.sessionId === 'busy')).toEqual({ sessionId: 'busy', incarnationId: 'inc-busy', app: 'claude',
+      foreground: null, generation: 1, prompt: null, outcome: 'skipped', reason: 'not-finished-turn' })
+    expect(decisions.find((row) => row.sessionId === 'idle')).toEqual({ sessionId: 'idle', incarnationId: 'inc-idle', app: 'claude',
+      foreground: true, generation: 1, prompt: 'idle', outcome: 'typed', reason: null })
+    // Nothing in a kept row is screen or prompt text.
+    expect(JSON.stringify(w.records)).not.toMatch(/❯|›|Brewed/u)
+  })
+
+  it('keeps the last checks\' facts: the foreground and the prompt state that decided the skip', async () => {
+    const cases: Array<[string, (w: ReturnType<typeof world>) => void, Partial<AwayWakeDecision>]> = [
+      ['back', (w) => { w.beforeScreen = () => { w.away = { ...EMPTY_AWAY_RECORD, state: 'back', revision: 4, periodId: 'p1', since: at(T), endedAt: at(T + HOUR) } } }, { reason: 'owner-back', foreground: null, prompt: null }],
+      ['new-run', (w) => { w.beforeScreen = () => { w.sessions.get('s')!.live = 'inc-other' } }, { reason: 'run-changed', foreground: null }],
+      ['shell', (w) => { w.sessions.get('s')!.front = null }, { reason: 'not-foreground', foreground: false, prompt: null }],
+      ['dialog-arrives', (w) => { w.beforeScreen = () => { w.sessions.get('s')!.generation += 1 } }, { reason: 'requests-changed', foreground: true, prompt: null }],
+      ['draft', (w) => { w.sessions.get('s')!.screen = [RULE, '❯ half a sentence', RULE] }, { reason: 'prompt-busy', foreground: true, prompt: 'busy' }],
+      ['no-mirror', (w) => { w.sessions.get('s')!.screen = null }, { reason: 'no-screen', foreground: true, prompt: 'none' }]
+    ]
+    for (const [name, arrange, expected] of cases) {
+      const w = world(T)
+      w.add('s', 'claude')
+      const wake = w.make()
+      await wake.sweep()
+      arrange(w)
+      w.now = T + 2 * HOUR
+      await wake.sweep()
+      expect(w.records.at(-1)!.decisions[0], name).toMatchObject({ outcome: 'skipped', ...expected })
+    }
+  })
+
+  it('records a tick once however often it is swept, a quiet tick with no sessions, and unreadable requests as an unreadable tick', async () => {
+    const w = world(T)
+    const wake = w.make()
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep(); await wake.sweep()
+    expect(w.records).toEqual([{ tick: expect.objectContaining({ tick: 1, state: 'swept', sessionsSeen: 0 }), decisions: [] }])
+    w.add('late', 'claude')
+    await wake.sweep()
+    expect(w.records).toHaveLength(2)
+    expect(w.records[1]!.decisions.map((row) => row.sessionId)).toEqual(['late'])
+    w.unreadable = true
+    w.now = T + 4 * HOUR; await wake.sweep()
+    expect(w.records[2]).toEqual({ tick: expect.objectContaining({ tick: 2, state: 'unreadable', sessionsSeen: 1 }), decisions: [] })
+  })
+
+  it('a failure to keep the facts never stops the wake', async () => {
+    const w = world(T)
+    w.add('s', 'claude')
+    const wake = new AwayWake({ ...(w.make() as unknown as { options: ConstructorParameters<typeof AwayWake>[0] }).options, record: () => { throw new Error('disk full') } })
+    await wake.sweep()
+    w.now = T + 2 * HOUR; await wake.sweep()
+    expect(w.written).toHaveLength(1)
   })
 })

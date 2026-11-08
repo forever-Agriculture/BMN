@@ -1,5 +1,5 @@
 // MODULE: away-wake.ts - Stories 90.6, 93.3 and 96.3: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
-import type { AwayRecord } from '@bmn/protocol'
+import { awayWakeReasonCode, type AwayRecord, type AwayWakeDecision, type AwayWakeTick } from '@bmn/protocol'
 
 export const AWAY_WAKE_EVERY_MS = 2 * 60 * 60 * 1000
 /** A finished turn must have waited this long, so a session that just paused for a moment is left alone. */
@@ -63,8 +63,19 @@ export interface AwayWakeOptions extends WakeProof {
    */
   finishedTurn(sessionId: string, incarnationId: string): string | null
   log(line: string): void
+  /**
+   * Story 113.6 AC1: what one sweep decided, kept text-free. Called once per tick this process sweeps, and again for a
+   * later sweep of the same tick that decided more sessions; a failure to keep it never stops the wake.
+   */
+  record?(tick: AwayWakeTick, decisions: AwayWakeDecision[]): void
   everyMs?: number
   quietMs?: number
+}
+
+/** What the last checks saw, filled as they run (113.6 AC1). */
+export interface WakeFacts {
+  foreground: boolean | null
+  prompt: 'idle' | 'busy' | 'none' | null
 }
 
 /**
@@ -125,8 +136,14 @@ export class AwayWake {
   private readonly firstTick = new Map<string, number>()
   /** `period␀session` → the last tick claimed, taken before any await so overlapping sweeps type nothing twice. */
   private readonly claimed = new Map<string, number>()
+  /** `period␀tick` this process already recorded, so a quiet repeat sweep of one tick writes nothing. */
+  private readonly recorded = new Set<string>()
+  /** When this process's wake began: a change between kept ticks is a restart (113.6 AC3). */
+  private readonly startedAt: string
 
-  constructor(private readonly options: AwayWakeOptions) {}
+  constructor(private readonly options: AwayWakeOptions) {
+    this.startedAt = options.now().toISOString()
+  }
 
   async sweep(): Promise<void> {
     const record = this.options.away()
@@ -138,6 +155,7 @@ export class AwayWake {
     if (!this.firstTick.has(period)) {
       this.firstTick.clear()
       this.claimed.clear()
+      this.recorded.clear()
       this.firstTick.set(period, Math.max(tick, 0))
     }
     if (tick <= this.firstTick.get(period)!) return
@@ -148,25 +166,42 @@ export class AwayWake {
       this.claimed.set(key, tick)
       candidates.push({ seen: { ...seen }, generation: this.options.generation(seen.sessionId).generation })
     }
-    if (candidates.length === 0) return
+    const keep = (state: AwayWakeTick['state'], decisions: AwayWakeDecision[]): void => {
+      const key = `${period}\0${tick}`
+      if (decisions.length === 0 && this.recorded.has(key)) return
+      this.recorded.add(key)
+      try {
+        this.options.record?.({ periodId: period, tick, at: this.options.now().toISOString(), processStartedAt: this.startedAt, state,
+          sessionsSeen: candidates.length }, decisions)
+      } catch { /* the account reads a tick it lacks as unknown */ }
+    }
+    if (candidates.length === 0) return keep('swept', [])
     let open: readonly WakeAttention[]
     try { open = await this.options.openAttention() } catch {
       this.options.log(`away wake: tick ${tick} of ${period} skipped: open requests unreadable`)
-      return
+      return keep('unreadable', [])
     }
+    const decisions: AwayWakeDecision[] = []
     for (const candidate of candidates) {
-      const reason = await this.wake(candidate.seen, candidate.generation, open, period, since).catch(() => 'unreadable state')
+      const facts: WakeFacts = { foreground: null, prompt: null }
+      const reason = await this.wake(candidate.seen, candidate.generation, open, period, since, facts).catch(() => 'unreadable state')
       this.options.log(reason === null
         ? `away wake: typed the wake line into ${candidate.seen.sessionId} (period ${period}, tick ${tick})`
         : `away wake: skipped ${candidate.seen.sessionId} (period ${period}, tick ${tick}): ${reason}`)
+      decisions.push({ sessionId: candidate.seen.sessionId, incarnationId: candidate.seen.incarnationId, app: candidate.seen.agent,
+        foreground: facts.foreground, generation: candidate.generation, prompt: facts.prompt,
+        outcome: reason === null ? 'typed' : 'skipped', reason: reason === null ? null : awayWakeReasonCode(reason) })
     }
+    keep('swept', decisions)
   }
 
   /** Null once the line was typed; otherwise why this session was left alone for this tick. */
-  private async wake(seen: WakeObservation, generation: number, open: readonly WakeAttention[], period: string, since: number): Promise<string | null> {
+  private async wake(seen: WakeObservation, generation: number, open: readonly WakeAttention[], period: string, since: number,
+    facts: WakeFacts): Promise<string | null> {
     if (Date.parse(seen.observedAt) <= since && isWakeApp(seen.agent) && finishedOwnTurn(seen) === null) return 'no hook event since the owner left'
     return typeIfIdle(this.options, {
       seen, generation, open, quietMs: this.options.quietMs ?? AWAY_WAKE_QUIET_MS, quietWords: 'its turn finished less than 15 minutes ago', line: AWAY_WAKE_LINE,
+      facts,
       // The record lives in memory; after a BMN restart the still-open notice (kept in the database) says when instead.
       finished: {
         at: this.options.finishedTurn(seen.sessionId, seen.incarnationId) ?? open.find((row) => row.sessionId === seen.sessionId &&
@@ -219,6 +254,8 @@ export async function typeIfIdle(proof: WakeProof, p: {
   stillAllowed(): string | null
   claim?(): Promise<string | null>
   unclaim?(): Promise<void>
+  /** Filled with what the last checks saw (113.6). */
+  facts?: WakeFacts
 }): Promise<string | null> {
   const { seen, generation, open } = p
   const notFinished = finishedOwnTurn(seen)
@@ -244,11 +281,15 @@ export async function typeIfIdle(proof: WakeProof, p: {
     if (!latest || latest.agent !== seen.agent || latest.event !== seen.event || latest.source !== seen.source ||
       latest.plugin !== seen.plugin || latest.observedAt !== seen.observedAt) return 'its agent reported again'
     const front = proof.foreground(seen.sessionId)
-    if (front === null || seen.foreground === null || front !== seen.foreground) return 'its agent is not in the foreground'
+    const foreground = front !== null && seen.foreground !== null && front === seen.foreground
+    if (p.facts) p.facts.foreground = foreground
+    if (!foreground) return 'its agent is not in the foreground'
     const changes = proof.generation(seen.sessionId)
     if (changes.generation !== generation || changes.pending > 0) return 'its requests changed'
-    if (screen === null) return 'no screen to read'
-    if (!idlePrompt(app, screen.lines, screen.cursor)) return 'its prompt is not empty and idle'
+    const prompt = screen === null ? 'none' : idlePrompt(app, screen.lines, screen.cursor) ? 'idle' : 'busy'
+    if (p.facts) p.facts.prompt = prompt
+    if (prompt === 'none') return 'no screen to read'
+    if (prompt === 'busy') return 'its prompt is not empty and idle'
     proof.write(seen.sessionId, p.line)
     return null
   }

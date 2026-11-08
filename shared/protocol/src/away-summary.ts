@@ -4,6 +4,7 @@ import { awayDurationWords, awayMomentWords, awayPeriodWords, type DecisionRecor
 import type { AttentionKind, AttentionRecord } from './companion'
 import type { DevAutoRunsResult } from './dev-auto'
 import { awayGrantSection, type AwayGrantSection } from './away-grant-summary'
+import { AWAY_WAKE_REASONS, type AwayNight } from './away-night'
 import type { GrantCarried, GrantPeriod } from './grant'
 import { pad } from './shared-helpers'
 
@@ -128,6 +129,11 @@ export interface AwaySummaryPayload {
    * null when the grant record could not be read. Absent from a host that predates Epic 84, which reads as no grant.
    */
   grants?: { periods: GrantPeriod[]; carried?: GrantCarried[] } | null
+  /**
+   * Story 113.6: what the Away wake did with each agent session in the period; null when it could not be read. Absent from
+   * a host that predates it, which reads as no account.
+   */
+  night?: AwayNight | null
 }
 
 export interface AwaySummaryInput extends AwaySummaryPayload {
@@ -196,6 +202,19 @@ export interface AwaySummaryView {
   /** What each run's card granted and what the night used of it; null in a period with no grant (Story 84.7 AC2). */
   granted: AwayGrantSection | null
   activity: { rows: AwayActivityRow[]; more: string | null; empty: string | null }
+  /**
+   * Story 113.6: what the Away wake did with each agent session, missed and unknown first; `hours` the spans no tick was
+   * swept. Null from a host that predates it.
+   */
+  wake: { head: string; rows: AwayWakeRow[]; hours: string[]; more: string | null; empty: string | null } | null
+}
+
+export interface AwayWakeRow {
+  sessionId: string
+  where: string
+  state: 'missed' | 'unknown' | 'woken' | 'skipped'
+  time: string
+  text: string
 }
 
 /** The request card's own kind words (session-request-card.tsx). */
@@ -554,7 +573,31 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     granted: awayGrantSection(input.grants === undefined ? [] : input.grants === null ? null : input.grants.periods, away.periodId, now, input.grants?.carried ?? []),
     wentOn,
     decided,
-    activity: activityView
+    activity: activityView,
+    wake: awayWakeView(input.night, where)
+  }
+}
+
+const WAKE_SPAN_WORDS = { restart: 'BMN was not running or had just started', unreadable: 'BMN could not read the open requests', 'not-recorded': 'BMN swept no tick (the computer asleep, or no record)' }
+
+/** Story 113.6 AC2: "The wake", in the dialog's own calm rows: the sessions he should look at first. */
+function awayWakeView(night: AwayNight | null | undefined, where: (sessionId: string) => string): AwaySummaryView['wake'] {
+  if (night === undefined) return null
+  if (night === null) return { head: '', rows: [], hours: [], more: null, empty: 'The wake\'s record could not be read.' }
+  const reason = (code: keyof typeof AWAY_WAKE_REASONS | null): string => AWAY_WAKE_REASONS[code ?? 'other'].words
+  const rows: AwayWakeRow[] = [
+    ...night.missed.map((row) => ({ sessionId: row.sessionId, where: where(row.sessionId), state: 'missed' as const, time: row.at ? clockWords(row.at) : '', text: reason(row.reason) })),
+    ...night.unknown.map((row) => ({ sessionId: row.sessionId, where: where(row.sessionId), state: 'unknown' as const, time: '', text: 'no tick decided it' })),
+    ...night.woken.map((row) => ({ sessionId: row.sessionId, where: where(row.sessionId), state: 'woken' as const, time: row.at ? clockWords(row.at) : '', text: 'the wake line was typed' })),
+    ...night.skipped.map((row) => ({ sessionId: row.sessionId, where: where(row.sessionId), state: 'skipped' as const, time: row.at ? clockWords(row.at) : '', text: reason(row.reason) }))
+  ]
+  const hours = night.unknownSpans.map((span) => `${clockWords(span.from)}–${clockWords(span.to)} unknown: ${WAKE_SPAN_WORDS[span.why]}`)
+  return {
+    head: `${night.ticks.swept} of ${night.ticks.expected} ${night.ticks.expected === 1 ? 'tick' : 'ticks'} swept${night.complete ? '' : ' · older rows no longer kept'}`,
+    rows: rows.slice(0, AWAY_SUMMARY_LIMITS.sessions),
+    hours,
+    more: rows.length > AWAY_SUMMARY_LIMITS.sessions ? `${rows.length - AWAY_SUMMARY_LIMITS.sessions} more sessions · bmn away --night` : null,
+    empty: rows.length > 0 || night.ticks.expected > 0 ? null : 'No tick fell in this period.'
   }
 }
 

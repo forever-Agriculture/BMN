@@ -7,6 +7,8 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'app_setting',
   'artifact',
   'attention_request',
+  'away_wake_decision',
+  'away_wake_tick',
   'control_receipt',
   'conversation_binding',
   'first_run_setup',
@@ -912,5 +914,36 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       );
       CREATE INDEX hook_card_by_session ON hook_card_record(session_id, observed_at);
       CREATE INDEX hook_card_by_call ON hook_card_record(session_id, tool_call_id);`
+  },
+  {
+    // Story 113.6: what the Away wake decided per tick and session, text-free, and which ticks a BMN process swept.
+    version: 37,
+    sql: `CREATE TABLE away_wake_tick (
+        period_id TEXT NOT NULL,
+        tick INTEGER NOT NULL CHECK (tick >= 1),
+        at TEXT NOT NULL,
+        process_started_at TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('swept', 'unreadable')),
+        sessions_seen INTEGER NOT NULL CHECK (sessions_seen >= 0),
+        PRIMARY KEY (period_id, tick)
+      );
+      CREATE TABLE away_wake_decision (
+        period_id TEXT NOT NULL,
+        tick INTEGER NOT NULL CHECK (tick >= 1),
+        session_id TEXT NOT NULL,
+        incarnation_id TEXT NOT NULL,
+        app TEXT NOT NULL,
+        foreground INTEGER CHECK (foreground IS NULL OR foreground IN (0, 1)),
+        generation INTEGER CHECK (generation IS NULL OR generation >= 0),
+        prompt TEXT CHECK (prompt IS NULL OR prompt IN ('idle', 'busy', 'none')),
+        outcome TEXT NOT NULL CHECK (outcome IN ('typed', 'skipped')),
+        reason_code TEXT CHECK ((reason_code IS NULL) = (outcome = 'typed') AND (reason_code IS NULL OR reason_code IN (
+          'no-event-since-away', 'app-not-woken', 'not-finished-turn', 'child-or-stop', 'plugin-earlier', 'finish-unknown', 'quiet',
+          'request-open', 'owner-back', 'run-changed', 'reported-again', 'requests-changed', 'not-foreground', 'no-screen',
+          'prompt-busy', 'unreadable', 'other'))),
+        at TEXT NOT NULL,
+        PRIMARY KEY (period_id, tick, session_id)
+      );
+      CREATE INDEX away_wake_decision_by_session ON away_wake_decision(period_id, session_id, tick);`
   }
 ])
