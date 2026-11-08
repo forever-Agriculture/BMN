@@ -99,6 +99,9 @@ try {
   if (values.stage === 'prepare') {
   assert.ok(!existsSync(journalPath), 'Preparation already has a receipt')
   const baselineIds = new Set(baseline.map(session => session.sessionId))
+  const workspaceToggle = '.workspace-group[aria-label="QA review"] .workspace-row > button:first-child'
+  if (await page.locator(workspaceToggle).getAttribute('aria-expanded') !== 'true') await action(['click', workspaceToggle])
+  await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true', workspaceToggle)
   await action(['click', 'button[aria-label="Command palette"]'])
   await action(['click', '#palette-new-session'])
   await page.getByRole('textbox', { name: 'Session name', exact: true }).fill('Observer shell')
