@@ -1942,6 +1942,12 @@ const evidence = await withTemporaryRoot(
             .map((group) => group.getAttribute('aria-label')),
           // Unmarked rows hold an invisible slot so every workspace name keeps one left edge.
           reservedSlots: document.querySelectorAll('.workspace-row .workspace-marker:not([data-marker])').length,
+          unmarkedRows: [...document.querySelectorAll('.workspace-row')]
+            .filter((row) => !row.querySelector('.workspace-marker[data-marker]'))
+            .map((row) => ({
+              name: row.querySelector('.eyebrow')?.textContent?.trim(),
+              slots: row.querySelectorAll('.workspace-marker').length
+            })),
           nameLeftEdges: [...new Set([...document.querySelectorAll('.workspace-row .eyebrow')]
             .map((name) => Math.round(name.getBoundingClientRect().left)))],
           // Hidden panes follow their workspace too, so no stale mark is left behind anywhere.
@@ -1954,8 +1960,10 @@ const evidence = await withTemporaryRoot(
       assert.equal(afterNone.foreignPaneMarker, 'rose', afterNoneDetail)
       assert.equal(afterNone.sidebarMarkerWorkspaces.length, 1, afterNoneDetail)
       assert.deepEqual([...new Set(afterNone.remainingPaneMarkers)], ['rose'], afterNoneDetail)
-      // One workspace still carries a marker, so the unmarked one keeps its slot and the names line up.
-      assert.equal(afterNone.reservedSlots, 1, afterNoneDetail)
+      // Every unmarked workspace, including the empty Setup workspace, keeps exactly one slot.
+      assert.ok(afterNone.unmarkedRows.length > 0, afterNoneDetail)
+      assert.ok(afterNone.unmarkedRows.every((row) => row.slots === 1), afterNoneDetail)
+      assert.equal(afterNone.reservedSlots, afterNone.unmarkedRows.length, afterNoneDetail)
       assert.equal(afterNone.nameLeftEdges.length, 1, afterNoneDetail)
       phase('workspace identity marker checks passed')
 
