@@ -59,13 +59,12 @@ const phase = (label) => console.error(`[BMN visual] ${label}`)
 // came out up to 20 shades off between two runs of one revision (5bf4595, 2026-10-19), with or without the GPU.
 const fixtureParent = '/tmp/bmn-visual-fixture'
 const fixtureFolder = join(fixtureParent, 'synthetic-project')
-// The renderer's clock is Playwright's, started at fixtureTime, before any time the app records, and running on from
-// there: every age the app shows reads "0 s ago" and no expiry is near on every run, while the app's own timers (the
-// activity tick, the 15-second refresh) keep their pace. It takes effect at the next load of the window.
+// Calendar text in button captures uses this fixed date. Numeric time must share the host's epoch: activity now
+// carries host timestamps, so a renderer months behind the host would keep every session Working forever.
 const fixtureTime = new Date('2026-01-01T00:00:00Z')
 
 async function fixPageClock(application, page) {
-  await application.context().clock.install({ time: fixtureTime })
+  await application.context().clock.install({ time: new Date() })
   await page.reload({ waitUntil: 'domcontentloaded' })
 }
 
