@@ -2414,11 +2414,17 @@ On a bound contract's origins the contract alone decides, ahead of the unreviewe
   `application/json` (optionally `; charset=utf-8`), at most 16 KiB of UTF-8, one JSON object with
   only `query`, `variables` (an object) and `operationName`, and no repeated keys, so no
   `extensions` and no batches. A byte-order mark is held, never stripped. graphql-js parses the query (at most 4000 tokens). It must be
-  exactly one `query` operation named after a reviewed template: the 18 Q Automations reads,
+  exactly one `query` operation named after a reviewed template, plus optional named fragment
+  definitions: the 18 Q Automations reads,
   `UserInfo` and `MyFeatureFlags` (whose resolver also records flag exposure, counted as a read
   by the owner on 31 October 2026). It may have only that template's one root field (an alias is
-  allowed), no fragments, no directives other than `@include` and `@skip`, and no introspection
-  field other than `__typename`. A given `operationName` must equal the operation's name.
+  allowed), including through named or inline fragments. Fragment names must be unique, all
+  spreads defined, all definitions used, and the dependency graph acyclic. The gate checks the
+  graph without expanding shared subtrees and counts root selection occurrences through
+  fragments, aliases and conditional branches; a second root stays held. The whole document
+  permits no directives other than `@include` and `@skip`, and no introspection field other
+  than `__typename`. A given `operationName` must equal the operation's name. The fragment
+  selection grammar version is included in the contract hash (Epic 113, D6).
 - **Sign-in origin:** only the renewal passes: `POST /realms/piche/protocol/openid-connect/token`,
   form-encoded, with no URL query and exactly the fields `grant_type=refresh_token`,
   `refresh_token` and `client_id=piche`, each once, written as the sign-in client writes them:

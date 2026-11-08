@@ -42,7 +42,8 @@ const PICHE_READS = Object.freeze(Object.fromEntries([
 const PICHE_GRAPHQL_PATH = '/graphql'
 const PICHE_RENEWAL = Object.freeze({ path: '/realms/piche/protocol/openid-connect/token', client: 'piche' })
 const PICHE_BODY_LIMIT = 16 * 1024
-const picheSha256 = createHash('sha256').update(JSON.stringify({ id: PICHE_ID, reads: PICHE_READS, graphql: PICHE_GRAPHQL_PATH, renewal: PICHE_RENEWAL, limit: PICHE_BODY_LIMIT })).digest('hex')
+const PICHE_SELECTION_POLICY = 'single-root-acyclic-fragments@1'
+const picheSha256 = createHash('sha256').update(JSON.stringify({ id: PICHE_ID, reads: PICHE_READS, graphql: PICHE_GRAPHQL_PATH, renewal: PICHE_RENEWAL, limit: PICHE_BODY_LIMIT, selections: PICHE_SELECTION_POLICY })).digest('hex')
 const loopback = value => { try { const url = new URL(value); return url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port !== '' && url.origin === value } catch { return false } }
 
 /** The Piche TEST read contract for its three TEST origins, or a test-only twin on three distinct loopback origins (101.2 verification). */
@@ -93,22 +94,58 @@ const graphqlParser = () => {
   graphqlLibrary = createRequire(existsSync(packaged) ? packaged : import.meta.url)('graphql')
   return graphqlLibrary
 }
-/** One query whose operation name and root fields match a reviewed template, with no fragments, other directives or introspection (D3). */
+/** One reviewed query/root after resolving fragments; nested fields never expand into another operation (113.8, D6). */
 function picheTemplate(document) {
   const { Kind, visit, BREAK } = graphqlParser()
-  if (document.definitions.length !== 1 || document.definitions[0].kind !== Kind.OPERATION_DEFINITION) return { operation: null, reviewed: false }
-  const operation = document.definitions[0], name = operation.name?.value ?? null, root = name !== null && Object.hasOwn(PICHE_READS, name) ? PICHE_READS[name] : null
-  let clean = operation.operation === 'query' && root !== null && operation.selectionSet.selections.length === 1 &&
-    operation.selectionSet.selections.every(selection => selection.kind === Kind.FIELD && selection.name.value === root)
-  if (clean) visit(document, {
-    enter(node) {
-      if (node.kind === Kind.FRAGMENT_SPREAD || node.kind === Kind.INLINE_FRAGMENT || node.kind === Kind.FRAGMENT_DEFINITION ||
-        node.kind === Kind.DIRECTIVE && !['include', 'skip'].includes(node.name.value) ||
-        node.kind === Kind.FIELD && node.name.value.startsWith('__') && node.name.value !== '__typename') { clean = false; return BREAK }
-      return undefined
+  const operations = document.definitions.filter(node => node.kind === Kind.OPERATION_DEFINITION)
+  if (operations.length !== 1 || document.definitions.some(node => ![Kind.OPERATION_DEFINITION, Kind.FRAGMENT_DEFINITION].includes(node.kind))) return { operation: null, reviewed: false }
+  const operation = operations[0], name = operation.name?.value ?? null, root = name !== null && Object.hasOwn(PICHE_READS, name) ? PICHE_READS[name] : null
+  const held = { operation: operation.operation, reviewed: false, name: null }
+  if (operation.operation !== 'query' || root === null) return held
+  const fragments = new Map(), references = new Map()
+  for (const definition of document.definitions) {
+    if (definition.kind === Kind.FRAGMENT_DEFINITION) {
+      if (fragments.has(definition.name.value)) return held
+      fragments.set(definition.name.value, definition)
     }
-  })
-  return { operation: operation.operation, reviewed: clean, name: clean ? name : null }
+    const spreads = new Set()
+    let clean = true
+    visit(definition, {
+      enter(node) {
+        if (node.kind === Kind.DIRECTIVE && !['include', 'skip'].includes(node.name.value) ||
+          node.kind === Kind.FIELD && node.name.value.startsWith('__') && node.name.value !== '__typename') { clean = false; return BREAK }
+        if (node.kind === Kind.FRAGMENT_SPREAD) spreads.add(node.name.value)
+        return undefined
+      }
+    })
+    if (!clean) return held
+    references.set(definition, spreads)
+  }
+  // Visit each fragment once, including spreads below fields, without expanding shared subtrees.
+  const active = new Set(), complete = new Set(), graph = [...references.get(operation)].map(fragment => [fragment, false])
+  while (graph.length) {
+    const [fragment, exiting] = graph.pop()
+    if (exiting) { active.delete(fragment); complete.add(fragment); continue }
+    if (complete.has(fragment)) continue
+    if (active.has(fragment) || !fragments.has(fragment)) return held
+    active.add(fragment); graph.push([fragment, true])
+    for (const dependency of references.get(fragments.get(fragment))) graph.push([dependency, false])
+  }
+  if (complete.size !== fragments.size) return held
+  // Count occurrences, even repeated spreads/aliases or conditionally skipped selections.
+  // Depth-first traversal stops at fields and rejects the second, so reuse cannot expand exponentially.
+  const selections = [...operation.selectionSet.selections]
+  let roots = 0
+  while (selections.length) {
+    const selection = selections.pop()
+    if (selection.kind === Kind.FIELD) {
+      if (++roots !== 1 || selection.name.value !== root) return held
+    } else {
+      const set = selection.kind === Kind.FRAGMENT_SPREAD ? fragments.get(selection.name.value).selectionSet : selection.selectionSet
+      selections.push(...set.selections)
+    }
+  }
+  return roots === 1 ? { operation: 'query', reviewed: true, name } : held
 }
 /** The closed envelope: POST /graphql, JSON, one object with only query, variables and a matching operationName (D8). */
 function picheGraphql(method, url, payload) {

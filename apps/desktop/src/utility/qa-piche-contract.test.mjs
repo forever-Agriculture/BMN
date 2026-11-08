@@ -33,6 +33,31 @@ describe('reviewed reads (101.2 AC1)', () => {
     const query = 'query AutomationRun($id: String!, $more: Boolean!) { run: automationRun(runId: $id) { id status @include(if: $more) logs @skip(if: $more) } }'
     expect(classifyQaRequest(contract, 'POST', api + '/graphql', bound, { contentType: 'application/json; charset=utf-8', data: Buffer.from(JSON.stringify({ query, operationName: 'AutomationRun', variables: { id: CANARY, more: true } })) }).classification).toBe('read')
   })
+  it.each([
+    ['named fragments', 'query AutomationSession { automationSession { ...SessionFields } } fragment SessionFields on AutomationSession { id __typename }'],
+    ['nested fragments', 'fragment Identity on AutomationSession { id } fragment SessionFields on AutomationSession { ...Identity status } query AutomationSession { automationSession { ...SessionFields } }'],
+    ['inline fragments', 'query AutomationSession { automationSession { ... on AutomationSession { id } } }'],
+    ['a root fragment', 'query AutomationSession { ...Root } fragment Root on Query { selected: automationSession { id } }'],
+    ['an inline root fragment', 'query AutomationSession { ... on Query { automationSession { id } } }'],
+    ['conditional spreads', 'query AutomationSession($show: Boolean!) { automationSession { ...SessionFields @include(if: $show) ... on AutomationSession @skip(if: $show) { status } } } fragment SessionFields on AutomationSession { id }'],
+    ['shared fragment dependencies', 'query AutomationSession { automationSession { ...Left ...Right } } fragment Left on AutomationSession { ...Identity status } fragment Right on AutomationSession { ...Identity phase } fragment Identity on AutomationSession { id }']
+  ])('accepts equivalent reviewed reads with %s and closed metadata only', (label, query) => {
+    const result = graphql(json({ query, operationName: 'AutomationSession', variables: { sessionId: CANARY, show: true } }))
+    expect(result).toMatchObject({ classification: 'read', reviewed: true, activity: null,
+      request: { body: { kind: 'graphql', operation: 'query', name: 'AutomationSession', sha256: sha(query) } } })
+    expect(Object.keys(result.request.body).sort()).toEqual(['kind', 'name', 'operation', 'sha256'])
+    secretFree(result)
+  })
+  it('checks a deeply shared fragment graph without expanding it', () => {
+    const definitions = Array.from({ length: 30 }, (_, index) => `fragment Part${index} on AutomationRun { ...Part${index + 1} ...Part${index + 1} }`)
+    const query = `query AutomationRun { automationRun { ...Part0 } } ${definitions.join(' ')} fragment Part30 on AutomationRun { id }`
+    expect(graphql(json({ query }))).toMatchObject({ classification: 'read', reviewed: true })
+  })
+  it('rejects a shared root graph at its second field occurrence', () => {
+    const definitions = Array.from({ length: 30 }, (_, index) => `fragment Root${index} on Query { ...Root${index + 1} ...Root${index + 1} }`)
+    const query = `query AutomationRun { ...Root0 } ${definitions.join(' ')} fragment Root30 on Query { automationRun { id } }`
+    expect(graphql(json({ query }))).toMatchObject({ classification: 'unknown', reviewed: false, request: { body: { name: null } } })
+  })
   it('reads the body only for a bound reviewed origin, lazily', () => {
     const payload = vi.fn(() => json({ query: RUN }))
     expect(classifyQaRequest(contract, 'GET', page + '/automations', bound, payload).classification).toBe('read')
@@ -56,8 +81,22 @@ describe('everything else on the API is held before send, without a name (101.2 
     ['an introspection field', json({ query: 'query AutomationRun { automationRun { id __schema { types { name } } } }' }), 'query'],
     ['another directive', json({ query: 'query AutomationRun { automationRun { id ... @defer { status } } }' }), 'query'],
     ['an unlisted directive', json({ query: 'query AutomationRun { automationRun { id @export(as: "x") } }' }), 'query'],
-    ['a fragment', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun { id }' }), null],
-    ['an inline fragment', json({ query: 'query AutomationRun { automationRun { ... on AutomationRun { id } } }' }), 'query'],
+    ['repeated root spreads', json({ query: 'query AutomationRun { ...Root ...Root } fragment Root on Query { automationRun { id } }' }), 'query'],
+    ['a skipped second root', json({ query: 'query AutomationRun { automationRun { id } ...Extra @skip(if: true) } fragment Extra on Query { automations { id } }' }), 'query'],
+    ['skipped introspection in a fragment', json({ query: 'query AutomationRun { automationRun { ...Run @skip(if: true) } } fragment Run on AutomationRun { __type(name: "Query") { name } }' }), 'query'],
+    ['an undefined fragment', json({ query: 'query AutomationRun { automationRun { ...Missing } }' }), 'query'],
+    ['a duplicate fragment', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun { id } fragment Run on AutomationRun { status }' }), 'query'],
+    ['a direct fragment cycle', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun { ...Run }' }), 'query'],
+    ['an indirect fragment cycle', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun { ...Identity } fragment Identity on AutomationRun { ...Run }' }), 'query'],
+    ['an unused fragment', json({ query: 'query AutomationRun { automationRun { id } } fragment Unused on AutomationRun { status }' }), 'query'],
+    ['an extra root hidden in a fragment', json({ query: 'query AutomationRun { automationRun { id } ...Extra } fragment Extra on Query { automations { id } }' }), 'query'],
+    ['an extra root hidden in an inline fragment', json({ query: 'query AutomationRun { automationRun { id } ... on Query { automations { id } } }' }), 'query'],
+    ['two aliased roots from one fragment', json({ query: 'query AutomationRun { ...Root } fragment Root on Query { a: automationRun { id } b: automationRun { id } }' }), 'query'],
+    ['another root hidden in a fragment', json({ query: 'query AutomationRun { ...Root } fragment Root on Query { conversations { id } }' }), 'query'],
+    ['introspection in a fragment', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun { __schema { types { name } } }' }), 'query'],
+    ['a disallowed spread directive', json({ query: 'query AutomationRun { automationRun { ...Run @defer } } fragment Run on AutomationRun { id }' }), 'query'],
+    ['a disallowed fragment directive', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun @export(as: "x") { id }' }), 'query'],
+    ['a mutation beside a fragmented read', json({ query: 'query AutomationRun { automationRun { ...Run } } fragment Run on AutomationRun { id } mutation DeleteAutomation { deleteAutomation { id } }' }), null],
     ['malformed GraphQL', json({ query: 'query AutomationRun { automationRun { id ' }), null],
     ['a mismatched operationName', json({ query: RUN, operationName: 'AutomationRuns' }), 'query'],
     ['extensions (persisted queries)', json({ query: RUN, extensions: { persistedQuery: { sha256Hash: CANARY } } }), null],
@@ -235,6 +274,13 @@ describe('the gate sends only what it classified (101.2 AC1, AC2, AC4)', () => {
     const f = fixture(api + '/graphql', 'POST', json({ query: RUN, variables: { runId: CANARY } }))
     await gateQaRequest(f.route, f.broker, f.close)
     expect(f.events).toEqual(['observe', 'network', 'fulfill']); secretFree(f.broker.observe.mock.calls)
+  })
+  it('a fragmented reviewed read crosses the same audit-before-send path', async () => {
+    const query = 'query AutomationSession { automationSession { ...SessionFields } } fragment SessionFields on AutomationSession { id }'
+    const f = fixture(api + '/graphql', 'POST', json({ query, variables: { sessionId: CANARY } }))
+    await gateQaRequest(f.route, f.broker, f.close)
+    expect(f.events).toEqual(['observe', 'network', 'fulfill'])
+    secretFree(f.broker.observe.mock.calls)
   })
   it('a mutation is held and never reaches the network', async () => {
     const f = fixture(api + '/graphql', 'POST', json({ query: 'mutation DeleteAutomation($id: String!) { deleteAutomation(automationId: $id) { id } }', variables: { id: CANARY } }))
