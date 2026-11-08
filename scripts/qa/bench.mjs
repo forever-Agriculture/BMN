@@ -7,7 +7,9 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { atomicJson, benchArguments, disposableEnvironment, isLiveProcess, processIdentity } from './bench-lib.mjs'
-import { allTraces, configFor, createGroup, createLaunch, currentFile, launchLeaseHeld, outstanding, ownState, publish, readCurrent, readJson, repo, requestStop, runPath, sleep, traceCompleted, transition, withLifecycleLock } from './bench-state.mjs'
+import { allTraces, configFor, createGroup, createLaunch, currentFile, finishQuiescentFailure, launchLeaseHeld, outstanding, ownState, publish, readCurrent, readJson, recoveryLaunchPolicy, repo, requestStop, runPath, sleep, traceCompleted, transition, withLifecycleLock } from './bench-state.mjs'
+
+import { benchCandidate } from './bench-candidate.mjs'
 
 const gates = new Set()
 const fileIdentity = path => { const stat = statSync(path); return { device: stat.dev, inode: stat.ino } }
@@ -54,7 +56,7 @@ function reserve(options, binary) {
       writeFileSync(busConfig, `<busconfig><type>session</type><listen>unix:tmpdir=${runtime}</listen><auth>EXTERNAL</auth><policy context="default"><allow user="*"/><allow own="*"/><allow send_destination="*"/><allow receive_sender="*"/></policy></busconfig>`, { mode: 0o600 })
       writeFileSync(join(root, 'synthetic-project/README.md'), '# QA project\nSynthetic data only.\n')
       const config = { version: 2, previousRunId: prior?.runId, runId, root, run, currentFile, recoveryRoot, tempParent, tempParentIdentity: fileIdentity(tempParent), rootIdentity: fileIdentity(root),
-        group, busConfig, node: process.execPath, binary, build, packaged: Boolean(options.binary), port: options.port, token: randomBytes(32).toString('hex') }
+        group, busConfig, node: process.execPath, binary, build, packaged: Boolean(options.binary), candidateSha256: build ? null : benchCandidate(binary, repo, Boolean(options.binary)), port: options.port, token: randomBytes(32).toString('hex') }
       atomicJson(join(run, 'config.json'), config)
       publish({ ...config, status: 'starting', starter: processIdentity(process.pid), tracers: [] })
       return config
@@ -68,8 +70,8 @@ function reserve(options, binary) {
   })
 }
 function trace(config, role, key) {
-  const { entry, fd } = createLaunch(config, role, key)
   const state = readCurrent()
+  const { entry, fd } = createLaunch(config, role, key, state.cleanupDeadlineAt)
   publish({ ...state, tracers: [...state.tracers, entry], ...(role === 'recovery' ? { recoveryPending: { key } } : {}) })
   const log = openSync(join(config.run, role === 'workload' ? 'bench.log' : `recovery-${key}.log`), 'a', 0o600)
   let child
@@ -92,6 +94,11 @@ function trace(config, role, key) {
 }
 function release(gate) { gate.end('go\n'); gates.delete(gate) }
 function startRecoveryLocked(config) {
+  const state = readCurrent(), decision = recoveryLaunchPolicy(state)
+  if (!decision.allowed) {
+    if (state.cleanupError !== decision.reason) publish({ ...state, cleanupError: decision.reason })
+    return readCurrent()
+  }
   const key = randomBytes(8).toString('hex')
   const launched = trace(config, 'recovery', key)
   release(launched.gate)
@@ -118,16 +125,16 @@ async function stop(runId, error, retry = false) {
   while (Date.now() < deadline) {
     const current = ownState(runId) ?? readJson(join(config.run, 'receipt.json'))
     if (current.status === 'stopped' && !outstanding(current).length && !existsSync(config.root) && !existsSync(config.group.path)) {
-      const traces = allTraces(current).map(entry => ({ key: entry.key, complete: traceCompleted(runId, entry) }))
+      const traces = allTraces(current).map(entry => ({ key: entry.key, complete: !current.cleanupUntraced && traceCompleted(runId, entry) }))
       atomicJson(join(config.run, 'completion-proof.json'), { stopped: true, rootsDeleted: true, groupRemoved: true, traces })
       return { stopped: true, cleanupComplete: true, evidence: config.run, traceComplete: traces.every(item => item.complete) }
     }
-    if (current.cleanupError && !isLiveProcess(current.watchdog?.identity)) throw new Error(current.cleanupError)
     if (current.runId !== runId) throw new Error('QA generation changed; another run was not stopped')
     ensureRecovery(runId)
+    finishQuiescentFailure(runId)
     await sleep(100)
   }
-  throw new Error('QA stop timed out; retryable stopping state and evidence preserved')
+  throw new Error(ownState(runId)?.cleanupError ?? 'QA stop timed out; retryable stopping state and evidence preserved')
 }
 async function start(options) {
   const binary = options.binary ? resolve(options.binary) : options.electron ? resolve(options.electron) : createRequire(join(repo, 'apps/desktop/package.json'))('electron')
@@ -162,7 +169,7 @@ async function start(options) {
       const state = ownState(config.runId)
       if (!state) throw new Error('QA starter was superseded; the newer run is untouched')
       if (state.status === 'running' && isLiveProcess(state.watchdog?.identity) && isLiveProcess(state.watchdog?.tracer)) {
-        console.log(JSON.stringify({ status: state.status, cdp: state.cdp, root: config.root, evidence: config.run, processes: state.processes,
+        console.log(JSON.stringify({ status: state.status, runId: config.runId, candidateSha256: state.candidateSha256, cdp: state.cdp, root: config.root, evidence: config.run, processes: state.processes,
           drive: 'pnpm run qa:bench -- do snapshot', stop: 'pnpm run qa:bench -- --stop' }, null, 2))
         return
       }

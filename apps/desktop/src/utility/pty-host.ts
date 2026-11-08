@@ -2,8 +2,9 @@
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { benchProcReader, benchScopeRequest } from './bench-proc-reader'
 import { QUIET_LEDGER_KEY } from './quiet-hours-delivery'
 import {
   ERROR_CODES,
@@ -350,6 +351,22 @@ async function start(): Promise<void> {
     turnChanges,
     roots,
     cliPath,
+    ...(() => {
+      const request = benchScopeRequest(process.argv, process.env)
+      if (request === null) return {}
+      const root = dirname(request.scopeFile)
+      const save = (name: string, value: unknown) => {
+        const path = join(root, name), temp = `${path}.${process.pid}.tmp`
+        writeFileSync(temp, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx' }); renameSync(temp, path)
+      }
+      const reader = benchProcReader(request.scopeFile, request.runId, { fault: () => {
+        try { save('scope-fault.json', { version: 1, runId: request.runId, code: 'QA_SCOPE_INVALID' }) }
+        finally { process.exit(1) }
+      } })
+      const fields = readFileSync('/proc/self/stat', 'utf8').split(') ').at(-1)!.trim().split(/\s+/u)
+      save('scope-ready.json', { ...reader.proof, pid: process.pid, ticks: fields[19] })
+      return { proc: reader }
+    })(),
     ...(process.argv.includes('--self-test-host') ? { now: () => selfTestClock ?? new Date() } : {}),
     // Electron self-test only (Story 30.3): Telegram talks to the main process's local fake Bot API.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN

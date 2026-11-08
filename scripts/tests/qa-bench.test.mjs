@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { benchArguments, disposableEnvironment, loopbackEndpoint, validateAction } from '../qa/bench-lib.mjs'
-import { deleteRoot, terminalTraceEvidence, validateRoot, validateStateRoot, withLifecycleLock } from '../qa/bench-state.mjs'
+import { cleanupDeadline, recoveryLaunchPolicy, deleteRoot, terminalTraceEvidence, validateRoot, validateStateRoot, withLifecycleLock } from '../qa/bench-state.mjs'
 
 describe('QA bench shell contract', () => {
   it('accepts pnpm separators, actions, stop, and ephemeral or explicit ports', () => {
@@ -155,5 +155,40 @@ describe('QA whole-life terminal evidence', () => {
   it('rejects detached or missing trace evidence', () => {
     expect(terminalTraceEvidence('').complete).toBe(false)
     expect(terminalTraceEvidence('11 +++ exited with 0 +++\nstrace: Process 12 detached\n').complete).toBe(false)
+  })
+})
+
+describe('QA recovery keeps its admission and cleanup budget', () => {
+  const first = 1700000000000
+  const stopping = () => ({ status: 'stopping', stopRequestedAt: new Date(first).toISOString(), cleanupDeadlineAt: first + 30000, tracers: [] })
+
+  it('never automatically replaces an initial failed admission during repeated polling', () => {
+    const state = stopping()
+    let launches = 0
+    for (let tick = 0; tick < 300; tick++) {
+      if (recoveryLaunchPolicy(state, first + tick * 100).allowed) {
+        launches++
+        state.tracers.push({ role: 'recovery' })
+      }
+    }
+    expect(launches).toBe(1)
+    expect(recoveryLaunchPolicy(state, first + 100).reason).toContain('admission failed')
+  })
+
+  it('allows only one successor after a monitor that actually became ready', () => {
+    const state = { ...stopping(), watchdog: { ready: true }, tracers: [{ role: 'workload' }, { role: 'recovery' }] }
+    expect(recoveryLaunchPolicy(state, first + 100).allowed).toBe(true)
+    state.tracers.push({ role: 'recovery' })
+    expect(recoveryLaunchPolicy(state, first + 200).allowed).toBe(false)
+    expect(recoveryLaunchPolicy({ ...state, cleanupError: undefined }, first + 300).allowed).toBe(false)
+  })
+
+  it('preserves the original deadline across retries and successor actors', () => {
+    const state = stopping()
+    expect(cleanupDeadline(state, first + 20000)).toBe(first + 30000)
+    expect(cleanupDeadline({ stopRequestedAt: state.stopRequestedAt }, first + 20000)).toBe(first + 30000)
+    expect(recoveryLaunchPolicy(state, first + 30000).allowed).toBe(false)
+    expect(recoveryLaunchPolicy(state, first + 50000).allowed).toBe(false)
+    expect(() => cleanupDeadline({ ...state, cleanupDeadlineAt: first + 60000 })).toThrow('deadline')
   })
 })

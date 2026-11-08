@@ -9,6 +9,8 @@ import { _electron as electron } from 'playwright'
 import { atomicJson, isLiveProcess, loopbackEndpoint, processIdentity, validateAction } from './bench-lib.mjs'
 import { allTraces, configFor, groupState, requestStop, transition } from './bench-state.mjs'
 
+import { benchCandidate } from './bench-candidate.mjs'
+
 const config = configFor(JSON.parse(readFileSync(process.argv[2], 'utf8')).runId)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const sleep = ms => new Promise(resolveWait => setTimeout(resolveWait, ms))
@@ -47,11 +49,18 @@ async function main() {
     const result = spawnSync(join(config.root, 'bin/pnpm'), ['run', 'build'], { cwd: repo, env: process.env, stdio: 'inherit' })
     if (result.status !== 0) throw new Error('Build failed inside the isolated QA workload')
   }
+  const candidateSha256 = benchCandidate(config.binary, repo, config.packaged)
+  if (config.candidateSha256 !== null && config.candidateSha256 !== candidateSha256) throw new Error('QA candidate changed before launch')
+  const scopeFile = join(config.run, 'process-scope.json')
+  atomicJson(scopeFile, { version: 1, runId: config.runId, group: { path: config.group.path, device: config.group.device, inode: config.group.inode } })
   application = await electron.launch({ chromiumSandbox: true, executablePath: config.binary, timeout: 40000,
     args: ['--ozone-platform=headless', '--ozone-override-screen-size=1920,1080', '--force-device-scale-factor=1',
-      '--disable-partial-raster', '--num-raster-threads=1', '--password-store=basic', '--remote-debugging-address=127.0.0.1',
-      ...(config.packaged ? [] : [join(repo, 'apps/desktop')]), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
-    cwd: join(config.root, 'synthetic-project'), env: process.env
+      '--disable-partial-raster', '--num-raster-threads=1', '--disable-gpu', '--password-store=basic', '--remote-debugging-address=127.0.0.1',
+      '--disable-background-networking', '--disable-component-update',
+      '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost', '--disable-dev-shm-usage',
+      ...(config.packaged ? [] : [join(repo, 'apps/desktop')]), '--bmn-test-mode', '--bmn-qa-bench', '--', '/bin/bash', '--noprofile', '--norc'],
+    cwd: join(config.root, 'synthetic-project'), env: { ...process.env, DBUS_SYSTEM_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
+      BMN_QA_SCOPE_FILE: scopeFile, BMN_QA_RUN_ID: config.runId }
   })
   application.on('close', () => { void shutdown() })
   const page = await application.firstWindow()
@@ -123,7 +132,8 @@ async function main() {
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(config.port, '127.0.0.1', resolveListen) })
   const running = transition(config.runId, ['starting'], state => {
     if (!isLiveProcess(state.watchdog?.identity) || !isLiveProcess(state.watchdog?.tracer)) return null
-    return { ...state, status: 'running', cdp, control: loopbackEndpoint(server.address().port), fixture, processes }
+    if (benchCandidate(config.binary, repo, config.packaged) !== candidateSha256) throw new Error('QA candidate changed during startup')
+    return { ...state, status: 'running', candidateSha256, cdp, control: loopbackEndpoint(server.address().port), fixture, processes }
   })
   if (running?.status !== 'running' || running.pid !== process.pid) throw new Error('QA startup lost its recovery monitor or was cancelled')
 }

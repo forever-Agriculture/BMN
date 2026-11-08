@@ -9,6 +9,9 @@ import type { ListeningPort } from '@bmn/protocol'
  * three times as long under load (Story 41.1 AC4, measured 2026-09-29).
  */
 export interface ProcReader {
+  beginScan?(): void
+  endScan?(): void
+  close?(): void
   readdir(path: string): string[]
   readFile(path: string): Buffer
   readlink(path: string): string
@@ -205,6 +208,13 @@ export async function scanSessionPorts(
   memory: ScanMemory = createScanMemory(),
   now: () => number = () => performance.now()
 ): Promise<Map<string, ListeningPort[]>> {
+  proc.beginScan?.()
+  try { return await scanSessionPortsNow(proc, sessionIds, uid, memory, now) }
+  finally { proc.endScan?.() }
+}
+
+async function scanSessionPortsNow(proc: ProcReader, sessionIds: ReadonlySet<string>, uid: number,
+  memory: ScanMemory, now: () => number): Promise<Map<string, ListeningPort[]>> {
   const result = new Map<string, ListeningPort[]>()
   if (sessionIds.size === 0) return result
   const tcp = parseListeningSockets(proc.readFile('/proc/net/tcp').toString('utf8'), 4)

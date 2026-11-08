@@ -43,7 +43,7 @@ def matches(info, expected):
 
 def environment(root):
     env = {'PATH': str(root / 'bin') + ':/usr/bin:/bin', 'HOME': str(root / 'home'),
-           'USER': 'qa', 'SHELL': '/bin/bash', 'LANG': 'C.UTF-8', 'TZ': 'UTC',
+           'USER': 'qa', 'SHELL': '/bin/bash', 'LANG': 'C.UTF-8', 'TZ': 'UTC', 'SYSTEMD_BYPASS_USERDB': '1',
            'TMPDIR': str(root / 'tmp'), 'BMN_LAUNCH_CWD': str(root / 'synthetic-project')}
     for name in ['config', 'data', 'state', 'cache', 'runtime']:
         env['XDG_' + name.upper() + ('_DIR' if name == 'runtime' else '_HOME')] = str(root / name)

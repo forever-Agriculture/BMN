@@ -30,7 +30,7 @@ export function validateAction(args) {
 
 export function disposableEnvironment(root) {
   return {
-    PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: join(root, 'home'), USER: 'qa', SHELL: '/bin/bash', LANG: 'C.UTF-8', TZ: 'UTC',
+    PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: join(root, 'home'), USER: 'qa', SHELL: '/bin/bash', LANG: 'C.UTF-8', TZ: 'UTC', SYSTEMD_BYPASS_USERDB: '1',
     ...Object.fromEntries(['config', 'data', 'state', 'cache', 'runtime'].map(name => [`XDG_${name.toUpperCase()}_${name === 'runtime' ? 'DIR' : 'HOME'}`, join(root, name)])),
     ...Object.fromEntries(['config', 'data', 'state', 'runtime'].map(name => [`BMN_${name.toUpperCase()}_HOME`, join(root, name, 'bmn')])),
     CLAUDE_CONFIG_DIR: join(root, 'config/claude'), CODEX_HOME: join(root, 'config/codex'), OPENCODE_CONFIG_DIR: join(root, 'config/opencode'),

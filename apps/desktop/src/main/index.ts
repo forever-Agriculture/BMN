@@ -384,7 +384,8 @@ async function launchHostWithChannel(): Promise<{
   const { environment, args } = selfTestTaps
     ? await selfTestTaps.hostLaunch(hostEnvironment(repoRoot))
     // A test-mode window's host knows it is one (Story 76.8: its Telegram may talk to a loopback fake Bot API).
-    : { environment: hostEnvironment(repoRoot), args: rendererTestMode ? ['--bmn-test-host'] : [] }
+    : { environment: hostEnvironment(repoRoot), args: rendererTestMode
+      ? ['--bmn-test-host', ...(process.argv.includes('--bmn-qa-bench') ? ['--bmn-qa-host'] : [])] : [] }
   const client = await PtyHostClient.launch(hostEntry, environment, { args })
   const ready = await client.ready
   if (ready.electronVersion !== EXPECTED_ELECTRON_VERSION) {

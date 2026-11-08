@@ -1234,6 +1234,7 @@ export class CompanionService {
   async close(): Promise<void> {
     this.history.stop()
     this.ports.stop()
+    this.options.proc?.close?.()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.pager.close()
     this.cards.dispose()

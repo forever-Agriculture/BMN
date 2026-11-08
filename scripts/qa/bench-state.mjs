@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { constants as osConstants } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { atomicJson, isLiveProcess, processIdentity } from './bench-lib.mjs'
 
@@ -76,7 +77,7 @@ export function ownState(runId) {
   })
 }
 
-export function createLaunch(config, role, key) {
+export function createLaunch(config, role, key, deadlineAt) {
   if (!['workload', 'recovery'].includes(role) || !/^[a-f0-9]{16}$/u.test(key)) throw new Error('Invalid QA launch')
   const group = createGroup(config.runId, key), path = join(config.run, `launch-${key}.lease`)
   let fd
@@ -84,7 +85,7 @@ export function createLaunch(config, role, key) {
     fd = openSync(path, 'wx', 0o600)
     writeFileSync(fd, `${config.runId}:${key}\n`); fsyncSync(fd)
     const lease = { path, ...identity(fstatSync(fd)) }
-    const entry = { role, key, identity: null, recorderIdentity: null, group, lease, gateDeadlineAt: Date.now() + 10000,
+    const entry = { role, key, identity: null, recorderIdentity: null, group, lease, gateDeadlineAt: Math.min(Date.now() + 10000, deadlineAt ?? Infinity),
       file: role === 'workload' ? 'isolation.strace' : `recovery-${key}.strace`,
       actorFile: role === 'workload' ? 'launcher.json' : `watchdog-${key}.json`, recorderFile: `recorder-${key}.json`, certificateFile: `certificate-${key}.json` }
     const acquired = spawnSync('/usr/bin/flock', ['-x', '-n', '3'], { env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'pipe', fd] })
@@ -171,19 +172,57 @@ export function outstanding(state) {
 }
 export function traceOutstanding(runId, trace) { return !launchQuiescent(runId, trace) }
 
-export function terminalTraceEvidence(text) {
-  const tasks = new Set(), terminal = new Set(), errors = []
+export function terminalTraceEvidence(text, originalPid) {
+  const tasks = new Set(), terminal = new Set(), errors = [], exits = {}, parents = new Map()
+  let root = originalPid
   for (const line of text.split('\n')) {
     if (/strace:|Process \d+ detached/u.test(line)) errors.push(line)
     const match = /^(\d+)\s+(.*)$/u.exec(line)
     if (!match) continue
     const [, pid, call] = match
+    root ??= Number(pid)
     tasks.add(pid)
-    if (/^\+\+\+ (?:exited with \d+|killed by .+) \+\+\+$/u.test(call)) terminal.add(pid)
+    const ended = /^\+\+\+ (?:exited with (\d+)|killed by (SIG[A-Z0-9]+)(?: \(core dumped\))?) \+\+\+$/u.exec(call)
+    if (ended) {
+      if (terminal.has(pid)) errors.push('Ambiguous repeated task lifetime')
+      terminal.add(pid)
+      exits[pid] = ended[1] === undefined ? { exitCode: null, signal: osConstants.signals[ended[2]] ?? null } : { exitCode: Number(ended[1]), signal: null }
+    }
     const child = /^(?:(?:clone3?|fork|vfork)\(|<\.\.\. (?:clone3?|fork|vfork) resumed>).*\)\s*=\s*(\d+)(?:\s+\/\* (\d+) in strace's PID NS \*\/)?(?:\s|$)/u.exec(call)
-    if (child && Number(child[1]) > 0) tasks.add(child[2] ?? child[1])
+    if (child && Number(child[1]) > 0) {
+      const id = child[2] ?? child[1]
+      if (parents.has(id)) errors.push('Ambiguous repeated task birth')
+      parents.set(id, pid); tasks.add(id)
+    }
   }
-  return { complete: tasks.size > 0 && !errors.length && [...tasks].every(pid => terminal.has(pid)), tasks: [...tasks], errors }
+  // Counts alone cannot discharge an unobserved birth or a disconnected task.
+  const reached = new Set([String(root)]), children = new Map()
+  for (const [pid, parent] of parents) {
+    if (!children.has(parent)) children.set(parent, [])
+    children.get(parent).push(pid)
+  }
+  const pending = [String(root)]
+  for (let index = 0; index < pending.length; index++) for (const child of children.get(pending[index]) ?? []) {
+    if (reached.has(child)) { errors.push('Ambiguous task ancestry'); continue }
+    reached.add(child); pending.push(child)
+  }
+  const complete = tasks.size > 0 && !parents.has(String(root)) && !errors.length &&
+    [...tasks].every(pid => reached.has(pid) && terminal.has(pid))
+  return { complete, tasks: [...tasks], errors, exits }
+}
+
+function tracerStatusMatches(cert, terminal) {
+  const raw = cert.rawWaitStatus
+  if (!terminal || !Number.isInteger(raw) || raw < 0 || raw > 65535) return false
+  const signal = raw & 127
+  if (signal === 0) {
+    const exit = raw >>> 8
+    return raw === exit * 256 && cert.exitCode === exit && cert.signal === null && terminal.exitCode === exit && terminal.signal === null
+  }
+  // Core-dump flags describe each process separately; strace mirrors the signal,
+  // not whether the tracee and the wrapper each produced a core file.
+  return signal < 127 && raw <= 255 && cert.exitCode === null && cert.signal === signal &&
+    terminal.exitCode === null && terminal.signal === signal
 }
 
 export function traceCompleted(runId, trace) {
@@ -194,14 +233,18 @@ export function traceCompleted(runId, trace) {
     if (lstatSync(path).isSymbolicLink()) return false
     const cert = readJson(path)
     const sameProcess = (a, b) => a?.pid === b?.pid && a?.start_ticks === b?.start_ticks
-    if (cert.version !== 1 || cert.runId !== runId || cert.launchKey !== entry.key || cert.role !== entry.role || cert.rawWaitStatus !== 0 || cert.exitCode !== 0 || cert.signal !== null ||
+    if (cert.version !== 1 || cert.runId !== runId || cert.launchKey !== entry.key || cert.role !== entry.role ||
         !sameProcess(cert.recorderIdentity, recorder.recorderIdentity) || !sameProcess(cert.tracerIdentity, recorder.tracerIdentity) ||
         cert.launchGroupIdentity?.device !== entry.group.device || cert.launchGroupIdentity?.inode !== entry.group.inode || cert.traceErrors?.length !== 0) return false
     const fd = openSync(join(config.run, entry.file), constants.O_RDONLY | constants.O_NOFOLLOW)
     let bytes
     try { if (!matches(fstatSync(fd), cert.traceFileIdentity)) return false; bytes = readFileSync(fd) }
     finally { closeSync(fd) }
-    return bytes.length === cert.traceBytes && createHash('sha256').update(bytes).digest('hex') === cert.traceSha256 && terminalTraceEvidence(bytes.toString()).complete
+    const actor = actorIdentity(runId, entry)
+    if (!actor || actor.runId !== runId || actor.key !== entry.key || !sameProcess(actor.tracer, recorder.tracerIdentity)) return false
+    const terminal = terminalTraceEvidence(bytes.toString(), actor.pid)
+    return bytes.length === cert.traceBytes && createHash('sha256').update(bytes).digest('hex') === cert.traceSha256 &&
+      terminal.complete && tracerStatusMatches(cert, terminal.exits[String(actor.pid)])
   } catch { return false }
 }
 
@@ -310,8 +353,45 @@ export function requestStop(runId, error, retry = false) {
   const config = configFor(runId)
   return transition(runId, ['starting', 'running', 'stopping'], state => {
     validateStateRoot(state, config)
-    return { ...state, status: 'stopping', stopRequestedAt: state.stopRequestedAt ?? new Date().toISOString(), error: error?.message ?? state.error,
+    const now = Date.now()
+    return { ...state, status: 'stopping', stopRequestedAt: state.stopRequestedAt ?? new Date(now).toISOString(), cleanupDeadlineAt: cleanupDeadline(state, now), error: error?.message ?? state.error,
       cleanupError: retry ? undefined : state.cleanupError }
+  })
+}
+
+export function cleanupDeadline(state, now = Date.now()) {
+  const first = state.stopRequestedAt === undefined ? now : Date.parse(state.stopRequestedAt)
+  const deadline = state.cleanupDeadlineAt ?? first + 30000
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(deadline) || deadline !== first + 30000) throw new Error('Invalid QA cleanup deadline')
+  return deadline
+}
+
+/** Polling never renews admission or cleanup budgets. A failed birth is not retried. */
+export function recoveryLaunchPolicy(state, now = Date.now()) {
+  if (!['starting', 'stopping'].includes(state.status)) return { allowed: false, reason: 'QA generation is not recoverable' }
+  if (state.status === 'stopping' && now >= cleanupDeadline(state, now)) return { allowed: false, reason: 'QA shared cleanup deadline expired' }
+  const count = state.tracers.filter(trace => trace.role === 'recovery').length
+  if (!count) return { allowed: true }
+  if (!state.watchdog?.ready) return { allowed: false, reason: 'QA recovery admission failed; automatic relaunch refused' }
+  if (count >= 2) return { allowed: false, reason: 'QA recovery successor limit reached' }
+  return { allowed: true }
+}
+
+/** A preflight failure with no surviving actors needs no further executable launch.
+ * This untraced host cleanup can release owned storage, but never qualify QA evidence. */
+export function finishQuiescentFailure(runId) {
+  return withLifecycleLock(() => {
+    const state = ownState(runId)
+    if (state?.status !== 'stopping' || !state.cleanupError || isLiveProcess(state.watchdog?.identity)) return null
+    const config = configFor(runId)
+    validateStateRoot(state, config)
+    if (groupState(config).populated || outstanding(state).length) return null
+    const traces = allTraces(state)
+    for (const trace of traces) removeGroup({ ...config, group: trace.group })
+    atomicJson(join(config.run, 'quiescent-failure-cleanup.json'), { version: 1, runId, traceComplete: false, reason: state.cleanupError })
+    deleteRoot(config); removeGroup(config)
+    return publish({ ...state, status: 'stopped', stoppedAt: new Date().toISOString(), cleanupUntraced: true,
+      traceEvidence: traces.map(trace => ({ key: trace.key, complete: false })) })
   })
 }
 
