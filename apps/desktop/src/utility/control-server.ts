@@ -5,6 +5,11 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import { dirname, isAbsolute } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
+  HOOK_CARD_LIMITS,
+  HOOK_CARD_METHODS,
+  HOOK_CARD_OUTCOMES,
+  HOOK_CARD_RULE_SOURCES,
+  type HookCardRecord,
   DECISION_LIMITS,
   DECISION_REFERENCE_KINDS,
   GRANT_ACTION_RESULTS,
@@ -220,6 +225,8 @@ export interface ControlHandlers {
     effects: readonly HookEventEffect[]
     /** Epic 69: what the event says of a turn. Only a session's own hook may say it. */
     turn?: { conversation: string; turn: string | null; nested: boolean } | undefined
+    /** Story 113.5 AC3: this hook run's id and its card calls' outcomes, ids only. */
+    hookRun?: { runId: string; cards: readonly HookCardRecord[] } | undefined
     /** Story 76.4 AC2: the hook holds its conversation's away lock, so it may be handed the away state. */
     awayLock?: true | undefined
   }): Promise<unknown>
@@ -570,6 +577,35 @@ function requireEffects(params: Params, key: string): HookEventEffect[] {
     }
   }
   return value as HookEventEffect[]
+}
+
+const HOOK_RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const HOOK_CARD_KEYS = ['method', 'requestKey', 'kind', 'toolCallId', 'outcome', 'ruleSource']
+/**
+ * Story 113.5 AC3: a hook run's id and what each of its card calls came to. Closed shapes, ids only: no title, body,
+ * prompt, answer or reason text can ride along. Absent from older CLIs, which record nothing.
+ */
+function readHookCards(params: Params): { runId: string; cards: HookCardRecord[] } | undefined {
+  if (params.runId === undefined && params.cards === undefined) return undefined
+  if (typeof params.runId !== 'string' || !HOOK_RUN_ID.test(params.runId)) throw invalidError('runId must be a lowercase UUID, with cards')
+  const value = params.cards
+  if (!Array.isArray(value) || value.length > HOOK_CARD_LIMITS.perRun) throw invalidError(`cards must be an array of at most ${HOOK_CARD_LIMITS.perRun} entries`)
+  const cards = value.map((entry: unknown): HookCardRecord => {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry) || Object.keys(entry).some((key) => !HOOK_CARD_KEYS.includes(key))) {
+      throw invalidError(`cards entries take only: ${HOOK_CARD_KEYS.join(', ')}`)
+    }
+    const card = entry as Params
+    const method = requireEnum(card, 'method', HOOK_CARD_METHODS)
+    const outcome = requireEnum(card, 'outcome', HOOK_CARD_OUTCOMES)
+    const requestKey = requireText(card, 'requestKey', RULES.requestKey)
+    const kind = card.kind === undefined ? null : requireEnum(card, 'kind', ATTENTION_KINDS)
+    const toolCallId = card.toolCallId === undefined ? null : requireText(card, 'toolCallId', IDENTIFIER)
+    if (toolCallId !== null && !/^[\x21-\x7e]+$/.test(toolCallId)) throw invalidError('toolCallId must be printable ASCII without spaces')
+    const ruleSource = card.ruleSource === undefined ? null : requireEnum(card, 'ruleSource', HOOK_CARD_RULE_SOURCES)
+    if ((ruleSource !== null) !== (outcome === 'refused')) throw invalidError('ruleSource names the rule of a refused card, and only of one')
+    return { method, requestKey, kind, toolCallId, outcome, ruleSource }
+  })
+  return { runId: params.runId, cards }
 }
 
 /** The pid of the agent a hook speaks for, as the hook read it from the process table. */
@@ -1430,8 +1466,11 @@ export class ControlServer {
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
         const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'plugin', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
-          'conversation', 'turn', 'nested', 'awayLock'])
+          'conversation', 'turn', 'nested', 'awayLock', 'runId', 'cards'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
+        const hookRun = readHookCards(params)
+        // A run's card records come only from a session's own hook, never from the owner's token observing for one.
+        if (hookRun !== undefined && scope.kind !== 'session') throw unauthorized('Only a session hook may record its card calls')
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalidError('event must be printable ASCII without spaces')
         const source = readText(params, 'source', RULES.shownSource)
@@ -1486,6 +1525,7 @@ export class ControlServer {
           ...(claudeConfigDir === undefined ? {} : { claudeConfigDir }),
           ...(conversation === undefined ? {} : { turn: { conversation: conversation.toLowerCase(), turn: turnId ?? null, nested: params.nested === true } }),
           ...(params.awayLock === true ? { awayLock: true } : {}),
+          ...(hookRun === undefined ? {} : { hookRun }),
           effects
         })
       }

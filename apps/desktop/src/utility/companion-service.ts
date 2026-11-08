@@ -1044,6 +1044,12 @@ export class CompanionService {
         }),
         observeHookEvent: (p) => this.controlCall(async () => {
           const recorded = await this.observeHookEvent(p)
+          // Story 113.5 AC3: a hook run's card calls, ids and outcomes only; a failed write never fails the hook's event.
+          if (p.hookRun !== undefined && p.hookRun.cards.length > 0) {
+            await this.options.database.companion('recordHookCards', {
+              runId: p.hookRun.runId, sessionId: p.sessionId, incarnationId: p.incarnationId, agent: p.agent, event: p.event, cards: p.hookRun.cards
+            }, this.iso()).catch(() => undefined)
+          }
           // Epic 69: a tool that ran, a conversation that started or ended; it moves a turn's record and answers nothing.
           this.turns?.seen(p.sessionId, p.agent)
           if (p.turn !== undefined) this.turns?.observe({ sessionId: p.sessionId, app: p.agent, event: p.event, source: p.source, ...p.turn })

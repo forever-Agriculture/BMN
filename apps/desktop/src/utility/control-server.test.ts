@@ -891,6 +891,16 @@ describe('control server validation', () => {
     ['empty model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: '' }],
     ['non-string model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: 42 }],
     ['unknown hook parameter', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], pid: 12 }],
+    // Story 113.5 AC3: a hook run's card records are ids and outcomes in closed shapes; no text can ride along.
+    ['cards without a run id', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], cards: [{ method: 'open', requestKey: 'claude:question', outcome: 'opened' }] }],
+    ['run id not a UUID', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: 'run-1', cards: [] }],
+    ['run id without cards', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11' }],
+    ['too many cards', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: Array(17).fill({ method: 'open', requestKey: 'claude:question', outcome: 'opened' }) }],
+    ['a card carrying a title', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [{ ...{ method: 'open', requestKey: 'claude:question', outcome: 'opened' }, title: 'Pick one' }] }],
+    ['an unknown card outcome', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [{ ...{ method: 'open', requestKey: 'claude:question', outcome: 'opened' }, outcome: 'settled' }] }],
+    ['a rule on an opened card', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [{ ...{ method: 'open', requestKey: 'claude:question', outcome: 'opened' }, ruleSource: 'away-question-refusal' }] }],
+    ['a refusal without its rule', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [{ ...{ method: 'open', requestKey: 'claude:question', outcome: 'opened' }, outcome: 'refused' }] }],
+    ['a call id with a space', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [{ ...{ method: 'open', requestKey: 'claude:question', outcome: 'opened' }, toolCallId: 'toolu 1' }] }],
     // Story 31.1: a Claude folder is an absolute path, and only a Claude hook reports one.
     ['relative claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: 'conf/glm' }],
     ['claude config folder from codex', 'hook.observe', { agent: 'codex', event: 'Stop', effects: [], claudeConfigDir: '/srv/glm' }],
@@ -1057,6 +1067,13 @@ describe('control server validation', () => {
       model: 'GLM-5.3',
       effects: []
     })
+    // Story 113.5 AC3: a session hook's run id and card outcomes reach the handler as closed records.
+    await client.request('hook.observe', { agent: 'codex', event: 'PreToolUse', effects: [], runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [
+      { method: 'open', requestKey: 'codex:question', kind: 'question', toolCallId: 'call_1', outcome: 'refused', ruleSource: 'away-question-refusal' },
+      { method: 'withdraw', requestKey: 'codex:turn', outcome: 'unchanged' }] })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({ hookRun: { runId: '0b6f5a52-7f0e-4c1e-9a43-2f0a8f5b7c11', cards: [
+      { method: 'open', requestKey: 'codex:question', kind: 'question', toolCallId: 'call_1', outcome: 'refused', ruleSource: 'away-question-refusal' },
+      { method: 'withdraw', requestKey: 'codex:turn', kind: null, toolCallId: null, outcome: 'unchanged', ruleSource: null }] } }))
     // Story 31.1: the folder a Claude session's settings live in reaches the handler as sent.
     await client.request('hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: '/home/owner/.claude-glm' })
     expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({

@@ -1999,6 +1999,21 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       }
     })
 
+    it('records each card call of a hook run with its run id and outcome, a refusal with its rule, never text (Story 113.5 AC3)', async () => {
+      for (const [app, tool, refused] of [['claude', 'AskUserQuestion', true], ['codex', 'request_user_input', true], ['claude', 'AskUserQuestion', false]] as const) {
+        const fixture = await cliFixture()
+        const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+        fixture.handlers.openAttention.mockResolvedValueOnce(refused ? { refused: true, changed: false, reason: REASON } : { state: 'open' })
+        await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: asks(session, tool) })
+        const observed = fixture.handlers.observeHookEvent.mock.calls.at(-1)?.[0] as { hookRun?: { runId: string; cards: Array<Record<string, unknown>> } } | undefined
+        expect(observed?.hookRun?.runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+        const open = observed?.hookRun?.cards.find(card => card.method === 'open')
+        expect(open).toEqual({ method: 'open', requestKey: `${app}:question`, kind: 'question', toolCallId: expect.any(String), outcome: refused ? 'refused' : 'opened', ruleSource: refused ? 'away-question-refusal' : null })
+        // Ids and outcomes only: the question's words never reach the record.
+        expect(JSON.stringify(observed?.hookRun)).not.toMatch(/question\?|header|options/iu)
+      }
+    })
+
     it('offers nothing for a sub-agent\'s question, so nothing changes there', async () => {
       const fixture = await cliFixture()
       const session = await claudeSession(fixture.root)

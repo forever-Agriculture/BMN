@@ -305,12 +305,14 @@ async function runHook(args) {
   // before it asks and held until this process ends, so an older revision can never be printed after a newer one.
   const awayFacts = marks !== null && ['SessionStart', 'PostToolUse'].includes(event.hook_event_name) ? marks.turnFacts(agent, event) : {}
   const awayLock = awayFacts.conversation !== undefined && awayFacts.nested !== true && await holdAwayLock(agent, awayFacts.conversation)
+  // Story 113.5 AC3: one id for this hook run, so every card call it makes can be told apart from another run's.
+  const runId = randomUUID()
   const calls = [...requests, (outcomes) => {
     reported = Date.now()
     // Story 75.6: a conversation's start names the conversation whatever turn changes do, so BMN can brief it once.
     // Story 76.4: and a tool call names it too, so the away state can follow the conversation it was handed to.
     const facts = marks !== null && (turns || ['SessionStart', 'PostToolUse'].includes(event.hook_event_name)) ? marks.turnFacts(agent, event) : {}
-    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, awayLock && facts.conversation !== undefined ? { ...facts, awayLock: true } : facts)
+    return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, awayLock && facts.conversation !== undefined ? { ...facts, awayLock: true } : facts, runId)
   }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])
   // BMN's answer to the report of this event says when a message waits for this session and carries its start
@@ -485,7 +487,7 @@ function toolFingerprint(event, agent) {
  * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
  * empty, which is what the owner needs to see when a request they expected never arrived.
  */
-function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined, configDir = undefined, turn = {}) {
+function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined, configDir = undefined, turn = {}, runId = undefined) {
   const eventName = hookEventName(event.hook_event_name)
   if (eventName === undefined) return undefined
   const byMethod = { 'attention.open': 'opened', 'attention.withdraw': 'withdrew', 'attention.resolve': 'answered' }
@@ -525,7 +527,35 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
       ...(model === undefined ? {} : { model }),
       ...(configDir === undefined ? {} : { claudeConfigDir: configDir }),
       // Epic 69: which conversation and turn this event belongs to, and whether a sub-agent speaks.
-      ...turn
+      ...turn,
+      // Story 113.5 AC3: what each card call of this run did, ids and outcomes only, never a title, body or answer.
+      ...(runId === undefined ? {} : { runId, cards: cardRecords(event, requests, outcomes) })
     }
   }
+}
+
+const CARD_METHODS = { 'attention.open': 'open', 'attention.withdraw': 'withdraw', 'attention.resolve': 'resolve' }
+const CARD_ID = /^[\x21-\x7e]{1,128}$/u
+/** Story 113.5 AC3: one text-free record per card call, with the outcome BMN gave it (a refusal included). */
+function cardRecords(event, requests, outcomes) {
+  const records = []
+  requests.forEach((request, index) => {
+    const method = CARD_METHODS[request.method]
+    if (method === undefined || records.length >= 16) return
+    const outcome = outcomes[index]
+    const result = isObject(outcome?.result) ? outcome.result : undefined
+    const word = outcome === undefined || outcome.error !== undefined || result === undefined ? 'error'
+      : result.refused === true ? 'refused' : result.changed === false ? 'unchanged'
+        : { open: 'opened', withdraw: 'withdrew', resolve: 'answered' }[method]
+    const params = request.params
+    const callId = [params.prompt?.toolUseId, params.evidence?.toolUseId, params.prompt?.requestRef, params.evidence?.requestRef, event.tool_use_id]
+      .find((value) => typeof value === 'string' && CARD_ID.test(value))
+    records.push({
+      method, requestKey: params.requestKey, outcome: word,
+      ...(typeof params.kind === 'string' ? { kind: params.kind } : {}),
+      ...(callId === undefined ? {} : { toolCallId: callId }),
+      ...(word === 'refused' ? { ruleSource: 'away-question-refusal' } : {})
+    })
+  })
+  return records
 }

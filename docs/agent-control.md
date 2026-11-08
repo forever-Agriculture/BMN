@@ -625,6 +625,15 @@ The owner dialog separately labels earlier host runs from an owner-only metadata
 what it keeps and leaves out are in [features.md](features.md#how-agents-reach-the-app). It has no
 control-socket method and appears only in the owner window; a history failure leaves live events working.
 
+Every hook run that makes a card call also leaves a card record (Story 113.5): one row per call in `hook_card_record`
+(`state.sqlite3`), with the run's own id (the hook mints one per run), the session and incarnation, the event, the call
+(open, withdraw, resolve), the request key and kind, the tool call's id, and what BMN made of it: opened, withdrew,
+answered, refused (the Away question refusal, which also names its rule, `away-question-refusal`), unchanged or error.
+No title, body, prompt, answer or reason text is kept. Only a session's own hook may report them; an older CLI reports
+none. The newest 20,000 rows are kept, beyond their sessions, so dev-auto's `interruptions.py` can count, for a run's
+time, phantoms (one call opened by two runs), duplicates (two runs for one call and event, from overlapping hook
+entries) and suppressions (an open refused or changing nothing). A failed write never fails the hook's event.
+
 ### Model origin flag
 
 Each hook event also tells BMN which model the agent is using, so the session can show its maker's

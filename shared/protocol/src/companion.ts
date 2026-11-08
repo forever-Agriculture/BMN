@@ -187,6 +187,25 @@ export function isHookEventName(value: string): boolean {
 
 export const HOOK_EVENT_EFFECTS = Object.freeze(['opened', 'withdrew', 'answered'] as const)
 export type HookEventEffect = (typeof HOOK_EVENT_EFFECTS)[number]
+/** Story 113.5 AC3: what one card call of a hook run came to; `refused` is the Away question refusal (Epic 106). */
+export const HOOK_CARD_OUTCOMES = Object.freeze(['opened', 'withdrew', 'answered', 'refused', 'unchanged', 'error'] as const)
+export type HookCardOutcome = (typeof HOOK_CARD_OUTCOMES)[number]
+export const HOOK_CARD_METHODS = Object.freeze(['open', 'withdraw', 'resolve'] as const)
+export type HookCardMethod = (typeof HOOK_CARD_METHODS)[number]
+/** The only rule a card's outcome can name today (D2(a) of Epic 113 left no settled-question rules). */
+export const HOOK_CARD_RULE_SOURCES = Object.freeze(['away-question-refusal'] as const)
+export type HookCardRuleSource = (typeof HOOK_CARD_RULE_SOURCES)[number]
+/** At most this many card calls are recorded for one hook run; the newest rows kept in all. */
+export const HOOK_CARD_LIMITS = Object.freeze({ perRun: 16, rows: 20_000, callId: 128 })
+/** One card call of one hook run: ids and outcome only, never a title, body, prompt, answer or reason text. */
+export interface HookCardRecord {
+  method: HookCardMethod
+  requestKey: string
+  kind: string | null
+  toolCallId: string | null
+  outcome: HookCardOutcome
+  ruleSource: HookCardRuleSource | null
+}
 
 /** One live hook observation; only a restricted metadata projection is retained after restart. */
 export interface HookEventRecord {

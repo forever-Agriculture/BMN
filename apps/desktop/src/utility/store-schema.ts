@@ -10,6 +10,7 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'control_receipt',
   'conversation_binding',
   'first_run_setup',
+  'hook_card_record',
   'input_draft',
   'launch_set',
   'launch_template',
@@ -888,5 +889,28 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       CREATE INDEX session_message_by_workspace ON session_message(workspace_id, sent_at);
       CREATE INDEX session_message_by_receiver ON session_message(receiver_session_id, state, sent_at);
       CREATE INDEX session_message_by_sender ON session_message(sender_session_id, sent_at);`
+  },
+  {
+    // Story 113.5 AC3: what each card call of a hook run came to, ids and outcomes only (no question text), so dev-auto's
+    // interruptions.py can count phantoms, duplicates and suppressions. Rows outlive their session; the store keeps the newest.
+    version: 36,
+    sql: `CREATE TABLE hook_card_record (
+        run_id TEXT NOT NULL,
+        position INTEGER NOT NULL CHECK (position >= 0 AND position < 16),
+        session_id TEXT NOT NULL,
+        incarnation_id TEXT,
+        agent TEXT NOT NULL,
+        event TEXT NOT NULL,
+        method TEXT NOT NULL CHECK (method IN ('open', 'withdraw', 'resolve')),
+        request_key TEXT NOT NULL,
+        kind TEXT CHECK (kind IS NULL OR kind IN ('question', 'permission', 'review', 'notice')),
+        tool_call_id TEXT,
+        outcome TEXT NOT NULL CHECK (outcome IN ('opened', 'withdrew', 'answered', 'refused', 'unchanged', 'error')),
+        rule_source TEXT CHECK ((rule_source IS NULL) = (outcome <> 'refused')),
+        observed_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, position)
+      );
+      CREATE INDEX hook_card_by_session ON hook_card_record(session_id, observed_at);
+      CREATE INDEX hook_card_by_call ON hook_card_record(session_id, tool_call_id);`
   }
 ])
