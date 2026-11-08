@@ -10,6 +10,7 @@ import { atomicJson, benchArguments, disposableEnvironment, isLiveProcess, proce
 import { allTraces, configFor, createGroup, createLaunch, currentFile, finishQuiescentFailure, launchLeaseHeld, outstanding, ownState, publish, readCurrent, readJson, recoveryLaunchPolicy, repo, requestStop, runPath, sleep, traceCompleted, transition, withLifecycleLock } from './bench-state.mjs'
 
 import { benchCandidate } from './bench-candidate.mjs'
+import { prepareBenchQa } from './bench-qa-record.mjs'
 
 const gates = new Set()
 const fileIdentity = path => { const stat = statSync(path); return { device: stat.dev, inode: stat.ino } }
@@ -57,6 +58,7 @@ function reserve(options, binary) {
       writeFileSync(join(root, 'synthetic-project/README.md'), '# QA project\nSynthetic data only.\n')
       const config = { version: 2, previousRunId: prior?.runId, runId, root, run, currentFile, recoveryRoot, tempParent, tempParentIdentity: fileIdentity(tempParent), rootIdentity: fileIdentity(root),
         group, busConfig, node: process.execPath, binary, build, packaged: Boolean(options.binary), candidateSha256: build ? null : benchCandidate(binary, repo, Boolean(options.binary)), port: options.port, token: randomBytes(32).toString('hex') }
+      config.qaInput = prepareBenchQa({ options, run, runId, candidateSha256: config.candidateSha256 })
       atomicJson(join(run, 'config.json'), config)
       publish({ ...config, status: 'starting', starter: processIdentity(process.pid), tracers: [] })
       return config

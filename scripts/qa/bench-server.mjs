@@ -120,7 +120,7 @@ async function main() {
             }
             case 'stop': result = { stopping: true }; break
           }
-          appendFileSync(join(config.run, 'actions.jsonl'), `${JSON.stringify({ at: new Date().toISOString(), args, result })}\n`, { mode: 0o600 })
+          appendFileSync(join(config.run, 'actions.jsonl'), `${JSON.stringify({ runId: config.runId, at: new Date().toISOString(), args, result })}\n`, { mode: 0o600 })
           response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result))
           if (args[0] === 'stop') setImmediate(() => { void shutdown().catch(fatal) })
         } catch (error) {

@@ -7,10 +7,11 @@ export function benchArguments(argv) {
   const args = argv[0] === '--' ? argv.slice(1) : argv
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     stop: { type: 'boolean' }, 'no-build': { type: 'boolean' },
-    electron: { type: 'string' }, binary: { type: 'string' }, port: { type: 'string', default: '0' }
+    electron: { type: 'string' }, binary: { type: 'string' }, port: { type: 'string', default: '0' }, 'qa-brief': { type: 'string' }, 'qa-seed': { type: 'string' }
   } })
   if (!/^\d+$/u.test(values.port) || Number(values.port) > 65535) throw new Error('Port must be an integer from 0 to 65535')
   if (values.stop && positionals.length) throw new Error('--stop takes no action')
+  if (Boolean(values['qa-brief']) !== Boolean(values['qa-seed']) || values['qa-brief'] && (values.stop || positionals.length)) throw new Error('Declare --qa-brief and --qa-seed together only at bench start')
   if (values.electron && values.binary) throw new Error('Choose --electron or --binary')
   if (positionals.length && positionals[0] !== 'do') throw new Error('Expected do <snapshot|click|type|press|screenshot>')
   if (positionals.length) validateAction(positionals.slice(1))
