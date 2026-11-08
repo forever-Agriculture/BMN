@@ -2028,6 +2028,23 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       expect(cards.filter(card => card.method === 'withdraw').map(card => card.outcome)).toEqual(['error'])
     })
 
+    it('answers no native permission prompt and offers none to a reason word, while still recording its card (Story 113.5 AC4)', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      fixture.handlers.openAttention.mockResolvedValue({ refused: true, changed: false, reason: REASON })
+      const prompt = JSON.stringify({ hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash',
+        cwd: session.workspace, session_id: SESSION, transcript_path: session.record })
+      // 103 D4: BMN answers nothing; 106 D7: no reason word changes it, so the hook offers no refusal and prints nothing.
+      expect(await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: prompt })).toEqual(QUIET)
+      expect(fixture.handlers.openAttention).toHaveBeenCalled()
+      for (const [call] of fixture.handlers.openAttention.mock.calls) {
+        expect(call).not.toHaveProperty('awayRefusable')
+        expect(call).not.toHaveProperty('reasonRefusable')
+      }
+      const observed = fixture.handlers.observeHookEvent.mock.calls.at(-1)?.[0] as { hookRun?: { cards: Array<Record<string, unknown>> } } | undefined
+      expect(observed?.hookRun?.cards.find(card => card.method === 'open')).toMatchObject({ method: 'open', kind: 'permission' })
+    })
+
     it('offers nothing for a sub-agent\'s question, so nothing changes there', async () => {
       const fixture = await cliFixture()
       const session = await claudeSession(fixture.root)
