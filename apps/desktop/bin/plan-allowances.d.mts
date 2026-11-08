@@ -6,6 +6,10 @@ export interface AllowanceLimit {
   per: string | null
   unit?: string
 }
+/** Historical publication evidence only; this does not authorize work or replace readAllowances. */
+export declare function allowanceHistoryAt(plan: import('./plan-board.mjs').ResolvedPlan, epic: number, revision: string): {
+  go: string; path: string; text: string; chain: string[]; status: string | null
+} | null
 export interface AllowancesData {
   schema: number | null
   epic: number | null

@@ -1,11 +1,10 @@
 // MODULE: plan-publish.mjs - Epic 107 plan-only checkpoints, publication and local go ancestry
 import { spawnSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, fsyncSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { isDeepStrictEqual } from 'node:util'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { PlanError, ROW } from './plan-board.mjs'
-import { parseAllowances } from './plan-allowances.mjs'
+import { equivalentAllowance as equalAllowances, planReconciliation, planWorkingDigest, validReconciliations } from './plan-reconciliation.mjs'
 import { approvalText, lockBoard } from './plan-cli.mjs'
 import { copyAuthorityState, copyFindings, isCopiedPlan } from './plan-bmad-copy.mjs'
 import { verifyParserProof } from './plan-bmad-parser.mjs'
@@ -43,16 +42,6 @@ function blob(repo, commit, path) {
   return p.status === 0 ? p.stdout : null
 }
 const equal = (a, b) => a === null ? b === null : b !== null && a.equals(b)
-const allowanceEpic = file => Number(/^plan\/allowances\/(\d+)\.yaml$/u.exec(file)?.[1])
-function equalAllowances(file, a, b) {
-  const epic = allowanceEpic(file)
-  if (!Number.isInteger(epic) || a === null || b === null) return false
-  try {
-    const decoder = new TextDecoder('utf-8', { fatal: true })
-    const left = parseAllowances(decoder.decode(a), epic), right = parseAllowances(decoder.decode(b), epic)
-    return left.problems.length === 0 && right.problems.length === 0 && isDeepStrictEqual(left.data, right.data)
-  } catch { return false }
-}
 function names(repo, commit, paths) { return git(repo, ['ls-tree', '-r', '--name-only', commit, '--', ...paths]).trim().split('\n').filter(Boolean) }
 function indexEntry(repo, path, env = {}) { return git(repo, ['ls-files', '-s', '--', path], { env }).trim() }
 
@@ -66,7 +55,8 @@ export function checkpointPlan(plan) {
   try {
     git(repo, ['read-tree', head], { env })
     const before = new Map(names(repo, head, paths).map((path) => [path, git(repo, ['ls-tree', head, '--', path]).trim().replace(/^([0-7]+) blob ([0-9a-f]+)\t/u, '$1 $2 0\t')]))
-    git(repo, ['add', '--sparse', '--all', '--', ...paths], { env })
+    const boardLock = relative(repo, join(dirname(plan.boardPath), `.${basename(plan.boardPath)}.lock`)).split('\\').join('/')
+    git(repo, ['add', '--sparse', '--all', '--', ...paths, `:(exclude,literal)${boardLock}`], { env })
     const tree = git(repo, ['write-tree'], { env }).trim()
     if (tree === git(repo, ['rev-parse', `${head}^{tree}`]).trim()) return head
     const commit = git(repo, ['commit-tree', tree, '-p', head, '-m', 'plan: local checkpoint']).trim()
@@ -91,7 +81,7 @@ export function publicationState(plan) {
   try { migration = load(join(plan.planRoot, 'migration.json')); if (!migration || typeof migration !== 'object' || Array.isArray(migration)) throw new Error('invalid migration state') } catch { migration = {}; authorityUnconfirmed = true }
   try { loc = location(plan); state = load(loc.path); if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('invalid publication state') } catch { state = {}; authorityUnconfirmed = true }
   const numbers = value => Array.isArray(value) && value.every(number => Number.isInteger(number) && number >= 0)
-  if (!numbers(migration.approval_conflicts ?? []) || !numbers(state.conflicts ?? []) || !Array.isArray(migration.approval_conflict_values ?? []) || !Array.isArray(state.conflict_values ?? [])) authorityUnconfirmed = true
+  if (!numbers(migration.approval_conflicts ?? []) || !numbers(state.conflicts ?? []) || !Array.isArray(migration.approval_conflict_values ?? []) || !Array.isArray(state.conflict_values ?? []) || !validReconciliations(state.allowanceBaselines)) authorityUnconfirmed = true
   let copied = { conflicts: [], conflict_values: [] }
   try { copied = copyAuthorityState(plan) } catch { authorityUnconfirmed = true }
   const known = {
@@ -172,12 +162,12 @@ function mergeBytes(folder, file, base, ours, theirs, suffix) {
   return { conflict: true, epics: conflictingEpics(file, base, ours, theirs) }
 }
 
-function projectPlan(repo, folder, paths, base, checkpoint, upstream, prTip, state) {
+function projectPlan(repo, folder, paths, base, checkpoint, upstream, prTip, state, reconciliation) {
   const all = new Set([...names(repo, base, paths), ...names(repo, checkpoint, paths), ...names(repo, upstream, paths), ...(prTip ? names(repo, prTip, paths) : [])])
-  const projected = new Map(), conflicts = []
+  const projected = new Map(), conflicts = [...(reconciliation?.holds ?? [])], reconciledFiles = []
   let conflict = false
   for (const file of all) {
-    const b = blob(repo, base, file), o = blob(repo, checkpoint, file), t = blob(repo, upstream, file)
+    const b = reconciliation?.bases.get(file) ?? blob(repo, base, file), o = blob(repo, checkpoint, file), t = blob(repo, upstream, file)
     const merged = mergeBytes(folder, file, b, o, t, 'upstream')
     if (merged.conflict) { conflict = true; conflicts.push(...merged.epics) }
     else projected.set(file, merged.bytes)
@@ -194,11 +184,13 @@ function projectPlan(repo, folder, paths, base, checkpoint, upstream, prTip, sta
     // An upstream restriction or deletion of an epic's allowances file is read as its changed terms are (110.5 AC6).
     const allowances = /^plan\/allowances\/(\d+)\.yaml$/u.exec(file)
     if (allowances && !equal(b, t) && !equal(o, t) && !equalAllowances(file, b, t) && !equalAllowances(file, o, t)) conflicts.push(Number(allowances[1]))
+    if (allowances && !equalAllowances(file, blob(repo, base, file), t) && equalAllowances(file, o, t)) reconciledFiles.push(file)
     if (prTip && !merged.conflict) {
       const prBase = blob(repo, state.published ?? upstream, file), incoming = blob(repo, prTip, file)
       const combined = mergeBytes(folder, file, prBase, projected.get(file), incoming, 'pr')
       if (combined.conflict) { conflict = true; conflicts.push(...combined.epics) }
       else projected.set(file, combined.bytes)
+      if (allowances && !equal(prBase, incoming) && !equal(o, incoming) && !equalAllowances(file, prBase, incoming) && !equalAllowances(file, o, incoming)) conflicts.push(Number(allowances[1]))
     }
   }
   state.conflicts = [...new Set(conflicts)]
@@ -215,7 +207,7 @@ function projectPlan(repo, folder, paths, base, checkpoint, upstream, prTip, sta
     }
   }
   state.conflict_values = [...values.values()]
-  return { projected, conflict: conflict || state.conflicts.length > 0 }
+  return { projected, reconciledFiles, conflict: conflict || state.conflicts.length > 0 }
 }
 
 function projectionTree(repo, folder, base, projected, checkpoint) {
@@ -236,16 +228,23 @@ function projectionTree(repo, folder, base, projected, checkpoint) {
 }
 
 /** Tests inject only remote policy/PR transport; all Git projection, push and integration remain real. */
-export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, direct = false } = {}) {
+export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, direct = false, reconciliationMigration = null, reconciliationExpect = null } = {}) {
   if (plan.format !== 'bmn-plan' || !plan.tracked) return { outcome: 'ignored', ...publicationState(plan) }
   if (plan.defaultAvailable === false) throw new PlanError('NO_DEFAULT_CHECKOUT', 'add a worktree on the remote default branch before publishing')
   const { repo, common, folder, path } = location(plan)
   const release = await lockBoard(join(common, 'bmn-plan-publish'))
+  let releaseAuthority = () => {}
   mkdirSync(folder, { recursive: true })
   let state = load(path)
   try {
+    if (reconciliationMigration !== null && isCopiedPlan(plan)) throw new PlanError('INVALID_RECONCILIATION', 'receipt migration requires a canonical plan without a retained board copy')
     const unresolved = (await copyFindings(plan, { recover: true })).filter(finding => finding.code !== 'COPY_CONFLICT')
     if (unresolved.length) throw new PlanError(unresolved[0].code, unresolved[0].reason)
+    if (!isCopiedPlan(plan)) releaseAuthority = await lockBoard(plan.boardPath)
+    if (reconciliationMigration !== null && (!reconciliationExpect ||
+        git(repo, ['rev-parse', 'HEAD']).trim() !== reconciliationExpect.head ||
+        planWorkingDigest(plan) !== reconciliationExpect.workingPlanSha256 ||
+        createHash('sha256').update(readFileSync(path)).digest('hex') !== reconciliationExpect.journalSha256)) throw new PlanError('RECONCILIATION_CHANGED', 'the pinned local reconciliation state changed; nothing may be recovered')
     const checkpoint = checkpointPlan(plan)
     state.checkpoint = checkpoint
     atomic(path, state)
@@ -253,9 +252,12 @@ export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, d
     const remote = git(repo, ['remote', 'get-url', 'origin']).trim(), name = repoName(remote)
     git(repo, ['fetch', '--no-tags', 'origin', `${branch}:refs/remotes/origin/${branch}`])
     let upstream = git(repo, ['rev-parse', `origin/${branch}`]).trim()
+    if (reconciliationMigration !== null && upstream !== reconciliationExpect.upstream) throw new PlanError('RECONCILIATION_CHANGED', 'the pinned upstream changed; holds are preserved')
     const paths = pathsFor(plan)
+    const reconciliation = planReconciliation(plan, state, checkpoint, upstream, reconciliationMigration)
     const ancestor = (before, after) => spawnSync('git', ['-C', repo, 'merge-base', '--is-ancestor', before, after]).status === 0
     const acknowledgePublished = () => {
+      if (reconciliation.holds.size) return
       if (state.publishedCheckpoint && (!state.acknowledged || ancestor(state.acknowledged, state.publishedCheckpoint))) state.acknowledged = state.publishedCheckpoint
     }
     // A merged publication remains the baseline after unrelated upstream work. Only an
@@ -279,7 +281,7 @@ export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, d
       git(repo, ['read-tree', '-u', '-m', head, next])
       git(repo, ['update-ref', git(repo, ['symbolic-ref', 'HEAD']).trim(), next, head])
     }
-    if (state.published && git(repo, ['diff', '--name-only', state.published, upstream, '--', ...paths]).trim() === '') {
+    if (!state.allowanceBaselines && reconciliationMigration === null && state.published && git(repo, ['diff', '--name-only', state.published, upstream, '--', ...paths]).trim() === '') {
       integrate()
       acknowledgePublished()
       state.conflicts = []
@@ -293,9 +295,25 @@ export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, d
       const tip = git(repo, ['rev-parse', 'origin/bmn/plan']).trim()
       if (spawnSync('git', ['-C', repo, 'merge-base', '--is-ancestor', tip, upstream]).status !== 0) prTip = tip
     }
-    const { projected, conflict } = projectPlan(repo, folder, paths, base, checkpoint, upstream, prTip, state)
+    if (reconciliationMigration !== null && (prTip !== reconciliationExpect.prTip || planWorkingDigest(plan) !== reconciliationExpect.workingPlanSha256)) throw new PlanError('RECONCILIATION_CHANGED', 'the pinned plan PR or working plan changed; holds are preserved')
+    const { projected, conflict, reconciledFiles } = projectPlan(repo, folder, paths, base, checkpoint, upstream, prTip, state, reconciliation)
+    const nonPublishHolds = [...(load(join(plan.planRoot, 'migration.json')).approval_conflicts ?? []), ...copyAuthorityState(plan).conflicts]
+    let held = conflict
+    if (conflict || nonPublishHolds.length) {
+      const rejected = reconciliation.admit([...state.conflicts, ...nonPublishHolds], reconciledFiles)
+      state.conflicts = [...new Set([...state.conflicts, ...rejected])]
+      // An unprovable reconciliation is a hold: nothing of it may be integrated or published.
+      if (rejected.length) held = true
+    }
     atomic(path, state)
-    if (conflict) return { outcome: 'PLAN_CONFLICT', ...publicationState(plan) }
+    if (held) return { outcome: 'PLAN_CONFLICT', ...publicationState(plan) }
+    if (state.allowanceBaselines && !nonPublishHolds.length) {
+      // All file proofs and other holds passed. Taking this validated projection makes
+      // upstream a real ancestor, so the temporary per-file baselines are now redundant.
+      integrate(projected)
+      delete state.allowanceBaselines
+      atomic(path, state)
+    }
     let tip
     {
       const tree = projectionTree(repo, folder, upstream, projected, checkpoint)
@@ -348,5 +366,5 @@ export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, d
   } catch (error) {
     state.error = error.code ?? 'PUBLICATION_FAILED'; atomic(path, state)
     return { outcome: 'unpublished', error: state.error, ...publicationState(plan) }
-  } finally { release() }
+  } finally { releaseAuthority(); release() }
 }

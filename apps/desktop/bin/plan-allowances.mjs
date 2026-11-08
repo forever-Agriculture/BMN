@@ -340,6 +340,36 @@ function rowStatus(text, epic) {
 
 function trailer(message, name) { return new RegExp(`^${name}: (.+)$`, 'mu').exec(message)?.[1].trim() ?? null }
 
+function recordedChanges(repo, folder, epic, go, goText, revision) {
+  let text = goText, commit = go
+  const changes = []
+  const log = gitRun(repo, ['log', '--reverse', '--topo-order', '--format=%H%x1f%B%x1e', '-E', `--grep=^Allow-Epic: 0*${epic}[[:space:]]*$`, `${go}..${revision}`])
+  for (const record of log.split('\x1e')) {
+    const [hash, message = ''] = record.replace(/^\n/u, '').split('\x1f')
+    if (!/^[0-9a-f]{40,64}$/u.test(hash)) continue
+    const path = pathAt(repo, folder, hash, epic)
+    const then = path === null ? null : showFile(repo, hash, path)
+    if (then === null || trailer(message, 'Allow-Go') !== go || trailer(message, 'Allow-Before') !== `sha256:${textSha(text)}` || trailer(message, 'Allow-After') !== `sha256:${textSha(then)}`) continue
+    if (parseAllowances(then, epic).problems.length > 0) continue
+    text = then; commit = hash
+    changes.push({ commit: hash, change: [...message.matchAll(/^Allow-Change: (.+)$/gmu)].map(one => one[1]), who: trailer(message, 'Allow-Who'), reason: trailer(message, 'Allow-Reason'), source: trailer(message, 'Approval-Source') })
+  }
+  return { text, commit, changes }
+}
+
+/** Historical facts for publication proof, never a permission decision or an alternative reader. */
+export function allowanceHistoryAt(plan, epic, revision) {
+  const { repo, folder, boardRel } = historyOf(plan)
+  const go = gitRun(repo, ['log', '-1', '--format=%H', '-E', `--grep=^Go-Epic: 0*${epic}[[:space:]]*$`, revision]).trim()
+  if (!go || trailer(gitRun(repo, ['log', '-1', '--format=%B', go]), 'Go-Epic') !== String(epic)) return null
+  const goPath = pathAt(repo, folder, go, epic), path = pathAt(repo, folder, revision, epic)
+  if (!goPath || !path || path !== goPath) return null
+  const goText = showFile(repo, go, goPath)
+  if (goText === null || parseAllowances(goText, epic).problems.length) return null
+  const recorded = recordedChanges(repo, folder, epic, go, goText, revision)
+  return { go, path, text: recorded.text, chain: [go, ...recorded.changes.map(change => change.commit)], status: rowStatus(showFile(repo, revision, boardRel), epic) }
+}
+
 /**
  * What the plan's history records for an epic (D13): the go's commit decides; if it holds the file the run has that
  * version, then the last recorded `allow` after that go, whether or not the file is on disk now. A go whose commit holds
@@ -374,22 +404,7 @@ export async function readAllowances(plan, epic, { at = null } = {}) {
   const goParsed = parseAllowances(goText, epic)
   if (goParsed.problems.length > 0) return { ...base, state: 'invalid', go_commit: go, reason: `the go's file does not read: line ${goParsed.problems[0].line}: ${goParsed.problems[0].reason}; it grants nothing`, problems: goParsed.problems }
 
-  let text = goText
-  let commit = go
-  const changes = []
-  const log = gitRun(repo, ['log', '--reverse', '--topo-order', '--format=%H%x1f%B%x1e', '-E', `--grep=^Allow-Epic: 0*${epic}[[:space:]]*$`, `${go}..HEAD`])
-  for (const record of log.split('\x1e')) {
-    const [hash, message = ''] = record.replace(/^\n/u, '').split('\x1f')
-    if (!/^[0-9a-f]{40,64}$/u.test(hash)) continue
-    const path = pathAt(repo, folder, hash, epic)
-    const then = path === null ? null : showFile(repo, hash, path)
-    // Each recorded change names the version it changed: anything else is not one of them.
-    if (then === null || trailer(message, 'Allow-Go') !== go || trailer(message, 'Allow-Before') !== `sha256:${textSha(text)}` || trailer(message, 'Allow-After') !== `sha256:${textSha(then)}`) continue
-    if (parseAllowances(then, epic).problems.length > 0) continue
-    text = then
-    commit = hash
-    changes.push({ commit: hash, change: [...message.matchAll(/^Allow-Change: (.+)$/gmu)].map((one) => one[1]), who: trailer(message, 'Allow-Who'), reason: trailer(message, 'Allow-Reason'), source: trailer(message, 'Approval-Source') })
-  }
+  const { text, commit, changes } = recordedChanges(repo, folder, epic, go, goText, 'HEAD')
   const parsed = parseAllowances(text, epic)
   const recordedName = goPath.slice(goPath.lastIndexOf('/') + 1)
   const result = {
