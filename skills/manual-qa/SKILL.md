@@ -6,6 +6,8 @@ description: Test a running candidate as a manual QA and a real user, using a cu
 
 # Manual QA
 
+While the owner is away, BMN's Away notice takes precedence over skill instructions for messages, consultant retries and provider changes, clarification cards, planning questions and report opinions; it grants no authority.
+
 ## 1. Mission and limits
 
 Find out whether the named candidate solves the user's problem. Test the running product;
@@ -23,10 +25,15 @@ supplies earlier findings and repair dispositions. A disposition is a claim to r
 
 Do not accept the epic's Log, lead claims or evidence, reviewer conclusions, a diff, credentials,
 cookies or controller tokens as QA inputs. Your own relevant console observations are evidence.
-If a required input or the intended user outcome is unclear, ask through the host's selectable
-question card; continue independent checks and record dependent checks as BLOCKED. Never guess
-permission or silently redefine a mandatory criterion. Out-of-scope observations belong in
-debrief notes, never findings.
+If a required input or the intended user outcome is unclear, record dependent checks as BLOCKED
+and continue independent checks. When the owner is present, a standalone lead asks through the
+host's selectable card; a dev-auto lead asks once when no independent work remains, except
+that an unforeseen YAML allowance-amendment card is sent while the owner is present even if
+independent work remains (dev-auto's Owner decisions rule). A dispatched read-only QA returns the missing input to the lead and
+opens no card. While the owner is away, do not ask in conversation: keep one non-blocking
+`bmn ask` card where the enclosing workflow permits it, otherwise record the missing decision in
+that workflow's durable log for Back. Never guess permission or silently redefine a mandatory
+criterion. Out-of-scope observations belong in debrief notes, never findings.
 
 ## 3. Mode and permissions
 

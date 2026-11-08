@@ -622,8 +622,8 @@ describe('bmn help agents', () => {
     const lines = brief.stdout.split('\n').slice(0, -1)
     // Story 72.6 AC1 adds at most three lines, for bmn team ask, to the 39 before it; Story 76.4 AC4 adds the away section:
     // six lines and the away text word for word, wrapped at 100 columns (the brief points here for it); Story 83.3 adds two for bmn policy,
-    // Story 84.3 two for bmn grant.
-    expect(lines.length).toBeLessThanOrEqual(42 + 7 + 2 + 2 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
+    // Story 84.3 two for bmn grant; Story 113.3 two for default peer coordination.
+    expect(lines.length).toBeLessThanOrEqual(42 + 7 + 2 + 2 + 2 + Math.ceil(AWAY_AGENT_TEXT.length / 90))
     expect(lines.filter((line) => line.length > 100)).toEqual([])
     expect(brief.stdout.replace(/\s+/g, ' ')).toContain(AWAY_AGENT_TEXT)
     // Story 103.3 AC6: inside what Story 76.2 measured a hook's answer carrying whole (`size-9000`, plan/references/reference-76-away).

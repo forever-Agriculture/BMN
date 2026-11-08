@@ -6,6 +6,8 @@ description: Write the one-page HTML report for finished work (an epic, a projec
 
 # Report artifact
 
+While the owner is away, BMN's Away notice takes precedence over skill instructions for messages, consultant retries and provider changes, clarification cards, planning questions and report opinions; it grants no authority.
+
 One short, calm page carries finished work to people who were not there: the owner, who runs
 several projects and does not remember each one, and teammates who know nothing about the work.
 A reader should know within a few minutes what the product is, what was wrong, what changed, what
@@ -95,7 +97,13 @@ report: a 1–4-word verdict and 2–3 plain sentences on worth, risk and what t
 and its evidence." Label its block `<model> · report and evidence review`. A refusal or failure is
 reported, never worked around: the second block then reads `No independent opinion` as its verdict,
 the role line `<asked model> · report and evidence review`, and one sentence with the refusal's
-reason.
+reason. This report-opinion rule is the exception to dev-auto's general unavailable-route sequence:
+while the owner is present, do not try a replacement model after that refusal or failure. While
+he is away, an opinion ask also follows the Away notice's single bounded consultant ask and
+existing dispatch/provider/data limits; after refusal, timeout or uncertain completion read
+the existing record, make no new ask or provider switch, and use `No independent opinion`
+with the reason. When no permitted opinion ask can run, disclose that limit in the same block.
+The page's presentation does not waive any product review or acceptance requirement.
 
 **Disagreement stays as written.** When the two differ, keep both words, and put the consequence
 in Still open or Next steps. An unresolved material disagreement never sits beside a plain
