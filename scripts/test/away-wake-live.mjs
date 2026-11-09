@@ -19,9 +19,9 @@
 // checks it against the wake's own log lines: woken where a line was typed, skipped or missed with the last reason, and
 // no decided tick read as an unknown hour.
 //   (needs `pnpm run build` first: the desktop build and @bmn/protocol's, whose reason codes the account check uses)
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect as connectTcp } from 'node:net'
 import { homedir } from 'node:os'
@@ -32,12 +32,16 @@ import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root
 import { testedApp } from '../lib/tested-app.mjs'
 import { AWAY_WAKE_REASONS, awayWakeReasonCode } from '../../shared/protocol/dist/away-night.js'
 import { nightMismatches } from './away-night-check.mjs'
+import { classifyMessageStartup, messageStartupStep, messageProcessIdentity } from './message-wake-startup.mjs'
+import { processTree, stopTree } from './away-skills-processes.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const cli = join(appDirectory, 'bin/bmn')
 const tested = testedApp(appDirectory)
 const args = [...tested.rest]
+const handoffAt = args.indexOf('--handoff')
+const handoffPath = handoffAt < 0 ? null : resolve(args.splice(handoffAt, 2)[1])
 const openCodeBinaries = []
 for (let at = args.indexOf('--opencode'); at >= 0; at = args.indexOf('--opencode')) openCodeBinaries.push(resolve(args.splice(at, 2)[1] ?? ''))
 const scratch = resolve(args[0] ?? '')
@@ -53,6 +57,7 @@ const OPENCODE_PINS = {
   '489b51816a77809e841310e80c88e834c28c19ad1639e12ba8a19f08b47ab607': '2.0.32'
 }
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+const shellQuote = value => "'"+String(value).replaceAll("'", "'\\''")+"'"
 const phase = (label) => console.error(`[BMN away wake] ${label}`)
 const report = { generatedAt: new Date().toISOString(), build: tested.build, commit: null, uncommitted: null, checks: [] }
 const check = (name, ok, detail = {}) => {
@@ -62,6 +67,17 @@ const check = (name, ok, detail = {}) => {
   if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
 }
 const reportPath = args[1] ? resolve(args[1]) : null
+const recordProcess = (row, add) => {
+  if (!handoffPath) return
+  const before = readFileSync(handoffPath, 'utf8'), line = `- ${JSON.stringify(row)}\n`
+  if (!before.includes('## Started\n')) throw new Error('Missing handoff process inventory')
+  const after = add ? before.replace('## Started\n', `## Started\n\n${line}`) : before.replace(line, '')
+  if (after.length > 9000) throw new Error('Handoff process inventory exceeds recovery bound')
+  const temporary = `${handoffPath}.${process.pid}.new`
+  writeFileSync(temporary, after); renameSync(temporary, handoffPath)
+  if (readFileSync(handoffPath, 'utf8') !== after) throw new Error('Handoff inventory readback mismatch')
+  execFileSync('python3', ['/home/oleksandr/code/dev-auto/skills/dev-auto/scripts/check.py', 'check', repoRoot])
+}
 try {
   report.commit = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   // The source build runs the working tree: its uncommitted files are named, so a report never passes for a clean commit.
@@ -294,7 +310,12 @@ async function run(scenario, binary) {
     }
     const logs = () => logFile().flatMap((file) => readFileSync(file, 'utf8').split('\n').filter(Boolean))
     const application = await electron.launch({ executablePath: tested.executablePath, args: [...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'], cwd: scratch, env: environment })
+    const identity = processTree(application.process().pid)[0]
+    if (!identity) throw new Error('Isolated night application identity unavailable')
+    const owned = { kind: 'process', pid: identity.pid, start_ticks: identity.start_ticks, command: `113.6 isolated ${name} test Electron`, evidence: reportPath }
+    report[`${name}Process`] = owned
     try {
+      recordProcess(owned, true)
       const page = await application.firstWindow()
       await page.waitForSelector('.session-row', { timeout: 60_000 })
       const input = page.locator('.session-terminal.selected .xterm-helper-textarea')
@@ -304,24 +325,35 @@ async function run(scenario, binary) {
       await sleep(3_000)
       await type(`cd '${scratch}' && ${command}`)
       const ready = app === 'claude' ? /^❯/mu : app === 'codex' ? /^›/mu : /Ask anything/u
-      const shown = []
-      // A dialog Codex shows at start also draws `›`: only its composer, with the footer's `·` below and no dialog keys, is the prompt.
-      const atPrompt = async () => {
+      const shown = [], startupHistory = [], startupUsed = { keys: 0 }
+      const startupFrame = async () => {
         const text = await screen().catch(() => '')
-        if (/Hooks need review|Trust this folder|enter continue|esc quit|enter confirm|esc skip|esc to cancel|Enter to confirm/iu.test(text) || !ready.test(text)) return false
-        return app !== 'codex' || /·/u.test(text.split('\n').filter((line) => line.trim() !== '').pop() ?? '')
+        if (app === 'claude' || app === 'codex') return { text, ...classifyMessageStartup(app, text.split('\n'), scratch) }
+        if (/Hooks need review|permission|authenticat|sign in|log in|onboarding|Update available|Choose the text style|Press Enter to continue/iu.test(text)) return { text, state: 'dialog' }
+        return { text, state: ready.test(text) ? 'composer' : 'loading' }
       }
-      for (let waited = 0; waited < 90_000 && !(await atPrompt()); waited += 5_000) {
-        // Claude Code's folder dialog stands on its No: the key moves to Yes first (a new profile shows it; Story 110.1).
-        const asked = await screen()
-        // Codex's hooks review stands on its first choice and its own `›` reads like a prompt; it is answered before the prompt is looked for.
-        if (/Hooks need review/u.test(asked)) { await input.focus(); await page.keyboard.press(/›\s*2\. Trust all/u.test(asked) ? 'Enter' : 'ArrowDown'); await sleep(1_500); continue }
-        if (/❯\s*(?:\d\.\s*)?No, exit/u.test(asked)) { await input.focus(); await page.keyboard.press('ArrowDown'); await sleep(300); await page.keyboard.press('Enter') }
-        else if (/trust|Press Enter to continue|Update available|Choose the text style|Yes, proceed/iu.test(asked)) { await input.focus(); await page.keyboard.press('Enter') }
-        shown.push((await screen()).split('\n').slice(-6))
-        await sleep(5_000)
+      const atPrompt = async () => (await startupFrame()).state === 'composer'
+      let promptReady = false
+      for (let waited = 0; waited < 90_000 && !promptReady; waited += 1500) {
+        const frame = await startupFrame()
+        shown.push(frame.text.split('\n').slice(-6))
+        if (frame.state === 'dialog') {
+          report[`${name}StartScreens`] = shown
+          throw new Error(`UNVERIFIED: ${name} requires owner startup/permission action; zero keys sent`)
+        }
+        if (frame.state === 'composer') { promptReady = true; break }
+        if (frame.state === 'trust' || frame.state === 'trust-negative') {
+          startupHistory.push({ ...frame, at: Date.now() })
+          const action = messageStartupStep(startupHistory, startupUsed)
+          if (action.action === 'fail') throw new Error(`UNVERIFIED: ${action.reason}`)
+          if (action.action === 'key') {
+            await input.focus(); await page.keyboard.press(action.key)
+            startupUsed.keys++; startupUsed[action.mark] = true
+          }
+        }
+        await sleep(1500)
       }
-      if (!(await atPrompt())) { report[`${name}StartScreens`] = shown; if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`); throw new Error(`${name} showed no prompt within 90 s`) }
+      if (!promptReady) { report[`${name}StartScreens`] = shown; if (reportPath) writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`); throw new Error(`${name} showed no prompt within 90 s`) }
       const started = Date.now()
       report[`${name}StartScreens`] = shown
       report[`${name}ReadyScreen`] = (await screen()).split('\n').slice(-12)
@@ -540,11 +572,33 @@ async function run(scenario, binary) {
         await input.focus(); await page.keyboard.press('Escape'); await sleep(1_500); await page.keyboard.press('Control+U')
         // A stop: the owner's Escape during a long tool call, with the prompt empty afterwards.
         const five = await tick(5, async () => {
-          await type(`Run this shell command in the foreground, never in the background: python3 -c 'import time; time.sleep(300)'`)
-          await sleep(12_000)
+          const footer = async () => (await screen()).split('\n').filter(line => line.trim()).slice(-5).join('\n')
+          const before = await footer()
+          if (app === 'codex' && /Plan mode/u.test(before)) {
+            // Codex 0.167 chatwidget/interaction.rs + settings.rs: Shift-Tab cycles Plan -> Default.
+            await input.focus(); await page.keyboard.press('Shift+Tab')
+            for (let waited = 0; waited < 5000 && /Plan mode/u.test(await footer()); waited += 250) await sleep(250)
+            if (/Plan mode/u.test(await footer())) throw new Error('UNVERIFIED: Codex did not leave Plan mode before tick5')
+          }
+          const marker = join(scratch, `${name}-tick5-${Date.now()}.json`), program = marker+'.py'
+          writeFileSync(program, `import json,os,time\nfrom pathlib import Path\np=Path(${JSON.stringify(marker)})\nidentity=Path('/proc/self/stat').read_text().rsplit(') ',1)[1].split()[19]\ntemporary=Path(str(p)+'.new')\ntemporary.write_text(json.dumps({'pid':os.getpid(),'start_ticks':identity,'at':time.time()*1000}))\nos.replace(temporary,p)\ntime.sleep(300)\n`, { mode: 0o600 })
+          const executionSince = Date.now()
+          await type(`Run exactly this command in one foreground shell tool call, never in the background: python3 ${shellQuote(program)}`)
+          let execution = null
+          for (let waited = 0; waited < 60_000; waited += 250) {
+            if (existsSync(marker)) {
+              const observed = JSON.parse(readFileSync(marker, 'utf8'))
+              const current = (await hookEvents()).at(-1)
+              const resolved = messageProcessIdentity({ root: identity, marker: observed, argv: ['python3', program] })
+              if (resolved.identity && current?.event === 'PreToolUse' && current.source !== 'subagent' && Date.parse(current.observedAt) >= executionSince) { execution = { ...observed, hostIdentity: resolved.identity, hook: current }; break }
+            }
+            await sleep(250)
+          }
+          if (!execution) throw new Error('UNVERIFIED: tick5 foreground command execution was not observed')
+          state.tick5Execution = { marker, program, execution, modeBefore: before, modeAfter: await footer(), escapeAt: Date.now() }
           await input.focus(); await page.keyboard.press('Escape')
         })
-        check(`${app}: tick 5 skips a session its owner stopped`, skipped(five), { logs: five })
+        check(`${app}: tick 5 skips a session its owner stopped`, skipped(five) && five.every(line => Date.parse(line.slice(0, 24)) >= state.tick5Execution.escapeAt), { logs: five, execution: state.tick5Execution })
         await input.focus(); await page.keyboard.press('Control+U')
         // Typing starts at the check: a finished turn, then keys from a second before the sweep the first tick's log line predicts.
         const firstTyped = logs().find((line) => line.includes('typed the wake line'))
@@ -580,9 +634,15 @@ async function run(scenario, binary) {
         account.woken.length === report[`${name}Logs`].filter((line) => line.includes('typed the wake line')).map((line) => line.split(' into ')[1]?.split(' ')[0]).filter((id, index, all) => all.indexOf(id) === index).length,
       { mismatches, woken: account?.woken.length ?? null, unknownSpans: account?.unknownSpans ?? null })
     } finally {
-      // A close that hangs (seen once with a shell left in front) must not hold the run: give it 15 s, then end that Electron.
-      const closed = await Promise.race([application.close().then(() => true, () => true), sleep(15_000).then(() => false)])
-      if (!closed) application.process().kill('SIGKILL')
+      const current = processTree(identity.pid)
+      const identities = current[0]?.start_ticks === identity.start_ticks ? current : [identity]
+      const inventory = handoffPath ? spawnSync('python3', ['/home/oleksandr/code/dev-auto/skills/dev-auto/scripts/check.py', 'leftovers', repoRoot], { encoding: 'utf8' }) : null
+      await Promise.race([application.close().catch(() => {}), sleep(15_000)])
+      // PID reuse cannot redirect cleanup to another application or one of the owner's sessions.
+      const stopped = await stopTree(identities, { graceMs: 1000, afterKillMs: 1500, wait: sleep })
+      report[`${name}Cleanup`] = { inventory: inventory && { status: inventory.status, stdout: inventory.stdout, stderr: inventory.stderr }, ...stopped }
+      check(`${name}: owned process cleanup`, stopped.remaining.length === 0, { remaining: stopped.remaining, killed: stopped.killed })
+      if (stopped.remaining.length === 0) recordProcess(owned, false)
     }
   }) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); proxy.close() } }
 }
