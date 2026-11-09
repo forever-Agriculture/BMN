@@ -5,11 +5,13 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { PUSH_POLICY_POINTER as PROTOCOL_POINTER } from '@bmn/protocol'
+import { BMN_RULES, PUSH_POLICY_POINTER } from '../../bin/agents-bmn-rules.mjs'
 import { inspectRoute } from '../../bin/agents-check.mjs'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import {
-  TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, lastProbes, listTransactions, masterHistory, parseMaster, planTeamUpdate, probe, probeAutoPlan, probeInspector, readMaster, render,
+  TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, installedPolicyPointer, lastProbes, listTransactions, masterHistory, parseMaster, planTeamUpdate, probe, probeAutoPlan, probeInspector, readMaster, render,
   restoreTransaction, teamPhrase, writeMaster
 } from '../../bin/agents-rules.mjs'
 import type { PathState } from '../../bin/safe-config-write.mjs'
@@ -151,7 +153,33 @@ describe('the master (60.4 AC1)', () => {
     expect(() => render(master, 'cursor' as never, approved)).toThrow("Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final")
     // Nothing public: never an empty file, so OpenCode cannot fall back to ~/.claude/CLAUDE.md.
     const bare = render({ ...master, parts: master.parts.filter((part: { kind: string }) => part.kind !== 'public') }, 'opencode', approved)
-    expect(bare.text.split('\n').slice(2).join('\n')).toBe('BMN gives this app only the rules its owner marked public, and none are marked.\n')
+    expect(bare.text.split('\n').slice(2).join('\n')).toBe(`BMN gives this app only the rules its owner marked public, and none are marked.\n\n${BMN_RULES}\n`)
+  })
+
+  it("appends BMN's own rules after the owner's master in every rendering, so the master holds his general rules only", () => {
+    const master = readMaster()
+    const approved = generation()
+    for (const harness of ['claude', 'codex', 'opencode'] as const) {
+      const text = render(master, harness, approved).text
+      expect(text.endsWith(`\n\n${BMN_RULES}\n`)).toBe(true)
+      expect(text.split(BMN_RULES).length).toBe(2)
+    }
+    expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).not.toContain(PUSH_POLICY_POINTER)
+    expect(BMN_RULES).toContain(PUSH_POLICY_POINTER)
+    // The bin copy and the protocol's constant are one text.
+    expect(PUSH_POLICY_POINTER).toBe(PROTOCOL_POINTER)
+  })
+
+  it('reads the push-policy pointer from every team app installed rules, never from whichever files exist (Story 83.3)', () => {
+    const files = { claude: join(home, '.claude/CLAUDE.md'), codex: join(home, '.codex/AGENTS.md') }
+    expect(installedPolicyPointer(env)).toBe(false)
+    for (const path of Object.values(files)) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, `rules\n${BMN_RULES}\n`) }
+    expect(installedPolicyPointer(env)).toBe(true)
+    // A restored codex file without the pointer takes the policy away, even though Claude's still has it.
+    writeFileSync(files.codex, 'older rules without it\n')
+    expect(installedPolicyPointer(env)).toBe(false)
+    rmSync(files.codex)
+    expect(installedPolicyPointer(env)).toBe(false)
   })
 
   it('gives the public rendering to an owner-declared destination whatever its provider answers, and with nothing approved', () => {

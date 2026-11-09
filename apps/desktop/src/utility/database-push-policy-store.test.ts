@@ -75,8 +75,8 @@ describe('push policy store (Story 83.3)', () => {
     changePushPolicy(database, { kind: 'owner', login: 'octo', allowed: true, expectedRevision: 0 }, T0)
     const read = getPushPolicy(database)
     expect(pushPolicyStanding(read, true)).toEqual({ authorizes: true, why: null })
-    expect(pushPolicyStanding(read, false)).toEqual({ authorizes: false, why: 'the rules master does not carry the policy pointer' })
-    expect(pushPolicyStanding(read, null)).toEqual({ authorizes: false, why: 'the rules master could not be read' })
+    expect(pushPolicyStanding(read, false)).toEqual({ authorizes: false, why: 'the installed rules do not carry the policy pointer' })
+    expect(pushPolicyStanding(read, null)).toEqual({ authorizes: false, why: 'the installed rules could not be read' })
     // Denying every owner is the off switch.
     changePushPolicy(database, { kind: 'owner', login: 'octo', allowed: false, expectedRevision: 1 }, T1)
     expect(pushPolicyStanding(getPushPolicy(database), true).authorizes).toBe(false)

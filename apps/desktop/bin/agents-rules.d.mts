@@ -31,6 +31,8 @@ export declare function parseMaster(text: string): { parts: Master['parts']; err
 export declare function readMaster(path?: string): Master
 export declare function teamPhrase(generation: RosterView | null): TeamPhrase
 export declare function routeFor(harness: RulesHarness, generation: RosterView | null): { kind: RenderingKind; reason: string; route: RosterRoute | null; provider: RosterProvider | null }
+/** Whether every approved team app's installed rules carry the push-policy pointer; null without an approved team. */
+export declare function installedPolicyPointer(environment?: NodeJS.ProcessEnv): boolean | null
 export declare function render(master: Master, harness: RulesHarness, generation: RosterView | null, options?: { kind?: RenderingKind | null; team?: TeamPhrase | null }): Rendering
 export declare function publicRendering(harness: RulesHarness): string
 export declare function planTeamUpdate(nextData: RosterData, options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<{ targets: TeamUpdateTarget[] }>

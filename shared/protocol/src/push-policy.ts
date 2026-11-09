@@ -142,8 +142,8 @@ interface PushPolicyStanding {
 export function pushPolicyStanding(read: PushPolicyRead, masterHasPointer: boolean | null): PushPolicyStanding {
   if (read.state === 'unknown') return { authorizes: false, why: `the policy could not be read (${read.reason}); everything counts as denied` }
   if (!read.record.owners.some((owner) => owner.allowed)) return { authorizes: false, why: 'no owner is allowed in Health' }
-  if (masterHasPointer === null) return { authorizes: false, why: 'the rules master could not be read' }
-  if (!masterHasPointer) return { authorizes: false, why: 'the rules master does not carry the policy pointer' }
+  if (masterHasPointer === null) return { authorizes: false, why: 'the installed rules could not be read' }
+  if (!masterHasPointer) return { authorizes: false, why: 'the installed rules do not carry the policy pointer' }
   return { authorizes: true, why: null }
 }
 
