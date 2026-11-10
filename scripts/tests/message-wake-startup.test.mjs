@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assertMessageProfileSeal, assertMessageQualifications, classifyMessageStartup, cleanupMessageProbe, messageProfileSnapshot, messageStartupStep, messageActivityVerdict, messageChildFixture, messageActivityFixture, assertMessageSetupConfiguration, messageCodexConfiguration, recordMessageVerdict, messageNativeEscape, messageNowSampler, messageRecorderHealthy, messageActivityComposer, messageProfileSealMigration, messageSocketGuidance, messageProcessIdentity } from '../test/message-wake-startup.mjs'
 import { processTree, stopTree } from '../test/away-skills-processes.mjs'
+import { collectMessageHookQueries } from '../test/message-wake-startup.mjs'
+import { approvalFrom } from '../../apps/desktop/bin/codex-hook-approval.mjs'
 const theme = ['Choose the text style that looks best with your terminal', 'To change this later, run /theme', 'Auto (match terminal)', '❯ ✔ Dark mode', 'Light mode', 'Dark mode (colorblind-friendly)', 'Light mode (colorblind-friendly)', 'Dark mode (ANSI colors only)', 'Light mode (ANSI colors only)']
 const capturedStartup = JSON.parse(readFileSync(new URL('./fixtures/away-skills-startup-captures.json', import.meta.url), 'utf8'))
 const declaredCodex = Object.entries(messageCodexConfiguration).map(([key, value]) => `${key} = ${JSON.stringify(value)}`).join('\n')+'\n'
@@ -716,5 +718,105 @@ describe('actual bounded native fixture commands', () => {
       expect(pulse.pid).toBe(actor.child.pid); expect(actor.child.exitCode).toBe(null)
       expect(actor.stdout).toContain('NATIVE_ACTIVITY_PULSE_2'); expect(actor.stderr).toBe('')
     } finally { await stop(actor); rmSync(directory, { recursive: true, force: true }) }
+  })
+})
+
+describe('retained hook queries keep closed evidence before the approval guard (113.7 method 6)', () => {
+  const SECRET = 'node /private/owner/path/probe-hook.mjs --token leak-me'
+  const entries = ['SessionStart', 'Stop'].map((event, index) => ({ event, key: `/h/hooks.json:${event}:0:${index}`, command: `${SECRET} ${event}` }))
+  const hook = (entry, change = {}) => ({ key: entry.key, command: entry.command, enabled: true, trustStatus: 'trusted', ...change })
+  const read = (hooks, extra = {}) => ({ state: 'read', hooks, warnings: 0, errors: 0, ...extra })
+  const run = async ({ answers, finishActor = async actor => { actor.exited = true; actor.stop = { killed: [], remaining: [] } }, save, ask }) => {
+    const saved = [], order = [], asked = []
+    let sequence = 0, clock = 1000
+    const promise = collectMessageHookQueries({ folders: ['/fixture/a', '/fixture/b'].slice(0, answers.length), entries, phase: 'bind:claude', nextInvocation: () => ++sequence, approvalFrom, now: () => clock += 5,
+      ask: ask ?? (async options => { asked.push({ cwd: options.cwd, limitMs: options.limitMs }); options.start('codex', ['app-server'], {}); order.push('ask'); return answers[asked.length - 1] }),
+      startActor: () => ({ child: { pid: 41, exitCode: null, signalCode: 'SIGKILL' }, identities: [{ pid: 41, start_ticks: '77' }], row: { id: 'row' }, exited: false }),
+      finishActor: async actor => { order.push('cleanup'); await finishActor(actor) },
+      save: save ?? (projection => { order.push('save'); saved.push(projection) }) })
+    return { promise, saved, order, asked }
+  }
+  it('keeps the approved control unchanged: one ordered query per folder at the fixed deadline', async () => {
+    const { promise, saved, order, asked } = await run({ answers: [read(entries.map(entry => hook(entry))), read(entries.map(entry => hook(entry)))] })
+    const results = await promise
+    expect(results.map(row => row.approval.state)).toEqual(['approved', 'approved'])
+    expect(results[0].statuses.map(row => [row.enabled, row.trustStatus])).toEqual([[true, 'trusted'], [true, 'trusted']])
+    expect(asked).toEqual([{ cwd: '/fixture/a', limitMs: 10000 }, { cwd: '/fixture/b', limitMs: 10000 }])
+    expect(order).toEqual(['ask', 'cleanup', 'save', 'ask', 'cleanup', 'save'])
+    expect(saved.map(row => [row.invocation, row.phase, row.fixture.index, row.answerState, row.approvalState, row.reason])).toEqual([[1, 'bind:claude', 0, 'read', 'approved', null], [2, 'bind:claude', 1, 'read', 'approved', null]])
+    expect(saved[0].actors).toEqual([{ pid: 41, startTicks: '77', exited: true, exitCode: null, signal: 'SIGKILL', killed: 0, remaining: 0 }])
+    expect(saved[0].timing.startedAt < saved[0].timing.answeredAt && saved[0].timing.answeredAt < saved[0].timing.cleanedAt).toBe(true)
+  })
+  it.each([
+    ['timeout', { state: 'unread', reason: 'no answer in 10 s' }, 'unverified', 'timeout'],
+    ['ended', { state: 'unread', reason: 'Codex ended without answering' }, 'unverified', 'ended'],
+    ['unreadable', { state: 'unread', reason: 'an answer BMN cannot read' }, 'unverified', 'unreadable'],
+    ['initialize', { state: 'unread', reason: 'Codex refused the question' }, 'unverified', 'initialize-rejected'],
+    ['spawn', { state: 'unread', reason: 'ENOENT' }, 'unverified', 'spawn-error'],
+    ['free text', { state: 'unread', reason: `failed at ${SECRET}` }, 'unverified', 'unknown'],
+    ['settings', read(entries.map(entry => hook(entry)), { errors: 2 }), 'unverified', 'settings-errors'],
+    ['missing', read([hook(entries[0])], { warnings: 1 }), 'unverified', 'entry-missing'],
+    ['mismatch', read([hook(entries[0]), hook(entries[1], { command: 'other' })]), 'unverified', 'command-mismatch'],
+    ['strange trust', read([hook(entries[0]), hook(entries[1], { trustStatus: `odd ${SECRET}` })]), 'unverified', 'entry-unknown'],
+    ['untrusted', read([hook(entries[0]), hook(entries[1], { trustStatus: 'untrusted' })]), 'not-approved', 'entries-off'],
+    ['modified', read([hook(entries[0], { trustStatus: 'modified' }), hook(entries[1])]), 'not-approved', 'entries-off'],
+    ['disabled', read([hook(entries[0], { enabled: false }), hook(entries[1])]), 'not-approved', 'entries-off']
+  ])('tells %s apart and keeps no raw text', async (_name, answer, state, reason) => {
+    const { promise, saved } = await run({ answers: [answer] })
+    const results = await promise
+    expect(results[0].approval.state).toBe(state)
+    expect([saved[0].approvalState, saved[0].reason]).toEqual([state, reason])
+    expect(saved[0].entries).toHaveLength(2)
+    for (const row of saved[0].entries) expect(Object.keys(row)).toEqual(['event', 'present', 'enabled', 'trustStatus', 'commandMatches'])
+    expect(JSON.stringify(saved)).not.toMatch(/leak-me|private\/owner|probe-hook/)
+  })
+  it('keeps the query outcome through a cleanup failure, then fails on the cleanup', async () => {
+    const { promise, saved, order } = await run({ answers: [{ state: 'unread', reason: 'no answer in 10 s' }, read([])],
+      finishActor: async actor => { actor.stop = { killed: [], remaining: [{ pid: 41 }] }; throw new Error('Local hook query process exit is unverified') } })
+    await expect(promise).rejects.toThrow('Local hook query process exit is unverified')
+    expect(order).toEqual(['ask', 'cleanup', 'save'])
+    expect([saved[0].reason, saved[0].actors[0].remaining, saved[0].actors[0].exited]).toEqual(['timeout', 1, false])
+  })
+  it('stops before the next query when the evidence cannot be written, after cleanup ran', async () => {
+    const order = []
+    const { promise, asked } = await run({ answers: [read(entries.map(entry => hook(entry))), read([])], save: () => { order.push('save'); throw new Error('disk full') },
+      finishActor: async actor => { order.push('cleanup'); actor.exited = true; actor.stop = { killed: [], remaining: [] } } })
+    await expect(promise).rejects.toThrow('disk full')
+    expect(order).toEqual(['cleanup', 'save'])
+    expect(asked).toHaveLength(1)
+  })
+  it.each([
+    ['handoff-bound', new Error('Handoff inventory would exceed recovery bound')],
+    ['handoff-heading', new Error('Missing handoff Started inventory')],
+    ['handoff-check', Object.assign(new Error(`Command failed: python3 ${SECRET}`), { status: 1 })],
+    ['unknown', new Error(`other ${SECRET}`)]
+  ])('reports a failed inventory registration (%s) as the harness error, never as an approval answer', async (code, error) => {
+    const cleaned = []
+    const saved = [], good = read(entries.map(entry => hook(entry)))
+    const promise = collectMessageHookQueries({ folders: ['/fixture/a', '/fixture/b'], entries, phase: 'bind:claude', nextInvocation: () => 3, approvalFrom,
+      ask: async options => { options.start('codex', ['app-server'], {}); return good },
+      startActor: () => ({ child: { pid: 41, exitCode: null, signalCode: null }, identities: [{ pid: 41, start_ticks: '77' }], row: null, exited: false, registrationError: error }),
+      finishActor: async actor => { cleaned.push(actor.child.pid); actor.exited = true; actor.stop = { killed: [{ pid: 41 }], remaining: [] } },
+      save: projection => saved.push(projection) })
+    await expect(promise).rejects.toThrow(`Hook query inventory registration failed (${code}); no approval answer is implied`)
+    expect(cleaned).toEqual([41])
+    expect(saved).toHaveLength(1)
+    expect([saved[0].registration, saved[0].approvalState, saved[0].actors[0].killed]).toEqual([code, 'approved', 1])
+    expect(JSON.stringify(saved)).not.toMatch(/leak-me|private\/owner/)
+  })
+  it('names a start callback that throws, the 2026-11-09 shape, apart from an unread answer', async () => {
+    const saved = []
+    const promise = collectMessageHookQueries({ folders: ['/fixture/a'], entries, phase: 'bind:claude', nextInvocation: () => 3, approvalFrom,
+      // askCodexHooks catches a throwing start and answers unread with the error text (codex-hook-approval.mjs).
+      ask: async options => { try { options.start('codex', ['app-server'], {}) } catch (error) { return { state: 'unread', reason: error.message } } return read([]) },
+      startActor: () => { throw new Error('Handoff inventory would exceed recovery bound') }, finishActor: async () => {}, save: projection => saved.push(projection) })
+    await expect(promise).rejects.toThrow('Hook query process could not be started by the harness')
+    expect([saved[0].registration, saved[0].answerState, saved[0].reason]).toEqual(['start-failed', 'unread', 'unknown'])
+  })
+  it('records an unknown outcome when the query itself throws, and rethrows it', async () => {
+    const { promise, saved } = await run({ answers: [null], ask: async () => { throw new Error(`spawn broke ${SECRET}`) } })
+    await expect(promise).rejects.toThrow('spawn broke')
+    expect([saved[0].answerState, saved[0].approvalState, saved[0].reason, saved[0].actors]).toEqual(['unknown', 'unverified', 'unknown', []])
+    expect(JSON.stringify(saved)).not.toMatch(/leak-me/)
   })
 })

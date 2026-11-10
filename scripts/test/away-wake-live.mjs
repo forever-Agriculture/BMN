@@ -557,6 +557,7 @@ async function run(scenario, binary) {
         // Story 110.1 AC3: a question card opens while the turn runs, and stays open past the tick.
         const asking = app === 'claude' ? 'AskUserQuestion' : 'request_user_input'
         // Codex offers its blocking question only in Plan mode; Default has a non-blocking one that holds nothing open.
+        const askedSince = Date.now()
         const four = await tick(4, async () => {
           if (app === 'codex') { await type('/plan'); await sleep(2_000) }
           await type(`Use your ${asking} tool to ask the owner one question: which colour, with the options Blue and Green. Then wait for the answer.`)
@@ -567,8 +568,17 @@ async function run(scenario, binary) {
         const questions = (await page.evaluate(() => globalThis.aiTerminal.listAttention())).filter((row) => row.sessionId === sessionId && row.state === 'open' && row.kind === 'question')
         state.questionCards = questions.map((row) => ({ key: row.requestKey, openedBy: row.openedBy ?? null }))
         const ownOnly = questions.length > 0 && questions.every((row) => row.openedBy === 'cli')
-        check(ownOnly ? `${app}: tick 4 wakes a session whose only open question is its own bmn ask card (F19)` : `${app}: tick 4 skips a session with the app's question open`,
-          ownOnly ? four.filter((line) => line.includes('typed')).length === 1 : skipped(four), { logs: four, cards: state.questionCards })
+        // The agent may also take the refusal and end its turn with no card of its own: then nothing is open, the session
+        // rests and the wake is due. That reading needs the hook's own record that the app's question was called.
+        const tickFourEvents = (await hookEvents()).filter((event) => Date.parse(event.observedAt) >= askedSince)
+        state.questionEvents = tickFourEvents.map((event) => ({ event: event.event, source: event.source ?? null, toolName: event.toolName ?? null, effects: event.effects, observedAt: event.observedAt }))
+        const called = tickFourEvents.some((event) => event.event === 'PreToolUse' && event.source !== 'subagent' && new RegExp(`(?:^|[.:/])${asking}(?:_async)?$`, 'u').test(event.toolName ?? ''))
+        const refusedNoCard = questions.length === 0 && called && tickFourEvents.some((event) => event.event === 'Stop')
+        if (questions.length === 0 && !refusedNoCard) check(`${app}: tick 4 has its question antecedent (the app's question was called)`, false, { logs: four, events: state.questionEvents, screen: state.questionScreen })
+        else check(ownOnly ? `${app}: tick 4 wakes a session whose only open question is its own bmn ask card (F19)`
+          : refusedNoCard ? `${app}: tick 4 wakes a session whose refused question left no card open`
+            : `${app}: tick 4 skips a session with the app's question open`,
+        ownOnly || refusedNoCard ? four.filter((line) => line.includes('typed')).length === 1 : skipped(four), { logs: four, cards: state.questionCards, events: state.questionEvents })
         await input.focus(); await page.keyboard.press('Escape'); await sleep(1_500); await page.keyboard.press('Control+U')
         // A stop: the owner's Escape during a long tool call, with the prompt empty afterwards.
         const five = await tick(5, async () => {

@@ -200,6 +200,70 @@ export function recordMessageVerdict(verdicts, name, value, { independentMayCont
   if (value.pass !== true && !independentMayContinue) throw new Error(`UNVERIFIED: ${name}; stop this method before dependent scenarios`)
 }
 
+const HOOK_QUERY_REASONS = [[/^no answer in /u, 'timeout'], [/^Codex ended without answering$/u, 'ended'], [/^an answer BMN cannot read$/u, 'unreadable'],
+  [/^Codex refused the question$/u, 'initialize-rejected'], [/^this Codex cannot list its hooks$/u, 'method-missing'], [/^E[A-Z0-9_]+$/u, 'spawn-error'],
+  [/^Codex could not load its settings$/u, 'settings-errors'], [/^Codex does not list BMN's /u, 'entry-missing'], [/^Codex lists another command /u, 'command-mismatch'],
+  [/^Codex said something BMN does not know /u, 'entry-unknown']]
+const HOOK_TRUST = new Set(['trusted', 'managed', 'untrusted', 'modified'])
+const hookCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null
+
+/** Why the harness could not enter a query's process in its inventory, as a closed code. */
+export function messageRegistrationCode(error) {
+  if (error === null || error === undefined) return null
+  const text = String(error?.message ?? '')
+  return /would exceed recovery bound/u.test(text) ? 'handoff-bound' : /Missing handoff Started inventory/u.test(text) ? 'handoff-heading'
+    : Number.isInteger(error?.status) || typeof error?.signal === 'string' ? 'handoff-check' : 'unknown'
+}
+
+/** What one local hooks/list query came to, as closed values only: no output, command, path or error text. */
+export function messageHookQueryProjection({ invocation, phase, fixture, answer, approval, entries, timing, actors, registration = null }) {
+  const state = ['approved', 'not-approved', 'unverified'].includes(approval?.state) ? approval.state : 'unknown'
+  const reason = state === 'approved' ? null : state === 'not-approved' ? 'entries-off'
+    : HOOK_QUERY_REASONS.find(([pattern]) => pattern.test(String(approval?.reason ?? answer?.reason ?? '')))?.[1] ?? 'unknown'
+  const listed = new Map((Array.isArray(answer?.hooks) ? answer.hooks : []).filter(row => row !== null && typeof row === 'object').map(row => [row.key, row]))
+  return { invocation, phase, fixture, registration, answerState: ['read', 'unread'].includes(answer?.state) ? answer.state : 'unknown', reason,
+    warnings: hookCount(answer?.warnings), errors: hookCount(answer?.errors), approvalState: state,
+    entries: entries.map(entry => {
+      const row = listed.get(entry.key)
+      return { event: entry.event, present: row !== undefined, enabled: typeof row?.enabled === 'boolean' ? row.enabled : null,
+        trustStatus: row === undefined ? null : HOOK_TRUST.has(row.trustStatus) ? row.trustStatus : 'unknown', commandMatches: row !== undefined && row.command === entry.command }
+    }), timing, actors }
+}
+
+/** Every required query leaves its projection before any guard can throw; cleanup runs first and a failed save stops progress. */
+export async function collectMessageHookQueries({ folders, entries, phase, nextInvocation, ask, approvalFrom, startActor, finishActor, save, now = Date.now }) {
+  const results = [], sha = text => createHash('sha256').update(text).digest('hex')
+  for (const [index, cwd] of folders.entries()) {
+    const actors = [], invocation = nextInvocation(), timing = { startedAt: now(), answeredAt: null, cleanedAt: null }
+    let answer, askError = null, cleanupError = null, startError = null
+    try {
+      answer = await ask({ cwd, limitMs: 10000, start: (program, args, options) => {
+        let actor
+        try { actor = startActor(program, args, options, { invocation, index }) } catch (error) { startError = error; throw error }
+        actors.push(actor); return actor.child
+      } })
+      timing.answeredAt = now()
+    } catch (error) { askError = error }
+    const registrationError = actors.find(actor => actor.registrationError)?.registrationError ?? null
+    for (const actor of actors) { try { await finishActor(actor) } catch (error) { cleanupError ??= error } }
+    timing.cleanedAt = now()
+    const approval = answer === undefined ? { state: 'unverified', reason: 'unknown' } : approvalFrom(answer, entries)
+    save(messageHookQueryProjection({ invocation, phase, fixture: { index, cwdSha256: sha(cwd) }, answer, approval, entries, timing,
+      registration: startError ? 'start-failed' : messageRegistrationCode(registrationError),
+      actors: actors.map(actor => ({ pid: actor.child?.pid ?? null, startTicks: actor.identities?.[0]?.start_ticks ?? null, exited: actor.exited === true,
+        exitCode: actor.child?.exitCode ?? null, signal: typeof actor.child?.signalCode === 'string' ? actor.child.signalCode : null,
+        killed: actor.stop?.killed?.length ?? null, remaining: actor.stop?.remaining?.length ?? null })) }))
+    if (startError) throw new Error('Hook query process could not be started by the harness', { cause: startError })
+    if (registrationError) throw new Error(`Hook query inventory registration failed (${messageRegistrationCode(registrationError)}); no approval answer is implied`, { cause: registrationError })
+    if (askError) throw askError
+    if (cleanupError) throw cleanupError
+    const listed = new Map((answer.hooks ?? []).map(row => [row.key, row]))
+    const statuses = entries.map(entry => ({ key: entry.key, event: entry.event, expectedCommandSha256: sha(entry.command), enabled: listed.get(entry.key)?.enabled ?? null, trustStatus: listed.get(entry.key)?.trustStatus ?? null }))
+    results.push({ cwd, approval, statuses, processExitVerified: true, actors: actors.map(actor => ({ identity: actor.row, exited: actor.exited, cleanup: actor.stop })) })
+  }
+  return results
+}
+
 /** Two real starts and complete shutdowns per receiver; paths alone cannot transfer qualification. */
 export function assertMessageQualifications(receipts, app, binding) {
   const stable = value => JSON.stringify({ ...value, profiles: { static: value?.profiles?.static } })
