@@ -1658,7 +1658,18 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
   const idle = (): Promise<WebQuestionsSnapshot> => until(load, (state) => state.holder === null, 'the question to end')
   /** `bmn research ask` in a process of its own, as an agent in a session's shell runs it. */
   const fromShell = (extra: Record<string, string> = {}): ReturnType<typeof spawn> => {
-    const child = spawn(process.execPath, [SCRIPT, 'research', 'ask', '--json'], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...extra }, stdio: ['pipe', 'pipe', 'pipe'] })
+    // Caller attribution prefers a real ancestor over an environment hint. Give
+    // this fixture its own Claude parent even when the test is run under Codex.
+    const argv = [SCRIPT, 'research', 'ask', '--json']
+    const claudeParent = `import ctypes,signal,subprocess,sys
+libc=ctypes.CDLL(None,use_errno=True)
+if libc.prctl(15,b'claude',0,0,0)!=0: raise OSError(ctypes.get_errno())
+def parent_death():
+ if libc.prctl(1,signal.SIGKILL,0,0,0)!=0: raise OSError(ctypes.get_errno())
+raise SystemExit(subprocess.call(sys.argv[1:],preexec_fn=parent_death))`
+    const child = extra.CLAUDECODE === '1'
+      ? spawn('/usr/bin/python3', ['-I', '-S', '-c', claudeParent, process.execPath, ...argv], { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...extra }, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn(process.execPath, argv, { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...extra }, stdio: ['pipe', 'pipe', 'pipe'] })
     child.stdin!.end(QUESTION)
     return child
   }

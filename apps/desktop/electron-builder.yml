@@ -263,6 +263,8 @@ extraResources:
     to: bin/plan-migration-lock.mjs
   - from: bin/plan-publish.mjs
     to: bin/plan-publish.mjs
+  - from: bin/plan-reconciliation.mjs
+    to: bin/plan-reconciliation.mjs
   - from: bin/plan-allowances.mjs
     to: bin/plan-allowances.mjs
   - from: bin/plan-statuses.mjs
@@ -282,6 +284,7 @@ extraResources:
       - plan-bmad-parser.mjs
       - plan-migration-lock.mjs
       - plan-publish.mjs
+      - plan-reconciliation.mjs
       - plan-allowances.mjs
       - plan-statuses.mjs
       - shared-helpers.mjs

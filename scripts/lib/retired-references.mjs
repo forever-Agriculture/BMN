@@ -139,6 +139,7 @@ export const NAMED = {
     status: 'never supported as an agent app; what is left names a command or a model family BMN still meets',
     patterns: [standalone(gem)],
     allowed: {
+      'scripts/test/away-skills-decode.mjs': { class: CURRENT, reason: 'the Away evidence decoder detects unapproved provider commands' },
       'apps/desktop/bin/agents-team-inputs.mjs': { class: CURRENT, reason: `\`~/.${gem}\` is a credential location: never an ask input or project` },
       'apps/desktop/src/renderer/src/session-presentation.ts': { class: CURRENT, reason: `the tag a session running \`${gem}\` gets; it runs as a plain terminal` },
       'docs/features.md': { class: CURRENT, reason: 'the launcher note: the commands BMN tags, and which of them it integrates' },

@@ -1,10 +1,11 @@
 // MODULE: bench-state.mjs - locked run generations and kernel-owned QA workload containment
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statfsSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { constants as osConstants } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual } from 'node:util'
 import { atomicJson, isLiveProcess, processIdentity } from './bench-lib.mjs'
 
 export const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -161,7 +162,7 @@ export function launchQuiescent(runId, trace) {
   return withLifecycleLock(() => {
     const config = configFor(runId), entry = launchFor(runId, trace.key), fd = openLease(config, entry)
     if (fd === null) return false
-    try { return !groupState({ ...config, group: entry.group }).populated }
+    try { return retiredRecoveryBranch(config, entry) || !groupState({ ...config, group: entry.group }).populated }
     finally { closeSync(fd) }
   })
 }
@@ -226,9 +227,13 @@ function tracerStatusMatches(cert, terminal) {
 }
 
 export function traceCompleted(runId, trace) {
+  return launchQuiescent(runId, trace) && certificateCompleted(runId, trace)
+}
+
+function certificateCompleted(runId, trace) {
   const config = configFor(runId), entry = launchFor(runId, trace.key), recorder = recorderIdentity(runId, entry)
   const path = join(config.run, entry.certificateFile)
-  if (!existsSync(path) || !recorder?.tracerIdentity || !launchQuiescent(runId, entry)) return false
+  if (!existsSync(path) || !recorder?.tracerIdentity) return false
   try {
     if (lstatSync(path).isSymbolicLink()) return false
     const cert = readJson(path)
@@ -246,6 +251,108 @@ export function traceCompleted(runId, trace) {
     return bytes.length === cert.traceBytes && createHash('sha256').update(bytes).digest('hex') === cert.traceSha256 &&
       terminal.complete && tracerStatusMatches(cert, terminal.exits[String(actor.pid)])
   } catch { return false }
+}
+
+function regularJson(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error('QA receipt is not a regular file')
+    return JSON.parse(readFileSync(fd, 'utf8'))
+  } finally { closeSync(fd) }
+}
+
+// ENOENT alone establishes absence. Inaccessible paths and dangling links block.
+function absent(path) {
+  try { lstatSync(path); return false }
+  catch (error) { if (error.code === 'ENOENT') return true; throw error }
+}
+
+function bootObservation() {
+  const bootId = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
+  const times = [...readFileSync('/proc/stat', 'utf8').matchAll(/^btime ([0-9]+)$/gmu)]
+  const uptimeText = readFileSync('/proc/uptime', 'utf8')
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(bootId) || times.length !== 1 ||
+      !/^[0-9]+\.[0-9]+ [0-9]+\.[0-9]+\n?$/u.test(uptimeText)) throw new Error('QA boot evidence is malformed')
+  const bootAt = Number(times[0][1]) * 1000, uptime = Number(uptimeText.split(' ')[0]) * 1000, now = Date.now()
+  if (!Number.isSafeInteger(bootAt) || !Number.isFinite(uptime) || Math.abs(now - uptime - bootAt) > 2000) {
+    throw new Error('QA boot and wall clocks disagree')
+  }
+  return { bootId, bootAt, uptime, now }
+}
+
+/** Only the final recovery actor may leave an empty group for the next boot.
+ * No old receipt is rewritten, and this exception never authorizes signalling. */
+function retiredRecoveryBranch(config, entry) {
+  const held = []
+  try {
+    if (entry.role !== 'recovery' || !absent(removalIntent({ ...config, group: entry.group }))) return false
+    const before = bootObservation(), receiptPath = join(config.run, 'receipt.json')
+    const receipt = regularJson(receiptPath), recorded = regularJson(join(config.run, 'config.json'))
+    if (!isDeepStrictEqual(recorded, config) || receipt.runId !== config.runId || receipt.status !== 'stopped' ||
+        receipt.cleanupUntraced || receipt.recoveryTracePending !== entry.key) return false
+    for (const field of ['version', 'runId', 'run', 'currentFile', 'recoveryRoot', 'root', 'rootIdentity', 'tempParent', 'tempParentIdentity', 'group']) {
+      if (!isDeepStrictEqual(receipt[field], config[field])) return false
+    }
+    const stopped = Date.parse(receipt.stoppedAt)
+    if (typeof receipt.stoppedAt !== 'string' || !Number.isSafeInteger(stopped) || new Date(stopped).toISOString() !== receipt.stoppedAt ||
+        Math.ceil(stopped / 1000) * 1000 + 1000 >= before.bootAt) return false
+    const traces = allTraces(receipt), keys = traces.map(trace => trace.key).sort()
+    const launchKeys = readdirSync(config.run).filter(name => /^launch-[a-f0-9]{16}\.json$/u.test(name)).map(name => name.slice(7, -5)).sort()
+    const proof = regularJson(join(config.run, 'completion-proof.json'))
+    if (!keys.length || new Set(keys).size !== keys.length || !isDeepStrictEqual(keys, launchKeys) ||
+        proof.stopped !== true || proof.rootsDeleted !== true || proof.groupRemoved !== true ||
+        !Array.isArray(proof.traces) || proof.traces.length !== keys.length ||
+        !isDeepStrictEqual(proof.traces.map(trace => trace.key).sort(), keys) || proof.traces.some(trace => trace.complete !== true)) return false
+    for (const trace of traces) {
+      const saved = receipt.tracers.find(item => item.key === trace.key)
+      for (const field of ['role', 'key', 'group', 'lease', 'file', 'actorFile', 'recorderFile', 'certificateFile']) {
+        if (!isDeepStrictEqual(saved[field], trace[field])) return false
+      }
+      if (trace.key !== entry.key) {
+        const fd = openLease(config, trace)
+        if (fd === null) return false
+        held.push(fd)
+        const removed = regularJson(removalIntent({ ...config, group: trace.group }))
+        if (removed.runId !== config.runId || !isDeepStrictEqual(removed.group, trace.group)) return false
+      }
+      if (!certificateCompleted(config.runId, trace)) return false
+    }
+    const deletion = regularJson(join(config.run, 'root-deletion-intent.json')), removed = regularJson(removalIntent(config))
+    if (deletion.runId !== config.runId || deletion.root !== config.root || !isDeepStrictEqual(deletion.identity, config.rootIdentity) ||
+        removed.runId !== config.runId || !isDeepStrictEqual(removed.group, config.group)) return false
+    const parent = `/sys/fs/cgroup/user.slice/user-${process.getuid()}.slice/user@${process.getuid()}.service/app.slice`
+    const groups = [config.group, ...traces.map(trace => trace.group)]
+    if (realpathSync(parent) !== parent || statfsSync(parent).type !== 0x63677270) return false
+    accessSync(parent, constants.R_OK | constants.X_OK)
+    if (realpathSync(config.tempParent) !== config.tempParent || dirname(config.root) !== config.tempParent) return false
+    accessSync(config.tempParent, constants.R_OK | constants.X_OK)
+    const allAbsent = () => absent(config.root) && groups.every(group => group.parent === parent &&
+      group.path === join(parent, `bmn-qa-${config.runId}${group.launchKey ? `-${group.launchKey}` : ''}.scope`) && absent(group.path))
+    if (!allAbsent()) return false
+    const after = bootObservation()
+    return before.bootId === after.bootId && before.bootAt === after.bootAt && after.uptime >= before.uptime &&
+      after.now >= before.now && Math.abs((after.now - before.now) - (after.uptime - before.uptime)) < 1000 &&
+      isDeepStrictEqual(regularJson(receiptPath), receipt) && isDeepStrictEqual(regularJson(join(config.run, 'config.json')), config) && allAbsent()
+  } catch { return false }
+  finally { for (const fd of held) closeSync(fd) }
+}
+
+export function removePreviousGroups(successor) {
+  return withLifecycleLock(() => {
+    const recorded = configFor(successor.runId)
+    if (!recorded.previousRunId || recorded.previousRunId !== successor.previousRunId) throw new Error('QA previous generation was substituted')
+    const previous = configFor(recorded.previousRunId), receipt = regularJson(join(previous.run, 'receipt.json'))
+    if (receipt.status !== 'stopped' || !absent(previous.root)) throw new Error('Previous QA run is not complete')
+    for (const trace of allTraces(receipt)) {
+      const fd = openLease(previous, trace)
+      if (fd === null) throw new Error('Previous QA launch is still active')
+      try {
+        if (retiredRecoveryBranch(previous, trace)) continue
+        if (groupState({ ...previous, group: trace.group }).populated) throw new Error('Previous QA launch is still active')
+        removeGroup({ ...previous, group: trace.group })
+      } finally { closeSync(fd) }
+    }
+  })
 }
 
 export function createGroup(runId, launchKey) {

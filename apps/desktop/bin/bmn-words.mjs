@@ -347,10 +347,10 @@ While the owner is away
   consequential technical choice, consult only if existing dispatch consent, provider and data rules
   and remaining spend and retry allowances permit: one \`bmn team ask --role consultant\` with one
   stable key and a bounded time limit, no recursion, no other provider; on a refusal, timeout or
-  uncertain completion read the existing ask record instead of asking again; advice grants no
-  authority: you decide and record. Withdraw a card when it stops mattering. Stops, refusals, retry
-  limits and owner-only checks stay binding. If no authorised work remains, finish with what
-  completed and what waits; do not invent work.
+  uncertain completion read the existing ask record instead of asking again; advice grants
+  no authority: you decide and record. Withdraw a card when it stops mattering. Stops,
+  refusals, retry limits and owner-only checks stay binding. If no authorised work remains,
+  finish with what completed and what waits; do not invent work.
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.

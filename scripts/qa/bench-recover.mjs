@@ -1,8 +1,7 @@
 // MODULE: bench-recover.mjs - bounded owned-branch drain and cleanup under one durable deadline
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicJson, isLiveProcess } from './bench-lib.mjs'
-import { allTraces, cleanupDeadline, configFor, deleteRoot, groupState, killGroup, readJson, removeGroup, runPath, sleep, traceCompleted, traceOutstanding, transition, validateStateRoot } from './bench-state.mjs'
+import { allTraces, cleanupDeadline, deleteRoot, groupState, killGroup, removeGroup, removePreviousGroups, sleep, traceCompleted, traceOutstanding, transition, validateStateRoot } from './bench-state.mjs'
 
 export async function recoverOwnedBench({ config, runId, key, self, token, ownTracer, claimed }) {
   let state = claimed()
@@ -49,12 +48,7 @@ export async function recoverOwnedBench({ config, runId, key, self, token, ownTr
   const traceEvidence = others.map(trace => ({ key: trace.key, complete: traceCompleted(runId, trace) }))
   for (const trace of others) removeGroup({ ...config, group: trace.group })
   if (config.previousRunId) {
-    const previous = configFor(config.previousRunId), receipt = readJson(join(runPath(previous.runId), 'receipt.json'))
-    if (receipt.status !== 'stopped' || existsSync(previous.root)) throw new Error('Previous QA run is not complete')
-    for (const trace of allTraces(receipt)) {
-      if (traceOutstanding(previous.runId, trace)) throw new Error('Previous QA launch is still active')
-      removeGroup({ ...previous, group: trace.group })
-    }
+    removePreviousGroups(config)
   }
   atomicJson(join(config.run, `recovery-${key}-proof.json`), { empty: true, traceEvidence, claimant: self })
   const stopped = transition(runId, ['stopping'], current => {
