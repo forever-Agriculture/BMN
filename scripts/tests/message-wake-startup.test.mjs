@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { runInNewContext } from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { assertMessageProfileSeal, assertMessageQualifications, classifyMessageStartup, cleanupMessageProbe, messageProfileSnapshot, messageStartupStep, messageActivityVerdict, messageChildFixture, messageActivityFixture, assertMessageSetupConfiguration, messageCodexConfiguration, recordMessageVerdict, messageNativeEscape, messageNowSampler, messageRecorderHealthy, messageActivityComposer, messageProfileSealMigration, messageSocketGuidance, messageProcessIdentity } from '../test/message-wake-startup.mjs'
+import { messageLaunchEcho, assertMessageProfileSeal, assertMessageQualifications, classifyMessageStartup, cleanupMessageProbe, messageProfileSnapshot, messageStartupStep, messageActivityVerdict, messageChildFixture, messageActivityFixture, assertMessageSetupConfiguration, messageCodexConfiguration, recordMessageVerdict, messageNativeEscape, messageNowSampler, messageRecorderHealthy, messageActivityComposer, messageProfileSealMigration, messageSocketGuidance, messageProcessIdentity } from '../test/message-wake-startup.mjs'
 import { processTree, stopTree } from '../test/away-skills-processes.mjs'
 import { collectMessageHookQueries } from '../test/message-wake-startup.mjs'
 import { approvalFrom } from '../../apps/desktop/bin/codex-hook-approval.mjs'
@@ -818,5 +818,48 @@ describe('retained hook queries keep closed evidence before the approval guard (
     await expect(promise).rejects.toThrow('spawn broke')
     expect([saved[0].answerState, saved[0].approvalState, saved[0].reason, saved[0].actors]).toEqual(['unknown', 'unverified', 'unknown', []])
     expect(JSON.stringify(saved)).not.toMatch(/leak-me/)
+  })
+})
+
+describe('typed child commands and a relaunch after earlier output (113.7 method 6 repair)', () => {
+  // The screens are the 2026-11-10 Claude 2.1.322 matrix record's screen-replaced-quit and screen-failure.
+  const launch = "claude --model haiku --permission-mode dontAsk --allowedTools 'Bash(echo:*)' 'Bash(bmn:*)' 'Bash(sleep:*)' 'Bash(python3:*)' 'Bash(touch:*)' 'Bash(git:*)' 'Agent' 'Task' 'Read' AskUserQuestion"
+  const before = ['', 'Resume this session with:', 'claude --resume 5e86f92d-3edf-44a5-9068-c5f62ff3c611', 'bash-5.3$ ', '', '']
+  const after = ['', 'Resume this session with:', 'claude --resume 5e86f92d-3edf-44a5-9068-c5f62ff3c611',
+    "bash-5.3$ claude --model haiku --permission-mode dontAsk --allowedTools 'Bash(echo:*)' 'Bash(bmn:*)' 'Bash(sleep:*)' 'Bash",
+    "(python3:*)' 'Bash(touch:*)' 'Bash(git:*)' 'Agent' 'Task' 'Read' AskUserQuestion", '', '']
+
+  it('names the child programs as files so each typed command is one line', () => {
+    const fixture = messageChildFixture('/tmp/child-x')
+    expect(fixture.bootstrapProgram).toBe('/tmp/child-x/bootstrap.py'); expect(fixture.foregroundProgram).toBe('/tmp/child-x/foreground.py')
+    expect(fixture.bootstrap).toContain('\n'); expect(`python3 '${fixture.foregroundProgram}' python3 '${fixture.bootstrapProgram}'`).not.toMatch(/[\r\n]/u)
+  })
+
+  it('reads the real relaunch screen as loading, where the bare prompt echo was refused', () => {
+    const echo = messageLaunchEcho(before, launch)
+    expect(classifyMessageStartup('claude', after, '/x', { launchEcho: echo, appSeen: false })).toEqual({ state: 'loading', detail: 'exact launch echo before app frame' })
+    expect(classifyMessageStartup('claude', after, '/x', { launchEcho: `bash-5.3$ ${launch}`, appSeen: false })).toEqual({ state: 'dialog', detail: 'unexpected text before app frame' })
+  })
+
+  it('still refuses any other text before the app frame', () => {
+    const echo = messageLaunchEcho(before, launch)
+    for (const extra of ['Do you trust this folder?', 'error: unknown option'])
+      expect(classifyMessageStartup('claude', [...after.slice(0, 5), extra], '/x', { launchEcho: echo, appSeen: false }).state).toBe('dialog')
+    expect(classifyMessageStartup('claude', after.toSpliced(1, 1, 'Resume this session with'), '/x', { launchEcho: echo, appSeen: false }).state).toBe('dialog')
+  })
+
+  it('accepts the same relaunch scrolled by whole lines, only with the command named', () => {
+    const echo = messageLaunchEcho(before, launch), scrolled = after.slice(2, 5)
+    expect(classifyMessageStartup('claude', scrolled, '/x', { launchEcho: echo, launch, appSeen: false })).toEqual({ state: 'loading', detail: 'exact launch echo tail before app frame' })
+    expect(classifyMessageStartup('claude', scrolled, '/x', { launchEcho: echo, appSeen: false }).state).toBe('dialog')
+    expect(classifyMessageStartup('claude', after.slice(4, 5), '/x', { launchEcho: echo, launch, appSeen: false }).state).toBe('dialog')
+    expect(classifyMessageStartup('claude', [...scrolled, 'Hooks need review'], '/x', { launchEcho: echo, launch, appSeen: false }).state).toBe('dialog')
+  })
+
+  it('refuses a launch with no shell prompt before it, or a multi-line launch', () => {
+    expect(() => messageLaunchEcho(['', 'still running'], launch)).toThrow('no shell prompt')
+    expect(() => messageLaunchEcho([], launch)).toThrow('no shell prompt')
+    expect(() => messageLaunchEcho(before, 'a\nb')).toThrow('Invalid launch echo inputs')
+    expect(() => messageLaunchEcho(before, '')).toThrow('Invalid launch echo inputs')
   })
 })

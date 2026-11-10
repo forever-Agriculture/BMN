@@ -293,7 +293,8 @@ export function assertMessageQualifications(receipts, app, binding) {
 
 export function messageChildFixture(directory) {
   const pulse = join(directory, 'pulse.json'), release = join(directory, 'release'), parentReady = join(directory, 'parent-ready')
-  return { pulse, release, parentReady,
+  // Typed prompts are one line: a newline submits, so the two programs are files the prompt names (method 6 repair).
+  return { pulse, release, parentReady, bootstrapProgram: join(directory, 'bootstrap.py'), foregroundProgram: join(directory, 'foreground.py'),
     bootstrap: `import time\nfrom pathlib import Path\np=Path(${JSON.stringify(parentReady)})\ndeadline=time.monotonic()+240\nwhile not p.exists() and time.monotonic()<deadline: time.sleep(0.25)\nassert p.exists(), 'parent never stopped'\n`,
     foreground: `import json,os,time\nfrom pathlib import Path\npulse=Path(${JSON.stringify(pulse)})\nrelease=Path(${JSON.stringify(release)})\nidentity=Path('/proc/self/stat').read_text().rsplit(') ',1)[1].split()[19]\ndeadline=time.monotonic()+600\nwhile not release.exists() and time.monotonic()<deadline:\n pulse.with_suffix('.new').write_text(json.dumps({'pid':os.getpid(),'start_ticks':identity,'at':time.time()*1000}))\n os.replace(pulse.with_suffix('.new'),pulse)\n time.sleep(0.5)\nprint('child-latch-released' if release.exists() else 'child-latch-expired',flush=True)\n` }
 }
@@ -383,6 +384,14 @@ export function messageActivityVerdict(evidence) {
   if (evidence.app === 'claude') require(noEventCondition, 'Claude no-event antecedent not observed')
   return { pass: failures.length === 0, noEventCondition, failures, sharedBoundMs: 2000, route: evidence.probeEventsAfter?.map(row => row.eventName) ?? [] }
 }
+/** A launch typed after earlier output: the visible screen before it, then the command, compared exactly. */
+export function messageLaunchEcho(before, launch) {
+  if (!Array.isArray(before) || before.some(line => typeof line !== 'string') || typeof launch !== 'string' || !launch || /[\r\n]/u.test(launch)) throw new Error('Invalid launch echo inputs')
+  const visible = before.map(line => line.trimEnd())
+  while (visible.length && visible.at(-1) === '') visible.pop()
+  if (!visible.length || !/\$$/u.test(visible.at(-1))) throw new Error('UNVERIFIED: no shell prompt before the launch')
+  return `${visible.join('')} ${launch}`
+}
 export function classifyMessageStartup(app, lines, folder, context = null) {
   const text = lines.join('\n')
   const frame = /Choose the text style that looks best with your terminal|^\s*Accessing workspace:|^\s*Folder access|>_ OpenAI Codex \(v|Claude Code v[0-9]/mu.test(text)
@@ -390,6 +399,9 @@ export function classifyMessageStartup(app, lines, folder, context = null) {
     const visible = [...lines]
     while (visible.length && visible.at(-1).trim() === '') visible.pop()
     if (!visible.length || visible.join('') === context.launchEcho) return { state: 'loading', detail: 'exact launch echo before app frame' }
+    // A relaunch at the foot of a full screen scrolls whole earlier lines away; what remains is still an exact tail ending in the command.
+    const shown = visible.join('')
+    if (typeof context.launch === 'string' && context.launch && context.launchEcho.endsWith(shown) && shown.endsWith(` ${context.launch}`)) return { state: 'loading', detail: 'exact launch echo tail before app frame' }
     return { state: 'dialog', detail: 'unexpected text before app frame' }
   }
   if (context && frame) context.appSeen = true
