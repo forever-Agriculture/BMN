@@ -4,6 +4,7 @@ import {
   countryFlag,
   MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
+  progressShowsStopped,
   RETIRED_APP_NAMES,
   USAGE_NOTICE_PERCENT,
   usageClock,
@@ -61,7 +62,7 @@ export function sessionStatus(
   if (attention === 'response') {
     return { dot: 'needs-you', word: 'Waiting for your response' }
   }
-  if (progress && !progress.stale && (progress.state === 'failed' || progress.state === 'blocked')) {
+  if (progress && progressShowsStopped(progress)) {
     return { dot: 'exited', word: `${progress.word} · ${progress.source}, ${progress.age}` }
   }
   if (live) {

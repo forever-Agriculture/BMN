@@ -15,6 +15,7 @@ import {
   AWAY_QUESTION_REFUSAL,
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
+  PROGRESS_STALE_AFTER_MS,
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
   METHOD_REGISTRY,
@@ -3432,6 +3433,24 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     clock = new Date(base + 2000).toISOString()
     expect((await row()).dot).toBe('running-idle')
     expect((await row()).doing).toBe('Idle')
+  })
+
+  it('bmn now shows a fresh failed or blocked report as stopped, as the sidebar and the sheet do, until it goes stale or a card opens', async () => {
+    const base = Date.parse(clock)
+    const report = (state: string, observedAt: string) => (service as unknown as { reportProgress: (p: unknown) => Promise<unknown> })
+      .reportProgress({ sessionId: 's2', incarnationId: 'incarnation-2', source: 'agent', state, label: 'Build', observedAt })
+    const row = async () => ((await handlers().readNow({ kind: 'owner' })) as NowReport)
+      .sections.flatMap(section => section.rows).find(row => row.sessionId === 's2')!
+    const before = (await row()).dot
+    expect(['running', 'running-idle']).toContain(before)
+    await report('running', new Date(base).toISOString())
+    expect((await row()).dot).toBe(before)
+    for (const [index, state] of ['failed', 'blocked'].entries()) {
+      await report(state, new Date(base + 1000 * (index + 1)).toISOString())
+      expect((await row()).dot).toBe('exited')
+    }
+    clock = new Date(base + 2000 + PROGRESS_STALE_AFTER_MS + 1).toISOString()
+    expect((await row()).dot).not.toBe('exited')
   })
 
   it('counts an agent its hooks reported in bmn now, as the sheet does, though a shell is in front (110.9)', async () => {

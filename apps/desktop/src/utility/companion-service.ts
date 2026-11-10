@@ -28,6 +28,7 @@ import {
   countryFlag,
   modelOrigin,
   PROGRESS_STALE_AFTER_MS,
+  progressShowsStopped,
   TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_CODES,
   TERMINAL_NOTICE_TITLE_MAX,
@@ -1998,12 +1999,16 @@ export class CompanionService {
         const card = attention.filter((record) => record.sessionId === session.sessionId && record.state === 'open' &&
           record.kind !== 'notice' && (!live || record.incarnationId === incarnation))
           .toSorted((left, right) => left.openedAt.localeCompare(right.openedAt))[0]
-        const label = progress.filter((record) => record.sessionId === session.sessionId && (!live || record.incarnationId === incarnation))
-          .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))[0]?.label ?? null
+        // The sheet's rule (main.tsx observedProgressFor): the newest report of the run in front, or of the last run.
+        const run = live ? incarnation : session.lastProcess?.incarnationId
+        const reported = progress.filter((record) => record.sessionId === session.sessionId && (run === undefined || record.incarnationId === run))
+          .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))[0]
+        const observed = reported ? { state: reported.state, stale: this.now().getTime() - Date.parse(reported.observedAt) > PROGRESS_STALE_AFTER_MS } : null
+        const label = reported && !observed!.stale ? reported.label : null
         const working = sessionActivityState(this.options.manager.sessionActivity(session.sessionId), this.now().getTime()).working
         return {
           sessionId: session.sessionId, workspaceId: session.workspaceId, name: session.name, live, started: session.lastProcess !== null,
-          dot: card ? 'needs-you' : live ? working ? 'running' : 'running-idle' : session.lastProcess ? 'exited' : 'idle',
+          dot: card ? 'needs-you' : progressShowsStopped(observed) ? 'exited' : live ? working ? 'running' : 'running-idle' : session.lastProcess ? 'exited' : 'idle',
           // One rule and one record with the sheet (main.tsx nowSessions reads this same origin list): this run's hooks
           // reported an agent that has not ended (SessionEnd clears it, the shell staying). He types agents inside shells,
           // and a launch program or a foreground process proves nothing the design asks for ("hooks decide").

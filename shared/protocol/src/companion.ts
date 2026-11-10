@@ -476,6 +476,14 @@ export type ProgressState =
 export const PROGRESS_STALE_AFTER_MS = 10 * 60 * 1000
 
 /**
+ * A fresh failed or blocked report shows the session as stopped, ahead of its activity and behind only a card: one rule
+ * for the sidebar, the Now sheet and `bmn now` (Epic 113 review, R113-FR7).
+ */
+export function progressShowsStopped(progress: { state: ProgressState; stale: boolean } | null | undefined): boolean {
+  return progress != null && !progress.stale && (progress.state === 'failed' || progress.state === 'blocked')
+}
+
+/**
  * One already-published file a report points at. The name is the artifact's display name as it was
  * when the link was made, so a deleted or renamed original is still nameable. Presence says the
  * reporter attached something, never that BMN checked the work.
