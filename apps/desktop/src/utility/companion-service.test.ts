@@ -3435,7 +3435,7 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     expect((await row()).doing).toBe('Idle')
   })
 
-  it('bmn now shows a fresh failed or blocked report as stopped, as the sidebar and the sheet do, until it goes stale or a card opens', async () => {
+  it('bmn now shows a fresh failed or blocked report as stopped, as the sidebar and the sheet do, until it goes stale', async () => {
     const base = Date.parse(clock)
     const report = (state: string, observedAt: string) => (service as unknown as { reportProgress: (p: unknown) => Promise<unknown> })
       .reportProgress({ sessionId: 's2', incarnationId: 'incarnation-2', source: 'agent', state, label: 'Build', observedAt })
