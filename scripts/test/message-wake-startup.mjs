@@ -299,6 +299,26 @@ export function messageChildFixture(directory) {
     foreground: `import json,os,time\nfrom pathlib import Path\npulse=Path(${JSON.stringify(pulse)})\nrelease=Path(${JSON.stringify(release)})\nidentity=Path('/proc/self/stat').read_text().rsplit(') ',1)[1].split()[19]\ndeadline=time.monotonic()+600\nwhile not release.exists() and time.monotonic()<deadline:\n pulse.with_suffix('.new').write_text(json.dumps({'pid':os.getpid(),'start_ticks':identity,'at':time.time()*1000}))\n os.replace(pulse.with_suffix('.new'),pulse)\n time.sleep(0.5)\nprint('child-latch-released' if release.exists() else 'child-latch-expired',flush=True)\n` }
 }
 
+/**
+ * The child case's antecedent on native facts (step-back 20261110T124143): the child's own tool call naming the latch
+ * program is open after the root Stop, that child has not stopped, its pulse is fresh and the root has done nothing since.
+ * BMN's own latest row is the measured route, recorded beside this and never a gate. Every condition is returned.
+ */
+export function messageChildAntecedent({ events, rootStopAt, program, pulse, now }) {
+  const none = { current: false, agentId: null, callAt: null, conditions: { call: false, open: false, alive: false, pulse: false, rootQuiet: false } }
+  if (!Array.isArray(events) || !Number.isFinite(rootStopAt) || typeof program !== 'string' || !program || !Number.isFinite(now)) return none
+  const at = row => Date.parse(row.at)
+  const call = events.findLast(row => row.event === 'PreToolUse' && row.agentId !== null && at(row) > rootStopAt && typeof row.input === 'string' && row.input.includes(program))
+  const rootQuiet = !events.some(row => row.agentId === null && at(row) > rootStopAt && ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop'].includes(row.event))
+  const fresh = Boolean(pulse && Number.isSafeInteger(pulse.pid) && Number.isFinite(pulse.at) && now-pulse.at >= 0 && now-pulse.at < 2500)
+  if (!call) return { ...none, conditions: { ...none.conditions, pulse: fresh, rootQuiet } }
+  const later = events.filter(row => row.agentId === call.agentId && at(row) >= at(call) && row !== call)
+  const open = !later.some(row => ['PostToolUse', 'PostToolUseFailure'].includes(row.event) && (call.toolUseId === null || row.toolUseId === null || row.toolUseId === call.toolUseId))
+  const alive = !later.some(row => ['SubagentStop', 'Stop'].includes(row.event))
+  const conditions = { call: true, open, alive, pulse: fresh, rootQuiet }
+  return { current: Object.values(conditions).every(Boolean), agentId: call.agentId, callAt: call.at, conditions }
+}
+
 export function messageActivityFixture(directory) {
   const execution = join(directory, 'executed.json'), program = join(directory, 'foreground.py')
   return { execution, program, source: `import json,os,time\nfrom pathlib import Path\np=Path(${JSON.stringify(execution)})\nfor n in range(8):\n p.with_suffix('.new').write_text(json.dumps({'pid':os.getpid(),'pulse':n,'at':time.time()*1000}))\n os.replace(p.with_suffix('.new'),p)\n print('NATIVE_ACTIVITY_PULSE_'+str(n),flush=True)\n time.sleep(0.25)\ntime.sleep(120)\n` }

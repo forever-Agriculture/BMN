@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { runInNewContext } from 'node:vm'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { messageLaunchEcho, assertMessageProfileSeal, assertMessageQualifications, classifyMessageStartup, cleanupMessageProbe, messageProfileSnapshot, messageStartupStep, messageActivityVerdict, messageChildFixture, messageActivityFixture, assertMessageSetupConfiguration, messageCodexConfiguration, recordMessageVerdict, messageNativeEscape, messageNowSampler, messageRecorderHealthy, messageActivityComposer, messageProfileSealMigration, messageSocketGuidance, messageProcessIdentity } from '../test/message-wake-startup.mjs'
+import { messageLaunchEcho, messageChildAntecedent, assertMessageProfileSeal, assertMessageQualifications, classifyMessageStartup, cleanupMessageProbe, messageProfileSnapshot, messageStartupStep, messageActivityVerdict, messageChildFixture, messageActivityFixture, assertMessageSetupConfiguration, messageCodexConfiguration, recordMessageVerdict, messageNativeEscape, messageNowSampler, messageRecorderHealthy, messageActivityComposer, messageProfileSealMigration, messageSocketGuidance, messageProcessIdentity } from '../test/message-wake-startup.mjs'
 import { processTree, stopTree } from '../test/away-skills-processes.mjs'
 import { collectMessageHookQueries } from '../test/message-wake-startup.mjs'
 import { approvalFrom } from '../../apps/desktop/bin/codex-hook-approval.mjs'
@@ -861,5 +861,70 @@ describe('typed child commands and a relaunch after earlier output (113.7 method
     expect(() => messageLaunchEcho([], launch)).toThrow('no shell prompt')
     expect(() => messageLaunchEcho(before, 'a\nb')).toThrow('Invalid launch echo inputs')
     expect(() => messageLaunchEcho(before, '')).toThrow('Invalid launch echo inputs')
+  })
+})
+
+describe('the child antecedent on native facts, replayed on the failed run (113.7 method 7)', () => {
+  // Run B, Claude 2.1.322, 2026-11-10: the probe's events for the receiver and BMN's own rows (negative-depth.json).
+  const program = '/fixtures/project/child-20261110T122533-method6r-c322-matrix-claude-1/foreground.py'
+  const child = 'a78770085fba9a220', day = '2026-11-10T'
+  const row = (time, event, agentId = null, toolUseId = null, input = null) => ({ at: `${day}${time}Z`, event, agentId, toolUseId, input })
+  const probe = [
+    row('12:26:35.931', 'UserPromptSubmit'),
+    row('12:26:40.592', 'PreToolUse', null, 'toolu_01CC', '{"description":"Run two bootstrap scripts in order"}'),
+    row('12:26:40.671', 'PostToolUse', null, 'toolu_01CC'),
+    row('12:26:40.685', 'SubagentStart', child),
+    row('12:26:41.621', 'Stop'),
+    row('12:26:42.875', 'PreToolUse', child, 'toolu_01RH', `{"command":"python3 '${program.replace('foreground', 'bootstrap')}'"}`),
+    row('12:26:42.976', 'SubagentStop', 'a71713fe707fb23de'),
+    row('12:26:43.026', 'PostToolUse', child, 'toolu_01RH'),
+    row('12:26:44.696', 'PreToolUse', child, 'toolu_01Ch', `{"command":"python3 '${program}'"}`),
+    row('12:27:12.360', 'PostToolUse', child, 'toolu_01Ch'),
+    row('12:27:13.822', 'SubagentStop', child),
+    row('12:27:13.952', 'UserPromptSubmit'),
+    row('12:27:15.904', 'Stop')
+  ]
+  const bmn = [['Stop', '12:26:41.692'], ['PostToolUse', '12:26:43.062'], ['PostToolUse', '12:27:12.416'], ['UserPromptSubmit', '12:27:14.108']]
+    .map(([event, time]) => ({ event, source: null, observedAt: `${day}${time}Z` }))
+  const rootStopAt = Date.parse(`${day}12:26:41.621Z`)
+  const at = time => Date.parse(`${day}${time}Z`)
+  const state = time => messageChildAntecedent({ events: probe.filter(entry => Date.parse(entry.at) <= at(time)), rootStopAt, program, pulse: { pid: 153371, start_ticks: '9492403', at: at(time)-300 }, now: at(time) })
+  const former = time => { const latest = bmn.findLast(entry => Date.parse(entry.observedAt) <= at(time)); return latest?.source === 'subagent' || /^Subagent/u.test(latest?.event ?? '') }
+
+  it('was never current by the former rule, although the child ran (red on the path that failed)', () => {
+    for (const time of ['12:26:42.000', '12:26:45.000', '12:26:55.000', '12:27:10.000', '12:27:12.300', '12:27:14.000']) expect(former(time)).toBe(false)
+  })
+
+  it('is current exactly while the child\'s latch call is open', () => {
+    for (const time of ['12:26:44.700', '12:26:55.000', '12:27:12.300']) expect(state(time)).toEqual({ current: true, agentId: child, callAt: `${day}12:26:44.696Z`, conditions: { call: true, open: true, alive: true, pulse: true, rootQuiet: true } })
+    expect(state('12:26:42.000').conditions).toEqual({ call: false, open: false, alive: false, pulse: true, rootQuiet: true })
+    expect(state('12:26:43.500').current).toBe(false) // the bootstrap call is not the latch
+    expect(state('12:27:12.400').conditions).toMatchObject({ call: true, open: false })
+    expect(state('12:27:13.900').conditions).toMatchObject({ open: false, alive: false })
+    expect(state('12:27:14.000').conditions.rootQuiet).toBe(false)
+  })
+
+  it('is not ended by the app\'s internal SubagentStop of another agent', () => {
+    expect(probe.some(entry => entry.event === 'SubagentStop' && entry.agentId !== child && Date.parse(entry.at) < at('12:26:44.696'))).toBe(true)
+    expect(state('12:26:50.000').conditions.alive).toBe(true)
+  })
+
+  it('needs a fresh pulse, an idle root and the latch program by name', () => {
+    const base = { events: probe.filter(entry => Date.parse(entry.at) <= at('12:26:55.000')), rootStopAt, program, now: at('12:26:55.000') }
+    expect(messageChildAntecedent({ ...base, pulse: null }).conditions).toMatchObject({ call: true, pulse: false })
+    expect(messageChildAntecedent({ ...base, pulse: { pid: 153371, at: at('12:26:52.000') } }).current).toBe(false)
+    expect(messageChildAntecedent({ ...base, pulse: { pid: 153371, at: at('12:26:56.000') } }).current).toBe(false)
+    expect(messageChildAntecedent({ ...base, pulse: { pid: 153371, at: at('12:26:54.900') }, program: '/elsewhere/foreground.py' }).conditions.call).toBe(false)
+    const rootMoved = [...base.events, row('12:26:54.000', 'PreToolUse', null, 'toolu_root', '{}')]
+    expect(messageChildAntecedent({ ...base, events: rootMoved, pulse: { pid: 153371, at: at('12:26:54.900') } }).conditions).toMatchObject({ call: true, open: true, rootQuiet: false })
+    const idle = [...base.events, row('12:26:54.000', 'Notification')]
+    expect(messageChildAntecedent({ ...base, events: idle, pulse: { pid: 153371, at: at('12:26:54.900') } }).current).toBe(true)
+    expect(messageChildAntecedent({ ...base, rootStopAt: NaN, pulse: { pid: 153371, at: at('12:26:54.900') } }).current).toBe(false)
+  })
+
+  it('reads a call with no tool-use id as closed by that child\'s next finished tool call', () => {
+    const bare = probe.map(entry => ({ ...entry, toolUseId: null }))
+    const read = time => messageChildAntecedent({ events: bare.filter(entry => Date.parse(entry.at) <= at(time)), rootStopAt, program, pulse: { pid: 1, at: at(time)-100 }, now: at(time) })
+    expect(read('12:26:55.000').current).toBe(true); expect(read('12:27:12.400').conditions.open).toBe(false)
   })
 })
