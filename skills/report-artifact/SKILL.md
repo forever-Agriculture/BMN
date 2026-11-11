@@ -32,6 +32,7 @@ those names. Word a heading for the reader if it helps. Every part stays visible
 | Header | `<header>` in the band | `<title>` of 2–4 words; eyebrow `Project · work · date` (`BMN · Epic 95 · 25 October 2026`); a title of 2–8 words that says what changed; **one** status line with status words (`✓ Done · checked on a local copy · ○ not yet in production · 2 steps wait on Artem`) |
 | In short | `in-short` | 3–4 sentences for a stranger: what the product is, what was wrong (who found it, when), what this work changed and how it helps |
 | What changed | `changes` | **one** table, Problem \| Fix \| What happens now, 1–6 rows, one issue per row, each complete on its own; the last line of each What happens now cell is its proof (`<p class="proof">`). Then the screenshots, each right after the table near the row it shows; then Also fixed, one line per smaller fix; then **one** checks line (`<p class="checks">`): the whole suite, reviews and CI |
+| What it took (optional) | `took`, immediately after `changes` | One scorecard table: roles (asks, observed models/efforts, minutes), boundaries (uses and limits, reviews, rechecks, rounds, consults, findings and dispositions), elapsed hours and unknowns. dev-auto supplies it from `scorecard.py`; no new ask. |
 | Still open | `still-open` | 1–3 plain lines: what was not checked, known risks. "None known." is valid |
 | Next steps | `next` | an `<h3>` per person, their steps numbered when there are two or more; "Nothing." is valid. Choices you made under the owner's delegation go here as **Choices you can reverse**, one line each with what changes it |
 | Two opinions | `opinions` | always last: the lead's and the independent reviewer's (below) |
@@ -140,7 +141,7 @@ page never scrolls sideways; every table cell keeps its `data-label` for this.
 Colour carries meaning and nothing else: `.ok` (done), `.open` (still open), `.bad` (failed) on
 status words, blue on setting names in `<code>` and on links. No inline styles, no other colours.
 
-The page's only element kinds are paragraphs, one table, lists, the two opinion blocks and
+The page's only element kinds are paragraphs, the changes table (and one optional took table), lists, the two opinion blocks and
 screenshots. Nothing else: no boxes, badges, number panels, progress bars, arrows, folds, icons
 or scripts; the check fails them.
 

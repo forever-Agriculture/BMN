@@ -67,6 +67,15 @@ describe('the report-artifact skill check', () => {
     fails(page.replace('<td data-label="Fix">One shared price table', '<td data-label="Change">One shared price table'), "every cell carries its column's data-label")
   })
 
+  it('accepts one optional took table after changes and rejects duplicates or wrong order', () => {
+    const part = '<section data-part="took"><h2>What it took</h2><table class="changes"><tr><td data-label="Role">Reviewer</td><td data-label="Asks">1</td></tr></table></section>'
+    const page = filled()
+    expect(check(page.replace('<section data-part="still-open">', part + '<section data-part="still-open">')).code).toBe(0)
+    fails(page.replace('<section data-part="still-open">', part + part + '<section data-part="still-open">'), 'no part twice')
+    fails(page.replace('<section data-part="in-short">', part + '<section data-part="in-short">'), 'parts in the fixed order')
+    fails(page.replace('<section data-part="still-open">', part.replace(/<table[\s\S]*?<\/table>/u, '') + '<section data-part="still-open">'), 'took: exactly one table')
+  })
+
   it('counts the report text once and fails 901 words while 900 pass with the screenshot present', () => {
     const page = filled()
     const padded = (n: number) => page.replace('<p>This work fixes', `<p>${'word '.repeat(n)}This work fixes`)

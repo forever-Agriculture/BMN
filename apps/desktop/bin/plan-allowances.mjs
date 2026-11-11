@@ -452,6 +452,9 @@ export async function allowanceFindings(plan, board, epicNumbers) {
     try { parsed = parseAllowances(readFileSync(join(plan.planRoot, 'allowances', name), 'utf8'), epic) } catch { add(at, 'unreadable'); continue }
     for (const problem of parsed.problems) add(`${at}:${problem.line}`, problem.reason)
   }
+  if (seen.size > 0 && board.rules?.allowances === undefined) {
+    add('plan/status.yaml', `allowance files exist but rules_from_allowances is missing; add rules_from_allowances: ${Math.min(...seen.keys())}`)
+  }
   if (board.rules?.allowances !== undefined) {
     for (const epic of epicNumbers) if (epic >= board.rules.allowances && !seen.has(epic)) add('plan/allowances', `epic ${epic} has no allowances file (epics from ${board.rules.allowances} on)`)
   }

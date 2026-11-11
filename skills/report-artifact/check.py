@@ -10,6 +10,8 @@ import sys
 from html.parser import HTMLParser
 
 ORDER = ["in-short", "changes", "still-open", "next", "opinions"]
+OPTIONAL = "took"
+ALL_PARTS = ["in-short", "changes", OPTIONAL, "still-open", "next", "opinions"]
 COLUMNS = ["problem", "fix", "what happens now"]
 MAX_ROWS = 6
 MAX_WORDS = 900
@@ -131,24 +133,26 @@ def check(source):
     # The parts, in their fixed order between the header and the footer
     sections = root.find(lambda n: n.tag == "section")
     parts = [s.attrs.get("data-part") for s in sections]
-    unknown = [p for p in parts if p not in ORDER]
+    unknown = [p for p in parts if p not in ALL_PARTS]
     rule("every section names a known part", not unknown, ", ".join(map(str, unknown)))
     rule("no part twice", len(parts) == len(set(parts)))
     missing = [p for p in ORDER if p not in parts]
     rule("every part present", not missing, "missing: " + ", ".join(missing) if missing else "")
     sequence = [n.attrs.get("data-part") if n.tag == "section" else n.tag
                 for n in root.find(lambda n: n.tag in ("header", "section", "footer"))]
-    expected = ["header"] + [p for p in ORDER if p in parts] + ["footer"]
+    expected = ["header"] + [p for p in ALL_PARTS if p in parts] + ["footer"]
     rule("parts in the fixed order: header, " + ", ".join(ORDER) + ", footer", sequence == expected, " > ".join(map(str, sequence)))
     rule("opinions are the last part before the footer", [p for p in sequence if p != "footer"][-1:] == ["opinions"])
     by = {s.attrs.get("data-part"): s for s in sections}
     for part, section in by.items():
-        if part in ORDER:
+        if part in ALL_PARTS:
             rule(f"{part}: has an h2 and content", section.find(lambda n: n.tag == "h2") and any(
                 n.tag != "h2" and (n.all_text().strip() or n.find(lambda c: c.tag == "img")) for n in section.children))
 
     # What changed: one table, Problem | Fix | What happens now, 1-6 complete rows each ending with its proof; one checks line
-    tables = root.find(lambda n: n.tag == "table")
+    tables = root.find(lambda n: n.tag == "table" and n.within(lambda p: p.attrs.get("data-part") == OPTIONAL) is None)
+    took_tables = by[OPTIONAL].find(lambda n: n.tag == "table") if OPTIONAL in by else []
+    rule("took: exactly one table when present", OPTIONAL not in by or len(took_tables) == 1)
     rule("exactly one table on the page", len(tables) == 1, f"{len(tables)} tables")
     table = tables[0] if tables else None
     in_changes = table is not None and table.within(lambda p: p.attrs.get("data-part") == "changes") is not None

@@ -10,7 +10,8 @@ limits:
   qa_passes: {limit: 2, ceiling: 4, per: epic}
   test_hours: {limit: 4, ceiling: 8, per: epic, unit: hours}
   money_usd: {limit: 0, per: epic, unit: usd}
-may: []
+may:
+  - "remove this run's own worktrees after delivery, once merged, clean and archived"
 stays_out:
   - production
   - customer data

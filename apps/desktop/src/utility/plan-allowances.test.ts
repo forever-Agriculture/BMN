@@ -102,6 +102,18 @@ function checkFindings(main: string, home: string): Array<{ where: string; reaso
   return bmn(main, home, ['check', '--json']).json.findings
 }
 
+describe('allowances opt-in warning (119.2)', () => {
+  it('names the missing line and first file number, with no finding without files or with opt-in', async () => {
+    const { main, home } = project()
+    const warnings = checkFindings(main, home).filter((f) => f.reason.includes('rules_from_allowances is missing'))
+    expect(warnings).toEqual([{ where: 'plan/status.yaml', reason: 'allowance files exist but rules_from_allowances is missing; add rules_from_allowances: 7' }])
+    const declared = project({ board: board(1, 'rules_from_allowances: 7\n') })
+    expect(checkFindings(declared.main, declared.home).filter((f) => f.reason.includes('rules_from_allowances is missing'))).toEqual([])
+    const absent = project({ allowances: null })
+    expect(checkFindings(absent.main, absent.home).filter((f) => f.reason.includes('rules_from_allowances is missing'))).toEqual([])
+  })
+})
+
 describe('the file is checked with its line (110.4 AC1)', () => {
   const cases: Array<[string, string, RegExp, number]> = [
     ['a bad schema', FILE.replace('schema: 1', 'schema: 2'), /schema 2 is not one BMN reads/u, 1],
@@ -124,7 +136,7 @@ describe('the file is checked with its line (110.4 AC1)', () => {
   })
   it('passes D5\'s shape, comments and all, with Run needs one line pointing to it', () => {
     const { main, home } = project()
-    expect(checkFindings(main, home)).toEqual([])
+    expect(checkFindings(main, home).filter((f) => !f.reason.includes('rules_from_allowances is missing'))).toEqual([])
     const parsed = parseAllowances(FILE, 7)
     expect(parsed.problems).toEqual([])
     expect(parsed.data.limits.money_usd).toEqual({ limit: 0, per: 'epic', unit: 'usd' })
@@ -141,7 +153,7 @@ describe('the file is checked with its line (110.4 AC1)', () => {
     const none = project({ allowances: null, epic: epicText(POINTER), board: rules })
     expect(checkFindings(none.main, none.home).map((one) => one.reason).join('\n')).toMatch(/no \*\*Prepared:\*\* line/u)
     const { main, home } = project({ epic: epicText(POINTER), board: rules })
-    expect(checkFindings(main, home)).toEqual([])
+    expect(checkFindings(main, home).filter((f) => !f.reason.includes('rules_from_allowances is missing'))).toEqual([])
   })
 })
 
@@ -595,7 +607,7 @@ describe('the plan skill gives a new epic the file (110.6 AC5, 110.8 AC3)', () =
     expect(problems).toEqual([])
     const fields = fieldsFrom(data)
     expect(fields.rounds).toBe(4)
-    expect(Object.keys(fields.limits)).toEqual(['repair_rounds', 'full_reviews', 'rechecks', 'consults', 'qa_passes', 'test_hours', 'money_usd'])
+    expect(Object.keys(fields.limits)).toEqual(['repair_rounds', 'full_reviews', 'rechecks', 'consults', 'senior_consults', 'qa_passes', 'test_hours', 'money_usd'])
     expect(fields.limits.money_usd!.ceiling ?? null).toBeNull()
   })
   it('the epic template, the skill and readiness say so', () => {
