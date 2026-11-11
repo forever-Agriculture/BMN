@@ -14,7 +14,7 @@ const PLAN_FORMAT = 'bmn-plan'
  * The implementation reviews dev-auto asks through BMN (R112-FR1). The quick pre-reviews only map
  * and are left out, as are consultants, helpers and QA (D5).
  */
-export const VISION_ROLES = Object.freeze(['focused-reviewer', 'epic-reviewer', 'final-reviewer'])
+export const VISION_ROLES = Object.freeze(['focused-reviewer', 'epic-reviewer', 'small-epic-reviewer', 'final-reviewer'])
 
 /** Plans BMN cannot find say there is no vision; any other plan error is a reason the vision was left out. */
 const NO_PLAN = new Set(['NO_PROJECT', 'NO_REPOSITORY', 'NO_PLAN'])
