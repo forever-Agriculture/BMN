@@ -135,6 +135,10 @@ function namesOf(...sources: Array<RosterDataShape | null>): Names {
   }
 }
 
+export function roleRecheckWords(recheck: NonNullable<RosterRoleShape['recheck']>, data: RosterDataShape): string {
+  return formatValue({ present: true, value: recheck }, 'recheck', namesOf(data))
+}
+
 /** `luna@max` reads "Luna max"; `astra@medium|high` reads "Astra medium or high". */
 function candidateWords(text: string, names: Names): string {
   const candidate = parseCandidate(text)

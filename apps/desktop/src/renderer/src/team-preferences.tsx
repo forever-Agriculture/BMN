@@ -59,6 +59,7 @@ import {
   consequenceWords,
   diffBody,
   effortWords,
+  roleRecheckWords,
   firstApprovalGroups,
   firstLine,
   groupDifferences,
@@ -1120,6 +1121,13 @@ export function Chain(props: { role: RosterRoleShape; data: RosterDataShape }): 
   )
 }
 
+function RoleRules({ role, data }: { role: RosterRoleShape; data: RosterDataShape }): React.JSX.Element {
+  return <>
+    {role.small_work ? <div className="chain"><span className="muted">Small work</span><Steps candidates={[role.small_work]} data={data} /></div> : null}
+    {role.recheck ? <div className="chain"><span className="muted">Recheck</span><span>{roleRecheckWords(role.recheck, data)}</span></div> : null}
+  </>
+}
+
 /** One changed value, before and after; a role's order is drawn as its steps. */
 function Difference(props: { line: DiffLine; data: RosterDataShape | null }): React.JSX.Element {
   const { line, data } = props
@@ -1255,6 +1263,7 @@ function RolesPage(props: { team: TeamState; data: RosterDataShape }): React.JSX
             <div>
               <b>{roleName(role.id)}</b>{role.read_only === true ? <span className="role-mark" title={READ_ONLY_HELP}>Read-only</span> : null}{role.description ? <span className="line-detail"> {role.description}</span> : null}
               <Chain role={role} data={data} />
+              <RoleRules role={role} data={data} />
             </div>
             <button type="button" className="small" aria-expanded={editing === role.id} aria-label={`${editing === role.id ? 'Done editing' : 'Edit'} ${roleName(role.id)}`}
               onClick={() => setEditing(editing === role.id ? null : role.id)}>{editing === role.id ? 'Done' : 'Edit'}</button>
@@ -1291,7 +1300,7 @@ function VersionView(props: { number: number; earlier: boolean }): React.JSX.Ele
           <span className="faint">{appWords(agent)} · <span className="mono">{agent.model}</span>{publicOnly(data, agent) ? ' · public work only' : ''}</span>
         </div>
       ))}
-      {data.roles.map((role) => <div key={role.id} className="version-role"><span>{roleName(role.id)}</span><Chain role={role} data={data} /></div>)}
+      {data.roles.map((role) => <div key={role.id} className="version-role"><span>{roleName(role.id)}</span><div><Chain role={role} data={data} /><RoleRules role={role} data={data} /></div></div>)}
     </div>
   )
 }

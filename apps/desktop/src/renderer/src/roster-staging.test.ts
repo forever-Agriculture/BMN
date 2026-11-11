@@ -32,6 +32,7 @@ import {
   retiredAppProposal,
   revokeVersion,
   roleName,
+  roleRecheckWords,
   sameData,
   setAgentClass,
   setAgentOn,
@@ -85,6 +86,13 @@ const find = (data: RosterDataShape, id: string): RosterAgentShape => data.agent
 const role = (data: RosterDataShape, id: string) => data.roles.find((entry) => entry.id === id)
 
 describe('words (R60-NFR8)', () => {
+  it('uses the existing recheck words with the current roster names (120.1)', () => {
+    expect(roleRecheckWords({ same_reviewer: true, astra: 'low' }, DATA)).toBe('the same reviewer · Astra low')
+    expect(roleRecheckWords({ same_reviewer: true }, DATA)).toBe('the same reviewer')
+    expect(roleRecheckWords({ same_reviewer: false, missing: 'high' }, DATA)).toBe('another reviewer · missing high')
+    const renamed = { ...DATA, agents: DATA.agents.map(entry => entry.id === 'astra' ? { ...entry, name: 'Reviewer' } : entry) }
+    expect(roleRecheckWords({ astra: 'low' }, renamed)).toBe('Reviewer low')
+  })
   it('names roles, numbers, prices and efforts the way the pages show them', () => {
     expect(roleName('epic-reviewer')).toBe('Epic reviewer')
     expect(thousands(272000)).toBe('272 000')

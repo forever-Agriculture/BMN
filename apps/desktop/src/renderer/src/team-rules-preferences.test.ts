@@ -346,6 +346,29 @@ describe('the Model field (60.5: suggestions)', () => {
 })
 
 describe('Agents › Roles and Changes (60.5 AC5, AC6)', () => {
+  it('shows Small work before Recheck on separate quiet lines, with the candidate states from the order (120.1)', () => {
+    const data: RosterDataShape = { ...DATA, roles: [
+      { id: 'epic-reviewer', candidates: ['sol@high'], then: 'blocked', small_work: 'glm@max', recheck: { same_reviewer: true, sol: 'low' } },
+      { id: 'helper', candidates: [], then: 'skip', small_work: 'missing@high' }
+    ] }
+    const markup = pageMarkup({ name: 'roles' }, team({ data }))
+    expect(markup).toContain('<div class="chain"><span class="muted">Small work</span><span class="chain-step"><svg class="piece"')
+    expect(words(markup).replace(/\s+/g, ' ')).toContain('Small work Glm, off max public work only Recheck the same reviewer · Sol low')
+    expect(words(markup).replace(/\s+/g, ' ')).toContain('Small work missing, unknown high')
+    expect(count(markup, '<span class="muted">Recheck</span>')).toBe(1)
+  })
+
+  it('leaves roles with neither field unchanged, and recheck-only roles have no Small work line (120.1)', () => {
+    const original = pageMarkup({ name: 'roles' })
+    expect(original).not.toContain('Small work')
+    expect(original).not.toContain('Recheck')
+    const data: RosterDataShape = { ...DATA, roles: DATA.roles.map(role => role.id === 'lead' ? { ...role, recheck: { same_reviewer: true } } : role) }
+    const markup = pageMarkup({ name: 'roles' }, team({ data }))
+    expect(markup).not.toContain('Small work')
+    expect(markup).toContain('<div class="chain"><span class="muted">Recheck</span><span>the same reviewer</span></div>')
+    expect(markup.replace('<div class="chain"><span class="muted">Recheck</span><span>the same reviewer</span></div>', '')).toBe(original)
+  })
+
   it('shows each role as one row: name, line, chain with pieces and efforts, then the fallback in words', () => {
     const markup = pageMarkup({ name: 'roles' })
     expect(markup).toContain('<b>Lead</b><span class="line-detail"> leads an epic/project start to finish</span>')

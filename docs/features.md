@@ -434,6 +434,9 @@ waits in one card at the top of Agents › Team, with one **Approve…** for all
 approved team with `bmn team`, and a lead runs `bmn roster check` before it hands work to another
 agent.
 
+A role's Small work candidate and Recheck rule appear under its order, in Roles and in each
+approved version.
+
 A lead you start yourself is checked too, at each prompt: when its app sends work to a provider
 that may not see private work, BMN tells the app to stop the prompt before it leaves and the
 session shows a card with **Allow here** (that provider, that workspace only) and **Keep
