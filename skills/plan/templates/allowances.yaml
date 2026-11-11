@@ -6,6 +6,7 @@ limits:
   full_reviews: {limit: 1, ceiling: 2, per: boundary}
   rechecks: {limit: 2, ceiling: 4, per: boundary}
   consults: {limit: 3, ceiling: 6, per: epic}
+  senior_consults: {limit: 1, ceiling: 2, per: epic}
   qa_passes: {limit: 2, ceiling: 4, per: epic}
   test_hours: {limit: 4, ceiling: 8, per: epic, unit: hours}
   money_usd: {limit: 0, per: epic, unit: usd}

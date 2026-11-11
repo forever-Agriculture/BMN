@@ -118,6 +118,16 @@ Works with BMN closed, on either format. Exit 0 done or clean, 1 findings or a r
 
 `plan/allowances/NNN.yaml` beside the epic holds every limit and permission of its runs, so `## Run needs` can be one line pointing to it and a raise changes no epic text ([template](../skills/plan/templates/allowances.yaml)). `limits` may use any name, each with `limit`, `per` (`boundary` or `epic`), an optional `ceiling` a lead may reach alone, and `unit` (`count`, `hours`, `usd`); no ceiling means the lead cannot raise it. `may` lists named actions and targets read as his approval, `stays_out` what no run asks to cross, and `deferrable`, `messages` and `prepared` are Run needs' lists. A go on an epic with the file adds its text to the approval hash; an epic without one reads and hashes as before.
 
+The template's `senior_consults: {limit: 1, ceiling: 2, per: epic}` counts one collected
+ask to the team's `senior-consultant` when development struggles, including a step-back:
+the lead brings the epic's main open and most complex questions with their evidence in
+one request. `consults` counts ordinary consultant asks. These are separate limits; the
+senior ask takes its senior limit. Existing files keep their approved names and numbers.
+Without an allowance file in force, dev-auto counts defaults of 6 `consults` and 1
+`senior_consults` per epic, 2 `full_reviews` and 4 `rechecks` per boundary, all without a
+ceiling; exhausted defaults park affected work, and independent stories continue.
+Withdrawn or unconfirmed approval grants no defaults. See [dev-auto](dev-auto.md).
+
 The file's trust matches the go's: only a commit written by `bmn plan go` or `bmn plan allow` counts. A hand edit is reported by `check` and ignored, and `allow` refuses until the file matches. `--source` holds his quoted words and is workflow protection, not proof against a forging agent. With no source only these change: a limit at or under its ceiling, a lower limit, an addition to `stays_out`, a Prepared need's `checked` date. A limit with any use keeps its name, `per` and `unit`, source or not; a different measure is a new limit. `allow` finds the epic's ledgers by the ids dev-auto's `spend_ledger.py` gives them (a moved plan keeps the id of the board it came from; another plan in the same repository has its own), holds their locks, the ones `spend_ledger.py` takes to count a use, from reading the uses to its commit, and counts as used anything it cannot read or confirm. A run uses the version at its go's commit, then the last recorded `allow` after that go, whether or not the file is on disk; a go whose commit holds no file returns the epic to its Run needs, with every use still counted. On a tracked plan a change stands locally at once and follows `bmn plan publish`; an upstream change or deletion of the file holds the epic as a conflict, which grants nothing until read again.
 
 Planning covers the expected implementation, reviews/rechecks, repairs, QA/retests, commands and targets, paid work, delivery and cleanup before the go. Limits include justified contingency; permissions and prerequisite/access checks cover those operations. A known gap is a readiness finding. The approved plan should let implementation proceed autonomously.
