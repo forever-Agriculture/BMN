@@ -342,20 +342,26 @@ async function withContext(data, chain) {
   // An OpenCode candidate runs only in the one form the check reads (70.2): BMN puts its folder in place
   // here and hands over the environment and arguments, whatever the role.
   let openCode
-  const held = async (candidate) => {
+  const held = async (candidate, readOnly = chain.read_only === true) => {
     const described = await describe(candidate)
     const harness = byId.get(candidate.agent)?.harness
     if (harness === 'opencode') {
       openCode ??= (await import('./agents-opencode.mjs')).installOpenCodeFolder()
       const { folder, ...items } = openCode
-      return { ...described, opencode: { folder, ...items }, ...(chain.read_only === true ? { read_only: { argv: items.argv.slice(items.argv.indexOf('--agent'), items.argv.indexOf('--agent') + 2), harness: 'opencode' } } : {}) }
+      return { ...described, opencode: { folder, ...items }, ...(readOnly ? { read_only: { argv: items.argv.slice(items.argv.indexOf('--agent'), items.argv.indexOf('--agent') + 2), harness: 'opencode' } } : {}) }
     }
-    const items = chain.read_only === true ? READ_ONLY_ITEMS[harness] : undefined
+    const items = readOnly ? READ_ONLY_ITEMS[harness] : undefined
     return items === undefined ? described : { ...described, read_only: { argv: items } }
   }
   const candidates = []
   for (const candidate of chain.candidates) candidates.push(await held(candidate))
-  return { ...chain, candidates, ...(chain.small_work === undefined ? {} : { small_work: await held(chain.small_work) }) }
+  let smallWork = chain.small_work
+  if (smallWork?.candidates) {
+    const linked = []
+    for (const candidate of smallWork.candidates) linked.push(await held(candidate, smallWork.read_only === true))
+    smallWork = { ...smallWork, candidates: linked }
+  } else if (smallWork !== undefined) smallWork = await held(smallWork)
+  return { ...chain, candidates, ...(smallWork === undefined ? {} : { small_work: smallWork }) }
 }
 
 /** The roles whose runs look things up, and the one line that tells them how (64.2 AC3). */

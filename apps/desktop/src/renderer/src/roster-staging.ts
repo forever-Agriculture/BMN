@@ -1,4 +1,5 @@
 // MODULE: roster-staging.ts - Epic 60.5: the Team pages' staged edits, review rows and their words, kept pure for tests
+import { isSmallWorkReference, linkedSmallWork } from '../../../bin/agents-small-work.mjs'
 import {
   RETIRED_APP_NAMES,
   ROSTER_APP_NAMES,
@@ -190,6 +191,7 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
     if (field === 'args') return value.map((entry) => (typeof entry === 'object' && entry !== null ? `$${String((entry as { env?: unknown }).env)}` : String(entry))).join(' ')
     return value.map((entry) => formatPlain(entry, undefined, names)).join(', ')
   }
+  if (field === 'small_work' && isSmallWorkReference(value)) return 'same as Small epic reviewer'
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
     // A recheck names who rechecks and at which effort: `{same_reviewer: true, astra: low}`.
@@ -505,6 +507,46 @@ function updateRole(data: RosterDataShape, roleId: string, change: (role: Roster
   return { ...data, roles: data.roles.map((role) => (role.id === roleId ? change(role) : role)) }
 }
 
+/** Explicit staged linking keeps the complete dedicated chain and removes its duplicate scalar. */
+export function shareSmallWork(data: RosterDataShape): RosterDataShape {
+  const outer = data.roles.find(role => role.id === 'epic-reviewer')
+  const target = data.roles.find(role => role.id === 'small-epic-reviewer')
+  if (!outer || !target || linkedSmallWork(data, outer)) return data
+  return updateRole(data, outer.id, role => ({ ...role, small_work: { role: 'small-epic-reviewer' } }))
+}
+
+/** Generic scalar Small work stays independent outside the shared epic-review reference. */
+export function setRoleSmallWork(data: RosterDataShape, roleId: string, agentId: string | null, effort?: RosterEffort): RosterDataShape {
+  const role = data.roles.find(entry => entry.id === roleId)
+  if (!role || linkedSmallWork(data, role)) return data
+  const agent = data.agents.find(entry => entry.id === agentId)
+  if (agentId !== null && (!agent || !agent.roles.includes(roleId) || !effort || !agent.efforts.includes(effort) || isCalled(agent))) return data
+  return updateRole(data, roleId, entry => {
+    const next = { ...entry }
+    if (agentId === null) delete next.small_work
+    else next.small_work = `${agentId}@${effort}`
+    return next
+  })
+}
+
+export function setRoleRecheckEffort(data: RosterDataShape, roleId: string, agentId: string, effort: RosterEffort | null): RosterDataShape {
+  const role = data.roles.find(entry => entry.id === roleId)
+  if (!role || !role.candidates.some(text => parseCandidate(text).agent === agentId)) return data
+  const agent = data.agents.find(entry => entry.id === agentId)
+  if (effort !== null && !agent?.efforts.includes(effort)) return data
+  if (effort === null && role.recheck?.[agentId] === undefined) return data
+  return updateRole(data, roleId, entry => {
+    const recheck: NonNullable<RosterRoleShape['recheck']> = { same_reviewer: true, ...entry.recheck }
+    if (effort === null) delete recheck[agentId]
+    else recheck[agentId] = effort
+    return { ...entry, recheck }
+  })
+}
+
+export function removeRoleRecheck(data: RosterDataShape, roleId: string): RosterDataShape {
+  return updateRole(data, roleId, role => { const next = { ...role }; delete next.recheck; return next })
+}
+
 export function moveCandidate(data: RosterDataShape, roleId: string, index: number, step: -1 | 1): RosterDataShape {
   return updateRole(data, roleId, (role) => {
     const target = index + step
@@ -612,7 +654,7 @@ function withoutAgent(role: RosterRoleShape, agentId: string): RosterRoleShape {
     delete rest[agentId]
     next.recheck = rest
   }
-  if (next.small_work && parseCandidate(next.small_work).agent === agentId) delete next.small_work
+  if (typeof next.small_work === 'string' && parseCandidate(next.small_work).agent === agentId) delete next.small_work
   return next
 }
 
@@ -671,7 +713,7 @@ export function toggleAgentEffort(data: RosterDataShape, agentId: string, effort
     agents: data.agents.map((entry) => (entry.id === agentId ? { ...entry, efforts } : entry)),
     roles: data.roles.map((role) => {
       const next: RosterRoleShape = { ...role, candidates: role.candidates.map(fix) }
-      if (role.small_work !== undefined) next.small_work = fix(role.small_work)
+      if (typeof role.small_work === 'string') next.small_work = fix(role.small_work)
       if (role.recheck !== undefined && typeof role.recheck[agentId] === 'string' && !efforts.includes(role.recheck[agentId] as RosterEffort)) {
         const rest = { ...role.recheck }
         delete rest[agentId]

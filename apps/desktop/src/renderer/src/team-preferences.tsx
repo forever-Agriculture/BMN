@@ -1,4 +1,5 @@
 // MODULE: team-preferences.tsx - Epic 60.5: Preferences › Agents: agents as solid cards, an agent's rows, New agent, role chains, approved versions and the approval footer
+import { linkedSmallWork, smallWorkCandidates } from '../../../bin/agents-small-work.mjs'
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
@@ -82,6 +83,10 @@ import {
   namedResearchers,
   setRoleReadOnly,
   setRoleThen,
+  shareSmallWork,
+  setRoleSmallWork,
+  setRoleRecheckEffort,
+  removeRoleRecheck,
   summarize,
   summaryWords,
   teamUpdateWords,
@@ -1123,7 +1128,7 @@ export function Chain(props: { role: RosterRoleShape; data: RosterDataShape }): 
 
 function RoleRules({ role, data }: { role: RosterRoleShape; data: RosterDataShape }): React.JSX.Element {
   return <>
-    {role.small_work ? <div className="chain"><span className="muted">Small work</span><Steps candidates={[role.small_work]} data={data} /></div> : null}
+    {role.small_work ? <div className="chain"><span className="muted">Small work</span><Steps candidates={smallWorkCandidates(data, role)} data={data} /></div> : null}
     {role.recheck ? <div className="chain"><span className="muted">Recheck</span><span>{roleRecheckWords(role.recheck, data)}</span></div> : null}
   </>
 }
@@ -1140,14 +1145,57 @@ function Difference(props: { line: DiffLine; data: RosterDataShape | null }): Re
   return <>{field} {side(line.chain?.before, line.before)} → {side(line.chain?.after, line.after)}</>
 }
 
+function ScalarSmallWorkEditor({ team, data, role }: { team: TeamState; data: RosterDataShape; role: RosterRoleShape }): React.JSX.Element {
+  const selected = typeof role.small_work === 'string' ? parseCandidate(role.small_work) : null
+  const options = data.agents.filter(agent => agent.roles.includes(role.id) && !isCalled(agent))
+  const agent = data.agents.find(entry => entry.id === selected?.agent)
+  return <div className="candidate">
+    <span className="muted">Small work</span>
+    <span className="chips" role="group" aria-label={`Small work reviewer for ${roleName(role.id)}`}>
+      <Chip on={!selected} onToggle={() => team.stage(setRoleSmallWork(data, role.id, null))}>Nobody</Chip>
+      {options.map(entry => <Chip key={entry.id} on={selected?.agent === entry.id}
+        onToggle={() => team.stage(setRoleSmallWork(data, role.id, entry.id, parseCandidate(role.candidates.find(text => parseCandidate(text).agent === entry.id) ?? `${entry.id}@${entry.efforts[0]}`).efforts[0]))}>
+        <Piece agentClass={entry.class} />{entry.name}{!entry.enabled ? ', off' : ''}
+      </Chip>)}
+    </span>
+    {agent && selected ? <span className="chips mono" role="group" aria-label={`${agent.name} effort for small work`}>
+      {agent.efforts.map(effort => <Chip key={effort} on={selected.efforts.includes(effort)} onToggle={() => team.stage(setRoleSmallWork(data, role.id, agent.id, effort))}>{effort}</Chip>)}
+    </span> : null}
+  </div>
+}
+
+function RecheckEditor({ team, data, role }: { team: TeamState; data: RosterDataShape; role: RosterRoleShape }): React.JSX.Element {
+  return <>
+    <div className="candidate"><span className="muted">Recheck</span><span className="faint">A recheck asks the reviewer of the earlier run.</span>
+      {role.recheck ? <button type="button" className="small" aria-label={`Remove the recheck rule of ${roleName(role.id)}`} onClick={() => team.stage(removeRoleRecheck(data, role.id))}>Remove rule</button> : null}
+    </div>
+    {role.candidates.map(text => {
+      const candidate = parseCandidate(text); const agent = data.agents.find(entry => entry.id === candidate.agent)
+      return <div className="candidate" key={candidate.agent}><span className="candidate-name">{agent?.name ?? candidate.agent}</span>
+        <span className="chips mono" role="group" aria-label={`${agent?.name ?? candidate.agent} effort for a recheck`}>
+          <Chip on={role.recheck?.[candidate.agent] === undefined} onToggle={() => team.stage(setRoleRecheckEffort(data, role.id, candidate.agent, null))}>Usual</Chip>
+          {(agent?.efforts ?? candidate.efforts).map(effort => <Chip key={effort} on={role.recheck?.[candidate.agent] === effort} onToggle={() => team.stage(setRoleRecheckEffort(data, role.id, candidate.agent, effort))}>{effort}</Chip>)}
+        </span>
+      </div>
+    })}
+    {role.recheck?.same_reviewer === false ? <p className="faint">The stored rule allows another reviewer; BMN still binds a recheck to the earlier reviewer.</p> : null}
+  </>
+}
+
 function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: RosterRoleShape }): React.JSX.Element {
   const { team, data, role } = props
   const thenId = useId()
   const readOnlyId = useId()
   const inChain = new Set(role.candidates.map((text) => parseCandidate(text).agent))
   // An agent BMN calls has no effort and is a candidate by its name alone; the role Judge takes no other agent.
-  const addable = data.agents.filter((agent) => !inChain.has(agent.id) && (isCalled(agent) || agent.efforts.length > 0) && roleBar(agent, role.id) === null)
+  const addable = data.agents.filter((agent) => !inChain.has(agent.id) && (isCalled(agent) || agent.efforts.length > 0) && roleBar(agent, role.id) === null
+    && !(role.id === 'small-epic-reviewer' && data.roles.some(entry => linkedSmallWork(data, entry)) && !agent.roles.includes('epic-reviewer')))
   const judge = role.id === ROSTER_JUDGE_ROLE
+  const outer = data.roles.find(entry => entry.id === 'epic-reviewer')
+  if (role.id === 'small-epic-reviewer' && outer && !linkedSmallWork(data, outer)) return <div className="chain-editor">
+    <p className="faint">Small work and Small epic reviewer are separate. This change keeps the full Small epic reviewer order and replaces the separate Small work value; review it before approving.</p>
+    <button type="button" onClick={() => team.stage(shareSmallWork(data))}>Use Small epic reviewer for Small work</button>
+  </div>
   return (
     <div className="chain-editor">
       {role.candidates.map((text, index) => {
@@ -1155,7 +1203,7 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
         const agent = data.agents.find((entry) => entry.id === candidate.agent)
         const name = agent?.name ?? candidate.agent
         return (
-          <div key={text} className="candidate">
+          <div key={candidate.agent} className="candidate">
             <span className="order">
               <button type="button" aria-label={`Move ${name} up`} disabled={index === 0} onClick={() => team.stage(moveCandidate(data, role.id, index, -1))}>↑</button>
               <button type="button" aria-label={`Move ${name} down`} disabled={index === role.candidates.length - 1} onClick={() => team.stage(moveCandidate(data, role.id, index, 1))}>↓</button>
@@ -1196,6 +1244,17 @@ function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: Rost
           <span className="faint">{READ_ONLY_HELP}</span>
         </div>
       )}
+      {!judge ? <RecheckEditor team={team} data={data} role={role} /> : null}
+      {!judge && role.id !== 'small-epic-reviewer' && !(role.id === 'epic-reviewer' && data.roles.some(entry => entry.id === 'small-epic-reviewer')) ? <ScalarSmallWorkEditor team={team} data={data} role={role} /> : null}
+      {role.id === 'epic-reviewer' && linkedSmallWork(data, role) ? <div role="group" aria-label="Small work" className="small-work-editor">
+        <span className="muted">Small work · same as Small epic reviewer</span>
+        <ChainEditor team={team} data={data} role={linkedSmallWork(data, role)!} />
+      </div> : null}
+      {role.id === 'epic-reviewer' && !linkedSmallWork(data, role) && data.roles.some(entry => entry.id === 'small-epic-reviewer') ? <div className="candidate">
+        <span className="muted">Small work and Small epic reviewer are separate.</span>
+        <button type="button" onClick={() => team.stage(shareSmallWork(data))}>Use Small epic reviewer for Small work</button>
+        <span className="faint">Review the removed Small work value and retained reviewer order before approving.</span>
+      </div> : null}
     </div>
   )
 }

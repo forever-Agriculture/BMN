@@ -33,6 +33,9 @@ import {
   revokeVersion,
   roleName,
   roleRecheckWords,
+  setRoleRecheckEffort,
+  removeRoleRecheck,
+  setRoleSmallWork,
   sameData,
   setAgentClass,
   setAgentOn,
@@ -542,4 +545,27 @@ describe('differences in words (60.5 AC7)', () => {
     expect(sameData(DATA, setRoleThen(DATA, 'lead', 'skip'))).toBe(false)
     expect(sameData(null, null)).toBe(true)
   })
+})
+
+
+it('edits one recheck effort without changing the chain or normalizing the stored reviewer policy (120.2)', () => {
+  const input: RosterDataShape = {...DATA,roles:[{id:'epic-reviewer',candidates:['sol@high'],then:'blocked',small_work:'sol@low',recheck:{same_reviewer:false,sol:'low'}}]}
+  const next = setRoleRecheckEffort(input,'epic-reviewer','sol','high')
+  expect(next.roles[0]?.recheck).toEqual({same_reviewer:false,sol:'high'})
+  expect(next.roles[0]?.candidates).toEqual(['sol@high'])
+  expect(next.roles[0]?.small_work).toBe('sol@low')
+  const reset = setRoleRecheckEffort(next,'epic-reviewer','sol',null)
+  expect(reset.roles[0]?.recheck).toEqual({same_reviewer:false})
+  expect(removeRoleRecheck(reset,'epic-reviewer').roles[0]?.recheck).toBeUndefined()
+  expect(input.roles[0]?.recheck).toEqual({same_reviewer:false,sol:'low'})
+})
+
+it('generic Small work editing validates an agent and effort and does not mutate other rules (120.2)', () => {
+  const input: RosterDataShape = {...DATA,agents:DATA.agents.map(agent => agent.id === 'sol' ? {...agent,efforts:['low','high'],roles:[...agent.roles,'helper']} : agent),roles:[{id:'helper',candidates:['sol@high'],then:'lead',recheck:{same_reviewer:true}}]}
+  const next = setRoleSmallWork(input,'helper','sol','low')
+  expect(next.roles[0]?.small_work).toBe('sol@low')
+  expect(next.roles[0]?.recheck).toEqual({same_reviewer:true})
+  expect(setRoleSmallWork(next,'helper','missing','low')).toBe(next)
+  expect(setRoleSmallWork(next,'helper',null).roles[0]?.small_work).toBeUndefined()
+  expect(input.roles[0]?.small_work).toBeUndefined()
 })

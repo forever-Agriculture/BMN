@@ -1,4 +1,5 @@
 // MODULE: agents-check-evaluate.mjs - the dispatch check (Epic 60.3) behind agents-check.mjs: evaluating a dispatch, a research run and the fence test's record
+import { sharedSmallWork } from './agents-small-work.mjs'
 import { lstatSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, relative, sep } from 'node:path'
@@ -46,8 +47,8 @@ function checkModelAndEffort(agent, resolution, note) {
 }
 
 /** A role that names efforts for the agent allows no other, also where the agent itself lists it (63.2 AC1). */
-function checkRoleEffort(role, agent, effort, note) {
-  const named = roleEfforts(role, agent.id)
+function checkRoleEffort(role, agent, effort, note, data) {
+  const named = roleEfforts(role, agent.id, data)
   if (named.length === 0) return
   if (!named.includes(effort.value)) {
     refuse('EFFORT_UNSUPPORTED', `${effort.source} ${effort.value} is not an effort the role ${role.id} names for ${agent.id} (${named.join(', ')})`, `role ${role.id} allows ${named.join(', ')}`)
@@ -182,9 +183,13 @@ export function evaluate(inputs, {
     note(`approved version ${generation.number}`)
     const agent = activeAgent(generation, inputs.agent)
     note(`agent ${agent.id}: ${agent.class}, ${agent.harness} ${agent.model}, provider ${agent.provider}`)
-    const role = data.roles.find((candidate) => candidate.id === inputs.role)
+    const foundRole = data.roles.find((candidate) => candidate.id === inputs.role)
+    const shared = sharedSmallWork(data)
+    const role = shared && foundRole?.id === shared.target.id && shared.outer.read_only === true
+      ? { ...foundRole, read_only: true } : foundRole
     if (role === undefined) refuse('ROLE_UNKNOWN', `no role ${inputs.role} in the approved ## roles`)
     if (!agent.roles.includes(role.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${role.id}`)
+    if (shared && role.id === shared.target.id && !agent.roles.includes(shared.outer.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${shared.outer.id}`)
     const classRule = classRefusal(agent.class, role.id)
     if (classRule !== null) refuse(classRule.code, `${agent.id} is a ${agent.class}; ${classRule.rule}`)
     note(`role ${role.id}: held`)
@@ -220,7 +225,7 @@ export function evaluate(inputs, {
     // OpenCode names a model with its provider; an agent that names the model alone is read with its provider.
     const named = parsed.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent
     const { model, effort } = checkModelAndEffort(named, resolution, note)
-    checkRoleEffort(role, agent, effort, note)
+    checkRoleEffort(role, agent, effort, note, data)
     // A role that may write is judged as before and its receipt carries nothing more (63.2 AC5).
     const readOnly = role.read_only === true ? checkReadOnly(role, parsed, resolution, version, note) : null
     // Required only where the owner's test proved the setting on this version (60.9 AC1, AC2).

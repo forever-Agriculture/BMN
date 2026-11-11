@@ -436,6 +436,11 @@ agent.
 
 A role's Small work candidate and Recheck rule appear under its order, in Roles and in each
 approved version.
+Both rules can be changed in the role’s Edit panel. Epic reviewer’s Small work can refer to the
+Small epic reviewer role: then either editor changes that one reviewer order, efforts and fallback,
+and both review commands use it. Older separate values require an explicit staged link and owner
+approval; no saved choice is changed just by opening the screen. Approved historical versions
+keep their original values.
 
 A lead you start yourself is checked too, at each prompt: when its app sends work to a provider
 that may not see private work, BMN tells the app to stop the prompt before it leaves and the

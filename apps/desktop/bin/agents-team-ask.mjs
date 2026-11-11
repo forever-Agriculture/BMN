@@ -48,7 +48,7 @@ function earlierRun(id, runs = teamRunsDirectory()) {
   try {
     const request = JSON.parse(readFileSync(join(runs, id, ASK_RUN_FILES.request), 'utf8'))
     if (typeof request.role !== 'string' || typeof request.agent !== 'string') return null
-    return { role: request.role, project: request.project ?? null, agent: request.agent }
+    return { role: request.role, project: request.project ?? null, agent: request.agent, phase: request.phase }
   } catch {
     return null
   }

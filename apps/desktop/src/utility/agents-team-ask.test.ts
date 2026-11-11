@@ -13,7 +13,7 @@ import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCr
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
-import { approveRoster } from '../main/agents-approval'
+import { approveRoster, saveAndApprove } from '../main/agents-approval'
 import { CODEX_MCP_LIST, goSignInInBmnFolder, stubOpenCode } from './test-fixtures/team-ask-harness'
 import { startAsk } from '../../bin/agents-team-run.mjs'
 
@@ -125,6 +125,20 @@ beforeEach(() => {
 afterEach(() => {
   process.env.HOME = savedHome
   rmSync(home, { recursive: true, force: true })
+})
+
+it('both shared Small work spellings pass production ask preparation and final validation (120.2)', () => {
+  const next = structuredClone(data())
+  next.roles.find(role => role.id === 'epic-reviewer')!.small_work = {role:'small-epic-reviewer'}
+  next.roles.push({id:'small-epic-reviewer',candidates:['astra@low'],then:'blocked',read_only:true})
+  next.agents.find(agent => agent.id === 'astra')!.roles.push('small-epic-reviewer')
+  saveAndApprove({generation:readApproved().number,fileHash:readValidRoster().hash},next,{checkInspectedRoutes:()=>{}})
+  for (const request of [{role:'small-epic-reviewer'}, {role:'epic-reviewer',smallWork:true}]) {
+    const prepared = ask(request)
+    expect(prepared.choice).toMatchObject({agent:'astra',effort:'low'})
+    expect(prepared.verdict.verdict).toBe('PASS')
+    expect(prepared.verdict.receipt).toMatchObject({form:'codex-read-only'})
+  }
 })
 
 describe('who answers (72.2 AC1)', () => {

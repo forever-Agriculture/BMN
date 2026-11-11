@@ -40,7 +40,7 @@ export interface RosterRole {
   candidates: string[]
   then: 'lead' | 'skip' | 'blocked' | 'owner-chooses'
   recheck?: Record<string, boolean | string>
-  small_work?: string
+  small_work?: string | { role: 'small-epic-reviewer' }
   /** A run for this role must not be able to write (63.2); absent or false for a role that may. */
   read_only?: boolean
 }
@@ -170,8 +170,8 @@ export declare function readOnlyProposed(roleId: string): boolean
 /** The roles of a team that BMN proposes to hold to read-only and that are not held yet. */
 export declare function readOnlyProposal(data: Pick<RosterData, 'roles'> | null | undefined): string[]
 /** The efforts a role names for an agent; empty where it does not name the agent. */
-export declare function roleEfforts(role: RosterRole, agentId: string): string[]
-export declare function initialEfforts(role: RosterRole, agent: RosterAgent): string[]
+export declare function roleEfforts(role: RosterRole, agentId: string, data?: RosterData): string[]
+export declare function initialEfforts(role: RosterRole, agent: RosterAgent, data?: RosterData): string[]
 export declare const PROJECT_CHOICE_FIELDS: readonly string[]
 export declare function projectChoiceProblem(data: Pick<RosterData, 'agents' | 'roles'>, choice: RosterProjectChoice): string | null
 export declare function choiceEnded(choice: RosterProjectChoice, now?: Date): boolean

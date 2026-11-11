@@ -94,7 +94,7 @@ export interface RosterRoleShape {
   candidates: string[]
   then: RosterThen
   recheck?: Record<string, boolean | string>
-  small_work?: string
+  small_work?: string | { role: 'small-epic-reviewer' }
   /** A run for this role must not be able to write (63.2); absent or false for a role that may. */
   read_only?: boolean
 }

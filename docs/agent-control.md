@@ -2317,7 +2317,7 @@ bmn team asks export <id> --output PATH
 | `--question TEXT`, `--question-file PATH\|-` | The question, inline or from a file; `-` reads standard input as the other long-text options do (one trailing newline dropped, a terminal refused). Exactly one. |
 | `--agent A` | Ask this teammate; refused with the reason and the eligible alternatives when it is not valid now, never passed over. Where the owner approved a choice for the role in the project, it answers, and naming someone else is refused (`PROJECT_CHOICE_CONFLICT`; "Your teammate for a project"). |
 | `--effort E` | One effort the role's applicable phase allows; with none given or saved, the first one the team lists for that teammate (Story 76.8). |
-| `--small-work` | The role's small-work candidate. |
+| `--small-work` | The role's small-work candidate, or the referenced Small epic reviewer configuration. |
 | `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort; refused (`PROJECT_CHOICE_CONFLICT`) where the owner's choice for the role there names another teammate. |
 | `--project P` | The folder the teammate works in (default: the asking session's repository root; with none, an empty folder of the run's own). Not `/`, the home folder, or a folder that holds or lies in a credential or app configuration location (`PROJECT_INVALID`). |
 | `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash. Not a link, a key store or a file in a credential or app configuration location; the one exception there is an installed plugin's instruction file, Markdown under `skills/`, `agents/` or `commands/` of a version in `~/.codex/plugins/cache` or `~/.claude/plugins/cache`, judged by its real path and scanned like any other. Giving a file changes nothing about what the teammate's mode can read. |
@@ -2337,6 +2337,16 @@ standard output and progress to standard error. Closing the waiting command, too
 only detaches it: the run's supervisor owns the run (below).
 
 ### A reviewer is given the project's vision
+
+Epic reviewer may store `small_work: {role: small-epic-reviewer}`. This is a reference, not a
+second candidate: its complete order, effort choices and fallback live on Small epic reviewer.
+The Team editor stages this link explicitly and shows its difference before approval. Scalar
+`agent@effort` values stay readable, and other roles’ Small work values are unchanged. Both
+`--role small-epic-reviewer` and `--role epic-reviewer --small-work` then use the referenced
+configuration; an Epic reviewer project choice cannot be bypassed through the other spelling.
+The dedicated role must also retain Epic reviewer membership, and read-only restrictions from
+either role remain binding. Rechecks keep their original role, project and earlier reviewer;
+ordinary Epic reviewer receipts are not treated as Small work by a later configuration change.
 
 An ask in `focused-reviewer`, `epic-reviewer`, `small-epic-reviewer` or `final-reviewer` (Epic 112) carries the project's
 `plan/VISION.md` when its project has a BMN-format plan with one, found the way `bmn plan` finds the plan,

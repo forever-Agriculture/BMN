@@ -1,4 +1,5 @@
 // MODULE: agents-check-team-ask.mjs - the dispatch check (Epic 60.3) behind agents-check.mjs: a teammate's ask (Epic 72) and the route inspection
+import { sharedSmallWork } from './agents-small-work.mjs'
 import { readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -114,9 +115,13 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     note(`approved version ${generation.number}`)
     const agent = activeAgent(generation, inputs.agent)
     note(`agent ${agent.id}: ${agent.class}, ${agent.harness} ${agent.model}, provider ${agent.provider}`)
-    const role = data.roles.find((candidate) => candidate.id === inputs.role)
+    const foundRole = data.roles.find((candidate) => candidate.id === inputs.role)
+    const shared = sharedSmallWork(data)
+    const role = shared && foundRole?.id === shared.target.id && shared.outer.read_only === true
+      ? { ...foundRole, read_only: true } : foundRole
     if (role === undefined) refuse('ROLE_UNKNOWN', `no role ${inputs.role} in the approved ## roles`)
     if (!agent.roles.includes(role.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${role.id}`)
+    if (shared && role.id === shared.target.id && !agent.roles.includes(shared.outer.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${shared.outer.id}`)
     const classRule = classRefusal(agent.class, role.id)
     if (classRule !== null) refuse(classRule.code, `${agent.id} is a ${agent.class}; ${classRule.rule}`)
     note(`role ${role.id}: held`)
@@ -266,7 +271,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     // OpenCode names a model with its provider (`-m opencode-go/gpt-6-luna`), as research's check reads it.
     const { model, effort } = checkModelAndEffort(agent.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
-    checkRoleEffort(role, agent, effort, note)
+    checkRoleEffort(role, agent, effort, note, data)
     const context = checkContext(agent, resolution.context, proven, agent.context_limit === undefined ? [] : provenPrecedence(agent.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
     note(context.note)

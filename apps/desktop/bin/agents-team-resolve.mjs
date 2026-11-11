@@ -1,4 +1,5 @@
 // MODULE: agents-team-resolve.mjs - Epic 72: the one resolver that picks who answers an ask and at which effort: a recheck's teammate, else the project's approved choice, else a named agent, else the small-work candidate, else the role's chain
+import { sharedSmallWork } from './agents-small-work.mjs'
 import { agentState, classRefusal, initialEfforts, isCalled, parseCandidate, roleEfforts } from './agents-roster.mjs'
 
 /**
@@ -89,6 +90,31 @@ function alternatives(data, role, context) {
  * `{ agent, effort, rule, phase }`, and `choice` (its id) when a project choice chose.
  */
 export function resolveTeammate(data, request, context) {
+  const shared = sharedSmallWork(data)
+  const priorSmall = request.role === 'epic-reviewer' && request.recheck?.run?.role === request.role
+    && request.recheck.run.phase === 'small-work'
+  if (!shared || !(request.role === 'small-epic-reviewer' || (request.role === 'epic-reviewer' && (request.smallWork || priorSmall)))) {
+    return resolveRole(data, request, context)
+  }
+  if (request.smallWork && (request.recheck || request.agent !== undefined)) {
+    refuse('USAGE', '--small-work cannot be combined with --agent or --recheck-of')
+  }
+  const outerChoice = context.projectChoice?.(shared.outer) ?? null
+  if (outerChoice !== null) refuse('PROJECT_CHOICE_CONFLICT', `this project's approved choice for ${shared.outer.id} is ${outerChoice.agent} (${outerChoice.id}); shared Small work does not bypass it`, [outerChoice.agent])
+  const guarded = {
+    ...context,
+    standing: agent => {
+      if (!agent.roles.includes(shared.outer.id)) return `does not hold the role ${shared.outer.id}`
+      const rule = classRefusal(agent.class, shared.outer.id)
+      return rule === null ? context.standing(agent) : rule.rule
+    }
+  }
+  const recheck = priorSmall ? { ...request.recheck, run: { ...request.recheck.run, role: shared.target.id } } : request.recheck
+  const result = resolveRole(data, { ...request, role: shared.target.id, smallWork: false, recheck }, guarded)
+  return { ...result, configuration_role: shared.target.id, ...(request.smallWork ? { rule: 'small-work', phase: 'small-work' } : {}) }
+}
+
+function resolveRole(data, request, context) {
   const role = data.roles.find((candidate) => candidate.id === request.role)
   if (role === undefined) refuse('ROLE_UNKNOWN', `no role ${request.role} in the approved team`)
   const byId = new Map(data.agents.map((agent) => [agent.id, agent]))

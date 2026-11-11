@@ -1,4 +1,5 @@
 // MODULE: agents-roster.mjs - Epic 60: parse, validate and print the owner's typed agent roster (~/.config/bmn/agents/roster.md)
+import { isSmallWorkReference, linkedSmallWork, smallWorkCandidates, sharedSmallWork } from './agents-small-work.mjs'
 import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { canonicalJson, isObject, sha256 } from './shared-helpers.mjs'
@@ -237,13 +238,15 @@ export function judges(data) {
 
 /** The efforts a role names for an agent: its candidate entry, its effort for a recheck and the one for small work. Empty where the role does not name the agent. */
 /** The efforts a first ask of a role may use with an agent: its efforts in the chain, else as the small-work candidate, else its own. */
-export function initialEfforts(role, agent) {
+export function initialEfforts(role, agent, data) {
   for (const text of role.candidates) {
     const candidate = parseCandidate(text)
     if (candidate?.agent === agent.id) return candidate.efforts
   }
-  const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
-  if (small?.agent === agent.id) return small.efforts
+  for (const text of data ? smallWorkCandidates(data, role) : typeof role.small_work === 'string' ? [role.small_work] : []) {
+    const small = parseCandidate(text)
+    if (small?.agent === agent.id) return small.efforts
+  }
   return agent.efforts
 }
 
@@ -259,7 +262,7 @@ export function projectChoiceProblem(data, choice) {
   if (!agent.roles.includes(role.id)) return `${choice.agent} does not hold the role ${role.id}`
   const rule = classRefusal(agent.class, role.id)
   if (rule !== null) return `${choice.agent} is a ${agent.class}; ${rule.rule}`
-  const efforts = initialEfforts(role, agent)
+  const efforts = initialEfforts(role, agent, data)
   if (choice.effort !== undefined && !efforts.includes(choice.effort)) return `${choice.agent} is asked at ${efforts.join(' or ') || 'no effort'} for ${role.id}, not ${choice.effort}`
   return null
 }
@@ -316,7 +319,7 @@ export function projectChoiceFor(data, project, roleId, canonical, now = new Dat
   return live.length === 1 ? { choice: live[0], ended: false } : { choice: there[0], ended: true }
 }
 
-export function roleEfforts(role, agentId) {
+export function roleEfforts(role, agentId, data) {
   const efforts = []
   const add = (effort) => { if (typeof effort === 'string' && !efforts.includes(effort)) efforts.push(effort) }
   for (const text of role.candidates ?? []) {
@@ -324,8 +327,10 @@ export function roleEfforts(role, agentId) {
     if (candidate?.agent === agentId) candidate.efforts.forEach(add)
   }
   if (role.recheck !== undefined && Object.hasOwn(role.recheck, agentId) && agentId !== 'same_reviewer') add(role.recheck[agentId])
-  const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
-  if (small?.agent === agentId) small.efforts.forEach(add)
+  for (const text of data ? smallWorkCandidates(data, role) : typeof role.small_work === 'string' ? [role.small_work] : []) {
+    const small = parseCandidate(text)
+    if (small?.agent === agentId) small.efforts.forEach(add)
+  }
   return efforts
 }
 const ROUTE_FIELDS = ['provider', 'basis', 'accepted_versions']
@@ -1094,7 +1099,15 @@ function validateRoles(entry, agentById, agentIds, add, warnings, schema) {
       }
     }
     if (Object.hasOwn(role, 'small_work')) {
-      if (role.small_work === null || typeof role.small_work !== 'string') fail('INVALID_VALUE', { key: 'small_work', text: 'small_work must be agent@effort' })
+      if (isSmallWorkReference(role.small_work)) {
+        if (id !== 'epic-reviewer' || !Object.hasOwn(entry.value, 'small-epic-reviewer') || entry.value['small-epic-reviewer']?.small_work !== undefined) {
+          fail('INVALID_VALUE', { key: 'small_work', text: 'a shared Small work reference requires Epic reviewer and a non-nested Small epic reviewer role' })
+        }
+        for (const text of Array.isArray(entry.value['small-epic-reviewer']?.candidates) ? entry.value['small-epic-reviewer'].candidates : []) {
+          const candidate = parseCandidate(text)
+          if (candidate && !agentById.get(candidate.agent)?.roles.includes('epic-reviewer')) fail('ROLE_NOT_HELD', { key: 'small_work', text: `${candidate.agent} must hold Epic reviewer as well as Small epic reviewer for the shared configuration` })
+        }
+      } else if (role.small_work === null || typeof role.small_work !== 'string') fail('INVALID_VALUE', { key: 'small_work', text: 'small_work must be agent@effort or {role: small-epic-reviewer}' })
       else checkCandidate(role.small_work, 'small_work', true)
     }
     if (Object.hasOwn(role, 'read_only') && typeof role.read_only !== 'boolean') fail('INVALID_VALUE', { key: 'read_only', text: 'read_only must be true or false' })
@@ -1422,9 +1435,13 @@ export function roleChain(data, roleId) {
     const { same_reviewer: sameReviewer, ...efforts } = role.recheck
     chain.recheck = { same_reviewer: sameReviewer, efforts }
   }
-  if (role.small_work !== undefined) chain.small_work = describe(role.small_work)
+  if (linkedSmallWork(data, role)) {
+    const target = linkedSmallWork(data, role)
+    chain.small_work = { role: target.id, candidates: target.candidates.map(describe), then: target.then, read_only: target.read_only === true || role.read_only === true }
+  } else if (typeof role.small_work === 'string') chain.small_work = describe(role.small_work)
   // A role the check holds to read-only (63.2): a run for it must not be able to write.
-  if (role.read_only === true) chain.read_only = true
+  const shared = sharedSmallWork(data)
+  if (role.read_only === true || (role.id === shared?.target.id && shared.outer.read_only === true)) chain.read_only = true
   // Nobody dispatches to this role: its agent is asked through BMN's own command.
   if (role.id === JUDGE_ROLE) chain.called_by = CALLED_BY_BMN
   return chain
@@ -1445,7 +1462,11 @@ export function roleChainText(chain) {
     const overrides = Object.entries(chain.recheck.efforts).map(([agent, effort]) => `${agent} at ${effort}`)
     lines.push(`  recheck: ${chain.recheck.same_reviewer ? 'same reviewer' : 'any candidate'}${overrides.length ? `, ${overrides.join(', ')}` : ''}`)
   }
-  if (chain.small_work) lines.push(`  small work: ${chain.small_work.agent}@${chain.small_work.efforts[0]}  ${about(chain.small_work)}`)
+  if (chain.small_work?.candidates) {
+    lines.push(`  small work: same configuration as ${chain.small_work.role}`)
+    for (const candidate of chain.small_work.candidates) lines.push(`    ${candidate.agent}@${candidate.efforts.join('|')}  ${about(candidate)}`)
+    lines.push(`    then: ${chain.small_work.then}`)
+  } else if (chain.small_work) lines.push(`  small work: ${chain.small_work.agent}@${chain.small_work.efforts[0]}  ${about(chain.small_work)}`)
   if (chain.called_by === CALLED_BY_BMN) lines.push(`  ${CALLED_WORDS}: no dispatch goes to this role; ask it with \`bmn judge ask\``)
   if (chain.read_only === true) {
     lines.push('  read-only: a run for this role is refused unless it is started so that it cannot write')
