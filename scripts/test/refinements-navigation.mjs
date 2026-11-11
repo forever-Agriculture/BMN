@@ -1,6 +1,7 @@
 /* global window, document, requestAnimationFrame */
 // Epics51/52 and manual desktop choices: isolated owner UI → store → host/PTY acceptance.
 import { toggleSessionRequests } from './session-request-helpers.mjs'
+import { screenFixtureEnvironment } from './screen-fixture-env.mjs'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -27,8 +28,7 @@ const fingerprintFiles = [...new Set([
 const fingerprint = Object.fromEntries(fingerprintFiles.map(path => [path, createHash('sha256').update(readFileSync(join(repo, path))).digest('hex')]))
 const result = { fingerprint, states: [], checks: [], status: 'running' }
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
-  const env = { ...process.env }
-  for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
+  const env = screenFixtureEnvironment(root)
   const dirA = join(root, 'project-a'), dirB = join(root, 'project-b')
   mkdirSync(dirA); mkdirSync(dirB)
   writeFileSync(join(dirA, 'AGENTS.md'), 'SYNTHETIC WORKSPACE A\n')
@@ -151,10 +151,11 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
       await page.getByRole('button', { name: 'Close search', exact: true }).click()
       await page.getByRole('button', { name: 'Preferences', exact: true }).click()
       const prefs = page.getByRole('dialog', { name: 'Preferences', exact: true })
-      const openPage = name => prefs.getByRole('navigation', { name: 'Preference pages', exact: true }).getByRole('button', { name, exact: true }).click()
+      const pageButton = name => prefs.getByRole('navigation', { name: 'Preference pages', exact: true }).getByRole('button', { name: new RegExp(`^${name}(?:\\s*Needs you)?$`) })
+      const openPage = name => pageButton(name).click()
       // Pages stay mounted while hidden; messages are read from the one shown.
       const shown = prefs.locator('.preferences-page:not([hidden])')
-      await openPage('Telegram')
+      await openPage('Notifications')
       const chat = prefs.locator('#preferences-telegram-chat-id')
       if (await chat.count()) {
         await chat.fill('synthetic invalid')
@@ -173,7 +174,7 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
           await chat.fill('123')
           await prefs.getByRole('button', { name: 'Save Telegram settings', exact: true }).click()
           await prefs.getByRole('button', { name: 'Saving…', exact: true }).waitFor()
-          await openPage('Appearance'); await openPage('Telegram')
+          await openPage('General'); await openPage('Notifications')
           assert.equal(await prefs.getByRole('button', { name: 'Saving…', exact: true }).isDisabled(), true)
           assert.equal(await chat.inputValue(), '123')
         } finally { writeFileSync(unlock, '') }
@@ -184,11 +185,13 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
         await shown.locator('.preferences-error').waitFor()
         result.checks.push('Preferences pages preserve an actual pending SQLite save and its unsaved field')
       }
-      for (const section of ['Backup', 'History', 'Voice', 'Appearance', 'Terminal', 'Notifications', 'Local control', 'Telegram']) {
+      for (const section of ['General', 'Agents', 'Integrations', 'Notifications', 'Voice', 'Data']) {
         await openPage(section)
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), section)
-        assert.deepEqual(await prefs.locator('.preferences-page:not([hidden]) h3').allTextContents(), [section])
+        assert.equal((await page.evaluate(() => document.activeElement.textContent)).trim(), section)
+        assert.equal(await pageButton(section).getAttribute('aria-current'), 'page')
+        assert.equal(await shown.count(), 1)
       }
+      await openPage('Notifications')
       if (await chat.count()) assert.equal(await chat.inputValue(), 'synthetic invalid')
       assert.deepEqual(await shown.locator('.preferences-error').allTextContents(), validation)
       await page.screenshot({ path: join(evidence, `preferences-${mode}-${width}.png`) })
@@ -208,7 +211,10 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
     assert.equal(stored.pinnedFilePaths[0], join(dirA, 'AGENTS.md'))
     await pins.getByRole('button', { name: `Open ${join(dirA, 'AGENTS.md')}`, exact: true }).click()
     // Story 67.6: a pin opens in Quick look for its workspace, whose menu offers no Send to session.
-    const preview = page.locator('dialog.quick-look[open]'); await preview.locator('.ql-code .cm-content').waitFor()
+    const preview = page.locator('dialog.quick-look[open]')
+    await preview.getByRole('button', { name: 'Source', exact: true }).click()
+    assert.equal(await preview.getByRole('button', { name: 'Source', exact: true }).getAttribute('aria-pressed'), 'true')
+    await preview.locator('.ql-code .cm-content').waitFor()
     assert.ok((await preview.locator('.ql-code').innerText()).includes('SYNTHETIC WORKSPACE A'))
     assert.equal(await preview.locator('.ql-path .ql-pth').getAttribute('title'), join(dirA, 'AGENTS.md'))
     await preview.getByRole('button', { name: 'More actions', exact: true }).click()
@@ -231,7 +237,10 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
     await otherPins.getByRole('textbox', { name: 'Pinned file path' }).fill('AGENTS.md')
     await otherPins.getByRole('button', { name: 'Add path', exact: true }).click()
     await otherPins.getByRole('button', { name: `Open ${join(dirB, 'AGENTS.md')}`, exact: true }).click()
-    const otherPreview = page.locator('dialog.quick-look[open]'); await otherPreview.locator('.ql-code .cm-content').waitFor()
+    const otherPreview = page.locator('dialog.quick-look[open]')
+    await otherPreview.getByRole('button', { name: 'Source', exact: true }).click()
+    assert.equal(await otherPreview.getByRole('button', { name: 'Source', exact: true }).getAttribute('aria-pressed'), 'true')
+    await otherPreview.locator('.ql-code .cm-content').waitFor()
     assert.ok((await otherPreview.locator('.ql-code').innerText()).includes('SYNTHETIC WORKSPACE B'))
     await page.keyboard.press('Escape'); await otherPreview.waitFor({ state: 'detached' })
     result.checks.push('Workspace B pin reaches its folder while session A remains selected')
@@ -266,7 +275,7 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
       body: '/synthetic/project/' + 'long-path-component/'.repeat(15) + 'instruction.md\nPermission is pending; no command ran.' })
     const multiple = page.locator('.attention-item[data-request-id]').filter({ hasText: 'Synthetic two-part question' })
     const permission = page.locator('.attention-item[data-request-id]').filter({ hasText: 'Synthetic permission target' })
-    await toggleSessionRequests(page)
+    if (!await page.locator('.session-request-card').isVisible()) await toggleSessionRequests(page)
     await multiple.waitFor(); await permission.waitFor()
     assert.equal(await multiple.locator('.attention-questions section').count(), 2)
     assert.ok((await permission.innerText()).includes('long-path-component'))

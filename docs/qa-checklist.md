@@ -46,3 +46,7 @@ The lead verifies machine-only boundaries such as process cleanup, backup conten
 | S13.1 | Privacy and storage | Inspect Health paths and control status | only bench roots/socket shown |
 | S13.2 | Privacy and storage | Lead gate: verify private-bus and protected-path separation with lifetime checks | no owner paths or bus touched; a filesystem/network sandbox requires separate escape proof |
 | S13.3 | Privacy and storage | Stop bench and verify cleanup | all recorded processes gone; disposable roots deleted; evidence retained |
+
+## Desktop screen gate
+
+Run `pnpm run test:screens` for BMN desktop changes. It builds once and runs keyboard-catalogue, notification-layout, refinements-navigation and electron-visual sequentially on a private Xvfb display, stopping on the first failure and naming the test. Logs and screenshots remain under `.dev-auto/evidence/`. This verifies the checkout at its recorded commit (including any recorded local changes), not a packaged binary; installed-build acceptance remains separate.

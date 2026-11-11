@@ -74,12 +74,26 @@
     display: none;
   }
 
+  .pane-heading {
+    flex-wrap: wrap;
+  }
+
   .pane-heading .pane-status {
-    flex: 0 1 auto;
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    min-height: 22px;
+  }
+
+  /* Working/Idle must not move actions between rows and resize a terminal during Find. */
+  .pane-heading .pane-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
 
   .pane-heading strong {
     flex: 1 1 0;
+    min-width: 0;
     max-width: none;
   }
 }

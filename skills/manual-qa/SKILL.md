@@ -62,6 +62,19 @@ account activity requires the host's verified bounded grant before any request r
 Do not retry an uncertain outcome or infer fresh allowance. Keep relevant redacted evidence local; real-account
 evidence stays inside the local BMN run folder and never goes to a report publisher.
 
+### Observable account criteria
+
+An account brief lists only checks the QA agent can observe through its permitted browser tools.
+The host judges audit completeness from its own sealed data, unconditionally. Do not ask the
+agent to certify the audit, request counts, absence of writes or other host-only facts. Calling
+`browser_qa_seal` returns a receipt reference, not the audit for the agent to inspect; copy that
+reference to `host_summary` without inventing observations.
+
+For a look-only account pass, use criteria such as “The landing page shows the expected list
+and its statuses” and “The page has no visible loading error.” Keep the scope to reading the
+landing page, with no opened records or state-changing actions. The host separately rejects an
+incomplete audit even when every observable criterion passes and the agent reports GO.
+
 ## 4. Reconnaissance and smoke
 
 Confirm the running build, target, scope and account context against the brief. If they differ,

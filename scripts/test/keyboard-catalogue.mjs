@@ -2,6 +2,7 @@
 // Epic 55: real Electron catalogue, addressed editing and response-card keyboard navigation.
 // Run on a private X display after building; all sessions and requests are synthetic.
 import { sessionRequestControl } from './session-request-helpers.mjs'
+import { screenFixtureEnvironment } from './screen-fixture-env.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -15,8 +16,7 @@ const evidence = join(repo, '.dev-auto/evidence/epic-55/runtime')
 mkdirSync(evidence, { recursive: true })
 assert.ok(process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, 'Use a private X display')
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
-  const env = { ...process.env }
-  for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
+  const env = screenFixtureEnvironment(root)
   const fixture = join(root, 'fixture.mjs')
   const cli = join(repo, 'apps/desktop/bin/bmn')
   writeFileSync(fixture, `import {appendFileSync,existsSync,readFileSync,writeFileSync,unlinkSync} from 'node:fs';
@@ -107,7 +107,8 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
         await page.keyboard.press('Control+Shift+Z')
         await page.keyboard.press('Control+Shift+Enter')
         await page.locator(`#palette-split-${b.session.sessionId}`).click()
-        await page.locator(`.session-terminal[data-session-id="${b.session.sessionId}"] .pane-heading`).click()
+        // Select through the title; the project plate in the header opens Quick look.
+        await page.locator(`.session-terminal[data-session-id="${b.session.sessionId}"] .pane-heading strong`).click()
       }
       for (const [width, height] of [[1280, 900], [800, 500]]) {
         await app.evaluate(({ BrowserWindow }, size) => { const win = BrowserWindow.getAllWindows()[0]; win.setMinimumSize(0, 0); win.setContentSize(...size) }, [width, height])
@@ -181,7 +182,7 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
     const bounds = await card.boundingBox()
     assert.ok(toast.x + toast.width <= bounds.x || toast.y >= bounds.y + bounds.height ||
       toast.y + toast.height <= bounds.y, 'Confirmation covers response actions')
-    const nav = card.locator('article .actions button.primary')
+    const nav = card.getByRole('button', { name: 'Dismiss', exact: true })
     assert.equal(await nav.count(), 7) // six north manual requests and its native question
     await nav.nth(4).focus()
     const identity = await nav.nth(4).evaluate(button => button.closest('article').dataset.requestId)

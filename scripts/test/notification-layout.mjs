@@ -1,6 +1,7 @@
 /* global window, document, innerWidth, innerHeight */
 // Exercise long confirmations and real Archive Undo in narrow isolated Electron windows.
 import { toggleSessionRequests } from './session-request-helpers.mjs'
+import { screenFixtureEnvironment } from './screen-fixture-env.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -16,8 +17,7 @@ assert.ok(process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, 'Use a private X 
 const failures = [], observations = []
 let completed = false
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
-  const env = { ...process.env }
-  for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
+  const env = screenFixtureEnvironment(root)
   const fixture = join(root, 'notice-fixture.mjs')
   writeFileSync(fixture, `import {spawnSync} from 'node:child_process';
 process.stdin.setRawMode(true);process.stdin.resume();
@@ -102,6 +102,12 @@ setInterval(()=>{},1000);`)
       await page.getByRole('textbox', { name: 'Session name', exact: true }).fill(longName)
       await page.getByRole('button', { name: 'Save session', exact: true }).click()
       await page.locator('.feedback-notice.brief').waitFor()
+      const requestHit = await page.locator(`[data-session-requests="${live.session.sessionId}"]`).evaluate(control => {
+        const r = control.getBoundingClientRect()
+        return { width: r.width, hit: control.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)) }
+      })
+      await page.screenshot({ path: join(evidence, `${width}-request-control.png`) })
+      assert.ok(requestHit.width > 0 && requestHit.hit, `Request control obscured at ${width}px: ${JSON.stringify(requestHit)}`)
       await toggleSessionRequests(page)
       await measure(width, 'save-popover', '.session-request-card')
       await closePopover()
