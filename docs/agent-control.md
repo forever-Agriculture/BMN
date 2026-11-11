@@ -2338,7 +2338,7 @@ only detaches it: the run's supervisor owns the run (below).
 
 ### A reviewer is given the project's vision
 
-An ask in `focused-reviewer`, `epic-reviewer` or `final-reviewer` (Epic 112) carries the project's
+An ask in `focused-reviewer`, `epic-reviewer`, `small-epic-reviewer` or `final-reviewer` (Epic 112) carries the project's
 `plan/VISION.md` when its project has a BMN-format plan with one, found the way `bmn plan` finds the plan,
 so from a linked worktree without `plan/` too (`apps/desktop/bin/agents-team-vision.mjs`). BMN adds it
 to the files before their hashes, so it is scanned, judged for consent and bound to the request's hash

@@ -11,7 +11,7 @@ import { AskUsageError, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { VISION_LIMIT, VISION_ROLES, reviewVision } from '../../bin/agents-team-vision.mjs'
 import { VISION_LIMIT as CHECK_LIMIT, resolvePlan } from '../../bin/plan-board.mjs'
 import { requestHash } from '../../bin/agents-team-places.mjs'
-import { SCOPES, leftovers as harnessLeftovers, ownSystemd, settle, teamAskHome } from './test-fixtures/team-ask-harness'
+import { EXAMPLE, SCOPES, approve, leftovers as harnessLeftovers, ownSystemd, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const BMN = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const VISION = `# Vision
@@ -75,9 +75,12 @@ afterEach(async () => {
 
 describe('a reviewer is given the vision (112.1 AC1)', () => {
   it('each reviewer role from a worktree without plan/ carries the vision whole, its hash and the one instruction, in prompt, manifest and receipt', async () => {
+    approve(home, EXAMPLE
+      .replace('roles: [focused-reviewer, epic-reviewer,', 'roles: [focused-reviewer, epic-reviewer, small-epic-reviewer,')
+      .replace('epic-reviewer: {candidates:', 'small-epic-reviewer: {candidates: [astra@medium], then: blocked, read_only: true}\nepic-reviewer: {candidates:'))
     const { worktree, visionPath } = planned()
     expect(existsSync(join(worktree, 'plan'))).toBe(false)
-    expect(VISION_ROLES).toEqual(['focused-reviewer', 'epic-reviewer', 'final-reviewer'])
+    expect(VISION_ROLES).toEqual(['focused-reviewer', 'epic-reviewer', 'small-epic-reviewer', 'final-reviewer'])
     for (const role of VISION_ROLES) {
       const { vision, prepared } = await reviewerAsk(role, worktree)
       expect(vision).toEqual({ path: visionPath, real: visionPath, sha256: sha(VISION), bytes: Buffer.byteLength(VISION) })
