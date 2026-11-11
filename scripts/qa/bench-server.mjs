@@ -10,6 +10,7 @@ import { atomicJson, isLiveProcess, loopbackEndpoint, processIdentity, validateA
 import { allTraces, configFor, groupState, requestStop, transition } from './bench-state.mjs'
 
 import { benchCandidate } from './bench-candidate.mjs'
+import { prepareBenchRoster } from './bench-qa-record.mjs'
 
 const config = configFor(JSON.parse(readFileSync(process.argv[2], 'utf8')).runId)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -53,6 +54,7 @@ async function main() {
   if (config.candidateSha256 !== null && config.candidateSha256 !== candidateSha256) throw new Error('QA candidate changed before launch')
   const scopeFile = join(config.run, 'process-scope.json')
   atomicJson(scopeFile, { version: 1, runId: config.runId, group: { path: config.group.path, device: config.group.device, inode: config.group.inode } })
+  prepareBenchRoster(config)
   application = await electron.launch({ chromiumSandbox: true, executablePath: config.binary, timeout: 40000,
     args: ['--ozone-platform=headless', '--ozone-override-screen-size=1920,1080', '--force-device-scale-factor=1',
       '--disable-partial-raster', '--num-raster-threads=1', '--disable-gpu', '--password-store=basic', '--remote-debugging-address=127.0.0.1',

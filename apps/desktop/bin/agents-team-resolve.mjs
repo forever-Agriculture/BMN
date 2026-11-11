@@ -44,13 +44,13 @@ function notEligible(data, role, agent, context) {
 }
 
 /** The efforts an agent may be asked at in a phase of a role. */
-function phaseEfforts(role, agent, phase) {
+function phaseEfforts(role, agent, phase, data) {
   if (phase === 'recheck' && role.recheck !== undefined && Object.hasOwn(role.recheck, agent.id) && agent.id !== 'same_reviewer') return [role.recheck[agent.id]]
   if (phase === 'small-work') {
     const small = role.small_work === undefined ? null : parseCandidate(role.small_work)
     if (small?.agent === agent.id) return small.efforts
   }
-  return initialEfforts(role, agent)
+  return initialEfforts(role, agent, data)
 }
 
 /**
@@ -91,8 +91,11 @@ function alternatives(data, role, context) {
  */
 export function resolveTeammate(data, request, context) {
   const shared = sharedSmallWork(data)
+  if (!shared && request.role === 'epic-reviewer' && request.recheck?.run?.configuration_role === 'small-epic-reviewer') {
+    refuse('RECHECK_INVALID', 'the approved team no longer links this earlier shared Small work configuration')
+  }
   const priorSmall = request.role === 'epic-reviewer' && request.recheck?.run?.role === request.role
-    && request.recheck.run.phase === 'small-work'
+    && (request.recheck.run.phase === 'small-work' || request.recheck.run.configuration_role === 'small-epic-reviewer')
   if (!shared || !(request.role === 'small-epic-reviewer' || (request.role === 'epic-reviewer' && (request.smallWork || priorSmall)))) {
     return resolveRole(data, request, context)
   }
@@ -123,7 +126,7 @@ function resolveRole(data, request, context) {
     const agent = byId.get(id)
     const why = notEligible(data, role, agent, context)
     if (why !== null) refuse('AGENT_NOT_ELIGIBLE', `${id} ${why}`, others())
-    const efforts = phase === 'recheck-named' ? roleEfforts(role, id) : phaseEfforts(role, agent, phase)
+    const efforts = phase === 'recheck-named' ? roleEfforts(role, id, data) : phaseEfforts(role, agent, phase, data)
     return { agent, effort: pickEffort(efforts, request.effort, agent, phase), rule, phase: phase === 'recheck-named' ? 'recheck' : phase }
   }
   const choice = context.projectChoice?.(role) ?? null
@@ -150,7 +153,7 @@ function resolveRole(data, request, context) {
     // An unavailable choice is refused with its reason, never passed to another (73.2 AC4).
     const why = notEligible(data, role, agent, context)
     if (why !== null) refuse('AGENT_NOT_ELIGIBLE', `this project's approved choice ${choice.agent} (${choice.id}) ${why}; asks for ${role.id} here are refused until the owner changes the choice`, others())
-    const allowed = phaseEfforts(role, agent, 'initial')
+    const allowed = phaseEfforts(role, agent, 'initial', data)
     if (choice.effort !== undefined && !allowed.includes(choice.effort)) refuse('AGENT_NOT_ELIGIBLE', `this project's approved choice ${choice.agent} (${choice.id}) is at ${choice.effort}, which ${role.id} no longer allows it (${allowed.join(' or ')}); asks for ${role.id} here are refused until the owner changes the choice`, others())
     const efforts = choice.effort !== undefined ? [choice.effort] : allowed
     return { agent, effort: pickEffort(efforts, request.effort, agent, 'initial'), rule: 'project-choice', phase: 'initial', choice: choice.id }

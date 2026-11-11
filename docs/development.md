@@ -174,6 +174,8 @@ under the current user’s `app.slice`. The bench refuses to start without kerne
 In a linked worktree use `--electron` with the default
 checkout's AppArmor-approved Electron executable, as with `test:visual`.
 
+For a declared lead QA pass, pass `--qa-brief BRIEF --qa-seed SEED` with `--no-build` or `--binary PATH`. A seed may include synthetic `roster` text: the bench installs its first approved generation in the fresh private home before Electron starts, for either candidate type. A changed seed, foreign run marker or existing roster folder is refused. Without `roster`, the seed remains a named input only.
+
 From any shell, in that checkout:
 
 ```bash

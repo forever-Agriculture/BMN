@@ -48,7 +48,7 @@ function earlierRun(id, runs = teamRunsDirectory()) {
   try {
     const request = JSON.parse(readFileSync(join(runs, id, ASK_RUN_FILES.request), 'utf8'))
     if (typeof request.role !== 'string' || typeof request.agent !== 'string') return null
-    return { role: request.role, project: request.project ?? null, agent: request.agent, phase: request.phase }
+    return { role: request.role, project: request.project ?? null, agent: request.agent, phase: request.phase, configuration_role: request.configuration_role }
   } catch {
     return null
   }
@@ -295,7 +295,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   }
   writePrivate(join(folder, ASK_RUN_FILES.manifest), `${JSON.stringify(manifest, null, 2)}\n`)
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
-    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
+    version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.configuration_role === undefined ? {} : { configuration_role: choice.configuration_role }), ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
     billing: choice.agent.paid_by ?? 'unknown', project, form, reads: reads.words, data: label, app_version: installed.version, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
     ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}), statement: BROWSER_STATEMENT } }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.

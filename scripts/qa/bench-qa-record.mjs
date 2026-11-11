@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { atomicJson } from './bench-lib.mjs'
+import { approvedTeam } from '../measure/calibration-environment.mjs'
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const read = path => JSON.parse(readFileSync(path, 'utf8'))
 
@@ -53,4 +54,22 @@ export function finishBenchQa({ run, runId, reportPath }) {
     actions: artifact('actions.jsonl'), screenshots: shots, state: artifact('receipt.json'), completion: artifact('completion-proof.json'), launches }
   atomicJson(join(run, 'lead-bench.json'), receipt)
   return { receipt: join(run, 'lead-bench.json'), runId, revision: input.revision, target: input.target }
+}
+
+/** Install only the reserved synthetic roster before Electron decides whether its profile is new. */
+export function prepareBenchRoster({ root, run, runId, qaInput }) {
+  if (!qaInput) return null
+  const bytes = readFileSync(join(run, 'bench/seed.json'))
+  if (qaInput.runId !== runId || hash(bytes) !== qaInput.fixture.seedSha256 || readFileSync(join(root, '.bmn-qa-run'), 'utf8') !== runId) {
+    throw new Error('The synthetic roster seed does not belong to this reserved bench')
+  }
+  const seed = JSON.parse(bytes)
+  if (seed.roster === undefined) return null
+  if (typeof seed.roster !== 'string') throw new Error('The synthetic roster must be text')
+  const folder = join(root, 'home/.config/bmn/agents')
+  if (realpathSync(root) !== root || realpathSync(join(root, 'home')) !== join(root, 'home') || existsSync(folder)) throw new Error('Synthetic roster installation requires this bench’s fresh private home')
+  approvedTeam(folder, seed.roster)
+  const installed = { id: seed.id, rosterSha256: hash(Buffer.from(seed.roster)), generation: 1 }
+  atomicJson(join(run, 'bench/seed-install.json'), installed)
+  return installed
 }

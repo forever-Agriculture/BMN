@@ -92,7 +92,7 @@ describe('words (R60-NFR8)', () => {
   it('uses the existing recheck words with the current roster names (120.1)', () => {
     expect(roleRecheckWords({ same_reviewer: true, astra: 'low' }, DATA)).toBe('the same reviewer · Astra low')
     expect(roleRecheckWords({ same_reviewer: true }, DATA)).toBe('the same reviewer')
-    expect(roleRecheckWords({ same_reviewer: false, missing: 'high' }, DATA)).toBe('another reviewer · missing high')
+    expect(roleRecheckWords({ same_reviewer: false, missing: 'high' }, DATA)).toBe('the same reviewer · missing high')
     const renamed = { ...DATA, agents: DATA.agents.map(entry => entry.id === 'astra' ? { ...entry, name: 'Reviewer' } : entry) }
     expect(roleRecheckWords({ astra: 'low' }, renamed)).toBe('Reviewer low')
   })

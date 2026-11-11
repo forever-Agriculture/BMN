@@ -137,7 +137,9 @@ function namesOf(...sources: Array<RosterDataShape | null>): Names {
 }
 
 export function roleRecheckWords(recheck: NonNullable<RosterRoleShape['recheck']>, data: RosterDataShape): string {
-  return formatValue({ present: true, value: recheck }, 'recheck', namesOf(data))
+  // Runtime rechecks always bind the earlier reviewer, including legacy false flags.
+  const effective = Object.hasOwn(recheck, 'same_reviewer') ? { ...recheck, same_reviewer: true } : recheck
+  return formatValue({ present: true, value: effective }, 'recheck', namesOf(data))
 }
 
 /** `luna@max` reads "Luna max"; `astra@medium|high` reads "Astra medium or high". */

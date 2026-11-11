@@ -33,8 +33,8 @@ it.each(['Small epic reviewer', 'Epic reviewer'])('editing %s updates the shared
     const row = [...container.querySelectorAll('.role')].find(el => el.querySelector('b')?.textContent === name)
     expect(row, `role ${name}`).toBeTruthy(); return row as Element
   }
-  const button = (label: string): HTMLButtonElement => {
-    const found = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+  const button = (label: string, within: Element = container): HTMLButtonElement => {
+    const found = within.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
     expect(found, label).toBeTruthy(); return found as HTMLButtonElement
   }
   try {
@@ -44,13 +44,15 @@ it.each(['Small epic reviewer', 'Epic reviewer'])('editing %s updates the shared
     expect(link, 'existing duplicate settings must be linked explicitly').toBeTruthy()
     await act(async () => link!.click())
     if (start === 'Small epic reviewer') await act(async () => button('Edit Small epic reviewer').click())
-    await act(async () => button('Remove Astra from Small epic reviewer').click())
-    await act(async () => button('Add Sol to Small epic reviewer').click())
     const edit = start === 'Epic reviewer' ? role(start).querySelector('[aria-label="Small work"]')! : role(start)
+    expect(edit, `selected editor ${start}`).toBeTruthy()
+    await act(async () => button('Remove Astra from Small epic reviewer', edit).click())
+    await act(async () => button('Add Sol to Small epic reviewer', edit).click())
     const choices = edit.querySelector('[aria-label="Sol efforts for Small epic reviewer"]')
     expect(choices).toBeTruthy()
     const low = [...choices!.querySelectorAll<HTMLButtonElement>('button')].find(el => el.textContent === 'low')
-    expect(low).toBeTruthy(); await act(async () => low!.click())
+    expect(low).toBeTruthy(); low!.focus(); await act(async () => low!.click())
+    expect(document.activeElement).toBe(low)
     const small = role('Small epic reviewer').querySelector('.list-line')?.textContent ?? ''
     const epic = role('Epic reviewer').querySelector('.list-line')?.textContent ?? ''
     expect(small).toContain('Sol'); expect(small).toContain('high')

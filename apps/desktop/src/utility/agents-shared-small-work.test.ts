@@ -1,4 +1,5 @@
 // MODULE: agents-shared-small-work.test.ts - Epic120.2: shared Small work survives real approval and both resolution paths
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,7 +9,6 @@ import { parseRoster, rewriteRoster, roleChain, type RosterData } from '../../bi
 import { readApproved, readValidRoster, generationPath } from '../../bin/agents-state.mjs'
 import { approveRoster, saveAndApprove } from '../main/agents-approval'
 import { resolveTeammate } from '../../bin/agents-team-resolve.mjs'
-import { moveCandidate, toggleCandidateEffort } from '../renderer/src/roster-staging'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const previousHome = process.env.HOME
@@ -48,15 +48,19 @@ it('stores a reference rather than two reviewer values, preserving the full chai
   expect(spellings.map(request => selected(fresh, request))).toEqual([{agent:'astra',effort:'low'}, {agent:'astra',effort:'low'}])
 })
 
-it('a real staged agent and effort edit persists after approval and both command resolutions and summaries update', () => {
+it('an agent and effort edit persists after approval and both command resolutions and summaries update', () => {
   persist(linked())
   const initial = readApproved().data
-  const moved = moveCandidate(initial, 'small-epic-reviewer', 1, -1)
-  const high = toggleCandidateEffort(moved, 'small-epic-reviewer', 'fable', 'high')
-  const changed = toggleCandidateEffort(high, 'small-epic-reviewer', 'fable', 'medium')
+  const changed = structuredClone(initial)
+  changed.roles.find(role => role.id === 'small-epic-reviewer')!.candidates = ['fable@high', 'astra@low']
   persist(changed)
   const fresh = readApproved().data
   expect(spellings.map(request => selected(fresh, request))).toEqual([{agent:'fable',effort:'high'}, {agent:'fable',effort:'high'}])
+  const cli = (role: string) => JSON.parse(execFileSync(process.execPath, [fileURLToPath(new URL('../../bin/bmn', import.meta.url)), 'roster', 'role', role, '--json'], {cwd:home,env:{HOME:home,PATH:'/usr/bin:/bin'},encoding:'utf8',timeout:10000}))
+  const outer = cli('epic-reviewer'), dedicated = cli('small-epic-reviewer')
+  expect(outer.ok).toBe(true); expect(dedicated.ok).toBe(true)
+  expect(outer.small_work.candidates.map((entry: {agent:string;efforts:string[]}) => ({agent:entry.agent,efforts:entry.efforts}))).toEqual(dedicated.candidates.map((entry: {agent:string;efforts:string[]}) => ({agent:entry.agent,efforts:entry.efforts})))
+  expect(outer.small_work.candidates[0]).toMatchObject({agent:'fable',efforts:['high']})
   expect(roleChain(fresh, 'epic-reviewer').small_work).toMatchObject({ role: 'small-epic-reviewer', candidates: [{agent:'fable',efforts:['high']}, {agent:'astra',efforts:['low']}] })
   expect(roleChain(fresh, 'small-epic-reviewer').candidates).toEqual((roleChain(fresh, 'epic-reviewer').small_work as {candidates:unknown}).candidates)
   expect(fresh.roles.find(role => role.id === 'epic-reviewer')!.candidates).toEqual(initial.roles.find(role => role.id === 'epic-reviewer')!.candidates)
@@ -92,4 +96,53 @@ it('rejects dangling and nested references rather than guessing a reviewer', () 
   expect(parseRoster(rewriteRoster(EXAMPLE, data)).data).toBeNull()
   const nested = linked(); nested.roles.find(role => role.id === 'small-epic-reviewer')!.small_work = {role:'small-epic-reviewer'}
   expect(parseRoster(rewriteRoster(EXAMPLE, nested)).data).toBeNull()
+})
+
+it('named initial and missing-receipt efforts read the referenced configuration too', () => {
+  const data = linked()
+  data.roles.find(role => role.id === 'small-epic-reviewer')!.candidates = ['sol@xhigh']
+  data.agents.find(agent => agent.id === 'sol')!.roles.push('epic-reviewer', 'small-epic-reviewer')
+  expect(resolveTeammate(data, {role:'epic-reviewer',agent:'sol'}, context)).toMatchObject({agent:{id:'sol'},effort:'xhigh'})
+  expect(resolveTeammate(data, {role:'epic-reviewer',agent:'sol',effort:'xhigh',recheck:{id:'20261111T010101-abcdef12',run:null}}, context)).toMatchObject({agent:{id:'sol'},effort:'xhigh'})
+})
+
+it.each(['astra@low', 'fable@medium', undefined])('keeps legacy value %s until an explicit link is approved without losing the dedicated chain', scalar => {
+  const data = linked()
+  const outer = data.roles.find(role => role.id === 'epic-reviewer')!
+  if (scalar === undefined) delete outer.small_work
+  else outer.small_work = scalar
+  persist(data)
+  const old = readFileSync(generationPath(readApproved().number), 'utf8')
+  const oldNumber = readApproved().number
+  const target = structuredClone(readApproved().data.roles.find(role => role.id === 'small-epic-reviewer'))
+  expect(readApproved().data.roles.find(role => role.id === 'epic-reviewer')!.small_work).toBe(scalar)
+  const explicit = structuredClone(readApproved().data)
+  explicit.roles.find(role => role.id === 'epic-reviewer')!.small_work = {role:'small-epic-reviewer'}
+  persist(explicit)
+  expect(readApproved().data.roles.find(role => role.id === 'small-epic-reviewer')).toEqual(target)
+  expect(readFileSync(generationPath(oldNumber), 'utf8')).toBe(old)
+  expect(spellings.map(request => selected(readApproved().data, request))).toEqual([{agent:'astra',effort:'low'}, {agent:'astra',effort:'low'}])
+})
+
+it('retains a legacy scalar with no dedicated role rather than inventing a choice or role grant', () => {
+  const original = readApproved().data
+  const parsed = parseRoster(rewriteRoster(EXAMPLE, original))
+  expect(parsed.errors).toEqual([])
+  expect(parsed.data).toEqual(original)
+  expect(parsed.data!.roles.some(role => role.id === 'small-epic-reviewer')).toBe(false)
+})
+
+it('enforces dedicated choices and outer membership on both shared entry points', () => {
+  const data = linked()
+  const choice = {...context,projectChoice: (role: RosterData['roles'][number]) => role.id === 'small-epic-reviewer' ? {id:'synthetic-small-choice',agent:'fable',effort:'medium'} : null}
+  for (const request of spellings) expect(resolveTeammate(data, request, choice)).toMatchObject({agent:{id:'fable'},effort:'medium',choice:'synthetic-small-choice'})
+  data.agents.find(agent => agent.id === 'astra')!.roles = ['small-epic-reviewer']
+  for (const request of spellings) expect(selected(data, request)).toEqual({agent:'fable',effort:'medium'})
+  data.agents.find(agent => agent.id === 'fable')!.roles = ['small-epic-reviewer']
+  for (const request of spellings) expect(() => selected(data, request)).toThrow(expect.objectContaining({code:'AGENT_NOT_ELIGIBLE'}))
+})
+
+it('refuses a known shared recheck when its explicit link has been removed', () => {
+  const data=linked();data.roles.find(role=>role.id==='epic-reviewer')!.small_work='astra@low'
+  expect(()=>resolveTeammate(data,{role:'epic-reviewer',recheck:{id:'20261111T010101-abcdef12',run:{role:'epic-reviewer',agent:'astra',project:context.project,phase:'recheck',configuration_role:'small-epic-reviewer'}}},context)).toThrow(expect.objectContaining({code:'RECHECK_INVALID'}))
 })

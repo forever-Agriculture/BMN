@@ -83,6 +83,8 @@ extraResources:
   # Epic 60: the roster, approval-state reader, dispatch check and rules master that bmn.mjs imports.
   - from: bin/agents-roster.mjs
     to: bin/agents-roster.mjs
+  - from: bin/agents-small-work.mjs
+    to: bin/agents-small-work.mjs
   - from: bin/agents-state.mjs
     to: bin/agents-state.mjs
   - from: bin/agents-cli.mjs

@@ -124,14 +124,15 @@ describe('team and rules state has no path into the database, Backup export, Tel
     // Story 102.12 adds the doctor's text, which holds the same state.
     // Epic 112 adds agents-team-vision; the plan reader it uses is handed in by the `bmn` entry point, outside this graph.
     // 2026-11-08 adds agents-bmn-rules, BMN's own rules block appended to every rendering; it imports only node:crypto.
-    expect(HOLDERS).toHaveLength(83)
+    // Epic120 adds the pure shared Small work accessor inside this same closed graph.
+    expect(HOLDERS).toHaveLength(84)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|bmn-rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-qa|team-qa-prepare|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree|team-vision)|doctor(?:-(?:adapters|state|results|text|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|native-rules|secret-list|hooks-floor|risky-allow|opencode-(?:floor|project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|small-work|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|bmn-rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-qa|team-qa-prepare|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree|team-vision)|doctor(?:-(?:adapters|state|results|text|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|native-rules|secret-list|hooks-floor|risky-allow|opencode-(?:floor|project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
     // New adapters remain inside this graph; injected store or delivery imports must fail it.
     for (const file of HOLDERS.filter(file => /(?:setup-|defaults-)/.test(file) || file.endsWith('/agents-team-qa.mjs'))) {
       for (const forbidden of ['./database-client', './telegram-service', './backup-export', './logger']) {

@@ -596,3 +596,23 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(evaluateAsk({ agent: 'astra', role: 'epic-reviewer', effort: 'medium', data: 'private' as const, run: result.folder, argv: plain, cwd: result.cwd }, { environment: env, now: NOW })).toMatchObject({ verdict: 'REFUSED' })
   })
 })
+
+it.each(['small-work', 'initial', undefined])('reads old receipt phase %s before choosing the shared or ordinary recheck rules (120.2)', phase => {
+  const next = structuredClone(data())
+  next.roles.find(role => role.id === 'epic-reviewer')!.small_work = {role:'small-epic-reviewer'}
+  next.roles.push({id:'small-epic-reviewer',candidates:['astra@high'],then:'blocked',read_only:true,recheck:{same_reviewer:true,astra:'high'}})
+  next.agents.find(agent => agent.id === 'astra')!.roles.push('small-epic-reviewer')
+  saveAndApprove({generation:readApproved().number,fileHash:readValidRoster().hash},next,{checkInspectedRoutes:()=>{}})
+  const id = '20261015T010000-0a0b0c0d', runs = teamRunsDirectory()
+  mkdirSync(join(runs,id), {recursive:true})
+  writeFileSync(join(runs,id,'request.json'),JSON.stringify({role:'epic-reviewer',project:null,agent:'astra',...(phase ? {phase} : {})}))
+  const prepared = ask({recheckOf:id}, {runs})
+  expect(prepared.choice).toMatchObject({agent:'astra',effort:phase==='small-work'?'high':'low'})
+  expect(prepared.verdict.verdict, JSON.stringify(prepared.verdict)).toBe('PASS')
+  expect(prepared.verdict.receipt).toMatchObject({form:'codex-read-only'})
+  const saved = JSON.parse(readFileSync(join(prepared.folder,'request.json'),'utf8'))
+  expect(saved.configuration_role).toBe(phase==='small-work'?'small-epic-reviewer':undefined)
+  const again = ask({recheckOf:prepared.id},{runs})
+  expect(again.choice).toMatchObject({agent:'astra',effort:phase==='small-work'?'high':'low'})
+  expect(again.verdict.verdict, JSON.stringify(again.verdict)).toBe('PASS')
+})
