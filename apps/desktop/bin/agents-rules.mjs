@@ -24,11 +24,11 @@ import { canonicalRoute } from './shared-helpers.mjs'
  * global files BMN writes, not project files or skills an app reads in a workspace.
  */
 
-/** The Team phrase names agents only while it stays this short; longer, it points at `bmn team`. */
+/** The Team phrase names agents only while it stays this short; longer, it points at `bmn roster`. */
 export const TEAM_LIMIT_BYTES = 400
 const TEAM_MARKER = '<!-- bmn:team -->'
-const TEAM_POINTER = ' (roles, efforts and limits: `bmn team`)'
-const TEAM_FALLBACK = 'the agents `bmn team` lists'
+const TEAM_POINTER = ' (current team: `bmn roster`; Claude Code/Codex also get BMN’s team block)'
+const TEAM_FALLBACK = 'the agents `bmn roster` lists (Claude Code/Codex also get BMN’s team block)'
 const OPEN_APPS = /^<!--\s*bmn:apps\s+([a-z ,]+?)\s*-->$/
 const CLOSE_APPS = /^<!--\s*\/bmn:apps\s*-->$/
 const OPEN_PUBLIC = /^<!--\s*bmn:public\s*-->$/
@@ -165,7 +165,7 @@ function approvedOrNull() {
 /**
  * The Team phrase: the enabled active agents' names grouped by app, apps in their fixed order and
  * agents in roster order, then where the details are. Longer than TEAM_LIMIT_BYTES, or with
- * nobody to name, it is the short phrase. Agents are pointed at `bmn team`, never at the roster file.
+ * nobody to name, it is the short phrase. Agents are pointed at `bmn roster`, never at the roster file.
  */
 export function teamPhrase(generation) {
   if (generation === null) return { form: 'short phrase (nothing approved)', text: TEAM_FALLBACK }

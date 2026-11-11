@@ -3590,6 +3590,113 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
     expect(writes).toEqual([])
   })
 
+  it('delivers approved team context beside the unchanged brief and latest-only notices (115.1/115.2)', async () => {
+    let version = 142
+    service['options'].teamBlock = async () => ({ version, block: `approved synthetic team ${version}` })
+    const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+    const report = (event = 'PostToolUse', source: string | null = null) => handlers().observeHookEvent({
+      sessionId: 's2', incarnationId: 'incarnation-2', agent: 'claude', event, source, toolName: null, effects: [],
+      turn: { conversation, turn: null, nested: false }, awayLock: true
+    }) as Promise<{ brief?: string; teamNotice?: string; teamRevision?: number; teamClaim?: string }>
+    const first = await report('SessionStart', 'startup')
+    expect(first.brief).toBe(AGENT_START_BRIEF)
+    expect(first.teamNotice).toBe('[Context from BMN, not a new task.]\napproved synthetic team 142')
+    const printed = (answer: typeof first) => handlers().awayPrinted({ sessionId: 's2', agent: 'claude', conversation,
+      revision: answer.teamRevision!, claimId: answer.teamClaim!, channel: 'team' })
+    await printed(first)
+    expect((await report()).teamNotice).toBeUndefined()
+    version = 144
+    const changed = await report()
+    expect(changed.teamRevision).toBe(144)
+    expect((await report()).teamRevision).toBe(144) // Unconfirmed print is retried.
+    const latest = await report()
+    await printed(changed) // A late old claim cannot confirm the latest one.
+    await printed(latest)
+    expect((await report()).teamNotice).toBeUndefined()
+    expect((await report('SessionStart', 'compact')).teamRevision).toBe(144)
+  })
+
+  it('starts team lookup while Away is still pending, preserving the shared message window (115.2)', async () => {
+    let release!: (value: null) => void
+    let entered!: () => void
+    const awayEntered = new Promise<void>(resolve => { entered = resolve })
+    vi.spyOn(service['awayNotices'], 'answer').mockImplementation(() => {
+      entered()
+      return new Promise(resolve => { release = resolve })
+    })
+    const lookup = vi.fn(async () => ({ version: 142, block: 'synthetic team' }))
+    service['options'].teamBlock = lookup
+    const answer = handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'claude',
+      event: 'PostToolUse', source: null, toolName: null, effects: [], awayLock: true,
+      turn: { conversation: '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e', turn: null, nested: false } })
+    await awayEntered
+    await new Promise(resolve => setImmediate(resolve))
+    try { expect(lookup).toHaveBeenCalledOnce() } finally { release(null); await answer }
+  })
+
+  it('keeps a waiting message and independent receipts through delayed claims and a hung team lookup (115.2 R2)', async () => {
+    await receiverAgent('claude')
+    await tell('synthetic waiting message')
+    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
+    const observe = () => handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'claude',
+      event: 'PostToolUse', source: null, toolName: 'Bash', effects: [], awayLock: true,
+      turn: { conversation, turn: null, nested: false } }) as Promise<{
+        awayNotice?: string; awayRevision: number; awayClaim: string; teamNotice?: string; teamRevision: number; teamClaim: string; messageWaiting?: boolean
+      }>
+    let stalled = false
+    let finishLookup!: () => void
+    let version = 142
+    const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+    service['options'].teamBlock = async () => {
+      if (stalled) return new Promise(resolve => { finishLookup = () => resolve(null) })
+      await delay(20)
+      return { version, block: `team ${version}` }
+    }
+    for (const [tracker, ms] of [[service['awayNotices'], 80], [service['teamNotices'], 60]] as const) {
+      const save = tracker['options'].save
+      vi.spyOn(tracker['options'], 'save').mockImplementation(async entries => { await delay(ms); await save(entries) })
+    }
+    vi.useFakeTimers()
+    try {
+      const started = Date.now()
+      const normal = observe()
+      await vi.advanceTimersByTimeAsync(80)
+      const first = await normal
+      expect(Date.now() - started).toBeLessThan(300)
+      expect(first).toMatchObject({ messageWaiting: true, teamRevision: 142 })
+      expect(first.awayNotice).toContain(AWAY_AGENT_TEXT)
+      expect(first.teamNotice).toBe('[Context from BMN, not a new task.]\nteam 142')
+      await handlers().awayPrinted({ sessionId: 's2', agent: 'claude', conversation, revision: first.awayRevision, claimId: first.awayClaim })
+      expect(service['awayNotices'].toldTo('s2', 'claude', conversation)?.status).toBe('printed')
+      expect(service['teamNotices'].toldTo('s2', 'claude', conversation)?.status).toBe('claimed')
+      await handlers().awayPrinted({ sessionId: 's2', agent: 'claude', conversation, revision: first.teamRevision, claimId: first.teamClaim, channel: 'team' })
+      await vi.advanceTimersByTimeAsync(80)
+      expect(service['teamNotices'].toldTo('s2', 'claude', conversation)?.status).toBe('printed')
+      await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
+      stalled = true
+      version = 143
+      const stalledAt = Date.now()
+      const slow = observe()
+      await vi.advanceTimersByTimeAsync(150)
+      const fallback = await slow
+      expect(Date.now() - stalledAt).toBe(150)
+      expect(fallback.messageWaiting).toBe(true)
+      expect(fallback.awayNotice).toContain(AWAY_BACK_AGENT_TEXT)
+      expect(fallback.teamNotice).toBeUndefined()
+      stalled = false
+      // The host's existing IPC bound releases the lookup; the expired claim saves nothing.
+      await vi.advanceTimersByTimeAsync(50)
+      finishLookup()
+      await vi.advanceTimersByTimeAsync(0)
+      await handlers().awayPrinted({ sessionId: 's2', agent: 'claude', conversation, revision: fallback.awayRevision, claimId: fallback.awayClaim })
+      const recovered = observe()
+      await vi.advanceTimersByTimeAsync(80)
+      expect(await recovered).toMatchObject({ messageWaiting: true, teamRevision: 143 })
+      expect(service['teamNotices'].toldTo('s2', 'claude', conversation)?.revision).toBe(143)
+    } finally { vi.useRealTimers() }
+  })
+
   it('answers a session\'s own report of a conversation\'s start with BMN\'s brief, once, and again after a compaction (Story 75.6)', async () => {
     const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
     const report = (source: string, event = 'SessionStart', incarnationId = 'incarnation-2', nested = false) => handlers().observeHookEvent({

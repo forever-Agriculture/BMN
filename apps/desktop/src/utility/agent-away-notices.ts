@@ -47,6 +47,7 @@ export interface AwayNoticeAnswer {
   revision: number
   claimId: string
 }
+type NoticeSnapshot = Pick<AwayRecord, 'state' | 'revision' | 'since' | 'endedAt'> & { context?: string }
 
 /**
  * Story 76.4 AC1–AC2: the current state for the agent typed into a session, in its main conversation, in the answer to the
@@ -71,6 +72,8 @@ export class AwayNotices {
     now(): Date
     /** Keeps what was handed: a claim is stored before it is answered; a printed report's failed save is tried again. */
     save(entries: Array<[string, AwayTold]>): Promise<void>
+    /** A versioned context channel has no away period to retain indefinitely. */
+    retainAway?: boolean
   }) {}
 
   /** What was kept, read back at start. */
@@ -82,7 +85,7 @@ export class AwayNotices {
    * The snapshot for this event's answer, or null; a returned one counts as handed. `locked` says the asking hook holds its
    * conversation's lock; `current` reads the record once this claim's turn comes.
    */
-  answer(p: AgentBriefEvent, current: () => Pick<AwayRecord, 'state' | 'revision' | 'since' | 'endedAt'>, locked: boolean): Promise<AwayNoticeAnswer | null> {
+  answer(p: AgentBriefEvent, current: () => NoticeSnapshot | Promise<NoticeSnapshot>, locked: boolean): Promise<AwayNoticeAnswer | null> {
     const start = AGENT_BRIEF_HANDOVER[p.agent]?.event === p.event && p.source !== null
     const tool = AWAY_NOTICE_HANDOVER[p.agent]?.event === p.event
     if ((!start && !tool) || !locked) return Promise.resolve(null)
@@ -96,7 +99,8 @@ export class AwayNotices {
       const done = (answer: AwayNoticeAnswer | null): void => { clearTimeout(late); resolve(answer) }
       void this.serial(async () => {
         if (expired || this.options.liveIncarnationId(p.sessionId) !== incarnationId) return done(null)
-        const record = current()
+        const record = await current()
+        if (expired || this.options.liveIncarnationId(p.sessionId) !== incarnationId) return done(null)
         const known = this.told.get(key)
         if (record.state === 'none' || (known !== undefined && known.revision > record.revision)) return done(null)
         const lost = start && LOST_SOURCES.includes(p.source ?? '')
@@ -108,7 +112,7 @@ export class AwayNotices {
           : known !== undefined && (known.state === 'away' || lost || uncertain) && (known.revision !== record.revision || lost || uncertain)
         if (!due) return done(null)
         const now = this.options.now()
-        const text = awayNotice(record, now)
+        const text = record.context ?? awayNotice(record, now)
         if (text === null) return done(null)
         const claim: AwayTold = { revision: record.revision, state: record.state, status: 'claimed', incarnationId, claimedAt: now.toISOString(), claimId: randomUUID() }
         const next = this.with(key, claim)
@@ -149,7 +153,7 @@ export class AwayNotices {
     const next = new Map(this.told)
     next.delete(key)
     next.set(key, told)
-    const settled = (entry: AwayTold): boolean => entry.state === 'back' && entry.status === 'printed'
+    const settled = (entry: AwayTold): boolean => (entry.state === 'back' || this.options.retainAway === false) && entry.status === 'printed'
     let over = [...next.values()].filter(settled).length - AWAY_NOTICES_REMEMBERED
     for (const [candidate, entry] of next) {
       if (over <= 0) break

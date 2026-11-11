@@ -9,6 +9,10 @@ import {
   pushPolicyStatus,
   sessionActivityState,
   agentStartBrief,
+  agentTeamNotice,
+  AGENT_BRIEF_HANDOVER,
+  AWAY_NOTICE_HANDOVER,
+  type AgentTeamBlock,
   type AwayNight,
   awayNightLines,
   type PushLevel,
@@ -252,6 +256,7 @@ interface CompanionServiceOptions {
    */
   messageSourceRoot?: (folder: string) => Promise<string> | string
   messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => Promise<{ allowed: boolean; reason: string }> | { allowed: boolean; reason: string }
+  teamBlock?: (agent: 'claude' | 'codex') => Promise<AgentTeamBlock | null>
   /** Story 83.3: whether the rules master carries the push policy's pointer, answered by the entry point; without it, null (not in force). */
   policyPointer?: () => Promise<boolean | null>
   qaLaunch?: (request: import('@bmn/protocol').QaLaunchRequest) => Promise<import('@bmn/protocol').MessageTeamAnswer>
@@ -546,6 +551,7 @@ export class CompanionService {
   private readonly messages: SessionMessages
   private readonly briefs: AgentBriefs
   private readonly awayNotices: AwayNotices
+  private readonly teamNotices: AwayNotices
   private lastMessageSweepAt = 0
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
@@ -744,6 +750,12 @@ export class CompanionService {
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
       now: () => this.now(),
       save: (entries) => options.database.companion('putAwayNotices', entries, this.iso())
+    })
+    this.teamNotices = new AwayNotices({
+      liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      now: () => this.now(),
+      retainAway: false,
+      save: (entries) => options.database.companion('putRawSetting', 'team-notices-v1', entries, this.iso())
     })
     this.grantNotices = new GrantDepartureNotices({
       now: () => this.now(),
@@ -949,7 +961,7 @@ export class CompanionService {
           ...pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
           granted: await this.grantedActions()
         }),
-        awayPrinted: async (p) => ({ recorded: await this.awayNotices.printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
+        awayPrinted: async (p) => ({ recorded: await (p.channel === 'team' ? this.teamNotices : this.awayNotices).printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
         // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
         recordDecision: (p) => this.controlCall(async () => {
           const producer = p.incarnationId === null ? null : this.producers.stamp(p.sessionId, p.incarnationId)
@@ -1072,7 +1084,21 @@ export class CompanionService {
           if (p.turn !== undefined) this.turns?.observe({ sessionId: p.sessionId, app: p.agent, event: p.event, source: p.source, ...p.turn })
           // Story 76.4: the away state rides beside the brief and a message, on its own rules; its claim is stored first, within
           // its own limit, so the brief below is counted as given only when the answer goes back at once (the final recheck).
-          const notice = await this.awayNotices.answer(p, () => this.awayRecord, p.awayLock === true)
+          // Epic 115: only the entry point reads the approved team. Each eligible hook asks for the latest value;
+          // the same lock, durable claim and printed receipt as Away coalesce changes and retry uncertain delivery.
+          const eligibleTeam = (p.agent === 'claude' || p.agent === 'codex') && p.turn !== undefined && !p.turn.nested && p.awayLock === true &&
+            (AGENT_BRIEF_HANDOVER[p.agent]?.event === p.event || AWAY_NOTICE_HANDOVER[p.agent]?.event === p.event)
+          // Both channels share the hook's 300ms message window. Bound lookup plus save inside the team's
+          // 150ms claim, in parallel with Away; read the approved version only once this claim reaches the queue.
+          const [notice, teamNotice] = await Promise.all([
+            this.awayNotices.answer(p, () => this.awayRecord, p.awayLock === true),
+            eligibleTeam ? this.teamNotices.answer(p, async () => {
+              const team = await this.options.teamBlock?.(p.agent as 'claude' | 'codex').catch(() => null)
+              return team == null ? { state: 'none', revision: 0, since: null, endedAt: null } : {
+                state: 'away', revision: team.version, since: null, endedAt: null, context: agentTeamNotice(team)
+              }
+            }, true) : null
+          ])
           // Epic 66.4: the hook asks for a message only when told one waits, so an ordinary tool call adds nothing.
           const waiting = await this.messages.waiting(p)
           // Story 75.6: BMN's start brief rides in this answer once per conversation and once after a compaction.
@@ -1084,6 +1110,7 @@ export class CompanionService {
           return {
             ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
+            ...(teamNotice === null ? {} : { teamNotice: teamNotice.text, teamRevision: teamNotice.revision, teamClaim: teamNotice.claimId }),
             ...(departure === null ? {} : { grantNotice: departure })
           }
         }),
@@ -1193,6 +1220,10 @@ export class CompanionService {
     await this.options.database.companion('recoverQaGrantUses', this.iso())
     await this.options.database.companion('recoverQaRuns')
     this.awayNotices.load(await this.options.database.companion('getAwayNotices'))
+    const teamTold = await this.options.database.companion('getRawSetting', 'team-notices-v1')
+    if (Array.isArray(teamTold)) this.teamNotices.load(teamTold.filter((entry): entry is [string, import('./agent-away-notices').AwayTold] =>
+      Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && entry[1]?.state === 'away' &&
+      Number.isSafeInteger(entry[1]?.revision) && ['claimed', 'printed'].includes(entry[1]?.status) && typeof entry[1]?.incarnationId === 'string'))
     // Epic 69: a turn stored as open has nobody left to end it.
     await this.turns?.start()
     await this.sessionsChanged()

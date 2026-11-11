@@ -41,7 +41,7 @@ OpenCode-only rule.
 PRIVATE-SENTINEL: a rule only a destination that may see private work receives.
 <!-- /bmn:apps -->
 `
-const TEAM = 'Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (roles, efforts and limits: `bmn team`)'
+const TEAM = 'Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (current team: `bmn roster`; Claude Code/Codex also get BMN’s team block)'
 
 let home: string
 let stubs: string
@@ -190,7 +190,7 @@ describe('the master (60.4 AC1)', () => {
     expect(render(readMaster(), 'claude', null)).toMatchObject({ kind: 'public', reason: 'nothing is approved yet', team_form: 'short phrase (nothing approved)' })
   })
 
-  it('names agents by app within 400 bytes, and points at `bmn team` beyond that or with nobody to name', () => {
+  it('names agents by app within 400 bytes, and points at `bmn roster` beyond that or with nobody to name', () => {
     const approved = generation()
     expect(teamPhrase(approved)).toEqual({ form: 'names by app', text: TEAM })
     expect(TEAM_LIMIT_BYTES).toBe(400)
@@ -201,13 +201,13 @@ describe('the master (60.4 AC1)', () => {
     const fits = teamPhrase(many(8, 30))
     expect(fits.form).toBe('names by app')
     expect(Buffer.byteLength(fits.text)).toBeLessThanOrEqual(TEAM_LIMIT_BYTES)
-    expect(fits.text.replace(/N+/g, '')).toBe('Claude Code (0, 3, 6), Codex (1, 4, 7), OpenCode (2, 5) (roles, efforts and limits: `bmn team`)')
+    expect(fits.text.replace(/N+(?=\d)/g, '')).toBe('Claude Code (0, 3, 6), Codex (1, 4, 7), OpenCode (2, 5) (current team: `bmn roster`; Claude Code/Codex also get BMN’s team block)')
     // An agent an old team file still has on Cursor is never named: the rules cannot reach it (Epic 71).
     const retired = { ...approved, data: { ...approved.data, agents: [...approved.data.agents, { ...approved.data.agents[0], id: 'composer', name: 'Composer', harness: 'cursor' }] } }
     expect(teamPhrase(retired)).toEqual({ form: 'names by app', text: TEAM })
-    expect(teamPhrase(many(12, 30))).toEqual({ form: 'short phrase (names too long)', text: 'the agents `bmn team` lists' })
-    expect(teamPhrase(many(0, 1))).toEqual({ form: 'short phrase (no active agent)', text: 'the agents `bmn team` lists' })
-    expect(teamPhrase(null)).toEqual({ form: 'short phrase (nothing approved)', text: 'the agents `bmn team` lists' })
+    expect(teamPhrase(many(12, 30))).toEqual({ form: 'short phrase (names too long)', text: 'the agents `bmn roster` lists (Claude Code/Codex also get BMN’s team block)' })
+    expect(teamPhrase(many(0, 1))).toEqual({ form: 'short phrase (no active agent)', text: 'the agents `bmn roster` lists (Claude Code/Codex also get BMN’s team block)' })
+    expect(teamPhrase(null)).toEqual({ form: 'short phrase (nothing approved)', text: 'the agents `bmn roster` lists (Claude Code/Codex also get BMN’s team block)' })
   })
 })
 

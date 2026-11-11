@@ -35,6 +35,47 @@ const tool = (over: Partial<AgentBriefEvent> = {}): AgentBriefEvent =>
 const revisionOf = (answer: AwayNoticeAnswer | null): number | null => answer?.revision ?? null
 
 describe('AwayNotices (Story 76.4 AC1-AC2)', () => {
+  it('reads asynchronous versioned context at its queue turn, and bounds lookup plus persistence together', async () => {
+    let version = 142
+    let release!: () => void
+    let saved = false
+    const tracker = new AwayNotices({ liveIncarnationId: () => 'i1', now: () => NOW, retainAway: false,
+      save: async () => { if (!saved) { saved = true; await new Promise<void>(resolve => { release = resolve }) } } })
+    const current = async () => ({ ...away(version), context: `team ${version}` })
+    const first = tracker.answer(tool(), current, true)
+    await vi.waitFor(() => expect(saved).toBe(true), { interval: 1 })
+    const second = tracker.answer(tool({ turn: { conversation: 'c2', nested: false } }), current, true)
+    version = 144
+    release()
+    expect((await first)?.text).toBe('team 142')
+    expect((await second)?.text).toBe('team 144')
+    let lookupDone!: (state: State) => void
+    const slow = tracker.answer(tool(), () => new Promise(resolve => { lookupDone = resolve }), true)
+    expect(await slow).toBeNull()
+    lookupDone(away(145))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(tracker.toldTo('s1', 'claude', 'c1')?.revision).toBe(142)
+  })
+  it('reuses the channel for latest approved team context, duplicate suppression, retry and lost context', async () => {
+    const { tracker, print, claims } = notices()
+    const team = (revision: number, event = tool()) => tracker.answer(event, () => ({ ...away(revision), since: null, context: `team ${revision}` }), true)
+    const first = await team(142, start('startup'))
+    expect(first?.text).toBe('team 142')
+    claims.set('c1', first!.claimId)
+    await print()
+    expect(await team(142)).toBeNull()
+    // Approvals 143 and 144 happened without a hook. Only the latest snapshot is handed over.
+    expect((await team(144))?.text).toBe('team 144')
+    const retry = await team(144)
+    expect(retry?.text).toBe('team 144')
+    claims.set('c1', retry!.claimId)
+    await print()
+    expect(await team(144)).toBeNull()
+    expect((await team(144, start('compact')))?.text).toBe('team 144')
+    const restarted = notices().tracker
+    restarted.load([['s1\u0000claude\u0000c1', tracker.toldTo('s1', 'claude', 'c1')!]])
+    expect((await restarted.answer(tool(), () => ({ ...away(145), context: 'team 145' }), true))?.text).toBe('team 145')
+  })
   it('tells a new conversation the state only while he is away, with its stamp and the whole text', async () => {
     const { ask } = notices()
     expect(await ask(start('startup'), back())).toBeNull()

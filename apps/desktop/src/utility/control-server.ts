@@ -280,7 +280,7 @@ export interface ControlHandlers {
   /** Story 83.3: the push policy's stored facts and standing, for `bmn policy`; read by any scope, written by none. */
   policyStatus(): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
-  awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number; claimId: string }): Promise<unknown>
+  awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number; claimId: string; channel?: 'team' }): Promise<unknown>
   /** Story 76.5: a decision the session's agent made while the owner is away; the host binds provenance and period. */
   recordDecision(p: { sessionId: string; incarnationId: string | null; key: string; revision: number; payload: DecisionPayload }): Promise<unknown>
   /** Story 76.5: what came of a recorded decision, under its own operation key. */
@@ -1675,7 +1675,7 @@ export class ControlServer {
         })
       }
       case 'away.printed': {
-        const params = closedParams(rawParams, ['agent', 'conversation', 'revision', 'claimId'])
+        const params = closedParams(rawParams, ['agent', 'conversation', 'revision', 'claimId', 'channel'])
         if (scope.kind !== 'session') throw unauthorized('Only a session\'s hook reports what it printed')
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const conversation = requireText(params, 'conversation', RULES.conversationReference)
@@ -1683,7 +1683,9 @@ export class ControlServer {
         const revision = params.revision
         if (!Number.isSafeInteger(revision) || (revision as number) < 0) throw invalidError('revision must be a whole number')
         const claimId = requireText(params, 'claimId', IDENTIFIER)
-        return handlers.awayPrinted({ sessionId: scope.sessionId, agent, conversation: conversation.toLowerCase(), revision: revision as number, claimId })
+        if (params.channel !== undefined && params.channel !== 'team') throw invalidError('channel must be team when supplied')
+        return handlers.awayPrinted({ sessionId: scope.sessionId, agent, conversation: conversation.toLowerCase(), revision: revision as number, claimId,
+          ...(params.channel === 'team' ? { channel: 'team' } : {}) })
       }
       case 'away.status': {
         closedParams(rawParams, [])

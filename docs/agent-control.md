@@ -3281,6 +3281,32 @@ Pushes and merges: read bmn policy --repo before each push, merge or PR write; p
 merge only at the level it prints; run git push and gh pr as commands of their own.
 ```
 
+### Current team context (Epic 115)
+
+Claude Code and Codex receive a separate team block after the unchanged start brief. It names
+the approved version, then this fixed route line:
+
+```text
+Work for a role goes through bmn team ask --role R (read-only), never your app's own sub-agent tool: that skips the roster.
+```
+
+Each role follows in configured order with its candidates, labelled “configured order”; this is
+configuration, not a choice for the current project. `bmn roster role R` gives the effective choice
+and efforts. The block stays within 900 characters, omits whole role lines once full, and says
+`more: bmn roster` before its final pointer. A public-only app receives only the version, route
+line and pointer. The entry point filters the approved generation before handing text to the host;
+no team file is read by the database or terminal host.
+
+At the next eligible hook after an approved change, open Claude Code and Codex conversations
+receive the latest block, marked “Context from BMN, not a new task.” This reuses the Away
+notice channel's conversation lock, durable claims, printed acknowledgements, retry of uncertain
+printing and resend after lost context. Two approvals between hooks coalesce to the latest;
+confirmed duplicate hooks print nothing. Printed never means read. Team receipts are stored
+separately from Away state and never change owner presence. The global rules' team phrase points
+to this block and `bmn roster` as the current source. The route line informs; it does not refuse
+native sub-agent calls. OpenCode receives no block or notice: its plugin does not deliver returned
+hook context, so that route remains out of scope.
+
 ## What the app enforces
 
 - Nothing on the socket can answer an agent's prompt, for any token: the owner token is a file every

@@ -100,6 +100,18 @@ afterEach(() => {
 })
 
 describe('whether the guard applies at all (60.8 AC2)', () => {
+  it('answers team context only from approved state, filtered by the app route (115.1)', () => {
+    expect(() => messageTeamAnswer({ kind: 'team-block', agent: 'claude' })).toThrow()
+    approve(team())
+    const full = messageTeamAnswer({ kind: 'team-block', agent: 'codex' }) as { team: { version: number; block: string } }
+    expect(full.team.version).toBe(1)
+    expect(full.team.block).toContain('configured order')
+    // The same public-only route used by global rule rendering must hide every roster field.
+    approve(team(text => edit(text, 'anthropic: {name: Anthropic, hosts: [api.anthropic.com], sites: [anthropic.com], private_work: allowed}', 'anthropic: {name: Anthropic, hosts: [api.anthropic.com], sites: [anthropic.com], private_work: public_only}')))
+    const publicTeam = messageTeamAnswer({ kind: 'team-block', agent: 'claude' }) as { team: { version: number; block: string } }
+    expect(publicTeam.team.block.split('\n')).toHaveLength(3)
+    expect(publicTeam.team.block).not.toContain('configured order')
+  })
   it('is inactive on an installation that never approved a team, whatever the session looks like', () => {
     expect(guardState()).toEqual({ state: 'inactive' })
     expect(prompt('claude', 0)).toMatchObject({ outcome: 'pass', cause: 'inactive' })

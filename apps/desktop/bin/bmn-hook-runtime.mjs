@@ -327,17 +327,19 @@ async function runHook(args) {
   const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
   const notice = awayLock && typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) &&
     typeof answer.awayClaim === 'string' ? answer.awayNotice : null
+  const team = awayLock && typeof answer?.teamNotice === 'string' && answer.teamNotice !== '' && Number.isSafeInteger(answer.teamRevision) &&
+    typeof answer.teamClaim === 'string' ? answer.teamNotice : null
   // Story 84.3: he is leaving or away, and a run may ask him on one card; once per conversation and departure.
   const departure = typeof answer?.grantNotice === 'string' && answer.grantNotice !== '' ? answer.grantNotice : null
   const said = { printed: false }
   await sayDestination(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, notice, departure], said)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, team, notice, departure], said)
       .catch(() => undefined)
   }
-  if (!said.printed && (brief !== null || notice !== null || departure !== null)) {
-    writeSync(1, contextAnswer(event, [brief, notice, departure]))
+  if (!said.printed && (brief !== null || team !== null || notice !== null || departure !== null)) {
+    writeSync(1, contextAnswer(event, [brief, team, notice, departure]))
     said.printed = true
   }
   if (notice !== null && said.printed) {
@@ -345,6 +347,10 @@ async function runHook(args) {
     // next hook to hold the lock is handed the current state again.
     await callEach(socketPath, token, [{ method: 'away.printed', params: { agent, conversation: awayFacts.conversation, revision: answer.awayRevision, claimId: answer.awayClaim } }], HOOK_TIMEOUT_MS)
       .catch(() => undefined)
+  }
+  if (team !== null && said.printed) {
+    await callEach(socketPath, token, [{ method: 'away.printed', params: { agent, conversation: awayFacts.conversation,
+      revision: answer.teamRevision, claimId: answer.teamClaim, channel: 'team' } }], HOOK_TIMEOUT_MS).catch(() => undefined)
   }
   const opened = permissionRef === null ? undefined : requests.findIndex((request) => request.params?.prompt?.requestRef === permissionRef)
   if (!said.printed && opened !== undefined && opened >= 0 && outcomes[opened]?.result !== undefined) {

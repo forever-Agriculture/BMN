@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
   ERROR_CODES,
+  agentTeamBlock,
   RETIRED_APP_LINE,
   ROSTER_APP_NAMES,
   isRetiredApp,
@@ -72,7 +73,7 @@ import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnly
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import {
-  applyTeamUpdate, installedPolicyPointer, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, saveRules, type RulesHarness, type SavePlan, type SaveResult
+  applyTeamUpdate, installedPolicyPointer, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, routeFor, saveRules, type RulesHarness, type SavePlan, type SaveResult
 } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely, writeAtomically } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
@@ -933,6 +934,10 @@ async function rulesOutcome(context: RulesIpcContext, result: CliResult, success
  * team can be read, which the caller answers as a failure and the host treats as a refusal.
  */
 export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAnswer {
+  if (question.kind === 'team-block') {
+    const generation = readApproved()
+    return { team: agentTeamBlock(generation.number, generation.data.roles, routeFor(question.agent, generation).kind === 'full') }
+  }
   if (question.kind === 'qa-launch') return { failed: true } // The entry point owns session creation.
   if (question.kind === 'source-root') return { root: workspaceRoot(question.folder) }
   if (question.kind === 'policy-pointer') {

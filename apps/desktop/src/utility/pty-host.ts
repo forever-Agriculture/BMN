@@ -408,6 +408,10 @@ async function start(): Promise<void> {
       if (!('allowed' in answer)) throw new Error('The app did not answer for the approved team')
       return answer
     },
+    teamBlock: async (agent) => {
+      const answer = await askTeam({ kind: 'team-block', agent })
+      return 'team' in answer ? answer.team : null
+    },
     qaLaunch: request => askTeam({ kind: 'qa-launch', request }),
     emit: (message) => parentPort.postMessage(message)
   })

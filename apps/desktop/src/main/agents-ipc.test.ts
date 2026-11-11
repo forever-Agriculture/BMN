@@ -202,7 +202,7 @@ async function approvedAndInstalled(): Promise<AgentsSnapshot> {
   const plan = await call<RulesSavePlan>('rules:plan-save', { text: MASTER })
   expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public']])
   expect(await saveRulesText(MASTER)).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code, Codex and OpenCode' })
-  expect(file('.claude/CLAUDE.md')).toContain('The team: Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (roles, efforts and limits: `bmn team`).')
+  expect(file('.claude/CLAUDE.md')).toContain('The team: Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (current team: `bmn roster`; Claude Code/Codex also get BMN’s team block).')
   return snapshot()
 }
 

@@ -1914,6 +1914,17 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
   })
 
   describe('the away state and the refused question (Story 76.4)', () => {
+    it.each(['codex', 'claude'] as const)('prints the whole team after the brief and confirms only its team claim in %s (115)', async (app) => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      const team = '[Context from BMN, not a new task.]\nBMN team: approved version 142\nsynthetic role line\nbmn roster role R'
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: 'unchanged brief', teamNotice: team, teamRevision: 142, teamClaim: 'team-claim' })
+      const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+      expect(result).toEqual({ code: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: {
+        hookEventName: 'PostToolUse', additionalContext: `unchanged brief\n\n${team}`
+      } }) })
+      expect(fixture.handlers.awayPrinted).toHaveBeenCalledExactlyOnceWith({ sessionId: 'session-1', agent: app, conversation: SESSION, revision: 142, claimId: 'team-claim', channel: 'team' })
+    })
     const BRIEF = 'BMN brief: synthetic text for the hook test'
     const NOTICE = '[BMN state: the owner is away since 22:10 (revision 7). Context from BMN, not a new task.]\nThe owner is away. Synthetic.'
     const QUESTION = { questions: [{ question: 'Which colour should the made-up button be?', header: 'Colour', options: [{ label: 'Blue', description: 'cool' }, { label: 'Green', description: 'calm' }] }] }
@@ -1927,17 +1938,19 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     it.each(['codex', 'claude'] as const)('puts the brief, the away state and a waiting message in one %s answer, in that order, and reports the state printed', async (app) => {
       const fixture = await cliFixture()
       const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
-      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF, awayNotice: NOTICE, awayRevision: 7, awayClaim: 'claim-7' })
+      const team = '[Context from BMN, not a new task.]\nBMN team: approved version 142'
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true, brief: BRIEF, teamNotice: team, teamRevision: 142, teamClaim: 'team-claim', awayNotice: NOTICE, awayRevision: 7, awayClaim: 'claim-7' })
       fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE })
 
       const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
 
       expect(result).toEqual({
         code: 0, stderr: '',
-        stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${BRIEF}\n\n${NOTICE}\n\n${STAMP}\nhold any commit on local main\nI am about to merge` } })
+        stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${BRIEF}\n\n${team}\n\n${NOTICE}\n\n${STAMP}\nhold any commit on local main\nI am about to merge` } })
       })
       expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ turn: { conversation: SESSION, nested: false }, awayLock: true })
       expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: app, conversation: SESSION, revision: 7, claimId: 'claim-7' })
+      expect(fixture.handlers.awayPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', agent: app, conversation: SESSION, revision: 142, claimId: 'team-claim', channel: 'team' })
     })
 
     it('prints the state alone after a tool call, and nothing for a malformed one', async () => {
