@@ -101,8 +101,8 @@ it('records an operation name only for a passed reviewed read, through every aud
 })
 it('the host always registers the Piche contract and adds a loopback twin only in a test host', () => {
   const shipped = shippedQaAccounts('/synthetic/cli/bmn.mjs', () => {})
-  expect(shipped.reviewed).toEqual([{ id: 'piche-test-read@1', origins: { ...PICHE_TEST_ORIGINS } }])
-  expect(shipped.contract(api)).toMatchObject({ id: 'piche-test-read@1' }); expect(shipped.contract('https://epic5.piche.it')).toBeNull()
+  expect(shipped.reviewed).toEqual([{ id: 'piche-test-read@2', origins: { ...PICHE_TEST_ORIGINS } }])
+  expect(shipped.contract(api)).toMatchObject({ id: 'piche-test-read@2' }); expect(shipped.contract('https://epic5.piche.it')).toBeNull()
   const twin = { page: 'http://127.0.0.1:5101', api: 'http://127.0.0.1:5102', signIn: 'http://127.0.0.1:5103' }
   const env = { BMN_TEST_QA_PICHE_ORIGINS: Object.values(twin).join(',') }
   expect(testQaPicheOrigins(['--bmn-test-host'], env)).toEqual(twin)

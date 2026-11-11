@@ -21,7 +21,7 @@ const BOM = String.fromCharCode(0xfeff)
 describe('reviewed reads (101.2 AC1)', () => {
   it.each([
     ['AutomationsList', 'automations'], ['AutomationRun', 'automationRun'], ['AutomationRunLogs', 'automationRunLogs'], ['AutomationSteps', 'automationSteps'],
-    ['AutomationWebhookAddresses', 'automationWorkspace'], ['UserInfo', 'userInfo'], ['MyFeatureFlags', 'myFeatureFlags']
+    ['AutomationsPilot', 'automationPilotStatus'], ['UserInfo', 'userInfo'], ['MyFeatureFlags', 'myFeatureFlags']
   ])('%s passes as a read with its type, name and document hash only', (name, root) => {
     const query = `query ${name}($tenantId: String!) { ${root}(tenantId: $tenantId) { id __typename } }`
     const result = graphql(json({ query, variables: { tenantId: 'piche', search: CANARY } }))
@@ -65,6 +65,25 @@ describe('reviewed reads (101.2 AC1)', () => {
     expect(classifyQaRequest(contract, 'POST', api + '/graphql', bound, payload).classification).toBe('read')
     expect(payload).toHaveBeenCalledOnce()
   })
+})
+
+describe('workspace reads held after backend qualification (114.3 D3)', () => {
+  it('uses the revised contract and refuses the retired contract identity', () => {
+    expect(contract.id).toBe('piche-test-read@2')
+    expect(classifyQaRequest({ ...contract, id: 'piche-test-read@1' }, 'POST', api + '/graphql', bound, json({ query: RUN })).classification).toBe('unknown')
+  })
+  for (const name of ['AutomationWorkspace', 'AutomationWebhookAddresses']) {
+    const query = `query ${name} { automationWorkspace { id } }`
+    it(`holds ${name} without retaining its name`, () => {
+      const result = graphql(json({ query }))
+      expect(result).toMatchObject({ classification: 'unknown', reviewed: false,
+        request: { body: { operation: 'query', name: null, sha256: sha(query) } } })
+    })
+    it(`refuses a forged ${name} read at the host metadata boundary`, () => {
+      expect(classifyQaMeta(contract, { method: 'POST', origin: api, path: '/graphql', queryKeys: [],
+        body: { kind: 'graphql', operation: 'query', name, sha256: sha(query) } }, bound).classification).toBe('unknown')
+    })
+  }
 })
 
 describe('everything else on the API is held before send, without a name (101.2 AC2)', () => {
@@ -286,6 +305,14 @@ describe('the gate sends only what it classified (101.2 AC1, AC2, AC4)', () => {
     const f = fixture(api + '/graphql', 'POST', json({ query: 'mutation DeleteAutomation($id: String!) { deleteAutomation(automationId: $id) { id } }', variables: { id: CANARY } }))
     await gateQaRequest(f.route, f.broker, f.close)
     expect(f.events).toEqual(['hold', 'abort']); expect(f.route.fetch).not.toHaveBeenCalled(); secretFree(f.broker.hold.mock.calls)
+  })
+  it.each(['AutomationWorkspace', 'AutomationWebhookAddresses'])('%s is held with zero network sends', async name => {
+    const query = `query ${name} { automationWorkspace { id } }`
+    const f = fixture(api + '/graphql', 'POST', json({ query }))
+    await gateQaRequest(f.route, f.broker, f.close)
+    expect(f.events).toEqual(['hold', 'abort'])
+    expect(f.route.fetch).not.toHaveBeenCalled()
+    expect(f.broker.hold.mock.calls[0][0].body).toEqual({ kind: 'graphql', operation: 'query', name: null, sha256: sha(query) })
   })
   it('the renewal is audited before the send and its status after', async () => {
     const f = fixture(signIn + '/realms/piche/protocol/openid-connect/token', 'POST', form(goodRenewal))

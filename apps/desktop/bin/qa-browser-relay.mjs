@@ -111,7 +111,7 @@ export async function runQaBrowser(folder) {
   // Only the contracts the host registered apply; a site's hostname never implies one (Opus F2).
   const contracts = Array.isArray(policy.contracts) ? policy.contracts : []
   // Epic 101: reviewed contracts arrive by id with their origins; only the Piche read contract exists, and its rules are this code's.
-  const reviewed = (Array.isArray(policy.reviewed) ? policy.reviewed : []).flatMap(item => { try { return item?.id === 'piche-test-read@1' ? [picheReadContract(item.origins)] : [] } catch { return [] } })
+  const reviewed = (Array.isArray(policy.reviewed) ? policy.reviewed : []).flatMap(item => { try { return item?.id === 'piche-test-read@2' ? [picheReadContract(item.origins)] : [] } catch { return [] } })
   const contractFor = origin => {
     try { if (contracts.includes(origin)) return syntheticPaidContract(origin) } catch { return null }
     return reviewed.find(contract => Object.values(contract.origins).includes(origin)) ?? null

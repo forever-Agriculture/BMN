@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MODULE: qa-fragments-live.mjs - live browser/loopback proof of the reviewed GraphQL fragment request boundary
+// MODULE: qa-fragments-live.mjs - live browser/loopback proof of reviewed reads, fragments and the held workspace boundary
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -36,8 +36,21 @@ const cases = [
   ['extra-root', 'query AutomationSession { automationSession { id } ...Extra } fragment Extra on Query { automations { id } }', false],
   ['repeated-root', 'query AutomationSession { ...Root ...Root } fragment Root on Query { automationSession { id } }', false],
   ['introspection', 'query AutomationSession { automationSession { ...Session } } fragment Session on AutomationSession { __schema { types { name } } }', false],
-  ['directive', 'query AutomationSession { automationSession { ...Session @defer } } fragment Session on AutomationSession { id }', false]
+  ['directive', 'query AutomationSession { automationSession { ...Session @defer } } fragment Session on AutomationSession { id }', false],
+  ['workspace', 'query AutomationWorkspace { automationWorkspace { id } }', false],
+  ['webhook-addresses', 'query AutomationWebhookAddresses { automationWorkspace { id } }', false],
+  ['workspace-root-fragment', 'query AutomationWorkspace { ...Root } fragment Root on Query { selected: automationWorkspace { id } }', false],
+  ['forged-name', 'query AutomationsList { automationWorkspace { id } }', false],
+  ['wrong-origin', 'query AutomationsList { automations { id } }', false, null, 'page']
 ]
+for (const [name, root] of [
+  ['AutomationOperation', 'automationOperationStatus'], ['AutomationsPilot', 'automationPilotStatus'], ['AutomationsList', 'automations'],
+  ['AutomationSession', 'automationSession'], ['AutomationSetup', 'automationSetup'], ['AutomationSuggestedConnections', 'automationSetup'],
+  ['AutomationRun', 'automationRun'], ['AutomationRunAttempts', 'automationRunAttempts'], ['AutomationRunEffects', 'automationRunEffects'],
+  ['AutomationRunLogs', 'automationRunLogs'], ['AutomationRuns', 'automationRuns'], ['AutomationWebhookCalls', 'automationWebhookCalls'],
+  ['AutomationPersonalConnections', 'automationPersonalConnections'], ['AutomationSteps', 'automationSteps'],
+  ['AutomationVersionSource', 'automationVersionSource'], ['AutomationExamples', 'automationExamples'], ['UserInfo', 'userInfo'], ['MyFeatureFlags', 'myFeatureFlags']
+]) cases.push([`reviewed-${name}`, `query ${name} { ${root} { id } }`, true, name])
 try {
   const api = await start((request, response) => {
     let body = ''
@@ -71,7 +84,7 @@ try {
   await context.route('**/*', route => gateQaRequest(route, broker, () => context.close()))
   const tab = await context.newPage()
   await tab.goto(page)
-  for (const [name, query, allowed] of cases) {
+  for (const [name, query, allowed, template = 'AutomationSession', destination = 'api'] of cases) {
     const before = calls.length, eventOffset = events.length
     const observed = await tab.evaluate(async ({ api, query }) => {
       try {
@@ -79,13 +92,15 @@ try {
         await response.text()
         return response.status
       } catch { return 'held' }
-    }, { api, query })
+    }, { api: origins[destination], query })
     assert.equal(observed, allowed ? 200 : 'held', name)
     assert.equal(calls.length - before, allowed ? 1 : 0, `${name}: actual API sends`)
     assert.deepEqual(events.slice(eventOffset).map(event => event.kind), allowed ? ['observe', 'network'] : ['hold'], `${name}: audit before send`)
     const detail = events[eventOffset].meta.body
-    assert.deepEqual(Object.keys(detail).sort(), ['kind', 'name', 'operation', 'sha256'])
-    assert.equal(detail.name, allowed ? 'AutomationSession' : null)
+    if (destination === 'api') {
+      assert.deepEqual(Object.keys(detail).sort(), ['kind', 'name', 'operation', 'sha256'])
+      assert.equal(detail.name, allowed ? template : null)
+    } else assert.equal(detail, undefined)
     results.push({ name, allowed, observed, actualApiSends: calls.length - before, pass: true })
     console.log(`PASS ${name}: ${allowed ? 'audited then sent' : 'held before send'}`)
   }

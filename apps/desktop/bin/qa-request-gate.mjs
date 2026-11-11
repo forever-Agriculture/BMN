@@ -26,13 +26,13 @@ export function qaContractActivities(contract) {
 /*
  * Epic 101: Piche TEST read contract. Its rules (reviewed query templates, the sign-in renewal, the body limit) are fixed
  * here and hashed; only its three origins vary, and only to a loopback twin a test-mode host registers (D2).
- * Templates: plan/references/101/reads-2026-10-31.md (each one query operation with one root field, traced to a read).
+ * Templates: plan/references/101/reads-2026-10-31.md; Epic 114 holds both workspace templates after backend qualification.
  */
-const PICHE_ID = 'piche-test-read@1'
+const PICHE_ID = 'piche-test-read@2'
 export const PICHE_TEST_ORIGINS = Object.freeze({ page: 'https://epic5web.gpark.lv', api: 'https://epic5.gpark.lv', signIn: 'https://identity-epic5.gpark.lv' })
 const PICHE_READS = Object.freeze(Object.fromEntries([
   ['AutomationOperation', 'automationOperationStatus'], ['AutomationsPilot', 'automationPilotStatus'], ['AutomationsList', 'automations'],
-  ['AutomationWorkspace', 'automationWorkspace'], ['AutomationWebhookAddresses', 'automationWorkspace'], ['AutomationSession', 'automationSession'],
+  ['AutomationSession', 'automationSession'],
   ['AutomationSetup', 'automationSetup'], ['AutomationSuggestedConnections', 'automationSetup'], ['AutomationRun', 'automationRun'],
   ['AutomationRunAttempts', 'automationRunAttempts'], ['AutomationRunEffects', 'automationRunEffects'], ['AutomationRunLogs', 'automationRunLogs'],
   ['AutomationRuns', 'automationRuns'], ['AutomationWebhookCalls', 'automationWebhookCalls'], ['AutomationPersonalConnections', 'automationPersonalConnections'],

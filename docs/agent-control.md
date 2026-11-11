@@ -2442,7 +2442,7 @@ as a page that navigates again, so every hop crosses the same route and audit wi
 kept; an activity's redirect stays uncertain and other redirects are blocked. The pane shows the
 agent's words and each browser action, not raw events.
 
-**The Piche TEST read contract (Epic 101).** The host always registers `piche-test-read@1` for
+**The Piche TEST read contract (Epics 101, 114).** The host always registers `piche-test-read@2` for
 three `https` origins: the page `https://epic5web.gpark.lv`, the API `https://epic5.gpark.lv` and
 sign-in `https://identity-epic5.gpark.lv`. Its rules are fixed in BMN's code
 (`apps/desktop/bin/qa-request-gate.mjs`) and hashed into the contract's SHA-256; a brief can
@@ -2459,7 +2459,7 @@ On a bound contract's origins the contract alone decides, ahead of the unreviewe
   only `query`, `variables` (an object) and `operationName`, and no repeated keys, so no
   `extensions` and no batches. A byte-order mark is held, never stripped. graphql-js parses the query (at most 4000 tokens). It must be
   exactly one `query` operation named after a reviewed template, plus optional named fragment
-  definitions: the 18 Q Automations reads,
+  definitions: the 16 Q Automations reads,
   `UserInfo` and `MyFeatureFlags` (whose resolver also records flag exposure, counted as a read
   by the owner on 31 October 2026). It may have only that template's one root field (an alias is
   allowed), including through named or inline fragments. Fragment names must be unique, all
@@ -2476,6 +2476,13 @@ On a bound contract's origins the contract alone decides, ahead of the unreviewe
   pair, a percent escape or a plus is held, so a server cannot decode the form differently from
   BMN. Another realm, client or grant, an extra or repeated field, the logout path and every other
   sign-in path are held.
+
+Version 2 holds `AutomationWorkspace` and `AutomationWebhookAddresses`, including their
+`automationWorkspace` root under aliases or fragments. Backend qualification found that the
+workspace read can update access-check state. The owner's Epic 114 D3 decision keeps both held:
+the Automations landing-list reads remain available, while workspace QA is unavailable until a
+non-writing backend call is qualified. The envelope, root and fragment rules are unchanged;
+version 1 is no longer registered. A held request still records no operation name.
 
 Everything else on those origins is refused before it is sent. Modes:
 
