@@ -357,7 +357,7 @@ export async function withGoCopy(plan, options, operation) {
     let result
     try { result = await operation() }
     catch (error) {
-      if (['WITHDRAWN', 'FINISHED', 'CONFLICT', 'CHANGED_TERMS', 'NO_OWNER_GO', 'NO_APPROVED_TEXT', 'NEEDS_NORMALIZE', 'COMMIT_FAILED', 'NO_EPIC', 'NO_HISTORY', 'NO_DEFAULT_CHECKOUT'].includes(error.code)) rmSync(journalPath(loc, key), { force: true })
+      if (['WITHDRAWN', 'FINISHED', 'CONFLICT', 'CHANGED_TERMS', 'NO_OWNER_GO', 'NO_APPROVED_TEXT', 'NOTE_WITHOUT_GO', 'NEEDS_NORMALIZE', 'COMMIT_FAILED', 'NO_EPIC', 'NO_HISTORY', 'NO_DEFAULT_CHECKOUT'].includes(error.code)) rmSync(journalPath(loc, key), { force: true })
       throw error
     }
     if (result.pending || !result.row || result.row.status !== 'ready') return { ...result, copy: { outcome: 'COPY_GO_PENDING' } }

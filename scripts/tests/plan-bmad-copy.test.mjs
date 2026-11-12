@@ -34,6 +34,24 @@ async function fixture() {
 }
 
 describe('D10 BMAD copy', () => {
+  it.each(['no go date here', 'go 2026-11-03 · wrong date'])('clears rejected Go note "%s" before a corrected CLI retry', async note => {
+    const f = await fixture(), bmn = new URL('../../apps/desktop/bin/bmn', import.meta.url).pathname
+    const args = ['plan', 'go', '7', '--source', '"Go" 2026-11-04T20:00', '--approved', `sha256:${approvalText(f.epic)}`, '--expect', rowToken('epic-7', 'backlog', ''), '--project', f.root, '--json']
+    const cli = note => {
+      const result = spawnSync(process.execPath, [bmn, ...args, '--note', note], { encoding: 'utf8', env: { ...process.env, ...f.environment } })
+      return { exit: result.status, value: JSON.parse(result.stdout) }
+    }
+    const head = git(f.root, 'rev-parse', 'HEAD'), board = readFileSync(f.board, 'utf8')
+    expect(cli(note)).toMatchObject({ exit: 1, value: { ok: false, error: { code: 'NOTE_WITHOUT_GO' } } })
+    expect(git(f.root, 'rev-parse', 'HEAD')).toBe(head)
+    expect(readFileSync(f.board, 'utf8')).toBe(board)
+    expect(readFileSync(f.target, 'utf8')).toBe(f.before)
+    expect(cli('go 2026-11-04 · accepted corrected note')).toMatchObject({ exit: 0, value: { ok: true, outcome: 'recorded', board_pending: false, row: { status: 'ready' } } })
+    expect(git(f.root, 'rev-list', '--count', `${head}..HEAD`)).toBe('1')
+    expect(readFileSync(f.board, 'utf8')).toContain('epic-7: ready # go 2026-11-04')
+    expect(readFileSync(f.target, 'utf8')).toContain('epic-7: ready-for-dev # go 2026-11-04')
+    expect(await copyFindings(f.plan, { recover: true })).toEqual([])
+  })
   it('refuses publication before checkpointing an ambiguous copy journal', async () => {
     const f = await fixture(), before = git(f.root, 'rev-parse', 'HEAD')
     await expect(setWithCopy(f.plan, { key: '7-1-one', status: 'paused', expect: rowToken('7-1-one', 'backlog', 'old note'), environment: f.environment, seam: phase => { if (phase === 'plan-writing') throw new Error('interrupted') } })).rejects.toThrow('interrupted')
