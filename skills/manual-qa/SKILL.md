@@ -48,6 +48,12 @@ criterion. Out-of-scope observations belong in debrief notes, never findings.
   and counts. `ordinary-granted` in a V2 brief describes testing intent; it grants nothing.
   Arbitrary evaluation, unsafe callbacks and network-body tools stay unavailable on ordinary accounts.
 
+BMN's desktop `quick-bench` route is lead-run only. Its terminals can run commands; the five
+UI actions do not establish a no-command boundary. Epic 116 used its approved fallback after
+qualification remained unproved, so `bmn team ask --role qa --bench` remains refused. Use the
+existing lead-run receipt and dev-auto's `qa_gate.py --lead-bench`; do not substitute a teammate
+ask or claim that a passing receipt proves isolation.
+
 Record each used alias, its permission (V1) or intent (V2) and observed tool restrictions. Also
 record the overall account/tool context. An alias, a brief
 or an instruction does not prove permission. Never use `browser_run_code_unsafe`; use

@@ -2386,6 +2386,19 @@ QA gets the browser's look and interaction tools, excluding unsafe server callba
 The effective Codex MCP command, arguments, working directory and environment are checked before launch.
 `--bench` currently returns `QA_BENCH_UNAVAILABLE`: a compliant bench boundary has not been established.
 
+Epic 116 applied its preapproved fallback on 12 November 2026. The no-command bench prototype
+did not complete qualification: its first method exhausted its harness repair, and the senior
+consultant's second method also exhausted its one harness repair during the normal-mode DevTools
+control. This is an unproved boundary, not an observed shell escape. The prototype was withdrawn;
+no teammate desktop route ships. An offline strict-tool-list experiment passed, but that alone
+does not qualify a desktop route. Opus-2's proposed desktop route is deferred; Terra retains web QA.
+
+Desktop QA therefore stays lead-run: start `node scripts/qa/bench.mjs` with a declared QA brief
+and synthetic seed, exercise the window, stop the bench and finalize its receipt. dev-auto checks
+that receipt with `qa_gate.py --lead-bench`, including the loaded candidate, retained capture and
+identity-bound cleanup. The bench's terminals run real shells. Its five actions are useful UI
+controls, and do not make it a no-command environment or qualify it for a teammate.
+
 The saved ask contains `qa/brief.json`, `qa/report.json` when JSON was returned, `qa/result.json`,
 `browser.json`, and native browser screenshots. `bmn team asks show ID` reports the verdict only for
 a valid report bound to retained browser evidence; otherwise it says `report invalid`.

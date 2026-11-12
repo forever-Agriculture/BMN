@@ -118,6 +118,13 @@ sending, proven on real Piche TEST with his saved accounts (Epic 101); an accoun
 account uses its origins fully. The sealed host receipt records what was asked. It does not prove a
 native app's tool confinement, which stays unverified.
 
+**Desktop QA bench.** `scripts/qa/bench.mjs` provides a disposable, synthetic BMN instance for
+lead-run UI checks. Its terminals can execute commands; the five UI actions do not remove that
+reach. Epic 116's proposed teammate mode did not complete its forced-path qualification and was
+withdrawn under its approved fallback. No inert-session mode or teammate desktop relay ships.
+The existing lead-run receipt retains candidate, generation, capture-completeness and
+identity-bound cleanup checks; it checks evidence consistency, not isolation from its writer.
+
 The QA permission ledger stores immutable grants, first-writer card links, non-refundable activity
 reservations and ordered redacted audit metadata in SQLite. Owner answers close the actual unchanged
 card and update its grant in one transaction, through window IPC or the verified Telegram handler.
