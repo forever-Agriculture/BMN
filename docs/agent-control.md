@@ -2336,17 +2336,21 @@ the new spelling (`--project` names the folder, `--file` gives files). Foregroun
 standard output and progress to standard error. Closing the waiting command, tool call or window
 only detaches it: the run's supervisor owns the run (below).
 
-### A reviewer is given the project's vision
+### Small work uses one reviewer configuration
 
 Epic reviewer may store `small_work: {role: small-epic-reviewer}`. This is a reference, not a
 second candidate: its complete order, effort choices and fallback live on Small epic reviewer.
 The Team editor stages this link explicitly and shows its difference before approval. Scalar
-`agent@effort` values stay readable, and other roles’ Small work values are unchanged. Both
+`agent@effort` values stay readable, and other roles’ Small work values are unchanged. When both
+legacy settings exist, either initial Small work command refuses until the link is approved,
+even if their current candidates match; ordinary Epic review and old recheck identity stay intact. Both
 `--role small-epic-reviewer` and `--role epic-reviewer --small-work` then use the referenced
 configuration; an Epic reviewer project choice cannot be bypassed through the other spelling.
 The dedicated role must also retain Epic reviewer membership, and read-only restrictions from
 either role remain binding. Rechecks keep their original role, project and earlier reviewer;
 ordinary Epic reviewer receipts are not treated as Small work by a later configuration change.
+
+### A reviewer is given the project's vision
 
 An ask in `focused-reviewer`, `epic-reviewer`, `small-epic-reviewer` or `final-reviewer` (Epic 112) carries the project's
 `plan/VISION.md` when its project has a BMN-format plan with one, found the way `bmn plan` finds the plan,

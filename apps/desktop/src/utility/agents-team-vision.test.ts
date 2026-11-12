@@ -77,6 +77,7 @@ describe('a reviewer is given the vision (112.1 AC1)', () => {
   it('each reviewer role from a worktree without plan/ carries the vision whole, its hash and the one instruction, in prompt, manifest and receipt', async () => {
     approve(home, EXAMPLE
       .replace('roles: [focused-reviewer, epic-reviewer,', 'roles: [focused-reviewer, epic-reviewer, small-epic-reviewer,')
+      .replace('small_work: astra@low', 'small_work: {role: small-epic-reviewer}')
       .replace('epic-reviewer: {candidates:', 'small-epic-reviewer: {candidates: [astra@medium], then: blocked, read_only: true}\nepic-reviewer: {candidates:'))
     const { worktree, visionPath } = planned()
     expect(existsSync(join(worktree, 'plan'))).toBe(false)

@@ -1,5 +1,5 @@
 // MODULE: agents-team-resolve.mjs - Epic 72: the one resolver that picks who answers an ask and at which effort: a recheck's teammate, else the project's approved choice, else a named agent, else the small-work candidate, else the role's chain
-import { sharedSmallWork } from './agents-small-work.mjs'
+import { sharedSmallWork, unlinkedSmallWork } from './agents-small-work.mjs'
 import { agentState, classRefusal, initialEfforts, isCalled, parseCandidate, roleEfforts } from './agents-roster.mjs'
 
 /**
@@ -90,6 +90,9 @@ function alternatives(data, role, context) {
  * `{ agent, effort, rule, phase }`, and `choice` (its id) when a project choice chose.
  */
 export function resolveTeammate(data, request, context) {
+  if (!request.recheck && unlinkedSmallWork(data) && (request.role === 'small-epic-reviewer' || request.role === 'epic-reviewer' && request.smallWork)) {
+    refuse('SMALL_WORK_CONFLICT', 'Small work and Small epic reviewer have separate legacy settings. Link them in Preferences > Agents > Roles and approve before starting Small work.')
+  }
   const shared = sharedSmallWork(data)
   if (!shared && request.role === 'epic-reviewer' && request.recheck?.run?.configuration_role === 'small-epic-reviewer') {
     refuse('RECHECK_INVALID', 'the approved team no longer links this earlier shared Small work configuration')

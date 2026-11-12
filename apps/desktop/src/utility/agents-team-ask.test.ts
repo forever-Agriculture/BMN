@@ -616,3 +616,51 @@ it.each(['small-work', 'initial', undefined])('reads old receipt phase %s before
   expect(again.choice).toMatchObject({agent:'astra',effort:phase==='small-work'?'high':'low'})
   expect(again.verdict.verdict, JSON.stringify(again.verdict)).toBe('PASS')
 })
+
+it.each(['epic-reviewer', 'small-epic-reviewer'])('validates target-only shared recheck effort through %s and its chained receipt (R120-01)', role => {
+  const next=structuredClone(data())
+  next.roles.find(entry=>entry.id==='epic-reviewer')!.small_work={role:'small-epic-reviewer'}
+  next.roles.push({id:'small-epic-reviewer',candidates:['fable@high'],then:'blocked',read_only:true,recheck:{same_reviewer:true,fable:'low'}})
+  next.agents.find(agent=>agent.id==='fable')!.roles.push('small-epic-reviewer')
+  saveAndApprove({generation:readApproved().number,fileHash:readValidRoster().hash},next,{checkInspectedRoutes:()=>{}})
+  const runs=teamRunsDirectory(),id='20261015T010000-0a0b0c0d'
+  mkdirSync(join(runs,id),{recursive:true})
+  writeFileSync(join(runs,id,'request.json'),JSON.stringify({role,agent:'fable',project:null,phase:role==='epic-reviewer'?'small-work':'initial'}))
+  const prepared=ask({role,recheckOf:id})
+  expect(prepared.choice).toMatchObject({agent:'fable',effort:'low'})
+  expect(prepared.verdict,JSON.stringify(prepared.verdict)).toMatchObject({verdict:'PASS',receipt:{role}})
+  const again=ask({role,recheckOf:prepared.id})
+  expect(again.choice).toMatchObject({agent:'fable',effort:'low'})
+  expect(again.verdict).toMatchObject({verdict:'PASS',receipt:{role}})
+  expect(refusal(()=>ask({role:'epic-reviewer',agent:'fable',effort:'low'})).code).toBe('EFFORT_NOT_ALLOWED')
+  const manifestPath=join(prepared.folder,ASK_RUN_FILES.manifest)
+  const manifest=JSON.parse(readFileSync(manifestPath,'utf8'))
+  expect(manifest.shared_review).toEqual({role,configuration_role:'small-epic-reviewer',phase:'recheck'})
+  manifest.shared_review.role='final-reviewer'
+  writeFileSync(manifestPath,JSON.stringify(manifest))
+  expect(evaluateAsk({agent:'fable',role,effort:'low',data:'private',run:prepared.folder,argv:prepared.argv,cwd:prepared.cwd},{environment:env,now:NOW})).toMatchObject({verdict:'REFUSED',code:'WORKSPACE_MISMATCH'})
+})
+
+it.each([
+  {label:'equal',legacy:'astra@low',target:['astra@low']},
+  {label:'different',legacy:'astra@low',target:['fable@high']},
+  {label:'fallback',legacy:'astra@low',target:['astra@low','fable@high']}
+])('requires explicit legacy linking before either initial command: $label (R120-02)', fixture => {
+  const next=structuredClone(data())
+  next.roles.find(entry=>entry.id==='epic-reviewer')!.small_work=fixture.legacy
+  next.roles.find(entry=>entry.id==='helper')!.small_work='luna@max'
+  next.roles.push({id:'small-epic-reviewer',candidates:fixture.target,then:'blocked',read_only:true})
+  for(const agent of next.agents)if(['astra','fable'].includes(agent.id))agent.roles.push('small-epic-reviewer')
+  saveAndApprove({generation:readApproved().number,fileHash:readValidRoster().hash},next,{checkInspectedRoutes:()=>{}})
+  for(const request of [{role:'small-epic-reviewer'},{role:'epic-reviewer',smallWork:true}])expect(refusal(()=>ask(request)).code).toBe('SMALL_WORK_CONFLICT')
+  expect(ask({role:'epic-reviewer'}).choice).toMatchObject({agent:'astra',effort:'medium'})
+  expect(resolveTeammate(data(),{role:'helper',smallWork:true},context())).toMatchObject({agent:{id:'luna'},effort:'max'})
+  const legacyAgent=fixture.target[0]!.split('@')[0]!
+  expect(resolveTeammate(data(),{role:'small-epic-reviewer',recheck:{id:'20261015T010000-0a0b0c0d',run:{role:'small-epic-reviewer',agent:legacyAgent,project:'/synthetic/project',phase:'initial'}}},context())).toMatchObject({agent:{id:legacyAgent}})
+  const linked=structuredClone(data());linked.roles.find(entry=>entry.id==='epic-reviewer')!.small_work={role:'small-epic-reviewer'}
+  saveAndApprove({generation:readApproved().number,fileHash:readValidRoster().hash},linked,{checkInspectedRoutes:()=>{}})
+  const [agent,effort]=fixture.target[0]!.split('@')
+  for(const request of [{role:'small-epic-reviewer'},{role:'epic-reviewer',smallWork:true}]){
+    const prepared=ask(request);expect(prepared.choice).toMatchObject({agent,effort});expect(prepared.verdict).toMatchObject({verdict:'PASS',receipt:{role:request.role}})
+  }
+})

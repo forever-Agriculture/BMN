@@ -18,3 +18,10 @@ export function smallWorkCandidates(data, role) {
   const target = linkedSmallWork(data, role)
   return target ? target.candidates : typeof role.small_work === 'string' ? [role.small_work] : []
 }
+
+/** Separate legacy records require explicit linking before an initial Small work ask. */
+export function unlinkedSmallWork(data) {
+  const outer = data.roles.find(entry => entry.id === EPIC_REVIEW)
+  const target = data.roles.find(entry => entry.id === SMALL_EPIC_REVIEW)
+  return outer && target && typeof outer.small_work === 'string' ? { outer, target } : null
+}

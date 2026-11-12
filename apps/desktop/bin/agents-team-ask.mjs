@@ -276,6 +276,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   if (browser !== null) mkdirSync(join(folder, ASK_RUN_FILES.browser), { mode: 0o700 })
   const manifest = {
     version: 2, id, data: label, form, reads: { scope: reads.scope, words: reads.words, folder: workIn },
+    ...(choice.configuration_role === undefined ? {} : { shared_review: { role: request.role, configuration_role: choice.configuration_role, phase: choice.phase } }),
     ...(harness === 'codex' ? { codex_mcp_servers: inherited } : {}),
     project: project === null ? null : { root: project },
     question: { bytes: question.bytes, sha256: question.sha256 },

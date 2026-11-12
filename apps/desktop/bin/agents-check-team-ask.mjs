@@ -140,6 +140,25 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     if (!isObject(manifest) || manifest.version !== 2 || typeof manifest.form !== 'string' || !Object.hasOwn(ASK_READS, manifest.form) || !Array.isArray(manifest.inputs) || !Array.isArray(manifest.pictures)) {
       refuse('WORKSPACE_MISMATCH', `${folder} holds no intact ask manifest`)
     }
+    let effortRole = role
+    if (Object.hasOwn(manifest, 'shared_review')) {
+      const identity = manifest.shared_review
+      let recorded
+      try { recorded = JSON.parse(readText(`${folder}/${ASK_RUN_FILES.request}`)) } catch { recorded = null }
+      const phases = shared && role.id === shared.outer.id ? ['small-work', 'recheck'] : shared && role.id === shared.target.id ? ['initial', 'recheck'] : []
+      if (!shared || !isObject(identity) || identity.role !== role.id || identity.configuration_role !== shared.target.id || !phases.includes(identity.phase)
+        || !isObject(recorded) || recorded.role !== role.id || recorded.agent !== agent.id || recorded.effort !== inputs.effort
+        || recorded.configuration_role !== identity.configuration_role || recorded.phase !== identity.phase) {
+        refuse('WORKSPACE_MISMATCH', 'the ask does not hold its original shared Small work configuration identity')
+      }
+      for (const policy of [shared.outer, shared.target]) {
+        if (!agent.roles.includes(policy.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${policy.id}`)
+        const rule = classRefusal(agent.class, policy.id)
+        if (rule !== null) refuse(rule.code, `${agent.id} is a ${agent.class}; ${rule.rule}`)
+      }
+      effortRole = shared.target
+      note(`shared configuration ${effortRole.id}; requested role ${role.id}`)
+    }
     const project = typeof manifest.project?.root === 'string' ? manifest.project.root : null
     const label = inputs.data === 'public' ? 'public' : 'private'
     if (manifest.data !== label) refuse('WORKSPACE_MISMATCH', `the ask's manifest is for a ${manifest.data} ask, not a ${label} one`)
@@ -271,7 +290,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     // OpenCode names a model with its provider (`-m opencode-go/gpt-6-luna`), as research's check reads it.
     const { model, effort } = checkModelAndEffort(agent.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
-    checkRoleEffort(role, agent, effort, note, data)
+    checkRoleEffort(effortRole, agent, effort, note, data)
     const context = checkContext(agent, resolution.context, proven, agent.context_limit === undefined ? [] : provenPrecedence(agent.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
     note(context.note)
