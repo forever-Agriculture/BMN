@@ -1,6 +1,6 @@
 // MODULE: foreground-process.test.ts - the foreground process's identity and folder against made-up /proc rows
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { foregroundProcessFolder, foregroundProcessIdentity } from './foreground-process'
+import { agentArguments, foregroundAgentArguments, foregroundProcessFolder, foregroundProcessIdentity } from './foreground-process'
 
 const fs = vi.hoisted(() => ({ readFileSync: vi.fn(), readlinkSync: vi.fn(), statSync: vi.fn() }))
 vi.mock('node:fs', () => fs)
@@ -65,5 +65,25 @@ describe.skipIf(process.platform !== 'linux')('host foreground process identity'
       return { dev: 1n, ino: 2n }
     })
     expect(foregroundProcessIdentity(100)).toBeNull()
+  })
+})
+
+describe('the arguments of an agent typed into a shell (Epic 125.5)', () => {
+  it('reads what follows the agent\'s own name, as its first or second word', () => {
+    expect(agentArguments(['claude', '--model', 'haiku'], 'claude')).toEqual(['--model', 'haiku'])
+    expect(agentArguments(['node', '/opt/lib/codex.js', '--no-alt-screen'], 'codex')).toEqual(['--no-alt-screen'])
+    expect(agentArguments(['/usr/bin/codex'], 'codex')).toEqual([])
+  })
+
+  it('answers nothing for another program, or an agent named only among the arguments', () => {
+    expect(agentArguments(['vim', 'notes'], 'claude')).toBeNull()
+    expect(agentArguments(['node', 'tool.js', 'claude'], 'claude')).toBeNull()
+  })
+
+  it.skipIf(process.platform !== 'linux')('answers nothing once the process is another one', () => {
+    const fields = Array<string>(20).fill('0'); fields[0] = 'S'; fields[2] = '200'; fields[4] = '34817'; fields[5] = '200'; fields[19] = '20'
+    fs.readFileSync.mockReset().mockImplementation(path => path === '/proc/200/cmdline' ? 'claude\0--model\0haiku\0' : `200 (claude) ${fields.join(' ')}`)
+    expect(foregroundAgentArguments('34817:200:20:1:2', 'claude')).toEqual(['--model', 'haiku'])
+    expect(foregroundAgentArguments('34817:200:21:1:2', 'claude')).toBeNull()
   })
 })

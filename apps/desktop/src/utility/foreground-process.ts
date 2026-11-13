@@ -37,6 +37,29 @@ export function foregroundProcessIdentity(ptyPid: number): string | null {
 }
 
 /**
+ * The arguments of an agent typed into a shell, as Linux reports them for the process an identity names: what follows
+ * the agent's own name (`claude ...`, or `node .../codex.js ...`). Null when that process is gone, is another one by
+ * now, or is not that agent.
+ */
+export function foregroundAgentArguments(identity: string, agent: string): string[] | null {
+  const [, pidText, start] = identity.split(':')
+  const pid = Number(pidText)
+  if (process.platform !== 'linux' || !Number.isSafeInteger(pid) || pid <= 0 || !start) return null
+  try {
+    const words = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')
+    if (words.at(-1) === '') words.pop()
+    if (processStat(pid)?.start !== start) return null
+    return agentArguments(words, agent)
+  } catch { return null }
+}
+
+/** The arguments after the agent's own name, which is the first or second word of its command line. */
+export function agentArguments(words: readonly string[], agent: string): string[] | null {
+  const at = words.slice(0, 2).findIndex(word => (word.split('/').pop() ?? '').replace(/\.js$/u, '') === agent)
+  return at < 0 ? null : words.slice(at + 1)
+}
+
+/**
  * The folder Linux reports for the process an identity names; null when that process is gone or is
  * another one by now. The link is read first and the process checked after, so a reused process id
  * cannot lend its folder.

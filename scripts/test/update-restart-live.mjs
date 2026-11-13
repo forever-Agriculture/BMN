@@ -36,6 +36,8 @@ const freePort = async () => {
   const server = createServer(); await new Promise(done => server.listen(0, '127.0.0.1', done))
   const { port } = server.address(); await new Promise(done => server.close(done)); return port
 }
+// Another BMN's command folder on the caller's PATH (a lead working inside BMN) would make the two Codex wrappers start each other forever.
+process.env.PATH = (process.env.PATH ?? '').split(':').filter(entry => entry && !entry.includes('/resources/bin')).join(':')
 const f = createUpdateRestartFixture({ base: join(process.env.HOME, 'restart-live'), runtimeBase: process.env.XDG_RUNTIME_DIR })
 const stateHome = join(f.roots.state, 'bmn')
 Object.assign(f.env, { BMN_TEST_HOST_WRITES: join(f.out, 'host-writes.jsonl'), BMN_TEST_RESTART_IO_RECORD: join(stateHome, 'restart-pty-io.jsonl') })
@@ -61,9 +63,25 @@ const type = async (id, text) => {
   await page.locator(`[data-session-id="${id}"] .terminal-surface`).first().click({ timeout: 8000 })
   await page.keyboard.type(text, { delay: 20 }); await pause(1000); await page.keyboard.press('Enter')
 }
+/** A shell command, typed and read back before Enter: under a file trace a key is sometimes dropped. */
+const typeCommand = async (id, text) => {
+  const typed = new RegExp(text.split(' ').map(word => word.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('\\s+'), 'u')
+  await select(id)
+  await page.locator(`[data-session-id="${id}"] .terminal-surface`).first().click({ timeout: 8000 })
+  for (let attempt = 1; ; attempt++) {
+    await page.keyboard.type(text, { delay: 40 }); await pause(1000)
+    const lines = await screen(id)
+    if (typed.test(lines.join('')) || typed.test(lines.join(' '))) break
+    if (attempt === 3) throw new Error('UNVERIFIED: the launch command did not reach the shell as typed')
+    await page.keyboard.press('Control+U'); await pause(500)
+  }
+  await page.keyboard.press('Enter')
+}
 /** The app's composer, seen twice two seconds apart with the same screen; a dialog is never answered here. */
 const composer = (app, id, folder, timeout) => until(async () => {
-  const first = await screen(id), state = classifyScreen(app, first, folder)
+  // The typed launch command stays on the screen and holds the word "permission": only what the app drew after it is read.
+  const first = await screen(id), from = first.findLastIndex(line => line.includes(LAUNCH[app].slice(-12)))
+  const state = classifyScreen(app, first.slice(from + 1), folder)
   if (state.state === 'dialog' || state.state === 'trust' || state.state === 'trust-negative') throw new Error(`UNVERIFIED: ${app} shows a dialog at start (${state.detail}); the folder must already be trusted`)
   if (state.state !== 'composer') return false
   await pause(2000)
@@ -83,7 +101,7 @@ try {
   }
   await page.reload(); await page.waitForSelector('.session-row', { timeout: 30_000 })
   for (const kind of ['codex', 'claude']) {
-    await type(sessions[kind], LAUNCH[kind]); await composer(kind, sessions[kind], folders[kind], 120_000); mark(`${kind} at its composer`)
+    await typeCommand(sessions[kind], LAUNCH[kind]); await composer(kind, sessions[kind], folders[kind], 120_000); mark(`${kind} at its composer`)
   }
   for (const kind of ['codex', 'claude']) { await type(sessions[kind], PROMPT); mark(`${kind} prompted`) }
   writeFileSync(join(f.stateDir, 'latest.json'), JSON.stringify({ phase: 'waiting-for-exit', commit: BUILD, updatedAt: new Date().toISOString() }))
@@ -152,7 +170,8 @@ try {
     codexAtClose: closed.codex.atClose, codexNotice: closed.codex.notice,
     bothResumed: member.claude.resume === 'resumed' && member.codex.resume === 'resumed',
     claudeTold: member.claude.tell === 'told',
-    claudeLineOnceInItsOwnRecord: count(text.claude, closed.claude.atClose === 'ready' ? UPDATE_RESTART_CONTINUE : UPDATE_RESTART_CHECK),
+    // The app keeps a prompt in several kinds of entry (the turn itself, its last-prompt note, its request copy): a turn is its `user` entry.
+    claudeLineOnceInItsOwnRecord: text.claude.split('\n').filter(line => line.includes(closed.claude.atClose === 'ready' ? UPDATE_RESTART_CONTINUE : UPDATE_RESTART_CHECK) && JSON.parse(line).type === 'user').length,
     codexNotTold: member.codex.tell === 'not-told',
     codexLinesFromBmnInItsOwnRecord: count(text.codex, 'BMN update restart:'),
     hostWritesAfterReopen: { claude: hostWrites.filter(w => w.sessionId === sessions.claude).length, codex: hostWrites.filter(w => w.sessionId === sessions.codex).length },

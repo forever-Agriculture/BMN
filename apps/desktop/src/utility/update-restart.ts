@@ -7,7 +7,7 @@ import { UPDATE_RESTART_SHUTDOWN_MS, UPDATE_RESTART_LIMIT_MS, UPDATE_RESTART_TEL
 import { restartClock } from './update-restart-deadline'
 import { typeIfIdle, type WakeAttention, type WakeObservation, type WakeProof } from './away-wake'
 
-export type RestartTarget = Pick<UpdateRestartMember, 'sessionId' | 'incarnationId' | 'name' | 'workspace' | 'agent' | 'conversation' | 'atPress'>
+export type RestartTarget = Pick<UpdateRestartMember, 'sessionId' | 'incarnationId' | 'name' | 'workspace' | 'agent' | 'conversation' | 'atPress' | 'typed'>
 interface Hook { sessionId: string; incarnationId: string | null; agent: string; event: string; source: string | null; turn?: { conversation: string; nested: boolean } | undefined }
 interface Options {
   path: string
@@ -426,6 +426,9 @@ export class UpdateRestart {
           quietMs: resumed ? 2000 : 0, quietWords: resumed ? 'its resumed run just started' : 'turn just ended',
           finished: { at: seen.observedAt, unknown: 'turn end unknown' },
           ...(resumed ? { antecedent: resumedStart } : {}),
+          // As for the Away wake: only the app's own question or permission holds the line back. A notice left open by the
+          // run that was closed (a finished turn, a repeated call) is not something the resumed run waits on.
+          holds: row => (row.kind === 'question' || row.kind === 'permission') && row.openedBy !== 'cli',
           stillAllowed: allowed,
           claim: async () => { m.tell = 'claimed'; this.save(); return null },
           // A write that was attempted is never tried again, whatever it came to.
@@ -462,6 +465,7 @@ function isRestartRecord(raw: unknown): raw is UpdateRestartRecord {
     typeof r.startedAt === 'string' && (r.mainLifetime === undefined || typeof r.mainLifetime === 'string') && (r.error === undefined || typeof r.error === 'string') && Number.isFinite(r.closesAt) && (r.dismissed === undefined || typeof r.dismissed === 'boolean') && ['admitting', 'waiting', 'closing', 'cancelling', 'cancelled', 'resuming', 'complete'].includes(r.phase) &&
     Array.isArray(r.members) && r.members.length <= 2000 && new Set(r.members.map(m => m.sessionId)).size === r.members.length && r.members.every(m =>
       typeof m.sessionId === 'string' && typeof m.incarnationId === 'string' && typeof m.name === 'string' && typeof m.workspace === 'string' && typeof m.agent === 'string' &&
+      (m.typed === undefined || (typeof m.typed === 'object' && m.typed !== null && typeof m.typed.cwd === 'string' && Array.isArray(m.typed.argv) && m.typed.argv.every(a => typeof a === 'string'))) &&
       (m.conversation === null || typeof m.conversation === 'string') && ['ended', 'working', 'unknown'].includes(m.atPress) && typeof m.ready === 'boolean' &&
       // The one rule the record itself keeps (D4): a session is ready only if its turn had ended at the press or its notice was printed.
       (!m.ready || m.atPress === 'ended' || m.notice === 'printed') &&

@@ -551,13 +551,22 @@ BMN closes when every row is `Ready`, at the clock time in the dialog's head (fi
 the press, eight seconds of that kept for the final capture and shutdown), or on **Restart now**.
 Each row's state at close is written once to the record: `ready` or `not-ready`.
 
-**What BMN types.** After reopening, only confirmed stopped members whose conversation binding is
-unchanged are resumed, one at a time. Then:
+**An agent typed into a shell.** BMN keeps a conversation binding only for a session whose own
+program is the agent. For a shell session with Claude Code or Codex typed into it, the restart
+records at the press what that agent's own start reported (its conversation) and what Linux reports
+for its process (its folder and its arguments). After reopening, the session is started as its own
+shell running the agent's resume command in that folder, with the arguments the app's resume
+accepts, and stays a shell when the agent leaves: `bash -ic '<agent> <resume arguments>; exec bash
+-i'`. Nothing is typed to do this. Variables exported by hand in the old shell are not carried. A
+shell with no agent in it is not resumed.
+
+**What BMN types.** After reopening, only confirmed stopped members whose conversation is unchanged
+are resumed, one at a time. Then:
 
 - A Claude Code session that was working at the press gets one fixed line, once, and only under
   the [Away wake-up](#the-away-wake-up)'s idle proof with a resumed start as its antecedent: its
   own `SessionStart` with source `resume` in the resumed run, the agent in front of its terminal,
-  an empty prompt, two quiet seconds and no request since. The line says to continue for a session
+  an empty prompt, two quiet seconds and no open question or permission of the app's own. The line says to continue for a session
   that was `ready` at close, and to check its work first for one that was not. The claim is
   consumed before the write and an uncertain write is never repeated. If the proof does not hold
   within a minute nothing is typed and the row reads `Resumed · not told, type continue`.

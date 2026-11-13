@@ -33,6 +33,11 @@ export interface UpdateRestartMember {
   agent: string
   conversation: string | null
   /**
+   * An agent the owner typed into a shell session: its folder and its arguments as Linux reported them at the press.
+   * BMN keeps no binding for such a session, so it is resumed as its shell running the agent's own resume command.
+   */
+  typed?: { cwd: string; argv: string[] }
+  /**
    * What BMN's own record said at the press (D4): the session's turn had ended, it was working, or BMN did not know.
    * Not knowing is never shown as ready.
    */

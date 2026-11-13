@@ -351,6 +351,8 @@ describe('after reopening: Claude Code is told once, under the idle proof (125.5
     await f.coordinator.tell()
     expect(f.write).not.toHaveBeenCalled()
     expect(updateRestartWords(f.member(), 'after')).toBe('Resumed · waiting to tell')
+    // A notice the closed run left open (seen live: a repeated-call notice) is nothing the resumed run waits on.
+    f.setOpen([{ sessionId: 's', requestKey: 'watch:repeat', kind: 'notice', state: 'open', openedAt: '2026-11-13T12:00:00.000Z' }])
     f.observe('SessionStart', 'new', 'resume')
     await f.coordinator.tell()
     expect(f.write).not.toHaveBeenCalled() // two quiet seconds first
@@ -374,7 +376,7 @@ describe('after reopening: Claude Code is told once, under the idle proof (125.5
   it.each([
     ['a draft in its prompt', (f: ReturnType<typeof setup>) => f.setLines(['──────────────', '❯ a draft', '──────────────'])],
     ['a dialog on its screen', (f: ReturnType<typeof setup>) => f.setLines(['Do you trust the files in this folder?', '❯ 1. Yes, proceed', '  2. No, exit'])],
-    ['a request of it open', (f: ReturnType<typeof setup>) => f.setOpen([{ sessionId: 's', requestKey: 'claude:permission', kind: 'approval', state: 'open', openedAt: '2026-11-13T12:00:00.000Z' }])],
+    ['a request of it open', (f: ReturnType<typeof setup>) => f.setOpen([{ sessionId: 's', requestKey: 'claude:permission', kind: 'permission', state: 'open', openedAt: '2026-11-13T12:00:00.000Z' }])],
     ['another event after its start', (f: ReturnType<typeof setup>) => f.observe('UserPromptSubmit', 'new')],
     ['a changed conversation', (f: ReturnType<typeof setup>) => f.setConversation('another')]
   ] as const)('types nothing when the proof fails (%s), and says the session was not told once its time is over', async (_name, spoil) => {

@@ -6321,6 +6321,63 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
   })
 })
 
+describe('an agent typed into a shell is resumed in that shell (Epic 125.5)', () => {
+  const reference = '01a0b657-21a8-7f00-addd-b73646828f5b'
+  async function shellSession(executableName: string) {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-typed-agent-'))
+    createdRoots.add(cwd)
+    const bin = join(cwd, 'bin'); await mkdir(bin)
+    for (const path of [join(bin, 'codex'), join(cwd, executableName)]) { await writeFile(path, '#!/bin/sh\n'); await chmod(path, 0o700) }
+    const database = new BetterSqlite3(':memory:')
+    initializeDatabase(database, '2026-11-13T09:00:00.000Z')
+    const spawns: Array<{ executable: string; argv: readonly string[]; cwd: string | undefined }> = []
+    const exists = vi.fn(async () => true)
+    const manager = new SessionManager({
+      store: sqliteSessionStore(database),
+      spawnPty: (command, argv, spawnOptions) => { spawns.push({ executable: command, argv: [...argv], cwd: spawnOptions.cwd }); return new SignalExitFakePty() },
+      processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+      conversationReferenceExists: exists,
+      sessionPath: () => bin,
+      sendTerminalMessage: () => undefined
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Typed', cwd, executable: join(cwd, executableName), argv: [], cols: 80, rows: 24 })
+    await manager.stop(created, 'explicit')
+    return { database, manager, created, cwd, spawns, exists }
+  }
+
+  it('starts the session\'s own shell with the agent\'s resume command in the agent\'s folder, and types nothing', async () => {
+    const { database, manager, created, cwd, spawns } = await shellSession('bash')
+    try {
+      const folder = join(cwd, "it's here"); await mkdir(folder)
+      const resumed = await manager.resumeTypedAgent({ sessionId: created.sessionId, cols: 80, rows: 24, agentCli: 'codex', conversationReference: reference, cwd: folder, argv: ['--model', "o'k"] })
+      expect(resumed.launch).toEqual({ cwd: folder, executable: join(cwd, 'bash') })
+      const launch = spawns.at(-1)!
+      expect(launch.executable).toBe(join(cwd, 'bash'))
+      expect(launch.cwd).toBe(folder)
+      expect(launch.argv[0]).toBe('-ic')
+      // The agent by its own name, as he typed it, each word quoted; the shell stays when the agent leaves.
+      expect(launch.argv[1]).toBe(`'codex' '--no-daemon' 'resume' '${reference}' '--model' 'o'\\''k'; exec '${join(cwd, 'bash')}' -i`)
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+    } finally { database.close() }
+  })
+
+  it('starts nothing for a session that is not a shell, or a conversation that is gone', async () => {
+    const other = await shellSession('my-program')
+    try {
+      await expect(other.manager.resumeTypedAgent({ sessionId: other.created.sessionId, cols: 80, rows: 24, agentCli: 'codex', conversationReference: reference, cwd: other.cwd, argv: [] }))
+        .rejects.toThrow('the session is not a shell an agent was typed into')
+      expect(other.spawns).toHaveLength(1)
+    } finally { other.database.close() }
+    const gone = await shellSession('bash')
+    try {
+      gone.exists.mockResolvedValue(false)
+      await expect(gone.manager.resumeTypedAgent({ sessionId: gone.created.sessionId, cols: 80, rows: 24, agentCli: 'codex', conversationReference: reference, cwd: gone.cwd, argv: [] }))
+        .rejects.toThrow('the codex conversation is missing')
+      expect(gone.spawns).toHaveLength(1)
+    } finally { gone.database.close() }
+  })
+})
+
 describe('workspace admission and archive ordering (47.1)', () => {
   function deferred() {
     let resolve!: () => void

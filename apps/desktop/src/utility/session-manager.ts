@@ -82,6 +82,7 @@ import { findProgramOnPath, missingProgramReason } from './reported-resume'
 import { OutputTail, ScreenMirror } from './screen-mirror'
 import {
   agentCli,
+  captureRelevantLaunchEnvironment,
   applyCapturedLaunchEnvironment,
   bindingFromObservation,
   buildNativeResumeLaunch,
@@ -1049,6 +1050,61 @@ export class SessionManager {
    * token, no shell), in the session's working folder. The name is resolved on the session's PATH again now, and the
    * command the owner confirmed must be the one that runs.
    */
+  /**
+   * Epic 125 (125.5): resumes an agent the owner had typed into a shell session. BMN keeps no binding for such a
+   * session, so the restart hands over what it recorded at the press: the agent, its conversation, its folder and its
+   * arguments. The session starts as its own shell running the agent's resume command and stays a shell after the
+   * agent leaves, the way the launcher's agent cards start one. Nothing is typed.
+   */
+  async resumeTypedAgent(p: {
+    sessionId: string; cols: number; rows: number
+    agentCli: 'claude' | 'codex'; conversationReference: string; cwd: string; argv: readonly string[]
+  }): Promise<SessionResumeResult> {
+    const stored = await findStoredSession(this.store, p.sessionId)
+    if (!stored) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+    if (stored.archivedAt !== null) throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
+    const shell = stored.executable.split('/').pop() ?? ''
+    if (!['bash', 'zsh', 'sh', 'dash'].includes(shell)) throw new HostControlError(ERROR_CODES.invalidArgument, 'the session is not a shell an agent was typed into')
+    const program = findProgramOnPath(p.agentCli, this.sessionPath())
+    if (program === null) throw new HostControlError(ERROR_CODES.notFound, missingProgramReason(p.agentCli))
+    // The app's profile folder as this session's processes get it: where its conversations are kept.
+    const profile = captureRelevantLaunchEnvironment(this.environment)
+    const context = (argv: readonly string[]): BoundConversationBinding => ({
+      sessionId: p.sessionId, agentCli: p.agentCli, status: 'bound', conversationReference: p.conversationReference,
+      captureRoute: 'hook-session-start', detail: 'typed into a shell', capturedAt: new Date().toISOString(),
+      launchContext: { cwd: p.cwd, executable: program, argv: [...argv], environment: profile }
+    })
+    if (!await this.referenceExists(context([]))) {
+      throw new HostControlError(ERROR_CODES.notFound, `the ${p.agentCli} conversation is missing`)
+    }
+    // Arguments the app's own resume refuses are dropped by the same rules a captured launch follows; a command line
+    // those rules cannot read is resumed without its arguments rather than not at all.
+    const { launch } = await this.prepareResumeLaunch(context(p.argv)).catch(() => this.prepareResumeLaunch(context([])))
+    const quote = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
+    const releaseLaunch = this.claimSessionLaunch(p.sessionId)
+    try {
+      const launchParams: PtyLaunchParams = {
+        cwd: launch.cwd,
+        executable: stored.executable,
+        argv: ['-ic', `${[p.agentCli, ...launch.argv].map(quote).join(' ')}; exec ${quote(stored.executable)} -i`],
+        cols: p.cols,
+        rows: p.rows,
+        terminalGraphics: stored.terminalGraphics
+      }
+      await validateLaunch(launchParams)
+      const live = await this.startIncarnation(p.sessionId, launchParams, this.environment, new Date().toISOString(), stored,
+        (record) => this.store.createResuming({ ...record, keepReportedResume: true }))
+      try {
+        return { ...this.attach(live), launch: { cwd: launch.cwd, executable: stored.executable } }
+      } catch (error) {
+        await this.teardownSession(live)
+        throw error
+      }
+    } finally {
+      releaseLaunch()
+    }
+  }
+
   private async resumeReported(
     params: ConfirmedStartParams,
     stored: SessionRecord,

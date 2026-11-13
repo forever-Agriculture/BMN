@@ -164,7 +164,7 @@ import { UpdateRestart, restartStateAtPress } from './update-restart'
 import type { SessionResumeResult } from '@bmn/protocol'
 import { GrantDepartureNotices } from './agent-grant-notices'
 import { QaSessions, shippedQaAccounts } from './qa-sessions'
-import { foregroundProcessFolder } from './foreground-process'
+import { foregroundAgentArguments, foregroundProcessFolder } from './foreground-process'
 import type { TurnChangesPort, TurnStoreKeeper } from './turn-changes-engine'
 import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
@@ -488,6 +488,8 @@ export class CompanionService {
    */
   /** Story 110.9, D14: the agent conversations each session's hooks reported while BMN ran, newest last, at most 8. */
   private readonly seenConversations = new Map<string, string[]>()
+  /** Epic 125.5: per session, the agent whose start its hooks last reported for the live process (an agent typed into a shell has no binding). */
+  private readonly typedAgents = new Map<string, { incarnationId: string; agent: 'claude' | 'codex'; conversation: string; foreground: string }>()
   private readonly hookObservations = new Map<string, {
     sessionId: string
     incarnationId: string
@@ -567,15 +569,20 @@ export class CompanionService {
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
+    // An agent typed into a shell has no binding of BMN's; its conversation is the one its own hooks reported for the live process.
+    const typedConversation = (sessionId: string): string | null => {
+      const typed = this.typedAgents.get(sessionId)
+      return typed && typed.incarnationId === options.manager.liveIncarnationId(sessionId) ? typed.conversation : null
+    }
     const restartBinding = async (sessionId: string): Promise<string | null> => {
       const b = await options.manager.conversationBinding(sessionId)
-      return b.status === 'bound' ? b.conversationReference : null
+      return b.status === 'bound' ? b.conversationReference : typedConversation(sessionId)
     }
     this.updateRestart = new UpdateRestart({
       mainLifetime: process.env.BMN_MAIN_LIFETIME,
       path: join(options.roots.data, 'update-restart.json'), now: () => this.now(),
       freeze: () => options.manager.freezeStartsForUpdate(), thaw: () => options.manager.thawStartsAfterUpdate(),
-      binding: restartBinding, currentBinding: id => options.manager.liveConversationReference(id),
+      binding: restartBinding, currentBinding: id => options.manager.liveConversationReference(id) ?? typedConversation(id),
       targets: async () => {
         const result = []
         const open = (await options.database.companion('listAttention')).filter(r => r.state === 'open')
@@ -586,8 +593,13 @@ export class CompanionService {
             const seen = this.hookObservations.get(s.sessionId)
             const bound = await options.manager.conversationBinding(s.sessionId)
             const agent = seen?.incarnationId === incarnationId ? seen.agent : bound.agentCli
-            result.push({ sessionId: s.sessionId, incarnationId, name: s.name, workspace: w.name, agent,
-              conversation: bound.status === 'bound' ? bound.conversationReference : null,
+            // The owner types his agents into shells: such a session's agent, folder and arguments are read from its own process.
+            const typedNow = this.typedAgents.get(s.sessionId)
+            const typedAgent = bound.status !== 'bound' && (agent === 'claude' || agent === 'codex') && typedNow?.incarnationId === incarnationId && typedNow.agent === agent ? typedNow.foreground : null
+            const cwd = typedAgent ? foregroundProcessFolder(typedAgent) : null
+            const conversation = bound.status === 'bound' ? bound.conversationReference : typedAgent && cwd ? typedConversation(s.sessionId) : null
+            result.push({ sessionId: s.sessionId, incarnationId, name: s.name, workspace: w.name, agent, conversation,
+              ...(typedAgent && cwd && conversation ? { typed: { cwd, argv: foregroundAgentArguments(typedAgent, agent) ?? [] } } : {}),
               atPress: restartStateAtPress(agent, seen?.incarnationId === incarnationId ? seen : undefined,
                 () => sessionActivityState(options.manager.sessionActivity(s.sessionId), this.now().getTime()).working,
                 open.some(r => r.sessionId === s.sessionId && !(r.kind === 'notice' && r.requestKey === `${agent}:turn`))) })
@@ -603,6 +615,11 @@ export class CompanionService {
         if (options.manager.liveIncarnationId(m.sessionId)) throw new Error('the session already has a running process')
         // A shell has no conversation to resume; its row says so in the row's own length (design W1).
         const shell = !['claude', 'codex', 'opencode'].includes(m.agent)
+        if (m.typed && m.conversation && (m.agent === 'claude' || m.agent === 'codex')) {
+          const start = await options.manager.resumeTypedAgent({ sessionId: m.sessionId, cols: 80, rows: 24, agentCli: m.agent, conversationReference: m.conversation, cwd: m.typed.cwd, argv: m.typed.argv })
+          options.manager.detach({ attachmentId: start.attachmentId })
+          return start
+        }
         const preview = await options.manager.conversationResumePreview(m.sessionId).catch((e: unknown) => { throw shell ? new Error('not an agent session') : e })
         if ('source' in preview && preview.source === 'reported') throw new Error('tick to run its command')
         if (shell) throw new Error('not an agent session')
@@ -1099,6 +1116,11 @@ export class CompanionService {
         }),
         observeConversation: (p) => this.controlCall(async () => {
           if (p.incarnationId === options.manager.liveIncarnationId(p.sessionId)) {
+            // Epic 125.5: the agent typed into this session, its conversation and its own process, as its start reported them.
+            const foreground = options.manager.foregroundProcessIdentity(p.sessionId)
+            if (p.incarnationId && foreground && (p.agentCli === 'claude' || p.agentCli === 'codex')) {
+              this.typedAgents.set(p.sessionId, { incarnationId: p.incarnationId, agent: p.agentCli, conversation: p.conversationReference, foreground })
+            }
             const seen = (this.seenConversations.get(p.sessionId) ?? []).filter((id) => id !== p.conversationReference)
             this.seenConversations.set(p.sessionId, [...seen, p.conversationReference].slice(-8))
           }
