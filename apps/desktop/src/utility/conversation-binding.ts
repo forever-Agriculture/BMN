@@ -535,6 +535,45 @@ function claudeArguments(
   return { contextArgv, explicitSessionId }
 }
 
+/** Options that select a conversation. A resume names its conversation itself, so these and their values are left out. */
+const CLAUDE_CONVERSATION_SELECTORS: ReadonlySet<string> = new Set(['--resume', '--continue', '--session-id', '--fork-session'])
+
+/**
+ * Epic 125.5: the arguments of a Claude Code the owner typed into a shell, as its resume may carry them. The typed
+ * prompt and the conversation selectors are left out; every other option is kept whole, or the resume is refused
+ * with the option named. Nothing is dropped silently, so a permission mode or a tool limit is never lost.
+ */
+export function claudeTypedResumeArguments(
+  argv: readonly string[], grammar: ClaudeOptionGrammar
+): { argv: string[] } | { refusal: string } {
+  const kept: string[] = []
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!
+    if (argument === '--') break
+    if (!argument.startsWith('-')) continue // his typed prompt: it is in the conversation already
+    const equalsIndex = argument.indexOf('=')
+    const flag = equalsIndex === -1 ? argument : argument.slice(0, equalsIndex)
+    const option = grammar.byAlias.get(flag)
+    if (!option) return { refusal: `its argument ${flag} is not one this Claude Code lists` }
+    const selector = CLAUDE_CONVERSATION_SELECTORS.has(option.canonicalName)
+    if (!selector && !CLAUDE_IDENTITY_NEUTRAL_OPTIONS.has(option.canonicalName)) return { refusal: `its option ${option.canonicalName} cannot be carried into a resume` }
+    const words = [argument]
+    if (equalsIndex === -1 && option.arity !== 'none') {
+      const value = (): boolean => argv[index + 1] !== undefined && !argv[index + 1]!.startsWith('-')
+      if (option.arity === 'required') {
+        if (argv[index + 1] === undefined) return { refusal: `its option ${flag} has no value` }
+        words.push(argv[++index]!)
+      } else if (option.arity === 'optional') {
+        if (value()) words.push(argv[++index]!)
+      } else {
+        while (value()) words.push(argv[++index]!)
+      }
+    }
+    if (!selector) kept.push(...words)
+  }
+  return { argv: kept }
+}
+
 export async function prepareConversationLaunch(
   sessionId: string,
   input: ConversationLaunchInput,

@@ -317,7 +317,7 @@ function openCodeEvidence(event) {
 }
 
 /** Claude Code lists in-flight background work and scheduled wake-ups on Stop; either resumes the agent without the owner. */
-function resumesByItself(event) {
+export function resumesByItself(event) {
   return [event.background_tasks, event.session_crons].some((list) => Array.isArray(list) && list.length > 0)
 }
 

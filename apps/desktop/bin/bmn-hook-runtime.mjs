@@ -8,7 +8,7 @@ import { isObject } from './shared-helpers.mjs'
 import { CONVERSATION_REFERENCE, HOOK_TIMEOUT_MS, TIMEOUT_MS } from './bmn-words.mjs'
 import { callEach } from './bmn-commands.mjs'
 import { HOOK_AGENTS } from './bmn-opencode-plugin.mjs'
-import { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, hookEventName, hookRequests, openCodeSubagent, phoneAnswerable, retiredOr, userInputTool } from './bmn-hooks.mjs'
+import { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, hookEventName, hookRequests, openCodeSubagent, resumesByItself, phoneAnswerable, retiredOr, userInputTool } from './bmn-hooks.mjs'
 
 export { runHook }
 
@@ -515,7 +515,8 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
   // Codex names what caused a compaction `trigger` (manual or auto). Every event of an OpenCode subagent's session is
   // the subagent's, whatever source it carries: its compaction is not counted as the owner's (Story 36.1), its run
   // starting never resets the repeat watch (Story 92.2), and its finished run is never the owner's turn (Story 93.3).
-  const source = agent === 'opencode' && openCodeSubagent(event) ? 'subagent' : hookEventName(event.source) ??
+  // A Claude Code stop that lists work in flight is not a resting point: the app goes on by itself (Epic 125, D4).
+  const source = agent === 'opencode' && openCodeSubagent(event) ? 'subagent' : agent === 'claude' && eventName === 'Stop' && resumesByItself(event) ? 'continues' : hookEventName(event.source) ??
     (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger) : undefined)
   const toolName = hookEventName(event.tool_name)
   // What BMN's OpenCode plugin promises with every event it sends (Story 96.3); earlier plugins send none.

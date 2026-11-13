@@ -6323,7 +6323,7 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
 
 describe('an agent typed into a shell is resumed in that shell (Epic 125.5)', () => {
   const reference = '01a0b657-21a8-7f00-addd-b73646828f5b'
-  async function shellSession(executableName: string) {
+  async function shellSession(executableName: string, extra: { conversationBeingDeleted?: () => boolean } = {}) {
     const cwd = await mkdtemp(join(tmpdir(), 'bmn-typed-agent-'))
     createdRoots.add(cwd)
     const bin = join(cwd, 'bin'); await mkdir(bin)
@@ -6338,6 +6338,7 @@ describe('an agent typed into a shell is resumed in that shell (Epic 125.5)', ()
       processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
       conversationReferenceExists: exists,
       sessionPath: () => bin,
+      ...extra,
       sendTerminalMessage: () => undefined
     })
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Typed', cwd, executable: join(cwd, executableName), argv: [], cols: 80, rows: 24 })
@@ -6359,6 +6360,26 @@ describe('an agent typed into a shell is resumed in that shell (Epic 125.5)', ()
       expect(launch.argv[1]).toBe(`'codex' '--no-daemon' 'resume' '${reference}' '--model' 'o'\\''k'; exec '${join(cwd, 'bash')}' -i`)
       await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
     } finally { database.close() }
+  })
+
+  it('holds the conversation as any Resume does: a second session cannot start it, nor can one start while its history is deleted (review F2)', async () => {
+    const { database, manager, created, cwd, spawns } = await shellSession('bash')
+    try {
+      const second = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Second', cwd, executable: join(cwd, 'bash'), argv: [], cols: 80, rows: 24 })
+      await manager.stop(second, 'explicit')
+      const typed = { cols: 80, rows: 24, agentCli: 'codex' as const, conversationReference: reference, cwd, argv: [] }
+      await manager.resumeTypedAgent({ sessionId: created.sessionId, ...typed })
+      const started = spawns.length
+      await expect(manager.resumeTypedAgent({ sessionId: second.sessionId, ...typed })).rejects.toThrow()
+      expect(spawns).toHaveLength(started)
+    } finally { database.close() }
+    const deleting = await shellSession('bash', { conversationBeingDeleted: () => true })
+    try {
+      await expect(deleting.manager.resumeTypedAgent({ sessionId: deleting.created.sessionId, cols: 80, rows: 24, agentCli: 'codex', conversationReference: reference, cwd: deleting.cwd, argv: [] }))
+        .rejects.toThrow(/cleaning up this codex conversation/u)
+      expect(deleting.spawns).toHaveLength(1)
+      // The refused start holds nothing: once the deletion is over the same resume starts.
+    } finally { deleting.database.close() }
   })
 
   it('starts nothing for a session that is not a shell, or a conversation that is gone', async () => {

@@ -2350,6 +2350,16 @@ describe('bmn hook provenance and the hook event log', () => {
     expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).not.toHaveProperty('fingerprint')
   })
 
+  it('reports a Claude Code stop with work in flight as continuing, never as a plain stop (Epic 125 review F3)', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', { hook_event_name: 'Stop', background_tasks: [{ id: 'task-1' }] })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ event: 'Stop', source: 'continues' })
+    await runHook(fixture, 'claude', { hook_event_name: 'Stop', session_crons: [{ id: 'cron-1' }] })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ event: 'Stop', source: 'continues' })
+    await runHook(fixture, 'claude', { hook_event_name: 'Stop', background_tasks: [] })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]?.source ?? null).toBeNull()
+  })
+
   it('fingerprints the measured Claude failed-tool error when no tool response exists', async () => {
     const fixture = await cliFixture()
     await runHook(fixture, 'claude', {

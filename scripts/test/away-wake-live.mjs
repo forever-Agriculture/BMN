@@ -30,6 +30,7 @@ import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { assertNativeTestEnvironment } from './native-test-home.mjs'
 import { testedApp } from '../lib/tested-app.mjs'
 import { AWAY_WAKE_REASONS, awayWakeReasonCode } from '../../shared/protocol/dist/away-night.js'
 import { nightMismatches } from './away-night-check.mjs'
@@ -87,6 +88,9 @@ try {
 mkdirSync(scratch, { recursive: true })
 const runtime = process.env.XDG_RUNTIME_DIR
 const wayland = runtime && process.env.WAYLAND_DISPLAY && !isAbsolute(process.env.WAYLAND_DISPLAY) ? join(runtime, process.env.WAYLAND_DISPLAY) : process.env.WAYLAND_DISPLAY
+// The run's own roots are made below the tests' home (short name: a control socket's path has a length limit).
+const runsFolder = join(nativeTest.home, 'r')
+mkdirSync(runsFolder, { recursive: true, mode: 0o700 })
 const caller = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== 'PROMPT_COMMAND' && !name.startsWith('BMN_') && !name.startsWith('AITERM_')))
 // Another BMN's own folder on the inherited PATH (the packaged one, when this runs inside a BMN session) holds a second
 // `codex` wrapper; each wrapper skips only its own folder, so the two would hand Codex to each other forever.
@@ -297,6 +301,8 @@ async function run(scenario, binary) {
       BMN_TEST_AWAY_WAKE_EVERY_MS: String(every), BMN_TEST_AWAY_WAKE_QUIET_MS: '5000',
       ...(wayland ? { WAYLAND_DISPLAY: wayland } : {})
     }
+    // Epic 125.1 AC1: the run's roots are the ones this driver made, so they are checked again, as made, before anything starts.
+    assertNativeTestEnvironment(environment)
     const socket = join(roots.runtime, 'bmn/control/control.sock')
     const bmn = (...argv) => execFileSync(process.execPath, [cli, '--owner', '--socket', socket, ...argv], { encoding: 'utf8', env: environment, cwd: scratch })
     const logFile = () => {
@@ -655,7 +661,7 @@ async function run(scenario, binary) {
       check(`${name}: owned process cleanup`, stopped.remaining.length === 0, { remaining: stopped.remaining, killed: stopped.killed })
       if (stopped.remaining.length === 0) recordProcess(owned, false)
     }
-  }) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); proxy.close() } }
+  }, runsFolder) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); proxy.close() } }
 }
 
 for (const app of (args[2] ?? 'claude,codex').split(',')) {

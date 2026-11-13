@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
 import {
+  claudeTypedResumeArguments,
   agentCli,
   conversationReferenceExists,
   isConversationReference,
@@ -761,5 +762,22 @@ describe('a conversation bound before Cursor was retired (Epic 71)', () => {
   it('is never resumed, and its chat is never looked for', async () => {
     expect(() => buildNativeResumeLaunch(bound)).toThrow('Cursor was retired on 14 Oct 2026.')
     await expect(conversationReferenceExists(bound)).resolves.toBe(false)
+  })
+})
+
+describe('the arguments of a Claude Code typed into a shell, for its resume (Epic 125.5, review F1)', () => {
+  it('keeps every option he chose and leaves out his prompt and the conversation selectors', () => {
+    expect(claudeTypedResumeArguments(['--permission-mode', 'plan', 'Explain this repository'], claudeGrammar)).toEqual({ argv: ['--permission-mode', 'plan'] })
+    expect(claudeTypedResumeArguments(['-c', '--model', 'haiku'], claudeGrammar)).toEqual({ argv: ['--model', 'haiku'] })
+    expect(claudeTypedResumeArguments(['--resume', '01a0b657-21a8-7f00-addd-b73646828f5b', '--allowedTools', 'Read', 'Write'], claudeGrammar))
+      .toEqual({ argv: ['--allowedTools', 'Read', 'Write'] })
+    expect(claudeTypedResumeArguments(['--model=haiku', '--', '--not-an-option'], claudeGrammar)).toEqual({ argv: ['--model=haiku'] })
+    expect(claudeTypedResumeArguments([], claudeGrammar)).toEqual({ argv: [] })
+  })
+
+  it('refuses, naming the option, rather than dropping one it cannot carry', () => {
+    expect(claudeTypedResumeArguments(['--model', 'haiku', '--no-such-option'], claudeGrammar)).toEqual({ refusal: 'its argument --no-such-option is not one this Claude Code lists' })
+    expect(claudeTypedResumeArguments(['--print', '--permission-mode', 'plan'], claudeGrammar)).toEqual({ refusal: 'its option --print cannot be carried into a resume' })
+    expect(claudeTypedResumeArguments(['--model'], claudeGrammar)).toEqual({ refusal: 'its option --model has no value' })
   })
 })

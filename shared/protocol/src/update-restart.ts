@@ -58,6 +58,8 @@ export interface UpdateRestartMember {
   tell: 'pending' | 'claimed' | 'told' | 'not-told' | 'unnecessary'
   tellUntil: number | null
   carryClaim?: string
+  /** A turn end observed while the notice was handed to the hook but its printing not yet confirmed; read when the confirmation comes. */
+  endedHanded?: number
   /** A turn end observed after Cancel, for a session whose notice had been printed. */
   carryFinishedAt?: number
   /** A Cancel result that came after the dialog closed: its words, and whether Needs You was told (D4). */

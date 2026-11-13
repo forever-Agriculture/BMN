@@ -225,7 +225,8 @@ function finishedOwnTurn(seen: WakeObservation): string | null {
   if (!isWakeApp(app)) return `${app} sessions are not woken (no recorded idle prompt)`
   if (!FINISHED[app].includes(seen.event)) return `its latest event is ${seen.event}, not a finished turn`
   // A child's turn is not the session's, and a stop the owner made stays a stop (R93-FR2).
-  if (seen.source === 'subagent' || seen.source === 'interrupted') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
+  // Nor is a stop Claude Code goes on from by itself, with work in flight.
+  if (seen.source === 'subagent' || seen.source === 'interrupted' || seen.source === 'continues') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
   if (app === 'opencode' && (seen.plugin ?? 0) < OPENCODE_WAKE_PLUGIN) return 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
   return null
 }

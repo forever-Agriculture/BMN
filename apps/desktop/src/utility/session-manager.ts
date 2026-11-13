@@ -83,6 +83,7 @@ import { OutputTail, ScreenMirror } from './screen-mirror'
 import {
   agentCli,
   captureRelevantLaunchEnvironment,
+  claudeTypedResumeArguments,
   applyCapturedLaunchEnvironment,
   bindingFromObservation,
   buildNativeResumeLaunch,
@@ -1074,15 +1075,32 @@ export class SessionManager {
       captureRoute: 'hook-session-start', detail: 'typed into a shell', capturedAt: new Date().toISOString(),
       launchContext: { cwd: p.cwd, executable: program, argv: [...argv], environment: profile }
     })
-    if (!await this.referenceExists(context([]))) {
-      throw new HostControlError(ERROR_CODES.notFound, `the ${p.agentCli} conversation is missing`)
+    let argv = [...p.argv]
+    if (p.agentCli === 'claude') {
+      // What he typed may hold a prompt or a selector of a conversation (`-c`, `--resume`): those are left out, since the
+      // resume names the conversation itself. Every other option is kept or the resume is refused; none is dropped
+      // silently, so a permission mode or a tool limit he chose is never lost.
+      const capability = await this.claudeSessionIdCapability({ cwd: p.cwd, executable: program, argv: [], cols: 80, rows: 24 })
+      if (!capability.supported || !capability.grammar) throw new HostControlError(ERROR_CODES.invalidArgument, `its arguments cannot be read: ${capability.detail}`)
+      const typed = claudeTypedResumeArguments(argv, capability.grammar)
+      if ('refusal' in typed) throw new HostControlError(ERROR_CODES.invalidArgument, typed.refusal)
+      argv = typed.argv
     }
-    // Arguments the app's own resume refuses are dropped by the same rules a captured launch follows; a command line
-    // those rules cannot read is resumed without its arguments rather than not at all.
-    const { launch } = await this.prepareResumeLaunch(context(p.argv)).catch(() => this.prepareResumeLaunch(context([])))
-    const quote = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
-    const releaseLaunch = this.claimSessionLaunch(p.sessionId)
+    const binding = context(argv)
+    // The same admission as any Resume: one live or resuming process per conversation, and none while its history is being deleted.
+    const reservation = this.claimConversation(conversationIdentity(binding)!, p.sessionId)
+    let releaseLaunch: () => void
     try {
+      releaseLaunch = this.claimSessionLaunch(p.sessionId)
+    } catch (error) {
+      this.removeIfCurrent(reservation)
+      throw error
+    }
+    try {
+      this.refuseWhileDeleted(binding)
+      if (!await this.referenceExists(binding)) throw new HostControlError(ERROR_CODES.notFound, `the ${p.agentCli} conversation is missing`)
+      const { launch } = await this.prepareResumeLaunch(binding)
+      const quote = (word: string): string => `'${word.replaceAll("'", `'\\''`)}'`
       const launchParams: PtyLaunchParams = {
         cwd: launch.cwd,
         executable: stored.executable,
@@ -1093,13 +1111,16 @@ export class SessionManager {
       }
       await validateLaunch(launchParams)
       const live = await this.startIncarnation(p.sessionId, launchParams, this.environment, new Date().toISOString(), stored,
-        (record) => this.store.createResuming({ ...record, keepReportedResume: true }))
+        (record) => this.store.createResuming({ ...record, keepReportedResume: true }), [], reservation)
       try {
         return { ...this.attach(live), launch: { cwd: launch.cwd, executable: stored.executable } }
       } catch (error) {
         await this.teardownSession(live)
         throw error
       }
+    } catch (error) {
+      if (!reservation.live) this.removeIfCurrent(reservation)
+      throw error
     } finally {
       releaseLaunch()
     }

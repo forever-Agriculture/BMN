@@ -159,6 +159,23 @@ describe('the native drivers', () => {
     expect(imports[0]).toMatch(/^import \{ nativeTest \} from '\.\/native-test-guard\.mjs'/u)
   })
 
+  it('a driver that makes its own roots makes them below the test home and checks the made environment again (review F6)', () => {
+    // What the two drivers made before the repair: roots under the system's temporary folder, in an environment that was valid at entry.
+    const made = { ...good(), XDG_CONFIG_HOME: join(outside, 'config'), XDG_RUNTIME_DIR: join(outside, 'runtime'), BMN_STATE_HOME: join(outside, 'state/bmn') }
+    expect(() => assertNativeTestEnvironment(made, { root })).toThrow(NativeTestEnvironmentError)
+    for (const file of ['scripts/test/away-skills-live.mjs', 'scripts/test/away-wake-live.mjs']) {
+      const source = readFileSync(join(repo, file), 'utf8')
+      const start = source.indexOf('withTemporaryRoot(temporaryRootContracts.electronDevelopment')
+      expect(start, file).toBeGreaterThan(0)
+      expect(source.indexOf('withTemporaryRoot(', start + 1), `${file} makes roots once`).toBe(-1)
+      expect(source, file).toContain("const runsFolder = join(nativeTest.home, 'r')")
+      expect(source, file).toMatch(/\n {2}\}, runsFolder\)/u)
+      // The check comes after the environment is made and before the socket is named or anything is launched.
+      const check = source.indexOf('assertNativeTestEnvironment(environment)', start), launch = source.indexOf('electron.launch(', start)
+      expect(check, file).toBeGreaterThan(start)
+      expect(launch, file).toBeGreaterThan(check)
+    }
+  })
   it('the guard module is the check on the environment the driver was started with, and nothing else', () => {
     const lines = readFileSync(join(repo, 'scripts/test/native-test-guard.mjs'), 'utf8').split('\n').filter(line => line.trim() !== '' && !/^\s*(\/\/|\/\*\*|\*)/u.test(line))
     expect(lines).toEqual(["import { assertNativeTestEnvironment } from './native-test-home.mjs'", 'export const nativeTest = assertNativeTestEnvironment(process.env)'])

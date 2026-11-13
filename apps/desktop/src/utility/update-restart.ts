@@ -32,7 +32,7 @@ const hooked = (agent: string): agent is 'claude' | 'codex' => agent === 'claude
 const CANCEL: readonly string[] = ['cancelled', 'cancelling']
 const TELLING: readonly string[] = ['cancelled', 'cancelling', 'resuming']
 /** A turn end of the session itself: never a child's, never the owner's interruption. */
-const ownTurnEnd = (p: Hook): boolean => (p.event === 'Stop' || p.agent === 'claude' && ['StopFailure', 'Notification'].includes(p.event)) && p.source !== 'subagent' && p.source !== 'interrupted'
+const ownTurnEnd = (p: Hook): boolean => (p.event === 'Stop' || p.agent === 'claude' && ['StopFailure', 'Notification'].includes(p.event)) && p.source !== 'subagent' && p.source !== 'interrupted' && p.source !== 'continues'
 /**
  * 125.5 AC3: the event the idle proof starts from in a resumed Claude Code run, which has no finished turn yet: its own
  * start by resuming, with nothing reported since. Every other check of the existing proof (the same run, the agent in
@@ -53,7 +53,8 @@ export function restartStateAtPress(
 ): UpdateRestartMember['atPress'] {
   if (agent !== 'claude' && agent !== 'codex' && agent !== 'opencode') return terminalWorking() ? 'working' : 'ended'
   if (!seen) return 'unknown'
-  if (seen.source === 'subagent' || requestOpen) return 'working'
+  // A stop with work in flight (`continues`) is the app going on by itself, never a resting point.
+  if (seen.source === 'subagent' || seen.source === 'continues' || requestOpen) return 'working'
   const finished = agent === 'claude' ? ['Stop', 'StopFailure', 'Notification'] : agent === 'codex' ? ['Stop'] : ['session.idle']
   return finished.includes(seen.event) || seen.event === 'SessionStart' ? 'ended' : 'working'
 }
@@ -128,7 +129,7 @@ export class UpdateRestart {
     if (!m || m.agent !== 'codex' || m.resume !== 'resumed' || m.resumedIncarnation === null) return false
     if (this.options.proof.liveIncarnation(sessionId) !== m.resumedIncarnation) return false
     const seen = this.options.proof.observation(sessionId)
-    return !(seen && seen.incarnationId === m.resumedIncarnation && seen.event === 'Stop' && seen.source !== 'subagent' && seen.source !== 'interrupted')
+    return !(seen && seen.incarnationId === m.resumedIncarnation && seen.event === 'Stop' && seen.source !== 'subagent' && seen.source !== 'interrupted' && seen.source !== 'continues')
   }
   refreshTargets(): void {
     if (this.refreshing || this.active()) return
@@ -230,6 +231,12 @@ export class UpdateRestart {
     if (!run || p.turn?.nested || !p.turn) return null
     const m = run.members.find(m => m.sessionId === p.sessionId && m.incarnationId === p.incarnationId && m.agent === p.agent && m.conversation === p.turn!.conversation)
     if (!m) return null
+    // The hook's word that it printed the notice can come after the turn end it caused. That turn end is kept, and
+    // dropped again if the session goes on before the word comes.
+    if (m.notice === 'handed' && m.stop === 'pending') {
+      const ended = ownTurnEnd(p) && p.event === 'Stop'
+      if (ended && m.endedHanded === undefined) { m.endedHanded = this.options.now().getTime(); this.save() } else if (!ended && m.endedHanded !== undefined && p.event !== 'SessionEnd') { delete m.endedHanded; this.save() }
+    }
     if (run.phase === 'waiting') {
       // D4: a row is ready only on a turn end observed after its notice was printed; without the printed notice it does not change.
       if (ownTurnEnd(p) && p.event === 'Stop' && m.notice === 'printed' && !m.ready) { m.ready = true; this.save() }
@@ -259,8 +266,18 @@ export class UpdateRestart {
     if (!m || !run) return false
     if (claim === m.claim && m.notice === 'handed') {
       m.notice = 'printed'; m.printedAt = this.options.now().toISOString()
-      // An acknowledgement that came after Cancel: the session was told to stop after all, so it waits for its next tool call.
-      if (CANCEL.includes(run.phase) && m.stop === 'pending' && (m.tell === 'pending' || m.tell === 'not-told' && m.reason === 'notice delivery unconfirmed')) { m.tell = 'pending'; m.tellUntil = null; m.reason = null }
+      const ended = m.endedHanded; delete m.endedHanded
+      // An acknowledgement that came after Cancel: the session was told to stop after all.
+      if (CANCEL.includes(run.phase) && m.stop === 'pending' && (m.tell === 'pending' || m.tell === 'not-told' && m.reason === 'notice delivery unconfirmed')) {
+        m.tell = 'pending'; m.reason = null
+        if (ended === undefined) m.tellUntil = null // still working: it waits for its next tool call
+        else {
+          // It has already ended its turn, so no tool call will come: Claude Code gets the line under the idle proof, Codex is listed.
+          m.carryFinishedAt = ended
+          if (m.agent === 'claude') m.tellUntil = this.options.now().getTime() + UPDATE_RESTART_TELL_MS
+          else { this.notTold(m, 'BMN types nothing into Codex'); return true }
+        }
+      }
       this.save(); return true
     }
     if (claim === m.carryClaim && CANCEL.includes(run.phase) && (m.tell === 'claimed' || m.tell === 'told' || m.tell === 'not-told' && m.reason === 'delivery unconfirmed')) { m.tell = 'told'; m.reason = null; this.save(); return true }
@@ -471,6 +488,7 @@ function isRestartRecord(raw: unknown): raw is UpdateRestartRecord {
       (!m.ready || m.atPress === 'ended' || m.notice === 'printed') &&
       ['none', 'queued', 'handed', 'printed', 'withdrawn'].includes(m.notice) && typeof m.claim === 'string' && (m.printedAt === null || typeof m.printedAt === 'string') &&
       (m.atClose === null || m.atClose === 'ready' || m.atClose === 'not-ready') &&
+      (m.endedHanded === undefined || Number.isFinite(m.endedHanded)) &&
       (m.carryClaim === undefined || typeof m.carryClaim === 'string') && (m.carryFinishedAt === undefined || Number.isFinite(m.carryFinishedAt)) &&
       (m.late === undefined || m.late !== null && typeof m.late === 'object' && typeof m.late.at === 'string' && typeof m.late.words === 'string' && typeof m.late.noticed === 'boolean') &&
       (m.tellUntil === null || Number.isFinite(m.tellUntil)) && (m.resumedIncarnation === null || typeof m.resumedIncarnation === 'string') && (m.reason === null || typeof m.reason === 'string') &&

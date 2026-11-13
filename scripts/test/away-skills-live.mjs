@@ -11,6 +11,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { assertNativeTestEnvironment } from './native-test-home.mjs'
 import { testedApp } from '../lib/tested-app.mjs'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
 import { approvalText, recordGo } from '../../apps/desktop/bin/plan-cli.mjs'
@@ -44,6 +45,9 @@ const wait = ms => new Promise(done => setTimeout(done, ms))
 const hash = text => createHash('sha256').update(text).digest('hex')
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'"
 const nativeHomes = { codex: nativeTest.codex, claude: nativeTest.claude }
+// The run's own roots are made below the tests' home (short name: a control socket's path has a length limit).
+const runsFolder = join(nativeTest.home, 'r')
+mkdirSync(runsFolder, { recursive: true, mode: 0o700 })
 const caller = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'PROMPT_COMMAND' && !key.startsWith('BMN_') && !key.startsWith('AITERM_')))
 caller.PATH = (caller.PATH ?? '').split(':').filter(folder => {
   try { return !readFileSync(join(folder, 'codex'), 'utf8').includes("Keep Codex's hooks in this BMN session") } catch { return Boolean(folder) }
@@ -119,6 +123,8 @@ async function lifecycle({ folder, cwd, budgetMs, cleanupMs, report, save, body 
   await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
     rootPath = root
     const environment = { ...caller, SHELL: '/bin/bash', XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime, BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'), BMN_STATE_HOME: join(roots.state, 'bmn'), BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'), ...(wayland ? { WAYLAND_DISPLAY: wayland } : {}) }
+    // Epic 125.1 AC1: the run's roots are the ones this driver made, so they are checked again, as made, before anything starts.
+    assertNativeTestEnvironment(environment)
     const socket = join(roots.runtime, 'bmn/control/control.sock')
     const bmn = (...args) => execFileSync(process.execPath, [cli, '--owner', '--socket', socket, ...args], { cwd, env: environment, encoding: 'utf8', timeout: Math.max(1000, remaining() - cleanupMs) })
     let application = null
@@ -154,7 +160,7 @@ async function lifecycle({ folder, cwd, budgetMs, cleanupMs, report, save, body 
       if (registered && stopped.remaining.length === 0) { handoffResource(owned, false); registered = false }
       save()
     }
-  })
+  }, runsFolder)
   report.temporaryRootRemoved = rootPath ? !existsSync(rootPath) : false
   report.elapsedMs = Date.now() - started
   report.withinDeadline = report.elapsedMs <= budgetMs
