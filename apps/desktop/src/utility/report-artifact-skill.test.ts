@@ -68,12 +68,16 @@ describe('the report-artifact skill check', () => {
   })
 
   it('accepts one optional took table after changes and rejects duplicates or wrong order', () => {
-    const part = '<section data-part="took"><h2>What it took</h2><table class="changes"><tr><td data-label="Role">Reviewer</td><td data-label="Asks">1</td></tr></table></section>'
+    const part = '<section data-part="took"><h2>What it took</h2><table class="took"><tr><td data-label="Role">Reviewer</td><td data-label="Asks">1</td></tr></table></section>'
     const page = filled()
     expect(check(page.replace('<section data-part="still-open">', part + '<section data-part="still-open">')).code).toBe(0)
     fails(page.replace('<section data-part="still-open">', part + part + '<section data-part="still-open">'), 'no part twice')
     fails(page.replace('<section data-part="in-short">', part + '<section data-part="in-short">'), 'parts in the fixed order')
     fails(page.replace('<section data-part="still-open">', part.replace(/<table[\s\S]*?<\/table>/u, '') + '<section data-part="still-open">'), 'took: exactly one table')
+    // A bare or changes-classed took table renders unstyled or with the wrong columns (owner, 2026-11-13): the class is required.
+    fails(page.replace('<section data-part="still-open">', part.replace('<table class="took">', '<table>') + '<section data-part="still-open">'), 'took: its table keeps class="took"')
+    fails(page.replace('<section data-part="still-open">', part.replace(' data-label="Asks"', '') + '<section data-part="still-open">'), 'took: every cell keeps its data-label')
+    expect(readFileSync(join(SKILL, 'template.html'), 'utf8')).toContain('table.took td:first-child')
   })
 
   it('counts the report text once and fails 901 words while 900 pass with the screenshot present', () => {

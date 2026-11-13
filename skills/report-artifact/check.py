@@ -153,6 +153,11 @@ def check(source):
     tables = root.find(lambda n: n.tag == "table" and n.within(lambda p: p.attrs.get("data-part") == OPTIONAL) is None)
     took_tables = by[OPTIONAL].find(lambda n: n.tag == "table") if OPTIONAL in by else []
     rule("took: exactly one table when present", OPTIONAL not in by or len(took_tables) == 1)
+    rule("took: its table keeps class=\"took\" (its look and phone layout)",
+         OPTIONAL not in by or (len(took_tables) == 1 and "took" in took_tables[0].classes()))
+    rule("took: table styles present (table.took)", OPTIONAL not in by or "table.took" in source)
+    rule("took: every cell keeps its data-label", OPTIONAL not in by or all(
+        c.attrs.get("data-label") for t in took_tables for c in t.find(lambda n: n.tag == "td")))
     rule("exactly one table on the page", len(tables) == 1, f"{len(tables)} tables")
     table = tables[0] if tables else None
     in_changes = table is not None and table.within(lambda p: p.attrs.get("data-part") == "changes") is not None
