@@ -522,6 +522,53 @@ describe('resuming keeps what it cannot confirm (125.5 AC6)', () => {
     expect(updateRestartWords(f.member(), 'after')).toBe('Not resumed · tick to run its command')
     expect(f.write).not.toHaveBeenCalled()
   })
+  it('a Codex process that reported two conversations is resumed by neither route, and the row says why (recheck, consult 1)', async () => {
+    // Known at the press: the reopening refuses before any launch, and the refusal is in the stored record.
+    const atPress = setup('codex')
+    atPress.targets[0]!.twoConversations = true
+    await atPress.coordinator.begin('1234567')
+    await atPress.closeAndReopen()
+    expect(atPress.options.resume).not.toHaveBeenCalled()
+    expect(atPress.member()).toMatchObject({ resume: 'failed', tell: 'not-told', twoConversations: true })
+    expect(updateRestartWords(atPress.member(), 'after')).toBe('Not resumed · this session reported two conversations')
+    expect(JSON.parse(readFileSync(atPress.options.path, 'utf8')).members[0]).toMatchObject({ twoConversations: true, resume: 'failed' })
+    // A second conversation that arrives after the press, before BMN closes, is kept across the close.
+    const late = setup('codex')
+    await late.coordinator.begin('1234567')
+    late.coordinator.secondConversation('s', 'old')
+    expect(JSON.parse(readFileSync(late.options.path, 'utf8')).members[0].twoConversations).toBe(true)
+    await late.closeAndReopen()
+    expect(late.options.resume).not.toHaveBeenCalled()
+    expect(updateRestartWords(late.member(), 'after')).toBe('Not resumed · this session reported two conversations')
+    // Cancel while a stop is in flight uses the other resume route: the same refusal, nothing launched, nothing typed.
+    const cancelled = setup('codex')
+    cancelled.targets[0]!.twoConversations = true
+    await cancelled.coordinator.begin('1234567')
+    await cancelled.told()
+    cancelled.coordinator.tick(true)
+    let finish!: (value: 'confirmed') => void
+    const stopping = cancelled.coordinator.stop('s', 'old', () => new Promise(resolve => { finish = resolve }))
+    cancelled.coordinator.cancel()
+    const recovering = cancelled.coordinator.recoverCancelled()
+    finish('confirmed'); await stopping; await recovering
+    expect(cancelled.options.resume).not.toHaveBeenCalled()
+    expect(cancelled.member()).toMatchObject({ resume: 'failed', reason: 'this session reported two conversations' })
+    expect(cancelled.write).not.toHaveBeenCalled()
+  })
+  it('one conversation reported again, another run, and a Claude Code session stay resumable', async () => {
+    const f = setup('codex')
+    await f.coordinator.begin('1234567')
+    f.coordinator.secondConversation('s', 'another-run')
+    f.coordinator.secondConversation('other-session', 'old')
+    await f.closeAndReopen()
+    expect(f.options.resume).toHaveBeenCalledTimes(1)
+    expect(f.member().twoConversations).toBeUndefined()
+    const claude = setup('claude')
+    await claude.coordinator.begin('1234567')
+    claude.coordinator.secondConversation('s', 'old')
+    await claude.closeAndReopen()
+    expect(claude.options.resume).toHaveBeenCalledTimes(1)
+  })
   it('does not resume a session whose stop it could not confirm', async () => {
     const f = setup()
     await f.coordinator.begin('1234567'); f.coordinator.tick(true)

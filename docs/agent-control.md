@@ -560,6 +560,14 @@ accepts, and stays a shell when the agent leaves: `bash -ic '<agent> <resume arg
 -i'`. Nothing is typed to do this. Variables exported by hand in the old shell are not carried. A
 shell with no agent in it is not resumed.
 
+**Two conversations in one Codex.** A Codex process can report a second conversation: a thread its
+own tool opened, or one you opened in it. Its hooks do not say which one you were in, so BMN resumes
+neither by itself, for a session launched as Codex and for one typed into a shell. The row reads
+`Not resumed · this session reported two conversations`; resume the one you want by hand. This is
+kept in the restart's record, so it holds when the second one appears after the press and across
+the reopening. The same following of the newest thread still decides whose finished turns BMN sees
+elsewhere (notices and the message wake), which is a known limit.
+
 **What BMN types.** After reopening, only confirmed stopped members whose conversation is unchanged
 are resumed, one at a time. Then:
 

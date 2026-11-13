@@ -38,6 +38,11 @@ export interface UpdateRestartMember {
    */
   typed?: { cwd: string; argv: string[] }
   /**
+   * One live Codex process reported more than one conversation (a thread its own tool opened, or one the owner
+   * opened): its hooks do not say which one he was in, so BMN resumes neither by itself and the row says so.
+   */
+  twoConversations?: boolean
+  /**
    * What BMN's own record said at the press (D4): the session's turn had ended, it was working, or BMN did not know.
    * Not knowing is never shown as ready.
    */

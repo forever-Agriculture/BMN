@@ -491,6 +491,12 @@ export class CompanionService {
   /** Epic 125.5: per session, the agent whose start its hooks last reported for the live process (an agent typed into a shell has no binding). */
   private readonly typedAgents = new Map<string, { incarnationId: string; agent: 'claude' | 'codex'; conversation: string; foreground: string | null }>()
   private readonly typedMissing = new Map<string, string>()
+  /**
+   * Epic 125.5: the conversations one live Codex process reported, per session. A second one (a thread Codex's own tool
+   * opened, or one the owner opened) leaves it unknown which he was in, so the restart resumes neither by itself.
+   * A process BMN could not name counts with the one before it: an unknown is never read as a fresh start.
+   */
+  private readonly codexConversations = new Map<string, { incarnationId: string; process: string | null; ids: string[] }>()
   /** The process in front of a session's terminal, only when Linux names it as that agent; seen live, it is not always there at the agent's first report. */
   private agentProcess(sessionId: string, agent: 'claude' | 'codex'): string | null {
     const identity = this.options.manager.foregroundProcessIdentity(sessionId)
@@ -610,7 +616,9 @@ export class CompanionService {
               const missing = conversation ? '' : !typedNow || typedNow.incarnationId !== incarnationId ? 'its start was not reported for this run' : !typedAgent ? 'its process is not in front of the terminal' : !cwd ? 'its folder could not be read' : 'its conversation is unknown'
               if (this.typedMissing.get(s.sessionId) !== missing) { this.typedMissing.set(s.sessionId, missing); if (missing) this.logRefusal('restart.typed-agent', s.sessionId, `${agent} typed into a shell cannot be resumed: ${missing}`) }
             }
+            const reported = this.codexConversations.get(s.sessionId)
             result.push({ sessionId: s.sessionId, incarnationId, name: s.name, workspace: w.name, agent, conversation,
+              ...(agent === 'codex' && reported?.incarnationId === incarnationId && reported.ids.length > 1 ? { twoConversations: true } : {}),
               ...(typedAgent && cwd && conversation ? { typed: { cwd, argv: foregroundAgentArguments(typedAgent, agent) ?? [] } } : {}),
               atPress: restartStateAtPress(agent, seen?.incarnationId === incarnationId ? seen : undefined,
                 () => sessionActivityState(options.manager.sessionActivity(s.sessionId), this.now().getTime()).working,
@@ -1133,6 +1141,15 @@ export class CompanionService {
               const earlier = this.typedAgents.get(p.sessionId)
               this.typedAgents.set(p.sessionId, { incarnationId: p.incarnationId, agent: p.agentCli, conversation: p.conversationReference,
                 foreground: this.agentProcess(p.sessionId, p.agentCli) ?? (earlier?.incarnationId === p.incarnationId && earlier.agent === p.agentCli ? earlier.foreground : null) })
+            }
+            if (p.incarnationId && p.agentCli === 'codex') {
+              const process = this.agentProcess(p.sessionId, 'codex')
+              const before = this.codexConversations.get(p.sessionId)
+              const same = before?.incarnationId === p.incarnationId && (before.process === null || process === null || before.process === process)
+              const ids = same ? before.ids : []
+              this.codexConversations.set(p.sessionId, { incarnationId: p.incarnationId, process: process ?? (same ? before.process : null),
+                ids: ids.includes(p.conversationReference) ? ids : [...ids, p.conversationReference].slice(-8) })
+              if (this.codexConversations.get(p.sessionId)!.ids.length > 1) this.updateRestart.secondConversation(p.sessionId, p.incarnationId)
             }
             const seen = (this.seenConversations.get(p.sessionId) ?? []).filter((id) => id !== p.conversationReference)
             this.seenConversations.set(p.sessionId, [...seen, p.conversationReference].slice(-8))

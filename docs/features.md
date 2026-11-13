@@ -263,7 +263,7 @@ sessions one at a time and shows each row's result:
 | `Not resumed · <reason>` | Left for you; a command a program reported stays unticked until you tick it |
 
 BMN never types into a Codex session it resumed. An agent you typed into a shell is resumed in that
-shell, in the folder and with the arguments it had; a shell with no agent in it is not resumed. Conversation bindings and saved output stay in their usual stores in every path. The first
+shell, in the folder and with the arguments it had; a shell with no agent in it is not resumed. A Codex that reported two conversations is not resumed by itself: BMN cannot tell which one you were in. Conversation bindings and saved output stay in their usual stores in every path. The first
 installation of this feature needs one ordinary close and open.
 
 Without a waiting update, Quit behaves as before and the next start offers its stopped sessions

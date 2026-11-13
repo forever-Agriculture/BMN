@@ -7,7 +7,7 @@ import { UPDATE_RESTART_SHUTDOWN_MS, UPDATE_RESTART_LIMIT_MS, UPDATE_RESTART_TEL
 import { restartClock } from './update-restart-deadline'
 import { typeIfIdle, type WakeAttention, type WakeObservation, type WakeProof } from './away-wake'
 
-export type RestartTarget = Pick<UpdateRestartMember, 'sessionId' | 'incarnationId' | 'name' | 'workspace' | 'agent' | 'conversation' | 'atPress' | 'typed'>
+export type RestartTarget = Pick<UpdateRestartMember, 'sessionId' | 'incarnationId' | 'name' | 'workspace' | 'agent' | 'conversation' | 'atPress' | 'typed' | 'twoConversations'>
 interface Hook { sessionId: string; incarnationId: string | null; agent: string; event: string; source: string | null; turn?: { conversation: string; nested: boolean } | undefined }
 interface Options {
   path: string
@@ -226,6 +226,21 @@ export class UpdateRestart {
     }
     this.save()
   }
+  /**
+   * A Codex process that reported a second conversation, at the press or after it: which one the owner was in is not
+   * in its hooks, so neither is resumed without him. Kept in the record, so it holds across the close and the reopening.
+   */
+  secondConversation(sessionId: string, incarnationId: string): void {
+    const m = this.record?.members.find(m => m.sessionId === sessionId && m.incarnationId === incarnationId)
+    if (!m || m.agent !== 'codex' || m.twoConversations || m.resume !== 'pending') return
+    m.twoConversations = true; this.save()
+  }
+  /** Before either resume route starts anything. */
+  private ambiguous(m: UpdateRestartMember): boolean {
+    if (!m.twoConversations) return false
+    m.resume = 'failed'; m.tell = 'not-told'; m.reason = 'this session reported two conversations'; this.save()
+    return true
+  }
   async hook(p: Hook): Promise<{ text: string; claim: string } | null> {
     const run = this.record
     if (!run || p.turn?.nested || !p.turn) return null
@@ -328,6 +343,7 @@ export class UpdateRestart {
       if (m.stop !== 'confirmed') {
         m.resume = 'failed'; m.tell = 'not-told'; m.reason = 'stop outcome unconfirmed; resume by hand'; this.save(); continue
       }
+      if (this.ambiguous(m)) continue
       m.resume = 'claimed'; this.save()
       try {
         const result = await this.options.resume(m)
@@ -386,6 +402,7 @@ export class UpdateRestart {
     for (const m of run.members) {
       if (m.resume !== 'pending') continue
       if (m.stop !== 'confirmed') { m.resume = 'failed'; m.tell = 'not-told'; m.reason = 'old process exit or interruption persistence unconfirmed; resume by hand'; this.save(); continue }
+      if (this.ambiguous(m)) continue
       m.resume = 'claimed'; this.save()
       try {
         const result = await this.options.resume(m)
@@ -483,6 +500,7 @@ function isRestartRecord(raw: unknown): raw is UpdateRestartRecord {
     Array.isArray(r.members) && r.members.length <= 2000 && new Set(r.members.map(m => m.sessionId)).size === r.members.length && r.members.every(m =>
       typeof m.sessionId === 'string' && typeof m.incarnationId === 'string' && typeof m.name === 'string' && typeof m.workspace === 'string' && typeof m.agent === 'string' &&
       (m.typed === undefined || (typeof m.typed === 'object' && m.typed !== null && typeof m.typed.cwd === 'string' && Array.isArray(m.typed.argv) && m.typed.argv.every(a => typeof a === 'string'))) &&
+      (m.twoConversations === undefined || typeof m.twoConversations === 'boolean') &&
       (m.conversation === null || typeof m.conversation === 'string') && ['ended', 'working', 'unknown'].includes(m.atPress) && typeof m.ready === 'boolean' &&
       // The one rule the record itself keeps (D4): a session is ready only if its turn had ended at the press or its notice was printed.
       (!m.ready || m.atPress === 'ended' || m.notice === 'printed') &&

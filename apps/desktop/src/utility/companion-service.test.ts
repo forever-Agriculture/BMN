@@ -170,6 +170,44 @@ beforeEach(() => {
   })
 })
 
+describe('Epic 125.5: one Codex process that reported two conversations', () => {
+  const start = (conversationReference: string, agentCli: 'codex' | 'claude' = 'codex', incarnationId = 'incarnation-1') =>
+    service['control']['options'].handlers.observeConversation({ sessionId: 's1', incarnationId, agentCli, conversationReference, source: 'startup' })
+  const reported = (): string[] | undefined => service['codexConversations'].get('s1')?.ids
+  beforeEach(() => {
+    const manager = service['options'].manager
+    manager.observeConversation = vi.fn(async () => ({ accepted: false as const, detail: 'Synthetic shell' }))
+    manager.liveIncarnationId = vi.fn(() => 'incarnation-1')
+  })
+
+  it('the same conversation reported again is one; a second one is told to the restart; Claude Code is not counted', async () => {
+    const second = vi.spyOn(service.updateRestart, 'secondConversation')
+    await start('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'); await start('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+    expect(reported()).toEqual(['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'])
+    expect(second).not.toHaveBeenCalled()
+    await start('cccccccc-cccc-cccc-cccc-cccccccccccc', 'claude')
+    expect(reported()).toHaveLength(1)
+    await start('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+    expect(reported()).toHaveLength(2)
+    expect(second).toHaveBeenCalledWith('s1', 'incarnation-1')
+  })
+
+  it('another Codex process in the same shell starts its own count; a process BMN could not name does not', async () => {
+    const manager = service['options'].manager
+    let front: string | null = null
+    manager.foregroundProcessIdentity = vi.fn(() => front)
+    await start('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+    await start('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+    expect(reported()).toHaveLength(2)
+    // The agent's own process is read from /proc; here its name is given directly.
+    service['agentProcess'] = (() => front) as never
+    front = 'linux:100:1'; await start('dddddddd-dddd-dddd-dddd-dddddddddddd')
+    expect(reported()).toHaveLength(3)
+    front = 'linux:200:2'; await start('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee')
+    expect(reported()).toEqual(['eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'])
+  })
+})
+
 describe('foreground question lifecycle ownership', () => {
   it.each(['opencode'] as const)('preserves exact legacy %s cleanup after observing its unsupported producer', async agent => {
     service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: false as const, detail: 'Synthetic shell' }))
