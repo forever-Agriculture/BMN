@@ -89,6 +89,15 @@ async function main() {
     return { primary: primary.workspaceId, second: second.workspaceId, cwd }
   }, cwd)
   const userData = await application.evaluate(({ app }) => app.getPath('userData'))
+  if (config.qaInput) {
+    const seed = JSON.parse(readFileSync(join(config.run, 'bench/seed.json'), 'utf8'))
+    if (seed.kind !== undefined) {
+      if (seed.kind !== 'update-restart-v2') throw new Error('Unknown bench fixture kind')
+      const { installRestartQaFixture } = await import('../test/update-restart-qa-fixture.mjs')
+      await installRestartQaFixture(application, config)
+      await page.setViewportSize({ width: 680, height: 720 })
+    }
+  }
   const portFile = join(userData, 'DevToolsActivePort')
   const deadline = Date.now() + 5000
   while (!existsSync(portFile) && Date.now() < deadline) await sleep(50)
@@ -122,7 +131,8 @@ async function main() {
             }
             case 'stop': result = { stopping: true }; break
           }
-          appendFileSync(join(config.run, 'actions.jsonl'), `${JSON.stringify({ runId: config.runId, at: new Date().toISOString(), args, result })}\n`, { mode: 0o600 })
+          const restart = config.qaInput?.fixture.adapterSha256 ? await application.evaluate(() => globalThis.bmnRestartQa) : undefined
+          appendFileSync(join(config.run, 'actions.jsonl'), `${JSON.stringify({ runId: config.runId, at: new Date().toISOString(), args, result, ...(restart ? { restart } : {}) })}\n`, { mode: 0o600 })
           response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result))
           if (args[0] === 'stop') setImmediate(() => { void shutdown().catch(fatal) })
         } catch (error) {

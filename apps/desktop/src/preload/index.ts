@@ -548,6 +548,11 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   }): Promise<WorkspaceLayoutState> {
     return invokeBridge('aiterm:layout:put', params)
   },
+  async updateRestart(op: import('@bmn/protocol').UpdateRestartOperation, runId?: string): Promise<import('@bmn/protocol').UpdateRestartSnapshot & { recovered: StartupSuccess[] }> {
+    const result = await invokeBridge<import('@bmn/protocol').UpdateRestartSnapshot & { recovered: StartupSuccess[] }>('aiterm:app:update-restart', op, runId)
+    for (const start of result.recovered) recordLiveSession(start)
+    return result
+  },
   quitApplication(): Promise<void> {
     return invokeBridge('aiterm:app:quit')
   },

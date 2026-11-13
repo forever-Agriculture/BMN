@@ -187,6 +187,29 @@ ordinary-session receipts below do not prove that setup exception.
 
 ### Desktop source update
 
+Epic 125 adds an owner-initiated source-update path: **Restart for the update…** freezes exact
+session, incarnation and conversation membership, hands working Claude Code and Codex sessions a
+safe-point notice at their next tool call, and captures and stops them as `update-restart` within
+the five-minute closing budget. The launcher waits for the original process (PID and start time)
+before waiting for the updater and reopening. The private record under the instance data root
+(`update-restart.json`) keeps each member's state at the press, notice, readiness, state at close,
+capture, stop, resume and telling outcome. Reopening resumes only confirmed exact interruptions
+with unchanged bindings, leaves reported commands unticked and uncertain exits for manual
+recovery, types one fixed line into a resumed Claude Code session only under the idle proof, and
+never types into a resumed Codex session. Bindings, layout and earlier output remain authoritative
+in their original stores; a final capture that did not settle is recorded unavailable.
+
+Evidence, all on isolated instances: `scripts/test/update-restart.mjs` (offer, Cancel, Restart now,
+a real `update-restart` interruption and manual recovery) and `scripts/test/update-restart-paths.mjs`
+(Cancel, all ready, Restart now, a failed update and the five-minute limit, reopened by the
+production launcher against a synthetic update service) run with shell sessions;
+`scripts/test/update-restart-live.mjs` runs the whole flow once with a real Claude Code and a real
+Codex session on the tests' own home and sign-in. Unit tests cover the state rule, claim order,
+the typed-line rule and the socket capabilities. The first press in the installed build is the
+owner's.
+
+The following is the retained earlier audit and its original trial limits:
+
 - Current behavior per column — process: the updater waits for BMN to exit; it does not stop
   sessions. The owner can Quit (records *interrupted · application quit*), close the last window
   and choose Stop (records *interrupted · last window close*), or Keep running (updater still
@@ -200,7 +223,7 @@ ordinary-session receipts below do not prove that setup exception.
   instead waits for BMN to exit ([update-desktop.mjs](../scripts/install/update-desktop.mjs),
   `waitForPackagedAppToExit`); the app's downloaded-update handler returns without stopping when
   any session runs ([app-lifecycle.ts](../apps/desktop/src/main/app-lifecycle.ts),
-  `updateDownloaded`). Its only `update-restart` stop passes an empty target list. The Electron
+  `updateDownloaded`). At that audit its only `update-restart` stop passed an empty target list. The Electron
   self-test directly manufactures that cause to exercise the cohort UI, so it does not prove the
   update use site. The old process and resume-all promise is **FAIL** against source behavior.
 - Trial steps (while running): on a disposable OS user or VM with synthetic sessions, queue the

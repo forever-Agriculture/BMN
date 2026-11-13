@@ -134,10 +134,33 @@ window() {
     --cancel-label "Don't wait" 2>/dev/null
 }
 
-waited=
+# BMN update restart v1
+# A restart launch must not hand over to the instance that requested it. Bind the wait to
+# Linux's process start ticks as well as its PID, so PID reuse never holds a later process.
+restart_waited=
+case "$BMN_RESTART_WAIT_PID:$BMN_RESTART_WAIT_TICKS" in
+  *[!0-9:]*|:*|*:) ;;
+  *) restart_waited=yes
+     [ "$BMN_RESTART_ACK" = 1 ] && { printf 'READY\\n' >&3; exec 3>&-; }
+     restart_left=15
+     while [ "$(sed 's/.*) //' "/proc/$BMN_RESTART_WAIT_PID/stat" 2>/dev/null | awk '{print $20}')" = "$BMN_RESTART_WAIT_TICKS" ]; do
+       [ -n "$BMN_RESTART_AUTH_PATH" ] && [ "$(cat "$BMN_RESTART_AUTH_PATH" 2>/dev/null)" = "$BMN_RESTART_AUTH_ID revoked" ] && exit 0
+       [ "$restart_left" -gt 0 ] || exit 1
+       restart_left=$((restart_left - 1))
+       sleep 1
+     done
+     # Authorization is committed only in the main process's final synchronous exit turn.
+     # A cancelled or crashed attempt cannot activate on a later ordinary quit.
+     if [ -n "$BMN_RESTART_AUTH_PATH" ]; then
+       [ "$(cat "$BMN_RESTART_AUTH_PATH" 2>/dev/null)" = "$BMN_RESTART_AUTH_ID launch" ] || exit 0
+     fi ;;
+esac
+unset BMN_RESTART_WAIT_PID BMN_RESTART_WAIT_TICKS BMN_RESTART_ACK BMN_RESTART_AUTH_PATH BMN_RESTART_AUTH_ID
+
+waited=$restart_waited
 if updating; then
   case $(phase) in
-    queued|waiting-for-exit) running && exec "$binary" "$@" ;;
+    queued|waiting-for-exit) [ -z "$restart_waited" ] && running && exec "$binary" "$@" ;;
   esac
   waited=yes
   if command -v zenity >/dev/null 2>&1; then
@@ -174,6 +197,11 @@ if [ ! -x "$binary" ]; then
   [ -x "$previous" ] && no_build "An update stopped while replacing the build; the previous build is in \${previous%/*}. Nothing was started."
   notify-send --urgency critical 'BMN cannot start' "No packaged BMN at $binary" 2>/dev/null
   exit 1
+fi
+if [ -n "$waited" ]; then
+  BMN_UPDATE_RESTART_RESULT=complete
+  if [ "$(phase)" = failed ]; then BMN_UPDATE_RESTART_RESULT=$(live_build); fi
+  export BMN_UPDATE_RESTART_RESULT
 fi
 exec "$binary" "$@"
 `

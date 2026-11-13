@@ -1,4 +1,5 @@
 // MODULE: session-manager.ts - Own PTYs, session admission and terminal retention
+import { beforeRestartDeadline, restartClock } from './update-restart-deadline'
 import { randomUUID } from 'node:crypto'
 import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -375,6 +376,8 @@ interface LiveSession extends SessionIdentity {
   exited: boolean
   exitUnconfirmed: boolean
   stopCause?: SessionStopCause
+  updateStopDeadline?: number
+  durableExit?: boolean
   teardown?: Promise<string | undefined>
   processStartIdentity: string
   conversationIdentity?: string
@@ -629,6 +632,18 @@ export class SessionManager {
   private readonly conversationReservations = new Map<string, ConversationReservation>()
   /** Sessions with a Start again or Resume between its checks and its process being tracked. */
   private readonly launchingSessions = new Set<string>()
+  private updateStartsFrozen = false
+  private updateAdmissionDrained: (() => void) | undefined
+  async freezeStartsForUpdate(): Promise<void> {
+    this.updateStartsFrozen = true
+    if (this.workspaceAdmissions.size === 0) return
+    const drained = new Promise<boolean>(resolve => { this.updateAdmissionDrained = () => resolve(true) })
+    try {
+      if (!await beforeRestartDeadline(drained, restartClock() + 2000, false)) throw new Error('A session start has not settled; no restart began')
+    } catch (error) { this.updateStartsFrozen = false; throw error }
+    finally { this.updateAdmissionDrained = undefined }
+  }
+  thawStartsAfterUpdate(): void { this.updateStartsFrozen = false }
   /** One workspace admission boundary for starts and moves, paired with archive reservations. */
   private readonly workspaceAdmissions = new Map<string, Set<{ sessionId?: string; name: string }>>()
   private readonly archivingWorkspaces = new Set<string>()
@@ -757,6 +772,12 @@ export class SessionManager {
       incarnationId: live.incarnationId,
       binding: prepared.binding
     }
+  }
+
+  /** The current binding without IO, for the last synchronous guard before automatic input. */
+  liveConversationReference(sessionId: string): string | null {
+    const binding = this.conversationBindings.get(sessionId)
+    return binding?.status === 'bound' ? binding.conversationReference : null
   }
 
   async conversationBinding(sessionId: string): Promise<ConversationBindingState> {
@@ -1609,6 +1630,7 @@ export class SessionManager {
     environment: Readonly<Record<string, string | undefined>> = this.environment,
     identity?: SessionIdentity
   ): PtyLike {
+    if (this.updateStartsFrozen) throw new HostControlError(ERROR_CODES.invalidArgument, 'The update restart cancelled this pending start')
     try {
       const env = {
         ...buildShellEnvironment(environment),
@@ -1953,6 +1975,14 @@ export class SessionManager {
     }
     this.sessions.clear()
     this.conversationReservations.clear()
+  }
+
+  async stopForUpdate(identity: SessionIdentity, deadline: number): Promise<'confirmed' | 'unknown'> {
+    const session = this.current(identity)
+    session.updateStopDeadline = deadline
+    await beforeRestartDeadline(this.stop(identity, 'update-restart').catch(() => undefined), deadline, undefined)
+    if (session.exited && !session.durableExit) await beforeRestartDeadline(session.exitComplete, deadline, undefined)
+    return session.exited && session.durableExit ? 'confirmed' : 'unknown'
   }
 
   async stop(identity: SessionIdentity, cause: SessionStopCause = 'explicit'): Promise<void> {
@@ -2312,6 +2342,7 @@ export class SessionManager {
     admission: { sessionId?: string; name: string },
     action: () => Promise<T>
   ): Promise<T> {
+    if (this.updateStartsFrozen) throw new HostControlError(ERROR_CODES.invalidArgument, 'BMN is restarting; new starts wait until it reopens')
     if (this.archivingWorkspaces.has(workspaceId)) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'The workspace is being archived; nothing was started or moved')
     }
@@ -2338,6 +2369,7 @@ export class SessionManager {
     } finally {
       entries.delete(admission)
       if (entries.size === 0) this.workspaceAdmissions.delete(workspaceId)
+      if (this.workspaceAdmissions.size === 0) this.updateAdmissionDrained?.()
     }
   }
 
@@ -2498,6 +2530,7 @@ export class SessionManager {
   }
 
   private async performTeardownSession(session: LiveSession): Promise<string | undefined> {
+    const remaining = (): number => session.updateStopDeadline === undefined ? Infinity : Math.max(0, session.updateStopDeadline - restartClock())
     if (session.exited) {
       this.revokeAttachment(session)
       this.removeIfCurrent(session)
@@ -2505,8 +2538,9 @@ export class SessionManager {
     }
     const identityMatches = async (): Promise<boolean> => {
       try {
-        return session.processStartIdentity.length > 0 &&
-          (await this.identifyProcess(session.pty.pid)) === session.processStartIdentity
+        const identity = session.updateStopDeadline === undefined ? await this.identifyProcess(session.pty.pid)
+          : await beforeRestartDeadline(this.identifyProcess(session.pty.pid), Math.min(session.updateStopDeadline, restartClock() + 250), '')
+        return remaining() > 0 && session.processStartIdentity.length > 0 && identity === session.processStartIdentity
       } catch {
         // The OS process may have disappeared before node-pty delivered its exit event.
         return false
@@ -2520,7 +2554,7 @@ export class SessionManager {
         // The bounded wait and identity-checked force-kill path below decide the outcome.
       }
     }
-    if (await this.waitForExit(session, this.stopGraceMs)) return undefined
+    if (await this.waitForExit(session, Math.min(this.stopGraceMs, remaining()))) return undefined
 
     identityStillMatches = await identityMatches()
     if (identityStillMatches) {
@@ -2534,7 +2568,7 @@ export class SessionManager {
         }
       }
     }
-    if (await this.waitForExit(session, this.stopKillWaitMs)) return undefined
+    if (await this.waitForExit(session, Math.min(this.stopKillWaitMs, remaining()))) return undefined
 
     const reason = identityStillMatches
       ? 'SIGKILL was sent but a PTY exit event was not observed'
@@ -2542,9 +2576,11 @@ export class SessionManager {
     const lifecycleCause = session.stopCause && session.stopCause !== 'explicit'
       ? session.stopCause
       : undefined
-    await this.markInterrupted(session, lifecycleCause
+    const interrupted = this.markInterrupted(session, lifecycleCause
       ? `${lifecycleStopSource(lifecycleCause)} · ${reason}`
       : reason)
+    if (session.updateStopDeadline === undefined) await interrupted
+    else await beforeRestartDeadline(interrupted, session.updateStopDeadline, undefined)
     return reason
   }
 
@@ -2678,6 +2714,7 @@ export class SessionManager {
           lifecycleDetail ? 'interrupted' : 'exited'
         )
       ])
+      session.durableExit = true
     } catch {
       // A failed starting record has nothing to transition; the process is still removed from live state.
     } finally {

@@ -160,6 +160,8 @@ import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
 import { AWAY_WAKE_EVERY_MS, AwayWake } from './away-wake'
 import { MessageWake } from './message-wake'
+import { UpdateRestart, restartStateAtPress } from './update-restart'
+import type { SessionResumeResult } from '@bmn/protocol'
 import { GrantDepartureNotices } from './agent-grant-notices'
 import { QaSessions, shippedQaAccounts } from './qa-sessions'
 import { foregroundProcessFolder } from './foreground-process'
@@ -408,6 +410,7 @@ export class CompanionService {
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
   /** Story 90.6: while he is Away, the fixed wake line every 2 hours into sessions idle at an empty prompt. */
+  readonly updateRestart: UpdateRestart
   private readonly awayWake: AwayWake
   private readonly messageWake: MessageWake
   /** Each session's last turn its hook reported finished with nothing in flight (110.3): a hook's withdrawal ends it, the owner reading it does not. */
@@ -564,6 +567,74 @@ export class CompanionService {
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
+    const restartBinding = async (sessionId: string): Promise<string | null> => {
+      const b = await options.manager.conversationBinding(sessionId)
+      return b.status === 'bound' ? b.conversationReference : null
+    }
+    this.updateRestart = new UpdateRestart({
+      mainLifetime: process.env.BMN_MAIN_LIFETIME,
+      path: join(options.roots.data, 'update-restart.json'), now: () => this.now(),
+      freeze: () => options.manager.freezeStartsForUpdate(), thaw: () => options.manager.thawStartsAfterUpdate(),
+      binding: restartBinding, currentBinding: id => options.manager.liveConversationReference(id),
+      targets: async () => {
+        const result = []
+        const open = (await options.database.companion('listAttention')).filter(r => r.state === 'open')
+        for (const w of await options.database.listWorkspaces()) {
+          for (const s of await options.database.listSessions(w.workspaceId)) {
+            const incarnationId = options.manager.liveIncarnationId(s.sessionId)
+            if (!incarnationId || s.setup) continue
+            const seen = this.hookObservations.get(s.sessionId)
+            const bound = await options.manager.conversationBinding(s.sessionId)
+            const agent = seen?.incarnationId === incarnationId ? seen.agent : bound.agentCli
+            result.push({ sessionId: s.sessionId, incarnationId, name: s.name, workspace: w.name, agent,
+              conversation: bound.status === 'bound' ? bound.conversationReference : null,
+              atPress: restartStateAtPress(agent, seen?.incarnationId === incarnationId ? seen : undefined,
+                () => sessionActivityState(options.manager.sessionActivity(s.sessionId), this.now().getTime()).working,
+                open.some(r => r.sessionId === s.sessionId && !(r.kind === 'notice' && r.requestKey === `${agent}:turn`))) })
+          }
+        }
+        return result
+      },
+      resume: async (m): Promise<SessionResumeResult> => {
+        const interrupted = await options.database.listInterruptedIncarnations()
+        if (!interrupted.some(i => i.sessionId === m.sessionId && i.incarnationId === m.incarnationId && i.detail?.includes('update restart'))) {
+          throw new Error('the exact update interruption is unavailable; resume by hand')
+        }
+        if (options.manager.liveIncarnationId(m.sessionId)) throw new Error('the session already has a running process')
+        // A shell has no conversation to resume; its row says so in the row's own length (design W1).
+        const shell = !['claude', 'codex', 'opencode'].includes(m.agent)
+        const preview = await options.manager.conversationResumePreview(m.sessionId).catch((e: unknown) => { throw shell ? new Error('not an agent session') : e })
+        if ('source' in preview && preview.source === 'reported') throw new Error('tick to run its command')
+        if (shell) throw new Error('not an agent session')
+        if (!m.conversation || await restartBinding(m.sessionId) !== m.conversation) throw new Error('the conversation binding changed or is unavailable')
+        const start = await options.manager.resume({ sessionId: m.sessionId, cols: 80, rows: 24, expectedCommand: preview.command })
+        // Recovery owns no terminal view. Main acquires its own lease and replays the retained output.
+        options.manager.detach({ attachmentId: start.attachmentId })
+        return start
+      },
+      openAttention: async () => (await options.database.companion('listAttention')).filter(r => r.state === 'open'),
+      proof: {
+        now: () => this.now(), observation: id => this.hookObservations.get(id),
+        liveIncarnation: id => options.manager.liveIncarnationId(id), foreground: id => options.manager.foregroundProcessIdentity(id),
+        generation: id => this.attentionChanges.get(id) ?? { generation: 0, pending: 0 },
+        screen: async (id, incarnation) => {
+          const mirror = options.manager.runningScreenMirror(id, incarnation)
+          if (!mirror) return null
+          await mirror.settled()
+          return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+        },
+        write: (id, text) => this.typeLine(id, text)
+      },
+      notify: async (m, words) => {
+        const incarnationId = options.manager.liveIncarnationId(m.sessionId)
+        if (!incarnationId) return
+        await this.openAttention({
+          sessionId: m.sessionId, incarnationId, requestKey: 'restart:carry-on', kind: 'notice', origin: 'update-restart',
+          title: `${m.name}: ${words}`.slice(0, TERMINAL_NOTICE_TITLE_MAX),
+          body: 'BMN cancelled the restart for the update and could not tell this session to carry on. It typed nothing into it.'
+        })
+      }
+    })
     this.awayWake = new AwayWake({
       ...options.awayWake,
       now: () => this.now(),
@@ -584,10 +655,7 @@ export class CompanionService {
         await mirror.settled()
         return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
       },
-      write: (sessionId, text) => {
-        this.messages.bmnTyped(sessionId)
-        options.manager.writeToSession(sessionId, bracketedPaste(text, true))
-      },
+      write: (sessionId, text) => this.typeLine(sessionId, text),
       log: (line) => {
         const entry = `${this.iso()} ${line}\n`
         process.stderr.write(`[BMN] ${entry}`)
@@ -618,10 +686,7 @@ export class CompanionService {
         await mirror.settled()
         return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
       },
-      write: (sessionId, text) => {
-        this.messages.bmnTyped(sessionId)
-        options.manager.writeToSession(sessionId, bracketedPaste(text, true))
-      },
+      write: (sessionId, text) => this.typeLine(sessionId, text),
       receivers: () => options.database.companion('messageWakeReceivers', this.iso()),
       candidates: (sessionId) => this.messages.wakeCandidates(sessionId),
       providerRefusal: (sessionId, incarnationId, messageId) => this.messages.wakeRefusal(sessionId, incarnationId, messageId),
@@ -961,6 +1026,7 @@ export class CompanionService {
           ...pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
           granted: await this.grantedActions()
         }),
+        restartPrinted: (p) => this.updateRestart.serial(async () => ({ recorded: this.updateRestart.printed(p.sessionId, p.incarnationId, p.claimId) })),
         awayPrinted: async (p) => ({ recorded: await (p.channel === 'team' ? this.teamNotices : this.awayNotices).printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
         // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
         recordDecision: (p) => this.controlCall(async () => {
@@ -1073,6 +1139,7 @@ export class CompanionService {
         }),
         observeHookEvent: (p) => this.controlCall(async () => {
           const recorded = await this.observeHookEvent(p)
+          const restart = await this.updateRestart.serial(() => this.updateRestart.hook(p))
           // Story 113.5 AC3: a hook run's card calls, ids and outcomes only; a failed write never fails the hook's event.
           if (p.hookRun !== undefined && p.hookRun.cards.length > 0) {
             await this.options.database.companion('recordHookCards', {
@@ -1108,7 +1175,7 @@ export class CompanionService {
           // Story 84.3: while he is leaving or away, once per conversation and departure: a run may ask him on one card.
           const departure = this.grantNotices.answer(p, this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null)
           return {
-            ...recorded, ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
+            ...recorded, ...(restart === null ? {} : { restartNotice: restart.text, restartClaim: restart.claim }), ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
             ...(teamNotice === null ? {} : { teamNotice: teamNotice.text, teamRevision: teamNotice.revision, teamClaim: teamNotice.claimId }),
             ...(departure === null ? {} : { grantNotice: departure })
@@ -2660,6 +2727,7 @@ export class CompanionService {
     model?: string | undefined
     claudeConfigDir?: string | undefined
     effects: readonly HookEventEffect[]
+    turn?: { conversation: string; nested: boolean } | undefined
   }): Promise<{ recorded: true }> {
     if (p.claudeConfigDir !== undefined) void this.history.learnClaudeFolder(p.claudeConfigDir).catch(() => undefined)
     // Share the notice queue: observe/reset/open must complete in arrival order.
@@ -2814,6 +2882,19 @@ export class CompanionService {
     this.hookArrivalSequence += 1
     this.retainedHooks.markDirty()
     return { recorded: true }
+  }
+
+  /**
+   * The one place a line BMN decided to type reaches a terminal: the Away wake's, a message's wake and the update
+   * restart's (Epic 125). A Codex session the restart resumed is never typed into, by any of them, until its resumed
+   * run finishes a turn of its own (D3, 125.5 AC4): the refusal is thrown before anything is written.
+   */
+  private typeLine(sessionId: string, text: string): void {
+    if (this.updateRestart.typesNothingInto(sessionId)) throw new Error('BMN types nothing into a Codex session it resumed after an update restart')
+    this.messages.bmnTyped(sessionId)
+    const changes = this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 }
+    this.attentionChanges.set(sessionId, { ...changes, generation: changes.generation + 1 })
+    this.options.manager.writeToSession(sessionId, bracketedPaste(text, true))
   }
 
   private *liveHookEvents(): Generator<HookEventRecord> {

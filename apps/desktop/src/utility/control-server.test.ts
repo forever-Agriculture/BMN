@@ -153,6 +153,7 @@ function fakeHandlers(current: Map<string, string>) {
     reportResumeCommand: vi.fn(async (p: Parameters<ControlHandlers['reportResumeCommand']>[0]): Promise<unknown> =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
     clearResumeCommand: vi.fn(async (): Promise<unknown> => ({ cleared: true })),
+    restartPrinted: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     awayPrinted: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     recordDecision: vi.fn(async (): Promise<unknown> => ({ outcome: 'recorded' })),
     decisionOutcome: vi.fn(async (): Promise<unknown> => ({ outcome: 'appended' })),
@@ -1929,6 +1930,16 @@ describe('away snapshot and refusal (Story 76.4)', () => {
     expect((fixture.handlers.openAttention.mock.calls.at(-1) as unknown[] | undefined)?.[0]).not.toHaveProperty('reasonRefusable')
   })
 
+  it('restricts restart acknowledgements to the bound member and forbids all restart controls on the socket', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expect((await agent.request('restart.printed', { claimId: 'restart-claim' })).error).toBeUndefined()
+    expect(fixture.handlers.restartPrinted).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', claimId: 'restart-claim' })
+    expectError(await owner.request('restart.printed', { claimId: 'restart-claim' }), ERROR_CODES.unauthorized)
+    expectError(await agent.request('restart.printed', { claimId: 'restart-claim', sessionId: 'other' }), ERROR_CODES.invalidArgument)
+    for (const client of [agent, owner]) expect((await client.request('app.updateRestart', { op: 'begin', build: '1234567' })).error).toBeDefined()
+  })
   it('takes a printed report from a session only, for a named conversation and revision', async () => {
     const fixture = await serverFixture()
     const agent = await authenticated(fixture, sessionToken(fixture))

@@ -1,4 +1,5 @@
 // MODULE: index.ts - public exports of the shared BMN protocol package
+export * from './update-restart'
 export * from './binding'
 export * from './companion'
 export * from './dev-auto'

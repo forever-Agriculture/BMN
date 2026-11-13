@@ -248,6 +248,7 @@ export interface AiTerminalBridge {
   getLayout(workspaceId: string): Promise<LayoutGetResult>
   putLayout(params: LayoutPutParams): Promise<WorkspaceLayoutState>
   /** Quits the app; the owner is asked first when sessions are running. */
+  updateRestart(op: import('@bmn/protocol').UpdateRestartOperation, runId?: string): Promise<import('@bmn/protocol').UpdateRestartSnapshot & { recovered: TerminalStartupSuccess[] }>
   quitApplication(): Promise<void>
   onAppEvent(listener: (message: AppEventMessage) => void): () => void
   onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void

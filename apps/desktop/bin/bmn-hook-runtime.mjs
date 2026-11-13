@@ -331,16 +331,20 @@ async function runHook(args) {
     typeof answer.teamClaim === 'string' ? answer.teamNotice : null
   // Story 84.3: he is leaving or away, and a run may ask him on one card; once per conversation and departure.
   const departure = typeof answer?.grantNotice === 'string' && answer.grantNotice !== '' ? answer.grantNotice : null
+  const restart = typeof answer?.restartNotice === 'string' && typeof answer?.restartClaim === 'string' ? answer.restartNotice : null
   const said = { printed: false }
   await sayDestination(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, team, notice, departure], said)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, team, notice, departure, restart], said)
       .catch(() => undefined)
   }
-  if (!said.printed && (brief !== null || team !== null || notice !== null || departure !== null)) {
-    writeSync(1, contextAnswer(event, [brief, team, notice, departure]))
+  if (!said.printed && (brief !== null || team !== null || notice !== null || departure !== null || restart !== null)) {
+    writeSync(1, contextAnswer(event, [brief, team, notice, departure, restart]))
     said.printed = true
+  }
+  if (restart !== null && said.printed) {
+    await callEach(socketPath, token, [{ method: 'restart.printed', params: { claimId: answer.restartClaim } }], HOOK_TIMEOUT_MS).catch(() => undefined)
   }
   if (notice !== null && said.printed) {
     // Printed, never read: BMN keeps that this claim went out (Story 76.4 AC2); a lost report leaves it "claimed", and the

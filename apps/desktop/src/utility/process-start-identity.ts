@@ -1,5 +1,7 @@
 // MODULE: process-start-identity.ts - an opaque per-process token that changes when a PID is reused
 import { readFile } from 'node:fs/promises'
+import { appendFileSync, closeSync, constants, openSync } from 'node:fs'
+import { join } from 'node:path'
 
 /**
  * A PID alone cannot be signalled safely: between a shell exiting and the PTY reporting it, the
@@ -33,3 +35,20 @@ export function processStartIdentityFor(platform: string): ProcessStartIdentity 
 }
 
 export const processStartIdentity: ProcessStartIdentity = processStartIdentityFor(process.platform)
+
+/** An isolated restart test records the root the host actually spawned; no process discovery. */
+export function testRestartProcessIdentity(
+  argv: readonly string[], environment: NodeJS.ProcessEnv, stateRoot: string,
+  identify: ProcessStartIdentity = processStartIdentity
+): ProcessStartIdentity {
+  const path = environment.BMN_TEST_RESTART_SPAWN_RECORD
+  if (!argv.includes('--bmn-test-host') || !path) return identify
+  if (path !== join(stateRoot, 'restart-spawn-identities.jsonl')) throw new Error('Invalid restart test record path')
+  return async pid => {
+    const identity = await identify(pid)
+    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600)
+    try { appendFileSync(fd, JSON.stringify({ pid, identity, at: new Date().toISOString() }) + '\n') }
+    finally { closeSync(fd) }
+    return identity
+  }
+}

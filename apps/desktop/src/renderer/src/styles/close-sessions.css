@@ -108,3 +108,16 @@
   gap: 8px;
   color: var(--muted);
 }
+
+/* The update states use the same quiet dialog, with the name and state on one row. */
+.update-restart .close-sessions-list .who {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  width: 100%;
+}
+.update-restart .identity { min-width: 0; }
+.update-restart .detail { overflow-wrap: anywhere; }
+.update-restart .close-sessions-list li { display: block; }
+.update-restart .note { margin: 4px 0 0; color: var(--faint); font-size: 12px; overflow-wrap: anywhere; }

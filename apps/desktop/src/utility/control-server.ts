@@ -280,6 +280,7 @@ export interface ControlHandlers {
   /** Story 83.3: the push policy's stored facts and standing, for `bmn policy`; read by any scope, written by none. */
   policyStatus(): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
+  restartPrinted?(p: { sessionId: string; incarnationId: string | null; claimId: string }): Promise<unknown>
   awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number; claimId: string; channel?: 'team' }): Promise<unknown>
   /** Story 76.5: a decision the session's agent made while the owner is away; the host binds provenance and period. */
   recordDecision(p: { sessionId: string; incarnationId: string | null; key: string; revision: number; payload: DecisionPayload }): Promise<unknown>
@@ -1673,6 +1674,12 @@ export class ControlServer {
           op: decisionKey(requireText(params, 'op', IDENTIFIER), 'op'), result,
           evidence: readIdentifiers(params, 'evidenceIds', DECISION_LIMITS.evidence)
         })
+      }
+      case 'restart.printed': {
+        const params = closedParams(rawParams, ['claimId'])
+        if (scope.kind !== 'session') throw unauthorized('Only the session hook reports what it printed')
+        const claimId = requireText(params, 'claimId', IDENTIFIER)
+        return handlers.restartPrinted?.({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, claimId }) ?? { recorded: false }
       }
       case 'away.printed': {
         const params = closedParams(rawParams, ['agent', 'conversation', 'revision', 'claimId', 'channel'])

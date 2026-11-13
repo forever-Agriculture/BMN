@@ -115,6 +115,7 @@ async function cliFixture() {
     reportResumeCommand: vi.fn<ControlHandlers['reportResumeCommand']>(async (p) =>
       ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
     clearResumeCommand: vi.fn<ControlHandlers['clearResumeCommand']>(async () => ({ cleared: true })),
+    restartPrinted: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     awayPrinted: vi.fn<ControlHandlers['awayPrinted']>(async () => ({ recorded: true })),
     recordDecision: vi.fn<ControlHandlers['recordDecision']>(async (p) => ({ outcome: 'recorded', key: p.key, periodId: 'period-1', revision: p.revision, recordedAt: '2026-10-16T23:00:00.000Z' })),
     decisionOutcome: vi.fn<ControlHandlers['decisionOutcome']>(async (p) => ({ outcome: 'appended', key: p.key, outcomes: 1 })),
@@ -1838,6 +1839,17 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     expect(withoutTeam.stdout).toContain('  messages: not handed over until a team is approved (measured on Codex 0.166.0)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.messages).toMatch(/^messages: handed to a working agent/)
     expect(asJson.agents.find((row) => row.agent === 'claude')?.messages).toMatch(/^messages: handed to a working agent/)
+  })
+
+  it.each(['claude', 'codex'] as const)('prints and acknowledges the restart context through the real %s hook runtime', async app => {
+    const fixture = await cliFixture()
+    const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+    fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: 'Synthetic brief', restartNotice: 'Synthetic restart notice', restartClaim: 'restart-claim' })
+    const result = await runCli(['hook', app], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash', session_id: SESSION, cwd: session.workspace, transcript_path: session.record }) })
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toBe('Synthetic brief\n\nSynthetic restart notice')
+    expect(fixture.handlers.restartPrinted).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-1', claimId: 'restart-claim' }))
   })
 
   describe("BMN's start brief (Story 75.6)", () => {

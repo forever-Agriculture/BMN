@@ -21,6 +21,7 @@ export function prepareBenchQa({ options, run, runId, candidateSha256 }) {
   const input = { version: 1, route: 'lead-bench', executor: 'lead', runId, revision: brief.revision, target: brief.target,
     candidateSha256, fixture: { id: seed.id, seedSha256: hash(readFileSync(join(run, 'bench/seed.json'))) },
     briefSha256: hash(readFileSync(join(run, 'qa/brief.json'))), startedAt: new Date().toISOString() }
+  if (seed.kind === 'update-restart-v2') input.fixture.adapterSha256 = hash(readFileSync(new URL('../test/update-restart-qa-fixture.mjs', import.meta.url)))
   atomicJson(join(run, 'bench/input.json'), input)
   return input
 }

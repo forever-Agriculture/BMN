@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, openSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { benchProcReader, benchScopeRequest } from './bench-proc-reader'
 import { QUIET_LEDGER_KEY } from './quiet-hours-delivery'
 import {
@@ -57,6 +57,7 @@ import {
 /** How long the host waits for the app's answer about a message's folder or provider before it reads none. */
 const MESSAGE_TEAM_ANSWER_MS = 200
 import { nativeLoadFailureMessage } from './native-load-error'
+import { testRestartProcessIdentity } from './process-start-identity'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
 import { bundledTerminfoAsset, installBundledTerminfo } from './terminal-graphics'
 import { FileSavedOutputStore } from './saved-output-store'
@@ -304,16 +305,36 @@ async function start(): Promise<void> {
   const companionHolder: { current?: CompanionService } = {}
   // Epic 125: a test host may record what BMN itself types into a terminal; a real host never does.
   const hostWrite = testHostWrites(process.argv, process.env)
+  const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')
+  const ioPath = process.argv.includes('--bmn-test-host') ? process.env.BMN_TEST_RESTART_IO_RECORD : undefined
+  if (ioPath && ioPath !== join(roots.state, 'restart-pty-io.jsonl')) throw new Error('Invalid restart test I/O record path')
+  let ioSequence = 0
+  const recordIo = (launch: { pid: number; sessionId: string | undefined; launchId: string }, direction: 'input' | 'output', bytes: string | Uint8Array): void => {
+    if (!ioPath) return
+    const fd = openSync(ioPath, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600)
+    try { appendFileSync(fd, JSON.stringify({ ...launch, sequence: ++ioSequence, at: Date.now(), direction, hex: Buffer.from(bytes).toString('hex') }) + '\n') }
+    finally { closeSync(fd) }
+  }
   const manager = new SessionManager({
+    processStartIdentity: testRestartProcessIdentity(process.argv, process.env, roots.state),
     ...(terminfoAsset ? { terminfoAsset } : {}),
     store: database,
     savedOutputStore,
-    spawnPty: (executable, argv, options) =>
-      nodePty.spawn!(executable, [...argv], {
+    spawnPty: (executable, argv, options) => {
+      const pty = nodePty.spawn!(executable, [...argv], {
         ...options,
         env: { ...options.env },
         encoding: null
-      }),
+      })
+      if (ioPath) {
+        const launch = { pid: pty.pid, sessionId: options.env.BMN_SESSION_ID, launchId: randomUUID() }
+        const write = pty.write.bind(pty)
+        pty.write = bytes => { recordIo(launch, 'input', bytes); write(bytes) }
+        const output = pty.onData(bytes => recordIo(launch, 'output', bytes))
+        pty.onExit(() => output.dispose())
+      }
+      return pty
+    },
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
     ...(hostWrite ? { hostWrite } : {}),
     conversationReferenceExists,
@@ -329,7 +350,6 @@ async function start(): Promise<void> {
     sessionEnvironment: (sessionIdentity) => companionHolder.current?.sessionEnvironment(sessionIdentity) ?? {},
     sessionPath: () => companionHolder.current?.sessionPath() ?? process.env.PATH ?? ''
   })
-  const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')
   /**
    * Questions about a message put to the app's entry point, each waiting for its answer. An answer that does
    * not come in time is a failure, which the caller reads as a refusal: a hook has 300 ms for everything.
@@ -422,6 +442,8 @@ async function start(): Promise<void> {
   companionHolder.current = companion
   await companion.start()
   const companionService = companion
+  const restartTimer = setInterval(() => companionService.updateRestart.advance(), 250)
+  restartTimer.unref()
   // Epic 69: the sweep removes what turn changes may no longer keep, now (after the archive purge wrote its
   // jobs) and every hour.
   new TurnRetention({
@@ -667,6 +689,11 @@ async function start(): Promise<void> {
       )
     }
     const params = record(request.params)
+    if (companionService.updateRestart.active() && [METHOD_REGISTRY.sessionCreate, METHOD_REGISTRY.sessionResume,
+      METHOD_REGISTRY.sessionRelaunch, METHOD_REGISTRY.sessionCohortResume, METHOD_REGISTRY.sessionBindingReplace,
+      METHOD_REGISTRY.sessionBindingClear].includes(request.method as never)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'BMN is restarting; new starts wait until it reopens')
+    }
     switch (request.method) {
       case METHOD_REGISTRY.hello: {
         const hello = params as unknown as HelloParams
@@ -678,6 +705,35 @@ async function start(): Promise<void> {
         }
         handshaken = true
         return { protocol: PROTOCOL_VERSION, instanceId: randomUUID() }
+      }
+      case METHOD_REGISTRY.updateRestart: {
+        const op = params.op
+        if (!['status', 'begin', 'cancel', 'now', 'recover', 'stop', 'capture', 'abort', 'dismiss'].includes(String(op)) || Object.keys(params).some(k => !['op', 'build', 'runId', 'sessionId', 'incarnationId', 'deadline', 'outcome', 'reason'].includes(k))) {
+          throw new HostControlError(ERROR_CODES.invalidArgument, 'Restart parameters are invalid')
+        }
+        const restart = companionService.updateRestart
+        if (!['status', 'recover', 'begin'].includes(String(op)) && !restart.matches(stringValue(params, 'runId'))) throw new HostControlError(ERROR_CODES.invalidArgument, 'This restart attempt has been superseded')
+        if (op === 'begin') {
+          const id = stringValue(params, 'runId'), deadline = numberValue(params, 'deadline')
+          if (typeof params.build !== 'string' || !/^[a-f0-9]{7,64}$/u.test(params.build)) throw new HostControlError(ERROR_CODES.invalidArgument, 'A waiting build is required')
+          // Admission is persisted synchronously. Completion is observed through nonblocking status.
+          void restart.begin(params.build, id, deadline).catch(() => undefined)
+        }
+        if (op === 'abort') restart.abort(stringValue(params, 'reason'))
+        if (op === 'capture') {
+          if (!['saved', 'unavailable'].includes(String(params.outcome))) throw new Error('Invalid capture outcome')
+          restart.tick(true, stringValue(params, 'runId'))
+          restart.capture(stringValue(params, 'sessionId'), stringValue(params, 'incarnationId'), params.outcome as 'saved' | 'unavailable')
+        }
+        if (op === 'stop') return restart.stop(stringValue(params, 'sessionId'), stringValue(params, 'incarnationId'), () => manager.stopForUpdate(identity(params), numberValue(params, 'deadline')))
+        if (op === 'cancel') { restart.cancel(); restart.startRecovery() }
+        if (op === 'dismiss') restart.dismiss()
+        if (op === 'now') restart.tick(true, stringValue(params, 'runId'))
+        if (op === 'recover') restart.startRecovery(String(params.build ?? 'unknown build'))
+        if (op === 'status') restart.refreshTargets()
+        const snapshot = { run: restart.snapshot(), sessions: restart.sessions(), starts: restart.starts() }
+        if (op === 'begin' && process.argv.includes('--bmn-test-host') && process.env.BMN_TEST_RESTART_DELAY_BEGIN_REPLY === '1') await new Promise(resolve => setTimeout(resolve, 12_000))
+        return snapshot
       }
       case METHOD_REGISTRY.healthGet:
         return selfTestHealthProbe(params) ?? manager.health()
@@ -1050,6 +1106,7 @@ async function start(): Promise<void> {
       typeof event.data === 'object' &&
       (event.data as { kind?: unknown }).kind === 'host-shutdown'
     ) {
+      clearInterval(restartTimer)
       const forcedExit = setTimeout(() => process.exit(0), 1_000)
       void companionService.close().then(() => database.close()).finally(() => {
         clearTimeout(forcedExit)

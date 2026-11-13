@@ -1,7 +1,12 @@
 import { registerBrowserAccounts } from './browser-accounts-ipc'
 import type { AccountSignIn } from '../../bin/browser-accounts-engine.mjs'
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
-import { chmodSync, mkdirSync } from 'node:fs'
+import { beforeRestartDeadline, restartClock } from '../utility/update-restart-deadline'
+import { chmodSync, mkdirSync, existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { waitingSourceBuild, openedSourceBuild, sourceUpdateLauncher, armSourceUpdateLauncher, sourceRestartAuthorization, type SourceRestartAuthorization } from './source-update-restart'
+import { createSourceRestartAdopter, type RestartAdoption } from './source-update-recovery'
+import { UPDATE_RESTART_LIMIT_MS, UPDATE_RESTART_SHUTDOWN_MS, type UpdateRestartRecord, type UpdateRestartMember, type UpdateRestartSnapshot, type SessionResumeResult } from '@bmn/protocol'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -46,7 +51,7 @@ import {
   type MessagePortMain,
   type WebContents
 } from 'electron'
-import { PtyHostClient, PtyHostRemoteError, type HostReady } from './pty-host-client'
+import { PtyHostClient, PtyHostRemoteError, PtyHostRequestTimeoutError, type HostReady } from './pty-host-client'
 import { createProgramCopy, programCopyAllowed } from './program-copy'
 import {
   connectRendererChannel,
@@ -359,6 +364,7 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     BMN_REPO_ROOT: repoRoot,
+    BMN_MAIN_LIFETIME: mainLifetime,
     BMN_CLI_PATH: bmnCliPath()
   }
 }
@@ -442,6 +448,7 @@ async function loadApplicationStartup(testMode: boolean): Promise<ApplicationSta
   const setup = await requireHostClient().request<import('@bmn/protocol').FirstRunSetupRecord | null>(METHOD_REGISTRY.setupGet, {})
   sessionRecords.clear()
   for (const session of state.sessions) sessionRecords.set(session.sessionId, session)
+  sourceRecordsReady = true
   const rendererState = selfTestTaps && testMode ? selfTestTaps.rendererState(state) : state
   return {
     ok: true,
@@ -465,6 +472,9 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   hostClient = launched.client
   hostRendererPort = launched.applicationPort
   trackSessionProcessStates(launched.client)
+  ensureSourcePolling()
+  void launched.client.request<SourceRestartResponse>(METHOD_REGISTRY.updateRestart, { op: 'recover', build: openedSourceBuild() })
+    .then(response => reconcileSourceRestart(response, launched.client)).catch(error => console.error('Restart recovery unavailable', error))
   launched.client.onAppEvent((message) => {
     if (message.topic === 'away') readSaidAway()
     appEvents.forward(message)
@@ -558,6 +568,39 @@ function restrictWebPermissions(): void {
   electronSession.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) =>
     microphoneOnly(contents, permission, details.mediaType ? [details.mediaType] : undefined)
   )
+}
+
+function adoptRestartedRuntime(
+  id: string,
+  attachment: AttachmentIdentity,
+  launch: { cwd: string; executable: string },
+  dimensions: { cols: number; rows: number }
+): StartupSuccess {
+  const record = sessionRecords.get(id)!
+  const adopted = runtimes.get(id)
+  // A retry of a recorded start names an incarnation this window may already be running; taking
+  // its old attachment back would hand the pane a lease the renderer's recovery has revoked.
+  if (adopted && !adoptsStartedAttachment(adopted.attachment, attachment)) return startupForRuntime(adopted)
+  const runtime: ApplicationRuntime = runtimes.get(id) ?? {
+    client: requireHostClient(),
+    session: attachment,
+    attachment,
+    rendererPort: hostRendererPort!,
+    dimensions,
+    cwd: record.cwd,
+    executable: record.executable,
+    workspaceId: record.workspaceId,
+    name: record.name,
+    testMode: rendererTestMode,
+    processState: 'live'
+  }
+  runtime.session = { sessionId: attachment.sessionId, incarnationId: attachment.incarnationId }
+  runtime.attachment = attachment
+  runtime.processState = 'live'
+  runtime.cwd = launch.cwd
+  runtime.executable = launch.executable
+  runtimes.set(id, runtime)
+  return startupForRuntime(runtime)
 }
 
 function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
@@ -795,38 +838,6 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     const id = requireKnownSession(event, sessionId)
     return startNewConversation(requireHostClient(), id)
   })
-  const adoptRestartedRuntime = (
-    id: string,
-    attachment: AttachmentIdentity,
-    launch: { cwd: string; executable: string },
-    dimensions: { cols: number; rows: number }
-  ): StartupSuccess => {
-    const record = sessionRecords.get(id)!
-    const adopted = runtimes.get(id)
-    // A retry of a recorded start names an incarnation this window may already be running; taking
-    // its old attachment back would hand the pane a lease the renderer's recovery has revoked.
-    if (adopted && !adoptsStartedAttachment(adopted.attachment, attachment)) return startupForRuntime(adopted)
-    const runtime: ApplicationRuntime = runtimes.get(id) ?? {
-      client: requireHostClient(),
-      session: attachment,
-      attachment,
-      rendererPort: hostRendererPort!,
-      dimensions,
-      cwd: record.cwd,
-      executable: record.executable,
-      workspaceId: record.workspaceId,
-      name: record.name,
-      testMode: rendererTestMode,
-      processState: 'live'
-    }
-    runtime.session = { sessionId: attachment.sessionId, incarnationId: attachment.incarnationId }
-    runtime.attachment = attachment
-    runtime.processState = 'live'
-    runtime.cwd = launch.cwd
-    runtime.executable = launch.executable
-    runtimes.set(id, runtime)
-    return startupForRuntime(runtime)
-  }
   bridgeIpc.handle('aiterm:session:resume', async (event, sessionId: unknown, expectedCommand: unknown) => {
     const id = requireKnownSession(event, sessionId)
     if (expectedCommand !== undefined && (typeof expectedCommand !== 'string' || expectedCommand.length === 0)) {
@@ -918,6 +929,57 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     if (!allowedSenders.has(event.sender.id) || event.senderFrame !== event.sender.mainFrame) return
     selectedSessions.set(event.sender.id, typeof sessionId === 'string' ? sessionId : null)
     appEvents.watchChanged()
+  })
+  bridgeIpc.handle('aiterm:app:update-restart', async (event, op: unknown, expectedRunId: unknown) => {
+    if (!senderIsAllowed(event)) throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    if (!['status', 'begin', 'cancel', 'now', 'recover', 'dismiss'].includes(String(op))) throw new MainIpcError(ERROR_CODES.invalidArgument, 'Invalid restart action')
+    if (expectedRunId !== undefined && (typeof expectedRunId !== 'string' || expectedRunId !== (sourceAttempt?.id ?? sourceRun?.id))) throw new Error('This restart attempt has been superseded')
+    const waitingBuild = waitingSourceBuild(), client = requireHostClient()
+    let attempt = sourceAttempt
+    if (op === 'begin') {
+      if (!waitingBuild) throw new Error('No update is waiting for BMN to close')
+      if (!sourceSnapshotKnown || sourcePendingAdoption || sourceRun && ['admitting', 'waiting', 'closing', 'cancelling', 'resuming'].includes(sourceRun.phase)) throw new Error('The previous restart is still recovering; wait for its sessions before restarting again')
+      if (closePromptCoordinator?.hasUnsavedEdits(event.sender)) throw new Error('Save or discard your Quick look edits before restarting')
+      sourceUpdateLauncher(rendererTestMode)
+      applicationLifecycle.beginSourceUpdate()
+      attempt = sourceAttempt = { id: randomUUID(), cancelled: false, client, deadline: restartClock() + UPDATE_RESTART_LIMIT_MS, targets: runningTargets() }
+      sourceRun = null; sourceRestartClosing = false; showUpdateRestart = true
+      clearSourceDeadlineTimers()
+      const owned = attempt
+      sourceCloseTimer = setTimeout(() => closeSourceAttempt(owned), Math.max(0, owned.deadline - UPDATE_RESTART_SHUTDOWN_MS - restartClock()))
+      sourceExitTimer = setTimeout(() => finishSourceAttempt(owned), Math.max(0, owned.deadline - restartClock()))
+      ensureSourcePolling()
+    }
+    const id = typeof expectedRunId === 'string' ? expectedRunId : attempt?.id ?? sourceRun?.id
+    if (op === 'cancel') {
+      if (attempt && attempt.id === id) { attempt.cancelled = true; attempt.authorization?.revoke() }
+      sourceFailedRestartId = id ?? null
+      clearSourceDeadlineTimers()
+      sourceRestartClosing = false; applicationLifecycle.cancelSourceUpdate(); ensureSourcePolling()
+    }
+    if (op === 'dismiss') showUpdateRestart = false
+    const response = await client.request<SourceRestartResponse>(METHOD_REGISTRY.updateRestart, {
+      op, ...(op === 'begin' ? { runId: attempt!.id, build: waitingBuild, deadline: attempt!.deadline }
+        : ['status', 'recover'].includes(String(op)) ? {} : { runId: id }),
+      ...(op === 'recover' ? { build: openedSourceBuild() } : {})
+    }).catch(async error => {
+      // Timeout is an unknown outcome; the already-armed main timers and status reconciliation remain.
+      if (op === 'begin' && error instanceof PtyHostRequestTimeoutError && sourceAttempt === attempt && !attempt?.cancelled) return client.request<SourceRestartResponse>(METHOD_REGISTRY.updateRestart, { op: 'status' })
+      if (op === 'begin' && !(error instanceof PtyHostRequestTimeoutError) && sourceAttempt === attempt) {
+        attempt!.cancelled = true; clearSourceDeadlineTimers(); applicationLifecycle.cancelSourceUpdate()
+      }
+      throw error
+    })
+    if (client !== hostClient || sourceAttempt && response.run?.id !== sourceAttempt.id) throw new Error('This restart response has been superseded')
+    const adoption = await reconcileSourceRestart(response, client)
+    if (!adoption.accepted) throw new Error('This restart response has been superseded')
+    const recovered = adoption.recovered
+    const run = sourceRun
+    const cohort = run && ['resuming', 'complete'].includes(run.phase)
+      ? await client.request<InterruptedSessionCohort | null>(METHOD_REGISTRY.sessionCohortList, {}) : null
+    const reported = cohort?.entries.filter(entry => entry.reportedAt !== undefined && run!.members.some(m => m.sessionId === entry.sessionId && m.incarnationId === entry.incarnationId)) ?? []
+    const reportedCohort = cohort && reported.length ? { ...cohort, entries: reported } : null
+    return { reportedCohort, waitingBuild, show: showUpdateRestart, run, sessions: response.sessions, recovered } satisfies UpdateRestartSnapshot & { recovered: StartupSuccess[] }
   })
   bridgeIpc.handle('aiterm:app:quit', (event) => {
     if (!senderIsAllowed(event)) {
@@ -1219,7 +1281,120 @@ async function nativeChoice(
   return result.response
 }
 
+const mainLifetime = randomUUID()
+let showUpdateRestart = false
+let sourceRestartClosing = false
+let sourceRestartTimer: NodeJS.Timeout | undefined
+let sourceRestartReading = false
+let sourceRecordsReady = false
+let sourceSnapshotKnown = false
+let sourcePendingAdoption = true
+let sourceRun: UpdateRestartRecord | null = null
+let sourceFailedRestartId: string | null = null
+let sourceCloseTimer: NodeJS.Timeout | undefined
+let sourceExitTimer: NodeJS.Timeout | undefined
+interface SourceAttempt { id: string; cancelled: boolean; client: PtyHostClient; deadline: number; targets: readonly RunningSessionTarget[]; authorization?: SourceRestartAuthorization }
+interface SourceRestartResponse { run: UpdateRestartRecord | null; sessions: UpdateRestartMember[]; starts: SessionResumeResult[] }
+let sourceAttempt: SourceAttempt | undefined
+const adoptSourceStarts = createSourceRestartAdopter({
+  recordsReady: () => sourceRecordsReady,
+  hasRecord: id => sessionRecords.has(id),
+  incarnation: id => runtimes.get(id)?.session.incarnationId,
+  attach: async (start, scope) => {
+    const attachment = await (scope as PtyHostClient).request<AttachmentIdentity>(METHOD_REGISTRY.terminalAttach, { sessionId: start.sessionId, incarnationId: start.incarnationId })
+    const gate = rendererTestMode && process.env.BMN_TEST_RESTART_ATTACH_GATE
+    if (gate) while (!existsSync(join(gate, start.sessionId))) await new Promise(resolve => setTimeout(resolve, 25))
+    return { ...start, ...attachment }
+  },
+  adopt: start => adoptRestartedRuntime(start.sessionId, start, start.launch, { cols: 80, rows: 24 })
+})
+function clearSourceDeadlineTimers(): void {
+  if (sourceCloseTimer) clearTimeout(sourceCloseTimer)
+  if (sourceExitTimer) clearTimeout(sourceExitTimer)
+  sourceCloseTimer = undefined; sourceExitTimer = undefined
+}
+function sourceAttemptAllowed(attempt: SourceAttempt): boolean { return sourceAttempt === attempt && !attempt.cancelled && hostClient === attempt.client }
+function finishSourceAttempt(attempt: SourceAttempt): void {
+  if (!sourceAttemptAllowed(attempt)) return
+  attempt.authorization?.commit()
+  app.exit(0)
+}
+function ensureSourcePolling(): void {
+  if (!sourceRestartTimer) sourceRestartTimer = setInterval(() => void driveSourceRestart(), 250)
+}
+async function reconcileSourceRestart(response: SourceRestartResponse, client: PtyHostClient): Promise<RestartAdoption<StartupSuccess>> {
+  const current = (): boolean => hostClient === client && (!sourceAttempt || response.run?.id === sourceAttempt.id) &&
+    (!sourceRun || response.run !== null && (response.run.id !== sourceRun.id || response.run.revision >= sourceRun.revision))
+  if (!current()) return { accepted: false, pending: false, recovered: [] }
+  sourceRun = response.run
+  sourcePendingAdoption = true
+  const adoption = await adoptSourceStarts(response.run, response.starts, client, current)
+  if (!adoption.accepted) return adoption
+  sourceSnapshotKnown = true; sourcePendingAdoption = adoption.pending
+  if (sourceRun?.phase === 'closing' && sourceAttempt?.id === sourceRun.id) closeSourceAttempt(sourceAttempt)
+  if (sourceRun?.phase === 'cancelled' && sourceAttempt?.id === sourceRun.id && !sourceAttempt.cancelled) {
+    sourceAttempt.cancelled = true; sourceAttempt.authorization?.revoke(); clearSourceDeadlineTimers()
+    sourceRestartClosing = false; applicationLifecycle.cancelSourceUpdate()
+  }
+  return adoption
+}
+function closeSourceAttempt(attempt: SourceAttempt): void {
+  if (!sourceAttemptAllowed(attempt) || sourceRestartClosing || attempt.id === sourceFailedRestartId) return
+  sourceRestartClosing = true
+  const allowed = (): boolean => sourceAttemptAllowed(attempt)
+  const run = sourceRun?.id === attempt.id ? sourceRun : null
+  const targets = run && run.phase !== 'admitting'
+    ? runningTargets().filter(t => run.members.some(m => m.sessionId === t.sessionId && m.incarnationId === t.incarnationId))
+    : attempt.targets
+  // The deadline remains owned even when Begin/status is delayed or the renderer is gone.
+  void attempt.client.request(METHOD_REGISTRY.updateRestart, { op: 'now', runId: attempt.id }).catch(() => undefined)
+  const deadline = Math.min(attempt.deadline, restartClock() + UPDATE_RESTART_SHUTDOWN_MS)
+  if (sourceExitTimer) clearTimeout(sourceExitTimer)
+  sourceExitTimer = setTimeout(() => finishSourceAttempt(attempt), Math.max(0, deadline - restartClock()))
+  let stopping = false
+  void applicationLifecycle.quitForSourceUpdate(targets, {
+    deadline, allowed, finish: () => finishSourceAttempt(attempt),
+    captured: async (target, outcome) => {
+      if (!allowed()) return
+      await attempt.client.request(METHOD_REGISTRY.updateRestart, { op: 'capture', runId: attempt.id, sessionId: target.sessionId, incarnationId: target.incarnationId, outcome: outcome.status === 'saved' ? 'saved' : 'unavailable' })
+    },
+    prepare: async () => {
+      if (!allowed()) return
+      attempt.authorization = sourceRestartAuthorization()
+      await armSourceUpdateLauncher(rendererTestMode, attempt.authorization)
+    },
+    stop: (target, stopDeadline) => {
+      if (!allowed()) return Promise.resolve()
+      stopping = true
+      return attempt.client.request(METHOD_REGISTRY.updateRestart, { op: 'stop', runId: attempt.id, sessionId: target.sessionId, incarnationId: target.incarnationId, deadline: stopDeadline })
+    }
+  }).catch(async error => {
+    if (!allowed()) return
+    if (stopping) { console.error('Restart shutdown outcome unconfirmed', error); return }
+    attempt.cancelled = true; attempt.authorization?.revoke(); sourceFailedRestartId = attempt.id
+    clearSourceDeadlineTimers(); applicationLifecycle.cancelSourceUpdate(); sourceRestartClosing = false
+    await beforeRestartDeadline(attempt.client.request(METHOD_REGISTRY.updateRestart, { op: 'abort', runId: attempt.id, reason: String(error) }), restartClock() + 500, undefined).catch(() => undefined)
+    showUpdateRestart = true; ensureSourcePolling()
+    console.error('Restart cancelled before stopping sessions', error)
+  })
+}
+async function driveSourceRestart(): Promise<void> {
+  if (sourceRestartReading) return
+  sourceRestartReading = true
+  const client = hostClient
+  if (!client) { sourceRestartReading = false; return }
+  try {
+    const result = await client.request<SourceRestartResponse>(METHOD_REGISTRY.updateRestart, { op: 'status' })
+    const adoption = await reconcileSourceRestart(result, client)
+    if (adoption.accepted && !adoption.pending && (!result.run || ['cancelled', 'complete'].includes(result.run.phase) && result.run.members.every(m => !['pending', 'claimed'].includes(m.tell))) && sourceRestartTimer && (!sourceAttempt || sourceAttempt.cancelled)) {
+      clearInterval(sourceRestartTimer); sourceRestartTimer = undefined
+    }
+  } catch (error) { console.error('Restart state unavailable', error) }
+  finally { sourceRestartReading = false }
+}
 const applicationLifecycle = createApplicationLifecycle({
+  sourceUpdatePending: () => waitingSourceBuild() !== null,
+  showSourceUpdate: () => { showUpdateRestart = true; applicationWindow?.show() },
   runningTargets,
   saveBackgroundChoice: async (decisions) => {
     for (const { target, choice } of decisions) {
@@ -1369,6 +1544,13 @@ if (primaryInstance) void app.whenReady().then(async () => {
     const noticeEvents: NodeJS.EventEmitter = app
     noticeEvents.on('bmn-test:app-notices', (read: (notices: typeof recorder.appNotices) => void) => read(recorder.appNotices))
     noticeEvents.on('bmn-test:app-notice-click', (index: number) => recorder.appNoticeClicks[index]?.())
+  }
+  if (rendererTestMode) {
+    const testEvents: NodeJS.EventEmitter = app
+    testEvents.on('bmn-test:restart-state', (read: (state: unknown) => void) => read({
+      run: sourceRun, polling: Boolean(sourceRestartTimer), reading: sourceRestartReading, pendingAdoption: sourcePendingAdoption, recordsReady: sourceRecordsReady,
+      runtimes: [...runtimes.values()].map(r => ({ ...r.session, attachmentId: r.attachment.attachmentId }))
+    }))
   }
   if (!rendererTestMode) presence.start()
   try {

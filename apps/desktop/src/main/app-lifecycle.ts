@@ -1,3 +1,5 @@
+// MODULE: app-lifecycle.ts - close/quit choices and bounded, cancellable source-update shutdown
+import { beforeRestartDeadline, restartClock } from '../utility/update-restart-deadline'
 import {
   ERROR_CODES,
   type BackgroundChoice,
@@ -60,6 +62,8 @@ interface PreventableEvent {
 }
 
 interface ApplicationLifecycleActions {
+  sourceUpdatePending?(): boolean
+  showSourceUpdate?(): void
   runningTargets(): readonly RunningSessionTarget[]
   /** The window holds unsaved edits in Quick look; the window's own prompt asks about them first (Story 68.1 AC8). */
   unsavedEdits?(): boolean
@@ -77,9 +81,20 @@ interface ApplicationLifecycleActions {
   reportFailure(error: unknown): void
 }
 
+export interface SourceUpdateShutdown {
+  deadline: number
+  allowed?(): boolean
+  finish?(): void
+  prepare(): Promise<void>
+  captured(target: RunningSessionTarget, outcome: SavedOutputCaptureOutcome): Promise<void>
+  stop(target: RunningSessionTarget, deadline: number): Promise<unknown>
+}
 export interface ApplicationLifecycle {
+  beginSourceUpdate(): void
+  cancelSourceUpdate(): void
   closeLastWindow(event: PreventableEvent): void
   beforeQuit(event: PreventableEvent): void
+  quitForSourceUpdate(targets: readonly RunningSessionTarget[], shutdown: SourceUpdateShutdown): Promise<void>
   updateDownloaded(): void
   stopCurrentTarget(target?: RunningSessionTarget): Promise<SavedOutputCaptureOutcome>
 }
@@ -117,6 +132,7 @@ export function createApplicationLifecycle(
 ): ApplicationLifecycle {
   let decisionInProgress = false
   let quitApproved = false
+  let sourceOwner: object | null = null
 
   const fail = (error: unknown): void => {
     decisionInProgress = false
@@ -151,8 +167,14 @@ export function createApplicationLifecycle(
   }
 
   return {
+    beginSourceUpdate(): void {
+      if (decisionInProgress) throw new Error('Finish the open close or quit question first')
+      decisionInProgress = true; sourceOwner = {}
+    },
+    cancelSourceUpdate(): void { if (sourceOwner) { sourceOwner = null; decisionInProgress = false } },
     closeLastWindow(event): void {
       if (quitApproved) return
+      if (sourceOwner) { event.preventDefault(); actions.showSourceUpdate?.(); return }
       const targets = actions.runningTargets()
       event.preventDefault()
       if (decisionInProgress) return
@@ -211,6 +233,7 @@ export function createApplicationLifecycle(
 
     beforeQuit(event): void {
       if (quitApproved) return
+      if (actions.sourceUpdatePending?.()) { event.preventDefault(); actions.showSourceUpdate?.(); return }
       const targets = actions.runningTargets()
       event.preventDefault()
       if (decisionInProgress) return
@@ -236,6 +259,33 @@ export function createApplicationLifecycle(
           return targets.length === 0 ? finishWithoutRunningTargets('application-quit') : stopThenQuit(targets)
         })
         .catch(fail)
+    },
+
+    async quitForSourceUpdate(targets, shutdown): Promise<void> {
+      if (decisionInProgress && !sourceOwner) throw new Error('A lifecycle decision is already in progress')
+      const owner = sourceOwner ?? {}
+      decisionInProgress = true; sourceOwner = owner
+      const allowed = (): boolean => sourceOwner === owner && shutdown.allowed?.() !== false
+      try {
+        const captureDeadline = Math.min(shutdown.deadline - 6000, restartClock() + 2000)
+        await Promise.all(targets.map(async target => {
+          const timeout: SavedOutputCaptureOutcome = { status: 'unavailable', reason: 'capture-persist-failure', detail: 'final capture did not settle within the update shutdown budget' }
+          const outcome = await beforeRestartDeadline(actions.flushSavedOutput([target]).catch(() => timeout), captureDeadline, timeout)
+          if (!allowed()) return
+          await beforeRestartDeadline(shutdown.captured(target, outcome), Math.min(shutdown.deadline - 5500, restartClock() + 250), undefined)
+        }))
+        if (!allowed()) return
+        await shutdown.prepare()
+        if (!allowed()) return
+        const stopDeadline = Math.min(shutdown.deadline - 500, restartClock() + 4000)
+        await Promise.allSettled(targets.map(target => !allowed() ? Promise.resolve() : beforeRestartDeadline(shutdown.stop(target, stopDeadline), stopDeadline, undefined)))
+        if (!allowed()) return
+        decisionInProgress = false; sourceOwner = null; quitApproved = true
+        if (shutdown.finish) shutdown.finish(); else actions.quitApplication()
+      } catch (error) {
+        if (sourceOwner === owner) { sourceOwner = null; fail(error) }
+        throw error
+      }
     },
 
     updateDownloaded(): void {

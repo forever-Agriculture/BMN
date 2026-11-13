@@ -42,6 +42,11 @@ import {
 } from './session-manager'
 import { AgentHistory, emptyHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { FileSavedOutputStore } from './saved-output-store'
+import { restartClock } from './update-restart-deadline'
+import { CompanionService } from './companion-service'
+import { COMPANION_OPERATIONS, type CompanionOperationName } from './database-companion-store'
+import type { DatabaseWorkerClient } from './database-client'
+import { UPDATE_RESTART_CHECK, updateRestartWords } from '@bmn/protocol'
 import {
   APPLICATION_INTERRUPTION_REASON,
   databaseSettings,
@@ -599,6 +604,52 @@ describe('addressed input BMN itself writes (Epic 125)', () => {
     expect(seen).toHaveLength(1)
     expect(() => manager.writeToSession('no-such-session', line)).toThrow()
     expect(seen).toHaveLength(1)
+  })
+})
+
+describe('update restart admission and bounded stop', () => {
+  const create = async (f: Awaited<ReturnType<typeof fixture>>) => f.manager.create({ ...DEFAULT_SESSION_CREATION, cwd: f.cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+  it('refuses new and already admitted starts while frozen and releases them after Cancel', async () => {
+    const spawn = vi.fn(() => new FakePty())
+    const f = await fixture(undefined, undefined, { spawnPty: spawn })
+    await f.manager.freezeStartsForUpdate()
+    await expect(create(f)).rejects.toThrow('restarting')
+    expect(spawn).not.toHaveBeenCalled()
+    f.manager.thawStartsAfterUpdate()
+    await create(f); expect(spawn).toHaveBeenCalledOnce()
+  })
+  it('cancels a start admitted before the freeze before it can spawn', async () => {
+    const spawn = vi.fn(() => new FakePty())
+    const f = await fixture(undefined, undefined, { spawnPty: spawn })
+    const original = f.store.listWorkspaces.bind(f.store)
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    f.store.listWorkspaces = async () => { await held; return original() }
+    const pending = create(f)
+    const refused = expect(pending).rejects.toThrow('cancelled this pending start')
+    const frozen = f.manager.freezeStartsForUpdate()
+    release(); await refused; await frozen
+    expect(spawn).not.toHaveBeenCalled()
+  })
+  it('never sends a late signal after a hung identity read exceeds the stop deadline', async () => {
+    let reads = 0, finish!: (identity: string) => void
+    const blocked = new Promise<string>(resolve => { finish = resolve })
+    const signal = vi.fn(() => true)
+    const f = await fixture(undefined, undefined, { processStartIdentity: () => ++reads === 1 ? Promise.resolve('linux-proc-start:12345') : blocked, signalProcess: signal })
+    const identity = await create(f)
+    expect(await f.manager.stopForUpdate(identity, restartClock() + 20)).toBe('unknown')
+    finish('linux-proc-start:12345')
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(f.pty.killed).toBe(false); expect(signal).not.toHaveBeenCalled()
+  })
+  it('distinguishes durable interruption from an observed exit with an unacknowledged record', async () => {
+    const f = await fixture(); const identity = await create(f)
+    f.store.markInterrupted = () => new Promise(() => {})
+    expect(await f.manager.stopForUpdate(identity, restartClock() + 20)).toBe('unknown')
+    expect(f.pty.killed).toBe(true)
+    const g = await fixture(); const confirmed = await create(g)
+    expect(await g.manager.stopForUpdate(confirmed, restartClock() + 200)).toBe('confirmed')
+    expect(g.store.interrupted.get(confirmed.incarnationId)).toContain('update restart')
   })
 })
 
@@ -6419,5 +6470,102 @@ describe('workspace admission and archive ordering (47.1)', () => {
     const mutate = vi.fn(async () => true)
     await expect(f.manager.updateSessionAvailability(created.sessionId, { archived: false }, mutate)).rejects.toThrow(/Restore the workspace/)
     expect(mutate).not.toHaveBeenCalled()
+  })
+})
+
+describe('update restart recovery through the manager and companion (Epic 125, 125.5)', () => {
+  const RULE = '─'.repeat(40)
+  const world = async (agent: 'claude' | 'codex') => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-restart-integration-')); createdRoots.add(cwd)
+    const executable = join(cwd, agent); await writeFile(executable, '#!/bin/sh\n'); await chmod(executable, 0o700)
+    const database = new BetterSqlite3(':memory:'); initializeDatabase(database, '2026-11-13T00:00:00Z')
+    const store = sqliteSessionStore(database), ptys: FakePty[] = []
+    const manager = new SessionManager({ store, spawnPty: (_file, argv) => { const pty = new FakePty(); if (argv[0] === '--help') completeCapabilityProbe(pty); else ptys.push(pty); return pty },
+      processStartIdentity: async () => 'synthetic-start',
+      conversationReferenceExists: async () => true, sendTerminalMessage: () => undefined,
+      environment: { HOME: cwd, CODEX_HOME: cwd, CLAUDE_CONFIG_DIR: cwd, PATH: '/usr/bin:/bin' }, homeDirectory: cwd })
+    // The agent the test started stays in front of its terminal; a fake process has no /proc entry to read.
+    vi.spyOn(manager, 'foregroundProcessIdentity').mockReturnValue('synthetic-front')
+    const worker = { ...store, companion: async (name: CompanionOperationName, ...args: unknown[]) => {
+      const operation = COMPANION_OPERATIONS[name] as (db: DatabaseConnection, ...args: unknown[]) => unknown
+      return operation(database, ...args)
+    } } as unknown as DatabaseWorkerClient
+    let clock = Date.parse('2026-11-13T12:00:00Z')
+    const options = { database: worker, manager, home: cwd, cliPath: join(cwd, 'bmn'), emit: () => undefined, now: () => new Date(clock),
+      roots: { config: join(cwd, 'config'), data: join(cwd, 'data'), state: join(cwd, 'state'), runtime: join(cwd, 'runtime') } }
+    let companion = new CompanionService(options)
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable, argv: [], cols: 100, rows: 12 })
+    await manager.observeConversation({ ...created, agentCli: agent, conversationReference: '01a0b657-21a8-7f00-addd-b73646828f5b', source: 'startup' })
+    await companion['observeHookEvent']({ ...created, agent, event: 'PostToolUse', source: null, toolName: 'shell', effects: [] })
+    /** BMN closes for the update with this session still working, and the reopened BMN recovers. */
+    const restartAndReopen = async (): Promise<string> => {
+      const restart = companion.updateRestart
+      await restart.begin('1234567'); restart.tick(true)
+      await restart.stop(created.sessionId, created.incarnationId, () => manager.stopForUpdate(created, restartClock() + 1000))
+      expect(restart.snapshot()!.members[0]).toMatchObject({ stop: 'confirmed', atPress: 'working', atClose: 'not-ready' })
+      await companion.close()
+      manager.thawStartsAfterUpdate() // A reopened utility has a new, unfrozen manager.
+      companion = new CompanionService(options)
+      await companion.updateRestart.recover('1234567')
+      expect(companion.updateRestart.snapshot()!.members[0]).toMatchObject({ resume: 'resumed' })
+      const incarnationId = manager.liveIncarnationId(created.sessionId)!
+      expect(incarnationId).not.toBe(created.incarnationId)
+      // Recovery holds no view of its own; the window attaches afterwards.
+      manager.activateAttachment(manager.attach({ sessionId: created.sessionId, incarnationId }).attachmentId)
+      return incarnationId
+    }
+    const typed = (): string[] => ptys.at(-1)!.writes.map(bytes => typeof bytes === 'string' ? bytes : Buffer.from(bytes).toString()).filter(text => text.includes('\x1b[200~'))
+    return { created, manager, ptys, database, typed, restartAndReopen, get companion() { return companion }, pass: (ms: number) => { clock += ms },
+      close: async () => { for (const pty of ptys) pty.emitExit({ exitCode: 0 }); await companion.close(); database.close() } }
+  }
+
+  it.each(['none', 'draft', 'hook-work', 'dialog', 'attention', 'no-start'] as const)('a resumed Claude Code session is told once, only when the idle proof holds: %s', async intervention => {
+    const w = await world('claude')
+    try {
+      const incarnationId = await w.restartAndReopen()
+      const { sessionId } = w.created
+      const pty = w.ptys.at(-1)!
+      if (intervention !== 'no-start') await w.companion['observeHookEvent']({ sessionId, incarnationId, agent: 'claude', event: 'SessionStart', source: 'resume', toolName: null, effects: [] })
+      pty.emit(`Claude Code v2.1.323\r\n${RULE}\r\n❯ ${intervention === 'draft' ? 'half a sentence' : ''}\r\n${RULE}\r\n  ? for shortcuts`)
+      if (intervention === 'dialog') pty.emit('\x1b[2J\x1b[HDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No')
+      if (intervention === 'hook-work') await w.companion['observeHookEvent']({ sessionId, incarnationId, agent: 'claude', event: 'UserPromptSubmit', source: null, toolName: null, effects: [] })
+      if (intervention === 'attention') await w.companion['openAttention']({ sessionId, incarnationId, requestKey: 'synthetic:question', kind: 'question', title: 'Synthetic question', phoneNotified: true })
+      // Right after its start nothing is typed, whatever the screen shows.
+      await w.companion.updateRestart.tell()
+      expect(w.typed()).toEqual([])
+      w.pass(2500)
+      await w.companion.updateRestart.tell(); await w.companion.updateRestart.tell()
+      expect(w.typed()).toEqual(intervention === 'none' ? [`\x1b[200~${UPDATE_RESTART_CHECK}\x1b[201~\r`] : [])
+      const member = w.companion.updateRestart.snapshot()!.members[0]!
+      if (intervention === 'none') expect(updateRestartWords(member, 'after')).toBe('Resumed · told to check its work')
+      else {
+        // The proof never holds: after its time the row says the session was not told, and still nothing was typed.
+        w.pass(61_000); w.companion.updateRestart.advance(); await w.companion.updateRestart.tell()
+        expect(updateRestartWords(w.companion.updateRestart.snapshot()!.members[0]!, 'after')).toBe('Resumed · not told, type continue')
+        expect(w.typed()).toEqual([])
+      }
+    } finally { await w.close() }
+  })
+
+  it('a resumed Codex session gets nothing typed by the restart, the Away wake or a message wake, until its resumed run finishes a turn', async () => {
+    const w = await world('codex')
+    try {
+      const incarnationId = await w.restartAndReopen()
+      const { sessionId } = w.created
+      const pty = w.ptys.at(-1)!
+      pty.emit('  >_ OpenAI Codex (v0.169.0)\r\n› \r\n\r\n  GPT-6 high · ~/synthetic\x1b]7501;state=idle:app=codex\x07')
+      for (let n = 0; n < 4; n += 1) { await w.companion.updateRestart.tell(); w.companion.updateRestart.advance(); w.pass(30_000) }
+      expect(updateRestartWords(w.companion.updateRestart.snapshot()!.members[0]!, 'after')).toBe('Resumed · not told, not ready at close')
+      // Each route that types a line ends in the same writer, which refuses this session before it writes.
+      const routes = w.companion as unknown as { typeLine(id: string, text: string): void; awayWake: { options: { write(id: string, text: string): void } }; messageWake: { options: { write(id: string, text: string): void } } }
+      expect(() => routes.typeLine(sessionId, 'the restart line')).toThrow(/types nothing into a Codex session/u)
+      expect(() => routes.awayWake.options.write(sessionId, 'the Away wake line')).toThrow(/types nothing into a Codex session/u)
+      expect(() => routes.messageWake.options.write(sessionId, 'the message wake line')).toThrow(/types nothing into a Codex session/u)
+      expect(pty.writes).toEqual([])
+      // The owner told it to continue and it finished that turn: the ordinary wakes may type again.
+      await w.companion['observeHookEvent']({ sessionId, incarnationId, agent: 'codex', event: 'Stop', source: null, toolName: null, effects: [] })
+      routes.messageWake.options.write(sessionId, 'the message wake line')
+      expect(w.typed()).toEqual(['\x1b[200~the message wake line\x1b[201~\r'])
+    } finally { await w.close() }
   })
 })

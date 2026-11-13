@@ -147,6 +147,8 @@ import {
 } from './session-terminal'
 import { ConfirmDialog, ConversationReferenceDialog, ResumeDialog, WorkspaceDialog } from './shell-dialogs'
 import { CloseSessionsDialog } from './close-sessions-dialog'
+import { UpdateRestartDialog } from './update-restart-dialog'
+import { updateRestartCancelListed, type UpdateRestartSnapshot, type UpdateRestartOperation } from '@bmn/protocol'
 import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from './terminal-history'
 import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
@@ -252,6 +254,49 @@ function App(): React.JSX.Element {
   const [interrupted, setInterrupted] = useState<InterruptedSessionCohort | null>(null)
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
   const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
+  const [updateRestart, setUpdateRestart] = useState<UpdateRestartSnapshot | null>(null)
+  const [restartOpen, setRestartOpen] = useState(false)
+  const restartRecovered = useRef(false)
+  const [restartReady, setRestartReady] = useState(false)
+  const restartDismissed = useRef<string | null>(null)
+  const restartAction = async (op: UpdateRestartOperation): Promise<void> => {
+    const snapshot = await window.aiTerminal.updateRestart(op, op === 'status' || op === 'recover' || op === 'begin' ? undefined : updateRestart?.run?.id)
+    if (snapshot.recovered.length) setLive(current => ({ ...current, ...Object.fromEntries(snapshot.recovered.map(item => [item.sessionId, item])) }))
+    setUpdateRestart(snapshot)
+    if (op === 'begin' || op === 'cancel') setRestartOpen(true)
+  }
+  useEffect(() => {
+    if (!startup) return
+    let cancelled = false, pending = false
+    const refresh = async (): Promise<void> => {
+      if (pending) return
+      pending = true
+      try {
+        const op = restartRecovered.current ? 'status' : 'recover'
+        restartRecovered.current = true
+        const snapshot = await window.aiTerminal.updateRestart(op)
+        if (cancelled) return
+        setRestartReady(true)
+        if (snapshot.recovered.length) setLive(current => ({ ...current, ...Object.fromEntries(snapshot.recovered.map(item => [item.sessionId, item])) }))
+        setUpdateRestart(snapshot.run?.id === restartDismissed.current ? { ...snapshot, run: null } : snapshot)
+        if (snapshot.show || snapshot.run && !snapshot.run.dismissed && ['admitting', 'waiting', 'closing', 'cancelling', 'cancelled', 'resuming', 'complete'].includes(snapshot.run.phase) && restartDismissed.current !== snapshot.run.id) setRestartOpen(true)
+      } catch (e) { if (!cancelled) console.error('Update restart state unavailable', e) }
+      finally { pending = false }
+    }
+    void refresh()
+    const timer = setInterval(() => void refresh(), 1000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [startup])
+  const closeRestart = (): void => {
+    restartDismissed.current = updateRestart?.run?.id ?? null
+    setRestartOpen(false)
+    void window.aiTerminal.updateRestart('dismiss', updateRestart?.run?.id).then(setUpdateRestart).catch(fail('The restart dialog could not close'))
+  }
+  // After Cancel the dialog stays only while it lists a session BMN could not tell (Epic 125 D4); a later result goes to Needs You.
+  useEffect(() => {
+    const run = updateRestart?.run
+    if (restartOpen && run && !run.dismissed && run.phase === 'cancelled' && !run.members.some(updateRestartCancelListed)) closeRestart()
+  }, [updateRestart, restartOpen])
   /** The close question Quick look has already let through: its unsaved edits were saved or discarded (Story 68.1 AC8). */
   const [closeCleared, setCloseCleared] = useState<string | null>(null)
   // A question asked only for unsaved edits that are gone by now (the sheet closed meanwhile) goes on at once.
@@ -539,17 +584,18 @@ function App(): React.JSX.Element {
    * dialog is open is not recorded, because it was never shown; the next start offers it.
    */
   useEffect(() => {
-    if (!startup || interruptedOfferChecked.current) return
+    if (!startup || !restartReady || interruptedOfferChecked.current) return
     interruptedOfferChecked.current = true
     void reloadInterruptedCohort()
       .then((cohort) => {
+        if (cohort?.cause === 'update-restart' && !updateRestart?.run?.dismissed && updateRestart?.run?.members.some(m => cohort.entries.some(e => e.sessionId === m.sessionId && e.incarnationId === m.incarnationId))) return undefined
         if (!shouldOfferInterrupted(cohort, dialogRef.current !== null)) return undefined
         setDialog({ kind: 'resume-interrupted', cohort })
         return window.aiTerminal.markCohortOffered(cohort.cohortId)
           .then((offer) => setInterrupted({ ...cohort, offeredAt: offer.offeredAt }))
       })
       .catch(fail('The resume offer could not be read'))
-  }, [startup])
+  }, [startup, restartReady])
 
   const applyStartup = (next: SuccessfulStartup): void => {
     catalogueReadSequence.current++
@@ -1823,6 +1869,7 @@ function App(): React.JSX.Element {
           ? `${interrupted.entries.length} stopped by ${interruptedStopWords(interrupted.cause)}`
           : undefined
       }),
+      ...(updateRestart?.waitingBuild ? [command('restart-update', 'Restart for the update…', () => setRestartOpen(true))] : []),
       command('quit', 'Quit BMN…', () => void window.aiTerminal.quitApplication())
     ]
   }
@@ -3007,6 +3054,7 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
+      {restartOpen && updateRestart ? <UpdateRestartDialog snapshot={updateRestart} action={restartAction} resumeReported={(cohortId, entries) => resumeInterruptedCohort(cohortId, crypto.randomUUID(), entries)} close={closeRestart} /> : null}
       {closePrompt && closePrompt.sessions.length > 0 && (dialog?.kind !== 'quick-look' || closeCleared === closePrompt.requestId) ? (
         <CloseSessionsDialog
           key={closePrompt.requestId}

@@ -526,13 +526,66 @@ by inactivity ([agent-history.md](agent-history.md)).
 These checks keep sessions apart inside the app. They do not stop a program that already runs as
 your user.
 
+## Update restart notices
+
+The owner's **Restart for the update…** press freezes that instance's running sessions into one
+recorded cohort. What BMN's own record says of each session at the press decides its row, and a
+state BMN did not observe is never shown as ready (Epic 125 D4):
+
+| At the press | Row | What happens |
+| --- | --- | --- |
+| Its turn had ended (a finished-turn event, or a start with nothing since) | `Ready` | No notice; nothing is typed after the resume |
+| Working (a tool call or prompt seen, a subagent, an open request) | `Not told yet` | The notice is queued for its next tool call |
+| No observation | `Not told yet` | The same; with no tool call the row never changes |
+
+A queued notice goes out in the hook answer after the session's next tool call, beside the brief,
+notices and messages. The hook then reports `restart.printed` with its own session token and a claim
+bound to its incarnation; only then does the row read `Reaching a safe point`, and only a root turn
+end after that makes it `Ready`. Printed means the hook wrote it, never that the agent read it or
+saved a handoff. The two notices give the clock time BMN closes by and say what will follow, each
+truthfully for its app: a Claude Code session is told BMN will resume it and tell it to continue, a
+Codex session that BMN will resume it and type nothing into it. OpenCode's plugin supplies no hook
+text and receives no notice.
+
+BMN closes when every row is `Ready`, at the clock time in the dialog's head (five minutes after
+the press, eight seconds of that kept for the final capture and shutdown), or on **Restart now**.
+Each row's state at close is written once to the record: `ready` or `not-ready`.
+
+**What BMN types.** After reopening, only confirmed stopped members whose conversation binding is
+unchanged are resumed, one at a time. Then:
+
+- A Claude Code session that was working at the press gets one fixed line, once, and only under
+  the [Away wake-up](#the-away-wake-up)'s idle proof with a resumed start as its antecedent: its
+  own `SessionStart` with source `resume` in the resumed run, the agent in front of its terminal,
+  an empty prompt, two quiet seconds and no request since. The line says to continue for a session
+  that was `ready` at close, and to check its work first for one that was not. The claim is
+  consumed before the write and an uncertain write is never repeated. If the proof does not hold
+  within a minute nothing is typed and the row reads `Resumed · not told, type continue`.
+- A Codex session is never typed into: not by the restart, and not by the Away wake or a message
+  wake, from its resume until its resumed run finishes a turn of its own. One writer holds that
+  rule for all three. Its row reads `Resumed` (turn ended before the press),
+  `Resumed · not told, not ready at close` or `Resumed · not told, type continue`.
+- A session whose turn had ended before the press gets nothing typed, in either app.
+
+**Cancel.** Text not yet handed to a hook is withdrawn. A session whose notice was printed gets the
+carry-on text at its next tool call; if it ends its turn first, a Claude Code session gets the
+carry-on line under the finished-turn idle proof, and a Codex session is listed. The Cancel result
+lists only the sessions BMN could not tell, as `Stopped for the restart · type continue` where the
+turn end was observed after the printed notice and `Not told to carry on` otherwise; with nobody to
+list the dialog closes. A result that arrives after the dialog closed is stored with the member and
+opens one informational notice in Needs You.
+
+These notices and lines grant no authority and lift no stop. Restart, Cancel and Restart now are
+window-only, unavailable on the agent control socket even with an owner token; `restart.printed`
+can acknowledge only its own bound member.
+
 ## Agent hooks: Needs you for Claude Code, Codex and OpenCode
 
 `bmn hook claude`, `bmn hook codex` and `bmn hook opencode` read one hook event as JSON on stdin
 and keep **Needs you** in step with the agent ([Cursor was retired](#cursor-retired)). They always exit 0 and print
 only BMN's answers to their own agent, so a hook never disturbs it otherwise: the [command guard](#the-command-guard)'s
 ask or block, a [prompt guard](#the-prompt-guard) stop, the away refusal of a blocking question, BMN's
-[start brief](#bmns-start-brief), the away and departure notices, a [message for their own agent](#messages-between-sessions),
+[start brief](#bmns-start-brief), the away and departure notices, an owner-initiated update restart notice, a [message for their own agent](#messages-between-sessions),
 and the phone's decision on a Claude `PermissionRequest` (Epic 78). Apart from the command guard, which decides from
 the command text alone and holds while BMN is closed, they do nothing outside BMN.
 

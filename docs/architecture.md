@@ -87,7 +87,7 @@ test that first fails on the demonstrated interleaving. An async gap that no tes
 as UNVERIFIED in the State column above, never as protected.
 
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
-arguments and working directory. The app adds no bypass flags and never copies CLI credentials. BMN types into a session only what you or a phone answer sent, with one exception: while you are Away, the fixed wake line of [The Away wake-up](agent-control.md#the-away-wake-up), and only into an agent's empty, idle prompt.
+arguments and working directory. The app adds no bypass flags and never copies CLI credentials. Apart from what you or a phone answer sent, BMN types only two things, each only into an agent's empty, idle prompt: the fixed wake line of [The Away wake-up](agent-control.md#the-away-wake-up), and after your update-restart press one fixed line into a resumed Claude Code session. A Codex session resumed by a restart is never typed into; see [update restart notices](agent-control.md#update-restart-notices).
 Terminal variables that identify another terminal (tmux, Zellij, other emulators) are removed;
 sessions get `COLORTERM=truecolor`. Every session defaults to Sixel graphics, whatever command or
 agent it runs; the owner can set **Terminal images (Sixel)** to Off per session.
@@ -316,7 +316,7 @@ agent has to guess.
 | Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop; setup sessions: none | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
 | Renderer crash | Keeps running | A new view is created, brought to the private terminal mode state the program is in, and the program is asked to repaint once; bytes from before the crash are not replayed | Unaffected; setup sessions: none | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
 | App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost; setup sessions: none | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
-| Desktop source update | The updater waits for BMN to exit; it does not stop sessions. Quit stops them as *interrupted · application quit*; closing the last window and choosing Stop records *interrupted · last window close*. Keep running leaves the updater waiting | Ends when BMN exits; a keep-running close minimizes the window | Quit or close-stop takes the final capture before stopping; the updater takes none; setup sessions: none | Unchanged | Individual Resume reopens a bound Claude/Codex conversation or OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not | Stay open; a harness that sends `SessionEnd` withdraws its own |
+| Desktop source update | The updater waits for exit. The owner’s Restart press reaches safe points, then captures/stops exact cohort members as *interrupted · update restart*, with an eight-second shutdown reserve inside five minutes; Cancel carries on, Restart now enters shutdown immediately | Ends on shutdown; closing with Keep running still minimizes | Final capture is bounded; unsettled capture is unavailable, earlier snapshots remain; the updater takes none; setup sessions: none | Unchanged; private restart receipt records exact membership and outcomes | The launcher waits for the exact old process and updater, then opens BMN. Confirmed exact interruptions with unchanged bindings resume sequentially; reported commands remain unticked, unknown outcomes require manual recovery. A Claude Code member that was working gets one fixed line under the existing idle proof after its resumed start; a resumed Codex member is never typed into | Stay open; a harness that sends `SessionEnd` withdraws its own |
 
 Ordinary saved output is a plain-text snapshot of the live screen, taken periodically, on stop and
 on quit; it is never replayed into a terminal. Setup sessions have no saved output in any row above,
@@ -360,9 +360,9 @@ a new view), the Quit row's interruption record and reason after restart, and pa
 and explicit-stop rows against the running app. A mixed close confirms that the kept session stays
 live without a lifecycle capture while the stopped session receives a final capture. The pure
 all-kept close and the visible minimized-window state remain unexercised by that self-test. App
-crash, reboot and desktop update still lack compliant end-to-end trials. The source update's
-previous *update restart* and resume-all promise contradicts its actual wait-for-exit path; see
-the [survival matrix](survival-matrix.md) for the recorded FAIL and other evidence limits.
+crash and reboot retain their trial gaps. Epic 125 joins the source updater's wait-for-exit path
+to owner-initiated safe points, launcher reopening and record-bound resume. Its evidence and the
+historical failed promise are told apart in the [survival matrix](survival-matrix.md).
 
 ## Electron hardening
 

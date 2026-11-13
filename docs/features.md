@@ -238,10 +238,37 @@ Windows and processes end separately:
 - After an app crash or a reboot, the earlier processes are marked *interrupted* and nothing
   restarts on its own.
 
-When Quit stopped sessions, the next start offers them back in one dialog. A queued source desktop
-update waits for BMN to exit; it does not stop sessions itself. Quit to get the offer after the
-update. Closing the last window and choosing Stop records *last window close* instead, so those
-sessions remain individually resumable without a resume-all offer.
+While a source update waits for BMN to close, the palette offers **Restart for the update…** and
+Quit opens the same dialog. It names the waiting build and each running session. Press **Restart**
+once. A session whose turn had ended reads **Ready** at once. A working session, or one whose state
+BMN does not know, reads **Not told yet**; at its next tool call BMN prints a notice asking it to
+reach a safe point, write its handoff and end its turn, and the row reads **Reaching a safe
+point**. It reads **Ready** only when its turn ends after that. Ready means BMN saw the notice
+printed and then the turn end, not that a handoff was saved. The head shows the clock time BMN
+closes by, five minutes after the press at most. **Restart now** closes at once. **Cancel** keeps
+BMN open and tells the notified sessions to carry on; the ones it could not tell are listed, and
+with nobody to list the dialog simply closes.
+
+BMN then closes, the update finishes and BMN opens again by itself. If the update failed, the
+launcher's usual dialog says which build it can open. The reopened BMN resumes the stopped agent
+sessions one at a time and shows each row's result:
+
+| Row | Meaning |
+| --- | --- |
+| `Resumed · told to continue` | A Claude Code session that was ready; BMN typed one line telling it to continue |
+| `Resumed · told to check its work` | A Claude Code session that was not ready at close; the line says to check its work first |
+| `Resumed · not told, type continue` | Nothing was typed: a Codex session, or a Claude Code session BMN could not prove idle. Type `continue` yourself |
+| `Resumed · not told, not ready at close` | A Codex session that had not reached a safe point; ask it to check its work |
+| `Resumed` | Its turn had ended before the press; nothing to tell |
+| `Not resumed · <reason>` | Left for you; a command a program reported stays unticked until you tick it |
+
+BMN never types into a Codex session it resumed. A shell is not an agent session and is not
+resumed. Conversation bindings and saved output stay in their usual stores in every path. The first
+installation of this feature needs one ordinary close and open.
+
+Without a waiting update, Quit behaves as before and the next start offers its stopped sessions
+back in one dialog. Closing the last window and choosing Stop records *last window close* instead,
+so those sessions remain individually resumable without a resume-all offer.
 Each row shows the exact command — *Resume*, or *Start again* for a session without a bound
 conversation. Resume rows are pre-checked, except a Resume that runs a command a program reported,
 which you tick yourself; the rows start in order, one at a time, and stop after

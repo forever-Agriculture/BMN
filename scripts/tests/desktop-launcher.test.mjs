@@ -22,7 +22,7 @@ function executable(path, content) {
  * provide is genuinely absent -- that is how the no-zenity fallback is exercised honestly.
  */
 function linkSystemTools(bin) {
-  for (const tool of ['sed', 'tail', 'sleep', 'readlink', 'cat', 'wc', 'printf']) {
+  for (const tool of ['sed', 'tail', 'sleep', 'readlink', 'cat', 'wc', 'printf', 'awk']) {
     for (const directory of ['/usr/bin', '/bin']) {
       const source = join(directory, tool)
       if (existsSync(source)) {
@@ -78,6 +78,28 @@ exit ${exit}
 const LAUNCHER_LIMIT = 60_000
 
 describe('desktop launcher', { timeout: 2 * LAUNCHER_LIMIT + 10_000 }, () => {
+  it.each(['pending', 'revoked'])('never activates an abandoned %s restart on a later ordinary exit', async state => {
+    const old = spawn('/bin/sleep', ['0.2'], { stdio: 'ignore' })
+    const ticks = readFileSync(`/proc/${old.pid}/stat`, 'utf8').split(') ').at(-1).trim().split(/\s+/u)[19]
+    const run = fixture({ phase: 'complete', activeChecks: 0 })
+    const authorization = join(run.root, 'authorization'); writeFileSync(authorization, `attempt ${state}\n`)
+    const launched = spawn(run.launcher, [], { env: { ...run.env, BMN_RESTART_WAIT_PID: String(old.pid), BMN_RESTART_WAIT_TICKS: ticks,
+      BMN_RESTART_AUTH_PATH: authorization, BMN_RESTART_AUTH_ID: 'attempt' }, stdio: 'ignore' })
+    expect(await new Promise(resolve => launched.once('exit', resolve))).toBe(0)
+    expect(run.read('started')).toBe(null)
+  })
+  it('restart waits for the exact old process before checking the update or opening the build', async () => {
+    const old = spawn('/bin/sleep', ['0.8'], { stdio: 'ignore' })
+    const ticks = readFileSync(`/proc/${old.pid}/stat`, 'utf8').split(') ').at(-1).trim().split(/\s+/u)[19]
+    const run = fixture({ phase: 'complete', activeChecks: 0 })
+    const launched = spawn(run.launcher, [], { env: { ...run.env, BMN_RESTART_WAIT_PID: String(old.pid), BMN_RESTART_WAIT_TICKS: ticks }, stdio: 'ignore' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(run.read('checks')).toBeNull()
+    expect(run.read('started')).toBeNull()
+    await new Promise(resolve => launched.on('exit', resolve))
+    expect(run.read('started')).not.toBeNull()
+  })
+
   it('starts BMN at once when no update is queued', () => {
     const run = fixture({ phase: 'complete', activeChecks: 0, zenity: fakeZenity() })
     const result = spawnSync(run.launcher, ['--flag'], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
@@ -257,4 +279,20 @@ describe('the bmn command for a session outside BMN (102.4)', () => {
     expect(commandLinkIsOurs(script)).toBe(true)
     expect(commandLinkIsOurs('#!/bin/sh\necho his own\n')).toBe(false)
   })
+})
+
+describe('restart child handover regression', () => {
+ it('waits for the update despite a same-binary child outliving the parent', async () => {
+  const root=mkdtempSync(join(tmpdir(),'bmn-restart-child-')); roots.push(root)
+  const binary=join(root,'sleep'); copyFileSync('/bin/sleep',binary); chmodSync(binary,0o700)
+  const old=spawn(binary,['0.1'],{stdio:'ignore'}), sibling=spawn(binary,['10'],{stdio:'ignore'})
+  const ticks=readFileSync(`/proc/${old.pid}/stat`,'utf8').split(') ').at(-1).trim().split(/\s+/u)[19]
+  const run=fixture({phase:'waiting-for-exit',activeChecks:3,binary})
+  const launched=spawn(run.launcher,['0'],{env:{...run.env,BMN_RESTART_WAIT_PID:String(old.pid),BMN_RESTART_WAIT_TICKS:ticks},stdio:['ignore','pipe','pipe']})
+  let diagnostic='';launched.stderr.on('data',b=>{diagnostic+=b.toString()})
+  expect(await new Promise(resolve=>launched.once('exit',resolve)),diagnostic).toBe(0)
+  const checks=run.read('checks').trim().split('\n').length
+  if(sibling.exitCode===null) await new Promise(resolve=>sibling.once('exit',resolve))
+  expect(checks).toBeGreaterThan(3)
+ },60000)
 })

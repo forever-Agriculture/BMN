@@ -256,9 +256,15 @@ export async function typeIfIdle(proof: WakeProof, p: {
   unclaim?(): Promise<void>
   /** Filled with what the last checks saw (113.6). */
   facts?: WakeFacts
+  /**
+   * Epic 125 (125.5 AC3): the event that must be the session's latest, in place of a finished turn of its own, with the
+   * reason when it is not. Only the update restart names one: a resumed Claude Code run's own start. Every later check
+   * of the idle proof is unchanged.
+   */
+  antecedent?(seen: WakeObservation): string | null
 }): Promise<string | null> {
   const { seen, generation, open } = p
-  const notFinished = finishedOwnTurn(seen)
+  const notFinished = p.antecedent ? p.antecedent(seen) : finishedOwnTurn(seen)
   if (notFinished !== null) return notFinished
   const app = seen.agent as WakeApp
   const mine = open.filter((row) => row.sessionId === seen.sessionId && row.state === 'open')
