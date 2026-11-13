@@ -1884,8 +1884,9 @@ export class SessionManager {
     if (bytes.byteLength > MAX_TERMINAL_CHUNK_BYTES) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal input chunk exceeds 256 KiB')
     }
-    live.pty.write(bytes)
+    // Recorded first, in a test host only: a write its record could not hold is not made, so no row means no write.
     this.hostWrite?.({ sessionId, incarnationId: live.incarnationId, bytes })
+    live.pty.write(bytes)
   }
 
   write(message: Pick<TerminalInputMessage, 'attachmentId' | 'bytes'>): void {

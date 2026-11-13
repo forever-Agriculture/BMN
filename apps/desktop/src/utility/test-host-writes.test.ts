@@ -22,8 +22,13 @@ describe('the record of what BMN itself writes into a terminal', () => {
     expect(JSON.parse(lines[0]!.line)).toEqual({ at: at.toISOString(), sessionId: 's1', incarnationId: 'run-1', bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex') })
     expect(lines[0]!.line).not.toContain('made-up')
   })
-  it('never lets a failed append reach the caller', () => {
-    const record = testHostWrites(['--bmn-test-host'], { BMN_TEST_HOST_WRITES: '/state/x.jsonl' }, { append: () => { throw new Error('disk full') } })!
-    expect(() => record({ sessionId: 's1', incarnationId: 'run-1', bytes })).not.toThrow()
+  it('refuses a write its record could not hold, also after an earlier write was recorded', () => {
+    let fail = false
+    const lines: string[] = []
+    const record = testHostWrites(['--bmn-test-host'], { BMN_TEST_HOST_WRITES: '/state/x.jsonl' }, { append: (_path, line) => { if (fail) throw new Error('disk full'); lines.push(line) } })!
+    record({ sessionId: 's1', incarnationId: 'run-1', bytes })
+    fail = true
+    expect(() => record({ sessionId: 's1', incarnationId: 'run-1', bytes })).toThrow(/could not record its terminal write, so the write was not made: disk full/)
+    expect(lines).toHaveLength(1)
   })
 })

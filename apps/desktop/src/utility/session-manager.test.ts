@@ -590,6 +590,13 @@ async function flowFixture(
 }
 
 describe('addressed input BMN itself writes (Epic 125)', () => {
+  it('makes no write the host-write observer could not record', async () => {
+    const { manager, pty, cwd } = await fixture(undefined, undefined, { hostWrite: () => { throw new Error('record failed') } })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const before = pty.writes.length
+    expect(() => manager.writeToSession(created.sessionId, new TextEncoder().encode('made-up line\r'))).toThrow('record failed')
+    expect(pty.writes).toHaveLength(before)
+  })
   it('tells the host-write observer of each write, with the run it reached, and of nothing a view typed', async () => {
     const seen: Array<{ sessionId: string; incarnationId: string; bytes: Uint8Array }> = []
     const { manager, pty, cwd } = await fixture(undefined, undefined, { hostWrite: (write) => seen.push(write) })

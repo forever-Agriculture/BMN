@@ -13,7 +13,8 @@ export interface HostWrite {
 /**
  * The recorder, or undefined outside a test host. `BMN_TEST_HOST_WRITES` names the file; each row holds the time, the
  * session, its run, the byte count and the bytes' SHA-256, never the bytes. What the owner types through an attached
- * view is not a host write and is not recorded. A failed append never stops the write it describes.
+ * view is not a host write and is not recorded. The caller records before it writes, and a failed append throws: in a
+ * test host a write that left no row is refused, so an empty interval in the record proves that nothing was written.
  */
 export function testHostWrites(
   argv: readonly string[],
@@ -24,6 +25,8 @@ export function testHostWrites(
   if (!argv.includes('--bmn-test-host') || path === undefined || !isAbsolute(path)) return undefined
   return ({ sessionId, incarnationId, bytes }) => {
     const row = { at: now().toISOString(), sessionId, incarnationId, bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex') }
-    try { append(path, `${JSON.stringify(row)}\n`) } catch { /* the record is evidence for a test, never a condition of the write */ }
+    try { append(path, `${JSON.stringify(row)}\n`) } catch (error) {
+      throw new Error(`The test host could not record its terminal write, so the write was not made: ${error instanceof Error ? error.message : 'unknown error'}`, { cause: error })
+    }
   }
 }
