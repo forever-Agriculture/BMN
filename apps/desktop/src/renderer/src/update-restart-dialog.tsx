@@ -42,7 +42,7 @@ export function UpdateRestartDialog(props: {
     {!run || !waiting && !after && !cancelled ? <p className="close-sessions-summary">Update {props.snapshot.waitingBuild?.slice(0, 7)} is waiting. {rows.length === 1 ? '1 session is' : `${rows.length} sessions are`} running.</p> : null}
     <ul className="close-sessions-list">
       {rows.map(m => <li key={m.sessionId}>
-        <span className="who"><span className="identity">
+        <span className="who"><span className="session-id">
           {after && reported?.entries.some(e => e.sessionId === m.sessionId) && !manual[m.sessionId] ? <input type="checkbox" aria-label={`Run reported command for ${m.name}`} checked={selected.includes(m.sessionId)} onChange={e => setSelected(ids => e.target.checked ? [...ids, m.sessionId] : ids.filter(id => id !== m.sessionId))} /> : null}
           <span className="name">{m.name}</span><span className="workspace"> · {m.workspace}</span></span>
           <span className="detail">{manual[m.sessionId] ?? updateRestartWords(m, stage)}</span>

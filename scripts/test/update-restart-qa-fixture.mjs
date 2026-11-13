@@ -15,6 +15,11 @@ export async function installRestartQaFixture(application, config) {
   const applied = { version: 1, runId: config.runId, candidateSha256: config.candidateSha256,
     seedSha256: sha256(raw), adapterSha256: sha256(readFileSync(import.meta.filename)), scope: 'restart dialog states with substituted IPC' }
   atomicJson(join(config.run, 'bench/restart-adapter.json'), applied)
+  await installRestartStates(application, applied)
+}
+
+/** The window's restart calls answered by four fixed states, so each can be drawn without an agent or an update. */
+export async function installRestartStates(application, binding) {
   await application.evaluate(({ ipcMain }, binding) => {
     const build = '1234567890abcdef', closesAt = new Date(2026, 10, 13, 14, 37).getTime()
     const member = (sessionId, name, agent, over) => ({ sessionId, incarnationId: `run-${sessionId}`, name, workspace: 'QA review', agent,
@@ -39,8 +44,10 @@ export async function installRestartQaFixture(application, config) {
         each({ 'fixture-claude': { tell: 'told' }, 'fixture-codex': { tell: 'not-told' }, 'fixture-codex-stopped': { tell: 'not-told' } })
       }
       if (op === 'dismiss') { run = null; show = false }
+      // A test opens the offer as Quit would: the main process raises `show` once.
+      if (globalThis.bmnRestartQa.open) { show = true; globalThis.bmnRestartQa.open = false }
       globalThis.bmnRestartQa.transitions.push({ op, phase: run?.phase ?? 'preview' })
       return { ok: true, result: { waitingBuild: build, run: structuredClone(run), sessions: structuredClone(members), reportedCohort: null, recovered: [], show } }
     })
-  }, applied)
+  }, binding)
 }

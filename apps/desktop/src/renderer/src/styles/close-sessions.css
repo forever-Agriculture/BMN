@@ -117,7 +117,8 @@
   gap: 6px 16px;
   width: 100%;
 }
-.update-restart .identity { min-width: 0; }
+/* Its own class: the shell's `.identity` is the brand mark, gold and of a fixed width. */
+.update-restart .session-id { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .update-restart .detail { overflow-wrap: anywhere; }
 .update-restart .close-sessions-list li { display: block; }
 .update-restart .note { margin: 4px 0 0; color: var(--faint); font-size: 12px; overflow-wrap: anywhere; }
