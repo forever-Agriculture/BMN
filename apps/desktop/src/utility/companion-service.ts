@@ -489,7 +489,13 @@ export class CompanionService {
   /** Story 110.9, D14: the agent conversations each session's hooks reported while BMN ran, newest last, at most 8. */
   private readonly seenConversations = new Map<string, string[]>()
   /** Epic 125.5: per session, the agent whose start its hooks last reported for the live process (an agent typed into a shell has no binding). */
-  private readonly typedAgents = new Map<string, { incarnationId: string; agent: 'claude' | 'codex'; conversation: string; foreground: string }>()
+  private readonly typedAgents = new Map<string, { incarnationId: string; agent: 'claude' | 'codex'; conversation: string; foreground: string | null }>()
+  private readonly typedMissing = new Map<string, string>()
+  /** The process in front of a session's terminal, only when Linux names it as that agent; seen live, it is not always there at the agent's first report. */
+  private agentProcess(sessionId: string, agent: 'claude' | 'codex'): string | null {
+    const identity = this.options.manager.foregroundProcessIdentity(sessionId)
+    return identity && foregroundAgentArguments(identity, agent) !== null ? identity : null
+  }
   private readonly hookObservations = new Map<string, {
     sessionId: string
     incarnationId: string
@@ -595,9 +601,15 @@ export class CompanionService {
             const agent = seen?.incarnationId === incarnationId ? seen.agent : bound.agentCli
             // The owner types his agents into shells: such a session's agent, folder and arguments are read from its own process.
             const typedNow = this.typedAgents.get(s.sessionId)
-            const typedAgent = bound.status !== 'bound' && (agent === 'claude' || agent === 'codex') && typedNow?.incarnationId === incarnationId && typedNow.agent === agent ? typedNow.foreground : null
+            const typedAgent = bound.status !== 'bound' && (agent === 'claude' || agent === 'codex') && typedNow?.incarnationId === incarnationId && typedNow.agent === agent
+              ? typedNow.foreground ?? this.agentProcess(s.sessionId, agent) : null
             const cwd = typedAgent ? foregroundProcessFolder(typedAgent) : null
             const conversation = bound.status === 'bound' ? bound.conversationReference : typedAgent && cwd ? typedConversation(s.sessionId) : null
+            // An agent BMN cannot resume is said once in the refusal log, with the piece that is missing.
+            if (bound.status !== 'bound' && (agent === 'claude' || agent === 'codex')) {
+              const missing = conversation ? '' : !typedNow || typedNow.incarnationId !== incarnationId ? 'its start was not reported for this run' : !typedAgent ? 'its process is not in front of the terminal' : !cwd ? 'its folder could not be read' : 'its conversation is unknown'
+              if (this.typedMissing.get(s.sessionId) !== missing) { this.typedMissing.set(s.sessionId, missing); if (missing) this.logRefusal('restart.typed-agent', s.sessionId, `${agent} typed into a shell cannot be resumed: ${missing}`) }
+            }
             result.push({ sessionId: s.sessionId, incarnationId, name: s.name, workspace: w.name, agent, conversation,
               ...(typedAgent && cwd && conversation ? { typed: { cwd, argv: foregroundAgentArguments(typedAgent, agent) ?? [] } } : {}),
               atPress: restartStateAtPress(agent, seen?.incarnationId === incarnationId ? seen : undefined,
@@ -1117,9 +1129,10 @@ export class CompanionService {
         observeConversation: (p) => this.controlCall(async () => {
           if (p.incarnationId === options.manager.liveIncarnationId(p.sessionId)) {
             // Epic 125.5: the agent typed into this session, its conversation and its own process, as its start reported them.
-            const foreground = options.manager.foregroundProcessIdentity(p.sessionId)
-            if (p.incarnationId && foreground && (p.agentCli === 'claude' || p.agentCli === 'codex')) {
-              this.typedAgents.set(p.sessionId, { incarnationId: p.incarnationId, agent: p.agentCli, conversation: p.conversationReference, foreground })
+            if (p.incarnationId && (p.agentCli === 'claude' || p.agentCli === 'codex')) {
+              const earlier = this.typedAgents.get(p.sessionId)
+              this.typedAgents.set(p.sessionId, { incarnationId: p.incarnationId, agent: p.agentCli, conversation: p.conversationReference,
+                foreground: this.agentProcess(p.sessionId, p.agentCli) ?? (earlier?.incarnationId === p.incarnationId && earlier.agent === p.agentCli ? earlier.foreground : null) })
             }
             const seen = (this.seenConversations.get(p.sessionId) ?? []).filter((id) => id !== p.conversationReference)
             this.seenConversations.set(p.sessionId, [...seen, p.conversationReference].slice(-8))
@@ -2835,6 +2848,8 @@ export class CompanionService {
         // Away wake still sees its finished turn (Epic 111 F18). `hookCompactions` below still counts it.
         const lastSeen = this.hookObservations.get(p.sessionId)
         const keepsLatest = p.event === 'SessionStart' && p.source === 'compact' && lastSeen?.incarnationId === p.incarnationId
+        const typed = this.typedAgents.get(p.sessionId)
+        if (typed && typed.incarnationId === p.incarnationId && typed.foreground === null) typed.foreground = this.agentProcess(p.sessionId, typed.agent)
         if (!keepsLatest) this.hookObservations.set(p.sessionId, {
           sessionId: p.sessionId,
           incarnationId: p.incarnationId,
