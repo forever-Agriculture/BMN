@@ -110,6 +110,48 @@ All commands run from the repository root.
   `pnpm run test:visual -- --out DIR` there, never restyling the current build. In a worktree, add
   `--electron` with the main checkout's Electron, the one the AppArmor profile above allows.
 
+### Native tests: a home and a sign-in of their own
+
+A native test drives a real Claude Code or Codex. It never uses your home, your profiles or your
+sign-in. It uses three folders of its own:
+
+| Folder | Used as |
+| --- | --- |
+| `~/.local/state/bmn/test-profiles/home` | `HOME`, with every XDG and BMN folder below it |
+| `~/.local/state/bmn/test-profiles/claude` | `CLAUDE_CONFIG_DIR` |
+| `~/.local/state/bmn/test-profiles/codex` | `CODEX_HOME` |
+
+- **One step is yours, once.** Sign in to each test profile from an ordinary shell:
+  `CODEX_HOME=~/.local/state/bmn/test-profiles/codex codex login`, and
+  `CLAUDE_CONFIG_DIR=~/.local/state/bmn/test-profiles/claude claude`, then `/login` and `/exit`.
+  A test never makes, links, copies or opens a sign-in file: it only checks that each profile holds
+  an ordinary file of its own. Deleting `test-profiles/` removes the tests' sign-in and nothing of
+  yours.
+- **Start a native driver through the launcher**, which builds the environment from those folders
+  and passes on only `PATH`, the locale and certificate names:
+  `node scripts/test/native-test-home.mjs -- node scripts/test/away-wake-live.mjs ...`.
+- **Every native driver refuses any other home or profile before it launches anything.**
+  `scripts/test/native-test-home.mjs` is the check: `HOME`, the five XDG folders,
+  `CLAUDE_CONFIG_DIR` and `CODEX_HOME` must all be named and lie in the test folders, no link may
+  stand anywhere at or below `test-profiles/`, and the caller's credentials and BMN session
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `BMN_TOKEN`, `SSH_AUTH_SOCK` and the like) must be absent.
+  `scripts/test/away-wake-live.mjs` and `scripts/test/away-skills-live.mjs` import
+  `native-test-guard.mjs` first; the planning drivers under `plan/references/111/measure/` call the
+  same check. `scripts/tests/native-test-home.test.mjs` proves each refusal.
+- **The made-up projects the agents work in live under `/var/tmp/bmn-native-tests`**, outside every
+  home. An app walks up from its folder looking for a `.git`, a `CLAUDE.md` or an `AGENTS.md`;
+  from there it reaches the root without passing your home.
+- **The team in a native run is made up** with BMN's own roster code. Your team file is not read.
+- Inside the test folders a driver may install BMN's hooks and accept Codex's hook review
+  (`cards.mjs --accept-hook-trust` answers the made-up project's folder trust and "Trust all and
+  continue", nothing else). Codex keeps that approval in the test profile.
+- To prove a run touched nothing of yours, trace its whole process tree
+  (`strace -f -y -e trace=%file`) and read the trace for any open, start, change or successful
+  lookup under `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.config/bmn`, `~/.config/opencode`,
+  `~/.local/share/ai-terminal`, `~/.local/state/bmn` outside `test-profiles/`, and your credential
+  stores. A lookup of a name that does not exist (a tool asking whether `~/.local/state/bmn/.git`
+  is there on its way up from the profile) reads nothing and is counted apart.
+
 ### Turn Changes handshake diagnostics
 
 The `real hook diagnostic` cases in `turn-changes-host.test.ts` join the actual hook CLI,

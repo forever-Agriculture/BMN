@@ -1,6 +1,7 @@
 // MODULE: away-wake-live.mjs - Stories 90.6, 93.4 and 96.3 on the running build: real Claude Code, Codex and pinned OpenCode sessions in a test-mode BMN, Away with the wake-up's 2 hours shortened; the line is typed once into each idle session and never into one with a draft, an open dialog, the owner's interrupt or a shell in front
 // Each app gets its own BMN in test mode with temporary BMN data, config, state and runtime folders (removed at the end); the agents
-// keep their own sign-ins where they are (nothing is copied; a test-mode BMN installs no hooks, index.ts:641) and are typed into a
+// run on the tests' own home and profiles only (Epic 125 D2; start through scripts/test/native-test-home.mjs; nothing is copied
+// or linked; a test-mode BMN installs no hooks, index.ts:641) and are typed into a
 // shell in a scratch folder. Away and Back are said with the owner's CLI token over that BMN's socket. Evidence: BMN's app log
 // (`away-wake.log` in its temporary state folder) and the agent's own transcript. Prints one JSON report.
 // OpenCode (Epic 93) runs once per `--opencode PATH`, a pinned 2.0.29 or 2.0.32 binary, in a disposable profile under the scratch
@@ -19,12 +20,12 @@
 // checks it against the wake's own log lines: woken where a line was typed, skipped or missed with the last reason, and
 // no decided tick read as an unknown hour.
 //   (needs `pnpm run build` first: the desktop build and @bmn/protocol's, whose reason codes the account check uses)
+import { nativeTest } from './native-test-guard.mjs' // first: refuses his real home and profiles before anything else is evaluated
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect as connectTcp } from 'node:net'
-import { homedir } from 'node:os'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
@@ -103,8 +104,8 @@ function wakesInTranscript(app, since) {
   } }
   // An isolated profile's records, when the caller set one (Story 110.1).
   walk(app === 'claude'
-    ? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects', scratch.replace(/[^A-Za-z0-9]/gu, '-'))
-    : join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions'))
+    ? join(nativeTest.claude, 'projects', scratch.replace(/[^A-Za-z0-9]/gu, '-'))
+    : join(nativeTest.codex, 'sessions'))
   let count = 0
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
@@ -284,9 +285,9 @@ async function run(scenario, binary) {
   if (openCode) report[`${scenario}-${openCode.version}`] = { binary, profile: openCode.profile }
   // Claude Code with his real profile installs itself into whatever XDG_DATA_HOME it sees and points his `claude` link there;
   // the run's data root is deleted at the end (Epic 111 F20): it starts with his own data folder and its updater off.
-  const claudeData = process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share')
+  const claudeData = process.env.XDG_DATA_HOME
   const through = proxy ? `HTTPS_PROXY='http://127.0.0.1:${proxy.port}' HTTP_PROXY='http://127.0.0.1:${proxy.port}' NO_PROXY='127.0.0.1,localhost' CLAUDE_CODE_MAX_RETRIES=2 ` : ''
-  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 ${through}claude --allowedTools 'Bash(sleep:*)'${process.env.CLAUDE_CONFIG_DIR ? ' --model haiku' : ''}${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 ${through}claude --allowedTools 'Bash(sleep:*)' --model haiku${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {

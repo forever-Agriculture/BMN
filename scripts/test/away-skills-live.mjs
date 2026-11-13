@@ -1,11 +1,12 @@
 // MODULE: away-skills-live.mjs - 113.3: actual native lead actions for six Away moments, in disposable BMN sessions
 // Usage: node scripts/test/away-skills-live.mjs EVIDENCE_ROOT --preflight
 //        node scripts/test/away-skills-live.mjs EVIDENCE_ROOT [codex|claude] [W1..W6]   (only after a preflight PASS)
-// Native sign-ins stay in their installed profiles. A transcript is bound by its metadata lines only, then decoded.
+// Native apps run on the tests' own home and profiles only (Epic 125 D2; start through scripts/test/native-test-home.mjs).
+// A transcript is bound by its metadata lines only, then decoded.
+import { nativeTest } from './native-test-guard.mjs' // first: refuses his real home and profiles before anything else is evaluated
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
@@ -42,7 +43,7 @@ const tested = testedApp(join(repo, 'apps/desktop'), [])
 const wait = ms => new Promise(done => setTimeout(done, ms))
 const hash = text => createHash('sha256').update(text).digest('hex')
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'"
-const nativeHomes = { codex: process.env.CODEX_HOME ?? join(homedir(), '.codex'), claude: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude') }
+const nativeHomes = { codex: nativeTest.codex, claude: nativeTest.claude }
 const caller = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'PROMPT_COMMAND' && !key.startsWith('BMN_') && !key.startsWith('AITERM_')))
 caller.PATH = (caller.PATH ?? '').split(':').filter(folder => {
   try { return !readFileSync(join(folder, 'codex'), 'utf8').includes("Keep Codex's hooks in this BMN session") } catch { return Boolean(folder) }
@@ -232,15 +233,15 @@ const LAUNCH_SCRIPT = '.dev-auto/launch.sh'
 const launchState = fixture => { const path = join(fixture, LAUNCH_SCRIPT), stat = statSync(path); return { path, sha256: hash(readFileSync(path)), mode: (stat.mode & 0o777).toString(8), executable: (stat.mode & 0o100) !== 0 } }
 const classifierSha256 = () => hash(readFileSync(join(repo, 'scripts/test/away-skills-startup.mjs')))
 const nativeCommand = (app, fixture) => app === 'claude'
-  ? `env XDG_DATA_HOME=${quote(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'))} DISABLE_AUTOUPDATER=1 claude --allowedTools Read Write 'Bash(cat:*)' 'Bash(bmn ask:*)' 'Bash(bmn team asks show:*)'`
+  ? `env XDG_DATA_HOME=${quote(process.env.XDG_DATA_HOME)} DISABLE_AUTOUPDATER=1 claude --allowedTools Read Write 'Bash(cat:*)' 'Bash(bmn ask:*)' 'Bash(bmn team asks show:*)'`
   : `codex --no-alt-screen -c 'mcp_servers={}' -c ${quote(`projects."${fixture}".trust_level="trusted"`)}`
-const profileFiles = { codex: [join(nativeHomes.codex, 'config.toml')], claude: [join(homedir(), '.claude.json'), join(nativeHomes.claude, 'settings.json')] }
+const profileFiles = { codex: [join(nativeHomes.codex, 'config.toml')], claude: [join(nativeHomes.claude, '.claude.json'), join(nativeHomes.claude, 'settings.json')] }
 const fileState = paths => Object.fromEntries(paths.map(path => { try { return [path, hash(readFileSync(path))] } catch { return [path, null] } }))
 /** Astra 142855 correction 5: the fixture's own trust value in the app's profile, never any other entry. */
 function fixtureTrust(app, fixture) {
   try {
     if (app === 'claude') {
-      const entry = JSON.parse(readFileSync(join(homedir(), '.claude.json'), 'utf8')).projects?.[fixture]
+      const entry = JSON.parse(readFileSync(join(nativeHomes.claude, '.claude.json'), 'utf8')).projects?.[fixture]
       return entry ? { hasTrustDialogAccepted: entry.hasTrustDialogAccepted ?? null } : null
     }
     const lines = readFileSync(join(nativeHomes.codex, 'config.toml'), 'utf8').split('\n')
