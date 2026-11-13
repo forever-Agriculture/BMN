@@ -33,6 +33,7 @@ function world(agent = 'claude') {
   const notes = new Map<string, string | null>()
   const claimed: string[] = []
   const released: string[] = []
+  const logs: string[] = []
   const wake = new MessageWake({
     now: () => new Date(state.now),
     observation: () => state.seen,
@@ -65,10 +66,48 @@ function world(agent = 'claude') {
     finishedTurn: (_sessionId, incarnationId) => (state.finished?.incarnationId === incarnationId ? state.finished.at : null),
     typedAt: () => state.typedAt,
     note: (messageId, reason) => notes.set(messageId, reason),
-    log: () => undefined
+    log: (line) => logs.push(line)
   })
-  return { state, wake, written, notes, claimed, released }
+  return { state, wake, written, notes, claimed, released, logs }
 }
+
+describe('what the wake records (125.2 AC1)', () => {
+  const quiet = SESSION_MESSAGE_WAKE_QUIET_MS
+  it('a typed wake is logged with the quiet time in force and the finished turn it was weighed against', async () => {
+    const w = world('codex')
+    await w.wake.sweep()
+    expect(w.logs).toEqual([`message wake: typed the wake line into b for m1 (quiet ${quiet} ms; turn finished ${at(T)}; 1 waiting)`])
+  })
+  it('a session whose turn finished inside the quiet time stays waiting, and the log alone says why', async () => {
+    const w = world('codex')
+    w.state.now = T + quiet - 1000
+    await w.wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs).toEqual([`message wake: skipped b: its turn finished less than 5 minutes ago (quiet ${quiet} ms; turn finished ${at(T)}; 1 waiting)`])
+  })
+  it('a run BMN never saw finish a turn is logged as not seen, never as a time', async () => {
+    const w = world('codex')
+    w.state.finished = null
+    await w.wake.sweep()
+    expect(w.written).toEqual([])
+    expect(w.logs).toHaveLength(1)
+    expect(w.logs[0]).toMatch(/^message wake: skipped b: .+ \(quiet \d+ ms; turn finished not seen; 1 waiting\)$/u)
+  })
+  it('each early refusal is logged too: no agent heard, an app that is never woken, no message that may wake it', async () => {
+    const unheard = world()
+    unheard.state.seen = undefined
+    await unheard.wake.sweep()
+    expect(unheard.logs).toEqual([`message wake: skipped b: BMN has not heard from its agent (quiet ${quiet} ms; turn finished not seen; 1 waiting)`])
+    const other = world('opencode')
+    await other.wake.sweep()
+    expect(other.logs[0]).toMatch(/^message wake: skipped b: opencode sessions are not woken \(quiet/u)
+    const deep = world()
+    deep.state.candidates = [{ messageId: 'm1', wakeDepth: 9, wokenAt: null }]
+    await deep.wake.sweep()
+    expect(deep.logs).toEqual([`message wake: skipped b: no waiting message may wake it; each sender reads why (quiet ${quiet} ms; turn finished ${at(T)}; 1 waiting)`])
+    expect(deep.notes.get('m1')).toMatch(/too many woken turns/u)
+  })
+})
 
 describe('a resting session gets its message (110.3 AC1)', () => {
   it.each(['claude', 'codex'])('types the fixed line once into an idle %s session, quiet for 5 minutes', async (agent) => {

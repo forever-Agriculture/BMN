@@ -584,6 +584,24 @@ async function flowFixture(
   return { manager, pty, store, harness, cwd }
 }
 
+describe('addressed input BMN itself writes (Epic 125)', () => {
+  it('tells the host-write observer of each write, with the run it reached, and of nothing a view typed', async () => {
+    const seen: Array<{ sessionId: string; incarnationId: string; bytes: Uint8Array }> = []
+    const { manager, pty, cwd } = await fixture(undefined, undefined, { hostWrite: (write) => seen.push(write) })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const line = new TextEncoder().encode('made-up line\r')
+    manager.writeToSession(created.sessionId, line)
+    expect(seen).toEqual([{ sessionId: created.sessionId, incarnationId: created.incarnationId, bytes: line }])
+    expect(pty.writes.at(-1)).toEqual(line)
+    const attached = manager.attach(created)
+    manager.activateAttachment(attached.attachmentId)
+    manager.write({ attachmentId: attached.attachmentId, bytes: new TextEncoder().encode('typed by the owner') })
+    expect(seen).toHaveLength(1)
+    expect(() => manager.writeToSession('no-such-session', line)).toThrow()
+    expect(seen).toHaveLength(1)
+  })
+})
+
 describe('host-owned per-incarnation activity', () => {
   it('projects initial activity without changing stored process state, then observes output without a view', async () => {
     let clock = 1000

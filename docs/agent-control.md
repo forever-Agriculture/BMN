@@ -467,7 +467,11 @@ its stamp, the sender's folder and where it stands. It has no Paste, Pause or Re
   status` shows the sender *woken at* a time whenever BMN typed the line (kept with the message,
   across restarts); for a message still waiting and not woken it shows *not woken* and why once
   BMN's wake sweep has weighed it since BMN started (those reasons are kept in memory, for the
-  newest messages only), and before that nothing. Each session holds a **wake depth**: your prompt or a run's start sets it
+  newest messages only), and before that nothing. BMN's `message-wake.log`, in its state folder,
+  keeps each decision of a sweep, bounded in size and with no message text: the line typed, or
+  the session skipped and why, each with the quiet time in force, when that run's turn finished
+  (or *not seen*) and how many messages waited, so a message that stayed waiting can be explained
+  from the log alone (Story 125.2). Each session holds a **wake depth**: your prompt or a run's start sets it
   to 0, a message handed to the session raises it to that message's depth if higher, and a message
   sent has the session's depth plus 1. Only depth 1
   and 2 wake anyone, so a question and its reply get through and two agents cannot keep each other

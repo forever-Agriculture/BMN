@@ -71,8 +71,14 @@ export class MessageWake {
     const say = (messages: readonly MessageWakeCandidate[], reason: string): void => {
       for (const message of messages) this.options.note(message.messageId, reason)
     }
-    if (seen === undefined) { say(waiting, 'BMN has not heard from its agent'); return }
-    if (!MESSAGE_WAKE_APPS.includes(seen.agent)) { say(waiting, `${seen.agent} sessions are not woken`); return }
+    const quietMs = this.options.quietMs ?? SESSION_MESSAGE_WAKE_QUIET_MS
+    // Story 125.2: every decision is logged with the quiet time in force and the finished turn it was weighed against, so
+    // a message that stayed waiting can be explained from the log alone (the 2026-11-10 Codex control could not be).
+    const facts = (finished: string | null): string => ` (quiet ${quietMs} ms; turn finished ${finished ?? 'not seen'}; ${waiting.length} waiting)`
+    const skipped = (reason: string, finished: string | null): void => this.options.log(`message wake: skipped ${sessionId}: ${reason}${facts(finished)}`)
+    if (seen === undefined) { say(waiting, 'BMN has not heard from its agent'); skipped('BMN has not heard from its agent', null); return }
+    const finishedAt = this.options.finishedTurn(sessionId, seen.incarnationId)
+    if (!MESSAGE_WAKE_APPS.includes(seen.agent)) { say(waiting, `${seen.agent} sessions are not woken`); skipped(`${seen.agent} sessions are not woken`, finishedAt); return }
     // The oldest message that may wake it; the others wait behind it, or say why they cannot.
     let chosen: MessageWakeCandidate | null = null
     const behind: MessageWakeCandidate[] = []
@@ -87,15 +93,14 @@ export class MessageWake {
       if (chosen === null) chosen = message
       else behind.push(message)
     }
-    if (chosen === null) return
-    const quietMs = this.options.quietMs ?? SESSION_MESSAGE_WAKE_QUIET_MS
+    if (chosen === null) { skipped('no waiting message may wake it; each sender reads why', finishedAt); return }
     let message = chosen
     let claimedAt: string | null = null
     // A message past its own pair's limit keeps its reason and holds up none behind it (113.7): each is claimed in turn.
     const limited = new Set<string>()
     const reason = await typeIfIdle(this.options, {
       seen, generation, open, quietMs, quietWords: `its turn finished less than ${Math.round(quietMs / 60_000)} minutes ago`, line: SESSION_MESSAGE_WAKE_LINE,
-      finished: { at: this.options.finishedTurn(sessionId, seen.incarnationId), unknown: 'BMN did not see this run finish a turn with nothing in flight' },
+      finished: { at: finishedAt, unknown: 'BMN did not see this run finish a turn with nothing in flight' },
       stillAllowed: () => {
         const typed = this.options.typedAt(sessionId)
         return typed !== null && this.options.now().getTime() - typed < quietMs ? 'BMN typed into it a moment ago' : null
@@ -117,11 +122,11 @@ export class MessageWake {
     if (reason === null) {
       this.options.note(message.messageId, null)
       say(others, 'another message woke it first; this one comes after')
-      this.options.log(`message wake: typed the wake line into ${sessionId} for ${message.messageId}`)
+      this.options.log(`message wake: typed the wake line into ${sessionId} for ${message.messageId}${facts(finishedAt)}`)
       return
     }
     say([chosen, ...behind].filter((each) => !limited.has(each.messageId)), reason)
-    this.options.log(`message wake: skipped ${sessionId}: ${reason}`)
+    skipped(reason, finishedAt)
   }
 }
 

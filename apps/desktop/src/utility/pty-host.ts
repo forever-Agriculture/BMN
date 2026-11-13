@@ -85,6 +85,7 @@ import {
   type PtyLike,
   type SessionIdentity
 } from './session-manager'
+import { testHostWrites } from './test-host-writes'
 
 type NativeModuleName = 'node-pty' | 'better-sqlite3'
 
@@ -301,6 +302,8 @@ async function start(): Promise<void> {
   let handshaken = false
   // The manager's callbacks run before the companion exists, so they read it through a holder.
   const companionHolder: { current?: CompanionService } = {}
+  // Epic 125: a test host may record what BMN itself types into a terminal; a real host never does.
+  const hostWrite = testHostWrites(process.argv, process.env)
   const manager = new SessionManager({
     ...(terminfoAsset ? { terminfoAsset } : {}),
     store: database,
@@ -312,6 +315,7 @@ async function start(): Promise<void> {
         encoding: null
       }),
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
+    ...(hostWrite ? { hostWrite } : {}),
     conversationReferenceExists,
     conversationBeingDeleted: (binding) => companionHolder.current?.historyDeleting(binding.conversationReference) ?? false,
     onSessionStateChange: (message) => {

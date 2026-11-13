@@ -304,6 +304,8 @@ interface SessionManagerOptions {
   /** Where a launch directory written as ~ or ~/… points; the owner's home by default. */
   homeDirectory?: string
   signalProcess?: (pid: number, signal: NodeJS.Signals) => boolean
+  /** Epic 125: told of each write BMN itself makes into a live process (`writeToSession`), after it is made. A test host records it. */
+  hostWrite?: (write: { sessionId: string; incarnationId: string; bytes: Uint8Array }) => void
   stopGraceMs?: number
   stopKillWaitMs?: number
   undeliveredOutputLimitBytes?: number
@@ -602,6 +604,7 @@ export class SessionManager {
     | undefined
   private readonly sessionPath: () => string
   private readonly signalProcess: (pid: number, signal: NodeJS.Signals) => boolean
+  private readonly hostWrite: SessionManagerOptions['hostWrite'] | undefined
   private readonly stopGraceMs: number
   private readonly stopKillWaitMs: number
   private readonly undeliveredOutputLimitBytes: number
@@ -649,6 +652,7 @@ export class SessionManager {
     this.sessionEnvironment = options.sessionEnvironment
     this.sessionPath = options.sessionPath ?? (() => buildShellEnvironment(this.environment).PATH ?? '')
     this.signalProcess = options.signalProcess ?? signalProcessByPid
+    this.hostWrite = options.hostWrite
     this.stopGraceMs = options.stopGraceMs ?? 2_000
     this.stopKillWaitMs = options.stopKillWaitMs ?? 2_000
     this.undeliveredOutputLimitBytes =
@@ -1859,6 +1863,7 @@ export class SessionManager {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal input chunk exceeds 256 KiB')
     }
     live.pty.write(bytes)
+    this.hostWrite?.({ sessionId, incarnationId: live.incarnationId, bytes })
   }
 
   write(message: Pick<TerminalInputMessage, 'attachmentId' | 'bytes'>): void {
