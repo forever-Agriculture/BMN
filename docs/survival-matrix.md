@@ -315,6 +315,7 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 | cross-harness claude→codex | UNVERIFIED — ran, but on the owner's inherited profiles (NFR35 method non-compliance); disposable-root credentials need owner authorization | `cross-harness-claude-to-codex-2026-09-25.md` | b341724 (Epic 26 tree) | 2026-09-25 |
 | cross-harness codex→claude | UNVERIFIED — same method non-compliance | `cross-harness-codex-to-claude-2026-09-25.md` | b341724 (Epic 26 tree) | 2026-09-25 |
 | handoff delivered by the receiving agent's hook (Story 75.5), one per app: shell → codex 0.162.1, shell → claude 2.1.301, isolated build and profiles, synthetic text and attachment; each agent read the stored text and the attachment and the handoff read printed | PASS | `receipt-2026-10-16.md` | 75.5 tree on e4d8a4d | 2026-10-16 |
+| one-press restart on the installed build (Epic 125, **Restart for the update…**) | first press pending — installed commit `7f45e117`; the isolated proof is in *Desktop source update* above | pending (the installed `update-restart.json`) | 7f45e117 (installed) | 2026-11-14 |
 
 One line per distinct trial, the latest receipt linked; FAIL and UNVERIFIED lines stay with their
 reasons rather than being dropped. PASS (partial) rows keep their unexercised cells named in the
