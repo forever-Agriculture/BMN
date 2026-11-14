@@ -50,3 +50,27 @@ The lead verifies machine-only boundaries such as process cleanup, backup conten
 ## Desktop screen gate
 
 Run `pnpm run test:screens` for BMN desktop changes. It builds once and runs keyboard-catalogue, notification-layout, refinements-navigation and electron-visual sequentially on a private Xvfb display, stopping on the first failure and naming the test. Logs and screenshots remain under `.dev-auto/evidence/`. This verifies the checkout at its recorded commit (including any recorded local changes), not a packaged binary; installed-build acceptance remains separate.
+
+## Lead-run desktop bench
+
+Desktop QA stays lead-run (`docs/agent-control.md`); the teammate's desktop route is refused. The
+route uses the V1 manual-QA brief and report. In the source brief use `mode: quick-bench`,
+`accounts: []` and `target: bmn-bench:pending`; name the frozen candidate revision and a synthetic
+seed JSON with an `id`. Start an already built disposable BMN checkout:
+
+```bash
+node scripts/qa/bench.mjs --no-build --qa-brief "$BRIEF" --qa-seed "$SEED"
+# For a packaged candidate, replace --no-build with --binary /path/to/candidate.
+node scripts/qa/bench.mjs do snapshot
+node scripts/qa/bench.mjs do screenshot goal
+# Exercise the brief through the bench UI; record observations and a V1 report.
+node scripts/qa/bench.mjs --stop
+node scripts/qa/bench-receipt.mjs --run-id "$GENERATION" --report "$REPORT"
+```
+
+Read the retained `qa/brief.json` after start: its exact target is the allocated generation. The
+bench reserves the revision, the loaded candidate digest, seed, brief and target before launch.
+Finalize only after shutdown; retain the action log, screenshots, every workload and recovery
+launch (including successors), capture certificates and the cleanup result. Hashes check
+consistency, not authenticity against a writer who can change the record. dev-auto then checks
+the receipt with `qa_gate.py --lead-bench` (its `references/qa-brief.md`).
