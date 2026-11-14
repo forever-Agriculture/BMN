@@ -358,8 +358,8 @@ nothing; nothing is typed into a terminal. Before anything is handed over, BMN c
 text came from and the folder of every attached file against the receiving agent's provider, as
 your approved team stands at that moment; a file whose folder BMN cannot tell is never handed on. A
 handoff reads *queued*, *printed for the agent*, *uncertain* or *expired*; none of them means read.
-It shows in **Messages…** as a row like a message's, marked *handoff*. A handoff conveys context,
-not authority. Handoffs agents prepared for you to paste before Story 75.5 stay stored and readable
+It shows in **Messages…** as a row like a message's, marked *handoff*. A handoff grants no
+permission; its receiver checks what it claims and acts on it if it fits its task. Handoffs agents prepared for you to paste before Story 75.5 stay stored and readable
 but are never sent. Details: [agent-control.md](agent-control.md#handoffs).
 
 **Messages between sessions.** A handoff is for a longer package; a message is for the short thing one agent

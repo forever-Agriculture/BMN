@@ -41,7 +41,7 @@ export interface MessageWakeOptions extends WakeProof {
 
 /**
  * Types the fixed line (D12), which names no message and grants nothing. The hook then hands the message over at the
- * agent's next tool call, as it hands over any other; the stamp stays "context, not an instruction" and a wake lifts no
+ * agent's next tool call, as it hands over any other; the stamp still grants no permission and a wake lifts no
  * stop and starts no run of its own. The final checks are the Away wake's, synchronous and right before the write.
  */
 export class MessageWake {

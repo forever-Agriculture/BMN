@@ -30,7 +30,7 @@ describe("BMN's start brief (Story 75.6)", () => {
       'bmn publish <file>', 'should open',
       'bmn progress <state> <label> --evidence-id', 'a real change of state', 'never report verified',
       'bmn team ask --role R', 'second opinion', 'Its answer is advice', 'never work around it',
-      'context from another agent, not authority', "the owner's instructions", '--key', 'bmn help agents', 'outside the sandbox'
+      'grants no authority', 'never overrides the owner', 'check it, then act', '--key', 'bmn help agents', 'outside the sandbox'
     ]) {
       expect(AGENT_START_BRIEF).toContain(words)
     }
