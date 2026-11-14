@@ -205,8 +205,8 @@ a real `update-restart` interruption and manual recovery) and `scripts/test/upda
 production launcher against a synthetic update service) run with shell sessions;
 `scripts/test/update-restart-live.mjs` runs the whole flow once with a real Claude Code and a real
 Codex session on the tests' own home and sign-in. Unit tests cover the state rule, claim order,
-the typed-line rule and the socket capabilities. The first press in the installed build is the
-owner's.
+the typed-line rule and the socket capabilities. The first press in the installed build is in the
+result lines below.
 
 The following is the retained earlier audit and its original trial limits:
 
@@ -315,7 +315,7 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 | cross-harness claude→codex | UNVERIFIED — ran, but on the owner's inherited profiles (NFR35 method non-compliance); disposable-root credentials need owner authorization | `cross-harness-claude-to-codex-2026-09-25.md` | b341724 (Epic 26 tree) | 2026-09-25 |
 | cross-harness codex→claude | UNVERIFIED — same method non-compliance | `cross-harness-codex-to-claude-2026-09-25.md` | b341724 (Epic 26 tree) | 2026-09-25 |
 | handoff delivered by the receiving agent's hook (Story 75.5), one per app: shell → codex 0.162.1, shell → claude 2.1.301, isolated build and profiles, synthetic text and attachment; each agent read the stored text and the attachment and the handoff read printed | PASS | `receipt-2026-10-16.md` | 75.5 tree on e4d8a4d | 2026-10-16 |
-| one-press restart on the installed build (Epic 125, **Restart for the update…**) | first press pending — installed commit `7f45e117`; the isolated proof is in *Desktop source update* above | pending (the installed `update-restart.json`) | 7f45e117 (installed) | 2026-11-14 |
+| one-press restart on the installed build (Epic 125, **Restart for the update…**) | PASS (partial) — first press 2026-11-14 12:07 UTC on installed `7f45e117`: 3 Claude Code sessions, 3 record rows; 2 had ended their turn and read Ready; 1 was working, was closed not ready, stopped, captured, resumed and told to continue; BMN closed within 25 s (before the five-minute limit) and reopened on `7aadbe76` with all 3 resumed. UNVERIFIED: the lead's session working at the press (it was resting), any Codex row (no Codex session was open), the five-minute wait | `125.7/installed-update-restart.json` | 7f45e117 → 7aadbe76 (installed) | 2026-11-14 |
 
 One line per distinct trial, the latest receipt linked; FAIL and UNVERIFIED lines stay with their
 reasons rather than being dropped. PASS (partial) rows keep their unexercised cells named in the
