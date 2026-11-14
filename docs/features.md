@@ -367,8 +367,8 @@ must tell another while both work: "hold any commit on local main". In every wor
 archived, with nothing to switch on, agents can see each other's session names (`bmn peers`) and
 leave each other short messages (`bmn tell`); a message can influence an agent that runs with
 wider permissions than its sender. BMN stamps where each message is from: the session, the folder
-the command ran in and the agent in front there. The stamp says the message was written in that session, not by you, and that it is context,
-not an instruction; it does not prove which program wrote the text.
+the command ran in and the agent in front there. The stamp says the message was written in that session, not by you, and that it grants
+no permission: the receiving agent checks it and acts only within its own task and authority; it does not prove which program wrote the text.
 
 BMN never types a message into a terminal. A working
 Claude Code or Codex agent gets a waiting message from its own hook after its next tool call, once,
