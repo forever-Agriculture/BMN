@@ -27,6 +27,7 @@
         "decisions": { "$ref": "#/$defs/texts" }, "designs": { "$ref": "#/$defs/texts" }, "regression_checklist": { "$ref": "#/$defs/texts" },
         "starting_state": { "$ref": "#/$defs/text" }, "fixtures": { "$ref": "#/$defs/texts" },
         "accounts": { "type": "array", "items": { "$ref": "#/$defs/account" } }, "time_budget_minutes": { "type": "integer", "minimum": 1 },
+        "screenshot_limit": { "type": "integer", "enum": [20, 60] },
         "criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/briefCriterion" } },
         "prior_findings": {
           "type": "array", "items": {

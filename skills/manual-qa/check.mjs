@@ -86,6 +86,7 @@ export function checkQaBrief(brief, schema = SCHEMA) {
   const errors = []
   walk(brief, schema.$defs[brief?.version === 2 ? 'briefV2' : 'brief'], schema, '$.brief', errors)
   if (errors.length) return errors
+  if (brief.screenshot_limit !== undefined && brief.mode !== 'quick-web') errors.push('$.brief.screenshot_limit: supported only for quick-web')
   for (const [items, key, path] of [[brief.criteria, 'id', 'criteria'], [brief.accounts, 'alias', 'accounts']]) {
     const seen = new Set()
     for (const [index, item] of items.entries()) {

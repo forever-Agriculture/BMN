@@ -10,7 +10,7 @@ import { AskRefusal } from './agents-team-resolve.mjs'
 import { RETENTION_DAYS, askSettings, placePath, recordInterrupted, removeRun, runHolds, sweepRuns } from './agents-team-places.mjs'
 import { ANSWER_LIMIT, StartRefusal, askOutcome, exportAsk, stopAsk } from './agents-team-run.mjs'
 import { RUN_FILES } from './agents-team-supervisor.mjs'
-import { BROWSER_LIMITS, BROWSER_LIMIT_WORDS } from './agents-team-browser.mjs'
+import { BROWSER_LIMITS, BROWSER_LIMIT_WORDS, browserScreenshotLimit } from './agents-team-browser.mjs'
 import { readJsonOrNull } from './shared-helpers.mjs'
 
 /**
@@ -260,7 +260,7 @@ function browserView(folder, request) {
   return {
     origin, interact: request.browser.interact === true, limit: BROWSER_LIMIT_WORDS,
     pages: list(record.pages, BROWSER_LIMITS.pages).flatMap(pageView),
-    screenshots: list(record.screenshots, BROWSER_LIMITS.screenshots).flatMap((shot) => (text(shot?.name, 255) === null ? [] : [{ name: text(shot.name, 255), bytes: count(shot.bytes) ?? 0 }]))
+    screenshots: list(record.screenshots, browserScreenshotLimit(request.browser)).flatMap((shot) => (text(shot?.name, 255) === null ? [] : [{ name: text(shot.name, 255), bytes: count(shot.bytes) ?? 0 }]))
   }
 }
 

@@ -2932,7 +2932,7 @@ is `"installed": false`.
 | Files | 64 files, each 1 MiB; question and file text together 2 MiB | the same prompts with their packets |
 | Pictures | 8 per ask, each 5 MiB, 8,000 px a side and 33.2 million pixels once drawn (an 8K screen, 7680x4320); PNG, JPEG, WebP | the providers' own image limits; the pixel bound keeps a small file from unfolding into gigabytes in the app |
 | Answer kept | 1 MiB; the app's raw output 64 MiB, over it the run fails | |
-| Browser record | 200 pages (addresses 2,000 characters, titles 300); 20 screenshots of 5 MiB | a review visits tens of pages; Pictures' 5 MiB |
+| Browser record | 200 pages (addresses 2,000 characters, titles 300); 20 screenshots of 5 MiB (quick-web QA: 60 when its brief explicitly selects `screenshot_limit: 60`) | a review visits tens of pages; Pictures' 5 MiB |
 | Time | 30 minutes; 1 to 120 with `--time-limit` | assumption (b) |
 | Capacity | 4 runs at once across BMN; 1 to 10 as `capacity` in `team/asks-settings.json` in BMN's state folder, beside `team/runs`; no screen sets it (owner, 2026-10-15: asks are the agents' layer). The same file's `token_ceiling` sets Claude Code's per-ask token ceiling; none by default | assumption (c) |
 | Key window | until the end of the 8th UTC day after the day the key names: at least 7 days from its first use | a lead's retries happen within its run |

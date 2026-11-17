@@ -129,6 +129,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     if (request.qa === undefined || browser === null) throw new AskUsageError('a QA ask requires its curated brief and disposable browser')
     const qa = qaAskInputs(files[0], { cwd, home, origin: browser.origin })
     if (request.question !== qa.question || images.length || files.length !== qa.files.length || texts.some((file, index) => file.real !== qa.files[index]) || JSON.stringify(request.qa.brief) !== JSON.stringify(qa.brief)) throw new InputRefusal('QA_INPUT_MISMATCH', 'QA inputs must be the curated brief and shared skill, without extra instructions or files')
+    if (qa.brief.screenshot_limit !== undefined) browser.screenshotLimit = qa.brief.screenshot_limit
   } else if (request.qa !== undefined) throw new AskUsageError('only the qa role takes a QA brief')
   // The project's vision the asking command found for a reviewer (Epic 112): one of the files, or the reason it was left out.
   let vision = null
@@ -298,7 +299,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   writePrivate(join(folder, ASK_RUN_FILES.request), `${JSON.stringify({
     version: 1, id, role: request.role, agent: choice.agent.id, model: choice.agent.model, provider: choice.agent.provider, aliases: choice.agent.aliases ?? [], effort: choice.effort, chosen_by: choice.rule, phase: choice.phase, ...(choice.configuration_role === undefined ? {} : { configuration_role: choice.configuration_role }), ...(choice.choice === undefined ? {} : { project_choice: choice.choice }),
     billing: choice.agent.paid_by ?? 'unknown', project, form, reads: reads.words, data: label, app_version: installed.version, ...(request.recheckOf === undefined ? {} : { recheck_of: request.recheckOf }),
-    ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}), statement: BROWSER_STATEMENT } }),
+    ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}), ...(browser.screenshotLimit === undefined ? {} : { screenshotLimit: browser.screenshotLimit }), statement: BROWSER_STATEMENT } }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
     asked_by: request.askedBy ?? askerOf(environment), asked_at: now.toISOString()

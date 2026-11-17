@@ -42,6 +42,16 @@ describe('quick QA contract', () => {
     expect(browserTools(true, true)).not.toContain('browser_run_code_unsafe')
     expect(browserTools(true)).toContain('browser_run_code_unsafe')
   })
+  it('accepts an optional capture limit for quick-web only and refuses unsupported values', () => {
+    const root = folder(), path = join(root, 'brief.json');
+    writeFileSync(path, JSON.stringify({ ...brief(), screenshot_limit: 60 }));
+    expect(qaAskInputs(path, { origin: ORIGIN }).brief.screenshot_limit).toBe(60);
+    for (const value of [0, 61, 1.5, "60"]) {
+      writeFileSync(path, JSON.stringify({ ...brief(), screenshot_limit: value }));
+      expect(() => qaAskInputs(path, { origin: ORIGIN })).toThrow();
+    }
+  });
+
   it('supplies only the checked brief and shared skill/report/schema', () => {
     const root = folder(), path = join(root, 'brief.json')
     writeFileSync(path, JSON.stringify(brief()))

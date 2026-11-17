@@ -138,8 +138,10 @@ and applicable standards or statutes. These are prompts, not a requirement to ex
 
 ## 9. UI and slop
 
-Inspect screenshots as well as snapshots; a snapshot cannot establish visual quality. Take at most
-20 screenshots in a run: the host keeps only 20, and citing a dropped one invalidates the report. Exercise
+Inspect screenshots as well as snapshots; a snapshot cannot establish visual quality. The default
+retention limit is 20 screenshots. A quick-web brief may explicitly set `screenshot_limit: 60`;
+that run retains up to 60 native captures. Other modes keep 20. Stay within the selected limit:
+citing a dropped capture invalidates the report. Exercise
 keyboard navigation and focus, and minimum and normal window sizes. Check clarity, hierarchy,
 empty/loading/error states and whether the user can see and use each required action.
 

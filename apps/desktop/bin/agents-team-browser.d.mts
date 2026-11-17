@@ -1,8 +1,8 @@
 // MODULE: agents-team-browser.d.mts - types for a teammate's browser check of the asker's local app (Story 74.3)
-export interface AskBrowser { origin: string; interact: boolean; qa?: boolean }
+export interface AskBrowser { origin: string; interact: boolean; qa?: boolean; screenshotLimit?: 20 | 60 }
 export interface BrowserPage { url: string | null; title: string | null }
 export interface BrowserScreenshot { name: string; bytes: number; sha256: string }
-export interface BrowserRecord { version: 1; origin: string; interact: boolean; tools: string[]; statement: string; calls: number; pages: BrowserPage[]; screenshots: BrowserScreenshot[]; removed: number }
+export interface BrowserRecord { version: 1; screenshotLimit?: 20 | 60; origin: string; interact: boolean; tools: string[]; statement: string; calls: number; pages: BrowserPage[]; screenshots: BrowserScreenshot[]; removed: number }
 export declare const BROWSER_MCP_PACKAGE: string
 export declare const BROWSER_SERVER: string
 export declare const BROWSER_ROLE: string
@@ -13,6 +13,7 @@ export declare const BROWSER_LIMITS: Readonly<{ pages: number; url: number; page
 export declare const BROWSER_RELAY: string
 export declare const BROWSER_CONFIG: string
 export declare const BROWSER_LIMIT_WORDS: string
+export declare function browserScreenshotLimit(browser?: Partial<AskBrowser> | null): 20 | 60
 export declare function browserTemporary(folder: string): string
 export declare function browserOrigin(value: string | undefined): { origin: string } | { reason: string }
 export declare function browserInstalled(environment: { PATH?: string; HOME?: string }, options?: { timeoutMs?: number }): { reason?: string }

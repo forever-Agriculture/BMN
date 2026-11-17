@@ -40,6 +40,14 @@ export const INTERACT_TOOLS = Object.freeze(['browser_click', 'browser_type', 'b
 
 /** What the record keeps of a browser ask: its pages and screenshots, bounded. */
 export const BROWSER_LIMITS = Object.freeze({ pages: 200, url: 2000, pageTitle: 300, screenshots: 20, screenshot: 5 * 1024 * 1024 })
+/** Explicit quick-web capacity belongs to its snapshot; legacy runs keep 20. */
+export function browserScreenshotLimit(browser) {
+  const limit = browser?.screenshotLimit
+  if (limit === undefined) return BROWSER_LIMITS.screenshots
+  if (limit !== 20 && limit !== 60) throw new Error('Invalid frozen QA screenshot limit')
+  return limit
+}
+
 /** A browser ask's parts of its run folder: the server's own folder, and the record BMN writes from it. */
 const BROWSER_FILES = Object.freeze({ folder: 'browser', record: 'browser.json' })
 const SCREENSHOT = /^[A-Za-z0-9._-]{1,200}\.(png|jpe?g)$/u
@@ -145,6 +153,7 @@ const bounded = (value, limit) => (typeof value === 'string' ? maskCredentials(v
  * screenshots where the file is still the one it recorded.
  */
 export function browserRecord(folder, browser, prior = null) {
+  const screenshotLimit = browserScreenshotLimit(browser)
   const own = join(folder, BROWSER_FILES.folder)
   let entries
   try {
@@ -167,7 +176,7 @@ export function browserRecord(folder, browser, prior = null) {
   if (prior !== null) {
     pages = Array.isArray(prior.pages) ? prior.pages : []
     calls = Number.isInteger(prior.calls) ? prior.calls : 0
-    for (const shot of Array.isArray(prior.screenshots) ? prior.screenshots : []) {
+    for (const shot of Array.isArray(prior.screenshots) ? prior.screenshots.slice(0, screenshotLimit) : []) {
       const name = typeof shot?.name === 'string' && SCREENSHOT.test(shot.name) ? shot.name : null
       if (name !== null && entries.includes(name) && sizeOf(name) === shot.bytes && digest(name) === shot.sha256) screenshots.push(shot)
     }
@@ -193,14 +202,14 @@ export function browserRecord(folder, browser, prior = null) {
     }
     for (const name of entries) {
       const size = sizeOf(name)
-      if (size !== null && SCREENSHOT.test(name) && shots.has(name) && size <= BROWSER_LIMITS.screenshot && screenshots.length < BROWSER_LIMITS.screenshots) screenshots.push({ name, bytes: size, sha256: digest(name) })
+      if (size !== null && SCREENSHOT.test(name) && shots.has(name) && size <= BROWSER_LIMITS.screenshot && screenshots.length < screenshotLimit) screenshots.push({ name, bytes: size, sha256: digest(name) })
     }
   }
   const removed = entries.filter((name) => !screenshots.some((shot) => shot.name === name))
   // Capabilities belong to the run's snapshot, never the current installation's defaults.
   const tools = Array.isArray(prior?.tools) ? prior.tools : Array.isArray(browser.tools) ? browser.tools : []
   return {
-    record: { version: 1, origin: browser.origin, interact: browser.interact === true, tools: [...tools], statement: BROWSER_STATEMENT, calls, pages, screenshots, removed: prior?.removed ?? removed.length },
+    record: { version: 1, ...(browser.screenshotLimit === undefined ? {} : { screenshotLimit }), origin: browser.origin, interact: browser.interact === true, tools: [...tools], statement: BROWSER_STATEMENT, calls, pages, screenshots, removed: prior?.removed ?? removed.length },
     removed
   }
 }

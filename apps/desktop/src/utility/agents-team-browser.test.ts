@@ -13,6 +13,7 @@ import { askOutcome, exportAsk, finishBrowser, startAsk, waitAsk } from '../../b
 import { askJson, showWords } from '../../bin/agents-team-cli.mjs'
 import { recordInterrupted, requestHash } from '../../bin/agents-team-places.mjs'
 import { appAskDetail } from '../../bin/agents-team-app.mjs'
+import { qaAskInputs } from '../../bin/agents-team-qa.mjs'
 import { ANSWER_KEY, EXAMPLE, SCOPES, approve, goSignInInBmnFolder, leftovers, scopeGone, settle, stubOpenCode, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const CLI = fileURLToPath(new URL('../../bin/agents-team-cli.mjs', import.meta.url))
@@ -287,6 +288,48 @@ describe('the record of a browser ask (74.3 AC3)', () => {
     expect(calls[7]).toMatchObject({ tool: 'browser_take_screenshot', args: { filename: 'named.png' }, shots: ['named.png'] })
     expect(sessionCalls('no log here')).toEqual([])
   })
+
+  it('freezes the QA cap in the manifest, request, visible detail and exported record', () => {
+    const role = 'browser: {candidates: [luna@max], then: lead}';
+    expect(EXAMPLE).toContain(role);
+    approve(home, EXAMPLE.replace(role, role + '\nqa: {candidates: [luna@max], then: blocked}').replace('roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]', 'roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer, qa]'));
+    const file = join(home, 'qa-brief.json');
+    writeFileSync(file, JSON.stringify({ version: 1, revision: 'synthetic-capacity-build', target: ORIGIN, mode: 'quick-web',
+      goal: 'See all required synthetic states', why: 'Retain complete native evidence', scope: { included: ['Synthetic page'], excluded: ['Accounts'] },
+      decisions: [], designs: [], regression_checklist: [], starting_state: 'Signed out', fixtures: [], accounts: [], time_budget_minutes: 5,
+      screenshot_limit: 60, criteria: [{ id: 'AC1', description: 'All required states are visible', mandatory: true }] }));
+    const inputs = qaAskInputs(file, { cwd: home, home, origin: ORIGIN });
+    const prepared = ask({ role: 'qa', question: inputs.question, files: inputs.files, qa: { brief: inputs.brief }, browser: { origin: ORIGIN, disposable: true, interact: true } });
+    expect(prepared.manifest).toMatchObject({ browser: { screenshotLimit: 60 } });
+    expect(JSON.parse(readFileSync(join(prepared.folder, ASK_RUN_FILES.request), 'utf8')).browser.screenshotLimit).toBe(60);
+    const own = join(prepared.folder, 'browser');
+    mkdirSync(join(own, 'session-1'), { recursive: true });
+    const names = Array.from({ length: 61 }, (_, index) => `capture-${String(index).padStart(2, '0')}.png`);
+    for (const name of names) writeFileSync(join(own, name), Buffer.from('89504e470d0a1a0a0000', 'hex'));
+    writeFileSync(join(own, 'session-1', 'session.md'), names.map(name => call('browser_take_screenshot', { filename: name }, shot(name))).join(''));
+    finishBrowser(prepared.folder);
+    expect((askJson(prepared.folder).browser as { screenshots: unknown[] }).screenshots).toHaveLength(60);
+    expect(appAskDetail(prepared.id).browser?.screenshots).toHaveLength(60);
+    const output = join(home, 'capture-export');
+    writeFileSync(join(prepared.folder, ASK_RUN_FILES.outcome), JSON.stringify({ version: 1, state: 'answered', exit: 0 }));
+    exportAsk(prepared.folder, output);
+    expect(JSON.parse(readFileSync(join(output, 'browser.json'), 'utf8')).screenshots).toHaveLength(60);
+    expect(readdirSync(join(output, 'browser'))).toHaveLength(60);
+  });
+
+  it('keeps an explicitly selected 60-capture run and retains the legacy default of 20', () => {
+    const folder = mkdtempSync(join(home, 'capture-limit-'));
+    const own = join(folder, 'browser');
+    mkdirSync(join(own, 'session-1'), { recursive: true });
+    const names = Array.from({ length: 61 }, (_, index) => `capture-${String(index).padStart(2, '0')}.png`);
+    for (const name of names) writeFileSync(join(own, name), Buffer.from('89504e470d0a1a0a0000', 'hex'));
+    writeFileSync(join(own, 'session-1', 'session.md'), names.map(name => call('browser_take_screenshot', { filename: name }, shot(name))).join(''));
+    const policy = { origin: ORIGIN, interact: true, qa: true, screenshotLimit: 60 as const };
+    const selected = browserRecord(folder, policy).record;
+    expect(selected.screenshots).toHaveLength(60);
+    expect(browserRecord(folder, policy, selected).record.screenshots).toEqual(selected.screenshots);
+    expect(browserRecord(folder, { origin: ORIGIN, interact: true }).record.screenshots).toHaveLength(20);
+  });
 
   it('keeps the pages in order and the screenshots the log names, bounded; removes the log, page snapshots, downloads, links and anything oversized, the record written first', () => {
     const folder = mkdtempSync(join(home, 'run-'))

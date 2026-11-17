@@ -182,7 +182,7 @@ describe('what an ended run\'s record says (73.1 AC2)', () => {
   it('a refused ask says why on its line, in the refusal\'s own words', () => {
     record('20261015T090000-0000000a', { asked_by: SESSION, asked_at: '2026-10-15T09:00:00.000Z' },
       { state: 'refused', exit: 10, refusal: { code: 'CHECK_FAILED', reason: 'the check refused the command: made-up reason' }, ended_at: '2026-10-15T09:00:01.000Z' })
-    expect(appAsks().asks[0]).toMatchObject({ state: 'refused', refusalCode: 'CHECK_FAILED', reason: 'the check refused the command: made-up reason', usage: null })
+    expect(appAsks({ now: new Date('2026-10-15T09:00:02.000Z') }).asks[0]).toMatchObject({ state: 'refused', refusalCode: 'CHECK_FAILED', reason: 'the check refused the command: made-up reason', usage: null })
   })
 
   it('an ask whose asking command ended before its supervisor started is interrupted when the page reads it, and can then be removed (epic review)', () => {
