@@ -47,6 +47,13 @@ describe('owner root guard', () => {
     expect(() => assertOwnerRootsUnchanged(before, grown, 'during smoke')).toThrow(/\/owner\/config\/runs\/old/)
     const added = [`${runs}\tdir\t3`, ...before.slice(1), `${runs}/new\tdir\t3`]
     expect(() => assertOwnerRootsUnchanged(before, added, 'during smoke', { runFolders: [runs] })).toThrow(/runs\/new/)
+    // A plan board's kept versions: one added and the oldest pruned inside a board folder that was there before.
+    const boards = '/owner/state/plan-versions'
+    const kept = [`${boards}\tdir\t1`, `${boards}/b1\tdir\t1`, `${boards}/b1/v1.yaml\t5\t1`, `${boards}/b1/board-path.txt\t9\t1`]
+    const rolled = [`${boards}\tdir\t1`, `${boards}/b1\tdir\t2`, `${boards}/b1/v2.yaml\t5\t2`, `${boards}/b1/board-path.txt\t9\t2`]
+    expect(() => assertOwnerRootsUnchanged(kept, rolled, 'during smoke', { runFolders: [runs, boards] })).not.toThrow()
+    expect(() => assertOwnerRootsUnchanged(kept, [...kept, `${boards}/b2\tdir\t3`], 'during smoke', { runFolders: [runs, boards] }))
+      .toThrow(/plan-versions\/b2/)
     // Only direct children of a run folder count as runs: a deeper folder that existed before excuses nothing beside it.
     const nested = [...before, `${runs}/old/inputs\tdir\t1`]
     expect(() => assertOwnerRootsUnchanged(nested, [...nested, '/owner/config/db\t1\t1'], 'during smoke', { runFolders: [runs] }))

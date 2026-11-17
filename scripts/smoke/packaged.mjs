@@ -27,8 +27,13 @@ const ownerRoots = [
 
 // The owner may already use the app, so the smoke proves it leaves their real roots untouched.
 // Quit BMN first; a running copy would change these files during the smoke. Team asks other sessions started
-// before the smoke keep writing in their own run folders and are left out of the check.
-const ownerRunFolders = [join(homedir(), '.config/bmn/agents/state/team/runs')]
+// before the smoke keep writing in their own run folders and are left out of the check. So are the kept versions of a
+// plan board another session already changed before the smoke: its `bmn plan set` calls go on meanwhile (the update
+// of 2026-11-17 failed on a B2Buster board). A board first changed during the smoke still fails.
+const ownerRunFolders = [
+  join(homedir(), '.config/bmn/agents/state/team/runs'),
+  join(homedir(), '.local/state/bmn/plan-versions')
+]
 const ownerFingerprint = () => fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readdirSync })
 
 function parseReceipt(stdout) {

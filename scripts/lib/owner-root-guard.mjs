@@ -19,9 +19,10 @@ export function fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readd
 
 /**
  * Fails when a run added, removed or modified anything under the owner's real roots.
- * `runFolders` names folders whose children are team ask runs. A run already there before the check began belongs to an
- * ask some other session started; its supervisor keeps writing inside its own folder while it lasts, so those writes are
- * not the run's. A leak would start a new run, which still fails (update of 2026-11-07 failed on a Q-Automations ask).
+ * `runFolders` names folders whose children each belong to one piece of other sessions' work: a team ask run, or the
+ * kept versions of one plan board. A child already there before the check began belongs to work some other session
+ * started; that session keeps writing inside it meanwhile, so those writes are not the run's. A leak would start a new
+ * child, which still fails (updates of 2026-11-07, a Q-Automations ask, and 2026-11-17, a B2Buster plan board).
  */
 export function assertOwnerRootsUnchanged(before, after, phase, { runFolders = [] } = {}) {
   // The owner's roots hold hundreds of thousands of entries; Sets keep the comparison linear.
