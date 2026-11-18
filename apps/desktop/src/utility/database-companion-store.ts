@@ -58,6 +58,7 @@ import { TURN_OPERATIONS } from './database-turn-store'
 import { AWAY_OPERATIONS } from './database-away-store'
 import { PUSH_POLICY_OPERATIONS } from './database-push-policy-store'
 import { GRANT_OPERATIONS } from './database-grant-store'
+import { DEPARTURE_OPERATIONS } from './database-departure-store'
 import { QA_OPERATIONS, getQaRun } from './database-qa-store'
 import { QA_GRANT_OPERATIONS, askQaGrant, qaGrantForKey, qaGrantForCard, bindQaGrantCard, answerQaGrant } from './database-qa-grant-store'
 import { AWAY_SUMMARY_OPERATIONS } from './database-away-summary'
@@ -1552,6 +1553,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   ...AWAY_OPERATIONS,
   ...PUSH_POLICY_OPERATIONS,
   ...GRANT_OPERATIONS,
+  ...DEPARTURE_OPERATIONS,
   ...QA_OPERATIONS,
   ...QA_GRANT_OPERATIONS,
   openQaGrantRequest,

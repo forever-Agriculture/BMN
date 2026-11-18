@@ -93,15 +93,17 @@ session. It uses a bot you create and own. It is off by default.
   finished-turn notice at least 15 minutes old, no other open request and a provably empty idle prompt. It types one
   fixed line into each, telling the agent to continue only work that is still allowed or stop. It grants nothing and
   never resumes a session you stopped.
-- Before you go (Epic 84): a run's departure card comes as one message with the run's terms and **Grant all**,
-  **Choose…** and **Grant none** (a card with one term has its own buttons, and one tap answers). **Choose…** walks
-  the terms one at a time with **‹ Back**, ● marking the proposal, and only the last tap grants. The buttons go and
-  one line says what was granted; a card answered at the laptop says **Answered at the laptop**, and one withdrawn
-  says why. A card asked again is edited in place; a tap on its earlier buttons grants nothing and says **This card
-  changed. Look again.** After a BMN restart an open card is drawn again with fresh buttons, since your answer is
-  checked against the stored card. A typed reply to one gets **Answer this card with its buttons.** A card waits
-  while you are at the desk and only leaving, goes at once when you are away or it came within 30 minutes of Away,
-  and later in the night follows quiet hours.
+- Before you go (Epics 84, 130): `/away` starts getting ready. A single head arrives at once, quiet hours or
+  not, with the window's counts, session states, **Go** / **Go now** and **Not leaving**. It is edited as answers
+  arrive; repeating `/away` repeats the counts. A run's lines arrive as a card with **Grant all**, **Choose…** and
+  **Grant none**; every choice in the walk saves immediately and shows the same saved answer in BMN. Saved choices
+  can change until Go. After Go they are frozen; unanswered lines can still be answered. The head keeps the stored
+  10-minute deadline, and an automatic start adds a short new message. With no recent session to ask, Away starts
+  at once without a list. Identical lines granted before a short return are proposals until **Grant the same N**.
+  Re-asks edit the same card. Stale buttons grant nothing and refresh the record's actual state. A restart redraws
+  the same stored head and cards; an uncertain head send is not replayed. Typed replies to a card say
+  **Answer this card with its buttons.** Cards asked later during Away retain the existing quiet-hours rule.
+
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 

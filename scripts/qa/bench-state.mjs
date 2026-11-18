@@ -1,6 +1,5 @@
 // MODULE: bench-state.mjs - locked run generations and kernel-owned QA workload containment
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { accessSync, constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, statfsSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { constants as osConstants } from 'node:os'
@@ -8,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { removeOwnedDirectory } from '../lib/owned-directories.mjs'
 import { atomicJson, isLiveProcess, processIdentity } from './bench-lib.mjs'
+import { traceLines } from './bench-file.mjs'
 
 export const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export const evidence = join(repo, '.dev-auto/evidence/qa-bench')
@@ -175,9 +175,18 @@ export function outstanding(state) {
 export function traceOutstanding(runId, trace) { return !launchQuiescent(runId, trace) }
 
 export function terminalTraceEvidence(text, originalPid) {
+  return terminalTraceLines(text.split('\n'), originalPid)
+}
+
+export function terminalTraceFileEvidence(fd, originalPid, chunkBytes) {
+  const stats = {}
+  return { ...terminalTraceLines(traceLines(fd, stats, chunkBytes), originalPid), ...stats }
+}
+
+function terminalTraceLines(lines, originalPid) {
   const tasks = new Set(), terminal = new Set(), errors = [], exits = {}, parents = new Map()
   let root = originalPid
-  for (const line of text.split('\n')) {
+  for (const line of lines) {
     if (/strace:|Process \d+ detached/u.test(line)) errors.push(line)
     const match = /^(\d+)\s+(.*)$/u.exec(line)
     if (!match) continue
@@ -243,14 +252,14 @@ function certificateCompleted(runId, trace) {
         !sameProcess(cert.recorderIdentity, recorder.recorderIdentity) || !sameProcess(cert.tracerIdentity, recorder.tracerIdentity) ||
         cert.launchGroupIdentity?.device !== entry.group.device || cert.launchGroupIdentity?.inode !== entry.group.inode || cert.traceErrors?.length !== 0) return false
     const fd = openSync(join(config.run, entry.file), constants.O_RDONLY | constants.O_NOFOLLOW)
-    let bytes
-    try { if (!matches(fstatSync(fd), cert.traceFileIdentity)) return false; bytes = readFileSync(fd) }
-    finally { closeSync(fd) }
-    const actor = actorIdentity(runId, entry)
-    if (!actor || actor.runId !== runId || actor.key !== entry.key || !sameProcess(actor.tracer, recorder.tracerIdentity)) return false
-    const terminal = terminalTraceEvidence(bytes.toString(), actor.pid)
-    return bytes.length === cert.traceBytes && createHash('sha256').update(bytes).digest('hex') === cert.traceSha256 &&
-      terminal.complete && tracerStatusMatches(cert, terminal.exits[String(actor.pid)])
+    try {
+      if (!matches(fstatSync(fd), cert.traceFileIdentity)) return false
+      const actor = actorIdentity(runId, entry)
+      if (!actor || actor.runId !== runId || actor.key !== entry.key || !sameProcess(actor.tracer, recorder.tracerIdentity)) return false
+      const terminal = terminalTraceFileEvidence(fd, actor.pid)
+      return terminal.bytes === cert.traceBytes && terminal.sha256 === cert.traceSha256 &&
+        terminal.complete && tracerStatusMatches(cert, terminal.exits[String(actor.pid)])
+    } finally { closeSync(fd) }
   } catch { return false }
 }
 

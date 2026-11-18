@@ -257,6 +257,8 @@ export async function typeIfIdle(proof: WakeProof, p: {
   unclaim?(): Promise<void>
   /** Filled with what the last checks saw (113.6). */
   facts?: WakeFacts
+  /** A departure decision must finish before its final screen read and synchronous write. */
+  transition?: { pending(): boolean; wait(): Promise<void> }
   /**
    * Epic 125 (125.5 AC3): the event that must be the session's latest, in place of a finished turn of its own, with the
    * reason when it is not. Only the update restart names one: a resumed Claude Code run's own start. Every later check
@@ -279,7 +281,12 @@ export async function typeIfIdle(proof: WakeProof, p: {
   const claimed = await p.claim?.()
   if (claimed) return claimed
   const last = async (): Promise<string | null> => {
-    const screen = await proof.screen(seen.sessionId, seen.incarnationId)
+    let screen: WakeScreen | null
+    do {
+      if (p.transition) await p.transition.wait()
+      screen = await proof.screen(seen.sessionId, seen.incarnationId)
+      // A decision which began during the read requires a fresh screen after its reply.
+    } while (p.transition?.pending())
     // The last checks run together, synchronously, right before the one write.
     const allowed = p.stillAllowed()
     if (allowed !== null) return allowed

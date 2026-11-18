@@ -14,6 +14,8 @@ import {
   AWAY_BACK_AGENT_TEXT,
   AWAY_QUESTION_REFUSAL,
   DEFAULT_APP_SETTINGS,
+  DEPARTURE_LINE,
+  GRANT_RECORD_KEY,
   ERROR_CODES,
   PROGRESS_STALE_AFTER_MS,
   HOOK_EVENT_LOG_LIMIT,
@@ -61,6 +63,16 @@ vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection
 const now = '2026-09-14T12:00:00.000Z'
+// Legacy night fixtures explicitly complete the new getting-ready step before exercising Away.
+async function setAwayAndGo(note?: string) {
+  await service.route(METHOD_REGISTRY.awaySet, { to: 'away', ...(note === undefined ? {} : { note }) })
+  const view = service.grantForOwner()
+  if (view.period?.state === 'leaving') await service.route(METHOD_REGISTRY.grantDeparture, {
+    action: 'go', periodId: view.period.periodId, expectedRevision: view.revision, operationKey: `test-go-${view.revision}`
+  })
+  return service.awayForOwner()
+}
+
 let root: string
 let database: DatabaseConnection
 let service: CompanionService
@@ -3675,7 +3687,7 @@ describe('messages between sessions, through the service (Epic 66, Story 75.4)',
   it('keeps a waiting message and independent receipts through delayed claims and a hung team lookup (115.2 R2)', async () => {
     await receiverAgent('claude')
     await tell('synthetic waiting message')
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     const conversation = '0a0a0a0a-1b1b-2c2c-3d3d-4e4e4e4e4e4e'
     const observe = () => handlers().observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'claude',
       event: 'PostToolUse', source: null, toolName: 'Bash', effects: [], awayLock: true,
@@ -4576,7 +4588,7 @@ describe('Away (Story 76.3)', () => {
   }
 
   it('keeps one state across the app, the CLI and an agent, and emits each change once', async () => {
-    const away = await service.route(METHOD_REGISTRY.awaySet, { to: 'away', note: 'train' })
+    const away = await setAwayAndGo('train')
     expect(away).toMatchObject({ state: 'away', revision: 1, source: 'app', note: 'train' })
     expect(emitted.filter(event => event.topic === 'away')).toHaveLength(1)
     expect(await service.changeAway({ to: 'away', source: 'cli' })).toMatchObject({ outcome: 'unchanged' })
@@ -4590,7 +4602,7 @@ describe('Away (Story 76.3)', () => {
   })
 
   it('reads the said state back after a restart, and shows a summary as shown once', async () => {
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     const back = await service.route(METHOD_REGISTRY.awaySet, { to: 'back' }) as { periodId: string }
     service = new CompanionService(service['options']); liveIncarnations.clear(); await service.start()
     expect(service.awayForOwner()).toMatchObject({ state: 'back', periodId: back.periodId, summaryShownAt: null })
@@ -4620,7 +4632,7 @@ describe('Away (Story 76.3)', () => {
     await vi.advanceTimersByTimeAsync(20_000)
     expect(sent).toEqual([])
 
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     await vi.advanceTimersByTimeAsync(0)
     service.sessionStateChanged('s1', 'exited')
     await vi.advanceTimersByTimeAsync(60_000)
@@ -4753,7 +4765,7 @@ describe('Away (Story 76.3)', () => {
     const handlers = service['control']['options'].handlers
     const question = { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'claude:question', kind: 'question' as const,
       title: 'Claude asks: Which colour?', origin: 'hook:claude:PreToolUse', awayRefusable: true }
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     expect(await handlers.openAttention(question)).toEqual({ refused: true, changed: false, reason: AWAY_QUESTION_REFUSAL })
     expect(COMPANION_OPERATIONS.listAttention(database).filter(row => row.sessionId === 's1')).toEqual([])
     // Only an app's own PreToolUse may be refused; anything else opens as it always did.
@@ -4770,7 +4782,7 @@ describe('Away (Story 76.3)', () => {
       effects: [], turn: { conversation, turn: null, nested: false }, ...(awayLock ? { awayLock: true as const } : {})
     }) as Promise<{ awayNotice?: string; awayRevision?: number; awayClaim?: string }>
     expect(await observe('PostToolUse')).not.toHaveProperty('awayNotice')
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away', note: 'private note' })
+    await setAwayAndGo('private note')
     // A hook that does not hold its conversation's away lock is handed nothing (76.4 AC2).
     expect(await observe('PostToolUse', null, false)).not.toHaveProperty('awayNotice')
     const told = await observe('PostToolUse')
@@ -4812,16 +4824,16 @@ describe('Away (Story 76.3)', () => {
     expect(service.grantForOwner().openCards).toBe(1)
     expect(emitted.filter(event => event.topic === 'grant')).toHaveLength(1)
     const periodId = service.grantForOwner().period!.periodId
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     expect(service.awayForOwner().periodId).toBe(periodId)
     expect(await handlers.grantStatus({ scope: agent, runId: 'run-80' })).toMatchObject({ runs: [{ active: false, reason: expect.stringContaining('unanswered card grants nothing') }] })
 
-    await expect(service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 } })).rejects.toThrow('required')
-    expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 2, choices: { rounds: 3 }, operationKey: 'press-0' }))
+    await expect(service.route(METHOD_REGISTRY.grantAnswer, { periodId, expectedRevision: service.grantForOwner().revision, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 } })).rejects.toThrow('required')
+    expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, expectedRevision: service.grantForOwner().revision, runId: 'run-80', cardRevision: 2, choices: { rounds: 3 }, operationKey: 'press-0' }))
       .toMatchObject({ outcome: 'refused', reason: 'changed' })
-    // The window reads this view: his refused answer is in it at once, kept for the morning.
-    expect(service.grantForOwner().period?.refusals).toMatchObject([{ runId: 'run-80', kind: 'answer', reason: 'changed', via: 'app' }])
-    expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, operationKey: 'press-1' }))
+    // D9: a stale card changes no record, including the refusal history.
+    expect(service.grantForOwner().period?.refusals).toEqual([])
+    expect(await service.route(METHOD_REGISTRY.grantAnswer, { periodId, expectedRevision: service.grantForOwner().revision, runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, operationKey: 'press-1' }))
       .toMatchObject({ outcome: 'granted', view: { openCards: 0 } })
     const status = await handlers.grantStatus({ scope: agent, runId: 'run-80' }) as { runs: Array<{ active: boolean; lines: string[] }> }
     expect(status.runs[0]!.active).toBe(true)
@@ -4852,14 +4864,14 @@ describe('Away (Story 76.3)', () => {
     const card = (name: string) => ({ title: 'Epic 103', scope: 'the pin', nothing: false, terms: [{ kind: 'command' as const, id: 'check-1', command: `./${name}`, folder, count: 1, script: { path: name, sha256 }, proposed: 'yes' as const, reason: 'the check' }] })
     await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
     await handlers.askGrant({ scope: agent, runId: 'run-103', card: card('a.sh') })
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     const periodId = service.grantForOwner().period!.periodId
-    await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-103', cardRevision: 1, choices: { 'check-1': 'yes' }, operationKey: 'press-1' })
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId, expectedRevision: service.grantForOwner().revision, runId: 'run-103', cardRevision: 1, choices: { 'check-1': 'yes' }, operationKey: 'press-1' })
     const database = service['options'].database
     const real = database.companion.bind(database)
     let between: (() => Promise<void>) | null = async () => {
       await handlers.askGrant({ scope: agent, runId: 'run-103', card: card('b.sh') })
-      await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-103', cardRevision: 2, choices: { 'check-1': 'yes' }, operationKey: 'press-2' })
+      await service.route(METHOD_REGISTRY.grantAnswer, { periodId, expectedRevision: service.grantForOwner().revision, runId: 'run-103', cardRevision: 2, choices: { 'check-1': 'yes' }, operationKey: 'press-2' })
     }
     database.companion = (async (operation: string, ...args: unknown[]) => {
       const result = await (real as (name: string, ...rest: unknown[]) => Promise<unknown>)(operation, ...args)
@@ -4875,6 +4887,99 @@ describe('Away (Story 76.3)', () => {
     }
   })
 
+  it('re-reads an unreadable grant cache and restores the exact saved departure', async () => {
+    vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
+    const handlers = service['control']['options'].handlers
+    const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    await handlers.observeHookEvent({ sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude', event: 'Stop',
+      source: null, toolName: null, effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+    await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+    const saved = service.grantForOwner()
+    expect(saved.period?.state).toBe('leaving')
+    const awayState = service.awayForOwner().state
+    expect(awayState).not.toBe('away')
+    const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(GRANT_RECORD_KEY) as { value_json: string }
+    const update = database.prepare('UPDATE app_setting SET value_json = ? WHERE key = ?')
+    update.run('synthetic unreadable row', GRANT_RECORD_KEY)
+    await expect(service.route(METHOD_REGISTRY.grantDeparture, {
+      action: 'go', periodId: saved.period!.periodId, expectedRevision: saved.revision, operationKey: 'unreadable-go'
+    })).resolves.toMatchObject({ outcome: 'unknown', view: { read: 'unknown' }, away: { state: awayState } })
+    await expect(service.route(METHOD_REGISTRY.grantGet, {})).resolves.toMatchObject({ read: 'unknown' })
+    expect(service['autoAwayTimer']).toBeUndefined()
+    update.run(row.value_json, GRANT_RECORD_KEY)
+    await expect(service.route(METHOD_REGISTRY.grantGet, {})).resolves.toEqual(saved)
+    expect(service.grantForOwner()).toEqual(saved)
+    expect(service['autoAwayTimer']).toBeDefined()
+  })
+
+  it('refuses an agent ask held across a real grant record replacement', async () => {
+    vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
+    const handlers = service['control']['options'].handlers
+    const scope = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    await handlers.observeHookEvent({ ...scope, agent: 'claude', event: 'Stop', source: null, toolName: null,
+      effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+    await handlers.leaveAway({ scope, expectedRevision: 0 })
+    const old = service.grantForOwner()
+    const worker = service['options'].database
+    const real = worker.companion.bind(worker)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    worker.companion = (async (operation: string, ...args: unknown[]) => {
+      if (operation === 'askGrantCard') { entered.resolve(); await release.promise }
+      return (real as (name: string, ...rest: unknown[]) => Promise<unknown>)(operation, ...args)
+    }) as typeof worker.companion
+    const ask = handlers.askGrant({ scope, runId: 'held-old-ask', card: { title: 'Synthetic old request', scope: 'For the old departure', nothing: true, terms: [] } })
+      .then(value => ({ value }), (error: unknown) => ({ error }))
+    try {
+      await entered.promise
+      database.prepare('UPDATE app_setting SET value_json = ? WHERE key = ?').run('malformed synthetic record', GRANT_RECORD_KEY)
+      await service.route(METHOD_REGISTRY.grantDeparture, { action: 'start', periodId: null, expectedRevision: old.revision, operationKey: 'publish-loss' })
+      await handlers.leaveAway({ scope, expectedRevision: 0 })
+      const newView = service.grantForOwner()
+      expect(newView.generation).toBe(1)
+      expect(newView.period?.periodId).not.toBe(old.period?.periodId)
+      release.resolve()
+      expect(await ask).toMatchObject({ error: expect.objectContaining({ message: expect.stringContaining('nothing was asked') }) })
+      expect(service.grantForOwner().period?.runs).toEqual([])
+    } finally {
+      release.resolve()
+      worker.companion = real
+    }
+  })
+
+  it('recovers an overdue saved deadline from the host sweep after renderer reads stop', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
+    await service.start()
+    try {
+      const handlers = service['control']['options'].handlers
+      const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+      await handlers.observeHookEvent({ ...agent, agent: 'claude', event: 'Stop', source: null, toolName: null,
+        effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+      await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+      const saved = service.grantForOwner()
+      const deadline = saved.period?.collection?.autoAwayAt
+      expect(deadline).toBeDefined()
+      const row = database.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(GRANT_RECORD_KEY) as { value_json: string }
+      const update = database.prepare('UPDATE app_setting SET value_json = ? WHERE key = ?')
+      update.run('synthetic unreadable row', GRANT_RECORD_KEY)
+      await service.route(METHOD_REGISTRY.grantDeparture, {
+        action: 'go', periodId: saved.period!.periodId, expectedRevision: saved.revision, operationKey: 'unknown-before-tick'
+      })
+      await vi.advanceTimersByTimeAsync(12_000)
+      expect(service.grantForOwner().read).toBe('unknown')
+      expect(service.awayForOwner().state).not.toBe('away')
+      clock = new Date(Date.parse(deadline!) + 5_000).toISOString()
+      update.run(row.value_json, GRANT_RECORD_KEY)
+      // No renderer or owner reads: the host sweep has to find and re-arm the persisted deadline.
+      await vi.advanceTimersByTimeAsync(8_001)
+      expect(service.grantForOwner().period).toMatchObject({ periodId: saved.period!.periodId, state: 'away',
+        collection: { autoAwayAt: deadline, autoStartedAt: clock } })
+    } finally {
+      await service.close()
+      vi.useRealTimers()
+    }
+  })
+
   it('lists the night\'s granted merges and pushes for bmn policy, and none without a grant (Story 84.9 AC1)', async () => {
     const handlers = service['control']['options'].handlers
     const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
@@ -4885,9 +4990,9 @@ describe('Away (Story 76.3)', () => {
     ] }
     await handlers.askGrant({ scope: agent, runId: 'run-80', card })
     const periodId = service.grantForOwner().period!.periodId
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     expect(await handlers.policyStatus()).toMatchObject({ granted: [] })
-    await service.route(METHOD_REGISTRY.grantAnswer, { periodId, runId: 'run-80', cardRevision: 1, choices: { 'merge-12': 'pr' }, operationKey: 'press-1' })
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId, expectedRevision: service.grantForOwner().revision, runId: 'run-80', cardRevision: 1, choices: { 'merge-12': 'pr' }, operationKey: 'press-1' })
     expect((await handlers.policyStatus() as { granted: unknown }).granted).toEqual([{
       runId: 'run-80', title: 'Epic 80 · clean up', item: 'merge-12', kind: 'merge', repository: 'octo/widgets',
       words: 'merge PR 12 in octo/widgets, only at head 3f2a9c1; another head waits', left: 1, count: 1
@@ -4900,7 +5005,7 @@ describe('Away (Story 76.3)', () => {
     const handlers = service['control']['options'].handlers
     const decision = { sessionId: 's1', incarnationId: 'incarnation-1', key: 'storage-format', revision: 1,
       payload: { choice: 'JSON array', reason: 'No dependency', affects: 'src/store.js', reverse: 'Replace it', references: [], depends: [] } }
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     await expect(handlers.recordDecision(decision)).rejects.toThrow(/does not know which conversation/)
     service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: true as const, binding: null })) as never
     await handlers.observeConversation({ sessionId: 's1', incarnationId: 'incarnation-1', agentCli: 'claude',
@@ -4947,7 +5052,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
   }
   const night = async (whileReading?: () => void): Promise<void> => {
     clock = new Date(T).toISOString()
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     clock = new Date(T + HOUR).toISOString()
     observe('Stop', T + HOUR)
     await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'codex:turn', kind: 'notice',
@@ -4973,7 +5078,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
     const composer = ['   Synthetic root', '', '  ┃', '  ┃', '  ┃', '  ┃  Build · Synthetic loopback', `  ╹${'▀'.repeat(40)}`, '  ctrl+p commands']
     let cursor = { x: 34, y: 3 }
     clock = new Date(T).toISOString()
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     clock = new Date(T + HOUR).toISOString()
     observe('session.idle', T + HOUR, 'opencode')
     await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'opencode:turn', kind: 'notice',
@@ -5005,7 +5110,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
       return screens.get(sessionId) as never
     }
     clock = new Date(T).toISOString()
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     clock = new Date(T + HOUR).toISOString()
     for (const [sessionId, incarnationId] of [['s1', 'incarnation-1'], ['s2', 'incarnation-2']] as const) {
       service['hookObservations'].set(sessionId, { sessionId, incarnationId, agent: 'opencode', event: 'session.idle', source: null, plugin: 1,
@@ -5030,7 +5135,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
 
   it.each(['subagent', 'interrupted'])('types nothing into an OpenCode root whose latest idle came from %s', async (source) => {
     clock = new Date(T).toISOString()
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     clock = new Date(T + HOUR).toISOString()
     observe('session.idle', T + HOUR, 'opencode', source)
     await service['openAttention']({ sessionId: 's2', incarnationId: 'incarnation-2', requestKey: 'opencode:turn', kind: 'notice',
@@ -5050,7 +5155,7 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
       sessionId: 's2', incarnationId: 'incarnation-2', agent: 'opencode', event: 'session.idle', source: null, toolName: null, effects: [],
       ...(plugin === undefined ? {} : { plugin }) })
     clock = new Date(T).toISOString()
-    await service.route(METHOD_REGISTRY.awaySet, { to: 'away' })
+    await setAwayAndGo()
     clock = new Date(T + HOUR).toISOString()
     // An OpenCode started before its plugin file was upgraded: its events carry no mark.
     await hook()
@@ -5070,5 +5175,240 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
     clock = new Date(T + 4 * HOUR + 1000).toISOString()
     await service['awayWake'].sweep()
     expect(writes.map((write) => write.sessionId)).toEqual(['s2'])
+  })
+})
+
+// This integration layer uses the existing service clock and real SQLite transactions. It does not
+// replace the wall-clock Electron/native acceptance checks or make a native prompt safe to type into.
+describe('130 D9: service routes and actual phone callbacks share the worker fence', () => {
+  type Message = { text: string; keyboard: Array<Array<{ text: string; callback_data: string }>> | null }
+  let messages: Map<number, Message>, nextMessage: number, callback: number, toasts: string[]
+  let failedEdit: number | null, beforeEdit: ((messageId: number) => Promise<void>) | null
+  const settle = async () => {
+    for (let pass = 0; pass < 10; pass++) {
+      const revision = service.grantForOwner().revision
+      await service['grantCards'].reconcile(); await service['departureHead'].reconcile()
+      if (service.grantForOwner().revision === revision) return
+    }
+    throw Error('Synthetic phone did not settle')
+  }
+  const records = async () => JSON.stringify(await service['options'].database.companion('getGrants'))
+  const command = (updateId: number, text: string) => service['handleTelegramReply']({ updateId, chatId: 1, fromUserId: 1, messageId: updateId + 900, replyToMessageId: null, text, textSource: 'text', file: null })
+  const app = (action: string, view = service.grantForOwner()) => service.route(METHOD_REGISTRY.grantDeparture, {
+    action, periodId: action === 'start' ? null : view.period!.periodId, expectedRevision: view.revision, operationKey: `synthetic-app-${++callback}`
+  }) as Promise<{ outcome: string }>
+  const phone = (match: string, label: string, head: boolean) => {
+    const row = [...messages].find(([, message]) => message.text.includes(match) && message.keyboard?.flat().some(button => button.text === label))
+    if (!row) throw Error(`No synthetic phone control ${label}`)
+    const [messageId, message] = row
+    const data = message.keyboard!.flat().find(button => button.text === label)!.callback_data
+    const event = { updateId: ++callback, callbackId: `synthetic-callback-${callback}`, chatId: 1, fromUserId: 1, messageId, data }
+    return () => head ? service['departureHead'].tap(event) : service['grantCards'].tap(event)
+  }
+  const ask = (runId = 'race-run') => service['control']['options'].handlers.askGrant({ scope: { kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' }, runId,
+    card: { title: `Synthetic ${runId}`, scope: 'One synthetic worker race', nothing: false, terms: [{ kind: 'push-default', id: 'push', repository: 'synthetic/repo', branch: 'synthetic', count: 1, proposed: 'yes', reason: 'Synthetic only' }] }
+  })
+  const start = async () => { await app('start'); await settle(); expect(service.grantForOwner().period?.state).toBe('leaving') }
+  beforeEach(async () => {
+    messages = new Map(); nextMessage = 100; callback = 0; toasts = []; failedEdit = null; beforeEdit = null
+    vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
+    service['telegram'] = {
+      botUsername: () => 'bmn_synthetic_bot',
+      sendMessage: async (text: string, options: { keyboard?: Message['keyboard'] } = {}) => { const messageId = nextMessage++; messages.set(messageId, { text, keyboard: options.keyboard ?? null }); return { messageId } },
+      editMessageText: async (messageId: number, text: string, options: { keyboard?: Message['keyboard'] } = {}) => { if (messageId === failedEdit) throw Error('Synthetic rejected edit'); await beforeEdit?.(messageId); messages.set(messageId, { text, keyboard: options.keyboard ?? null }) },
+      answerCallbackQuery: async (_id: string, text: string) => { toasts.push(text) }
+    } as unknown as TelegramConnector
+    service['telegramToken'] = '123456789:SYNTHETIC_test_token_not_real'
+    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0, failingSince: null }
+    await service['control']['options'].handlers.observeHookEvent({ sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude', event: 'Stop', source: null, toolName: null, effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+  })
+  afterEach(async () => {
+    await settle(); service['grantCards'].dispose(); service['departureHead'].dispose()
+    if (service['autoAwayTimer']) clearTimeout(service['autoAwayTimer'])
+  })
+  it.each(['control', 'replayed-back', 'stale-cancel', 'early-auto'] as const)('an old command does not invalidate a later claimed departure wake: %s', async mode => {
+    await start(); await command(801, '/back'); await settle(); await start()
+    service['finishedTurns'].set('s1', { incarnationId: 'incarnation-1', at: now })
+    clock = new Date(Date.parse(now) + 30_000).toISOString()
+    const reached = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const rule = '─'.repeat(60)
+    screens.set('s1', { settled: async () => { reached.resolve(); await release.promise }, undimmedLines: () => ['● ok', rule, '❯ ', rule, 'Synthetic'], cursor: () => ({ x: 0, y: 0 }) } as unknown as ScreenLike)
+    vi.mocked(service['departureWake'].sweep).mockRestore()
+    const wake = service['departureWake'].sweep()
+    try {
+      await Promise.race([reached.promise, wake.then(() => { throw Error('Synthetic wake never reached the claimed screen read') })])
+      await settle()
+      expect(service.grantForOwner().period!.collection!.sessions.find(row => row.sessionId === 's1')!.claim).not.toBeNull()
+      const before = await records()
+      if (mode === 'replayed-back') await command(801, '/back')
+      if (mode === 'stale-cancel') await app('cancel', { ...service.grantForOwner(), revision: service.grantForOwner().revision - 1 })
+      if (mode === 'early-auto') await service['automaticAway']()
+      await settle(); expect(await records()).toBe(before)
+    } finally { release.resolve(); await wake }
+    const bytes = Buffer.concat(writes.map(row => Buffer.from(row.bytes))).toString('utf8')
+    expect(bytes.split(DEPARTURE_LINE).length - 1).toBe(1)
+    expect(service.grantForOwner().period!.collection!.sessions.find(row => row.sessionId === 's1')!.toldAt).toBe(clock)
+  })
+  it('a genuine cancel holds the wake through a committed but delayed worker reply', async () => {
+    await start()
+    service['finishedTurns'].set('s1', { incarnationId: 'incarnation-1', at: now })
+    clock = new Date(Date.parse(now) + 30_000).toISOString()
+    const reached = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const committed = Promise.withResolvers<void>(), reply = Promise.withResolvers<void>()
+    const rule = '─'.repeat(60)
+    screens.set('s1', { settled: async () => { reached.resolve(); await release.promise }, undimmedLines: () => ['● ok', rule, '❯ ', rule, 'Synthetic'], cursor: () => ({ x: 0, y: 0 }) } as unknown as ScreenLike)
+    vi.mocked(service['departureWake'].sweep).mockRestore()
+    const wake = service['departureWake'].sweep()
+    await Promise.race([reached.promise, wake.then(() => { throw Error('Synthetic wake did not reach screen') })])
+    const store = service['options'].database, original = store.companion.bind(store)
+    const spy = vi.spyOn(store, 'companion').mockImplementation((async (name: string, ...args: unknown[]) => {
+      const result = await (original as (...args: unknown[]) => Promise<unknown>)(name, ...args)
+      if (name === 'departureAction' && (args[0] as { action?: string }).action === 'cancel') { committed.resolve(); await reply.promise }
+      return result
+    }) as typeof store.companion)
+    const cancel = app('cancel')
+    try {
+      await committed.promise; release.resolve()
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(writes).toEqual([])
+      expect(service.grantForOwner().period!.state).toBe('leaving')
+    } finally { reply.resolve(); release.resolve(); await cancel; await wake; spy.mockRestore() }
+    expect(writes).toEqual([])
+    expect(service.grantForOwner().period?.state).toBe('cancelled')
+  })
+  it('an immediate-Away worker walk skips saved middle/end lines and preserves their metadata', async () => {
+    await start(); await app('cancel'); await settle()
+    await service['control']['options'].handlers.changeAway({ scope: { kind: 'owner' }, to: 'away' })
+    await service['control']['options'].handlers.askGrant({ scope: { kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' }, runId: 'skip-phone', card: {
+      title: 'Synthetic skipped phone', scope: 'Four synthetic choices', nothing: false, terms: [
+        { kind: 'rounds', id: 'rounds', proposed: 3, reason: 'Synthetic' },
+        ...['middle', 'third', 'end'].map(id => ({ kind: 'push-default' as const, id, repository: 'synthetic/repo', branch: id, count: 1, proposed: 'yes' as const, reason: 'Synthetic' }))
+      ]
+    } })
+    const seen = service.grantForOwner()
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'skip-phone', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'preanswered-middle-end', choices: { middle: 'no', end: 'yes' } })
+    const before = structuredClone(service.grantForOwner().period!.runs[0]!.answer!.lines)
+    await settle(); await phone('Synthetic skipped phone', 'Choose…', false)(); await settle()
+    await phone('Synthetic skipped phone', '2', false)(); await settle()
+    const drawn = [...messages.values()].find(row => row.text.includes('Synthetic skipped phone'))!
+    expect(drawn.text).toContain('<b>3. Push')
+    expect(drawn.text).toContain('1. Extra repair rounds per boundary: 2')
+    await phone('Synthetic skipped phone', '‹ Back', false)(); await settle()
+    expect([...messages.values()].find(row => row.text.includes('Synthetic skipped phone'))!.keyboard!.flat().some(button => button.text === 'Choose…')).toBe(true)
+    await phone('Synthetic skipped phone', 'Choose…', false)(); await settle()
+    await phone('Synthetic skipped phone', 'No', false)(); await settle()
+    const answer = service.grantForOwner().period!.runs[0]!.answer!
+    expect(answer.choices).toEqual({ rounds: 2, middle: 'no', third: 'no', end: 'yes' })
+    expect(answer.lines!.middle).toEqual(before!.middle); expect(answer.lines!.end).toEqual(before!.end)
+  })
+  it('a repeated phone /away does not claim that a desktop list was presented', async () => {
+    await start()
+    expect(service.grantForOwner().period!.collection!.openedAt).toBeNull()
+    await command(802, '/away'); await settle()
+    expect(service.grantForOwner().period!.collection!.openedAt).toBeNull()
+  })
+  it('after V2 adoption, immediate Away saves every Choose pick through the real worker', async () => {
+    await start(); await app('cancel'); await settle()
+    await service['control']['options'].handlers.changeAway({ scope: { kind: 'owner' }, to: 'away' })
+    expect(service.grantForOwner().period?.collection).toBeUndefined()
+    await service['control']['options'].handlers.askGrant({ scope: { kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' }, runId: 'explicit-phone', card: {
+      title: 'Synthetic explicit phone', scope: 'Two synthetic choices', nothing: false, terms: [
+        { kind: 'rounds', id: 'rounds', proposed: 3, reason: 'Synthetic' },
+        { kind: 'push-default', id: 'push', repository: 'synthetic/repo', branch: 'synthetic', count: 1, proposed: 'yes', reason: 'Synthetic' }
+      ]
+    } })
+    await settle(); await phone('Synthetic explicit phone', 'Choose…', false)(); await settle()
+    await phone('Synthetic explicit phone', '2', false)(); await settle()
+    expect(service.grantForOwner().period!.runs[0]!.answer!.choices).toEqual({ rounds: 2 })
+    await phone('Synthetic explicit phone', 'No', false)(); await settle()
+    const answered = service.grantForOwner().period!.runs[0]!
+    expect(answered).toMatchObject({ card: { state: 'answered' }, answer: { via: 'telegram', choices: { rounds: 2, push: 'no' } } })
+    expect([...messages.values()].find(row => row.text.includes('Synthetic explicit phone'))!.keyboard).toBeNull()
+  })
+  it('an acknowledged worker answer recovers after a failed phone edit with no new write', async () => {
+    await start(); await ask(); await settle()
+    const messageId = [...messages].find(([, row]) => row.text.includes('Synthetic race-run'))![0]
+    failedEdit = messageId
+    const seen = service.grantForOwner()
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'race-run', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'edit-recovery-answer', choices: { push: 'yes' } })
+    await settle(); expect(messages.get(messageId)!.keyboard!.flat().some(button => button.text === '● Yes')).toBe(false)
+    const before = await records(); failedEdit = null; await settle()
+    expect(messages.get(messageId)!.keyboard!.flat().some(button => button.text === '● Yes')).toBe(true)
+    expect(await records()).toBe(before)
+  })
+  it('a worker answer during another card redraw makes the next actual phone token fresh', async () => {
+    await start(); await ask('first-card'); await ask('second-card'); await settle()
+    const firstId = [...messages].find(([, row]) => row.text.includes('Synthetic first-card'))![0]
+    let changed = false
+    beforeEdit = async id => {
+      if (id !== firstId || changed) return
+      changed = true; const seen = service.grantForOwner()
+      await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'second-card', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'during-other-redraw', choices: { push: 'no' } })
+    }
+    const seen = service.grantForOwner()
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'first-card', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'first-redraw', choices: { push: 'yes' } })
+    await settle(); expect(changed).toBe(true)
+    await phone('Synthetic second-card', 'Yes', false)(); await settle()
+    expect(service.grantForOwner().period!.runs.find(row => row.runId === 'second-card')!.answer).toMatchObject({ via: 'telegram', choices: { push: 'yes' } })
+  })
+  it('the thirty-third run reads not asked because the list is full, without creating authority', async () => {
+    await start()
+    for (let index = 0; index < 32; index++) await ask(`capacity-${index}`)
+    await settle(); const before = await records()
+    await expect(ask('capacity-33')).rejects.toThrow('Not asked: the list is full')
+    await settle(); expect(await records()).toBe(before)
+    expect(service.grantForOwner().period!.runs).toHaveLength(32)
+  })
+  it.each(['app-first', 'telegram-first'])('two starts at the same revision: %s', async order => {
+    const view = service.grantForOwner()
+    const actions = [() => app('start', view), () => command(501, '/away')]
+    if (order === 'telegram-first') actions.reverse()
+    await Promise.all(actions.map(action => action())); await settle()
+    const stored = await service['options'].database.companion('getGrants')
+    expect(stored.read.state).toBe('read')
+    if (stored.read.state === 'read') expect(stored.read.record.periods).toHaveLength(1)
+    expect(service.grantForOwner().period?.state).toBe('leaving')
+  })
+  it.each([['go', 'cancel'], ['cancel', 'go']])('two windows: %s wins against %s', async (first, second) => {
+    await start(); const seen = service.grantForOwner()
+    expect((await app(first!, seen)).outcome).toBe('changed'); await settle()
+    const before = await records()
+    expect((await app(second!, seen)).outcome).toBe('stale'); await settle()
+    expect(await records()).toBe(before)
+  })
+  it.each(['phone-first', 'timer-first'])('phone Go and the actual automatic handler: %s', async order => {
+    await start(); const go = phone('Before you go', 'Go now', true)
+    clock = service.grantForOwner().period!.collection!.autoAwayAt
+    if (order === 'phone-first') { await go(); await settle(); const before = await records(); await service['automaticAway'](); await settle(); expect(await records()).toBe(before) }
+    else { await service['automaticAway'](); await settle(); const before = await records(); await go(); await settle(); expect(await records()).toBe(before); expect(toasts.at(-1)).toMatch(/changed|away|active/i) }
+    expect(service.awayForOwner().state).toBe('away')
+  })
+  it.each(['back-first', 'timer-first'])('Back and the actual automatic handler: %s', async order => {
+    await start(); const seen = service.grantForOwner()
+    clock = seen.period!.collection!.autoAwayAt
+    const back = () => service.changeAway({ to: 'back', source: 'app', expectedGrantRevision: seen.revision, expectedPeriodId: seen.period!.periodId })
+    if (order === 'back-first') { await back(); await settle(); const before = await records(); await service['automaticAway'](); await settle(); expect(await records()).toBe(before); expect(service.grantForOwner().period?.state).toBe('cancelled') }
+    else { await service['automaticAway'](); await settle(); const before = await records(); expect((await back()).outcome).toBe('stale'); await settle(); expect(await records()).toBe(before); expect(service.awayForOwner().state).toBe('away') }
+  })
+  it.each(['app-first', 'phone-first'])('window Yes against actual phone No: %s', async order => {
+    await start(); await ask(); await settle()
+    const seen = service.grantForOwner(), no = phone('Synthetic race-run', 'No', false)
+    const yes = () => service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'race-run', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'synthetic-yes', choices: { push: 'yes' } }) as Promise<{ outcome: string; reason?: string }>
+    if (order === 'app-first') { expect((await yes()).outcome).toBe('granted'); await settle(); const before = await records(); await no(); await settle(); expect(await records()).toBe(before) }
+    else { await no(); await settle(); const before = await records(); expect(await yes()).toMatchObject({ outcome: 'refused', reason: 'stale' }); await settle(); expect(await records()).toBe(before) }
+    expect(service.grantForOwner().period!.runs[0]!.answer!.choices.push).toBe(order === 'app-first' ? 'yes' : 'no')
+  })
+  it.each(['card', 'answer'])('last-second %s keeps the deadline in force', async event => {
+    await start(); await ask(); await settle()
+    const due = service.grantForOwner().period!.collection!.autoAwayAt
+    clock = new Date(Date.parse(due) - 1000).toISOString()
+    if (event === 'card') await ask('late-card')
+    else { const seen = service.grantForOwner(); await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'race-run', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'last-second-answer', choices: { push: 'yes' } }) }
+    await settle()
+    const actualDue = service.grantForOwner().period!.collection!.autoAwayAt
+    expect(actualDue).toBe(event === 'card' ? due : new Date(Date.parse(clock) + 600000).toISOString())
+    clock = due; await service['automaticAway'](); await settle()
+    expect(service.grantForOwner().period!.state).toBe(event === 'card' ? 'away' : 'leaving')
+    if (event === 'answer') { clock = actualDue; await service['automaticAway'](); await settle(); expect(service.awayForOwner().state).toBe('away') }
   })
 })

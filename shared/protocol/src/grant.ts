@@ -3,6 +3,8 @@ import { awayMomentWords, type AwayRecord, type AwaySource } from './away'
 import { pushPolicyRepository } from './push-policy'
 import { secretShapeRanges } from './secret-ranges'
 import { isIso, isTextOrEmpty } from './shared-helpers'
+import { DEPARTURE_AUTO_MS, readDepartureCollection, type DepartureCollection } from './departure'
+import { grantNotAskedAgain, grantReoffer, type GrantReoffer } from './grant-reoffers'
 
 /**
  * The raw setting that holds every grant (Epic 84, Decisions "schema"): its own `app_setting` row beside `owner-away-v1`,
@@ -55,6 +57,12 @@ export type GrantActionTerm = Exclude<GrantTerm, GrantRoundsTerm>
 /** What the owner picked for one term: a round count, or a merge's 'no' | 'pr' | 'green', or 'no' | 'yes'. */
 export type GrantChoice = number | 'no' | 'pr' | 'green' | 'yes'
 
+/** Sparse answers never inherit a choice from Object.prototype, including after IPC or JSON readback. */
+export function grantChoice(choices: Readonly<Record<string, unknown>> | null | undefined, id: string): GrantChoice | undefined {
+  const value = choices !== null && choices !== undefined && Object.hasOwn(choices, id) ? choices[id] : undefined
+  return typeof value === 'number' || value === 'no' || value === 'pr' || value === 'green' || value === 'yes' ? value : undefined
+}
+
 type GrantCardState = 'open' | 'answered' | 'nothing' | 'withdrawn'
 export type GrantAnswerSource = 'app' | 'telegram'
 
@@ -83,6 +91,7 @@ export interface GrantAnswer {
   at: string
   via: GrantAnswerSource
   operationKey: string
+  lines?: Record<string, { at: string; via: GrantAnswerSource }>
 }
 
 export interface GrantRun {
@@ -163,24 +172,31 @@ export interface GrantPeriod {
   uses: GrantUse[]
   refusals: GrantRefusal[]
   reports: GrantReport[]
+  collection?: DepartureCollection
+  /** Private owner note, excluded from agent status and departure notices. */
+  note?: string | null
 }
 
 /** A boundary's rounds from periods no longer kept, so they still count (R84-FR3: across Away periods). */
 export interface GrantCarried { runId: string; boundary: string; rounds: number }
 
 export interface GrantRecord {
-  version: 1
+  version: 1 | 2
   revision: number
   /** The current period last; at most the current and the previous one are kept. */
   periods: GrantPeriod[]
   /** Rounds per run and boundary from the periods dropped before these, newest last. */
   carried: GrantCarried[]
   operations: Array<{ key: string; revision: number; unchanged?: true }>
+  offers?: Array<{ runId: string; title: string; endedAt: string; answer: GrantAnswer }>
 }
 
 export const EMPTY_GRANT_RECORD: GrantRecord = Object.freeze({ version: 1, revision: 0, periods: [], carried: [], operations: [] }) as GrantRecord
 
-export type GrantRead = { state: 'read'; record: GrantRecord } | { state: 'unknown'; reason: string }
+export type GrantRead = ({ state: 'read'; record: GrantRecord } | { state: 'unknown'; reason: string }) & {
+  /** Present on worker snapshots. Null means the ordering metadata could not be read. */
+  generation?: number | null
+}
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/
 const SHA = /^[0-9a-f]{7,40}$/
@@ -390,11 +406,11 @@ function readCard(value: unknown): GrantCard | null {
   }
 }
 
-function readAnswer(value: unknown, card: GrantCard): GrantAnswer | null | undefined {
+function readAnswer(value: unknown, maxRevision: number): GrantAnswer | null | undefined {
   if (value === null || value === undefined) return null
   if (typeof value !== 'object') return undefined
   const answer = value as Record<string, unknown>
-  if (!isCount(answer.cardRevision, card.revision) || !isIso(answer.at) || (answer.via !== 'app' && answer.via !== 'telegram') || !isTextOrEmpty(answer.operationKey)) return undefined
+  if (!isCount(answer.cardRevision, maxRevision) || !isIso(answer.at) || (answer.via !== 'app' && answer.via !== 'telegram') || !isTextOrEmpty(answer.operationKey)) return undefined
   if (typeof answer.choices !== 'object' || answer.choices === null || !Array.isArray(answer.terms)) return undefined
   const terms = answer.terms.map(readTerm)
   if (terms.some((term) => term === null)) return undefined
@@ -405,7 +421,18 @@ function readAnswer(value: unknown, card: GrantCard): GrantAnswer | null | undef
     if (term === undefined || !grantTermChoices(term).includes(choice as GrantChoice)) return undefined
     choices[id] = choice as GrantChoice
   }
-  return { cardRevision: answer.cardRevision as number, terms: terms as GrantTerm[], choices, at: answer.at, via: answer.via, operationKey: answer.operationKey }
+  const lines: NonNullable<GrantAnswer['lines']> = {}
+  if (answer.lines !== undefined) {
+    if (typeof answer.lines !== 'object' || answer.lines === null || Array.isArray(answer.lines)) return undefined
+    for (const [id, raw] of Object.entries(answer.lines)) {
+      const line = raw as { at?: unknown; via?: unknown } | null
+      if (!Object.hasOwn(choices, id) || !line || !isIso(line.at) || line.via !== 'app' && line.via !== 'telegram') return undefined
+      lines[id] = { at: line.at, via: line.via }
+    }
+    if (Object.keys(choices).some(id => !Object.hasOwn(lines, id))) return undefined
+  }
+  return { cardRevision: answer.cardRevision as number, terms: terms as GrantTerm[], choices, at: answer.at, via: answer.via, operationKey: answer.operationKey,
+    ...(answer.lines === undefined ? {} : { lines }) }
 }
 
 function readPeriod(value: unknown): GrantPeriod | null {
@@ -420,9 +447,9 @@ function readPeriod(value: unknown): GrantPeriod | null {
     const runId = grantIdentifier(run?.runId, GRANT_LIMITS.runId)
     const card = readCard(run?.card)
     if (runId === null || card === null || !isTextOrEmpty(run.title) || runs.some((other) => other.runId === runId)) return null
-    const answer = readAnswer(run.answer, card)
+    const answer = readAnswer(run.answer, card.revision)
     if (answer === undefined) return null
-    const earlier = run.earlier === undefined ? [] : Array.isArray(run.earlier) ? run.earlier.map((item) => readAnswer(item, card)) : [undefined]
+    const earlier = run.earlier === undefined ? [] : Array.isArray(run.earlier) ? run.earlier.map((item) => readAnswer(item, card.revision)) : [undefined]
     if (earlier.some((item) => item === undefined || item === null)) return null
     const phone = typeof run.phone === 'object' && run.phone !== null && Number.isSafeInteger((run.phone as { messageId?: unknown }).messageId) &&
       Number.isSafeInteger((run.phone as { cardRevision?: unknown }).cardRevision)
@@ -459,12 +486,16 @@ function readPeriod(value: unknown): GrantPeriod | null {
         text: isTextOrEmpty(item.text) ? item.text : null, at: item.at
       }))
     : []
+  const collection = row.collection === undefined ? undefined : readDepartureCollection(row.collection)
+  if (collection === null) return null
   return {
     periodId: row.periodId, state: row.state as GrantPeriodState, startedAt: row.startedAt, startedBy: row.startedBy as AwaySource,
     agentSessionId: isTextOrEmpty(row.agentSessionId) ? row.agentSessionId : null, awayAt: isIso(row.awayAt) ? row.awayAt : null,
     endedAt: isIso(row.endedAt) ? row.endedAt : null,
     endedBy: ['app', 'cli', 'agent', 'telegram'].includes(row.endedBy as string) ? row.endedBy as AwaySource : null,
-    told: row.told.filter(isTextOrEmpty).slice(-GRANT_LIMITS.told), runs, uses, refusals, reports
+    told: row.told.filter(isTextOrEmpty).slice(-GRANT_LIMITS.told), runs, uses, refusals, reports,
+    ...(collection === undefined ? {} : { collection }),
+    ...(row.note === undefined ? {} : { note: typeof row.note === 'string' ? row.note : null })
   }
 }
 
@@ -479,7 +510,7 @@ export function readGrantRecord(raw: string | undefined): GrantRead {
   try { value = JSON.parse(raw) } catch { return { state: 'unknown', reason: 'the grant record is not valid JSON' } }
   if (typeof value !== 'object' || value === null) return { state: 'unknown', reason: 'the grant record is not a record' }
   const row = value as Record<string, unknown>
-  if (row.version !== 1) return { state: 'unknown', reason: 'the grant record has an unknown version' }
+  if (row.version !== 1 && row.version !== 2) return { state: 'unknown', reason: 'the grant record has an unknown version' }
   if (!Number.isSafeInteger(row.revision) || (row.revision as number) < 0 || !Array.isArray(row.periods) || !Array.isArray(row.operations)) {
     return { state: 'unknown', reason: 'the grant record has no valid revision or periods' }
   }
@@ -504,7 +535,18 @@ export function readGrantRecord(raw: string | undefined): GrantRead {
     if (runId === null || boundary === null || !isCount(entry!.rounds, Number.MAX_SAFE_INTEGER)) return { state: 'unknown', reason: 'the grant record has carried rounds it cannot read' }
     carried.push({ runId, boundary, rounds: entry!.rounds as number })
   }
-  return { state: 'read', record: carry({ version: 1, revision: row.revision as number, periods, carried, operations }) }
+  const offers: NonNullable<GrantRecord['offers']> = []
+  if (row.version === 2) {
+    if (!Array.isArray(row.offers) || row.offers.length > GRANT_LIMITS.runs) return { state: 'unknown', reason: 'the grant record has invalid prior offers' }
+    for (const raw of row.offers) {
+      const offer = raw as Record<string, unknown>
+      const answer = readAnswer(offer?.answer, Number.MAX_SAFE_INTEGER)
+      if (!grantIdentifier(offer?.runId, GRANT_LIMITS.runId) || !isTextOrEmpty(offer.title) || !isIso(offer.endedAt) || answer == null) return { state: 'unknown', reason: 'the grant record has an invalid prior offer' }
+      offers.push({ runId: offer.runId as string, title: offer.title, endedAt: offer.endedAt, answer })
+    }
+  }
+  return { state: 'read', record: carry({ version: row.version, revision: row.revision as number, periods, carried, operations,
+    ...(row.version === 2 ? { offers } : {}) }) }
 }
 
 /** The period still open (leaving or away), if any: always the last one. */
@@ -533,7 +575,12 @@ function withPeriod(record: GrantRecord, period: GrantPeriod): GrantRecord {
   const periods = record.periods.some((other) => other.periodId === period.periodId)
     ? record.periods.map((other) => other.periodId === period.periodId ? period : other)
     : [...record.periods, period]
-  return carry({ ...record, revision: record.revision + 1, periods })
+  let offers = record.offers
+  if (record.version === 2 && period.state === 'ended' && period.endedAt !== null) {
+    const fresh = period.runs.filter(run => run.answer !== null).map(run => ({ runId: run.runId, title: run.title, endedAt: period.endedAt!, answer: run.answer! }))
+    offers = [...(offers ?? []).filter(offer => !fresh.some(next => next.runId === offer.runId)), ...fresh].slice(-GRANT_LIMITS.runs)
+  }
+  return carry({ ...record, revision: record.revision + 1, periods, ...(offers === undefined ? {} : { offers }) })
 }
 
 function remember(record: GrantRecord, key: string | undefined, unchanged = false): GrantRecord {
@@ -564,9 +611,17 @@ export type GrantLifecycleResult = { outcome: 'changed' | 'unchanged'; record: G
  * His departure words, or `bmn away --leaving` (84.3 AC1): a pending departure with its own period id. Leaving again, or
  * while away, changes nothing.
  */
-export function startDeparture(record: GrantRecord, start: { source: AwaySource; agentSessionId: string | null; periodId: string }, awayState: AwayRecord['state'], now: string): GrantLifecycleResult {
+export function upgradeGrantRecord(record: GrantRecord): GrantRecord {
+  return record.version === 2 ? record : { ...record, version: 2, offers: record.periods
+    .filter(period => period.state === 'ended' && period.endedAt !== null).flatMap(period => period.runs.filter(run => run.answer !== null)
+      .map(run => ({ runId: run.runId, title: run.title, endedAt: period.endedAt!, answer: run.answer! }))).slice(-GRANT_LIMITS.runs) }
+}
+
+export function startDeparture(record: GrantRecord, start: { source: AwaySource; agentSessionId: string | null; periodId: string; collection?: DepartureCollection }, awayState: AwayRecord['state'], now: string): GrantLifecycleResult {
   if (awayState === 'away' || openGrantPeriod(record) !== null) return { outcome: 'unchanged', record }
-  return { outcome: 'changed', record: withPeriod(record, newPeriod(start.periodId, 'leaving', start.source, start.agentSessionId, now)) }
+  const base = start.collection === undefined ? record : upgradeGrantRecord(record)
+  return { outcome: 'changed', record: withPeriod(base, { ...newPeriod(start.periodId, 'leaving', start.source, start.agentSessionId, now),
+    ...(start.collection === undefined ? {} : { collection: start.collection }) }) }
 }
 
 /** The period id Away takes when it is set: the pending departure's (Decisions, departure lifecycle), else a new one. */
@@ -601,10 +656,24 @@ export function followAwayChange(record: GrantRecord, before: AwayRecord, after:
 }
 
 /** The sessions handed the departure notice, newest kept. */
-export function markDepartureTold(record: GrantRecord, periodId: string, sessionId: string): GrantLifecycleResult {
+export function markDepartureTold(record: GrantRecord, periodId: string, sessionId: string, now?: string, via: 'hook' | 'typed' = 'hook'): GrantLifecycleResult {
   const open = openGrantPeriod(record)
   if (open === null || open.periodId !== periodId || open.told.includes(sessionId)) return { outcome: 'unchanged', record }
-  return { outcome: 'changed', record: withPeriod(record, { ...open, told: [...open.told, sessionId].slice(-GRANT_LIMITS.told) }) }
+  const collection = open.collection === undefined || now === undefined ? open.collection : { ...open.collection,
+    sessions: open.collection.sessions.map(session => session.sessionId === sessionId ? { ...session, toldAt: session.toldAt ?? now, via: session.via ?? via, reason: null } : session) }
+  return { outcome: 'changed', record: withPeriod(record, { ...open, told: [...open.told, sessionId].slice(-GRANT_LIMITS.told),
+    ...(collection === undefined ? {} : { collection }) }) }
+}
+
+export function touchDeparture(record: GrantRecord, periodId: string, now: string): GrantRecord {
+  const period = openGrantPeriod(record)
+  if (period?.periodId !== periodId || period.state !== 'leaving' || period.collection === undefined) return record
+  return withPeriod(record, { ...period, collection: { ...period.collection, autoAwayAt: new Date(Date.parse(now) + DEPARTURE_AUTO_MS).toISOString() } })
+}
+
+export function setDepartureCollection(record: GrantRecord, periodId: string, collection: DepartureCollection): GrantRecord {
+  const period = record.periods.find(other => other.periodId === periodId)
+  return period === undefined || JSON.stringify(period.collection) === JSON.stringify(collection) ? record : withPeriod(record, { ...period, collection })
 }
 
 /** What changed from one revision to the next, in the notes' words. */
@@ -654,7 +723,7 @@ export function askGrant(record: GrantRecord, ask: {
     return { outcome: 'unchanged', record: remember(record, ask.operationKey, true), run: existing, periodId: open.periodId }
   }
   if (existing === undefined && open.runs.length >= GRANT_LIMITS.runs) {
-    return { outcome: 'no-departure', record, reason: `This departure already holds ${GRANT_LIMITS.runs} runs' cards; nothing was asked` }
+    return { outcome: 'no-departure', record, reason: `Not asked: the list is full (${GRANT_LIMITS.runs} runs' cards)` }
   }
   const card: GrantCard = {
     revision: (existing?.card.revision ?? 0) + 1, askedAt: now, sessionId: ask.sessionId, agentCli: ask.agentCli, scope: ask.card.scope,
@@ -667,7 +736,7 @@ export function askGrant(record: GrantRecord, ask: {
   return { outcome: existing === undefined ? 'opened' : 'replaced', record: next, run, periodId: open.periodId }
 }
 
-export type GrantRefusalReason = 'changed' | 'withdrawn-back' | 'withdrawn-not-leaving' | 'answered' | 'no-card' | 'invalid'
+export type GrantRefusalReason = 'changed' | 'withdrawn-back' | 'withdrawn-not-leaving' | 'answered' | 'no-card' | 'invalid' | 'stale'
 
 export type GrantAnswerResult =
   | { outcome: 'granted' | 'repeated'; record: GrantRecord; run: GrantRun }
@@ -680,25 +749,51 @@ export type GrantAnswerResult =
  */
 export function answerGrant(record: GrantRecord, answer: {
   periodId: string; runId: string; cardRevision: number; choices: Record<string, unknown>; via: GrantAnswerSource; operationKey: string
+  expectedRevision?: number; lineId?: string
 }, now: string): GrantAnswerResult {
   const period = record.periods.find((other) => other.periodId === answer.periodId)
   const run = period?.runs.find((other) => other.runId === answer.runId) ?? null
   // A refused answer of his is kept for the morning as BMN's record (the notes §4); it grants nothing and changes no grant.
   const refuse = (reason: GrantRefusalReason, detail: string): GrantAnswerResult => {
+    if (record.version === 2) return { outcome: 'refused', record, reason, detail, run }
     if (period === undefined || run === null || reason === 'no-card') return { outcome: 'refused', record, reason, detail, run }
     const refusal: GrantRefusal = { runId: run.runId, kind: 'answer', boundary: null, item: null, reason, via: answer.via, at: now }
     return { outcome: 'refused', record: withPeriod(record, { ...period, refusals: [...period.refusals, refusal].slice(-GRANT_LIMITS.uses) }), reason, detail, run }
   }
   if (period === undefined || run === null) return refuse('no-card', 'There is no such card in this departure')
-  if (run.answer?.operationKey === answer.operationKey) return { outcome: 'repeated', record, run }
+  const operationKey = `answer:${answer.periodId}:${answer.runId}:${answer.operationKey}`
+  if (run.answer?.operationKey === answer.operationKey || run.earlier.some(old => old.operationKey === answer.operationKey) ||
+    record.operations.some(operation => operation.key === operationKey)) return { outcome: 'repeated', record, run }
+  if (record.version === 2 && answer.expectedRevision !== record.revision) return refuse('stale', 'The departure changed since this list was shown. Look again.')
   if (period.state === 'ended' || run.card.withdrawnFor === 'back') return refuse('withdrawn-back', 'you are back, so this card was withdrawn')
   if (period.state === 'cancelled' || run.card.withdrawnFor === 'not-leaving') return refuse('withdrawn-not-leaving', 'you did not leave, so this card was withdrawn')
   if (run.card.revision !== answer.cardRevision) return refuse('changed', `the card changed at ${run.card.askedAt}`)
+  if (record.version === 2) {
+    if (run.card.state !== 'open' && run.card.state !== 'answered') return refuse('no-card', 'This card asks nothing')
+    const current = run.answer?.cardRevision === run.card.revision ? run.answer : null
+    const patch = Object.entries(answer.choices)
+    if (patch.length === 0 || answer.lineId !== undefined && (patch.length !== 1 || patch[0]![0] !== answer.lineId)) return refuse('invalid', 'Choose a line shown on this card')
+    for (const [id, choice] of patch) {
+      const term = run.card.terms.find(other => other.id === id)
+      if (term === undefined || !grantTermChoices(term).includes(choice as GrantChoice)) return refuse('invalid', 'This choice is not on the card')
+      if (period.state === 'away' && grantChoice(current?.choices, id) !== undefined) return refuse('answered', 'This line was answered before Go and is frozen')
+    }
+    const choices: Record<string, GrantChoice> = { ...(current?.choices ?? {}) }
+    const lines: NonNullable<GrantAnswer['lines']> = { ...(current?.lines ?? {}) }
+    for (const [id, choice] of patch) { choices[id] = choice as GrantChoice; lines[id] = { at: now, via: answer.via } }
+    const answered: GrantRun = { ...run, card: { ...run.card, state: run.card.terms.every(term => grantChoice(choices, term.id) !== undefined) ? 'answered' : 'open' },
+      answer: { cardRevision: run.card.revision, terms: run.card.terms, choices, lines, at: now, via: answer.via, operationKey: answer.operationKey },
+      earlier: run.answer === null ? run.earlier : [...run.earlier, run.answer].slice(-GRANT_LIMITS.operations) }
+    let next = withPeriod(record, { ...period, runs: period.runs.map(other => other.runId === run.runId ? answered : other),
+      ...(period.state !== 'leaving' || period.collection === undefined ? {} : { collection: { ...period.collection, autoAwayAt: new Date(Date.parse(now) + DEPARTURE_AUTO_MS).toISOString() } }) })
+    next = remember(next, operationKey)
+    return { outcome: 'granted', record: next, run: answered }
+  }
   if (run.card.state === 'answered' && run.answer !== null) return refuse('answered', `already answered ${run.answer.via === 'app' ? 'here' : 'from Telegram'} at ${run.answer.at}`)
   if (run.card.state !== 'open') return refuse('no-card', 'This card asks nothing')
   const choices: Record<string, GrantChoice> = {}
   for (const term of run.card.terms) {
-    const choice = answer.choices[term.id]
+    const choice = grantChoice(answer.choices, term.id)
     if (!grantTermChoices(term).includes(choice as GrantChoice)) return refuse('invalid', `the answer has no valid choice for ${term.id}`)
     choices[term.id] = choice as GrantChoice
   }
@@ -785,7 +880,7 @@ export function grantStatus(read: GrantRead, away: Pick<AwayRecord, 'state' | 'p
   const notGranted: GrantActionTerm[] = []
   for (const term of terms) {
     if (term.kind === 'rounds') continue
-    const choice = run.answer.choices[term.id] ?? 'no'
+    const choice = grantChoice(run.answer.choices, term.id) ?? 'no'
     if (isNo(choice)) { notGranted.push(term); continue }
     const count = itemCount(term, choice)
     // A newly answered revision is a new grant: only the uses under the answer in force count against its items.
@@ -1017,7 +1112,7 @@ export function grantAnswerWords(terms: readonly GrantTerm[], choices: Record<st
   const granted: string[] = []
   const notGranted: string[] = []
   for (const term of terms) {
-    const choice = choices[term.id] ?? (term.kind === 'rounds' ? 0 : 'no')
+    const choice = grantChoice(choices, term.id) ?? (term.kind === 'rounds' ? 0 : 'no')
     if (isNo(choice)) notGranted.push(grantShortName(term, term.kind === 'rounds' ? term.proposed : term.kind === 'merge' ? (term.proposed === 'no' ? (term.headSha === null ? 'green' : 'pr') : term.proposed) : 'yes'))
     else granted.push(grantShortName(term, choice))
   }
@@ -1026,7 +1121,7 @@ export function grantAnswerWords(terms: readonly GrantTerm[], choices: Record<st
 
 /** The primary button's words for the choices as they stand (the notes §1g). */
 export function grantButtonWords(terms: readonly GrantTerm[], choices: Record<string, GrantChoice>): string {
-  const granted = terms.filter((term) => !isNo(choices[term.id] ?? 'no')).length
+  const granted = terms.filter((term) => !isNo(grantChoice(choices, term.id) ?? 'no')).length
   if (granted === 0) return 'Grant none'
   if (terms.length === 1) return 'Grant'
   return granted === terms.length ? 'Grant all' : `Grant ${granted} of ${terms.length}`
@@ -1037,6 +1132,15 @@ export function grantProposedChoices(terms: readonly GrantTerm[]): Record<string
   return Object.fromEntries(terms.map((term) => [term.id, term.proposed]))
 }
 
+/** The displayed proposals for still-unanswered lines; saved answers are never a bulk proposal. */
+export function grantOpenProposals(terms: readonly GrantTerm[], saved: Readonly<Record<string, unknown>> | null | undefined,
+  offered?: Readonly<Record<string, unknown>>): Record<string, GrantChoice> {
+  return Object.fromEntries(terms.filter(term => grantChoice(saved, term.id) === undefined).map(term => {
+    const prior = grantChoice(offered, term.id)
+    return [term.id, prior !== undefined && grantTermChoices(term).includes(prior) ? prior : term.proposed]
+  }))
+}
+
 /** "No" for every term: what Grant none sends. */
 export function grantNoChoices(terms: readonly GrantTerm[]): Record<string, GrantChoice> {
   return Object.fromEntries(terms.map((term) => [term.id, term.kind === 'rounds' ? 0 : 'no']))
@@ -1044,6 +1148,7 @@ export function grantNoChoices(terms: readonly GrantTerm[]): Record<string, Gran
 
 /** The refusal's words in the app (the notes §1 Refused). */
 export function grantRefusalWords(reason: GrantRefusalReason, detail: { at?: string | null; via?: GrantAnswerSource | null; by?: string | null; now?: Date } = {}): string {
+  if (reason === 'stale') return 'The list changed. Look again; nothing was changed by this answer.'
   const at = detail.at ? awayMomentWords(detail.at, detail.now) : null
   if (reason === 'changed') return `Not granted: ${detail.by ?? 'the run'} changed this card${at === null ? '' : ` at ${at}`}. Look again.`
   if (reason === 'withdrawn-back') return 'Not granted: you are back, so this card was withdrawn.'
@@ -1056,7 +1161,7 @@ export function grantRefusalWords(reason: GrantRefusalReason, detail: { at?: str
  * What an agent is handed once per conversation and departure (84.3 AC1, R84-FR1): he is leaving, and a run may ask on
  * one card for what its remaining night needs, or say it needs nothing.
  */
-const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository, one exact command, one exact message). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no such run does nothing. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
+const GRANT_DEPARTURE_AGENT_TEXT = 'Before he goes, a run with authorised work left for the night asks him once, on one card, for only what that work needs: extra repair rounds per boundary (2, 3 or 4, when a review or gate boundary is ahead) and named actions with their targets (merge a PR, push a branch to the default branch, open or update a PR in another repository, one exact command, one exact message). Compose it from the remaining scope, each term with its reason, and pipe it as JSON to `bmn grant ask --run <run id> --card-file -` (`bmn grant --help` gives the shape); a run that needs nothing says so with `bmn grant ask --run <run id> --nothing`. A session with no dev-auto run answers under its session name with a stable run id. Every session with unfinished authorised work answers now, within 3 minutes; while the owner is getting ready, Away starts on his Go in the window or on Telegram. Do not set Away for him unless he said he is already gone. Only the owner answers, in the BMN window or on Telegram; an unanswered card grants nothing, and every grant ends when he is back. Read `bmn grant --run <run id>` right before each step that would use it, record the use first, and report what the step did with `bmn grant report` for his morning summary.'
 
 /** The departure notice's first line, like the away stamp. */
 function grantDepartureStamp(state: 'leaving' | 'away', at: string, now: Date = new Date()): string {
@@ -1071,19 +1176,32 @@ export function grantDepartureNotice(period: Pick<GrantPeriod, 'state' | 'starte
 
 /** What the owner's own surfaces get (the head, Before you go, Telegram): the latest period whole, its runs and cards. */
 export interface OwnerGrantView {
+  generation?: number | null
+  revision: number
   /** `unknown`: the record could not be read; nothing is granted and no card shows. */
   read: 'read' | 'unknown'
   reason: string | null
   period: GrantPeriod | null
   /** Open cards of the open period: the gold count beside the Away check (the notes §2). */
   openCards: number
+  offers: GrantReoffer[]
+  notAskedAgain: Array<{ runId: string; title: string; at: string; granted: string[] }>
+}
+
+export function compareGrantOrder(next: Pick<OwnerGrantView, 'generation' | 'revision'>,
+  current: Pick<OwnerGrantView, 'generation' | 'revision'>): number {
+  return (next.generation ?? 0) - (current.generation ?? 0) || next.revision - current.revision
 }
 
 export function ownerGrantView(read: GrantRead): OwnerGrantView {
-  if (read.state === 'unknown') return { read: 'unknown', reason: read.reason, period: null, openCards: 0 }
+  const generation = read.generation === undefined ? {} : { generation: read.generation }
+  if (read.state === 'unknown') return { ...generation, read: 'unknown', reason: read.reason, period: null, openCards: 0, revision: 0, offers: [], notAskedAgain: [] }
   const period = read.record.periods.at(-1) ?? null
   const open = openGrantPeriod(read.record)
-  return { read: 'read', reason: null, period, openCards: open === null ? 0 : open.runs.filter((run) => run.card.state === 'open').length }
+  return { ...generation, read: 'read', reason: null, period, revision: read.record.revision,
+    offers: period === null ? [] : period.runs.map(run => grantReoffer(read.record, period, run)).filter((offer): offer is GrantReoffer => offer !== null),
+    notAskedAgain: period === null ? [] : grantNotAskedAgain(read.record, period),
+    openCards: open === null ? 0 : open.runs.filter((run) => run.card.state === 'open').length }
 }
 
 /** A granted item's kind, target and condition, as `bmn grant` lists it (84.6 AC1). */

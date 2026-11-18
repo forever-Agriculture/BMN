@@ -556,16 +556,17 @@ master carries the pointer, so Rules › Undo of that save turns it off, and so 
 releases, CI changes, secrets, force pushes and deletions always ask you, and BMN's hook holds the clearly
 critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
 
-**Before you go** (Epic 84): when you say you are leaving, an agent forwards it with `bmn away --leaving` and the
-Away check reads **leaving**. Each run with authorised work left for the night may then ask you once, on one card,
-for only what that work needs: extra repair rounds at a review boundary, a named merge, push to the default
-branch or pull request elsewhere, one simple command exactly as it will run in a named folder, or one exact
-message through a named tool to a named recipient, each with its reason. The agent records a matching use with
-`bmn grant use` before acting. A gold **N cards** beside the Away check opens them, the
-cards' only place; you grant all, some or none, and a run that needs nothing says so. Your answer holds until you
-are back; an unanswered card grants nothing, a run that asks again cannot change what you granted until you answer
-again, and **Not leaving** withdraws the open cards. The same cards reach Telegram once you are away
-([telegram.md](telegram.md)); agents read their grant with `bmn grant` ([agent-control.md](agent-control.md#the-away-grant)).
+**Before you go** (Epics 84, 130): ticking Away, sending `/away` or saying you are leaving starts
+**getting ready**, with the box still unticked. The list opens by itself in the focused window and arrives on
+Telegram. Recent Claude Code and Codex sessions are selected; working sessions get the notice at their next tool
+call, and resting sessions get one fixed line only when BMN proves an empty, idle prompt. Each row shows its
+requests, needs nothing with its words, no answer, or not told with the reason. A line saves when you answer it;
+you can change it until **Go**, while unanswered lines grant nothing. **Go** starts Away in the same period;
+**Not leaving** or Back cancels it. Esc and × close the list without cancelling. Away starts by itself 10 minutes
+after your last action on the list; with no recent session to ask, it starts at once. The same answers appear
+in BMN and Telegram. A short return ends the grants; leaving again within 12 hours offers identical granted lines
+again, with **Grant the same N**. Each still needs your tap. The owner's explicit `bmn away` remains immediate.
+Agents read and record uses through `bmn grant` ([agent-control.md](agent-control.md#the-away-grant)).
 In the morning, **While you were away** adds **Granted** after Finished when a run held a grant: one row per run
 that asked, used, unused or none, with one line of what it used; open a row for what you granted and not, the
 rounds per boundary, each action's uses, what was refused (an answer of yours a changed card refused too) and any

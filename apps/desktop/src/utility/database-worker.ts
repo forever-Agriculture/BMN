@@ -288,7 +288,7 @@ function handle(request: WorkerRequest): unknown {
           ...args: unknown[]
         ) => unknown
         const args = Array.isArray(params.args) ? params.args : []
-        return database.transaction(() => operation(database, ...args))()
+        return database.transaction(() => operation(database, ...(name === 'departureAction' ? [args[0], new Date().toISOString()] : args)))()
       }
       throw new Error(`unknown database worker operation: ${request.operation}`)
     }

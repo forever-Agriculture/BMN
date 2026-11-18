@@ -2,6 +2,7 @@
 import { awayMomentWords } from './away'
 import { pad } from './shared-helpers'
 import {
+  grantChoice,
   grantShortName,
   grantTermLabel,
   type GrantActionTerm,
@@ -109,14 +110,14 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   const answers: GrantAnswer[] = [...run.earlier, ...(run.answer === null ? [] : [run.answer])]
   const answer = run.answer
   const roundsOf = (given: GrantAnswer): number => given.terms.some((term) => term.kind === 'rounds') && typeof given.choices.rounds === 'number' ? given.choices.rounds : 0
-  const itemsOf = (given: GrantAnswer): GrantActionTerm[] => given.terms.filter((term): term is GrantActionTerm => term.kind !== 'rounds' && !isNo(given.choices[term.id]))
+  const itemsOf = (given: GrantAnswer): GrantActionTerm[] => given.terms.filter((term): term is GrantActionTerm => term.kind !== 'rounds' && !isNo(grantChoice(given.choices, term.id)))
   const grants = (given: GrantAnswer): boolean => roundsOf(given) > 0 || itemsOf(given).length > 0
   const terms = answer?.terms ?? run.card.terms
   const choices = answer?.choices ?? {}
   const roundsTerm = terms.find((term) => term.kind === 'rounds') ?? answers.flatMap((given) => given.terms).find((term) => term.kind === 'rounds')
   const rounds = answer === null ? 0 : roundsOf(answer)
   const roundsShown = Math.max(0, ...answers.map(roundsOf))
-  const notGranted = terms.filter((term) => answer === null || (term.kind === 'rounds' ? rounds === 0 : isNo(choices[term.id])))
+  const notGranted = terms.filter((term) => answer === null || (term.kind === 'rounds' ? rounds === 0 : isNo(grantChoice(choices, term.id))))
   const granted = answers.some(grants)
   const uses = period.uses.filter((use) => use.runId === run.runId)
   const reports = period.reports.filter((report) => report.runId === run.runId)
@@ -125,7 +126,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   const termOf = (id: string | null, revision?: number): GrantActionTerm | undefined =>
     [answerFor(revision)?.terms ?? [], terms, ...answers.map((given) => given.terms).reverse()].flat()
       .find((term): term is GrantActionTerm => term.kind !== 'rounds' && term.id === id)
-  const choiceOf = (id: string | null, revision?: number): GrantChoice | undefined => id === null ? undefined : (answerFor(revision) ?? answer)?.choices[id]
+  const choiceOf = (id: string | null, revision?: number): GrantChoice | undefined => id === null ? undefined : grantChoice((answerFor(revision) ?? answer)?.choices, id)
 
   // Granted, or why nothing was: each answer with when and where, or the card's state.
   for (const given of answers) {
@@ -133,7 +134,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
     add('Granted', `${awayMomentWords(given.at, now)} ${given.via === 'telegram' ? 'from Telegram' : 'here'}${grants(given) ? '' : ' · none'}${revision}`, AWAY_GRANT_RECORD)
     const rounds = given.terms.find((term) => term.kind === 'rounds')
     if (roundsOf(given) > 0) add('Granted', grantedWords(rounds!, roundsOf(given)), AWAY_GRANT_RECORD)
-    for (const term of itemsOf(given)) add('Granted', grantedWords(term, given.choices[term.id]!), AWAY_GRANT_RECORD)
+    for (const term of itemsOf(given)) add('Granted', grantedWords(term, grantChoice(given.choices, term.id)!), AWAY_GRANT_RECORD)
   }
   if (answers.length === 0 && run.card.state === 'nothing') {
     add('Granted', 'Nothing asked: the run needed nothing for the night', AWAY_GRANT_RECORD)
@@ -181,7 +182,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   const itemParts: string[] = []
   for (const given of answers) {
     for (const term of itemsOf(given)) {
-      const choice = given.choices[term.id]!
+      const choice = grantChoice(given.choices, term.id)!
       const label = itemLabel(term, term.id, choice)
       const mine = actionUses.filter((use) => use.item === term.id && use.cardRevision === given.cardRevision)
       const count = term.kind === 'merge' ? (choice === 'green' ? term.upTo ?? 1 : 1) : term.count
@@ -239,7 +240,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
     text = 'You granted none'
   } else if (uses.length === 0) {
     state = 'unused'
-    text = `${[...(roundsOf(shown!) > 0 ? [grantShortName(roundsTerm!, roundsOf(shown!))] : []), ...itemsOf(shown!).map((term) => grantShortName(term, shown!.choices[term.id]!))].join(', ')} granted; none used`
+    text = `${[...(roundsOf(shown!) > 0 ? [grantShortName(roundsTerm!, roundsOf(shown!))] : []), ...itemsOf(shown!).map((term) => grantShortName(term, grantChoice(shown!.choices, term.id)!))].join(', ')} granted; none used`
   } else {
     state = 'used'
     text = [roundsPart, ...itemParts].filter(Boolean).join(' · ')

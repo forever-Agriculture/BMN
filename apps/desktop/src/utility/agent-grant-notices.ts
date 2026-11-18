@@ -31,6 +31,7 @@ export class GrantDepartureNotices {
     const start = AGENT_BRIEF_HANDOVER[p.agent]?.event === p.event && p.source !== null
     const tool = AWAY_NOTICE_HANDOVER[p.agent]?.event === p.event
     if ((!start && !tool) || p.turn === undefined || p.turn.nested || period === null) return null
+    if (period.state === 'leaving' && period.collection !== undefined && !period.collection.sessions.some(session => session.sessionId === p.sessionId && session.selected)) return null
     const key = `${period.periodId}\u0000${p.sessionId}\u0000${p.agent}\u0000${p.turn.conversation}`
     if (start && LOST_SOURCES.includes(p.source ?? '')) this.told.delete(key)
     if (this.told.has(key)) return null

@@ -68,6 +68,14 @@ import {
   grantPinnedFile,
   openGrantPeriod,
   ownerGrantView,
+  compareGrantOrder,
+  awayMomentWords,
+  awayNoteProblem,
+  departureCounts,
+  newDepartureCollection,
+  selectDepartureSessions,
+  type OwnerDepartureInput,
+  type OwnerDepartureReply,
   type GrantAnswerResult,
   type GrantRead,
   type GrantedRepositoryAction,
@@ -161,6 +169,9 @@ import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
 import { AWAY_WAKE_EVERY_MS, AwayWake } from './away-wake'
+import { DepartureWake } from './departure-wake'
+import { testDepartureBarrier } from './test-departure-barrier'
+import { DEPARTURE_TOKEN_PREFIX, TelegramDepartureHead } from './telegram-departure-head'
 import { MessageWake } from './message-wake'
 import { UpdateRestart, restartStateAtPress } from './update-restart'
 import type { SessionResumeResult } from '@bmn/protocol'
@@ -416,6 +427,12 @@ export class CompanionService {
   /** Story 90.6: while he is Away, the fixed wake line every 2 hours into sessions idle at an empty prompt. */
   readonly updateRestart: UpdateRestart
   private readonly awayWake: AwayWake
+  private readonly departureWake: DepartureWake
+  private departureSweepTimer: NodeJS.Timeout | undefined
+  private autoAwayTimer: NodeJS.Timeout | undefined
+  private departureEpoch = 0
+  private readonly departureTransitions = new Set<Promise<void>>()
+  private readonly departureHanded = new Set<string>()
   private readonly messageWake: MessageWake
   /** Each session's last turn its hook reported finished with nothing in flight (110.3): a hook's withdrawal ends it, the owner reading it does not. */
   private readonly finishedTurns = new Map<string, { incarnationId: string; at: string }>()
@@ -428,6 +445,7 @@ export class CompanionService {
   private awayRecord: AwayRecord = parseAwayRecord(undefined)
   /** Story 84.3: every departure's cards and grants, as last read or written; reads for authority go to the store. */
   private grantRead: GrantRead = { state: 'read', record: EMPTY_GRANT_RECORD }
+  private grantOrder: { generation?: number | null; revision: number } = { revision: 0 }
   private readonly grantNotices: GrantDepartureNotices
   private readonly policyReader: PolicyReader
   private readonly pager: ReturnType<typeof createAttentionPager>
@@ -437,6 +455,7 @@ export class CompanionService {
   private readonly cards: TelegramCardKeeper
   /** Story 84.3: the departure cards on the phone, beside the request cards. */
   private readonly grantCards: TelegramGrantCards
+  private readonly departureHead: TelegramDepartureHead
   private readonly draftOperations = new Map<string, Promise<void>>()
   private readonly telegramReplyOperations = new Map<string, Promise<void>>()
   /** A request key claims the one PTY write before any asynchronous availability check. */
@@ -709,6 +728,28 @@ export class CompanionService {
         void options.database.companion('recordAwayWake', tick, decisions).catch(() => undefined)
       }
     })
+    const departureBarrier = testDepartureBarrier(process.argv, process.env, options.roots.state)
+    this.departureWake = new DepartureWake({
+      now: () => this.now(), period: () => this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null,
+      transition: { pending: () => this.departureTransitions.size > 0,
+        wait: async () => { while (this.departureTransitions.size > 0) await Promise.all(this.departureTransitions) } },
+      epoch: () => this.departureEpoch, handed: (periodId, sessionId) => this.departureHanded.has(`${periodId}:${sessionId}`),
+      observation: id => this.hookObservations.get(id), liveIncarnation: id => options.manager.liveIncarnationId(id),
+      foreground: id => options.manager.foregroundProcessIdentity(id),
+      generation: id => this.attentionChanges.get(id) ?? { generation: 0, pending: 0 },
+      openAttention: () => options.database.companion('listAttention'),
+      finishedTurn: (id, incarnation) => { const turn = this.finishedTurns.get(id); return turn?.incarnationId === incarnation ? turn.at : null },
+      screen: async (id, incarnation) => {
+        await departureBarrier?.(id, incarnation)
+        const mirror = options.manager.runningScreenMirror(id, incarnation)
+        if (!mirror) return null
+        await mirror.settled()
+        return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+      },
+      write: (id, text) => this.typeLine(id, text),
+      delivery: input => options.database.companion('departureDelivery', input, this.iso()),
+      changed: read => this.grantChanged(read)
+    })
     this.messageWake = new MessageWake({
       ...options.messageWake,
       now: () => this.now(),
@@ -866,8 +907,9 @@ export class CompanionService {
     this.grantNotices = new GrantDepartureNotices({
       now: () => this.now(),
       mark: async (periodId, sessionId) => {
+        this.departureHanded.add(`${periodId}:${sessionId}`)
         const result = await options.database.companion('markGrantTold', periodId, sessionId, this.iso())
-        if (result.outcome === 'changed') this.grantChanged({ state: 'read', record: result.record })
+        if (result.outcome === 'changed') this.grantChanged(result.read)
       }
     })
     this.messages = new SessionMessages({
@@ -971,8 +1013,13 @@ export class CompanionService {
       answer: (answer) => this.answerGrant(answer),
       keep: async (periodId, runId, phone) => {
         const result = await options.database.companion('setGrantPhoneMessage', periodId, runId, phone, this.iso())
-        if (result.outcome === 'changed') this.grantChanged({ state: 'read', record: result.record })
+        if (result.outcome === 'changed') this.grantChanged(result.read)
       }
+    })
+    this.departureHead = new TelegramDepartureHead({
+      connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
+      view: () => this.grantForOwner(), now: () => this.now(), action: input => this.ownerDeparture(input, 'telegram'),
+      keep: async (periodId, phone) => { this.grantChanged(await options.database.companion('departurePhone', periodId, phone, this.iso())) }
     })
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
     this.turns = options.turnChanges === undefined ? null : new TurnRecorder({
@@ -1114,13 +1161,16 @@ export class CompanionService {
           return this.leaveAway(p.scope.kind === 'owner' ? 'cli' : 'agent', p.scope.kind === 'session' ? p.scope.sessionId : null)
         }),
         askGrant: (p) => this.controlCall(async () => {
+          const read = this.grantRead
+          const origin = { generation: read.generation ?? 0,
+            periodId: read.state === 'read' ? openGrantPeriod(read.record)?.periodId ?? null : null }
           const sessionId = p.scope.kind === 'session' ? p.scope.sessionId : null
           const producer = p.scope.kind === 'session' ? this.producers.stamp(p.scope.sessionId, p.scope.incarnationId) : null
           const result = await this.options.database.companion('askGrantCard', {
-            runId: p.runId, sessionId, agentCli: producer?.agentCli ?? null, card: p.card, ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
+            runId: p.runId, sessionId, agentCli: producer?.agentCli ?? null, card: p.card, origin, ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
           }, this.iso())
           if (result.outcome === 'no-departure') throw new HostControlError(ERROR_CODES.notFound, `${result.reason}; nothing was asked`)
-          if (result.outcome === 'opened' || result.outcome === 'replaced') this.grantChanged({ state: 'read', record: result.record })
+          if (result.outcome === 'opened' || result.outcome === 'replaced') this.grantChanged(result.read)
           return { outcome: result.outcome, periodId: result.periodId, runId: result.run.runId, cardRevision: result.run.card.revision, state: result.run.card.state }
         }),
         grantStatus: (p) => this.controlCall(async () => this.grantStatusFor(p.scope, p.runId)),
@@ -1133,14 +1183,14 @@ export class CompanionService {
             ? { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'round' as const, boundary: p.boundary }
             : { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'action' as const, item: p.item ?? '', ...(pinned === null ? {} : { file: { periodId: pinned.periodId, cardRevision: pinned.cardRevision, folder: pinned.folder, path: pinned.script.path, sha256: commandPinSha(pinned) } }) }
           const result = await this.options.database.companion('useGrantRecord', use, this.iso())
-          if (result.outcome !== 'repeated') this.grantChanged({ state: 'read', record: result.record })
+          if (result.outcome !== 'repeated') this.grantChanged(result.read)
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
           return { outcome: result.outcome, left: result.left, periodId: result.periodId, ...(result.exact === null ? {} : { exact: result.exact }) }
         }),
         reportGrant: (p) => this.controlCall(async () => {
           const result = await this.options.database.companion('reportGrantRecord', p, this.iso())
           // The window's view is this cache; a report it never hears of stays missing there (matrix full-3).
-          if (result.outcome === 'recorded') this.grantChanged({ state: 'read', record: result.record })
+          if (result.outcome === 'recorded') this.grantChanged(result.read)
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not kept: ${result.reason}`)
           return { outcome: result.outcome }
         }),
@@ -1344,8 +1394,10 @@ export class CompanionService {
 
   async start(): Promise<void> {
     // Story 76.3 (R76-NFR1): the said state is restored before anything at start can deliver.
-    this.awayRecord = await this.options.database.companion('getAway')
-    this.grantRead = (await this.options.database.companion('getGrants')).read
+    const grants = await this.options.database.companion('getGrants')
+    this.awayRecord = grants.away
+    this.grantRead = grants.read
+    this.grantOrder = ownerGrantView(this.grantRead)
     await this.options.database.companion('recoverQaGrantUses', this.iso())
     await this.options.database.companion('recoverQaRuns')
     this.awayNotices.load(await this.options.database.companion('getAwayNotices'))
@@ -1373,6 +1425,12 @@ export class CompanionService {
     }
     this.sweepTimer = setInterval(() => void this.sweepAttention(), ATTENTION_SWEEP_MS)
     this.sweepTimer.unref()
+    this.departureSweepTimer = setInterval(() => {
+      void this.refreshUnreadableGrant().then(() => this.departureWake.sweep()).catch(() => undefined)
+      void this.departureHead.reconcile()
+    }, 20_000)
+    this.departureSweepTimer.unref()
+    this.armAutomaticAway()
     this.ports.start()
     // Telegram's first network check must never delay terminal startup.
     void this.restartTelegram().catch(() => undefined)
@@ -1398,9 +1456,12 @@ export class CompanionService {
     this.ports.stop()
     this.options.proc?.close?.()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
+    if (this.departureSweepTimer) clearInterval(this.departureSweepTimer)
+    if (this.autoAwayTimer) clearTimeout(this.autoAwayTimer)
     this.pager.close()
     this.cards.dispose()
     this.grantCards.dispose()
+    this.departureHead.dispose()
     this.answers.dispose()
     await Promise.allSettled([this.control.close(), this.telegram?.stop(), this.retainedHooks.close()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
@@ -1686,7 +1747,15 @@ export class CompanionService {
       case METHOD_REGISTRY.awayGet:
         return this.awayForOwner()
       case METHOD_REGISTRY.grantGet:
+        await this.refreshUnreadableGrant()
         return this.grantForOwner()
+      case METHOD_REGISTRY.grantDeparture: {
+        if (!['start', 'go', 'cancel', 'open', 'presented', 'same'].includes(params.action as string) ||
+          !Number.isSafeInteger(params.expectedRevision) ||
+          (params.expectedGeneration !== undefined && !Number.isSafeInteger(params.expectedGeneration)) || params.periodId !== null && typeof params.periodId !== 'string' ||
+          typeof params.operationKey !== 'string') invalid('action, periodId, expectedRevision and operationKey are required')
+        return this.ownerDeparture(params as unknown as OwnerDepartureInput, 'app')
+      }
       case METHOD_REGISTRY.grantAnswer: {
         // Story 84.3 AC2: the window's own answer; the control socket refuses this method for every token.
         const { periodId, runId, cardRevision, choices, operationKey } = params
@@ -1694,16 +1763,33 @@ export class CompanionService {
           typeof choices !== 'object' || choices === null || Array.isArray(choices)) invalid('periodId, runId, cardRevision, choices and operationKey are required')
         const result = await this.answerGrant({
           periodId: periodId as string, runId: runId as string, cardRevision: cardRevision as number, choices: choices as Record<string, unknown>,
-          via: 'app', operationKey: `app:${operationKey as string}`
+          via: 'app', operationKey: `app:${operationKey as string}`,
+          ...(params.expectedGeneration === undefined ? {} : { expectedGeneration: params.expectedGeneration as number }),
+          ...(params.expectedRevision === undefined ? {} : { expectedRevision: params.expectedRevision as number }),
+          ...(params.lineId === undefined ? {} : { lineId: params.lineId as string })
         })
         return { outcome: result.outcome, ...(result.outcome === 'refused' ? { reason: result.reason, detail: result.detail } : {}), view: this.grantForOwner() }
       }
       case METHOD_REGISTRY.awaySet: {
         const to = params.to
+        if (awayNoteProblem(params.note) !== null) invalid(awayNoteProblem(params.note)!)
         if (to !== 'away' && to !== 'back') invalid('to must be away or back')
+        if (to === 'away' && this.awayRecord.state !== 'away') {
+          const view = this.grantForOwner()
+          const result = await this.ownerDeparture({ action: view.period?.state === 'leaving' ? 'open' : 'start',
+            periodId: view.period?.state === 'leaving' ? view.period.periodId : null, expectedRevision: typeof params.expectedGrantRevision === 'number' ? params.expectedGrantRevision : view.revision,
+            expectedGeneration: (params.expectedGrantGeneration as number | undefined) ?? view.generation ?? 0, operationKey: randomUUID(),
+            ...(params.note === undefined ? {} : { note: params.note as string | null }) }, 'app')
+          return result.away
+        }
         // Back while only leaving is the dialog's Not leaving: it cancels the departure and withdraws its cards (84.3 AC1).
-        const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }) })
+        const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }),
+          ...(params.expectedGrantGeneration === undefined ? {} : { expectedGrantGeneration: params.expectedGrantGeneration as number }),
+          ...(params.expectedGrantRevision === undefined ? {} : { expectedGrantRevision: params.expectedGrantRevision as number }),
+          ...(params.expectedRevision === undefined ? {} : { expectedRevision: params.expectedRevision as number }),
+          ...(params.expectedPeriodId === undefined ? {} : { expectedPeriodId: params.expectedPeriodId as string | null }) })
         if (result.outcome === 'invalid') invalid(result.reason)
+        if (result.outcome === 'stale') throw new HostControlError(ERROR_CODES.revisionConflict, 'The departure changed. Look again; nothing was changed.')
         return ownerAwayView(result.record)
       }
       case METHOD_REGISTRY.policyGet:
@@ -1785,12 +1871,18 @@ export class CompanionService {
     this.pager.ownerLeft()
     void this.quietDelivery.sweep().catch(() => undefined)
     void this.grantCards.reconcile()
+    void this.departureHead.reconcile()
   }
 
   /** Story 76.3: one serialised change of the said state, from any surface; the caller's source decides what it may do. */
   async changeAway(change: Omit<AwayChange, 'periodId'>): Promise<AwayChangeResult> {
+    return this.departureTransition(() => this.applyAwayChange(change))
+  }
+
+  private async applyAwayChange(change: Omit<AwayChange, 'periodId'>): Promise<AwayChangeResult> {
     const before = this.ownerAway()
-    const result = await this.options.database.companion('changeAway', change, this.iso())
+    const view = this.grantForOwner()
+    const result = await this.options.database.companion('changeAway', { expectedGrantRevision: view.revision, expectedGrantGeneration: view.generation ?? 0, expectedPeriodId: view.period?.periodId ?? null, ...change }, this.iso())
     if (result.outcome === 'changed' || result.record.revision > this.awayRecord.revision) {
       this.awayRecord = result.record
       this.presenceChanged(before)
@@ -1803,24 +1895,141 @@ export class CompanionService {
 
   /** Story 84.3 AC1: his departure words, `bmn away --leaving` or the CLI: a pending departure; the runs are told on their next tool call. */
   private async leaveAway(source: 'cli' | 'agent', agentSessionId: string | null): Promise<unknown> {
-    const result = await this.options.database.companion('leaveAway', { source, agentSessionId }, this.iso())
-    if (result.outcome === 'changed') this.grantChanged(result.read)
-    const open = result.read.state === 'read' ? openGrantPeriod(result.read.record) : null
+    const view = this.grantForOwner()
+    const result = await this.ownerDeparture({ action: 'start', periodId: null, expectedRevision: view.revision, expectedGeneration: view.generation ?? 0, operationKey: randomUUID() }, source, agentSessionId)
+    const open = result.view.period
     return { outcome: result.outcome, state: open?.state ?? this.awayRecord.state, periodId: open?.periodId ?? null, since: open?.startedAt ?? null, revision: this.awayRecord.revision }
   }
 
   /** Story 84.3 AC2–AC3: the owner's answer from the window or Telegram, the only two callers. */
-  private async answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, unknown>; via: 'app' | 'telegram'; operationKey: string }): Promise<GrantAnswerResult> {
+  private async answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, unknown>; via: 'app' | 'telegram'; operationKey: string; expectedRevision?: number; expectedGeneration?: number; lineId?: string }): Promise<GrantAnswerResult> {
     const result = await this.options.database.companion('answerGrantCard', answer, this.iso())
-    // A refused answer is kept too; an unreadable record (reason 'invalid') stays unknown in the cache.
-    if (result.outcome === 'granted' || (result.outcome === 'refused' && result.reason !== 'invalid')) this.grantChanged({ state: 'read', record: result.record })
+    // An unreadable worker snapshot must revoke the cached view even when the attempted answer was refused.
+    if (result.outcome !== 'repeated') this.grantChanged(result.read)
     return result
   }
 
-  private grantChanged(read: GrantRead): void {
+  /** Once a failed read drops the cached record, ask the worker again without overwriting a concurrent update. */
+  private async refreshUnreadableGrant(): Promise<void> {
+    const cached = this.grantRead
+    if (cached.state === 'read') return
+    const state = await this.options.database.companion('getGrants').catch(() => null)
+    if (this.grantRead !== cached || state?.read.state !== 'read') return
+    if (state.away.revision > this.awayRecord.revision) {
+      const before = this.ownerAway()
+      this.awayRecord = state.away
+      this.presenceChanged(before)
+      this.emit('away', null)
+    }
+    this.grantChanged(state.read, true)
+  }
+
+  private grantChanged(read: GrantRead, refreshed = false): void {
+    if (read.generation != null && read.generation < (this.grantOrder.generation ?? 0)) return
+    if (read.state === 'read') {
+      const order = { generation: read.generation ?? 0, revision: read.record.revision }
+      if (compareGrantOrder(order, this.grantOrder) < 0 ||
+        (!refreshed && this.grantRead.state === 'unknown' && (order.generation ?? 0) <= (this.grantOrder.generation ?? 0))) return
+      this.grantOrder = order
+    }
+    if (read === this.grantRead || (read.state === 'unknown' && this.grantRead.state === 'unknown' &&
+      read.generation === this.grantRead.generation && read.reason === this.grantRead.reason)) return
+    const before = this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null
+    const after = read.state === 'read' ? openGrantPeriod(read.record) : null
+    if (before?.state === 'leaving' && (after?.periodId !== before.periodId || after.state !== 'leaving')) this.departureEpoch++
     this.grantRead = read
     this.emit('grant', null)
     void this.grantCards.reconcile()
+    void this.departureHead.reconcile()
+    this.armAutomaticAway()
+  }
+
+  private async departureTransition<Result>(work: () => Promise<Result>): Promise<Result> {
+    const generationAtStart = this.grantOrder.generation ?? 0
+    const held = Promise.withResolvers<void>()
+    this.departureTransitions.add(held.promise)
+    try { return await work() }
+    catch (error) {
+      // A missing reply may follow a committed write. Read the worker before allowing another PTY write.
+      try {
+        const state = await this.options.database.companion('getGrants')
+        if (state.away.revision >= this.awayRecord.revision) {
+          const before = this.ownerAway()
+          this.awayRecord = state.away; this.presenceChanged(before); this.emit('away', null)
+        }
+        this.grantChanged(state.read, true)
+      } catch {
+        if ((this.grantOrder.generation ?? 0) === generationAtStart) this.grantChanged({ state: 'unknown', generation: generationAtStart,
+          reason: 'The departure transition could not be read' })
+      }
+      throw error
+    } finally {
+      this.departureTransitions.delete(held.promise)
+      held.resolve()
+    }
+  }
+
+  private ownerDeparture(input: OwnerDepartureInput, source: 'app' | 'telegram' | 'cli' | 'agent', agentSessionId: string | null = null): Promise<OwnerDepartureReply> {
+    const work = () => this.applyDeparture(input, source, agentSessionId)
+    return input.action === 'go' || input.action === 'cancel' ? this.departureTransition(work) : work()
+  }
+
+  private async applyDeparture(input: OwnerDepartureInput, source: 'app' | 'telegram' | 'cli' | 'agent', agentSessionId: string | null): Promise<OwnerDepartureReply> {
+    let collection: ReturnType<typeof newDepartureCollection> | undefined
+    if (input.action === 'start' || (input.action === 'open' || input.action === 'presented') && this.grantForOwner().period?.collection === undefined) {
+      await this.sessionsChanged()
+      const sessions = [...this.knownSessions.values()].filter(session => session.archivedAt === null).flatMap(session => {
+        const events = [...this.retainedHooks.history(session.sessionId), ...this.listHookEvents(session.sessionId)]
+          .filter(event => event.agent === 'claude' || event.agent === 'codex').sort((a, b) => b.observedAt.localeCompare(a.observedAt))
+        const last = events[0]
+        const observed = this.hookObservations.get(session.sessionId)
+        const agent = last?.agent ?? observed?.agent ?? (/(?:^|\/)claude$/u.test(session.executable) ? 'claude' : /(?:^|\/)codex$/u.test(session.executable) ? 'codex' : null)
+        return agent === null ? [] : [{ sessionId: session.sessionId,
+          incarnationId: this.options.manager.liveIncarnationId(session.sessionId) ?? null, name: session.name, agent,
+          lastEventAt: last?.observedAt ?? observed?.observedAt ?? null }]
+      })
+      const now = this.iso()
+      collection = newDepartureCollection(selectDepartureSessions(sessions, now), now)
+    }
+    const before = this.ownerAway()
+    const result = await this.options.database.companion('departureAction', { ...input, source, agentSessionId,
+      ...(collection === undefined ? {} : { collection }) }, this.iso())
+    if (result.away.revision >= this.awayRecord.revision) {
+      this.awayRecord = result.awayRecord
+      this.presenceChanged(before)
+      this.emit('away', null)
+    }
+    this.grantChanged(result.read)
+    if (input.action === 'start' && result.outcome === 'changed') void this.departureWake.sweep().catch(() => undefined)
+    return { outcome: result.outcome, view: result.view, away: result.away, detail: result.detail }
+  }
+
+  private armAutomaticAway(): void {
+    if (this.autoAwayTimer) clearTimeout(this.autoAwayTimer)
+    this.autoAwayTimer = undefined
+    const period = this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null
+    if (period?.state !== 'leaving' || period.collection === undefined) return
+    this.autoAwayTimer = setTimeout(() => { void this.automaticAway().catch(() => undefined) }, Math.max(0, Date.parse(period.collection.autoAwayAt) - this.now().getTime()))
+    this.autoAwayTimer.unref()
+  }
+
+  private automaticAway(): Promise<void> {
+    return this.departureTransition(() => this.applyAutomaticAway())
+  }
+
+  private async applyAutomaticAway(): Promise<void> {
+    const read = this.grantRead
+    const period = read.state === 'read' ? openGrantPeriod(read.record) : null
+    if (read.state !== 'read' || period?.state !== 'leaving' || period.collection === undefined) return
+    const before = this.ownerAway()
+    const result = await this.options.database.companion('departureAction', { action: 'auto', periodId: period.periodId,
+      expectedRevision: read.record.revision, expectedGeneration: read.generation ?? 0, operationKey: `auto:${period.collection.autoAwayAt}`, source: 'app' }, this.iso())
+    if (result.away.revision >= this.awayRecord.revision) {
+      this.awayRecord = result.awayRecord
+      this.presenceChanged(before)
+      this.emit('away', null)
+    }
+    this.grantChanged(result.read)
   }
 
   grantForOwner(): OwnerGrantView {
@@ -3848,7 +4057,7 @@ export class CompanionService {
           set: (next) => this.options.database.companion('putRawSetting', TELEGRAM_OFFSET_KEY, next, this.iso())
         },
         onReply: (reply) => this.handleTelegramReply(reply),
-        onTap: (tap) => tap.data.startsWith(GRANT_TOKEN_PREFIX) ? this.grantCards.tap(tap) : this.cards.tap(tap),
+        onTap: (tap) => tap.data.startsWith(DEPARTURE_TOKEN_PREFIX) ? this.departureHead.tap(tap) : tap.data.startsWith(GRANT_TOKEN_PREFIX) ? this.grantCards.tap(tap) : this.cards.tap(tap),
         onHealth: (health) => {
           if (this.telegram !== connector) return
           const entered = health.state !== this.telegramHealth?.state
@@ -3860,7 +4069,10 @@ export class CompanionService {
               if (this.telegram !== connector) return
               this.telegramReady = ready
               // Story 84.3: an open departure card is redrawn on its own message with fresh buttons after a restart.
-              if (this.telegramHealth?.state === 'polling') void this.grantCards.reconcile()
+              if (this.telegramHealth?.state === 'polling') {
+                void this.grantCards.reconcile()
+                void this.departureHead.reconcile()
+              }
               if (ready && this.telegramHealth?.state === 'polling') {
                 try { await this.quietDelivery.sweep() }
                 finally {
@@ -3917,7 +4129,7 @@ export class CompanionService {
     if (other === 'elsewhere') return
     if (other !== null) return this.telegramCommandReply(connector, reply, TELEGRAM_HELP_TEXT, bot)
     // Story 84.3: a departure card is answered with its buttons only; a typed reply to one does nothing else.
-    if (reply.replyToMessageId !== null && this.grantCards.owns(reply.replyToMessageId)) return this.telegramCommandReply(connector, reply, GRANT_TYPED_REPLY, bot)
+    if (reply.replyToMessageId !== null && (this.grantCards.owns(reply.replyToMessageId) || this.departureHead.owns(reply.replyToMessageId))) return this.telegramCommandReply(connector, reply, GRANT_TYPED_REPLY, bot)
     const key = `telegram-reply:${bot}:${reply.updateId}`
     const pending = this.telegramReplyOperations.get(key)
     if (pending) return pending
@@ -3976,6 +4188,22 @@ export class CompanionService {
    */
   private async telegramAway(connector: TelegramConnector, reply: InboundReply, command: TelegramAwayCommand, bot: string): Promise<void> {
     const operationKey = `telegram:${bot}:${reply.updateId}`
+    const grant = this.grantForOwner()
+    if (command.to === 'away' && this.awayRecord.state !== 'away') {
+      const result = await this.ownerDeparture({ action: grant.period?.state === 'leaving' ? 'open' : 'start',
+        periodId: grant.period?.state === 'leaving' ? grant.period.periodId : null, expectedRevision: grant.revision, expectedGeneration: grant.generation ?? 0, operationKey,
+        ...(command.note !== null && awayNoteProblem(command.note) === null ? { note: command.note } : {}) }, 'telegram')
+      const period = result.view.period
+      const note = command.note === null ? 'none' : awayNoteProblem(command.note) === null ? 'kept' : [...command.note].length > AWAY_NOTE_LIMIT ? 'too-long' : 'refused'
+      const text = period?.state === 'leaving'
+        ? `Getting ready since ${awayMomentWords(period.startedAt, this.now())}. Asked ${departureCounts(period, this.now()).asked} sessions. ${departureCounts(period, this.now()).asking} still answering. ${departureCounts(period, this.now()).lines} lines to answer. The Before you go list is here and in BMN. Answer its lines and press Go.${command.note !== null && awayNoteProblem(command.note) !== null ? ' The note was refused.' : ''}`
+        : result.away.state === 'away' && result.away.since !== null ? `${awayReplyText({ since: result.away.since, repeated: false, note, now: this.now() })} No session to ask.` : result.detail ?? 'The list changed. Look again.'
+      return this.telegramCommandReply(connector, reply, text, bot)
+    }
+    if (command.to === 'back' && grant.period?.state === 'leaving') {
+      const result = await this.ownerDeparture({ action: 'cancel', periodId: grant.period.periodId, expectedRevision: grant.revision, expectedGeneration: grant.generation ?? 0, operationKey }, 'telegram')
+      return this.telegramCommandReply(connector, reply, result.detail ?? 'Not leaving. Open lines withdrawn.', bot)
+    }
     const before = this.awayRecord.state
     const noteBefore = this.awayRecord.note
     let note: 'none' | 'kept' | 'replaced' | 'too-long' | 'refused' = 'none'

@@ -26,11 +26,16 @@ const CARD = {
   title: 'Epic 80 · clean up ai slop', scope: 'Stories 80.2–80.6', nothing: false,
   terms: [{ id: 'rounds' as const, kind: 'rounds' as const, proposed: 3, reason: 'two boundaries are ahead' }]
 }
-const ask = (runId = 'run-80') => askGrantCard(database, { runId, sessionId: 's-builder', agentCli: 'claude', card: CARD }, T0)
+const ask = (runId = 'run-80') => {
+  const read = readGrantRow(database)
+  const open = read.state === 'read' ? read.record.periods.find(period => period.state === 'leaving' || period.state === 'away') : undefined
+  return askGrantCard(database, { runId, sessionId: 's-builder', agentCli: 'claude', card: CARD,
+    origin: { generation: read.generation ?? 0, periodId: open?.periodId ?? null } }, T0)
+}
 
 describe('grant store (Story 84.3)', () => {
   it('starts with no row, and starts a departure whose period id Away then carries (AC1)', () => {
-    expect(getGrants(database).read).toEqual({ state: 'read', record: { version: 1, revision: 0, periods: [], carried: [], operations: [] } })
+    expect(getGrants(database).read).toEqual({ state: 'read', generation: 0, record: { version: 1, revision: 0, periods: [], carried: [], operations: [] } })
     expect(ask()).toMatchObject({ outcome: 'no-departure' })
     expect(raw(database, GRANT_RECORD_KEY)).toBeUndefined()
     const left = leaveAway(database, { source: 'agent', agentSessionId: 's-builder' }, T0)

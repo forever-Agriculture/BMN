@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { atomicJson } from './bench-lib.mjs'
+import { fileDigest } from './bench-file.mjs'
 import { approvedTeam } from '../measure/calibration-environment.mjs'
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const read = path => JSON.parse(readFileSync(path, 'utf8'))
@@ -39,8 +40,7 @@ export function finishBenchQa({ run, runId, reportPath }) {
   const artifact = path => {
     const full = join(run, path), name = relative(run, full)
     if (!name || name.startsWith('../') || realpathSync(full) !== full) throw new Error('Bench evidence path is foreign or symlinked')
-    const raw = readFileSync(full)
-    return { path: name, bytes: raw.length, sha256: hash(raw), runId }
+    return { path: name, ...fileDigest(full), runId }
   }
   const actions = readFileSync(join(run, 'actions.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
   if (!actions.length || actions.some(action => action.runId !== runId)) throw new Error('Bench action log has no bound generation')

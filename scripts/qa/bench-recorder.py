@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import resource
 import select
 import stat
 import subprocess
@@ -128,6 +129,13 @@ def gate():
     return False
 
 
+MAX_TRACE_BYTES = 1024 ** 3
+
+def limit_capture_file():
+    # Inherited only by this isolated synthetic launch, never the owner's BMN.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_TRACE_BYTES, MAX_TRACE_BYTES))
+
+
 def launch():
     root = pathlib.Path(config['root'] if entry['role'] == 'workload' else config['recoveryRoot'])
     if entry['role'] == 'workload':
@@ -137,7 +145,7 @@ def launch():
     else:
         command = [config['node'], str(repo / 'scripts/qa/bench-recovery.mjs'), run_id, key]
     child = subprocess.Popen(['/usr/bin/strace', '-f', '-q', '-v', '--decode-pids=pidns', '-s', '4096', '-e', 'trace=%file,connect,%process',
-                              '-o', str(run / entry['file']), *command], cwd=root, env=environment(root), pass_fds=(3,))
+                              '-o', str(run / entry['file']), *command], cwd=root, env=environment(root), pass_fds=(3,), preexec_fn=limit_capture_file)
     birth['tracerIdentity'] = process_identity(child.pid)
     atomic_json(birth_file, birth)
     os.close(3)
@@ -164,8 +172,10 @@ try:
         info = os.fstat(trace_fd)
         if not stat.S_ISREG(info.st_mode):
             raise RuntimeError('Trace is not a regular file')
+        if info.st_size > MAX_TRACE_BYTES:
+            raise RuntimeError('QA trace exceeds 1GiB')
         with os.fdopen(trace_fd, 'rb', closefd=False) as stream:
-            data = stream.read()
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
         os.fsync(trace_fd)
     finally:
         os.close(trace_fd)
@@ -175,7 +185,7 @@ try:
                 'recorderIdentity': self_identity, 'tracerIdentity': birth['tracerIdentity'], 'launchGroupIdentity': {'device': entry['group']['device'], 'inode': entry['group']['inode']},
                 'rawWaitStatus': status, 'exitCode': os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,
                 'signal': os.WTERMSIG(status) if os.WIFSIGNALED(status) else None, 'traceFileIdentity': file_identity(info),
-                'traceBytes': len(data), 'traceSha256': hashlib.sha256(data).hexdigest(), 'traceErrors': errors})
+                'traceBytes': info.st_size, 'traceSha256': digest, 'traceErrors': errors})
 except Exception as error:
     atomic_json(run / ('recorder-' + key + '-error.json'), {'error': str(error), 'identity': self_identity})
     print('QA recorder:', str(error), file=sys.stderr)

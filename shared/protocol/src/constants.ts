@@ -104,7 +104,8 @@ export const METHOD_REGISTRY = Object.freeze({
   policyGet: 'policy.get',
   policySet: 'policy.set',
   grantGet: 'grant.get',
-  grantAnswer: 'grant.answer'
+  grantAnswer: 'grant.answer',
+  grantDeparture: 'grant.departure'
 } as const)
 
 export type ProtocolMethod = (typeof METHOD_REGISTRY)[keyof typeof METHOD_REGISTRY]

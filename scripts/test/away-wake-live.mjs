@@ -39,8 +39,8 @@ import { processTree, stopTree } from './away-skills-processes.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
-const cli = join(appDirectory, 'bin/bmn')
 const tested = testedApp(appDirectory)
+const cli = tested.cliPath
 const args = [...tested.rest]
 const handoffAt = args.indexOf('--handoff')
 const handoffPath = handoffAt < 0 ? null : resolve(args.splice(handoffAt, 2)[1])
@@ -662,6 +662,11 @@ async function run(scenario, binary) {
       if (stopped.remaining.length === 0) recordProcess(owned, false)
     }
   }, runsFolder) } finally { await standIn?.close(); if (proxy) { report[`${name}ProxyHosts`] = Object.fromEntries(proxy.hosts); proxy.close() } }
+}
+
+if (args.includes('--departure')) {
+  const { departureLive } = await import('./departure-live.mjs')
+  process.exit(await departureLive({ tested, args, recordProcess, caller }))
 }
 
 for (const app of (args[2] ?? 'claude,codex').split(',')) {

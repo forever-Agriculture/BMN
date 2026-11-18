@@ -97,9 +97,9 @@ Commands:
                                             A repeated away keeps the period's time and note unless --note is
                                             given; a repeated back changes nothing. Only the owner sets a note
                                             (at most 200 characters), and only he sees it
-  away --leaving [--revision R]             He says he is leaving: a departure starts, the runs are told and
-                                            may each ask him on one card (bmn grant); then say away. Back
-                                            while only leaving cancels it
+  away --leaving [--revision R]             He is getting ready: every session with unfinished authorised
+                                            work answers within 3 minutes (bmn grant). Away starts on his
+                                            Go in BMN or Telegram. Back cancels getting ready
   away --status [--json]                    Away or back, since when, and the revision
   away --night [--json]                     What the Away wake did with each agent session in the last period:
                                             woken, skipped and why, missed while eligible, or unknown, and the
@@ -308,8 +308,9 @@ Submission is not delivery
 While the owner is away
   bmn away --status shows away or back, since when, and the revision. Set it (bmn away --revision R,
   bmn back --revision R) only on the owner's own words to you, never because he seems to be gone.
-  When he says he is leaving (bmn away --leaving), a run with authorised work left for the night may
-  ask him once, on one card, for only what that work needs: bmn grant --help.
+  Leaving: forward bmn away --leaving (getting ready). Every session with unfinished authorised work
+  answers within 3 minutes on one card: bmn grant --help. No dev-auto: use its name and stable id.
+  Away starts on Go in BMN or Telegram. Forward bmn away only if he says he is already gone.
   While he is away BMN refuses your blocking question tool (Claude Code's AskUserQuestion, Codex's
   request_user_input) and hands you this text, word for word:
   The owner is away. While the owner is away, BMN's Away notice takes precedence over skill

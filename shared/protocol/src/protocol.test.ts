@@ -162,7 +162,8 @@ describe('protocol surface', () => {
         'policy.get',
         'policy.set',
         'grant.get',
-        'grant.answer'
+        'grant.answer',
+        'grant.departure'
       ])
     )
     // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the

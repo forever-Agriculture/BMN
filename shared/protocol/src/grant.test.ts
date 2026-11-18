@@ -87,7 +87,7 @@ describe('readGrantRecord (84.3 AC4: a malformed row is no grant)', () => {
 
   it('reads anything malformed as unknown with its reason, never as a grant', () => {
     expect(readGrantRecord('{').state).toBe('unknown')
-    expect(readGrantRecord(JSON.stringify({ version: 2, revision: 0, periods: [], operations: [] }))).toMatchObject({ state: 'unknown', reason: expect.stringContaining('version') })
+    expect(readGrantRecord(JSON.stringify({ version: 3, revision: 0, periods: [], operations: [] }))).toMatchObject({ state: 'unknown', reason: expect.stringContaining('version') })
     const record = granted(away(asked()), all)
     const broken = JSON.parse(JSON.stringify(record)) as { periods: Array<{ runs: Array<{ answer: { terms: unknown[] } }> }> }
     broken.periods[0]!.runs[0]!.answer.terms = [{ kind: 'force-push', reason: 'x', repository: 'o/r' }]

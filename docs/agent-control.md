@@ -78,9 +78,9 @@ Commands:
                                             A repeated away keeps the period's time and note unless --note is
                                             given; a repeated back changes nothing. Only the owner sets a note
                                             (at most 200 characters), and only he sees it
-  away --leaving [--revision R]             He says he is leaving: a departure starts, the runs are told and
-                                            may each ask him on one card (bmn grant); then say away. Back
-                                            while only leaving cancels it
+  away --leaving [--revision R]             He is getting ready: every session with unfinished authorised
+                                            work answers within 3 minutes (bmn grant). Away starts on his
+                                            Go in BMN or Telegram. Back cancels getting ready
   away --status [--json]                    Away or back, since when, and the revision
   away --night [--json]                     What the Away wake did with each agent session in the last period:
                                             woken, skipped and why, missed while eligible, or unknown, and the
@@ -1172,11 +1172,20 @@ No rule here grants authority, changes consent, answers a native permission, or 
 only what that work needs. Only his own answer, in the BMN window or on Telegram, creates a grant, and every grant
 ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
 
-- **The departure.** `bmn away --leaving`, from an agent on his words that he is leaving, starts a departure with
-  its period id; Away, once set, carries that id, and Back while only leaving cancels it. Away pressed with no
-  departure starts the period at Away. While he is leaving or away, each Claude Code and Codex conversation is
-  handed the departure notice once, in the answer to the event its away notice rides on; a compaction or clear
-  tells it again. A missed or repeated notice is harmless: a run that does not ask is granted nothing.
+- **The departure.** Ticking Away in BMN, `/away` or `bmn away --leaving` on his departure words starts
+  getting ready and opens Before you go. Away starts on his **Go**, in the same period, or automatically 10 minutes
+  after his last action on the list. Only his start, opening the list or answering moves that stored deadline;
+  a session's card does not. A restart keeps the deadline and starts Away if it is overdue. With no selected
+  session, Away starts at once. The owner's explicit `bmn away`, or an agent forwarding that he is already gone,
+  remains immediate. **Not leaving**, `/back` or `bmn back` cancels; clicking the unticked Away box only reopens
+  the list. Esc and × close it without cancelling.
+  BMN selects Claude Code and Codex sessions with a hook event in the last 12 hours, up to 32, with selection and
+  delivery kept apart. Working sessions receive the departure notice at the next hook; resting ones receive
+  exactly one fixed line under the wake's complete idle proof, with a 20-second quiet time. BMN retries the proof
+  every 20 seconds for 3 minutes; an unproven prompt, a resumed Codex session without its own finished turn, an
+  app question, a draft or typing is left alone. A restart does not recreate proof or replay an uncertain write.
+  Sessions without a dev-auto run answer under their session's name. The list shows asking, lines, needs nothing
+  with its scope, no answer after 3 minutes from delivery, or not told with the reason. Late answers still arrive.
 - **The card.** `bmn grant ask --run ID --card-file -` takes the card as JSON on standard input (`bmn grant --help`
   shows it): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
   boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
@@ -1216,11 +1225,16 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   his own git config, so he reads the whole text before saying yes. Between the
   hash and the run a file can still change. `bmn grant ask`'s checks run when a card is asked, never on a stored one,
   so a rule added later never unreads a record.
-- **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token, the
-  owner's CLI token included. An answer is bound to the period, the run, the terms shown and the card's revision;
-  a changed, withdrawn, already answered or earlier-period card is refused and no grant changes (his refused
-  answer is kept for the morning as BMN's record, a tap on Telegram that only moves through a card is not), and
-  the same operation key returns the first answer.
+- **The answer.** Only the window and Telegram answer; `grant.answer` on the socket refuses every token,
+  the owner's CLI token included. Each line saves immediately, bound to the period, card revision and the record
+  revision shown. A competing start, answer, Go, Back, cancellation or automatic start wins once; a stale action
+  changes no record and refreshes the surface. Answers can change until Go without refunding uses; after Go an
+  answered line is frozen, while an open line can still be answered. An unanswered line grants nothing. A revised
+  card under the pointer or keyboard focus holds its old, disabled lines until **Show** or leaving the list.
+  On a return within 12 hours, identical earlier granted lines are proposals marked with the earlier answer's
+  time, never grants. **Grant the same N** saves new answers in one transaction; changed targets, counts, exact
+  text or merge head SHAs need fresh answers. A run that has not asked again is history only.
+  Legacy v1 cards remain readable until an owner opens the list; older binaries read a v2 envelope as no grant.
 - **Reading and using it.** `bmn grant --run ID` reads the grant fresh each time: its terms, the period and what
   is left, or "No grant" and why (none answered, Back, a new period, a malformed row, an unreadable store). Read
   it right before each step that uses it; a grant never comes from a handoff. `bmn grant use --run ID --use-id U
@@ -3339,8 +3353,9 @@ Submission is not delivery
 While the owner is away
   bmn away --status shows away or back, since when, and the revision. Set it (bmn away --revision R,
   bmn back --revision R) only on the owner's own words to you, never because he seems to be gone.
-  When he says he is leaving (bmn away --leaving), a run with authorised work left for the night may
-  ask him once, on one card, for only what that work needs: bmn grant --help.
+  Leaving: forward bmn away --leaving (getting ready). Every session with unfinished authorised work
+  answers within 3 minutes on one card: bmn grant --help. No dev-auto: use its name and stable id.
+  Away starts on Go in BMN or Telegram. Forward bmn away only if he says he is already gone.
   While he is away BMN refuses your blocking question tool (Claude Code's AskUserQuestion, Codex's
   request_user_input) and hands you this text, word for word:
   The owner is away. While the owner is away, BMN's Away notice takes precedence over skill
@@ -3597,3 +3612,7 @@ lifecycle attribution: an ambiguous late end retains the request, refuses input 
 shows “Conversation unavailable”. A fresh question gets a new binding; old cards
 never revive. Actual producer ordering and the original withdrawal incident remain
 unverified until isolated configured-CLI trials pass.
+
+### Desktop departure presentation receipts
+
+A real desktop modal show consumes a reservation that belongs to that window and grant generation. The main process suppresses another automatic show while a receipt is pending. It reads back the saved receipt or retries with the original period, generation and operation key after a failed or ambiguous save. The receipt leaves the Away deadline intact. After an app crash, a saved receipt suppresses automatic presentation. If the same period is still open and has no durable receipt, the restarted app may show it once and record that new show.

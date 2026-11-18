@@ -34,6 +34,8 @@ export function Segmented<Value extends string | number | null>(props: {
   options: readonly Value[]
   value: Value
   disabled?: boolean | undefined
+  /** A temporary unreadable record disables activation while keeping the focused segment mounted. */
+  unavailable?: boolean
   /** Segments sized by their words instead of equal widths (long words such as "owner chooses"). */
   fit?: boolean | undefined
   /** A label may carry a mark before its word (Agents: seal, pips). */
@@ -41,16 +43,19 @@ export function Segmented<Value extends string | number | null>(props: {
   onChange(value: Value): void
   /** Pressing the chosen segment calls onChange too: a view's segment brings it back to its start (Agents › Team from an agent). */
   again?: boolean | undefined
+  /** Permission choices move with arrows, but save only on an explicit click, Space or Enter. */
+  manualActivation?: boolean | undefined
 }): React.JSX.Element {
   const buttons = useRef<Array<HTMLButtonElement | null>>([])
   const move = (event: KeyboardEvent<HTMLDivElement>): void => {
     const step = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1
       : event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 0
-    if (step === 0 || props.disabled) return
+    if (step === 0 || props.disabled || props.unavailable) return
     event.preventDefault()
-    const index = props.options.indexOf(props.value)
+    const focused = buttons.current.findIndex((button) => button === document.activeElement)
+    const index = props.manualActivation && focused >= 0 ? focused : props.options.indexOf(props.value)
     const next = (index + step + props.options.length) % props.options.length
-    props.onChange(props.options[next] as Value)
+    if (!props.manualActivation) props.onChange(props.options[next] as Value)
     buttons.current[next]?.focus()
   }
   return (
@@ -67,7 +72,8 @@ export function Segmented<Value extends string | number | null>(props: {
             aria-checked={checked}
             tabIndex={checked || (index === 0 && !props.options.includes(props.value)) ? 0 : -1}
             disabled={props.disabled}
-            onClick={() => { if (!checked || props.again) props.onChange(option) }}
+            aria-disabled={props.unavailable || undefined}
+            onClick={() => { if (!props.unavailable && (!checked || props.again)) props.onChange(option) }}
           >
             {props.optionLabel(option)}
           </button>

@@ -110,9 +110,9 @@ describe('awaySummaryData (Story 76.6 AC1-AC2)', () => {
   })
 
   it('reads the kept grant periods up to this one in the same read, and none when the grant record cannot be read (Story 84.7)', () => {
-    leaveAway(database, { source: 'agent', agentSessionId: 's1' }, T0)
+    const left = leaveAway(database, { source: 'agent', agentSessionId: 's1' }, T0)
     const card = { title: 'Epic 80', scope: 'Stories 80.2-80.6', nothing: false, terms: [{ id: 'rounds' as const, kind: 'rounds' as const, proposed: 3, reason: 'two boundaries ahead' }] }
-    const asked = askGrantCard(database, { runId: 'run-80', sessionId: 's1', agentCli: 'claude', card }, T0)
+    const asked = askGrantCard(database, { runId: 'run-80', sessionId: 's1', agentCli: 'claude', origin: { generation: 0, periodId: left.record.periods[0]!.periodId }, card }, T0)
     if (asked.outcome === 'no-departure') throw new Error(asked.reason)
     const period = changeAway(database, { to: 'away', source: 'app' }, T0).record
     expect(period.periodId).toBe(asked.periodId)

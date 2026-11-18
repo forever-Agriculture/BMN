@@ -69,6 +69,13 @@ describe('captured trust dialogs', () => {
 })
 
 describe('other screens', () => {
+  it('recognizes the captured Codex welcome help while refusing real permission overlays (130)', () => {
+    const capture = JSON.parse(readFileSync(new URL('./fixtures/departure-codex-welcome.json', import.meta.url), 'utf8')).screen
+    expect(classifyScreen('codex', capture, '/synthetic-epic130').state).toBe('composer')
+    for (const overlay of ['Permission request', 'Allow once?', 'Do you want to run this command?', 'Hooks need review', 'Update available', 'API key required']) {
+      expect(classifyScreen('codex', [...capture, overlay], '/synthetic-epic130').state).toBe('dialog')
+    }
+  })
   it('blocking prompts are dialogs, never composers', () => {
     for (const [screen, detail] of [
       [['Hooks need review', '  Esc to continue'], 'hooks review'],

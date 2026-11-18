@@ -4,14 +4,32 @@ import {
   METHOD_REGISTRY,
   type AppEventMessage,
   type AttentionRecord,
+  type ProtocolMethod,
   type TelegramOwnerEntry,
   type TelegramStatus
 } from '@bmn/protocol'
+import type { IpcMainInvokeEvent } from 'electron'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))
 
-const { activateAttentionNotification, createAppEventForwarder, listedPortUrl, noticeResolution } = await import('./companion-ipc')
+const { activateAttentionNotification, createAppEventForwarder, installCompanionIpcHandlers, listedPortUrl, noticeResolution } = await import('./companion-ipc')
+
+it('keeps presentation receipts out of the ordinary renderer departure route', async () => {
+  const handlers = new Map<string, (event: IpcMainInvokeEvent, params?: unknown) => unknown>()
+  const request = vi.fn(async (method: ProtocolMethod, params: object) => ({ method, params }))
+  installCompanionIpcHandlers({ handle: (channel, handler) => handlers.set(channel, handler) }, {
+    senderIsAllowed: () => true, dialogsEnabled: () => false,
+    client: () => ({ request: async <Result>(method: ProtocolMethod, params: object) => await request(method, params) as Result })
+  })
+  const invoke = handlers.get('aiterm:grant:departure')!
+  const event = {} as IpcMainInvokeEvent
+  const input = { periodId: 'synthetic-period', expectedRevision: 1, operationKey: 'synthetic-operation' }
+  expect(() => invoke(event, { ...input, action: 'presented' })).toThrow('requires its show receipt')
+  expect(request).not.toHaveBeenCalled()
+  await invoke(event, { ...input, action: 'open' })
+  expect(request).toHaveBeenCalledWith(METHOD_REGISTRY.grantDeparture, { ...input, action: 'open' })
+})
 
 function request(requestId: string, sessionId: string, revision = 1): AttentionRecord {
   return {

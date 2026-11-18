@@ -1,7 +1,7 @@
 // MODULE: away.ts - Electron self-test for the one away state: set and ended from the app, the CLI and Telegram through the fake Bot API, every surface reading the same record (Story 76.3, 76.6 AC4)
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { METHOD_REGISTRY, type AppSettings, type ControlInfo, type OwnerAwayView, type TelegramStatus } from '@bmn/protocol'
+import { METHOD_REGISTRY, type AppSettings, type ControlInfo, type OwnerAwayView, type OwnerGrantView, type TelegramStatus } from '@bmn/protocol'
 import type { SelfTestHost } from '../index'
 import type { PtyHostClient } from '../pty-host-client'
 import { SELF_TEST_TELEGRAM_CHAT_ID, type SelfTestRecorder } from './taps'
@@ -31,7 +31,20 @@ export async function runAwaySelfTest(host: SelfTestHost, client: PtyHostClient,
     await until(async () => (await client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {})).state === 'polling' ? true : undefined, 'fake connector')
 
     phase('app')
-    const fromApp = await renderer<OwnerAwayView>("window.aiTerminal.setAway('away', 'self-test note')")
+    let fromApp = await renderer<OwnerAwayView>("window.aiTerminal.setAway('away', 'self-test note')")
+    if (fromApp.state !== 'away') {
+      fromApp = await until(async () => {
+        const current = await shown()
+        if (current.state === 'away') return current
+        const grant = await renderer<OwnerGrantView>('window.aiTerminal.getGrant()')
+        assert.equal(grant.period?.state, 'leaving')
+        const result = await renderer<{ outcome: string; detail: string | null }>(`window.aiTerminal.departure(${JSON.stringify({ action: 'go', periodId: grant.period!.periodId, expectedRevision: grant.revision, operationKey: `away-note-go-${grant.revision}` })})`)
+        console.error(`[BMN] away app Go: ${JSON.stringify(result)}`)
+        assert.ok(result.outcome === 'changed' || result.outcome === 'stale', `Go: ${JSON.stringify(result)}`)
+        const after = await shown()
+        return after.state === 'away' ? after : undefined
+      }, 'Go with the current list revision')
+    }
     assert.equal(fromApp.state, 'away'); assert.equal(fromApp.source, 'app'); assert.equal(fromApp.note, 'self-test note')
     const appBack = await renderer<OwnerAwayView>("window.aiTerminal.setAway('back')")
     assert.equal(appBack.state, 'back'); assert.equal(appBack.endedBy, 'app')
@@ -46,10 +59,26 @@ export async function runAwaySelfTest(host: SelfTestHost, client: PtyHostClient,
 
     phase('telegram')
     const from = bot.calls.length
+    bot.tapOn('Before you go · getting ready', [{ tap: 'Go now' }])
     bot.say('/away train to Kyiv')
-    const phoneAway = await until(async () => { const view = await shown(); return view.state === 'away' && view.source === 'telegram' ? view : undefined }, '/away from Telegram')
+    let retriedStaleTap = false
+    const phoneAway = await until(async () => {
+      const view = await shown()
+      if (view.state === 'away' && view.source === 'telegram') return view
+      const updates = bot.calls.slice(from)
+      const refused = updates.some(call => call.method === 'answerCallbackQuery' && String(call.body.text).startsWith('The list changed.'))
+      const head = updates.findLast(call => call.method === 'editMessageText' && String(call.body.text).startsWith('Before you go · getting ready'))
+      if (!retriedStaleTap && refused && head?.messageId != null) {
+        retriedStaleTap = true
+        bot.tapOn('Before you go · getting ready', [{ tap: 'Go now' }], head.messageId)
+      }
+      return undefined
+    }, '/away from Telegram').catch(async error => {
+      console.error('[130-phone-diag] '+JSON.stringify({ away: await shown(), grant: await renderer<OwnerGrantView>('window.aiTerminal.getGrant()'), events: bot.events, calls: bot.calls.slice(from).map(call => ({ method: call.method, messageId: call.messageId, text: call.body.text, callback: call.body.callback_query_id, keyboard: call.body.reply_markup })) }))
+      throw error
+    })
     assert.equal(phoneAway.note, 'train to Kyiv')
-    await until(async () => sent(from).some(text => /^Away since .*Note kept on the laptop\./.test(text)) ? true : undefined, '/away reply')
+    await until(async () => sent(from).some(text => /^(Away since .*Note kept on the laptop\.|Getting ready since )/.test(text)) ? true : undefined, '/away reply')
     assert.ok(!sent(from).some(text => text.includes('train to Kyiv')), 'the reply never echoes the note')
     bot.say('/back')
     await until(async () => (await shown()).state === 'back' ? true : undefined, '/back from Telegram')

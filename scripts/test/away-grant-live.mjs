@@ -6,21 +6,34 @@
 // Usage: node scripts/test/away-grant-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 import { testedApp } from '../lib/tested-app.mjs'
+import { processTree, stopTree } from './away-skills-processes.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
-const cli = join(appDirectory, 'bin/bmn')
 const tested = testedApp(appDirectory)
+const cli = tested.cliPath
 console.log(`BMN build: ${tested.build}`)
-const reportPath = tested.rest[0] ? resolve(tested.rest[0]) : null
-const shots = tested.rest[1] ? resolve(tested.rest[1]) : null
+const args = [...tested.rest]
+const handoffAt = args.indexOf('--handoff')
+const handoffPath = handoffAt < 0 ? null : resolve(args.splice(handoffAt, 2)[1])
+const reportPath = args[0] ? resolve(args[0]) : null
+const shots = args[1] ? resolve(args[1]) : null
+const recordProcess = (row, add) => {
+  if (!handoffPath) return
+  const before = readFileSync(handoffPath, 'utf8'), line = `- ${JSON.stringify(row)}\n`
+  if (!before.includes('## Started\n')) throw Error('Missing process inventory')
+  const after = add ? before.replace('## Started\n', `## Started\n\n${line}`) : before.replace(line, '')
+  if (after.length > 9000) throw Error('Recovery inventory exceeds 9000 characters')
+  writeFileSync(`${handoffPath}.new`, after); renameSync(`${handoffPath}.new`, handoffPath)
+  if (readFileSync(handoffPath, 'utf8') !== after) throw Error('Inventory readback mismatch')
+}
 const phase = (label) => console.error(`[BMN away grant] ${label}`)
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 
@@ -88,11 +101,16 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const ask = (runId, title, terms, scope = 'Stories 80.2–80.6, then Epic 81') =>
     bmn(['grant', 'ask', '--run', runId, '--card-file', '-'], JSON.stringify({ title, scope, terms }))
   const application = await electron.launch({
+    chromiumSandbox: true,
     executablePath: tested.executablePath,
-    args: [...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    args: ['--ozone-platform=headless', '--disable-gpu', ...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
     env: environment
   })
+  const identity = processTree(application.process().pid)[0]
+  if (!identity) throw Error('Missing isolated Electron identity')
+  const owned = { kind: 'process', pid: identity.pid, start_ticks: identity.start_ticks, command: '130 isolated grant window', evidence: reportPath }
+  recordProcess(owned, true)
   const page = await application.firstWindow()
   page.setDefaultTimeout(20_000)
   // A packaged BMN may open maximized, where a size set without unmaximizing first is ignored.
@@ -104,38 +122,37 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await page.waitForSelector('.session-row')
     await resize(1280)
 
-    phase('leaving')
+    // Owner-scoped diagnostic observations cannot prove a live native prompt, but they select a synthetic shell for list QA.
+    const { call, readCredentials } = await import(new URL(`../../apps/desktop/bin/bmn-commands.mjs`, import.meta.url))
+    const credentials = readCredentials({ owner: true, socket })
+    const sessionId = await page.locator('.session-row [data-session-id]').first().getAttribute('data-session-id')
+    await call(credentials.socketPath, credentials.token, 'hook.observe', { sessionId, agent: 'claude', event: 'Stop', effects: [] })
+    phase('getting ready')
     const leaving = bmn(['away', '--leaving'])
-    await until(async () => (await head.count()) > 0 && (await head.innerText()) === 'leaving', 'the head says leaving')
+    await until(async () => (await head.count()) > 0 && (await head.innerText()) === 'getting ready', 'the muted getting-ready word')
+    await dialog.waitFor()
     const box = await page.locator('#away-check-box').getAttribute('aria-label')
-    check('`bmn away --leaving` starts a departure: the head says "leaving" as a muted text button, the Away box stays unchecked (AC1, the notes §2)',
-      leaving.startsWith('Leaving since ') && !(await head.getAttribute('class')).includes('cards') && box === 'Away; check it when you go'
+    check('130.1: a departure opens the list, keeps Away unchecked and the head muted',
+      leaving.startsWith('Leaving since ') && !(await head.getAttribute('class')).includes('cards') && box === 'Away; open Before you go'
         && !(await page.locator('#away-check-box').isChecked()), { leaving: leaving.trim(), box })
-    await shot('head-leaving-1280.png')
+    const passive = await page.evaluate(() => document.activeElement?.classList.contains('grant-list'))
+    check('130.3: initial focus is on the passive list', passive)
+    await shot('head-getting-ready-1280.png')
 
     phase('cards')
     const first = ask('run-80', 'Epic 80 · clean up ai slop', TERMS)
     const second = ask('run-81', 'Epic 81 · harness doctor', [TERMS[0]], 'Story 81.2')
     const nothing = bmn(['grant', 'ask', '--run', 'run-79', '--nothing', '--title', 'Epic 79 · first-run setup'])
-    await until(async () => (await head.innerText()) === '2 cards', 'the gold count')
-    const gold = await head.evaluate((element) => ({ color: getComputedStyle(element).color, weight: getComputedStyle(element).fontWeight, identity: getComputedStyle(document.documentElement).getPropertyValue('--identity').trim() }))
-    check('two cards make a gold "2 cards" beside the Away check, weight 600; a run that needs nothing adds none (AC1, owner card recommendations 2 and 4)',
-      first.startsWith('Card revision 1 for run run-80 is open') && second.startsWith('Card revision 1 for run run-81') && nothing.startsWith('Recorded: run run-79 needs nothing')
-        && gold.weight === '600' && (await head.getAttribute('class')).includes('cards'), { first: first.trim(), nothing: nothing.trim(), gold })
-
-    phase('Before you go at 1280')
-    await head.click()
-    await dialog.waitFor()
+    await until(async () => (await dialog.locator('article.grant-card.request').count()) === 2, 'two cards')
     const headLine = await dialog.locator('.grant-head-line').innerText()
     const cards = await dialog.locator('article.grant-card.request').count()
-    const focused = await page.evaluate(() => ({ text: document.activeElement?.textContent, role: document.activeElement?.getAttribute('role'), checked: document.activeElement?.getAttribute('aria-checked') }))
-    const needs = await dialog.locator('.grant-nothing').innerText()
-    check('Before you go lists both open cards oldest first and the run that needs nothing; focus starts on the first term at its proposal, never on No or Grant (the notes §2–§3)',
-      headLine.startsWith('Leaving since ') && cards === 2 && needs === 'Epic 79 · first-run setup needs nothing.' && focused.role === 'radio' && focused.checked === 'true' && focused.text === '3',
-      { headLine, cards, needs, focused })
+    check('130.3: both cards arrive in order, and getting ready stays muted',
+      headLine.startsWith('Getting ready since ') && cards === 2 && !(await head.getAttribute('class')).includes('cards')
+        && first.startsWith('Card revision 1') && second.startsWith('Card revision 1') && nothing.startsWith('Recorded:'), { headLine, cards })
     const rule = await dialog.locator('article.grant-card.request').first().locator('.grant-rule').count()
-    const button = await dialog.locator('article.grant-card.request').first().locator('.actions button.primary').innerText()
-    check('the three-term card carries the rule line and "Grant all" at its proposals', rule === 1 && button === 'Grant all', { rule, button })
+    const button = await dialog.locator('article.grant-card.request').first().locator('.actions button').innerText()
+    check('130.3: one primary Go, with a secondary All as proposed per card', rule === 1 && button === 'All as proposed'
+      && await dialog.locator('button.primary').count() === 1, { rule, button })
     await shot('before-you-go-1280.png')
 
     phase('Before you go at 540')
@@ -143,37 +160,62 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await sleep(300)
     const overflow = await dialog.evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }))
     const stacked = await dialog.locator('.grant-term').first().evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
-    check('at 540 px the dialog fits without sideways scrolling and each choice sits on its own line under its label (the notes §3)', overflow.scroll <= overflow.client + 1 && stacked === 1, { overflow, stacked })
+    check('at 540 px the dialog fits without sideways scrolling and choices stack', overflow.scroll <= overflow.client + 1 && stacked === 1, { overflow, stacked })
     await shot('before-you-go-540.png')
     await resize(1280)
     await sleep(300)
 
-    phase('answer with the keyboard')
-    const firstCard = dialog.locator('article.grant-card.request').first()
-    await firstCard.locator('.segmented').nth(1).locator('[role="radio"]', { hasText: /^No$/ }).click()
-    // Another run's change refreshes every card; his unsent choice must stay (the epic review, finding 1).
+    phase('immediate answer and keyboard focus')
+    const firstCard = dialog.locator('article.grant-card[data-run-id="run-80"]')
+    await firstCard.locator('.actions button').click()
+    await until(async () => (await firstCard.locator('.grant-line-seen').allInnerTexts()).every(text => !text.includes('Not answered')), 'all proposals saved')
+    await page.evaluate(() => {
+      window.__grantFocusTrace = []
+      const nativeFrame = window.requestAnimationFrame.bind(window)
+      window.requestAnimationFrame = callback => nativeFrame(time => {
+        const sample = () => ({ tag: document.activeElement?.tagName, text: document.activeElement?.textContent?.slice(0, 50), disabled: [...document.querySelectorAll('article[data-run-id="run-80"] [role="radio"]')].map(node => node.disabled) })
+        const before = sample(); callback(time)
+        window.__grantFocusTrace.push({ event: 'frame', at: Date.now(), before, after: sample() })
+      })
+      for (const event of ['focusin', 'focusout']) document.addEventListener(event, input => {
+        const target = input.target
+        window.__grantFocusTrace.push({ event, at: Date.now(), tag: target?.tagName, text: target?.textContent?.slice(0, 50), run: target?.closest('article')?.getAttribute('data-run-id') })
+      })
+    })
+    const no = firstCard.locator('.segmented').nth(1).locator('[role="radio"]', { hasText: /^No$/ })
+    await no.focus()
+    await page.keyboard.press('Enter')
+    await until(async () => (await firstCard.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]').innerText()) === 'No', 'No saved')
     const other = bmn(['grant', 'ask', '--run', 'run-77', '--nothing', '--title', 'Epic 77 · refresh'])
-    await until(async () => (await dialog.locator('.grant-nothing', { hasText: 'Epic 77' }).count()) === 1, 'the refresh drawn')
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.length === 4, 'other run saved')
     const kept = await firstCard.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]').innerText()
-    check('an unsent choice stays when another run\'s change refreshes the cards (AC2)', other.startsWith('Recorded: run run-77 needs nothing') && kept === 'No', { other: other.trim(), kept })
-    const words = await firstCard.locator('.actions button.primary').innerText()
-    await firstCard.locator('.actions button.primary').click()
-    await until(async () => (await dialog.locator('article.grant-card.request').count()) === 1, 'the first card answered')
-    const answered = await dialog.locator('article.grant-card.cleared .grant-answered').allInnerTexts()
-    const next = await page.evaluate(() => document.activeElement?.closest('article')?.getAttribute('data-run-id'))
+    const focusAtRead = await page.evaluate(() => ({ tag: document.activeElement?.tagName, run: document.activeElement?.closest('article')?.getAttribute('data-run-id') }))
+    await until(() => no.evaluate(node => node === node.ownerDocument.activeElement), 'the exact No control retains focus', 1000)
+    const focusedRun = await page.evaluate(() => document.activeElement?.closest('article')?.getAttribute('data-run-id'))
+    report.focusDiagnostic = { focusAtRead, finalRun: focusedRun, trace: await page.evaluate(() => window.__grantFocusTrace) }
     const status = bmn(['grant', '--run', 'run-80'])
-    check('dropping one term reads "Grant 2 of 3"; the answer is stored, says what it granted, and focus moves to the next open card (AC2, the notes §1g, §3)',
-      words === 'Grant 2 of 3' && answered.some((line) => line.startsWith('Granted here at ') && line.includes('3 rounds per boundary · push to the default branch in tools'))
-        && answered.some((line) => line === 'Not granted: merge PR 12 at 3f2a9c1') && next === 'run-81'
-        && status.includes('Grant for run run-80') && status.includes('Not granted: item merge-12'), { words, answered, next, status: status.trim() })
+    check('130.3: a line saves immediately, survives another run arriving, and keeps focus on its own line',
+      other.startsWith('Recorded:') && kept === 'No' && await no.evaluate(node => node === node.ownerDocument.activeElement) && status.includes('Not granted: item merge-12'), { kept, focusedRun, status: status.trim() })
     await shot('before-you-go-answered-1280.png')
 
     phase('a re-ask while open')
     const again = ask('run-81', 'Epic 81 · harness doctor', [{ ...TERMS[0], proposed: 4 }], 'Story 81.2')
-    await until(async () => (await dialog.locator('article.grant-card.request[data-card-revision="2"]').count()) === 1, 'revision 2 drawn')
-    const seen = await dialog.locator('article.grant-card.request .seen').first().innerText()
-    check('a second ask for the same run replaces the open card with a new revision that says what changed (AC1)',
-      again.includes('Card revision 2 for run run-81 replaces the earlier one') && seen.includes('changed: rounds 3 → 4'), { again: again.trim(), seen })
+    const held = dialog.locator('article[data-run-id="run-81"]')
+    await held.locator('.grant-changed').waitFor()
+    check('130.3: a revised card stays disabled under pointer/focus until Show', await held.getAttribute('data-card-revision') === '1'
+      && await held.locator('[role="radio"]:disabled').count() > 0, { again: again.trim() })
+    const beforeShow = (await page.evaluate(() => window.aiTerminal.getGrant())).period.collection.autoAwayAt
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    const showAt = Date.now()
+    await held.getByRole('button', { name: 'Show', exact: true }).click()
+    await until(async () => await held.getAttribute('data-card-revision') === '2', 'revision 2 shown')
+    const afterShow = await until(async () => {
+      const value = (await page.evaluate(() => window.aiTerminal.getGrant())).period.collection.autoAwayAt
+      return Date.parse(value) > Date.parse(beforeShow) ? value : null
+    }, 'Show activity stored against the current revision')
+    check('130-QA3-F1: Show restarts the stored full ten-minute deadline', Date.parse(afterShow) >= showAt + 600_000,
+      { beforeShow, showAt: new Date(showAt).toISOString(), afterShow })
+    await shot('before-you-go-changed-1280.png')
 
     phase('not leaving')
     await dialog.locator('.grant-footer button', { hasText: 'Not leaving' }).click()
@@ -192,9 +234,22 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       return grant.period?.runs.length === 2 ? grant : null
     }, 'two cards in the new departure')
     const periodId = view.period.periodId
-    await page.evaluate((answer) => window.aiTerminal.answerGrant(answer), { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3, 'merge-12': 'pr', 'push-81': 'no' }, operationKey: 'live-80' })
-    await page.evaluate((answer) => window.aiTerminal.answerGrant(answer), { periodId, runId: 'run-81', cardRevision: 1, choices: { rounds: 0 }, operationKey: 'live-81' })
-    await page.evaluate(() => window.aiTerminal.setAway('away'))
+    {
+      const saved = await page.evaluate(async answer => {
+        const shown = await window.aiTerminal.getGrant()
+        return window.aiTerminal.answerGrant({ ...answer, expectedRevision: shown.revision })
+      }, { periodId, runId: 'run-80', cardRevision: 1, choices: { rounds: 3, 'merge-12': 'pr', 'push-81': 'no' }, operationKey: 'live-80' })
+      if (saved.outcome !== 'granted') throw Error(`Night fixture answer refused: ${JSON.stringify(saved)}`)
+    }
+    {
+      const saved = await page.evaluate(async answer => {
+        const shown = await window.aiTerminal.getGrant()
+        return window.aiTerminal.answerGrant({ ...answer, expectedRevision: shown.revision })
+      }, { periodId, runId: 'run-81', cardRevision: 1, choices: { rounds: 0 }, operationKey: 'live-81' })
+      if (saved.outcome !== 'granted') throw Error(`Night fixture answer refused: ${JSON.stringify(saved)}`)
+    }
+    await dialog.locator('.grant-footer .grant-go').click()
+    await dialog.waitFor({ state: 'hidden' })
     // The night's agent: one session records each use before its step and reports what happened, as the skill says.
     const seeded = join(root, 'night-seeded')
     const night = join(root, 'night.sh')
@@ -280,8 +335,8 @@ touch '${seeded}'
     check('`grant ask` refuses a chain, what the guard holds and an unpinned writable script, each naming why (103.3 AC2)',
       chained.includes('chains commands') && heldByGuard.includes('command guard holds') && unpinned.includes('name that script on the card'), { chained: chained.trim(), heldByGuard: heldByGuard.trim(), unpinned: unpinned.trim() })
     const exactAsked = ask('run-103', 'Epic 103', [COMMAND_TERM, MESSAGE_TERM], 'Story 103.3')
-    await until(async () => (await head.innerText()) === '1 card', 'the one card')
-    await head.click()
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).openCards === 1, 'the one card')
+    if (!(await dialog.isVisible())) await head.click()
     await dialog.waitFor()
     const exactCard = dialog.locator('article.grant-card.request[data-run-id="run-103"]')
     const shown = await exactCard.locator('.grant-term-label').evaluateAll((labels) => labels.map((label) => ({ text: label.textContent, whole: label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1, lines: getComputedStyle(label).whiteSpace })))
@@ -296,10 +351,11 @@ touch '${seeded}'
     check('at 540 px the whole command wraps without sideways scrolling (103.3 AC1)', exactNarrow.scroll <= exactNarrow.client + 1, exactNarrow)
     await shot('before-you-go-exact-540.png')
     await resize(1280)
-    await exactCard.locator('.actions button.primary').click()
+    await exactCard.locator('.actions button').click()
     await until(async () => (await dialog.locator('article.grant-card.request').count()) === 0, 'the card answered')
     const exactStatus = bmn(['grant', '--run', 'run-103'])
-    await page.evaluate(() => window.aiTerminal.setAway('away'))
+    await dialog.locator('.grant-footer .grant-go').click()
+    await dialog.waitFor({ state: 'hidden' })
     await page.keyboard.press('Escape').catch(() => undefined)
     // The night's agent: what `grant use` prints is what it runs and sends, read from that output; a refused use does neither.
     const usedOutput = join(root, 'exact-uses.txt')
@@ -350,12 +406,66 @@ touch '${exactSeeded}'
     check('the morning names the command and the message with its target and report, and the refusal (103.3 AC5)',
       exactWords.includes('./night-check.sh') && exactWords.includes('the team chat') && exactWords.includes('Ran') && exactWords.includes('Sent') && exactWords.includes('changed since the card named it'), { exactLines })
     await shot('morning-exact-1280.png')
+
+    const dismissRepeatSummary = async (label) => {
+      await summary.waitFor()
+      await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).summaryShownAt !== null,
+        label + ' summary presentation saved')
+      await summary.getByRole('button', { name: 'Close While you were away', exact: true }).click()
+      await summary.waitFor({ state: 'hidden' })
+    }
+
+    phase('130.5 repeat through Back and a second departure')
+    for (let pass = 0; pass < 3 && await page.locator('dialog[open]').count(); pass++) await page.keyboard.press('Escape')
+    if (await page.locator('dialog[open]').count()) throw Error('Unexpected dialog blocks the repeat fixture')
+    bmn(['away', '--leaving'])
+    const repeatTerms = [TERMS[0], TERMS[2]]
+    ask('run-repeat-driver', 'Synthetic repeat driver', repeatTerms, 'Identical synthetic scope')
+    await dialog.waitFor()
+    const repeat = dialog.locator('article[data-run-id="run-repeat-driver"]')
+    await repeat.locator('.segmented').nth(0).getByRole('radio', { name: '2', exact: true }).click()
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.find(row => row.runId === 'run-repeat-driver')?.answer?.choices.rounds === 2, 'first repeat line saved')
+    await repeat.locator('.segmented').nth(1).getByRole('radio', { name: 'Yes', exact: true }).click()
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.find(row => row.runId === 'run-repeat-driver')?.answer?.choices['push-81'] === 'yes', 'second repeat line saved')
+    const repeatPeriod = (await page.evaluate(() => window.aiTerminal.getGrant())).period.periodId
+    await dialog.locator('.grant-go').click()
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'away', 'first repeat departure Go')
+    bmn(['back'])
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'back', 'repeat Back')
+    await dismissRepeatSummary('repeat')
+    bmn(['away', '--leaving'])
+    ask('run-repeat-driver', 'Synthetic repeat driver', repeatTerms, 'Identical synthetic scope')
+    await dialog.waitFor()
+    await until(async () => (await repeat.locator('.grant-term-reason').allInnerTexts()).every(text => text.includes('As you granted')), 'prior answers offered on the second departure')
+    const beforeRepeat = await page.evaluate(() => window.aiTerminal.getGrant())
+    const unanswered = beforeRepeat.period.runs.find(row => row.runId === 'run-repeat-driver')
+    check('130.5: previous answers are proposals only after Back', beforeRepeat.period.periodId !== repeatPeriod && unanswered.answer === null && await repeat.getByRole('radio', { checked: true }).count() === 0 && bmn(['grant', '--run', 'run-repeat-driver']).includes('not answered'))
+    await dialog.getByRole('button', { name: 'Grant the same 2', exact: true }).click()
+    const repeatedAnswer = await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.find(row => row.runId === 'run-repeat-driver')?.answer, 'explicit repeat saved')
+    check('130.5: one explicit repeat tap saves exactly the earlier two choices', JSON.stringify(repeatedAnswer.choices) === JSON.stringify({ rounds: 2, 'push-81': 'yes' }), { choices: repeatedAnswer.choices })
+    await dialog.locator('.grant-go').click()
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'away', 'second repeat Go before its return')
+    bmn(['back'])
+    await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'back', 'proposal repeat Back')
+    await dismissRepeatSummary('proposal repeat')
+    bmn(['away', '--leaving'])
+    ask('run-repeat-driver', 'Synthetic repeat driver', repeatTerms, 'Identical synthetic scope')
+    await dialog.waitFor()
+    await until(async () => (await repeat.locator('.grant-term-reason').allInnerTexts()).every(text => text.includes('As you granted')), 'displayed proposals for the bulk action')
+    await repeat.getByRole('button', { name: 'All as proposed', exact: true }).click()
+    const proposedAnswer = await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.find(row => row.runId === 'run-repeat-driver')?.answer, 'displayed bulk proposals saved')
+    check('130.5: All as proposed stores the displayed repeat2 rather than original3', proposedAnswer.choices.rounds === 2 && proposedAnswer.choices['push-81'] === 'yes', { choices: proposedAnswer.choices })
+    bmn(['back'])
   } catch (error) {
-    check('the run completed', false, { error: error instanceof Error ? error.message : String(error) })
+    check('the run completed', false, { error: error instanceof Error ? error.message : String(error), screen: await page.locator('.session-terminal.selected .xterm-rows').innerText().catch(() => ''), dialogs: await page.locator('dialog').allTextContents() })
     await shot('failure.png').catch(() => undefined)
   } finally {
+    const current = processTree(identity.pid)
+    const identities = current[0]?.start_ticks === identity.start_ticks ? current : []
     await Promise.race([application.close().catch(() => undefined), sleep(10_000)])
-    try { application.process().kill('SIGKILL') } catch { /* already gone */ }
+    const cleanup = await stopTree(identities, { graceMs: 1000, afterKillMs: 1500, wait: sleep })
+    check('owned process cleanup', cleanup.remaining.length === 0, cleanup)
+    if (cleanup.remaining.length === 0) recordProcess(owned, false)
   }
 })
 

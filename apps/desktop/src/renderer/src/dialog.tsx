@@ -10,10 +10,16 @@ export function Dialog(props: {
   onClose(): void
   children: ReactNode
   className?: string
+  /** A passive focus target for a dialog that opens while the owner may still be typing. */
+  initialFocus?: string
+  /** Called only after showModal succeeds and its initial focus target has focus. */
+  onPresented?(): void
 }): React.JSX.Element {
   const element = useRef<HTMLDialogElement>(null)
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
+  const onPresented = useRef(props.onPresented)
+  onPresented.current = props.onPresented
 
   useEffect(() => {
     const dialog = element.current
@@ -23,7 +29,10 @@ export function Dialog(props: {
     // showModal() focuses the header close button; React's autoFocus does not survive that, so move
     // focus to the first control in the body.
     // A choice that is not its group's tab stop is skipped, so focus lands on the chosen one, never on No (Story 84.3).
-    dialog.querySelector<HTMLElement>('.app-dialog-body :is(input, select, textarea, button):not([disabled]):not([tabindex="-1"])')?.focus()
+    const target = props.initialFocus ?? '.app-dialog-body :is(input, select, textarea, button):not([disabled]):not([tabindex="-1"])'
+    const first = dialog.querySelector<HTMLElement>(target)
+    first?.focus()
+    if (dialog.open && (props.initialFocus === undefined || document.activeElement === first)) onPresented.current?.()
     const cancel = (event: Event): void => {
       event.preventDefault()
       onClose.current()

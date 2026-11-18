@@ -10,6 +10,7 @@ import {
   parseGrantCardInput,
   setGrantPhone,
   startDeparture,
+  newDepartureCollection,
   type AwayRecord,
   type GrantRecord,
   type TelegramQuietHours
@@ -43,7 +44,7 @@ const away = (record: GrantRecord): GrantRecord => followAwayChange(record, away
 
 interface Sent { messageId: number; text: string; keyboard: Array<Array<{ text: string; callback_data: string }>> | null; replyTo?: number }
 
-function harness(start: GrantRecord, options: { atDesk?: boolean; quiet?: Partial<TelegramQuietHours>; now?: string; failAnswer?: boolean } = {}) {
+function harness(start: GrantRecord, options: { atDesk?: boolean; quiet?: Partial<TelegramQuietHours>; now?: string; failAnswer?: boolean; failEdit?: boolean; beforeEdit?(messageId: number): Promise<void> } = {}) {
   let record = start
   let nextId = 100
   let callback = 0
@@ -57,7 +58,7 @@ function harness(start: GrantRecord, options: { atDesk?: boolean; quiet?: Partia
       sent.push({ messageId, text, keyboard: opts.keyboard ?? null, ...(opts.replyToMessageId === undefined ? {} : { replyTo: opts.replyToMessageId }) })
       return { messageId }
     },
-    editMessageText: async (messageId: number, text: string, opts: { keyboard?: Sent['keyboard'] } = {}) => { edits.push({ messageId, text, keyboard: opts.keyboard ?? null }) },
+    editMessageText: async (messageId: number, text: string, opts: { keyboard?: Sent['keyboard'] } = {}) => { if (options.failEdit) throw Error('synthetic edit rejected'); await options.beforeEdit?.(messageId); edits.push({ messageId, text, keyboard: opts.keyboard ?? null }) },
     answerCallbackQuery: async (_id: string, text: string) => { toasts.push(text) }
   }
   const cards = new TelegramGrantCards({
@@ -297,5 +298,164 @@ describe('TelegramGrantCards (Story 84.3, the notes 84.2 §1 On Telegram)', () =
     await h.cards.reconcile()
     expect(h.cards.owns(h.sent[0]!.messageId)).toBe(true)
     expect(h.cards.owns(9_999)).toBe(false)
+  })
+})
+
+
+describe('getting-ready Telegram choices (130.4)', () => {
+  const v2 = () => ask(startDeparture({ ...EMPTY_GRANT_RECORD, periods: [], operations: [] }, { source: 'app', agentSessionId: null, periodId: 'p-1', collection: newDepartureCollection([], T0) }, 'back', T0).record)
+  it('keeps the saved non-default value shown by the same overview when Grant all is tapped', async () => {
+    const h = harness(v2(), { atDesk: true })
+    h.record = answerGrant(h.record, { periodId: 'p-1', runId: 'run-80', cardRevision: 1, choices: { rounds: 4 }, via: 'app', operationKey: 'saved-four', expectedRevision: h.record.revision }, T1).record
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('Extra repair rounds per boundary: 4')
+    const saved = structuredClone(h.record.periods[0]!.runs[0]!.answer!.lines!.rounds)
+    await h.tap(h.button('Grant all'))
+    expect(h.record.periods[0]!.runs[0]!.answer?.choices.rounds).toBe(4)
+    expect(h.record.periods[0]!.runs[0]!.answer!.lines!.rounds).toEqual(saved)
+  })
+  it('shows the persisted non-default pick on the next v2 Choose screen', async () => {
+    const h = harness(v2(), { atDesk: true })
+    await h.cards.reconcile()
+    await h.tap(h.button('Choose…'))
+    await h.tap(h.button('2'))
+    expect(h.record.periods[0]!.runs[0]!.answer?.choices.rounds).toBe(2)
+    expect(h.last().text).toContain('1. Extra repair rounds per boundary: 2')
+  })
+  it('skips an already answered middle line in one immediate-Away v2 Choose walk', async () => {
+    const ended = followAwayChange(away(v2()), AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, LATE).record
+    const next = followAwayChange(ended, BACK, { ...AWAY, periodId: 'p-2', since: LATE }, { to: 'away', source: 'cli', outcome: 'changed' }, LATE).record
+    const h = harness(ask(next), { now: LATE })
+    h.record = answerGrant(h.record, { periodId: 'p-2', runId: 'run-80', cardRevision: 1, choices: { 'merge-12': 'no' }, via: 'app', operationKey: 'middle-answered', expectedRevision: h.record.revision }, LATE).record
+    h.record = setGrantPhone(h.record, 'p-2', 'run-80', { messageId: 101, cardRevision: 1 }).record
+    await h.cards.reconcile()
+    await h.tap(h.button('Choose…'), 101)
+    await h.tap(h.button('2'), 101)
+    expect(h.last().text).toContain('<b>3. Push')
+    await h.tap(h.button('No'), 101)
+    expect(h.record.periods.at(-1)!.runs[0]!.answer?.choices).toEqual({ rounds: 2, 'merge-12': 'no', 'push-81': 'no' })
+    expect(h.last().keyboard).toBeNull()
+  })
+  it('accepts the first displayed v2 button immediately after its message id is kept', async () => {
+    const h = harness(v2(), { atDesk: true })
+    await h.cards.reconcile()
+    await h.tap(h.button('Grant all'))
+    expect(h.record.periods[0]!.runs[0]!.answer?.choices.rounds).toBe(3)
+  })
+  it('answers a multi-line explicit Away period after the record has upgraded to v2', async () => {
+    const ended = followAwayChange(away(v2()), AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, LATE).record
+    const next = followAwayChange(ended, BACK, { ...AWAY, periodId: 'p-2', since: LATE }, { to: 'away', source: 'cli', outcome: 'changed' }, LATE).record
+    const h = harness(ask(next), { now: LATE })
+    expect(h.record.version).toBe(2)
+    expect(h.record.periods.at(-1)!.collection).toBeUndefined()
+    h.record = setGrantPhone(h.record, 'p-2', 'run-80', { messageId: 101, cardRevision: 1 }).record
+    await h.cards.reconcile()
+    await h.tap(h.button('Choose…'), 101)
+    await h.tap(h.button('2'), 101)
+    expect(h.record.periods.at(-1)!.runs[0]!.answer?.choices).toEqual({ rounds: 2 })
+    expect(h.last().text).toContain('<b>2. Merge')
+    await h.tap(h.button('No'), 101)
+    expect(h.last().text).toContain('<b>3. Push')
+    await h.tap(h.button('No'), 101)
+    expect(h.record.periods.at(-1)!.runs[0]!.answer?.choices).toEqual({ rounds: 2, 'merge-12': 'no', 'push-81': 'no' })
+    expect(h.last().keyboard).toBeNull()
+  })
+  it('Grant all saves the earlier choices actually displayed as proposals', async () => {
+    let first = v2()
+    const answered = answerGrant(first, { periodId: 'p-1', runId: 'run-80', cardRevision: 1, choices: { rounds: 2, 'merge-12': 'pr' }, via: 'app', operationKey: 'prior', expectedRevision: first.revision }, T1)
+    expect(answered.outcome).toBe('granted'); first = away(answered.record)
+    const ended = followAwayChange(first, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, LATE).record
+    const next = startDeparture(ended, { source: 'app', agentSessionId: null, periodId: 'p-2', collection: newDepartureCollection([], LATE) }, 'back', LATE).record
+    const h = harness(ask(next), { atDesk: true, now: LATE })
+    await h.cards.reconcile(); await h.cards.reconcile()
+    expect(h.last().text).toContain('proposed 2 · not answered')
+    await h.tap(h.button('Grant all'))
+    expect(h.record.periods.at(-1)!.runs[0]!.answer?.choices.rounds).toBe(2)
+    expect(h.last().text).not.toContain('not granted until your tap')
+  })
+  it('retries an unacknowledged edit after an app answer without requiring another write', async () => {
+    const options = { atDesk: true, failEdit: false }
+    const h = harness(v2(), options)
+    await h.cards.reconcile()
+    options.failEdit = true
+    h.record = answerGrant(h.record, { periodId: 'p-1', runId: 'run-80', cardRevision: 1, choices: { rounds: 2 }, via: 'app', operationKey: 'app-edit-failed', expectedRevision: h.record.revision }, T1).record
+    await h.cards.reconcile()
+    options.failEdit = false
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('Extra repair rounds per boundary: 2')
+    expect(h.last().text).toContain('Answered at the laptop')
+  })
+  it('draws the current run snapshot when another answer arrives during a multi-card redraw', async () => {
+    const options: { atDesk: boolean; beforeEdit?: (messageId: number) => Promise<void> } = { atDesk: true }
+    const h = harness(v2(), options)
+    h.record = askGrant(h.record, { runId: 'second', sessionId: 's-second', agentCli: 'claude', card: parsed([{ kind: 'rounds', proposed: 2, reason: 'Second initial' }]) }, T0).record
+    let changed = false
+    options.beforeEdit = async messageId => {
+      if (messageId !== 100 || changed) return
+      changed = true
+      h.record = askGrant(h.record, { runId: 'second', sessionId: 's-second', agentCli: 'claude', card: parsed([{ kind: 'rounds', proposed: 4, reason: 'Second revised' }]) }, T1).record
+    }
+    await h.cards.reconcile(); await h.cards.reconcile()
+    expect(changed).toBe(true)
+    const second = h.edits.findLast(row => row.messageId === 101) ?? h.sent.find(row => row.messageId === 101)!
+    expect(second.text).toContain('proposed 4 · not answered')
+    await h.tap(h.button('4', second), 101)
+    expect(h.record.periods[0]!.runs.find(run => run.runId === 'second')!.answer?.choices.rounds).toBe(4)
+  })
+  it('retries a failed redraw and displays only callbacks for the current saved revision', async () => {
+    const options = { atDesk: true, failEdit: false }
+    const h = harness(v2(), options)
+    await h.cards.reconcile(); await h.cards.reconcile()
+    options.failEdit = true
+    h.record = ask(h.record, [{ kind: 'rounds', proposed: 4, reason: 'changed' }])
+    await h.cards.reconcile()
+    options.failEdit = false
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('proposed 4 · not answered')
+    await h.tap(h.button('4'))
+    expect(h.record.periods.at(-1)!.runs[0]!.answer?.choices.rounds).toBe(4)
+  })
+  it('saves each pick immediately, shows its origin, and freezes answered lines after Go', async () => {
+    const h = harness(v2(), { atDesk: true })
+    await h.cards.reconcile(); await h.cards.reconcile()
+    await h.tap(h.button('Choose…'))
+    await h.tap(h.button('No'))
+    expect(h.record.periods[0]?.runs[0]?.answer?.choices).toEqual({ rounds: 0 })
+    expect(h.last().text).not.toContain('Nothing is granted until this answer.')
+    h.record = away(h.record)
+    await h.cards.reconcile()
+    await h.tap(h.button('‹ Back'))
+    expect(h.last().keyboard?.flat().some(button => button.text === '● No')).toBe(false)
+  })
+
+  it('keeps the earlier authority visible when a run revises its card to needs nothing', async () => {
+    const h = harness(v2(), { atDesk: true })
+    const answered = answerGrant(h.record, { periodId: 'p-1', runId: 'run-80', cardRevision: 1, choices: { rounds: 2 }, via: 'app', operationKey: 'earlier-nothing', expectedRevision: h.record.revision }, T1)
+    expect(answered.outcome).toBe('granted'); h.record = answered.record
+    await h.cards.reconcile()
+    h.record = askGrant(h.record, { runId: 'run-80', sessionId: 's-builder', agentCli: 'claude', card: { title: 'Nothing now', scope: 'Synthetic scope', nothing: true, terms: [] } }, T1).record
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('Earlier answer still holds: 2 rounds per boundary')
+  })
+  it('shows the prior grant still in force when a lower proposal has no answer', async () => {
+    const h = harness(v2(), { atDesk: true })
+    const answered = answerGrant(h.record, { periodId: 'p-1', runId: 'run-80', cardRevision: 1, choices: { rounds: 3 }, via: 'app', operationKey: 'first', expectedRevision: h.record.revision }, T1)
+    expect(answered.outcome).toBe('granted')
+    h.record = answered.record
+    h.record = ask(h.record, [{ kind: 'rounds', proposed: 2, reason: 'Less work' }])
+    await h.cards.reconcile(); await h.cards.reconcile()
+    expect(h.last().text).toContain('Earlier answer still holds: 3 rounds per boundary. A new answer replaces it.')
+    expect(h.last().text).toContain('proposed 2 · not answered')
+  })
+  it('rejects old v2 tokens with zero record writes, including old-card tokens retired on re-ask', async () => {
+    const h = harness(v2(), { atDesk: true })
+    await h.cards.reconcile(); await h.cards.reconcile()
+    const token = h.button('Grant all')
+    h.record = ask(h.record, [{ kind: 'rounds', proposed: 4, reason: 'changed' }])
+    await h.cards.reconcile()
+    const before = JSON.stringify(h.record)
+    await h.tap(token)
+    expect(JSON.stringify(h.record)).toBe(before)
+    expect(h.answers).toHaveLength(0)
   })
 })

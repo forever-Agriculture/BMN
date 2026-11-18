@@ -1,6 +1,13 @@
 /* MODULE: before-you-go.css - Before you go: the Messages dialog shape, cards split by the article's hairline, no boxes; gold only on what needs him (Story 84.3, the notes 84.2) */
 .before-you-go-dialog { width: min(820px, calc(100vw - 32px)); }
-.before-you-go { display: flex; flex-direction: column; gap: 4px; }
+.before-you-go { display: flex; flex-direction: column; gap: 4px; max-height: calc(100vh - 160px); min-height: 0; }
+.before-you-go-dialog .app-dialog-body { overflow: hidden; }
+.grant-heading, .grant-footer { flex: 0 0 auto; }
+.grant-list { min-height: 0; overflow: auto; outline: none; }
+.grant-session-row { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr); gap: 12px; padding: 5px 12px; font-size: 12px; min-height: 28px; overflow-wrap: anywhere; }
+.grant-session-row > :last-child { color: var(--muted); }
+.grant-go { width: 88px; margin-left: auto; }
+.grant-line-seen { grid-column: 1 / -1; min-height: 14px; margin: 0; color: var(--muted); font-size: 11px; }
 .before-you-go .grant-head-line { margin: 0; font-size: 13px; }
 .before-you-go .grant-head-note,
 .before-you-go .grant-empty,
@@ -50,3 +57,5 @@
 }
 .away-check button.away-grant.cards { color: var(--identity); font-weight: 600; }
 .away-check button.away-grant:hover { text-decoration: underline; }
+
+.before-you-go button[aria-disabled="true"] { opacity: .55; cursor: default; }

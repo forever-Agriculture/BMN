@@ -48,6 +48,7 @@ import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from 
 import { AwayCheck, awaySourceWords } from './away-check'
 import { AwaySummaryDialog } from './away-summary-dialog'
 import { BeforeYouGoDialog } from './before-you-go-dialog'
+import { adoptGrantView, INITIAL_GRANT_VIEW, performDepartureAction, readDepartureGrant } from './departure-actions'
 import { AWAY_NOTE_LIMIT } from '@bmn/protocol'
 import { rememberRecentSession } from './recent-sessions'
 import { WorkspacePinsDialog } from './workspace-pins-dialog'
@@ -240,7 +241,11 @@ function App(): React.JSX.Element {
   /** Story 76.3: what the owner said, away or back, as the host keeps it. */
   const [awayView, setAwayView] = useState<OwnerAwayView | null>(null)
   /** Story 84.3: the departure, its runs' cards and his answers, as the host keeps them. */
-  const [grantView, setGrantView] = useState<OwnerGrantView | null>(null)
+  const [{ view: grantView, unreadable: grantUnreadable }, setGrantView] = useState(INITIAL_GRANT_VIEW)
+  const grantRequest = useRef(0)
+  const grantGeneration = useRef(0)
+  grantGeneration.current = grantView?.generation ?? 0
+  const [departureError, setDepartureError] = useState<{ periodId: string | null; requestedGeneration: number; request: number; detail: string | null } | null>(null)
   const [panel, setPanel] = useState<SidePanel>(null)
   const sessionNameInput = useRef<HTMLInputElement>(null)
   const [focusMode, setFocusMode] = useState(false)
@@ -462,10 +467,116 @@ function App(): React.JSX.Element {
   }
 
   const fail = (fallback: string) => (error: unknown): void => setFailure(failureDetail(error, fallback))
+  // Mutation replies may arrive after a more recent event read, and Away and grant revisions advance independently.
+  const adoptAwayView = (view: OwnerAwayView): void => {
+    setAwayView(current => current === null || view.revision >= current.revision ? view : current)
+  }
+  const receiveGrantView = (view: OwnerGrantView, request: number, fromRead = false): void => {
+    const issued = grantRequest.current
+    setGrantView(current => adoptGrantView(current, view, request, issued, fromRead))
+  }
+  const refreshGrantView = async (): Promise<void> => {
+    const request = ++grantRequest.current
+    const view = await readDepartureGrant(grantGeneration.current, () => window.aiTerminal.getGrant())
+    receiveGrantView(view, request, true)
+  }
+  useEffect(() => {
+    if (!grantUnreadable) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    let reads = 0
+    const schedule = (): void => {
+      if (stopped || reads >= 4) return
+      timer = setTimeout(() => {
+        reads++
+        void refreshGrantView().then(schedule)
+      }, reads === 0 ? 0 : 2_000)
+    }
+    schedule()
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [grantUnreadable])
   /** Story 76.3: away (with his note) or back, said here; the host's answer is the state every window shows. */
   const sayAway = (to: 'away' | 'back', note?: string): void => {
-    void window.aiTerminal.setAway(to, note).then(setAwayView).catch(fail('Away could not be changed'))
+    if (to === 'away' && grantUnreadable) { openGrants(); return }
+    if (note === undefined && to === 'away' && awayView?.state !== 'away' && grantView !== null) {
+      void actDeparture(grantView.period?.state === 'leaving' ? 'open' : 'start')
+    } else void window.aiTerminal.setAway(to, note, awayView !== null && grantView !== null ? { expectedRevision: awayView.revision, expectedGrantRevision: grantView.revision, expectedGrantGeneration: grantView.generation ?? 0, expectedPeriodId: grantView.period?.periodId ?? null } : undefined).then(adoptAwayView).catch(fail('Away could not be changed'))
   }
+  const actDeparture = async (action: 'start' | 'open' | 'go' | 'cancel' | 'same'): Promise<void> => {
+    if (grantView === null || grantUnreadable && action !== 'cancel') return
+    const request = ++grantRequest.current
+    const sentPeriodId = action === 'start' ? null : grantView.period?.periodId ?? null
+    const requestedGeneration = grantView.generation ?? 0
+    const reply = await performDepartureAction({ action, periodId: sentPeriodId, expectedRevision: grantView.revision, expectedGeneration: requestedGeneration,
+      operationKey: crypto.randomUUID() }, input => window.aiTerminal.departure(input))
+    receiveGrantView(reply.view, request)
+    adoptAwayView(reply.away)
+    const detail = reply.outcome === 'stale' || reply.outcome === 'unknown' ? reply.detail ?? 'The list changed. Look again.' : null
+    setDepartureError(current => current !== null && current.request > request ? current : {
+      periodId: action === 'start' ? reply.view.period?.periodId ?? null : sentPeriodId, requestedGeneration, request, detail
+    })
+    if (reply.outcome === 'changed' && (action === 'go' || action === 'cancel')) {
+      setDialog(current => current?.kind === 'before-you-go' && current.periodId === sentPeriodId ? null : current)
+    }
+  }
+  const periodId = grantView?.period?.periodId ?? null
+  const declinePresentation = (periodId: string, token: string): void => {
+    void window.aiTerminal.departurePresentation({ action: 'decline', periodId, token }).catch(fail('The list presentation could not be released'))
+  }
+  const openGrants = (): void => {
+    const opened = { kind: 'before-you-go', periodId, token: null } as const
+    if (grantUnreadable || grantView?.period?.state !== 'leaving') {
+      setDialog(opened)
+      return
+    }
+    const pending = { ...opened, pending: true } as const
+    const leavingPeriod = grantView.period.periodId
+    setDialog(pending)
+    void actDeparture('open').catch(fail('The list activity could not be saved'))
+    void window.aiTerminal.departurePresentation({ action: 'manual', periodId: leavingPeriod, expectedGeneration: grantView.generation ?? 0 }).then(({ token }) => {
+      setDialog(current => {
+        if (current === pending) return { ...opened, token }
+        if (token !== null) declinePresentation(leavingPeriod, token)
+        return current
+      })
+    }).catch(error => {
+      setDialog(current => current === pending ? opened : current)
+      fail('The list presentation could not be reserved')(error)
+    })
+  }
+
+  useEffect(() => {
+    if (dialog?.kind === 'before-you-go' && grantView !== null && dialog.periodId !== periodId) {
+      setDialog(current => current === dialog ? null : current)
+    }
+  }, [dialog, grantView, periodId])
+
+  useEffect(() => {
+    if (dialog?.kind !== 'before-you-go' || dialog.periodId === null || dialog.token === null) return
+    const { periodId, token } = dialog
+    return () => declinePresentation(periodId, token)
+  }, [dialog])
+
+  useEffect(() => {
+    const period = grantView?.period
+    if (grantView === null || grantUnreadable || period?.state !== 'leaving' || period.collection?.presentedAt != null || dialog !== null) return
+    let cancelled = false
+    const open = (): void => {
+      if (!document.hasFocus()) return
+      void window.aiTerminal.departurePresentation({ action: 'reserve', periodId: period.periodId, expectedGeneration: grantView.generation ?? 0 }).then(({ token }) => {
+        if (token === null) return
+        if (cancelled || !document.hasFocus()) { declinePresentation(period.periodId, token); return }
+        setDialog(current => {
+          if (current === null) return { kind: 'before-you-go', periodId: period.periodId, token }
+          declinePresentation(period.periodId, token)
+          return current
+        })
+      }).catch(fail('The list could not be presented'))
+    }
+    if (document.hasFocus()) open()
+    window.addEventListener('focus', open)
+    return () => { cancelled = true; window.removeEventListener('focus', open) }
+  }, [grantView, grantUnreadable, dialog])
   // Story 76.6 AC3 (Fable 76.1 §1): a closed period's summary not yet shown opens by itself once, in the focused window or,
   // when none is, the first window that gains focus; it waits for an open dialog to close and is marked shown once the dialog
 // has read the closed period (onPresented), so back arriving under the summary so far refreshes it before it counts.
@@ -653,7 +764,7 @@ function App(): React.JSX.Element {
       if (history) setHistoryPending(history.needsConfirmation)
     },
     away: () => window.aiTerminal.getAway().then(setAwayView),
-    grant: () => window.aiTerminal.getGrant().then(setGrantView),
+    grant: refreshGrantView,
     // A phone channel that stopped delivering must not sit unseen behind the gear either.
     telegram: async () => {
       const status = await window.aiTerminal.getTelegramStatus().catch(() => null)
@@ -1784,7 +1895,7 @@ function App(): React.JSX.Element {
         : command('away', "I'm away…", () => setDialog({ kind: 'away-note' }), { disabled: awayView === null }),
       // Story 84.3 (the notes §2, palette): only while leaving or while a card is open.
       ...(grantView !== null && (grantView.period?.state === 'leaving' || grantView.openCards > 0) ? [
-        command('before-you-go', 'Before you go…', () => setDialog({ kind: 'before-you-go' }), {
+        command('before-you-go', 'Before you go…', openGrants, {
           context: grantView.openCards > 0 ? `${grantView.openCards} ${grantView.openCards === 1 ? 'card' : 'cards'} open` : 'leaving · no card yet'
         })
       ] : []),
@@ -2078,7 +2189,7 @@ function App(): React.JSX.Element {
         <div className="header-actions">
           <AwayCheck view={awayView} now={new Date(now)} onChange={(to) => sayAway(to)} onOpenSummary={() => setDialog({ kind: 'away-summary' })}
             sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null}
-            grant={grantView} onOpenGrants={() => setDialog({ kind: 'before-you-go' })} />
+            grant={grantView} onOpenGrants={openGrants} />
           <button type="button" className="icon-button" aria-label="Now" title={`Now (${SHORTCUT_LABELS.now})`} onClick={toggleNow}>
             <Icon name="now" />
           </button>
@@ -2775,25 +2886,41 @@ function App(): React.JSX.Element {
           onOpenSession={(sessionId) => { setDialog(null); openSession(sessionId, true) }}
           onOpenDevAutoRuns={() => setDialog({ kind: 'now' })}
           onPresented={(periodId) => {
-            if (awayView.summaryShownAt === null) void window.aiTerminal.markAwaySummaryShown(periodId).then(setAwayView).catch(() => undefined)
+            if (awayView.summaryShownAt === null) void window.aiTerminal.markAwaySummaryShown(periodId).then(adoptAwayView).catch(() => undefined)
           }}
           onClose={() => setDialog(null)}
         />
       ) : null}
-      {dialog?.kind === 'before-you-go' && grantView !== null ? (
+      {dialog?.kind === 'before-you-go' && !dialog.pending && grantView !== null && dialog.periodId === periodId ? (
         <BeforeYouGoDialog
+          key={dialog.periodId ?? 'no-period'}
           grant={grantView}
+          unreadable={grantUnreadable}
           now={new Date(now)}
           place={place}
           sessionName={(sessionId) => sessions.find((item) => item.sessionId === sessionId)?.name ?? null}
           onAnswer={async (answer) => {
-            const reply = await window.aiTerminal.answerGrant({ ...answer, operationKey: crypto.randomUUID() })
-            setGrantView(reply.view)
+            const request = ++grantRequest.current
+            const reply = await window.aiTerminal.answerGrant({ ...answer, expectedGeneration: grantView.generation ?? 0, operationKey: crypto.randomUUID() })
+            receiveGrantView(reply.view, request)
             // The dialog stays while cards are open; once none is, it closes by itself after Away (the notes §2).
             return reply
           }}
-          onAwayNow={() => sayAway('away')}
-          onNotLeaving={() => { sayAway('back'); setDialog(null) }}
+          onAwayNow={() => { void actDeparture('go').catch(fail('Away could not be changed')) }}
+          onNotLeaving={() => { void actDeparture('cancel').catch(fail('The departure could not be cancelled')) }}
+          onSameAgain={() => { void actDeparture('same').catch(fail('The earlier choices could not be granted')) }}
+          onListAction={() => { void actDeparture('open').catch(fail('The list activity could not be saved')) }}
+          onPresented={() => {
+            const { periodId, token } = dialog
+            if (periodId === null || token === null) return
+            const request = ++grantRequest.current
+            void window.aiTerminal.departurePresentation({ action: 'ack', periodId, token }).then(({ reply }) => {
+              if (reply === null) return
+              receiveGrantView(reply.view, request)
+              adoptAwayView(reply.away)
+            }).catch(fail('The list presentation could not be recorded'))
+          }}
+          actionError={departureError?.periodId === dialog.periodId && departureError.requestedGeneration === (grantView.generation ?? 0) ? departureError.detail : null}
           onClose={() => setDialog(null)}
         />
       ) : null}

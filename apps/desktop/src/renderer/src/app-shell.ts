@@ -38,7 +38,7 @@ type ShellDialog =
   /** Story 76.6: "While you were away", the current period's summary, read-only. */
   | { kind: 'away-summary' }
   /** Story 84.3: Before you go, the departure's cards, answered only here or on Telegram. */
-  | { kind: 'before-you-go' }
+  | { kind: 'before-you-go'; periodId: string | null; token: string | null; pending?: true }
   /**
    * Read-only: one progress observation and the published files it points at. The observation is
    * captured when the detail opens, so a newer report cannot swap itself in under the owner.

@@ -75,7 +75,9 @@ export function readTrustDialog(app, lines, fixture) {
  * one Down), `dialog` (any other dialog or option list: never answered), `composer`, or `loading`.
  */
 export function classifyScreen(app, lines, fixture) {
-  const text = lines.join('\n')
+  // Codex's captured welcome help names /permissions; it is informational, with no choice to answer.
+  // Only that complete known help line is ignored; every actual dialog marker remains checked.
+  const text = lines.filter(line => app !== 'codex' || !/^\s*\/permissions - choose what Codex is allowed to do\s*$/u.test(line)).join('\n')
   if (TRUST_DIALOGS[app] && lines.some(line => TRUST_DIALOGS[app].header.test(line) || TRUST_DIALOGS[app].title.test(line))) {
     const dialog = readTrustDialog(app, lines, fixture)
     if (dialog.error) return { state: 'dialog', detail: dialog.error }

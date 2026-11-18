@@ -90,7 +90,7 @@ test that first fails on the demonstrated interleaving. An async gap that no tes
 as UNVERIFIED in the State column above, never as protected.
 
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
-arguments and working directory. The app adds no bypass flags and never copies CLI credentials. Apart from what you or a phone answer sent, BMN types only two things, each only into an agent's empty, idle prompt: the fixed wake line of [The Away wake-up](agent-control.md#the-away-wake-up), and after your update-restart press one fixed line into a resumed Claude Code session. A Codex session resumed by a restart is never typed into; see [update restart notices](agent-control.md#update-restart-notices).
+arguments and working directory. The app adds no bypass flags and never copies CLI credentials. Apart from what you or a phone answer sent, BMN types fixed notices only into an agent's empty, idle prompt: the getting-ready departure line under the wake's complete proof (20 seconds quiet, one durable attempt per departure), the fixed wake line of [The Away wake-up](agent-control.md#the-away-wake-up), and after your update-restart press one fixed line into a resumed Claude Code session. A Codex session resumed by a restart is never typed into; see [update restart notices](agent-control.md#update-restart-notices).
 Terminal variables that identify another terminal (tmux, Zellij, other emulators) are removed;
 sessions get `COLORTERM=truecolor`. Every session defaults to Sixel graphics, whatever command or
 agent it runs; the owner can set **Terminal images (Sixel)** to Off per session.
@@ -229,8 +229,8 @@ repositories comes from the session folders' `origin` remotes and `gh repo view`
 enforces the policy: GitHub's repository rules and the hook's deny-only command guard are the hard limits.
 
 **The Away grant is the owner's answer; agents only ask and read it (Epic 84).** One `app_setting` row,
-`night-grant-v1`, keeps the current and the previous departure: its state (leaving, away, ended or cancelled), each
-run's latest card, the owner's answer bound to the card revision and terms he saw (his earlier answers that period
+`night-grant-v1`, uses a v2 envelope and keeps the current and previous departure: its state (leaving, away, ended or cancelled), each
+stored automatic-Away deadline, selected sessions, told/not-told delivery and its proof claim, phone head receipt, private departure note, and each run's latest card. It keeps prior granted lines as 12-hour proposals with no authority before a new answer. All owner actions are revision-fenced in the same worker transaction. It also holds the owner's answer bound to the card revision and terms he saw (his earlier answers that period
 kept as history), each use with the revision it was used under, each refusal BMN made (of a use or of his answer;
 after Back too, with the period that ended) and each agent report of a step's outcome. The rounds of a departure no
 longer kept are carried as counts per run and boundary, never dropped. It changes in the
@@ -448,3 +448,7 @@ Once a secret is typed, console and network history remain private across all ta
 until the entire context restarts. Unmark and Remove serialize against in-flight
 secret entry; a completed revocation prevents the next use. A keyring lock applies
 at the final keyring read; already-authorized entry is in flight.
+
+### Grant snapshots after a record reset
+
+The database worker reads the grant row, its generation and the Away record in one SQLite transaction. The generation survives app and worker restarts. Replacing a malformed or previously present missing grant row increments it atomically. Malformed bytes are kept in the same private database as inactive recovery data. Unknown versions and unavailable ordering metadata fail closed. The host, renderer and desktop presentation broker compare generation before revision, so a reset can legitimately return a lower revision.

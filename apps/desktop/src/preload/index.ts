@@ -1,5 +1,9 @@
 // MODULE: index.ts - preload that exposes the typed bmn bridge over context isolation
 import {
+  type DesktopDepartureInput,
+  type DeparturePresentationInput,
+  type DeparturePresentationReply,
+  type OwnerDepartureReply,
   MAX_TERMINAL_CHUNK_BYTES,
   CONSUMER_OUTPUT_QUEUE_BYTES,
   METHOD_REGISTRY,
@@ -796,8 +800,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     return invokeBridge('aiterm:away:get', {})
   },
   /** Away (with an optional note, which replaces the period's) or back, said in the app. */
-  setAway(to: 'away' | 'back', note?: string | null): Promise<OwnerAwayView> {
-    return invokeBridge('aiterm:away:set', note === undefined ? { to } : { to, note })
+  setAway(to: 'away' | 'back', note?: string | null, fence?: { expectedRevision: number; expectedGrantRevision: number; expectedGrantGeneration?: number; expectedPeriodId: string | null }): Promise<OwnerAwayView> {
+    return invokeBridge('aiterm:away:set', { to, ...(note === undefined ? {} : { note }), ...fence })
   },
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView> {
     return invokeBridge('aiterm:away:summary-shown', { periodId })
@@ -817,7 +821,13 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   getGrant(): Promise<OwnerGrantView> {
     return invokeBridge('aiterm:grant:get', {})
   },
-  answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string }): Promise<{
+  departurePresentation(input: DeparturePresentationInput): Promise<DeparturePresentationReply> {
+    return invokeBridge('aiterm:grant:presentation', input)
+  },
+  departure(input: DesktopDepartureInput): Promise<OwnerDepartureReply> {
+    return invokeBridge('aiterm:grant:departure', input)
+  },
+  answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string; expectedRevision?: number; expectedGeneration?: number; lineId?: string }): Promise<{
     outcome: 'granted' | 'repeated' | 'refused'; reason?: GrantRefusalReason; detail?: string; view: OwnerGrantView
   }> {
     return invokeBridge('aiterm:grant:answer', answer)

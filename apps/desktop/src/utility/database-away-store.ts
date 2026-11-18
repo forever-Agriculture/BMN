@@ -31,6 +31,13 @@ export function getAway(database: DatabaseConnection): AwayRecord {
   return readRecord(database)
 }
 
+/** A Telegram update stays applied when later state would route it to another departure action. */
+export function rememberDepartureCommand(database: DatabaseConnection, operationKey: string, now: string): void {
+  const record = readRecord(database)
+  if (record.operations.some(operation => operation.key === operationKey)) return
+  writeRecord(database, { ...record, operations: [...record.operations, { key: operationKey, revision: record.revision, unchanged: true }] }, now)
+}
+
 /**
  * Reads, decides and writes in the worker's one transaction, so the app, the CLI and Telegram changing it at once are
  * applied one after another, each against the record the one before it left. The period id is made here, never by a caller:
@@ -41,12 +48,22 @@ export function getAway(database: DatabaseConnection): AwayRecord {
 export function changeAway(database: DatabaseConnection, change: Omit<AwayChange, 'periodId'>, now: string): AwayChangeResult & { grant: GrantRead | null } {
   const current = readRecord(database)
   const grants = readGrantRow(database)
-  const result = applyAwayChange(current, { ...change, periodId: departurePeriodId(grantBase(grants)) ?? randomUUID() }, now)
+  if (change.operationKey !== undefined && current.operations.some(operation => operation.key === change.operationKey)) {
+    return { ...applyAwayChange(current, { ...change, periodId: current.periodId ?? '' }, now), grant: null }
+  }
+  if (grants.generation === null) return { outcome: 'invalid', record: current, grant: null, reason: 'The grant generation could not be read' }
+  if (grants.state === 'unknown' && grants.reason.includes('unknown version')) return { outcome: 'invalid', record: current, grant: null, reason: 'Unsupported grant version; nothing was changed' }
+  const grantRecord = grantBase(grants)
+  const period = grantRecord.periods.at(-1)
+  if (change.expectedGrantGeneration !== undefined && change.expectedGrantGeneration !== grants.generation ||
+    change.expectedGrantRevision !== undefined && change.expectedGrantRevision !== grantRecord.revision ||
+    change.expectedPeriodId !== undefined && change.expectedPeriodId !== (period?.periodId ?? null)) return { outcome: 'stale', record: current, grant: null }
+  const note = change.note === undefined && change.to === 'away' && period?.state === 'leaving' ? period.note : change.note
+  const result = applyAwayChange(current, { ...change, ...(note === undefined ? {} : { note }), periodId: departurePeriodId(grantRecord) ?? randomUUID() }, now)
   // An unchanged state with a remembered key is written too: the key is what makes a later replay a no-op.
   if (result.outcome === 'changed' || result.record !== current) writeRecord(database, result.record, now)
-  const followed = followAwayChange(grantBase(grants), current, result.record, { to: change.to, source: change.source, outcome: result.outcome }, now)
-  if (followed.outcome === 'changed') writeGrantRow(database, followed.record, now)
-  return { ...result, grant: followed.outcome === 'changed' ? { state: 'read', record: followed.record } : null }
+  const followed = followAwayChange(grantRecord, current, result.record, { to: change.to, source: change.source, outcome: result.outcome }, now)
+  return { ...result, grant: followed.outcome === 'changed' ? writeGrantRow(database, followed.record, now) : null }
 }
 
 /** The summary of this closed period was shown: stored once, so a crash before this shows it again and after it does not. */

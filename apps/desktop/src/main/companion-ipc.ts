@@ -3,6 +3,8 @@ import {
   ERROR_CODES,
   METHOD_REGISTRY,
   type AppEventMessage,
+  type OwnerDepartureReply,
+  type OwnerGrantView,
   type AppSettings,
   type ArtifactRecord,
   type AttentionKind,
@@ -23,6 +25,7 @@ import {
   type WebContents
 } from 'electron'
 import { MainIpcError } from './workspace-ipc'
+import { DeparturePresentation } from './departure-presentation'
 
 interface CompanionHostClient {
   request<Result>(method: ProtocolMethod, params: object): Promise<Result>
@@ -82,7 +85,6 @@ const ROUTES = {
   'aiterm:away:summary': METHOD_REGISTRY.awaySummary,
   'aiterm:policy:get': METHOD_REGISTRY.policyGet,
   'aiterm:policy:set': METHOD_REGISTRY.policySet,
-  'aiterm:grant:get': METHOD_REGISTRY.grantGet,
   'aiterm:grant:answer': METHOD_REGISTRY.grantAnswer
 } as const
 
@@ -161,6 +163,48 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
     if (!artifact) throw new MainIpcError(ERROR_CODES.notFound, 'The artifact was not found')
     return artifact
   }
+
+  const watchedPresenters = new WeakSet<WebContents>()
+  const presentation = new DeparturePresentation({
+    view: () => actions.client().request<OwnerGrantView>(METHOD_REGISTRY.grantGet, {}),
+    released: () => {
+      for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send('aiterm:app-event', { kind: 'app-event', topic: 'grant', sessionId: null })
+    },
+    focused: sender => BrowserWindow.getFocusedWindow()?.webContents.id === sender,
+    available: sender => BrowserWindow.getAllWindows().some(window => !window.isDestroyed() && window.webContents.id === sender),
+    save: async (periodId, operationKey, expectedGeneration) => {
+      const view = await actions.client().request<OwnerGrantView>(METHOD_REGISTRY.grantGet, {})
+      return actions.client().request<OwnerDepartureReply>(METHOD_REGISTRY.grantDeparture, { action: 'presented', periodId, expectedRevision: view.revision, expectedGeneration, operationKey })
+    }
+  })
+  handle('aiterm:grant:get', async (_event, params) => {
+    const view = await actions.client().request<OwnerGrantView>(METHOD_REGISTRY.grantGet, params)
+    presentation.observe(view)
+    return view
+  })
+  handle('aiterm:grant:presentation', (event, params) => {
+    const { action } = params
+    const periodId = requiredText(params, 'periodId')
+    const sender = event.sender
+    const senderId = sender.id
+    if (action === 'reserve' || action === 'manual') {
+      if (!watchedPresenters.has(sender)) {
+        watchedPresenters.add(sender)
+        sender.once('destroyed', () => presentation.close(senderId))
+      }
+      const expectedGeneration = params.expectedGeneration
+      if (expectedGeneration !== undefined && !Number.isSafeInteger(expectedGeneration)) {
+        throw new MainIpcError(ERROR_CODES.invalidArgument, 'The grant generation is invalid')
+      }
+      return presentation.act(senderId, { action, periodId, ...(expectedGeneration === undefined ? {} : { expectedGeneration: expectedGeneration as number }) })
+    }
+    if (action !== 'decline' && action !== 'ack') throw new MainIpcError(ERROR_CODES.invalidArgument, 'The presentation action is invalid')
+    return presentation.act(senderId, { action, periodId, token: requiredText(params, 'token') })
+  })
+  handle('aiterm:grant:departure', (_event, params) => {
+    if (params.action === 'presented') throw new MainIpcError(ERROR_CODES.invalidArgument, 'A desktop presentation requires its show receipt')
+    return actions.client().request(METHOD_REGISTRY.grantDeparture, params)
+  })
 
   for (const [channel, method] of Object.entries(ROUTES)) {
     handle(channel, (_event, params) => actions.client().request(method, params))

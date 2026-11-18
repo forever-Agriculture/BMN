@@ -41,7 +41,7 @@ export const TELEGRAM_HELP_TEXT = [
   'What you can do here:',
   '• Reply to a card to answer it; the reply goes to that card\'s session.',
   '• Tap a card\'s buttons: an option for a question, Allow once or Deny for a permission. Each answers once.',
-  '• /away: say you are away. Agents go on and leave what is yours as cards.',
+  '• /away: get ready to leave. Answer the Before you go list, then press Go to start Away.',
   '• /back: say you are back and see what waits for you.',
   '• /help: this message.'
 ].join('\n')

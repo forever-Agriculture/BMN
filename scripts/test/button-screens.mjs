@@ -22,6 +22,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, wri
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { removeOwnedDirectory } from '../lib/owned-directories.mjs'
+import { call, readCredentials } from '../../apps/desktop/bin/bmn-commands.mjs'
 
 const buttonVariants = Object.freeze([
   Object.freeze({ colorMode: 'black', width: 1280 }),
@@ -452,19 +453,24 @@ async function walkStates(application, context) {
   // ---- Epic 84: the departure, its cards and their grant choices ----
   const head = page.locator('.away-check button.away-grant')
   const beforeYouGo = page.locator('dialog.before-you-go-dialog')
-  await step('Head, leaving', 'bmn away --leaving: the head says "leaving"', async () => {
+  await step('Head, getting ready', 'bmn away --leaving: the list opens; Escape hides it and the head stays muted', async () => {
     await escapeAll()
+    const selectedSession = await page.locator('.session-row > button[data-session-id]').first().getAttribute('data-session-id')
+    const credentials = readCredentials({ owner: true, socket })
+    await call(credentials.socketPath, credentials.token, 'hook.observe', { sessionId: selectedSession, agent: 'claude', event: 'Stop', effects: [] })
     ownerCli(['away', '--leaving'])
-    await page.locator('.away-check button.away-grant:not(.cards)', { hasText: /^leaving$/ }).waitFor()
+    await beforeYouGo.waitFor()
+    await page.keyboard.press('Escape')
+    await page.locator('.away-check button.away-grant:not(.cards)', { hasText: /^getting ready$/ }).waitFor()
   })
-  await step('Head, two grant cards', 'two runs ask on a card each (bmn grant ask) and a third needs nothing', async () => {
+  await step('Head, two grant cards', 'two runs ask with four lines in total; a third needs nothing; getting ready stays muted', async () => {
     const ask = (run, title, terms, scope) => ownerCli(['grant', 'ask', '--run', run, '--card-file', '-'], JSON.stringify({ title, scope, terms }))
     ask('run-80', 'Epic 80 · clean up ai slop', grantTerms, 'Stories 80.2–80.6, then Epic 81')
     ask('run-81', 'Epic 81 · harness doctor', [grantTerms[0]], 'Story 81.2')
     ownerCli(['grant', 'ask', '--run', 'run-79', '--nothing', '--title', 'Epic 79 · first-run setup'])
-    await page.locator('.away-check button.away-grant.cards', { hasText: /^2 cards$/ }).waitFor()
+    await page.locator('.away-check button.away-grant:not(.cards)', { hasText: /^getting ready$/ }).waitFor()
   })
-  await step('Before you go', 'the head\'s "2 cards"', async () => {
+  await step('Before you go', 'the head\'s "getting ready"', async () => {
     await head.click()
     await beforeYouGo.locator('article.grant-card.request').nth(1).waitFor()
   })

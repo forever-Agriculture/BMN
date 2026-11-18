@@ -1,5 +1,9 @@
 // MODULE: bridge.d.ts - the typed window.aiTerminal bridge the preload exposes to the renderer
 import type {
+  DesktopDepartureInput,
+  DeparturePresentationInput,
+  DeparturePresentationReply,
+  OwnerDepartureReply,
   AppEventMessage,
   ProgramCopyNotice,
   AgentHistoryStatus,
@@ -381,7 +385,7 @@ export interface AiTerminalBridge {
   getControlInfo(): Promise<ControlInfo>
   /** Story 76.3: the owner's said away state, as his own surfaces see it. */
   getAway(): Promise<OwnerAwayView>
-  setAway(to: 'away' | 'back', note?: string | null): Promise<OwnerAwayView>
+  setAway(to: 'away' | 'back', note?: string | null, fence?: { expectedRevision: number; expectedGrantRevision: number; expectedGrantGeneration?: number; expectedPeriodId: string | null }): Promise<OwnerAwayView>
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView>
   awaySummary(): Promise<AwaySummaryPayload>
   /** Story 83.3: the push policy as Health shows it, and the owner's one change at a time against the revision he saw. */
@@ -389,7 +393,9 @@ export interface AiTerminalBridge {
   setPushPolicy(change: PushPolicyChange): Promise<PushPolicyView>
   /** Story 84.3: the departure's cards, and the owner's answer to one; nothing else can answer it. */
   getGrant(): Promise<OwnerGrantView>
-  answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string }): Promise<{
+  departurePresentation(input: DeparturePresentationInput): Promise<DeparturePresentationReply>
+  departure(input: DesktopDepartureInput): Promise<OwnerDepartureReply>
+  answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string; expectedRevision?: number; expectedGeneration?: number; lineId?: string }): Promise<{
     outcome: 'granted' | 'repeated' | 'refused'; reason?: GrantRefusalReason; detail?: string; view: OwnerGrantView
   }>
   /** Writes a backup to a folder the owner picks and checks the copy at once (Story 75.7); null when he cancels. */

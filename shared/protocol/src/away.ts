@@ -52,6 +52,10 @@ export interface AwayChange {
   note?: string | null
   /** The revision the caller saw; an agent always names it. A different current revision refuses the change. */
   expectedRevision?: number
+  /** The departure this surface saw, checked in the same worker transaction. */
+  expectedGrantRevision?: number
+  expectedGrantGeneration?: number
+  expectedPeriodId?: string | null
   /** A retry of the same operation returns the first result. */
   operationKey?: string
   periodId: string

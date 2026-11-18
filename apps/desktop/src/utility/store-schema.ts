@@ -12,6 +12,8 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'control_receipt',
   'conversation_binding',
   'first_run_setup',
+  'grant_generation',
+  'grant_reset_archive',
   'hook_card_record',
   'input_draft',
   'launch_set',
@@ -945,5 +947,21 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         PRIMARY KEY (period_id, tick, session_id)
       );
       CREATE INDEX away_wake_decision_by_session ON away_wake_decision(period_id, session_id, tick);`
+  },
+  {
+    // Epic 130: a grant recovery can restart its revision without losing ordering or the original bytes.
+    version: 38,
+    sql: `CREATE TABLE grant_generation (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        generation INTEGER NOT NULL CHECK (generation >= 0),
+        has_record INTEGER NOT NULL CHECK (has_record IN (0, 1))
+      );
+      INSERT INTO grant_generation (id, generation, has_record)
+        SELECT 1, 0, EXISTS (SELECT 1 FROM app_setting WHERE key = 'night-grant-v1');
+      CREATE TABLE grant_reset_archive (
+        generation INTEGER PRIMARY KEY CHECK (generation >= 0),
+        value_json TEXT NOT NULL,
+        archived_at TEXT NOT NULL
+      );`
   }
 ])

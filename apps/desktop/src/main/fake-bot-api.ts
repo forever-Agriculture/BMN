@@ -1,4 +1,5 @@
 // MODULE: fake-bot-api.ts - a local stand-in for the Telegram Bot API that taps card buttons; Electron self-test only (Story 30.3)
+import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
@@ -16,15 +17,22 @@ export interface FakeBotCall {
  */
 export type FakeBotStep = number | { tap: string } | { reply: string } | Array<{ tap: string } | { reply: string }>
 
+export interface FakeBotEvent {
+  kind: string; at: number; messageId?: number; updateId?: number; callbackId?: string
+  dataHash?: string; buttons?: string[]; found?: boolean; match?: string
+}
+
 export interface FakeBotApi {
   /** `http://127.0.0.1:<port>`, handed to the host as its Bot API origin. */
   origin: string
   calls: FakeBotCall[]
+  /** Last 200 synthetic routing observations; callback data is fingerprinted. */
+  events: FakeBotEvent[]
   /**
    * Taps, in order, the given option of each card state that shows buttons, but only on the message whose
    * text first contained `match`; every other card is left alone.
    */
-  tapOn(match: string, options: FakeBotStep[]): void
+  tapOn(match: string, options: FakeBotStep[], messageId?: number): void
   /** Story 32.2: answer getMe and getUpdates with this HTTP error, or drop the connection; null serves again. */
   failWith(mode: 409 | 401 | 'network' | null): void
   /** Story 76.3: the owner sends this text as a message of its own (`/away`, `/back`), replying to nothing. */
@@ -61,45 +69,71 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
 
 export async function startFakeBotApi(chatId: number, userId: number): Promise<FakeBotApi> {
   const calls: FakeBotCall[] = []
+  const events: FakeBotEvent[] = []
+  const trace = (kind: string, fields: Omit<FakeBotEvent, 'kind' | 'at'> = {}): void => {
+    events.push({ kind, at: Date.now(), ...fields })
+    if (events.length > 200) events.shift()
+  }
+  const fingerprint = (data: string): string => createHash('sha256').update(data).digest('hex').slice(0, 16)
   const updates: Array<Record<string, unknown>> = []
   let nextUpdate = 1
   let nextMessage = 5000
-  let target: { match: string; options: FakeBotStep[]; messageId: number | null } | null = null
+  type Target = { match: string; options: FakeBotStep[]; messageId: number | null; keyboard: Keyboard; scheduled: boolean; pending: Set<string> }
+  let target: Target | null = null
+  const callbackOwners = new Map<string, Target>()
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+  const later = (action: () => void, ms: number): void => {
+    const timer = setTimeout(() => { timers.delete(timer); action() }, ms)
+    timers.add(timer)
+  }
   let failure: 409 | 401 | 'network' | null = null
 
-  const tapLater = (messageId: number, keyboard: Keyboard): void => {
-    if (!target || keyboard.length === 0 || target.messageId !== messageId) return
-    const step = target.options.shift()
-    if (step === undefined) return
-    const actions = Array.isArray(step) ? step : [step]
-    actions.forEach((action, index) => {
-      const button = typeof action === 'number'
-        ? keyboard.flat()[action]
-        : 'tap' in action ? keyboard.flat().find((candidate) => candidate.text === action.tap) : undefined
-      setTimeout(() => {
+  const actionsOf = (step: FakeBotStep): Array<number | { tap: string } | { reply: string }> => Array.isArray(step) ? step : [step]
+  const buttonFor = (action: ReturnType<typeof actionsOf>[number], keyboard: Keyboard) => typeof action === 'number'
+    ? keyboard.flat()[action] : 'tap' in action ? keyboard.flat().find(button => button.text === action.tap) : undefined
+  const ready = (step: FakeBotStep, keyboard: Keyboard): boolean => actionsOf(step).every(action =>
+    typeof action === 'object' && 'reply' in action || buttonFor(action, keyboard) !== undefined)
+  const advance = (current: Target): void => {
+    const step = current.options[0]
+    if (target !== current || current.scheduled || current.pending.size || step === undefined || !ready(step, current.keyboard)) return
+    current.scheduled = true
+    later(() => {
+      current.scheduled = false
+      if (target !== current || !ready(step, current.keyboard)) return
+      // Read the actual latest keyboard at the tap, after any redraws during the human delay.
+      current.options.shift()
+      const messageId = current.messageId!
+      const actions = actionsOf(step).map(action => {
+        const button = buttonFor(action, current.keyboard)
+        const callbackId = button ? `tap-${nextUpdate++}` : null
+        if (callbackId !== null) { current.pending.add(callbackId); callbackOwners.set(callbackId, current) }
+        return { action, button, callbackId }
+      })
+      actions.forEach(({ action, button, callbackId }, index) => later(() => {
+        if (target !== current) return
+        trace('step-selected', { messageId, found: button !== undefined, ...(button ? { dataHash: fingerprint(button.callback_data) } : {}) })
+        const updateId = nextUpdate++
         if (typeof action === 'object' && 'reply' in action) {
-          updates.push({
-            update_id: nextUpdate++,
-            message: {
-              message_id: nextMessage++, date: 1_789_000_000, text: action.reply,
-              chat: { id: chatId, type: 'private' }, from: { id: userId, is_bot: false, first_name: 'Owner' },
-              reply_to_message: { message_id: messageId }
-            }
-          })
-          return
+          updates.push({ update_id: updateId, message: {
+            message_id: nextMessage++, date: 1_789_000_000, text: action.reply,
+            chat: { id: chatId, type: 'private' }, from: { id: userId, is_bot: false, first_name: 'Owner' },
+            reply_to_message: { message_id: messageId }
+          } })
+        } else if (button && callbackId !== null) {
+          trace('callback-enqueued', { messageId, updateId, callbackId, dataHash: fingerprint(button.callback_data) })
+          updates.push({ update_id: updateId, callback_query: {
+            id: callbackId, from: { id: userId, is_bot: false, first_name: 'Owner' },
+            message: { message_id: messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } }, data: button.callback_data
+          } })
         }
-        if (!button) return
-        updates.push({
-          update_id: nextUpdate++,
-          callback_query: {
-            id: `tap-${nextUpdate}`,
-            from: { id: userId, is_bot: false, first_name: 'Owner' },
-            message: { message_id: messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } },
-            data: button.callback_data
-          }
-        })
-      }, TAP_DELAY_MS * (index + 1))
-    })
+      }, TAP_DELAY_MS * index))
+    }, TAP_DELAY_MS)
+  }
+  const tapLater = (messageId: number, keyboard: Keyboard): void => {
+    if (!target || target.messageId !== messageId) return
+    target.keyboard = keyboard
+    trace('target-keyboard', { messageId, buttons: keyboard.flat().map(button => button.text.slice(0, 80)) })
+    advance(target)
   }
 
   const reply = (response: ServerResponse, result: unknown): void => {
@@ -125,15 +159,30 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
         const end = Date.now() + EMPTY_POLL_MS
         while (!response.destroyed && updates.length === 0 && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 25))
         if (response.destroyed) return
-        return reply(response, updates.splice(0))
+        const batch = updates.splice(0)
+        for (const update of batch) trace('update-delivered', { updateId: Number(update.update_id) })
+        return reply(response, batch)
       }
       const call: FakeBotCall = { method, body, at: Date.now() }
       calls.push(call)
       if (method === 'getMe') return reply(response, { id: 1, is_bot: true, username: 'bmn_self_test_bot' })
+      if (method === 'answerCallbackQuery') {
+        const callbackId = String(body.callback_query_id)
+        const current = callbackOwners.get(callbackId)
+        if (current) {
+          current.pending.delete(callbackId); callbackOwners.delete(callbackId)
+          trace('callback-acknowledged', { callbackId, messageId: current.messageId! })
+          advance(current)
+        }
+        return reply(response, true)
+      }
       if (method === 'sendMessage') {
         const messageId = nextMessage++
         call.messageId = messageId
-        if (target && target.messageId === null && String(body.text ?? '').includes(target.match)) target.messageId = messageId
+        if (target && target.messageId === null && String(body.text ?? '').includes(target.match)) {
+          target.messageId = messageId
+          trace('target-bound', { messageId, match: target.match })
+        }
         tapLater(messageId, keyboardOf(body))
         return reply(response, { message_id: messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } })
       }
@@ -141,8 +190,9 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
         call.messageId = nextMessage++
         return reply(response, { message_id: call.messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } })
       }
-            if (method === 'editMessageText') {
-        tapLater(Number(body.message_id), keyboardOf(body))
+      if (method === 'editMessageText') {
+        call.messageId = Number(body.message_id)
+        tapLater(call.messageId, keyboardOf(body))
         return reply(response, true)
       }
       return reply(response, true)
@@ -156,8 +206,15 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
   return {
     origin: `http://127.0.0.1:${port}`,
     calls,
-    tapOn: (match, options) => {
-      target = { match, options: [...options], messageId: null }
+    events,
+    tapOn: (match, options, messageId) => {
+      const latest = messageId === undefined ? undefined : calls.findLast(call => call.messageId === messageId &&
+        (call.method === 'editMessageText' || call.method === 'sendMessage'))
+      if (messageId !== undefined && (latest === undefined || !String(latest.body.text).includes(match))) throw new Error('Unknown fake phone message')
+      target = { match, options: [...options], messageId: messageId ?? null, keyboard: latest === undefined ? [] : keyboardOf(latest.body),
+        scheduled: false, pending: new Set() }
+      trace('target-armed', { match })
+      if (messageId !== undefined) advance(target)
     },
     failWith: (mode) => {
       failure = mode
@@ -169,6 +226,8 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
       })
     },
     close: () => new Promise((resolve) => {
+      for (const timer of timers) clearTimeout(timer)
+      timers.clear(); callbackOwners.clear()
       server.closeAllConnections()
       server.close(() => resolve())
     })

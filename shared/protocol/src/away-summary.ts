@@ -562,7 +562,8 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
 
   return {
     label: away.state === 'away' ? 'While you are away' : 'While you were away',
-    head: awayHeadWords(away, now, name),
+    head: awayHeadWords(away, now, name) + (input.grants?.periods.find(period => period.periodId === away.periodId)?.collection?.autoStartedAt
+      ? ` · started by itself at ${awayMomentWords(input.grants.periods.find(period => period.periodId === away.periodId)!.collection!.autoStartedAt!, now)}` : ''),
     note: away.note,
     couldNotRead,
     couldNotReadWhy,
