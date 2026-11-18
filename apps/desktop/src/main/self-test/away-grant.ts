@@ -198,7 +198,7 @@ touch apply-finished
     assert.equal(JSON.parse(readFileSync(join(project, 'apply.json'), 'utf8')).state, 'written')
     const allowance = plan('allowances', '7')
     assert.deepEqual(allowance.current.fields.limits.rechecks, { limit: 6, ceiling: 6, per: 'boundary' })
-    assert.match(allowance.changes.at(-1).source, /night list: Yes to .* in Telegram/u)
+    assert.match(allowance.changes.at(-1)!.source, /night list: Yes to .* in Telegram/u)
     await until(async () => texts(limitStart, 'editMessageText').some(text => /use bmn plan allow to lower it/iu.test(text)) ? true : undefined, 'durable write drawn on Telegram')
 
     phase('back')

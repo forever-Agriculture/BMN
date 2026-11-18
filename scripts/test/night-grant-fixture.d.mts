@@ -1,0 +1,12 @@
+// MODULE: night-grant-fixture.d.mts - the disposable plan fixture used by the Electron self-test
+interface FixtureAllowanceRead {
+  current: { fields: { limits: Record<string, { limit: number; ceiling: number; per: string }> } }
+  changes: Array<{ source: string }>
+}
+
+export function seedNightPlan(project: string, cliPath: string, environment: NodeJS.ProcessEnv, nodePath?: string): {
+  written(name: string, text: string): string
+  git(where: string, ...argv: string[]): string
+  plan(action: 'allowances', epic: string): FixtureAllowanceRead
+  plan(...argv: string[]): unknown
+}
