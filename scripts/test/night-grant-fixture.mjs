@@ -71,6 +71,7 @@ esac
   if (prepared !== '1') throw Error('The synthetic Prepared check did not start signed out')
   written('fixture-work.txt', `Epic 7. Story 7.1 still has two required review rechecks.
 Prepared need: "${access.name}". Check it with ./fixture-night prepared before composing. The login command is ${access.command}. Only the owner can sign in.
+If that Prepared check fails, include an entry in access with the need's name, login command, and the reason it is needed. This asks the owner to sign in.
 Story 7.1 also needs to deliver its current pull request if policy requires approval. BMN facts have the current head and policy.
 For the composer use title and scope, a limits array of {name,boundary,uses,reason}, and an access array of {name,command,reason}. BMN facts supply the PR so leave actions out.
 `)

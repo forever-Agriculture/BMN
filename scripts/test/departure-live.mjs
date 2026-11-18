@@ -304,6 +304,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
             const answered = told === null ? null : await until(async () => (await get()).period.runs.find(run => run.runId === (night?.run ?? 'departure-probe')), 'native departure answer', 180_000).catch(() => null)
             result.answeredAt = answered?.card.askedAt ?? null
             const terms = answered?.card.terms
+            if (night) result.sentKinds = terms?.map(term => term.kind) ?? []
             const correctCard = night
               ? terms?.length === 3 && terms[0]?.kind === 'limit' && terms[0].from === 4 && terms[0].to === 6 &&
                 terms[1]?.kind === 'access' && terms[1].name === night.access.name &&
