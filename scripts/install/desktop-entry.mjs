@@ -4,7 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { commandLinkIsOurs, commandLinkPath, commandLinkScript, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
+import { brainReturnActionLines, commandLinkIsOurs, commandLinkPath, commandLinkScript, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 
 // Must match "desktopName" in apps/desktop/package.json: Electron derives the Wayland app_id from it.
@@ -60,6 +60,9 @@ function installDesktopEntry() {
     'Categories=System;TerminalEmulator;',
     'StartupNotify=true',
     `StartupWMClass=${DESKTOP_ID.replace(/\.desktop$/, '')}`,
+    'Actions=brain-return;',
+    '',
+    ...brainReturnActionLines(binary),
     ''
   ].join('\n'))
 

@@ -126,9 +126,11 @@ import {
   type InstalledOriginal
 } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
+import type {BrainCheckTransport} from './brain-check-capabilities'
 import { HookEventHistory } from './hook-event-history'
 import { LiveProducers } from './live-producers'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
+import type { BrainService } from './brain-service'
 import type { DatabaseWorkerClient } from './database-client'
 import type { SendOutcome } from './database-message-store'
 import type { ApplicationRoots } from './roots'
@@ -223,6 +225,8 @@ const TEXT_MEDIA = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|toml)
 export const UNROUTED = Symbol('unrouted')
 
 interface CompanionServiceOptions {
+  brain?: BrainService
+  brainChecks?: BrainCheckTransport
   database: DatabaseWorkerClient
   manager: SessionManager
   roots: ApplicationRoots
@@ -1001,11 +1005,17 @@ export class CompanionService {
     this.control = new ControlServer({
       socketPath: this.socketPath,
       auth: this.auth,
+      ...(options.brainChecks?{brainChecks:options.brainChecks}:{}),
       receipts: {
         get: async (key) => (await options.database.companion('getReceipt', key)) as ReceiptRecord | undefined,
         put: (record) => options.database.companion('putReceipt', record, this.iso())
       },
       handlers: {
+        brainRequest: async (scope, params) => {
+          if (!options.brain) throw new ControlError(ERROR_CODES.invalidArgument, 'Brain is unavailable in this build')
+          try { return await options.brain.request(scope, params) }
+          catch (error) { throw new ControlError(ERROR_CODES.invalidArgument, error instanceof Error ? error.message : 'Brain request failed') }
+        },
         qaSession: sessionId => this.controlCall(async () => options.database.companion('isQaSession', sessionId)),
         qaRequest: (scope, method, params) => this.controlCall(() => new QaSessions({
           database: options.database, data: options.roots.data, cliPath: options.cliPath,

@@ -758,6 +758,50 @@ the palette labels a cap. It does not follow symbolic links, and
 new typing supersedes an older search. An unavailable directory shows no files. There is no index or
 watcher; contents are searched only in Quick look.
 
+## Shared brain
+
+Claude Code and Codex can use lasting cross-project memory through `bmn brain`. Project facts stay
+in their repository's plan, rules and docs; the brain's project map points to those homes. It keeps
+personal preferences, durable cross-project decisions and lessons, and ideas with no project home.
+It does not store handoffs, transcripts, progress or daily logs, and this feature injects nothing
+into sessions or calls a model to save, search, import, export or back up notes.
+
+Search returns at most ten titles with short summaries. Whole-note reads include the revision,
+origin, date and scope; a heading can select one section, and links/backlinks are optional. Search
+is literal FTS5 trigram search, with a short-query fallback; it does not translate between languages.
+The current local corpus's Ukrainian-query recall remains below the planned bar and is carried
+to the next memory-quality work, rather than described as successful cross-language retrieval.
+
+Writes require a live BMN session and the completed owner-held switch. Edits require the revision
+the agent read. A stale edit, duplicate normalized title, fourth new note in one session or a
+single-project scope is refused. Withdrawal is reversible and keeps history; this feature has no
+hard-delete command. Reads still work with BMN closed, while writes have no direct-file fallback.
+The current export opens in Quick Look; backup and export failures appear in Health.
+
+Installing this feature does not switch the owner's setup. The old brain skill, rules, timers and
+vault stay in place until the owner chooses **Switch to the BMN brain…** from the command palette
+and confirms. Agents told “switch” point to that entry. No script, agent command, update or reboot
+can authorize it. The switch closes Obsidian, retires the three old brain timers and keeps the vault
+as a read-only archive, including its Git history; attachments stay writable in `~/brain/files/`.
+The journal restores the old setup if a check fails before commit. Installed checks run unattended
+after the owner's action; until then that installed path remains unverified.
+
+After a completed switch the palette offers **Return to the Obsidian brain…**, again only to the
+owner in BMN's focused window and only after he confirms. The same return is the BMN desktop icon's
+right-click action (`--brain-return`), which works when BMN's window does not; the switch counts only
+once that action points at the running build. Either way his native confirmation is recorded by the
+brain worker first; a journal that merely says "returning" never starts one. The return closes the
+brain to agents, takes a final checksummed snapshot, and rebuilds every note written, edited or
+withdrawn in BMN since the switch from that snapshot's recorded revision and attachment bytes (never
+from today's files), into one new folder `~/brain/inbox/from-bmn-brain-<switch id>/`. Each file has
+the note's id, revision, status and, for an edited vault note, `edits_vault_note` naming the original
+file, which stays untouched; its attachment links point at the copies in `assets/`. The folder is
+published while every old writer is still held: if that fails, nothing comes back and the return
+stays held. Then the vault becomes writable again, and the old rules, skill and timers come back as
+one unit; a reboot in between does not block them. Nothing in the vault is overwritten: the folder
+appears by a no-replace rename, an existing folder of that name with other contents holds the
+return, and a retry after an interruption continues from the same journal.
+
 ## Voice dictation
 
 Hold **Space** in any terminal to talk; recording starts after 0.3 seconds, and releasing pastes the

@@ -41,6 +41,12 @@ import {
 import { CompanionService, UNROUTED } from './companion-service'
 import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
+import { BrainWorkerClient } from './brain-client'
+import {configureBrainReceiptReader} from '../../bin/brain-state.mjs'
+import {brainCutoverStateRoot} from '../../../../scripts/lib/brain-provenance.mjs'
+import { BrainService } from './brain-service'
+import {BrainCheckCapabilities} from './brain-check-capabilities'
+import { recordBrainInitialization } from './brain-health'
 import { readFileReference } from './file-reference-reader'
 import { listQuickLookFolder, quickLookIdentity, quickLookRoot, quickLookSourceFolder, readQuickLookFile } from './quick-look'
 import { QuickLookSearches } from './quick-look-search'
@@ -297,6 +303,18 @@ async function start(): Promise<void> {
     join(roots.data, 'state.sqlite3')
   )
   const initialized = await database.initialize()
+  const brainClient = new BrainWorkerClient(join(__dirname, 'brain-worker.js'), join(roots.data, 'brain.sqlite3'),undefined,join(brainCutoverStateRoot(),'brain-cutover','journal.json'))
+  // Brain exports and attachment I/O run independently of terminal/state readiness.
+  const brainInitialization=recordBrainInitialization(roots.data).catch(()=>undefined).then(()=>brainClient.initialize())
+    .catch(()=>recordBrainInitialization(roots.data,true).catch(()=>undefined))
+  configureBrainReceiptReader(state=>state===brainCutoverStateRoot()&&brainClient.admissionState?.receipt?{...brainClient.admissionState.receipt,open:brainClient.admissionState.open}:null)
+  const brain = new BrainService(brainClient,async()=>(await brainClient.admission()).open)
+  const brainChecks=new BrainCheckCapabilities(brainClient,join(roots.runtime,'control','control.sock'),roots.data)
+  const runBrainBackup = (now?:string) => brainInitialization.then(()=>brainClient.scheduledBackup(now))
+  const brainBackupTick = () => { void runBrainBackup().catch(() => undefined) }
+  brainBackupTick()
+  const brainBackupTimer = setInterval(brainBackupTick, 60_000)
+  brainBackupTimer.unref()
   const savedOutputStore = new FileSavedOutputStore(join(roots.state, 'saved-output'))
   await purgeExpiredArchives(database, savedOutputStore, roots.data)
   let terminalPort: TerminalPort | undefined
@@ -371,6 +389,8 @@ async function start(): Promise<void> {
   // Epic 69: the thread that captures work trees starts with its first request.
   const turnChanges = new TurnChangesClient(join(__dirname, 'turn-changes-worker.js'), { dataRoot: roots.data, home: agentHome() })
   const companion = new CompanionService({
+    brain,
+    brainChecks,
     database,
     manager,
     turnChanges,
@@ -487,6 +507,7 @@ async function start(): Promise<void> {
    */
   function selfTestHealthProbe(params: Record<string, unknown>): Promise<unknown> | undefined {
     if (!process.argv.includes('--self-test-host')) return undefined
+    if (typeof params.selfTestBrainClock === 'string') return runBrainBackup(params.selfTestBrainClock)
     if (typeof params.selfTestQuietTrace === 'boolean') {
       stopSelfTestQuietTrace?.(); stopSelfTestQuietTrace = undefined
       if (!params.selfTestQuietTrace) return Promise.resolve({ stopped: true })
@@ -562,7 +583,8 @@ async function start(): Promise<void> {
     }
     if (params.selfTestHostLoss === true) {
       setTimeout(() => {
-        void database.close().then(() => {
+        clearInterval(brainBackupTimer)
+        void brainClient.close().catch(() => undefined).then(() => database.close()).then(() => {
           parentPort.postMessage({ kind: 'host-loss-self-test-ready' })
           manager.abandonForHostLossSelfTest()
           process.exit(0)
@@ -734,6 +756,30 @@ async function start(): Promise<void> {
         const snapshot = { run: restart.snapshot(), sessions: restart.sessions(), starts: restart.starts() }
         if (op === 'begin' && process.argv.includes('--bmn-test-host') && process.env.BMN_TEST_RESTART_DELAY_BEGIN_REPLY === '1') await new Promise(resolve => setTimeout(resolve, 12_000))
         return snapshot
+      }
+      // This route is only on Electron's inherited private parent port. It has no control-socket method.
+      case METHOD_REGISTRY.brainAdmin: {
+        const command=stringValue(params,'command')
+        switch(command) {
+          case 'data-root': return roots.data
+          case 'admission-status': return brainClient.admission()
+          case 'commit-cutover': return brainClient.commitCutover(stringValue(params,'payloadHash'))
+          case 'resume-cutover': return brainClient.resumeCutover()
+          case 'authorize-return': return brainClient.authorizeReturn()
+          case 'return-capture': return brainClient.returnCapture()
+          case 'close-door': brainChecks.revokeAll();return brainClient.setWriteDoor(false)
+          case 'open-door': return brainClient.setWriteDoor(true)
+          case 'import': return brainClient.importNotes(params.notes as import('./brain-store').BrainImport[])
+          case 'list': return brainClient.list()
+          case 'read': return brainClient.read(stringValue(params,'name'))
+          case 'issue-check': return brainChecks.issue(stringValue(params,'attempt'),stringValue(params,'title'),stringValue(params,'noteId'))
+          case 'recover-check': brainChecks.revokeAll();return brainClient.recoverCheck({note:stringValue(params,'note'),attempt:stringValue(params,'attempt'),title:stringValue(params,'title')})
+          case 'revoke-check': brainChecks.revoke(stringValue(params,'id'));return undefined
+          case 'export': return brainClient.export()
+          case 'backup': return brainClient.backup()
+          case 'restore-check': return brainClient.restoreCheck(stringValue(params,'backup'),stringValue(params,'scratch'))
+          default: throw new HostControlError(ERROR_CODES.invalidArgument,'Unknown private brain operation')
+        }
       }
       case METHOD_REGISTRY.healthGet:
         return selfTestHealthProbe(params) ?? manager.health()
@@ -1108,7 +1154,8 @@ async function start(): Promise<void> {
     ) {
       clearInterval(restartTimer)
       const forcedExit = setTimeout(() => process.exit(0), 1_000)
-      void companionService.close().then(() => database.close()).finally(() => {
+      clearInterval(brainBackupTimer)
+      void companionService.close().then(() => brainClient.close()).catch(() => undefined).then(() => database.close()).finally(() => {
         clearTimeout(forcedExit)
         process.exit(0)
       })

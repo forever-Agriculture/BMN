@@ -172,6 +172,7 @@ Commands:
   judge ask --state-file <path>|- --questions-file <path> --data public|private
                                             Ask the team's judge typed questions about one text; it answers
                                             with numbers, and BMN reads them (bmn judge --help)
+  brain search|read|write|edit|withdraw|restore  Lasting cross-project memory (bmn brain --help)
   doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
                                             one shared run, also with BMN closed (bmn doctor --help)
   plan status|check|set|go                  The project's planning board in BMN's format (a BMAD one reads only): print

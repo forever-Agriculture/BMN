@@ -65,6 +65,7 @@ describe('protocol surface', () => {
       new Set([
         'hello',
         'app.updateRestart',
+        'app.brainAdmin',
         'health.get',
         'workspace.list',
         'workspace.create',
@@ -177,7 +178,7 @@ describe('protocol surface', () => {
     // Story79.4 adds the one-time ownership identity claim.
     // Story79.3 also reads state-only evidence that a Codex hook was observed.
     // Epic100 adds the main-only exact QA binding.
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(99)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(100)
   })
 
   it('exports the initial stable error codes', () => {

@@ -33,6 +33,7 @@ import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
 import { runQuietHoursSelfTest } from './quiet-hours'
 import { runMorningDigestSelfTest } from './morning-digest'
 import { runHealthAlertsSelfTest } from './health-alerts'
+import { runBrainScheduleSelfTest } from './brain-schedule'
 import { runAwaySelfTest } from './away'
 import { runAwayGrantSelfTest } from './away-grant'
 import { runSelectMenusSelfTest } from './select-menus'
@@ -437,6 +438,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const isolatedCwd = process.env.BMN_STATE_HOME
     if (!isolatedCwd) throw new Error('self-test requires BMN_STATE_HOME')
     const envelopedInvokeChannels = await verifyRegisteredInvokeEnvelopes()
+    const brainSchedule = await runBrainScheduleSelfTest(client,resolveApplicationRoots().data)
+    console.error(`[BMN] self-test phase: brain schedule ${JSON.stringify(brainSchedule)}`)
 
     await expectRemoteFailure(
       client.request(METHOD_REGISTRY.sessionCreate, {
@@ -5443,6 +5446,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       quietHours,
       morningDigest,
       healthAlerts,
+      brainSchedule,
       away,
       awayGrant,
       fullerAnswers: fuller,

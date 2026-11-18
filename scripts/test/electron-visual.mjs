@@ -15,7 +15,7 @@ import { sessionRequestControl } from './session-request-helpers.mjs'
 import { captureButtonScreens } from './button-screens.mjs'
 import assert from 'node:assert/strict'
 import { execFile, execFileSync } from 'node:child_process'
-import { rmSync } from 'node:fs'
+import { lstatSync } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
@@ -23,6 +23,7 @@ import { parseArgs, promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { removeOwnedDirectory } from '../lib/owned-directories.mjs'
 
 const cliArguments = process.argv.slice(2)
 const { values: options } = parseArgs({
@@ -412,7 +413,10 @@ try {
   console.error(`[BMN visual] ${fixtureParent} exists: another visual run is using it, or a stopped run left it; remove it and run again`)
   process.exit(2)
 }
-process.once('exit', () => rmSync(fixtureParent, { recursive: true, force: true }))
+const fixtureStat = lstatSync(fixtureParent), fixtureIdentity = { device: fixtureStat.dev, inode: fixtureStat.ino }
+process.once('exit', () => {
+  removeOwnedDirectory(fixtureParent, fixtureIdentity)
+})
 await mkdir(fixtureFolder, { mode: 0o700 })
 await mkdir(evidenceDirectory, { recursive: true })
 await mkdir(activityEvidenceDirectory, { recursive: true })

@@ -19,6 +19,7 @@ import { readLocalTextFile, type FileReferenceReaderOptions } from './file-refer
 import { gitTopLevel } from './repository-git'
 import { quickLookEditState } from './quick-look-save'
 import { yieldTurn } from './shared-helpers'
+import { readBrainExportLinks } from './brain-export-links'
 
 const DIMMED = new Set(QUICK_LOOK_DIMMED_NAMES)
 /** At most this many names are held while a folder is read; past it they are cut to the first rows in the tree's order. */
@@ -163,6 +164,7 @@ export async function readQuickLookFile(path: string, options: FileReferenceRead
   if (read.status === 'unavailable') {
     return { status: 'unavailable', path: requested, canonicalPath: read.canonicalPath, reason: read.reason, message: read.message, facts: read.facts }
   }
+  const linkTargets=await readBrainExportLinks(read.canonicalPath,read.digest)
   return {
     status: 'ready',
     path: requested,
@@ -173,6 +175,7 @@ export async function readQuickLookFile(path: string, options: FileReferenceRead
     modifiedAt: read.modifiedAt,
     identity: read.identity,
     digest: read.digest,
+    ...(linkTargets===undefined?{}:{linkTargets}),
     // Whether it may be edited is told with the read, and every part of it is checked again at Save (Story 68.1).
     edit: options.root === undefined ? null : await quickLookEditState(requested, options.root, options.uid === undefined ? {} : { uid: options.uid })
   }

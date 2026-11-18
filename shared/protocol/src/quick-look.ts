@@ -98,6 +98,8 @@ export type QuickLookReadResult =
       identity: QuickLookIdentity
       /** SHA-256 of the bytes read, which Save compares with the bytes on disk. */
       digest: string
+      /** Captured Brain targets in the same immutable generation as these bytes; empty means held. */
+      linkTargets?: Record<string,string>
       /** Null for a name Quick look never edits, or when no root was named. */
       edit: QuickLookEditState | null
     }

@@ -3,6 +3,32 @@ import type { AccountSignIn } from '../../bin/browser-accounts-engine.mjs'
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
 import { beforeRestartDeadline, restartClock } from '../utility/update-restart-deadline'
 import { chmodSync, mkdirSync, existsSync } from 'node:fs'
+import { brainCutoverStateRoot } from '../../../../scripts/lib/brain-provenance.mjs'
+import { readBrainHealth } from '../utility/brain-health'
+import { pathToFileURL } from 'node:url'
+import { brainCutover } from './brain-cutover'
+import { bindBrainCutoverWindow } from './brain-cutover-lifecycle'
+let cancelBrainSwitch:()=>void=()=>{}
+let brainReturnLauncher:(()=>Promise<unknown>)|undefined
+/** `--brain-return` from the desktop entry's action: the same confirmed return, without needing the window. */
+function launchBrainReturn():void {
+  if(!brainReturnLauncher){dialog.showErrorBox('Return to the Obsidian brain','BMN could not start its brain, so the return cannot run yet. Nothing has changed.');return}
+  void brainReturnLauncher().catch((error:unknown)=>dialog.showErrorBox('Return to the Obsidian brain',(error instanceof Error?error.message:String(error))+'\nThe journal keeps the return held; nothing was overwritten.'))
+}
+import {startBrainDeliveryRetry} from './brain-cutover-delivery'
+import { brainCutoverAvailable, brainCutoverCommitted, recoverBrainCutover, rollbackBrainCutover, runBrainCutover, settleBrainRollback } from './brain-cutover-run'
+import {configureBrainReceiptReader} from '../../bin/brain-state.mjs'
+import type {BrainAdmissionStatus} from '../utility/brain-admission'
+let currentBrainAdmission:BrainAdmissionStatus|null=null
+configureBrainReceiptReader(state=>state===brainCutoverStateRoot()&&currentBrainAdmission?.receipt?{...currentBrainAdmission.receipt,open:currentBrainAdmission.open}:null)
+async function privateBrainAdmin<T>(command:string,params:Record<string,unknown>={}):Promise<T>{
+ try{
+  const result=await requireHostClient().request<T>(METHOD_REGISTRY.brainAdmin,{command,...params})
+  if(['admission-status','commit-cutover','resume-cutover'].includes(command))currentBrainAdmission=result as BrainAdmissionStatus
+  if(command==='close-door')currentBrainAdmission=null
+  return result
+ }catch(error){currentBrainAdmission=null;throw error}
+}
 import { randomUUID } from 'node:crypto'
 import { waitingSourceBuild, openedSourceBuild, sourceUpdateLauncher, armSourceUpdateLauncher, sourceRestartAuthorization, type SourceRestartAuthorization } from './source-update-restart'
 import { createSourceRestartAdopter, type RestartAdoption } from './source-update-recovery'
@@ -401,7 +427,13 @@ async function launchHostWithChannel(): Promise<{
     )
   }
   const { port1, port2 } = new MessageChannelMain()
-  client.attachTerminalPort(port1)
+  try {
+    client.attachTerminalPort(port1)
+  } catch (error) {
+    // The recovery launcher needs only the ready host and its brain, not the terminal channel.
+    if (process.argv.includes('--brain-return')) hostClient = client
+    throw error
+  }
   return { client, ready, applicationPort: port2 }
 }
 
@@ -472,6 +504,11 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   hostClient = launched.client
   hostRendererPort = launched.applicationPort
   trackSessionProcessStates(launched.client)
+  void recoverBrainCutover({state:brainCutoverStateRoot(),bin:app.isPackaged?join(process.resourcesPath,'bin'):resolve(__dirname,'../../bin'),skills:app.isPackaged?join(process.resourcesPath,'skills'):resolve(__dirname,'../../../../skills'),admin:privateBrainAdmin}).catch(error=>console.error('Brain rollback or completion recovery unavailable',error))
+  const stopBrainReporting=startBrainDeliveryRetry({state:brainCutoverStateRoot(),
+    deliver:()=>recoverBrainCutover({state:brainCutoverStateRoot(),bin:app.isPackaged?join(process.resourcesPath,'bin'):resolve(__dirname,'../../bin'),skills:app.isPackaged?join(process.resourcesPath,'skills'):resolve(__dirname,'../../../../skills'),admin:privateBrainAdmin}),
+    onError:error=>console.error('Brain completion reporting remains pending',error)})
+  app.once('will-quit',stopBrainReporting)
   ensureSourcePolling()
   void launched.client.request<SourceRestartResponse>(METHOD_REGISTRY.updateRestart, { op: 'recover', build: openedSourceBuild() })
     .then(response => reconcileSourceRestart(response, launched.client)).catch(error => console.error('Restart recovery unavailable', error))
@@ -613,6 +650,50 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     (sender) => allowedSenders.has(sender.id) && !sender.isDestroyed()
   )
   const bridgeIpc = bridgeInvokeRegistrar(ipcMain)
+  const brainRoots=resolveApplicationRoots()
+  const brainState=brainCutoverStateRoot()
+  const switchBrain=brainCutover({runtime:brainRoots.runtime,state:join(brainState,'source-update'),prepared:join(brainState,'brain-cutover-prepared.json'),archive:join(process.resourcesPath,'app.asar'),
+    bin:app.isPackaged?join(process.resourcesPath,'bin'):resolve(__dirname,'../../bin'),
+    available:async()=>brainCutoverAvailable(brainState,await privateBrainAdmin<BrainAdmissionStatus>('admission-status')),
+    complete:async()=>brainCutoverCommitted(brainState,await privateBrainAdmin<BrainAdmissionStatus>('admission-status')),
+    confirm:async()=>{
+      const owner=applicationWindow
+      if(!owner||owner.isDestroyed()||!owner.isFocused()||!app.isPackaged||rendererTestMode||selfTestTaps)return false
+      const answer=await dialog.showMessageBox(owner,{type:'question',title:'Switch to the BMN brain?',message:'Switch notes, rules and skills to the BMN brain now?',detail:'BMN will close Obsidian, pause the old brain timers and make the vault a read-only archive. It will roll back the switch if a check fails.',buttons:['Cancel','Switch to the BMN brain'],defaultId:0,cancelId:0,noLink:true})
+      return answer.response===1&&!owner.isDestroyed()&&applicationWindow===owner
+    },
+    settleFailed:payloadHash=>settleBrainRollback({state:brainState,bin:join(process.resourcesPath,'bin'),skills:join(process.resourcesPath,'skills'),admin:privateBrainAdmin},payloadHash),
+    run:(permit)=>runBrainCutover({permit,state:brainState,bin:join(process.resourcesPath,'bin'),skills:join(process.resourcesPath,'skills'),
+      admin:privateBrainAdmin})})
+  cancelBrainSwitch=()=>{void switchBrain.dispose().catch(error=>console.error('Brain switch cancellation unavailable',error))}
+  app.once('will-quit',cancelBrainSwitch)
+  // The owner's return to Obsidian after a completed switch: same journal and lock, his native confirmation only.
+  // The palette passes its focused window; the recovery launcher has none, so it works when the window does not.
+  const ownerBrainReturn=async(owner:BrowserWindow|null):Promise<unknown>=>{
+    if(!app.isPackaged||rendererTestMode||selfTestTaps)throw new MainIpcError(ERROR_CODES.invalidArgument,'The real return to Obsidian is available only in the installed app')
+    if(!brainCutoverCommitted(brainState,await privateBrainAdmin<BrainAdmissionStatus>('admission-status')))throw new MainIpcError(ERROR_CODES.invalidArgument,'The brain has not switched, so there is nothing to return')
+    const question={type:'question' as const,title:'Return to the Obsidian brain?',message:'Return notes, rules and skills to the Obsidian brain now?',detail:'BMN will close its brain to agents, copy every note written or changed in BMN into a new folder in ~/brain/inbox, make the vault writable again and restore the old rules, skill and timers. Nothing in the vault is overwritten. Choose Return only if you asked for it yourself.',buttons:['Cancel','Return to the Obsidian brain'],defaultId:0,cancelId:0,noLink:true}
+    const answer=owner?await dialog.showMessageBox(owner,question):await dialog.showMessageBox(question)
+    if(answer.response!==1||owner&&(owner.isDestroyed()||applicationWindow!==owner))return switchBrain.status()
+    await privateBrainAdmin('authorize-return')
+    await rollbackBrainCutover({state:brainState,bin:join(process.resourcesPath,'bin'),skills:join(process.resourcesPath,'skills'),admin:privateBrainAdmin})
+    return switchBrain.status()
+  }
+  brainReturnLauncher=()=>ownerBrainReturn(null)
+  bridgeIpc.handle('aiterm:brain:switch',async(event,action:unknown)=>{
+    if(!senderIsAllowed(event)||BrowserWindow.fromWebContents(event.sender)!==applicationWindow)throw new MainIpcError(ERROR_CODES.unauthorized,'Only BMN’s own window can request the brain switch')
+    const expected=pathToFileURL(join(__dirname,'../renderer/index.html')).href
+    if(app.isPackaged&&event.senderFrame?.url!==expected)throw new MainIpcError(ERROR_CODES.unauthorized,'The brain switch requires BMN’s packaged window')
+    if(action==='status')return switchBrain.status()
+    if(action==='return'){
+      const owner=applicationWindow
+      if(!owner||!owner.isFocused())throw new MainIpcError(ERROR_CODES.unauthorized,'Choose the return in BMN’s focused command palette')
+      return ownerBrainReturn(owner)
+    }
+    if(action!=='begin'||!applicationWindow?.isFocused())throw new MainIpcError(ERROR_CODES.unauthorized,'Choose the brain switch in BMN’s focused command palette')
+    if(!app.isPackaged||rendererTestMode||selfTestTaps)throw new MainIpcError(ERROR_CODES.invalidArgument,'The real brain switch is available only in the installed app')
+    await switchBrain.begin();return switchBrain.status()
+  })
   installWorkspaceIpcHandlers(bridgeIpc, senderIsAllowed, {
     client: () => ({
       request: async <Result,>(method: Parameters<PtyHostClient['request']>[0], params: object) => {
@@ -691,6 +772,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   app.once('will-quit', () => { void browserAccounts.dispose() })
   const agentsIpc = installAgentsIpcHandlers(bridgeIpc, {
     browserAccounts: () => browserAccounts.view().accounts,
+    brainHealth: () => readBrainHealth(),
     senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path), openExternal: (address) => shell.openExternal(address), notifyApp: showAppNotice,
     doctorTerminalEnvironment: environment => terminalGraphicsEnvironment(null, environment,
       bundledTerminfoAsset(resolveApplicationRoots().data, process.resourcesPath, __dirname)),
@@ -1013,6 +1095,7 @@ function createWindow(
       backgroundThrottling: false
     }
   })
+  bindBrainCutoverWindow(window,()=>cancelBrainSwitch())
   trackAllowedSender(allowedSenders, window.webContents)
   // BMN's window opens no windows: links go to the owner's browser through aiterm:link:open (owner, 2026-10-31).
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
@@ -1189,9 +1272,10 @@ process.once('exit', cleanupDevelopmentRoot)
 const instanceDataRoot = resolveApplicationRoots().data
 mkdirSync(instanceDataRoot, { recursive: true, mode: 0o700 })
 chmodSync(instanceDataRoot, 0o700)
-const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
-  focusExistingWindow(applicationWindow)
-)
+const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, (argv) => {
+  if (argv.includes('--brain-return')) launchBrainReturn()
+  else focusExistingWindow(applicationWindow)
+})
 
 function runningTargets(): RunningSessionTarget[] {
   return trackedRunningTargets(processTracking)
@@ -1555,6 +1639,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
   if (!rendererTestMode) presence.start()
   try {
     const startup = await initializeApplication(rendererTestMode)
+    // The recovery launcher needs only the brain host, never the window or its terminal channel.
+    if (process.argv.includes('--brain-return')) launchBrainReturn()
     if (!hostRendererPort) throw new Error('The renderer terminal channel is unavailable')
     applicationWindow = createWindow(startup, {
       terminalPort: hostRendererPort,
@@ -1581,6 +1667,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
   } catch (error) {
     const failure = actionableStartupFailure(error)
     console.error(`[BMN] terminal startup failed: ${failure.message}`)
+    if (process.argv.includes('--brain-return') && hostClient) launchBrainReturn()
     applicationWindow = createWindow(failure)
   }
 })

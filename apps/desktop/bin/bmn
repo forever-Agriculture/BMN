@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { writeSync } from 'node:fs'
+import { brainSwitchComplete,brainStateRoot,configureBrainReceiptReader } from './brain-state.mjs'
 import { nestedAsk, nestedWords } from './agents-team-nested.mjs'
 import { AGENT_BRIEF, GLOBAL_OPTIONS, HANDOFF_OUTLINE, TERMINAL_BRIEF, USAGE } from './bmn-words.mjs'
 import { COMMANDS, CliError, UsageError, call, commandUsage, parseArguments, readCredentials, requireNonEmpty } from './bmn-commands.mjs'
@@ -21,6 +22,10 @@ async function main(argv) {
   if (argv[0] === 'hook') return runHook(argv.slice(1)).catch(() => 0)
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
+  if(['skills','setup-defaults'].includes(argv[0])||argv[0]==='help'&&argv[1]==='agents'){
+    const receipt=await (await import('./brain-cli.mjs')).readBrainCommitReceipt().catch(()=>null),root=brainStateRoot()
+    configureBrainReceiptReader(state=>state===root?receipt:null)
+  }
   // Internal fresh-profile coordinator; its caller supplies the durable SQLite creation claim.
   if (argv[0] === 'setup-defaults') return (await import('./setup-defaults.mjs')).runSetupDefaultsCommand(argv.slice(1))
   // Epic 83: the push policy, read through the socket; the repository's owner and default branch through the agent's own gh.
@@ -29,6 +34,7 @@ async function main(argv) {
   if (argv[0] === 'grant') return (await import('./grant-cli.mjs')).runGrantCommand(argv.slice(1), { readCredentials, call })
   // Epic 77: the project's plan and board are files in the project; no socket, and it works with BMN closed.
   if (argv[0] === 'plan') return (await import('./plan-cli.mjs')).runPlanCommand(argv.slice(1))
+  if (argv[0] === 'brain') return (await import('./brain-cli.mjs')).runBrainCommand(argv.slice(1), { readCredentials, call })
   if (argv[0] === 'qa') return (await import('./qa-cli.mjs')).runQaCommand(argv.slice(1))
   if (argv[0] === 'browser') return (await import('./browser-accounts-cli.mjs')).runBrowserCommand(argv.slice(1))
   if (argv[0] === 'doctor') return (await import('./doctor.mjs')).runDoctorCommand(argv.slice(1))
@@ -67,7 +73,7 @@ async function main(argv) {
     ;[command, ...positionals] = parsed.positionals
     if (parsed.options.yes) throw new UsageError('--yes is only for hooks install')
     if (command === 'help' || parsed.options.help) {
-      const page = command === 'help' && positionals[0] === 'agents' ? AGENT_BRIEF
+      const page = command === 'help' && positionals[0] === 'agents' ? AGENT_BRIEF + (!brainSwitchComplete()?'\nBrain switch: point him to “Switch to the BMN brain…” in the palette; never start or authorize it.':'')
         : command === 'help' && positionals[0] === 'terminal' ? TERMINAL_BRIEF
           : command !== undefined && command !== 'help' ? commandUsage(command) ?? USAGE : USAGE
       process.stdout.write(`${page}\n`)

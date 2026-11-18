@@ -11,8 +11,10 @@ flowchart LR
   R[Renderer: React + xterm.js] --> P[Preload: narrow API]
   P --> M[Electron main]
   M --> U[Utility process: PTY host + companion service]
-  U --> W[Database worker]
-  W --> SQL[(SQLite, WAL)]
+  U --> W[State database worker]
+  W --> SQL[(state.sqlite3, WAL)]
+  U --> BW[Brain worker]
+  BW --> BS[(brain.sqlite3, WAL)]
   U --> PT[PTYs: shell, Claude Code, Codex, ...]
   U --> F[Stored files and saved output]
   C[bmn CLI in a session] --> S[Unix socket, owner-only] --> U
@@ -28,7 +30,8 @@ flowchart LR
 | Renderer | The interface: sidebar, panes, one live xterm.js per session, preferences | `apps/desktop/src/renderer` |
 | Preload | The only bridge from the renderer to the main process, as a typed, validated API | `apps/desktop/src/preload` |
 | Utility | node-pty terminals, the control socket, stored files, backups, Telegram | `apps/desktop/src/utility` |
-| Database worker | The single SQLite connection; every write is one transaction | `apps/desktop/src/utility/database-worker.ts` |
+| State database worker | The state SQLite connection; every write is one transaction | `apps/desktop/src/utility/database-worker.ts` |
+| Brain worker | Its own SQLite connection, schema, history, search, export and backups | `apps/desktop/src/utility/brain-worker.ts` |
 | Quick look search worker | A contents search's reads, masking and matching, apart from the thread that keeps terminals flowing; a stop is read inside each file | `apps/desktop/src/utility/quick-look-search-worker.ts` |
 
 A fresh profile with no rules master or approved team enters Setup, which checks Claude Code, Codex
@@ -302,6 +305,43 @@ bot token at a time; the connector takes a lock for it. See [telegram.md](telegr
 
 **Bounded storage, private files.** XDG folders with owner-only modes; limits on message sizes,
 queues, scrollback and preview decoding. Stored originals are only removed by an explicit delete.
+
+## Brain store and owner-held cutover
+
+`brain.sqlite3` lives beside `state.sqlite3` and has its own worker and migrations. Opening it never
+migrates session metadata or changes process incarnations. A note points to an immutable version;
+edits, withdrawal and restoration append versions. Expected-revision checks, title admission,
+session creation counts and head/search/link updates share one transaction. Source paths identify
+imports, so duplicate legacy names remain distinguishable and withdrawals survive re-import.
+Omitted import sources move to the archive with their history retained. Imports stop once the write
+door opens. Project paths and note links are projections of each current version.
+
+Agent writes follow `bmn brain` → authenticated control socket → brain service → worker. Session
+identity comes from the socket scope, never request metadata. Owner tokens do not substitute for
+a live session. There is no public import, write-door or cutover command. Read commands open the
+existing brain read-only, including while BMN is closed.
+
+Each change batch publishes a read-only Markdown export, with full history in `history.json`.
+The two most recent generated folders are kept; primary history stays in SQLite. Nightly snapshots
+use `VACUUM INTO`, retain14nightly/8weekly copies and catch up a missed night on startup. Explicit
+manual/import checkpoints are retained. Attachments remain in `~/brain/files/`; backups keep their
+contents once by hash, reclaiming an object only after every retained snapshot no longer needs it.
+Scratch restore checks database/version hashes, links, rebuilt search and attachment contents.
+Backup/export failures and incomplete startup recovery appear in Health.
+
+The real write door stays closed until the owner's confirmed **Switch to the BMN brain…** command
+palette action. Restart, reboot, a CLI token or a file cannot mint the live main-process permit.
+The fixed one-shot service has no activation trigger. Main checks the service's kernel peer identity
+and systemd invocation, and binds the running packaged executable, application archive, helpers,
+skills and prepared configuration to a completed update record. A queued or failed update is not
+proof of installation; an earlier completed record remains available.
+
+The journal records originals before changes. It pauses the old writers, makes the vault read-only
+except `files/` and `.git`, drains held/writable-mapped files with kernel lease controls, and checks
+source hashes before switching rules, skill, indexes and the write door. Cancellation before the
+durable commit rolls back. Startup recovers an interrupted journal by rolling back, never by
+starting another switch. Completion reporting follows the durable commit. The installed cutover
+and its installed-build checks remain unverified until the owner performs the palette action.
 
 ## What survives
 

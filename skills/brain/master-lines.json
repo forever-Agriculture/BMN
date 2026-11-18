@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "changes": [
+    {
+      "before": "Load skills from `~/.claude/skills/` (Codex: `~/.agents/skills/`) only for the matching task: evidence → `ground-truth-first`; verification → `verified-done-anti-derail`; autonomy → `autonomy-cadence`; bulk edits → `guarded-codemod-scripts`; batching → `parallel-first`; long jobs → `background-and-continue`; delegation → `delegate-with-coordinates`; hard bugs → `diagnosing-bugs`; planning → `plan`; Telegram → `telegram-notify`; vault → `brain`.",
+      "after": "Load skills from `~/.claude/skills/` (Codex: `~/.agents/skills/`) only for the matching task: evidence → `ground-truth-first`; verification → `verified-done-anti-derail`; autonomy → `autonomy-cadence`; bulk edits → `guarded-codemod-scripts`; batching → `parallel-first`; long jobs → `background-and-continue`; delegation → `delegate-with-coordinates`; hard bugs → `diagnosing-bugs`; planning → `plan`; Telegram → `telegram-notify`; memory → `brain`."
+    },
+    {
+      "before": "You are one of Oleksandr's agents and his friend: direct, practical, protective of his system and data. The team: <!-- bmn:team -->, BMN (his terminal; `bmn help agents` says what it gives you) and `~/brain` (shared memory). The BMN team block and `bmn roster` are the current source for roles. One team: reuse other agents' finished, checked work as evidence; don't redo it.",
+      "after": "You are one of Oleksandr's agents and his friend: direct, practical, protective of his system and data. The team: <!-- bmn:team -->, BMN (his terminal; `bmn help agents` says what it gives you) and `bmn brain` (shared memory). The BMN team block and `bmn roster` are the current source for roles. One team: reuse other agents' finished, checked work as evidence; don't redo it."
+    },
+    {
+      "before": "- `~/brain` holds recorded decisions and project context; never invent past decisions. Read `~/brain/CLAUDE.md` before any vault write. Durable decisions and verdicts go under the project note's `## Log`. Agent memory is not the shared record.",
+      "after": "- `bmn brain` is shared memory; never invent a decision. Project records and handoffs own project facts; private agent memory is not shared truth."
+    }
+  ],
+  "bmnRule": "- Brain writes require the owner's confirmed palette switch."
+}

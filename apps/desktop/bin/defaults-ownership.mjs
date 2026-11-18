@@ -299,6 +299,21 @@ export function readDefaultsOwnership(setupId, { path = defaultsOwnershipPath() 
         dependencies: operation.nextDependencies.map(dep => ({ ...dep, status: 'active' })) })
       liveRefreshes.delete(defaultsTargetKey(target))
     },
+    removeBrainCutoverEntries(expected) {
+      if (!Array.isArray(expected) || expected.length > 3 || new Set(expected.map(row => defaultsTargetKey(row.target))).size !== expected.length ||
+        expected.some(row => row.target.entry !== 'brain' || !(row.target.kind === 'own-skills' && row.target.app === 'source' ||
+          row.target.kind === 'skills' && ['source', 'codex'].includes(row.target.app)) || row.stage !== 'installed' || row.optOut ||
+          row.operation !== null || row.before.kind !== 'absent' || !Number.isSafeInteger(row.current.revision) || row.current.revision < 1)) throw failure('invalid brain cutover ownership retirement')
+      const keys = new Set(expected.map(row => defaultsTargetKey(row.target)))
+      const present = expected.filter(row => entryFor(row.target) !== undefined)
+      if (!present.length) return
+      if (present.length !== expected.length || expected.some(row => JSON.stringify(entryFor(row.target)) !== JSON.stringify(row) || metadataPending(row)) ||
+        Object.entries(state.entries).some(([key, row]) => !keys.has(key) && row.dependencies.some(dep => dep.status !== 'released' &&
+          expected.some(backing => dep.backingInstallId === backing.transaction)))) throw failure('brain ownership changed, opted out or acquired another dependency; left as it is', 'REVISION_CONFLICT')
+      const next = copy(state)
+      for (const key of keys) delete next.entries[key]
+      commit(next)
+    },
     bindCompatibility(kind, path, observedHash) {
       if (!recordKinds.includes(kind) || !absolute(path) || !nullableHash(observedHash) || Object.hasOwn(state.compatibility, kind)) throw failure('compatibility provenance cannot be initialized or replaced')
       const next = copy(state); next.compatibility[kind] = { path, hash: observedHash, pending: null }; commit(next)

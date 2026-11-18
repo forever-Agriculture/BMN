@@ -184,6 +184,22 @@ extraResources:
     to: bin/hooks-floor.mjs
   - from: bin/codex-hook-approval.mjs
     to: bin/codex-hook-approval.mjs
+  - from: bin/brain-cli.mjs
+    to: bin/brain-cli.mjs
+  - from: bin/brain-markdown.mjs
+    to: bin/brain-markdown.mjs
+  - from: bin/brain-state.mjs
+    to: bin/brain-state.mjs
+  - from: bin/brain-cutover-skills.mjs
+    to: bin/brain-cutover-skills.mjs
+  - from: bin/brain-cutover-files.py
+    to: bin/brain-cutover-files.py
+  - from: bin/brain-cutover-peer.py
+    to: bin/brain-cutover-peer.py
+  - from: bin/brain-cutover-service.py
+    to: bin/brain-cutover-service.py
+  - from: bin/brain-vault-writers.py
+    to: bin/brain-vault-writers.py
   - from: bin/policy-cli.mjs
     to: bin/policy-cli.mjs
   # Epic 84: `bmn grant`.

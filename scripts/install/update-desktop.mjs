@@ -5,6 +5,7 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -18,9 +19,12 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { UPDATE_UNIT, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
+import { UPDATE_UNIT, desktopEntryReturnsBrain, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 import { buildFolders, packageSmokeAndSwap } from '../lib/staged-build.mjs'
+import { brainFileHash, brainResourcesHash, brainCutoverStateRoot, brainDeliveryCommit, brainContainsDelivery } from '../lib/brain-provenance.mjs'
+
+import { installBrainCutoverService } from './brain-cutover-service.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const workerPath = fileURLToPath(import.meta.url)
@@ -140,6 +144,12 @@ function log(message) {
   appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`)
 }
 
+export function brainUpdateNotice(commit,state=brainCutoverStateRoot()) {
+  const opening=`Reopen BMN to run ${commit.slice(0,7)}.\n`
+  if(!existsSync(join(state,'brain-cutover','journal.json')))return opening+'The brain is installed; nothing has switched. Use “Switch to the BMN brain…” in the command palette.'
+  return opening+'The brain is installed. Open BMN to check the brain’s current state.'
+}
+
 function notify(summary, body, urgency = 'normal') {
   if (process.platform !== 'linux') return
   spawnSync('notify-send', ['--urgency', urgency, summary, body], { stdio: 'ignore' })
@@ -180,6 +190,27 @@ async function waitForPackagedAppToExit() {
   }
 }
 
+/** Called only from the clean canonical main checkout, never from an implementation worktree. */
+export function prepareBrainDelivery({project=repoRoot,commit,state=stateDirectory,install=installBrainCutoverService}) {
+  const common=spawnSync('/usr/bin/git',['-C',project,'rev-parse','--path-format=absolute','--git-common-dir'],{encoding:'utf8',timeout:10_000})
+  if(common.status!==0||resolve(project)!==dirname(common.stdout.trim()))throw new Error('Held brain installation requires the canonical delivery checkout')
+  const delivered=brainDeliveryCommit(project,commit),path=join(state,'brain-delivery.json')
+  if(existsSync(path)){
+    const prior=JSON.parse(readFileSync(path,'utf8'))
+    if(prior.version!==1||prior.epic!==126||prior.commit!==delivered)throw new Error('The original brain delivery identity changed; kept unchanged')
+  }else{
+    mkdirSync(state,{recursive:true,mode:0o700})
+    const text=JSON.stringify({version:1,epic:126,commit:delivered})+'\n',temporary=path+'.tmp-'+process.pid
+    const fd=openSync(temporary,'wx',0o600)
+    try{writeFileSync(fd,text);fsyncSync(fd)}finally{closeSync(fd)}
+    renameSync(temporary,path)
+    if(readFileSync(path,'utf8')!==text)throw new Error('Brain delivery identity read-back failed')
+    const directory=openSync(state,'r');try{fsyncSync(directory)}finally{closeSync(directory)}
+  }
+  install({sourceRoot:project,resources:packagedApp(project).resources})
+  return delivered
+}
+
 async function runWorker() {
   mkdirSync(stateDirectory, { recursive: true })
   writeFileSync(logPath, '')
@@ -191,6 +222,7 @@ async function runWorker() {
   const buildingState = gitState()
   const readiness = repositoryReadiness(buildingState)
   if (readiness) throw new Error(readiness)
+  const brainDelivered=prepareBrainDelivery({commit:buildingState.head})
   writeStatus({ phase: 'building', commit: buildingState.head, updatedAt: new Date().toISOString(), logPath })
 
   // The live build is not touched until the new one has passed its smoke test in a folder beside it.
@@ -212,14 +244,37 @@ async function runWorker() {
   if (!desktopEntryRunsLauncher(readFileSync(desktopEntry, 'utf8'), launcher)) {
     throw new Error('desktop entry does not run the BMN launcher')
   }
+  if (!desktopEntryReturnsBrain(readFileSync(desktopEntry, 'utf8'), binary)) {
+    throw new Error('desktop entry lacks the recovery launcher for the return to Obsidian')
+  }
   if (readFileSync(launcher, 'utf8') !== launcherScript({ binary, statusPath })) {
     throw new Error('BMN launcher does not start the packaged BMN binary')
   }
 
+  if(brainDeliveryCommit(repoRoot,completedState.head)!==brainDelivered||!brainContainsDelivery(repoRoot,brainDelivered,completedState.head))throw new Error('Packaged build no longer contains brain delivery')
+  for(const name of ['brain-cutover-service.py','brain-cutover-peer.py']){
+    const installed=join(dirname(archive),'bin',name),source=join(repoRoot,'apps/desktop/bin',name)
+    if(!lstatSync(installed).isFile()||lstatSync(installed).isSymbolicLink()||brainFileHash(installed)!==brainFileHash(source))throw new Error('Installed brain helper provenance failed')
+  }
+  // Verify the held unit again after packaging, without starting or enabling it.
+  prepareBrainDelivery({commit:completedState.head})
   const completedAt = new Date().toISOString()
-  writeStatus({ phase: 'complete', commit: completedState.head, completedAt, logPath, binary, liveBuild })
+  const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex')
+  const completed = { phase: 'complete', commit: completedState.head, brainDeliveryCommit:brainDelivered, completedAt, logPath, binary, archive,
+    binaryHash: digest(binary), archiveHash: digest(archive), resourcesHash:brainResourcesHash(dirname(archive)),
+    preparedHash:existsSync(join(brainCutoverStateRoot(),'brain-cutover-prepared.json'))?brainFileHash(join(brainCutoverStateRoot(),'brain-cutover-prepared.json')):null, brainVersion: 126, liveBuild }
+  // latest.json is replaced at queue time. Keep completed provenance independently of later attempts.
+  const history = join(stateDirectory, 'completed')
+  mkdirSync(history, { recursive: true, mode: 0o700 })
+  const record = join(history, completedState.head + '.json'), temporary = record + '.tmp'
+  const completedFile=openSync(temporary,'w',0o600)
+  try{writeFileSync(completedFile,JSON.stringify(completed)+'\n');fsyncSync(completedFile)}finally{closeSync(completedFile)}
+  renameSync(temporary, record)
+  for(const path of [history,stateDirectory]){const directory=openSync(path,'r');try{fsyncSync(directory)}finally{closeSync(directory)}}
+  if (readFileSync(record, 'utf8') !== JSON.stringify(completed) + '\n') throw new Error('Completed build record read-back failed')
+  writeStatus(completed)
   log(`COMPLETE commit ${completedState.head}`)
-  notify('BMN updated', `Reopen BMN to run ${completedState.head.slice(0, 7)}.`)
+  notify('BMN updated', brainUpdateNotice(completedState.head))
 }
 
 function queueWorker() {
@@ -229,6 +284,8 @@ function queueWorker() {
   const state = gitState()
   const readiness = repositoryReadiness(state)
   if (readiness) throw new Error(readiness)
+
+  prepareBrainDelivery({commit:state.head})
 
   const active = spawnSync('systemctl', ['--user', 'is-active', '--quiet', unit])
   if (active.status === 0) {

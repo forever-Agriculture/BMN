@@ -41,7 +41,7 @@ export declare function checkTargets(environment?: NodeJS.ProcessEnv | Record<st
 export declare function rulesRecord(path: string): string | null
 export declare function changeRulesRecord(path: string, expected: string | null, next: string | null): void
 export declare function rememberSetupMaster(path: string, hash: string, reason: string, now?: Date): ReturnType<typeof masterHistory>[number]
-export declare function installRules(harnesses: RulesHarness[], options?: { yes?: boolean; asJson?: boolean; environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; afterConfirm?: () => void; beforeTarget?: (harness: RulesHarness, index: number) => void; expectedPlanHash?: string }): Promise<InstallResult>
+export declare function installRules(harnesses: RulesHarness[], options?: { yes?: boolean; asJson?: boolean; environment?: NodeJS.ProcessEnv | Record<string, string>; now?: Date; afterConfirm?: () => void; beforeTarget?: (harness: RulesHarness, index: number) => void; expectedPlanHash?: string; cutover?: boolean; beforeTransaction?: (owned: CutoverRulesOwnership) => void }): Promise<InstallResult>
 declare function planInstall(harnesses: RulesHarness[], options?: { environment?: NodeJS.ProcessEnv | Record<string, string> }): Promise<{ code: string; message?: string; planHash: string | null; plans: unknown[] }>
 export declare function planView(result: Awaited<ReturnType<typeof planInstall>>): { code: string; message?: string; plan_hash: string | null; targets: { harness: RulesHarness; path: string; resolved_path: string; kind: string; change: string; rendering: RenderingKind; reason: string; team_form: string; link_target?: string; diff: string; fold: string[] }[] }
 /** One app's file as a save or an install plans it. */
@@ -85,3 +85,11 @@ export declare function writePrivate(path: string, text: string, options?: { gua
 export declare function newTransaction(now: Date): { id: string; folder: string }
 export declare function routeStillMatches(harness: string, decision: { kind: RenderingKind; route: { provider: string } | null }, environment: NodeJS.ProcessEnv | Record<string, string>): Promise<{ ok: boolean; reason?: string; remedy?: string; inspected?: unknown }>
 export declare function findRollout(root: string, cwd: string, since: number): string | null
+
+export interface CutoverRulesOwnership {
+ id:string;targets:{path:string;priorRecord:string|null;writtenHash:string;writtenText:string;mode:number}[]
+ history:{revision:number;hash:string;bytes:number;at:string;reason:string}|null
+}
+export declare function rollbackCutoverRules(owned:CutoverRulesOwnership,audit:string):void
+
+export declare function preflightCutoverRules(owned:CutoverRulesOwnership):void

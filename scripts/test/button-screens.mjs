@@ -18,9 +18,10 @@
 // drawn as the fixture's moment (2026-01-01 00:00 UTC); time values, and so every age and duration, stay real.
 /* global window, document, getComputedStyle */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { removeOwnedDirectory } from '../lib/owned-directories.mjs'
 
 const buttonVariants = Object.freeze([
   Object.freeze({ colorMode: 'black', width: 1280 }),
@@ -87,7 +88,8 @@ function freezeCalendar(fixed) {
 
 // A fresh fixture for one variant: the data folders, HOME with the synthetic team, and the project folder.
 function prepareFixture({ base, appDirectory, fixtureFolder }) {
-  rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  mkdirSync(base, { mode: 0o700 })
+  const stat = lstatSync(base), identity = { device: stat.dev, inode: stat.ino }
   const roots = Object.fromEntries(['config', 'data', 'state', 'cache', 'runtime', 'home', 'stubs'].map((name) => {
     const path = join(base, name)
     mkdirSync(path, { recursive: true, mode: 0o700 })
@@ -120,7 +122,7 @@ function prepareFixture({ base, appDirectory, fixtureFolder }) {
     env: { PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_NOSYSTEM: '1' }
   })
   writeFileSync(join(fixtureFolder, 'README.md'), '# synthetic project\n\nA file for Quick Look and the Files panel.\n')
-  return { roots, home, agentsDirectory, roster }
+  return { roots, home, agentsDirectory, roster, identity }
 }
 
 /**
@@ -138,13 +140,15 @@ export async function captureButtonScreens(context) {
     mkdirSync(directory, { recursive: true })
     context.phase(`button screens ${label}`)
     const fixture = prepareFixture({ base, appDirectory: context.appDirectory, fixtureFolder: context.fixtureFolder })
-    const application = await context.launch(fixture.roots, { BMN_START_INSTALLS: 'hooks' })
-    let walked
+    let application, walked
     try {
+      application = await context.launch(fixture.roots, { BMN_START_INSTALLS: 'hooks' })
       walked = await walkStates(application, { ...context, ...fixture, variant, directory })
     } finally {
-      await context.close(application, fixture.roots)
-      rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+      try { if (application) await context.close(application, fixture.roots) }
+      finally {
+        removeOwnedDirectory(base, fixture.identity)
+      }
     }
     await writeFile(join(directory, 'buttons.json'), `${JSON.stringify({ variant, states: walked.facts }, null, 1)}\n`)
     const outlined = Object.entries(walked.facts).flatMap(([slug, buttons]) => buttons

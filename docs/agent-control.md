@@ -153,6 +153,7 @@ Commands:
   judge ask --state-file <path>|- --questions-file <path> --data public|private
                                             Ask the team's judge typed questions about one text; it answers
                                             with numbers, and BMN reads them (bmn judge --help)
+  brain search|read|write|edit|withdraw|restore  Lasting cross-project memory (bmn brain --help)
   doctor [--json]                          Read-only app health and show-only leftovers; automatic schedule,
                                             one shared run, also with BMN closed (bmn doctor --help)
   plan status|check|set|go                  The project's planning board in BMN's format (a BMAD one reads only): print
@@ -1304,6 +1305,46 @@ woken later), or unknown (no tick decided it). Ticks no BMN process swept (BMN n
 start, which is never acted on, the computer asleep, or the open requests unreadable) are unknown hours: they never
 count as woken or missed. The account shows as "The wake" in "While you were away", and `bmn away --night [--json]`
 (control method `away.night`, read-only, any scope) prints it for the last period, or this one so far while he is away.
+
+## Lasting memory: `bmn brain`
+
+The brain is an extra shared store for Claude Code and Codex. It does not replace project records,
+handoffs or dev-auto state. Commands call no model and inject no session text.
+
+```sh
+bmn brain search "cross-project preference"
+bmn brain read "title or id" --section "Heading" --links
+bmn brain history ID
+bmn brain write "Title" --revision 0 --text-file FILE --kind decision --scope all
+bmn brain edit ID --revision N --text-file FILE
+bmn brain withdraw ID --revision N
+bmn brain restore ID --revision N
+bmn brain export
+```
+
+`--json` provides structured output. `--text-file -` reads standard input. Search returns at most
+ten rows; `--archived` includes archived notes. Read metadata includes revision, origin, date and
+scope. Section reads keep child headings and ignore headings inside fenced examples. Imported
+duplicate titles require a note id. `--data-root DIR` is available only for read commands.
+
+Writes require the current authenticated session and a completed cutover. The server enforces at
+most three new notes per session, unique normalized titles, and scope `all` or a group of at least
+two projects. Project-only facts are refused with their project records named as the proper home.
+Edits require the current revision; a stale reply says to read again. Withdrawal appends history
+and removes the note from search. `delete` is refused; named owner deletion is later work.
+An `origin` string cannot bypass admission. There is no session import or authorization operation.
+
+Before the owner switches, write attempts explain that the brain is read-only. With BMN closed,
+reads open only the existing database, while writes are refused. An export failure after a saved
+change explicitly tells the caller to read the current revision before retrying.
+
+The only real switch entry is the focused, packaged BMN window's **Switch to the BMN brain…**
+palette action and native confirmation. `bmn help agents` points to it while held. CLI tokens,
+stored records and direct service starts are not owner consent. No restart automatically starts
+the service. `~/brain` remains protected against removal after it becomes the read-only archive.
+The cutover and its installed checks run after the owner's later action; before that they are
+unverified on the installed build. [Architecture](architecture.md#brain-store-and-owner-held-cutover)
+describes the journal, build proof, write barrier, backup and recovery boundaries.
 
 ## The team: team file, check and rules
 
@@ -3347,6 +3388,7 @@ bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
   Manual cards: ask ... --choices-json JSON. BMN adds Other; phone answers send ordinary messages.
   bmn hooks install asks Yes for target/diff (default No); scripts need --yes; direct edits remain.
+Brain switch: point him to “Switch to the BMN brain…” in the palette; never start or authorize it.
 ```
 
 ## BMN's start brief

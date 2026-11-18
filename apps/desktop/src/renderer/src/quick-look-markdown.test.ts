@@ -182,3 +182,26 @@ describe('masks and find on the page', () => {
     expect(matchesOnPage(findMatches(text, 'strong** words', false), shown)).toEqual([])
   })
 })
+
+it('uses only captured generation targets for Brain links and Obsidian embeds while keeping literal code untouched',()=>{
+ const map={
+  'markdown:../../files/asset.txt':'/synthetic/generation/assets/captured.txt',
+  'wiki:asset.txt':'/synthetic/generation/assets/captured.txt',
+  'wiki:Other':'/synthetic/generation/other.md'
+ }
+ const text='[asset](../../files/asset.txt) ![[asset.txt]] [[Other|label]] [[Other#choice]] [unresolved](files/missing.bin) `![[asset.txt]]`'
+ const page=markdownPage(text,map),inlines=(page.blocks[0] as Extract<MarkdownBlock,{kind:'paragraph'}>).children
+ const links=inlines.filter(inline=>inline.kind==='link'||inline.kind==='image')
+ expect(links.map(inline=>inline.target)).toEqual([
+  {kind:'file',path:map['markdown:../../files/asset.txt'],line:null,column:null,heading:null},
+  {kind:'file',path:map['wiki:asset.txt'],line:null,column:null,heading:null},
+  {kind:'file',path:map['wiki:Other'],line:null,column:null,heading:null},
+  {kind:'file',path:map['wiki:Other'],line:null,column:null,heading:'choice'},
+  {kind:'none'}
+ ])
+ const note=links[2] as Extract<MarkdownInline,{kind:'link'}>
+ expect(inlineText(note.children)).toBe('label')
+ expect(note.children[0]).toMatchObject({kind:'text',from:text.indexOf('label')})
+ expect(inlines.find(inline=>inline.kind==='code')).toMatchObject({text:'![[asset.txt]]'})
+ expect(markdownPage('[x](files/unmapped)',{}).blocks).toHaveLength(1)
+})

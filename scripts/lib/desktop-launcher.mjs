@@ -206,3 +206,12 @@ fi
 exec "$binary" "$@"
 `
 }
+
+/** The desktop entry's right-click action that runs the owner-confirmed return to Obsidian without BMN's window (Epic 126). */
+export function brainReturnActionLines(binary) {
+  return ['[Desktop Action brain-return]', 'Name=Return to the Obsidian brain…', `Exec="${binary}" --brain-return`]
+}
+export function desktopEntryReturnsBrain(entry, binary) {
+  const lines = entry.split(/\r?\n/u)
+  return lines.includes('Actions=brain-return;') && brainReturnActionLines(binary).every((line) => lines.includes(line))
+}

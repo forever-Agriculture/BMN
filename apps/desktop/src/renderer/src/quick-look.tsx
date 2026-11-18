@@ -460,7 +460,7 @@ export function QuickLook(props: {
   // A Markdown file of at most 512 KiB reads as a page unless he chose source for it (Story 67.4).
   const markdown = !!ready && quickLookFileType(ready.path).language === 'markdown'
   const pageTooLarge = markdown && ready.byteLength > MARKDOWN_PAGE_MAX_BYTES
-  const page = useMemo(() => (markdown && !pageTooLarge ? markdownPage(text) : null), [markdown, pageTooLarge, text])
+  const page = useMemo(() => (markdown && !pageTooLarge ? markdownPage(text,ready?.linkTargets) : null), [markdown, pageTooLarge, text, ready?.linkTargets])
   const rendered = !!page && !!ready && markdownModes.get(ready.path) !== 'source'
   const runs = useMemo(() => (page ? pageRuns(page) : []), [page])
   const matches = useMemo(() => {

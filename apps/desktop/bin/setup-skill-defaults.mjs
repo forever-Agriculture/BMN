@@ -88,7 +88,7 @@ function checkMetadataBinding(target, setup) {
   if (!bound(metadata.record, setup.after) || !bound(setup.current.record, setup.current.fingerprint)) throw failure('the setup skill record does not bind to its original and current revision')
 }
 
-function checked(manifest, folder, journal, current) {
+function checked(manifest, folder, journal, current, retiring = false) {
   const setup = manifest.setup, target = setup?.target, entry = target && journal.snapshot().entries[defaultsTargetKey(target)]
   if (!setup || manifest.kind !== 'setup-skill' || !entry || entry.transaction !== manifest.id || folder !== originalFolder(manifest.id) ||
     !equal(entry.target, target) || !same(entry.before, setup.before) || !same(entry.after, setup.after) ||
@@ -98,8 +98,23 @@ function checked(manifest, folder, journal, current) {
   checkMetadataBinding(target, setup)
   const all = records(journal)
   if (setup.metadata !== null && (!setup.metadata || !entry.compatibility.includes(setup.metadata.kind) ||
-    !equal(recordAt(all, setup.metadata), entry.stage === 'opted-out' ? setup.metadata.prior : setup.current.record))) throw failure('the setup skill compatibility binding changed')
+    !(retiring && recordAt(all,setup.metadata)===null) && !equal(recordAt(all, setup.metadata), entry.stage === 'opted-out' ? setup.metadata.prior : setup.current.record))) throw failure('the setup skill compatibility binding changed')
   return { entry, all }
+}
+
+
+/** Internal whole-Brain recovery; current refreshes must retain their original install provenance. */
+export function checkedBrainCutoverSkill(saved,{setupId,retiring=false,restoring=false}={}) {
+ assertDefaultsAdmission()
+ const journal=readDefaultsOwnership(setupId),row=journal.snapshot().entries[defaultsTargetKey(saved.target)]
+ if(!row){if(retiring)return null;throw failure('the Brain setup entry disappeared')}
+ if(row.transaction!==saved.transaction||!equal(row.target,saved.target)||!same(row.before,saved.before)||!same(row.after,saved.after)||row.stage!=='installed'||row.optOut||row.operation!==null||row.current.revision<saved.current.revision)throw failure('the Brain setup provenance or refresh state changed')
+ const folder=originalFolder(row.transaction),manifest=loadManifest(folder),parent=setupFileParent(row.target.path)
+ try{
+  if(manifest.state!=='complete'||manifest.reason!=='brain cutover'||manifest.setup?.setupId!==journal.snapshot().setupId)throw failure('the original Brain setup transaction changed')
+  checked(manifest,folder,journal,restoring?row.current.fingerprint:observeSetupSkill(row.target.path,parent),retiring)
+  return row
+ }finally{closeSync(parent.fd)}
 }
 
 /** Unknown legacy destinations retain backing; matching legacy bytes never grant setup ownership. */
@@ -142,17 +157,17 @@ function resultError(error, { manifest, folder, staged, published = false } = {}
     recoveryPaths: [recovery?.holdingPath, stagedPath, folder].filter(Boolean) }
 }
 
-export function installSetupSkill(target, desired, { setupId, now = new Date(), beforePublish, afterPublish } = {}) {
+export function installSetupSkill(target, desired, { setupId, now = new Date(), beforePublish, afterPublish, cutover = false } = {}) {
   return withDefaultsAdmission(() => {
     let parent, manifest, folder, staged, published = false
     try {
-      targetValid(target, desired); parent = setupFileParent(target.path)
+      targetValid(target, desired);if (cutover && target.entry !== 'brain') throw failure('cutover adoption is only for the brain skill'); parent = setupFileParent(target.path)
       const journal = readDefaultsOwnership(setupId), all = records(journal, true)
       const before = observeSetupSkill(target.path, parent), state = journal.inspect(target, before)
       if (state !== 'new') return { code: 'OK', transaction: null, written: [], state }
       if (before.kind !== 'absent') return { code: 'FOREIGN_TARGET', transaction: null, written: [], message: `${target.path} is not setup-owned; left as it is` }
       const allocated = newTransaction(now); folder = allocated.folder
-      manifest = { id: allocated.id, created_at: now.toISOString(), kind: 'setup-skill', reason: `setup skill ${target.entry}`, state: 'started',
+      manifest = { id: allocated.id, created_at: now.toISOString(), kind: 'setup-skill', reason: cutover ? 'brain cutover' : `setup skill ${target.entry}`, state: 'started',
         targets: app(target) ? [{ harness: target.app, skill: target.entry, path: target.path }] : [], setup: { setupId, target, before } }
       staged = stageSetupSkill(parent, desired, allocated.id, { beforeCreate: path => {
         manifest.setup.staging = { version: 1, kind: 'skill', sourcePath: target.path, path }; saveSetupManifest(folder, manifest)
@@ -225,6 +240,7 @@ export function refreshSetupSkill(target, desired, { setupId, beforeHold, afterH
 }
 
 function planSkillUndo(manifest, folder) {
+    if (manifest.reason === 'brain cutover') throw failure('Recover the whole brain switch in BMN; a skill cannot be removed separately', 'CUTOVER_RECOVERY_REQUIRED')
     const target = manifest.setup?.target, journal = readDefaultsOwnership(manifest.setup?.setupId), parent = setupFileParent(target.path)
     try {
       const current = observeSetupSkill(target.path, parent), { entry, all } = checked(manifest, folder, journal, current)

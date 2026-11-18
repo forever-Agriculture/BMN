@@ -17,6 +17,9 @@ const pathValid = value => typeof value === 'string' && value.length <= 4096 && 
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value
 
+const brainObservation=value=>exact(value,['hash','device','inode','linkDevice','linkInode','target'])&&hash(value.hash)&&pathValid(value.target)&&['device','inode','linkDevice','linkInode'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0)
+const brainProof=value=>exact(value,['version','installId','revision','current','refresh'])&&value.version===1&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.installId)&&Number.isSafeInteger(value.revision)&&value.revision>=1&&brainObservation(value.current)&&(value.refresh===null||exact(value.refresh,['id','revision','prior','nextHash'])&&typeof value.refresh.id==='string'&&value.refresh.revision===value.revision&&brainObservation(value.refresh.prior)&&hash(value.refresh.nextHash))
+
 export function setupSkillRecordPath(kind) {
   if (!kinds.includes(kind)) throw failure('unknown skill metadata kind')
   return kind === 'own-skills' ? join(agentsDirectory(), 'state/own-skills.json') : join(agentsDirectory(), 'state/rules/skills-written.json')
@@ -28,7 +31,7 @@ export function validateSetupSkillRecords(kind, value) {
   if (kind === 'own-skills') {
     valid = exact(value, ['version', 'skills', 'removed']) && value.version === 1 && object(value.skills) && object(value.removed) &&
       Object.keys(value.skills).length + Object.keys(value.removed).length <= 4096 &&
-      Object.entries(value.skills).every(([skill, row]) => name(skill) && (exact(row, ['path', 'copy', 'at']) || exact(row, ['path', 'copy', 'at', 'took_over'])) &&
+      Object.entries(value.skills).every(([skill, row]) => name(skill) && (exact(row, ['path', 'copy', 'at']) || exact(row, ['path', 'copy', 'at', 'took_over']) || skill==='brain'&&exact(row,['path','copy','at','brain'])&&brainProof(row.brain)) &&
         pathValid(row.path) && basename(row.path) === skill && pathValid(row.copy) && basename(row.copy) === skill && timestamp(row.at) &&
         (!Object.hasOwn(row, 'took_over') || pathValid(row.took_over)) && !Object.hasOwn(value.removed, skill)) &&
       Object.entries(value.removed).every(([skill, at]) => name(skill) && timestamp(at))

@@ -7,6 +7,7 @@ export const MAX_TERMINAL_CHUNK_BYTES = 256 * 1024
 export const METHOD_REGISTRY = Object.freeze({
   hello: 'hello',
   updateRestart: 'app.updateRestart',
+  brainAdmin: 'app.brainAdmin',
   healthGet: 'health.get',
   workspaceList: 'workspace.list',
   workspaceCreate: 'workspace.create',

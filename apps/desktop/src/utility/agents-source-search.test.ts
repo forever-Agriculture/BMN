@@ -107,6 +107,7 @@ describe('no schema-1 roster word is left (60.1 AC5)', () => {
  */
 describe('team and rules state has no path into the database, Backup export, Telegram or logs (R60-NFR3)', () => {
   const HOLDERS = [
+    'apps/desktop/bin/brain-state.mjs',
     ...inFolder('apps/desktop/bin', /^(agents-.*|setup-.*|defaults-.*|doctor(?:-(?:adapters|state|results|text|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|opencode-(?:project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)\.mjs$/),
     // app-program only finds an agent app's program on PATH for Health; it is held to the same rule because the IPC module imports it.
     ...inFolder('apps/desktop/src/main', /^(agents-(approval|ipc)|auto-tests|visibility-refresh|app-program|first-run-setup|setup-team-draft)\.ts$/)
@@ -125,14 +126,14 @@ describe('team and rules state has no path into the database, Backup export, Tel
     // Epic 112 adds agents-team-vision; the plan reader it uses is handed in by the `bmn` entry point, outside this graph.
     // 2026-11-08 adds agents-bmn-rules, BMN's own rules block appended to every rendering; it imports only node:crypto.
     // Epic120 adds the pure shared Small work accessor inside this same closed graph.
-    expect(HOLDERS).toHaveLength(84)
+    expect(HOLDERS).toHaveLength(85)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|small-work|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|bmn-rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-qa|team-qa-prepare|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree|team-vision)|doctor(?:-(?:adapters|state|results|text|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|native-rules|secret-list|hooks-floor|risky-allow|opencode-(?:floor|project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|small-work|state|check(-(base|argv|routes|workspace|consequences|evaluate|team-ask))?|rules|bmn-rules|cli|approval|guard|context|skills|own-skills|research|ask|fence|supervised|judge|tools|tool-files|opencode|container|team-app|team-ask|team-browser|team-cli|team-forms|team-qa|team-qa-prepare|team-inputs|team-nested|team-pictures|team-places|team-resolve|team-run|team-supervisor|team-tree|team-vision)|doctor(?:-(?:adapters|state|results|text|leftovers|leftover-results|profile|locations|continuity|inspection(?:-worker)?))?|setup-[a-z-]+|defaults-[a-z-]+|bmn-hooks|bmn-opencode-plugin|native-rules|secret-list|hooks-floor|risky-allow|opencode-(?:floor|project-reader|project-git|reader-child|reader-plugin|child-accounting)|safe-config-write|text-diff|shared-helpers|brain-state)(\.mjs)?|\.\/workspace-ipc|\.\/app-program|\.\/auto-tests)$/
     // New adapters remain inside this graph; injected store or delivery imports must fail it.
     for (const file of HOLDERS.filter(file => /(?:setup-|defaults-)/.test(file) || file.endsWith('/agents-team-qa.mjs'))) {
       for (const forbidden of ['./database-client', './telegram-service', './backup-export', './logger']) {
@@ -158,7 +159,7 @@ describe('team and rules state has no path into the database, Backup export, Tel
     expect(report(search(main, /\bconsole\.|\blogger\b|\blog\.(info|warn|error|debug)\(/))).toBe('PASS')
   })
 
-  it('only the app entry point and the CLI reach them', () => {
+  it('only the app entry point, CLI and journaled cutover reach them', () => {
     const sources = [
       ...inFolder('apps/desktop/src/main', /\.ts$/), ...inFolder('apps/desktop/src/utility', /\.ts$/),
       ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn',
@@ -166,7 +167,13 @@ describe('team and rules state has no path into the database, Backup export, Tel
       ...inFolder('apps/desktop/bin', /^bmn-.+\.mjs$/), 'apps/desktop/bin/qa-pane-run.mjs'
     ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
     const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills|research|guard|team-qa-prepare)|visibility-refresh)(\.mjs)?$/.test(name)))
-    expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/bin/bmn-hook-runtime.mjs', 'apps/desktop/bin/bmn-hooks.mjs', 'apps/desktop/src/main/index.ts'])
+    expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/bin/bmn-hook-runtime.mjs', 'apps/desktop/bin/bmn-hooks.mjs', 'apps/desktop/src/main/brain-cutover-run.ts', 'apps/desktop/src/main/index.ts', 'apps/desktop/src/utility/brain-cutover-journal.ts'])
+    expect(imports('apps/desktop/bin/brain-state.mjs').every(name => /^node:/.test(name))).toBe(true)
+    const journal = readFileSync(join(REPOSITORY, 'apps/desktop/src/utility/brain-cutover-journal.ts'), 'utf8')
+    expect(journal).toContain("import type {CutoverRulesOwnership} from '../../bin/agents-rules.mjs'")
+    expect(journal).not.toMatch(/(?:^|\n)import(?! type)[^\n]*agents-rules/)
+    const cutover = readFileSync(join(REPOSITORY, 'apps/desktop/src/main/brain-cutover-run.ts'), 'utf8')
+    expect(cutover.indexOf('if(!recoveryOnly)assertBrainCutoverPermit(permit)')).toBeLessThan(cutover.indexOf("const rules=await import("))
   })
 })
 

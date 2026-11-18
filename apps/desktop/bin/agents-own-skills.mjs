@@ -1,7 +1,7 @@
 // MODULE: agents-own-skills.mjs - Story 77.4: BMN's own skills (plan, team-ask, report-artifact, web-question, jev-judge) install themselves into the skills folder as BMN's entries, pointing at a copy that stays readable with BMN closed; a renamed skill's old name is retired
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
-import { randomBytes } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { constants,closeSync,fsyncSync,openSync,readdirSync,readlinkSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,7 @@ import { copyTree, entryOf, treeHash } from './agents-skills.mjs'
 import { realOrNull } from './shared-helpers.mjs'
 import { optionalDefaultsOwnership } from './defaults-ownership.mjs'
 import { maintainSetupOwnSkills } from './setup-own-skills.mjs'
+import { brainSwitchComplete } from './brain-state.mjs'
 
 /**
  * BMN ships a few skills of its own, listed in `skills/manifest.json` beside them (in the repository, and in a
@@ -47,17 +48,17 @@ export function ownCopiesRoot(environment = process.env) {
   return join(data, 'bmn', 'skills')
 }
 
-function shippedNames(root) {
+function shippedNames(root,environment) {
   const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'))
   if (!Array.isArray(manifest?.skills)) throw new Error('skills/manifest.json has no skills list')
-  return manifest.skills.filter((name) => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/u.test(name))
+  return manifest.skills.filter((name) => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/u.test(name) && (name !== 'brain' || brainSwitchComplete(environment,environment.HOME||homedir())))
 }
 
 /** Names only, for the fresh-profile approval proposal before any asset is installed. */
 export function shippedSkillNames(environment = process.env) {
   const root = shippedSkillsRoot(environment)
   if (root === null) throw new Error('BMN shipped skills are unavailable')
-  return shippedNames(root)
+  return shippedNames(root,environment)
 }
 
 /** Old names of renamed skills, from the manifest's `retired` list; a name still shipped is never retired. */
@@ -81,7 +82,48 @@ function writeRecord(record) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const temporary = `${path}.${process.pid}-${randomBytes(3).toString('hex')}.tmp`
   writeFileSync(temporary, `${JSON.stringify({ version: OWN_SKILLS_RECORD_VERSION, ...record }, null, 2)}\n`, { mode: 0o600 })
-  renameSync(temporary, path)
+  const file=openSync(temporary,'r');try{fsyncSync(file)}finally{closeSync(file)}
+  renameSync(temporary,path)
+  const parent=openSync(dirname(path),'r');try{fsyncSync(parent)}finally{closeSync(parent)}
+  if(readFileSync(path,'utf8')!==`${JSON.stringify({version:OWN_SKILLS_RECORD_VERSION,...record},null,2)}\n`)throw new Error('Own-skill record read-back failed')
+}
+
+
+function syncSkillTree(path){
+ const stat=lstatSync(path);if(stat.isSymbolicLink())return
+ if(stat.isDirectory())for(const name of readdirSync(path))syncSkillTree(join(path,name))
+ const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|(stat.isDirectory()?constants.O_DIRECTORY:0));try{fsyncSync(fd)}finally{closeSync(fd)}
+}
+export function brainOwnSkillObservation(path,copy){
+ const before=lstatSync(copy),link=lstatSync(path)
+ if(!before.isDirectory()||before.isSymbolicLink()||!link.isSymbolicLink()||readlinkSync(path)!==copy)throw new Error('Brain own-skill tree or link changed')
+ const hash=treeHash(copy),after=lstatSync(copy),last=lstatSync(path)
+ if(before.dev!==after.dev||before.ino!==after.ino||link.dev!==last.dev||link.ino!==last.ino||readlinkSync(path)!==copy)throw new Error('Brain own-skill changed while observed')
+ return {hash,device:before.dev,inode:before.ino,linkDevice:link.dev,linkInode:link.ino,target:copy}
+}
+export function verifyBrainOwnSkillRow(row,installed,restored=[]){
+ const proof=row?.brain
+ if(!proof||proof.version!==1||proof.installId!==installed?.brain?.installId||proof.revision<installed.brain.revision||proof.refresh!==null||row.path!==installed.path||row.copy!==installed.copy||row.at!==installed.at)throw new Error('Brain own-skill refresh has no completed original lineage')
+ if(!restored.includes(row.copy)){
+  const stat=lstatSync(row.copy)
+  if(!stat.isDirectory()||stat.isSymbolicLink()||stat.dev!==proof.current.device||stat.ino!==proof.current.inode||treeHash(row.copy)!==proof.current.hash)throw new Error('Brain own-skill checked tree changed')
+ }
+ if(!restored.includes(row.path)){
+  const link=lstatSync(row.path)
+  if(!link.isSymbolicLink()||link.dev!==proof.current.linkDevice||link.ino!==proof.current.linkInode||readlinkSync(row.path)!==proof.current.target)throw new Error('Brain own-skill checked link changed')
+ }
+ return row
+}
+
+function refreshBrainOwnSkill(shipped,row,record){
+ verifyBrainOwnSkillRow(row,row)
+ const intent={id:randomUUID(),revision:row.brain.revision,prior:row.brain.current,nextHash:treeHash(shipped)}
+ row.brain={...row.brain,refresh:intent};writeRecord(record)
+ refreshCopy(shipped,row.copy);syncSkillTree(row.copy)
+ const parent=openSync(dirname(row.copy),'r');try{fsyncSync(parent)}finally{closeSync(parent)}
+ const observed=brainOwnSkillObservation(row.path,row.copy)
+ if(observed.hash!==intent.nextHash)throw new Error('Brain refreshed tree differs from its durable intent')
+ row.brain={...row.brain,revision:row.brain.revision+1,current:observed,refresh:null};writeRecord(record)
 }
 
 /** A link's target that lies in a BMN checkout (`<repo>/skills/<name>` beside `apps/desktop/bin/bmn`) or a BMN install (`resources/skills/<name>` beside `bin/bmn.mjs`). */
@@ -146,7 +188,7 @@ function installOwnSkillsAdmitted({ source, environment = process.env, apply = t
   const root = shippedSkillsRoot(environment)
   if (root === null) return { ok: false, code: 'NO_SHIPPED_SKILLS', message: 'BMN\'s own skills were not found beside this bmn', rows: [] }
   let names
-  try { names = shippedNames(root) } catch (error) { return { ok: false, code: 'NO_SHIPPED_SKILLS', message: error.message, rows: [] } }
+  try { names = shippedNames(root,environment) } catch (error) { return { ok: false, code: 'NO_SHIPPED_SKILLS', message: error.message, rows: [] } }
   if (!existsSync(source)) {
     if (!existsSync(dirname(source))) return { ok: false, code: 'NO_SKILLS_FOLDER', message: `${dirname(source)} does not exist`, rows: [] }
     if (apply) mkdirSync(source, { recursive: true, mode: 0o755 })
@@ -182,7 +224,9 @@ function installOwnSkillsAdmitted({ source, environment = process.env, apply = t
       if (ours) {
         const readable = existsSync(join(copy, 'SKILL.md'))
         const current = readable && copyCurrent(shipped, copy)
-        if (!current && apply) { refreshCopy(shipped, copy); changed = true }
+        if(name==='brain'&&record.skills[name]?.brain){
+          try{verifyBrainOwnSkillRow(record.skills[name],record.skills[name]);if(!current&&apply)refreshBrainOwnSkill(shipped,record.skills[name],record)}catch(error){rows.push({name,state:'foreign',path,detail:error.message});continue}
+        }else if (!current && apply) { refreshCopy(shipped, copy); changed = true }
         if (record.skills[name] === undefined && apply) { record.skills[name] = { path, copy, at }; delete record.removed[name]; changed = true }
         rows.push({ name, state: current ? 'current' : readable ? 'updated' : 'repaired', path, copy })
         continue
@@ -219,6 +263,24 @@ function installOwnSkillsAdmitted({ source, environment = process.env, apply = t
   return { ok: true, code: 'OK', source, shipped: root, copies, rows }
 }
 
+/** Internal cutover adapter: its caller has journalled and held the rehearsed legacy entry. */
+export function installBrainCutoverOwnSkill({ source, environment = process.env, beforeRecord, guard }) {
+  return withDefaultsAdmission(() => {
+    guard();assertDefaultsAdmission()
+    if (optionalDefaultsOwnership()) throw new Error('Setup-owned brain adoption uses the setup skill installer')
+    const root = shippedSkillsRoot(environment), path = join(source, 'brain'), copy = join(ownCopiesRoot(environment), 'brain')
+    const record = readRecord()
+    if (!root || source !== join(environment.HOME || homedir(), '.claude/skills') || entryOf(path).kind !== 'missing' ||
+      lstatOrNull(copy) !== null || record.skills.brain !== undefined || record.removed.brain !== undefined) throw new Error('Brain skill adoption cannot replace an owned entry or opt-out')
+    const row={path,copy,at:new Date().toISOString(),brain:{version:1,installId:randomUUID(),revision:1,current:null,refresh:null}}
+    beforeRecord(row);guard();refreshCopy(join(root,'brain'),copy);guard();placeLink(path,copy);syncSkillTree(copy)
+    const parent=openSync(dirname(copy),'r');try{fsyncSync(parent)}finally{closeSync(parent)}
+    row.brain.current=brainOwnSkillObservation(path,copy);beforeRecord(row);guard()
+    record.skills.brain=row;writeRecord(record)
+    return row
+  })
+}
+
 /**
  * The shipped names whose entry in the skills folder `source` is BMN's own, for eligibility: its own skills are
  * public, as its repository is. Only a link to BMN's copy counts; a foreign folder or link of a shipped name is
@@ -228,7 +290,7 @@ export function ownSkillNames(source, environment = process.env) {
   const root = shippedSkillsRoot(environment)
   if (root === null || !source) return []
   let names
-  try { names = shippedNames(root) } catch { return [] }
+  try { names = shippedNames(root,environment) } catch { return [] }
   const copies = ownCopiesRoot(environment)
   return names.filter((name) => {
     let entry

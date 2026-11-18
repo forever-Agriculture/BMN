@@ -4,10 +4,12 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installOwnSkills, ownCopiesRoot, pointsIntoBmn } from '../../bin/agents-own-skills.mjs'
 import { checkSkills } from '../../bin/agents-skills.mjs'
+import {configureBrainReceiptReader,brainJournalCommit} from '../../bin/brain-state.mjs'
 
 let root: string, home: string, shipped: string, source: string, environment: Record<string, string>
 const savedHome = process.env.HOME
 beforeEach(() => {
+  configureBrainReceiptReader(()=>null)
   root = mkdtempSync(join(tmpdir(), 'bmn-own-skills-'))
   home = join(root, 'home'); shipped = join(root, 'shipped'); source = join(home, '.claude', 'skills')
   mkdirSync(source, { recursive: true })
@@ -16,7 +18,7 @@ beforeEach(() => {
   environment = { HOME: home, BMN_SHIPPED_SKILLS: shipped }
   process.env.HOME = home
 })
-afterEach(() => { process.env.HOME = savedHome; rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { configureBrainReceiptReader(()=>null); process.env.HOME = savedHome; rmSync(root, { recursive: true, force: true }) })
 function skill(base: string, name: string, text: string): string {
   mkdirSync(join(base, name), { recursive: true })
   writeFileSync(join(base, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${text}\n---\n${text}\n`)
@@ -101,4 +103,27 @@ describe('BMN\'s skills install themselves (Story 77.4)', () => {
     expect(installOwnSkills({ source, environment, apply: false }).rows.map((row) => row.state)).toEqual(['installed', 'installed'])
     expect(existsSync(join(source, 'plan'))).toBe(false)
   })
+})
+
+it('holds the brain skill across starts until the owner-confirmed cutover commits',()=>{
+ skill(shipped,'brain','new BMN brain')
+ writeFileSync(join(shipped,'manifest.json'),JSON.stringify({skills:['plan','report-artifact','brain']}))
+ // A previous BMN-owned link is also held; restart must never refresh it early.
+ const checkout=join(root,'old-checkout');mkdirSync(join(checkout,'apps/desktop/bin'),{recursive:true});writeFileSync(join(checkout,'apps/desktop/bin/bmn'),'')
+ const prior=skill(join(checkout,'skills'),'brain','old vault brain')
+ symlinkSync(prior,join(source,'brain'))
+ for(let restart=0;restart<2;restart++) {
+  expect(states().brain).toBeUndefined()
+  expect(readlinkSync(join(source,'brain'))).toBe(prior)
+ }
+ const journal=join(home,'.local/state/bmn/brain-cutover');mkdirSync(journal,{recursive:true})
+ writeFileSync(join(journal,'journal.json'),JSON.stringify({state:'running'}));expect(states().brain).toBeUndefined()
+ writeFileSync(join(journal,'journal.json'),JSON.stringify({state:'complete'}));expect(states().brain).toBeUndefined()
+ const value={version:1,state:'complete',cutoverId:'11111111-1111-4111-8111-111111111111',originatingCommit:'c'.repeat(40),phases:['write-barrier','source-proof','write-door','installed-checks'],commit:{} as ReturnType<typeof brainJournalCommit>}
+ value.commit=brainJournalCommit(value,'22222222-2222-4222-8222-222222222222')
+ writeFileSync(join(journal,'journal.json'),JSON.stringify(value))
+ expect(states().brain).toBeUndefined()
+ configureBrainReceiptReader(state=>state===join(home,'.local/state/bmn')?{...value.commit,open:true}:null)
+ expect(states().brain).toBe('taken-over')
+ expect(readFileSync(join(source,'brain/SKILL.md'),'utf8')).toContain('new BMN brain')
 })

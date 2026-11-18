@@ -202,6 +202,9 @@ function App(): React.JSX.Element {
   const [setupLastLines, setSetupLastLines] = useState<Record<string, string>>({})
   const [failure, setFailure] = useState<string>()
   const [notice, setNotice] = useState<string>()
+  const [brainSwitchAvailable,setBrainSwitchAvailable]=useState(false)
+  const [brainSwitched,setBrainSwitched]=useState(false)
+  useEffect(()=>{void window.aiTerminal.brainSwitch('status').then(s=>{setBrainSwitchAvailable(s.available);setBrainSwitched(s.complete)}).catch(()=>undefined)},[])
   const [archiveUndo, setArchiveUndo] = useState<ArchiveUndoTarget>()
   const [noticeFocused, setNoticeFocused] = useState(false)
   const undoInFlight = useRef(false)
@@ -243,6 +246,7 @@ function App(): React.JSX.Element {
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
+  useEffect(()=>{if(dialog?.kind==='palette')void window.aiTerminal.brainSwitch('status').then(s=>{setBrainSwitchAvailable(s.available);setBrainSwitched(s.complete)}).catch(()=>undefined)},[dialog?.kind])
   /** Story 110.9: the row, scroll and open rows the Now sheet comes back on, and its last read of the runs. */
   const nowMemory = useRef(createNowMemory())
   const nowFixtureMemory = useRef(createNowMemory())
@@ -1870,6 +1874,8 @@ function App(): React.JSX.Element {
           : undefined
       }),
       ...(updateRestart?.waitingBuild ? [command('restart-update', 'Restart for the update…', () => setRestartOpen(true))] : []),
+      ...(brainSwitchAvailable?[command('brain-switch','Switch to the BMN brain…',()=>{void window.aiTerminal.brainSwitch('begin').then(s=>setBrainSwitchAvailable(s.available)).catch(error=>brief(failureDetail(error,'Brain switch could not start')))} )]:[]),
+      ...(brainSwitched?[command('brain-return','Return to the Obsidian brain…',()=>{void window.aiTerminal.brainSwitch('return').then(s=>{setBrainSwitchAvailable(s.available);setBrainSwitched(s.complete)}).catch(error=>brief(failureDetail(error,'Return to Obsidian could not finish')))} )]:[]),
       command('quit', 'Quit BMN…', () => void window.aiTerminal.quitApplication())
     ]
   }

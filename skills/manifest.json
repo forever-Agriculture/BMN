@@ -1,4 +1,16 @@
 {
-  "skills": ["plan", "team-ask", "report-artifact", "web-question", "jev-judge", "manual-qa"],
-  "retired": ["team-page"]
+  "skills": [
+    "plan",
+    "team-ask",
+    "report-artifact",
+    "web-question",
+    "jev-judge",
+    "manual-qa"
+  ],
+  "retired": [
+    "team-page"
+  ],
+  "cutoverSkills": [
+    "brain"
+  ]
 }

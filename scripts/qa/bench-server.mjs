@@ -10,6 +10,7 @@ import { atomicJson, isLiveProcess, loopbackEndpoint, processIdentity, validateA
 import { allTraces, configFor, groupState, requestStop, transition } from './bench-state.mjs'
 
 import { benchCandidate } from './bench-candidate.mjs'
+import { prepareBrainQaFixture, releaseBrainQaFixture } from '../test/brain-qa-fixture.mjs'
 import { prepareBenchRoster } from './bench-qa-record.mjs'
 
 const config = configFor(JSON.parse(readFileSync(process.argv[2], 'utf8')).runId)
@@ -27,6 +28,7 @@ async function shutdown(error) {
       await application.evaluate(({ app }) => app.exit(0)).catch(() => {})
       await application.close().catch(() => {})
     }
+    releaseBrainQaFixture(config)
     // The outside-group watchdog owns the final group drain, trace completion and root deletion.
     process.exit(error ? 1 : 0)
   })()
@@ -55,6 +57,7 @@ async function main() {
   const scopeFile = join(config.run, 'process-scope.json')
   atomicJson(scopeFile, { version: 1, runId: config.runId, group: { path: config.group.path, device: config.group.device, inode: config.group.inode } })
   prepareBenchRoster(config)
+  const brainFixture = await prepareBrainQaFixture(config)
   application = await electron.launch({ chromiumSandbox: true, executablePath: config.binary, timeout: 40000,
     args: ['--ozone-platform=headless', '--ozone-override-screen-size=1920,1080', '--force-device-scale-factor=1',
       '--disable-partial-raster', '--num-raster-threads=1', '--disable-gpu', '--password-store=basic', '--remote-debugging-address=127.0.0.1',
@@ -70,7 +73,7 @@ async function main() {
   await page.waitForSelector('.session-row', { timeout: 30000 })
   // Use the normal create flow so the renderer knows the seeded shell is live.
   // A raw preload create bypasses its reducer; reloading would add a recovery notice.
-  const cwd = join(config.root, 'synthetic-project')
+  const cwd = brainFixture?.defaultCwd ?? join(config.root, 'synthetic-project')
   await page.getByRole('button', { name: 'New workspace', exact: true }).click()
   await page.getByRole('textbox', { name: 'Workspace name', exact: true }).fill('QA review')
   await page.getByRole('textbox', { name: 'Optional workspace directory' }).fill(cwd)
@@ -91,7 +94,14 @@ async function main() {
   const userData = await application.evaluate(({ app }) => app.getPath('userData'))
   if (config.qaInput) {
     const seed = JSON.parse(readFileSync(join(config.run, 'bench/seed.json'), 'utf8'))
-    if (seed.kind !== undefined) {
+    if (seed.kind === 'brain-v1') {
+      const viewport = seed.viewport ?? 'normal'
+      if (!['minimum', 'normal', 'normal-then-minimum'].includes(viewport)) throw new Error('Unknown brain QA viewport')
+      await page.setViewportSize(viewport === 'minimum' ? { width: 680, height: 720 } : { width: 1200, height: 900 })
+      if (viewport === 'normal-then-minimum') setTimeout(() => {
+        if (!stopping) void page.setViewportSize({ width: 680, height: 720 }).catch(fatal)
+      }, 180_000).unref()
+    } else if (seed.kind !== undefined) {
       if (seed.kind !== 'update-restart-v2') throw new Error('Unknown bench fixture kind')
       const { installRestartQaFixture } = await import('../test/update-restart-qa-fixture.mjs')
       await installRestartQaFixture(application, config)

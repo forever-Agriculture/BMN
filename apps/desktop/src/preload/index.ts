@@ -553,6 +553,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     for (const start of result.recovered) recordLiveSession(start)
     return result
   },
+  brainSwitch(action:'status'|'begin'|'return'):Promise<{available:boolean;running:boolean;complete:boolean}> {
+    return invokeBridge('aiterm:brain:switch',action)
+  },
   quitApplication(): Promise<void> {
     return invokeBridge('aiterm:app:quit')
   },

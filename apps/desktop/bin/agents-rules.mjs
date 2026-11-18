@@ -2,7 +2,7 @@
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
 import { spawnSync } from 'node:child_process'
 import {
-  appendFileSync, chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
+  appendFileSync, chmodSync, closeSync, cpSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
   writeSync
 } from 'node:fs'
 import { homedir } from 'node:os'
@@ -13,7 +13,7 @@ import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { absoluteUncollapsed, pathState, replaceFileSafely, resolvedPath, restorePathState, sameState } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
-import { BMN_RULES, PUSH_POLICY_POINTER } from './agents-bmn-rules.mjs'
+import { BMN_RULES, BRAIN_SWITCH_RULE, PUSH_POLICY_POINTER } from './agents-bmn-rules.mjs'
 import { canonicalRoute } from './shared-helpers.mjs'
 
 /**
@@ -215,7 +215,7 @@ export function render(master, harness, generation, { kind = null, team = null }
     body = renderLines(master.parts, harness, phrase).join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
   }
   // BMN's own rules hold no private work, so every rendering carries them (owner, 2026-11-08).
-  body = `${body}\n\n${BMN_RULES}`
+  body = `${body}\n\n${BMN_RULES}${['claude','codex'].includes(harness)&&body.includes('`bmn brain` is shared memory;')?'\n'+BRAIN_SWITCH_RULE:''}`
   const text = `${header}\n\n${body}\n`
   return { harness, text, hash: sha256(text), kind: used, reason: decision.reason, team_form: phrase.form, bytes: Buffer.byteLength(text) }
 }
@@ -570,7 +570,7 @@ export function planView(result) {
  * manifest so `restore` can undo what changed. With `expectedPlanHash`, the plan must be exactly
  * the one the owner confirmed elsewhere (the Rules panel), or nothing is written.
  */
-export async function installRules(harnesses, { yes = false, asJson = false, environment = process.env, now = new Date(), afterConfirm, beforeTarget, expectedPlanHash } = {}) {
+export async function installRules(harnesses, { yes = false, asJson = false, environment = process.env, now = new Date(), afterConfirm, beforeTarget, expectedPlanHash, cutover = false, beforeTransaction } = {}) {
   const planned = await planInstall(harnesses, { environment })
   if (planned.code !== 'OK') return { code: planned.code, message: planned.message, transaction: null, written: [] }
   const { master, plans } = planned
@@ -594,7 +594,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
     if (confirmed.planHash !== planned.planHash) {
       return { code: 'REVISION_CONFLICT', message: 'the targets or the rendering changed while the confirmation was open; nothing was written', transaction: null, written: [] }
     }
-    return writeTransaction(master, plans, { now, beforeTarget })
+    return writeTransaction(master, plans, { now, beforeTarget, ...(cutover ? { reason: 'brain cutover', beforeTransaction } : {}) })
   })
 }
 
@@ -603,12 +603,15 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
  * when that is taken: an existing directory is never reused, so one transaction can never
  * overwrite another's manifest or backups.
  */
-export function newTransaction(now) {
+export function newTransaction(now, beforeCreate) {
   assertDefaultsAdmission()
   ensurePrivate(transactionsDirectory())
   const base = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
   for (let count = 1; ; count += 1) {
     const id = count === 1 ? base : `${base}-${count}`
+    if (existsSync(`${transactionsDirectory()}/${id}`)) continue
+    beforeCreate?.({ id, folder: `${transactionsDirectory()}/${id}` })
+    assertDefaultsAdmission()
     try {
       mkdirSync(`${transactionsDirectory()}/${id}`, { mode: 0o700 })
       return { id, folder: `${transactionsDirectory()}/${id}` }
@@ -623,10 +626,19 @@ export function newTransaction(now) {
  * last-written record first, then each file through the change-refusing, read-back flow. A
  * failure part-way stops and keeps the manifest so `restore` can undo what changed.
  */
-function writeTransaction(master, plans, { now = new Date(), beforeTarget, reason = 'install', keepGoing = false, masterChange } = {}) {
+function writeTransaction(master, plans, { now = new Date(), beforeTarget, reason = 'install', keepGoing = false, masterChange, beforeTransaction } = {}) {
   assertDefaultsAdmission()
-  const { id, folder } = newTransaction(now)
   const records = lastWritten()
+  const { id, folder } = newTransaction(now, beforeTransaction ? ({ id }) => {
+    if (reason !== 'brain cutover' || masterChange !== undefined) throw new Error('Invalid cutover Rules transaction')
+    const index = readJsonMissingAs(`${historyDirectory()}/index.json`, { revisions: [] })
+    if (!Array.isArray(index.revisions)) throw new Error('Invalid master history')
+    const last = index.revisions.at(-1)
+    beforeTransaction({ id, targets: plans.map(plan => ({ path: plan.path, priorRecord: records[plan.path] ?? null,
+      writtenHash: plan.rendering.hash, writtenText: plan.rendering.text, mode: plan.prior.kind === 'file' ? plan.prior.mode : 0o600 })),
+      history: last?.hash === master.hash ? null : { revision: (last?.revision ?? 0) + 1, hash: master.hash,
+        bytes: Buffer.byteLength(master.text), at: now.toISOString(), reason: `${reason} ${id}` } })
+  } : undefined)
   const manifest = {
     id, created_at: now.toISOString(), master_hash: master.hash, state: 'started', reason,
     // Story 75.9: a save writes the master in the same transaction, so Undo puts it back with the files.
@@ -687,6 +699,44 @@ function writeTransaction(master, plans, { now = new Date(), beforeTarget, reaso
   manifest.state = failed.length === 0 ? 'complete' : 'partial'
   writeAdmittedPrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
   return { code: 'OK', transaction: id, written, ...(keepGoing ? { failed } : {}) }
+}
+
+/** Read every known Rules conflict before any recovery metadata write or removal. */
+export function preflightCutoverRules(owned) {
+ assertDefaultsAdmission()
+ if(!owned||!/^[0-9TZ-]+-\d+(?:-\d+)?$/.test(owned.id)||!Array.isArray(owned.targets)||owned.targets.some(target=>!['claude','codex'].some(app=>target.path===targetPath(app))))throw new Error('Invalid cutover Rules ownership')
+ const folder=`${transactionsDirectory()}/${owned.id}`
+ if(existsSync(folder)){
+  const manifest=readJsonMissingAs(`${folder}/manifest.json`,null)
+  if(!manifest||manifest.id!==owned.id||manifest.reason!=='brain cutover'||canonicalJson(manifest.targets.map(target=>[target.path,target.written_hash]))!==canonicalJson(owned.targets.map(target=>[target.path,target.writtenHash])))throw new Error('Rules rollback conflict: the cutover transaction changed')
+  const allowed=new Set(['manifest.json',...owned.targets.map((_,index)=>`${index}.bak`)])
+  if(readdirSync(folder).some(name=>!allowed.has(name)))throw new Error('Rules rollback conflict: unowned transaction contents')
+ }
+ const records=lastWritten()
+ for(const target of owned.targets){const current=records[target.path]??null;if(current!==target.writtenHash&&current!==target.priorRecord)throw new Error('Rules rollback conflict: ownership changed '+target.path)}
+ if(owned.history){
+  const index=readJsonMissingAs(`${historyDirectory()}/index.json`,{revisions:[]}),matching=index.revisions.find(entry=>entry.revision===owned.history.revision)
+  if(matching&&canonicalJson(matching)!==canonicalJson(owned.history))throw new Error('Rules rollback conflict: master history entry changed')
+  const snapshot=`${historyDirectory()}/${String(owned.history.revision).padStart(6,'0')}.md`
+  if(existsSync(snapshot)&&sha256(readFileSync(snapshot,'utf8'))!==owned.history.hash)throw new Error('Rules rollback conflict: master history snapshot changed')
+ }
+}
+/** Apply only after the whole recovery has preflighted, with a fresh per-target check. */
+export function rollbackCutoverRules(owned,audit) {
+ preflightCutoverRules(owned)
+ const folder=`${transactionsDirectory()}/${owned.id}`
+ if(existsSync(folder)&&!existsSync(audit))cpSync(folder,audit,{recursive:true,errorOnExist:true,force:false})
+ const records=lastWritten()
+ for(const target of owned.targets)if((records[target.path]??null)===target.writtenHash){if(target.priorRecord===null)delete records[target.path];else records[target.path]=target.priorRecord}
+ writeAdmittedPrivate(lastWrittenPath(),JSON.stringify(records,null,2))
+ if(owned.history){
+  const path=`${historyDirectory()}/index.json`,index=readJsonMissingAs(path,{revisions:[]}),snapshot=`${historyDirectory()}/${String(owned.history.revision).padStart(6,'0')}.md`
+  // Recheck immediately before touching this independently stored history.
+  preflightCutoverRules(owned)
+  writeAdmittedPrivate(path,JSON.stringify({...index,revisions:index.revisions.filter(entry=>entry.revision!==owned.history.revision)},null,2))
+  assertDefaultsAdmission();rmSync(snapshot,{force:true})
+ }
+ assertDefaultsAdmission();rmSync(folder,{recursive:true,force:true})
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -811,6 +861,7 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
   const folder = `${transactionsDirectory()}/${id}`
   const manifest = readJsonMissingAs(`${folder}/manifest.json`, null)
   if (manifest === null) return { code: 'NOT_FOUND', message: `no transaction ${id}` }
+  if (manifest.reason === 'brain cutover') return { code: 'CUTOVER_RECOVERY_REQUIRED', message: 'This is part of the brain switch. Recover the whole switch in BMN; Rules cannot restore only these files.' }
   // A target in an app BMN retired is left as it is and named: an undo never writes into that app's folder (Epic 71).
   const left = manifest.targets.filter((target) => isRetired(target.harness)).map((target) => ({ harness: target.harness, path: target.path, reason: retiredWords(target.harness) }))
   const kept = { ...manifest, targets: manifest.targets.filter((target) => !isRetired(target.harness)) }

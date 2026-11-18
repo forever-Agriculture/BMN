@@ -1,11 +1,12 @@
 // MODULE: bench-state.mjs - locked run generations and kernel-owned QA workload containment
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statfsSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, constants, closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmdirSync, statfsSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { constants as osConstants } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
+import { removeOwnedDirectory } from '../lib/owned-directories.mjs'
 import { atomicJson, isLiveProcess, processIdentity } from './bench-lib.mjs'
 
 export const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -318,7 +319,7 @@ function retiredRecoveryBranch(config, entry) {
       if (!certificateCompleted(config.runId, trace)) return false
     }
     const deletion = regularJson(join(config.run, 'root-deletion-intent.json')), removed = regularJson(removalIntent(config))
-    if (deletion.runId !== config.runId || deletion.root !== config.root || !isDeepStrictEqual(deletion.identity, config.rootIdentity) ||
+    if (!rootDeletionComplete(config) || deletion.runId !== config.runId || deletion.root !== config.root || !isDeepStrictEqual(deletion.identity, config.rootIdentity) ||
         removed.runId !== config.runId || !isDeepStrictEqual(removed.group, config.group)) return false
     const parent = `/sys/fs/cgroup/user.slice/user-${process.getuid()}.slice/user@${process.getuid()}.service/app.slice`
     const groups = [config.group, ...traces.map(trace => trace.group)]
@@ -406,32 +407,56 @@ export function killGroup(config) {
   } finally { closeSync(fd) }
 }
 
+function deletionFor(config) {
+  const path=join(config.run,'root-deletion-intent.json')
+  if(absent(path))return null
+  const value=regularJson(path),state=value.cleanup
+  if(value.version!==2||value.runId!==config.runId||value.root!==config.root||!isDeepStrictEqual(value.identity,config.rootIdentity)||
+    !state||state.root!==config.root||!isDeepStrictEqual(state.identity,config.rootIdentity)||
+    dirname(state.parent)!==config.tempParent||!state.parent.startsWith(join(config.tempParent,'.bmn-cleanup-'))||state.entry!==join(state.parent,'entry')||
+    !['prepared','moved','removing','deleted'].includes(state.phase))throw new Error('QA deletion journal differs from its creation identity')
+  return value
+}
+export function rootDeletionComplete(config) {
+  const value=deletionFor(config)
+  return !!value&&value.cleanup.phase==='deleted'&&absent(config.root)&&absent(value.cleanup.parent)
+}
 export function validateRoot(config) {
-  if (realpathSync(config.tempParent) !== config.tempParent || !matches(statSync(config.tempParent), config.tempParentIdentity)) {
-    throw new Error('QA temporary parent was substituted')
+  if(realpathSync(config.tempParent)!==config.tempParent||!matches(statSync(config.tempParent),config.tempParentIdentity)||dirname(config.root)!==config.tempParent)throw new Error('QA temporary parent was substituted')
+  const value=deletionFor(config)
+  if(value){
+    const state=value.cleanup
+    if(state.phase==='deleted'&&absent(state.parent)){
+      if(!absent(config.root))throw new Error('QA public root was replaced after deletion; foreign entry preserved')
+      return false
+    }
+    const parent=lstatSync(state.parent)
+    if(!parent.isDirectory()||parent.isSymbolicLink()||!matches(parent,state.parentIdentity)||parent.uid!==process.getuid()||(parent.mode&0o777)!==0o700)throw new Error('QA private cleanup parent changed')
+    if(!absent(state.entry)){
+      const moved=lstatSync(state.entry)
+      if(!moved.isDirectory()||moved.isSymbolicLink()||!matches(moved,config.rootIdentity))throw new Error('QA quarantined entry was substituted')
+      return false // moved or crash between rename and its phase publication
+    }
+    if(state.phase==='removing'||state.phase==='deleted')return false
   }
-  if (dirname(config.root) !== config.tempParent) throw new Error('QA root is outside its recorded creation parent')
-  if (!existsSync(config.root)) {
-    const path = join(config.run, 'root-deletion-intent.json')
-    if (existsSync(path) && readJson(path).runId === config.runId) return false
-    throw new Error('QA root disappeared without a deletion receipt')
-  }
-  const stat = lstatSync(config.root)
-  if (!stat.isDirectory() || stat.isSymbolicLink() || !matches(stat, config.rootIdentity) || readFileSync(join(config.root, '.bmn-qa-run'), 'utf8') !== config.runId) {
-    throw new Error('QA root does not match its creation identity')
-  }
+  if(absent(config.root))throw new Error('QA root disappeared without a proven deletion')
+  const stat=lstatSync(config.root)
+  if(!stat.isDirectory()||stat.isSymbolicLink()||!matches(stat,config.rootIdentity)||readFileSync(join(config.root,'.bmn-qa-run'),'utf8')!==config.runId)throw new Error('QA root does not match its creation identity')
   return true
 }
-
-export function validateStateRoot(state, config) {
-  if (state.root !== config.root || state.run !== config.run || state.group?.path !== config.group.path) throw new Error('QA state creation fields were substituted')
+export function validateStateRoot(state,config) {
+  if(state.root!==config.root||state.run!==config.run||state.group?.path!==config.group.path)throw new Error('QA state creation fields were substituted')
   return validateRoot(config)
 }
-
 export function deleteRoot(config) {
-  if (!validateRoot(config)) return
-  atomicJson(join(config.run, 'root-deletion-intent.json'), { runId: config.runId, root: config.root, identity: config.rootIdentity })
-  rmSync(config.root, { recursive: true, maxRetries: 3, retryDelay: 100 })
+  validateRoot(config)
+  const path=join(config.run,'root-deletion-intent.json'),prior=deletionFor(config)
+  removeOwnedDirectory(config.root,config.rootIdentity,{state:prior?.cleanup,save:cleanup=>{
+    const value={version:2,runId:config.runId,root:config.root,identity:config.rootIdentity,cleanup}
+    atomicJson(path,value)
+    if(!isDeepStrictEqual(regularJson(path),value))throw new Error('QA deletion journal read-back failed')
+  }})
+  if(!rootDeletionComplete(config))throw new Error('Owned QA root deleted; foreign public entry preserved, completion held')
 }
 
 export function removeGroup(config) {

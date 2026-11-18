@@ -12,7 +12,7 @@ import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import {
   TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, installedPolicyPointer, lastProbes, listTransactions, masterHistory, parseMaster, planTeamUpdate, probe, probeAutoPlan, probeInspector, readMaster, render,
-  restoreTransaction, teamPhrase, writeMaster
+  rollbackCutoverRules, restoreTransaction, teamPhrase, writeMaster
 } from '../../bin/agents-rules.mjs'
 import type { PathState } from '../../bin/safe-config-write.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -893,4 +893,41 @@ describe('the panel binds install and restore to the plan it showed (60.6 AC4)',
     expect(readlinkSync(target.claude())).toBe(join(home, 'dotfiles/CLAUDE.md'))
     expect(readFileSync(target.codex(), 'utf8')).toBe('# by hand, changed after the plan was shown\n')
   })
+})
+
+it('retires only cutover-owned Rules metadata and preserves unrelated keys and history',async()=>{
+ const {withDefaultsAdmission}=await import('../../bin/defaults-admission.mjs')
+ await installRules(['claude','codex'],{yes:true,asJson:true,environment:env})
+ const state=join(home,'.config/bmn/agents/state/rules'),record=join(state,'last-written.json'),history=join(state,'master-history/index.json')
+ const targets=[join(home,'.claude/CLAUDE.md'),join(home,'.codex/AGENTS.md')],priorText=targets.map(path=>readFileSync(path,'utf8')),priorRecord=JSON.parse(readFileSync(record,'utf8'))
+ writeMasterFile(MASTER.replace('Plain rule for everyone.','New brain rule.'))
+ let owned:Parameters<typeof rollbackCutoverRules>[0]|undefined
+ const result=await installRules(['claude','codex'],{yes:true,asJson:true,environment:env,cutover:true,beforeTransaction:value=>{
+  owned=value
+  expect(existsSync(join(state,'transactions',value.id))).toBe(false)
+ }})
+ expect(result.code).toBe('OK');expect(owned).toBeDefined()
+ const records=JSON.parse(readFileSync(record,'utf8'));records['/synthetic/unrelated']='f'.repeat(64);writeFileSync(record,JSON.stringify(records))
+ const revisions=JSON.parse(readFileSync(history,'utf8')).revisions
+ const independent={revision:revisions.at(-1).revision+1,hash:'e'.repeat(64),bytes:5,at:new Date().toISOString(),reason:'independent'}
+ writeFileSync(history,JSON.stringify({revisions:[...revisions,independent]}));writeFileSync(join(state,'master-history',String(independent.revision).padStart(6,'0')+'.md'),'later')
+ writeMasterFile();targets.forEach((path,i)=>writeFileSync(path,priorText[i]!))
+ await withDefaultsAdmission(()=>rollbackCutoverRules(owned!,join(home,'cutover-audit')))
+ expect(JSON.parse(readFileSync(record,'utf8'))).toEqual({...priorRecord,'/synthetic/unrelated':'f'.repeat(64)})
+ expect(JSON.parse(readFileSync(history,'utf8')).revisions).toEqual([revisions[0],independent])
+ expect(listTransactions().some(item=>item.id===result.transaction)).toBe(false)
+ expect(checkTargets(env).filter(row=>['claude','codex'].includes(row.harness)).map(row=>row.state)).toEqual(['current','current'])
+ await withDefaultsAdmission(()=>rollbackCutoverRules(owned!,join(home,'cutover-audit')))
+})
+
+it.each(['plan','apply','cli-plan','cli-apply'])('refuses a partial brain cutover Undo through generic Rules restore (%s)',async route=>{
+ const installed=await installRules(['claude','codex'],{yes:true,asJson:true,environment:env,cutover:true})
+ expect(installed.code).toBe('OK');expect(installed.transaction).toBeTruthy()
+ const paths=[target.claude(),target.codex()],before=paths.map(path=>readFileSync(path,'utf8'))
+ if(route.startsWith('cli')){
+  const result=await runCli(['rules','restore','--transaction',installed.transaction!,...(route==='cli-plan'?['--plan']:['--yes']),'--json'])
+  expect(JSON.parse(result.stdout)).toMatchObject({code:'CUTOVER_RECOVERY_REQUIRED'})
+ }else expect(await restoreTransaction(installed.transaction!,route==='plan'?{planOnly:true}:{yes:true,asJson:true})).toMatchObject({code:'CUTOVER_RECOVERY_REQUIRED'})
+ expect(paths.map(path=>readFileSync(path,'utf8'))).toEqual(before)
+ expect(listTransactions().find(row=>row.id===installed.transaction)?.state).toBe('complete')
 })

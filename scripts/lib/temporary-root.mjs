@@ -1,6 +1,8 @@
-import { mkdirSync, mkdtempSync, readlinkSync, rmSync } from 'node:fs'
+// MODULE: temporary-root.mjs - Identity-bound disposable roots and protected owner launcher
+import { mkdirSync, mkdtempSync, readlinkSync, lstatSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
+import { removeOwnedDirectory } from './owned-directories.mjs'
 
 /**
  * The owner's `claude` command. Claude Code started in a run whose XDG_DATA_HOME is the temporary root, with his real
@@ -10,12 +12,9 @@ import { join, sep } from 'node:path'
 export const OWNER_CLAUDE_LINK = join(homedir(), '.local/bin/claude')
 const readLink = (path) => { try { return readlinkSync(path) } catch { return null } }
 
-const removeTemporaryRoot = (root) => rmSync(root, {
-  recursive: true,
-  force: true,
-  maxRetries: 5,
-  retryDelay: 50
-})
+const removeTemporaryRoot = (root, identity) => {
+  removeOwnedDirectory(root, identity)
+}
 
 export const temporaryRootContracts = Object.freeze({
   electronSelfTest: Object.freeze({
@@ -38,6 +37,7 @@ export const temporaryRootContracts = Object.freeze({
 
 export function createTemporaryRoot(contract, baseDirectory = tmpdir(), claudeLink = OWNER_CLAUDE_LINK) {
   const root = mkdtempSync(join(baseDirectory, contract.prefix))
+  const stat = lstatSync(root), identity = { device: stat.dev, inode: stat.ino }
   const linkBefore = readLink(claudeLink)
   let cleaned = false
   try {
@@ -53,9 +53,9 @@ export function createTemporaryRoot(contract, baseDirectory = tmpdir(), claudeLi
       roots,
       cleanup() {
         if (cleaned) return
-        cleaned = true
         const linkAfter = readLink(claudeLink)
-        removeTemporaryRoot(root)
+        removeTemporaryRoot(root, identity)
+        cleaned = true
         if (linkAfter !== linkBefore && linkAfter !== null && (linkAfter === root || linkAfter.startsWith(`${root}${sep}`))) {
           throw new Error(`this run pointed ${claudeLink} into its temporary root (${linkAfter}), now removed, so the owner's \`claude\` ` +
             `no longer starts; put it back with: ln -sfn '${linkBefore ?? '<his installed version>'}' '${claudeLink}'`)
@@ -63,7 +63,7 @@ export function createTemporaryRoot(contract, baseDirectory = tmpdir(), claudeLi
       }
     }
   } catch (error) {
-    removeTemporaryRoot(root)
+    removeTemporaryRoot(root, identity)
     throw error
   }
 }

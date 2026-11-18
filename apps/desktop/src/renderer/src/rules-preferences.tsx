@@ -50,6 +50,7 @@ import { HooksHealth, hookRowWords } from './hooks-health'
 import { SetupReadiness, useSetupApps, type SetupNavigation } from './first-run-setup'
 import { setupAppNeedsAction } from './setup-app-view'
 import { PushPolicyHealth } from './push-policy-health'
+import { BrainHealth, brainHealthAttention } from './brain-health'
 import { destinationProviders, diffBody, diffSummary, listedRoles, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
 import { Issues, NumberField, PageHead, Row, Switch, TargetPath, shortDate } from './team-preferences'
@@ -162,9 +163,9 @@ const KEPT_BY_TRANSACTION = /^(before )?(save|install|team update) /
 export function earlierVersions(snapshot: Pick<RulesSnapshot, 'transactions' | 'history'>): Earlier[] {
   // A skills or tools install is undone on its own page, where it was made.
   const installs: Earlier[] = snapshot.transactions.filter((entry) => entry.reason !== SKILLS_INSTALL && entry.reason !== TOOLS_INSTALL).map((entry) => ({
-    kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && (entry.state === 'complete' || entry.state === 'partial'),
-    title: !entry.valid ? 'A save that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : entry.master ? 'Saved and installed' : 'Installed',
-    detail: (entry.targets ?? []).map(appDisplayName).join(', ')
+    kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && entry.reason !== 'brain cutover' && (entry.state === 'complete' || entry.state === 'partial'),
+    title: !entry.valid ? 'A save that cannot be read' : entry.reason === 'brain cutover' ? 'Brain switch' : entry.reason === 'team update' ? 'Team line updated' : entry.master ? 'Saved and installed' : 'Installed',
+    detail: (entry.targets ?? []).map(appDisplayName).join(', ') + (entry.reason === 'brain cutover' ? ' · part of the brain switch' : '')
       + (entry.valid && entry.state === 'partial' ? ' · not every app written' : entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
   }))
   const saves: Earlier[] = (snapshot.history ?? []).filter((entry) => !KEPT_BY_TRANSACTION.test(entry.reason)).map((entry) => ({
@@ -267,14 +268,13 @@ export function healthNeeds(snapshot: RulesSnapshot): { count: number; sections:
   if (snapshot.health.state === 'checked') rows('Rules files', 'rules', snapshot.health.targets, (target) => { const now = rulesRowState(snapshot, target); return { off: now.off, tests: tests(now.again) } }, (target) => target.harness)
   rows('Skills', 'skills', snapshot.skills.apps, (app) => { const now = skillsRowState(snapshot, app); return { off: now.off, tests: tests(now.again, now.loadAgain) } }, (app) => app.harness)
   rows('Tools', 'tools', snapshot.tools.apps, (app) => { const now = toolsRowState(snapshot, app); return { off: now.off, tests: tests(now.again) } }, (app) => app.harness)
-  found.push(...browserAccountAttention(snapshot.browserAccounts))
+  found.push(...browserAccountAttention(snapshot.browserAccounts), ...brainHealthAttention(snapshot.brain))
   rows('Context limits', null, snapshot.context, (row) => ({ off: contextRowNeeds(row), tests: 0 }), (row) => row.harness)
   if (snapshot.hooks?.state === 'checked') rows('Hooks', 'hooks', snapshot.hooks.apps, (app) => ({ off: hookRowWords(app).needs, tests: 0 }), (app) => app.harness)
   const doctor = doctorNeedsCount(snapshot.doctor, keys)
   if (doctor > 0) found.push(['Doctor', doctor])
   return { count: found.reduce((total, [, count]) => total + count, 0), sections: found.map(([section]) => section), keys, own: found.reduce((total, [section, count]) => section === 'Doctor' ? total : total + count, 0) }
 }
-
 /** How many Health issues need the owner, each counted once. */
 export function healthNeedsCount(snapshot: RulesSnapshot): number {
   return healthNeeds(snapshot).count
@@ -1959,7 +1959,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       <ToolsHealth rules={rules} action={action} setAction={setAction} />
 
       <BrowserAccountsHealth accounts={snapshot.browserAccounts} />
-
+      <BrainHealth brain={snapshot.brain} />
       <ContextLimits rules={rules} action={action} setAction={setAction} />
 
       <PushPolicyHealth />

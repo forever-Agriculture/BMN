@@ -68,6 +68,7 @@ import {
   type UsageWindow
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
+import type {BrainCheckTransport} from './brain-check-capabilities'
 import { OPENCODE_REFERENCE_PATTERN } from './conversation-binding'
 import { grantCommandProblem } from '../../bin/grant-command.mjs'
 
@@ -82,6 +83,7 @@ export class ControlError extends Error {
 type ConversationAgentCli = LiveAgentCli
 
 export interface ControlHandlers {
+  brainRequest?(scope: ControlScope, params: Record<string, unknown>): Promise<unknown>
   qaSession?(sessionId: string, incarnationId: string): Promise<boolean>
   qaRequest?(scope: ControlScope, method: string, params: Record<string, unknown>): Promise<unknown>
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
@@ -332,6 +334,7 @@ interface ControlServerOptions {
   /** Parent dir created 0700; socket chmod 0600; a stale socket file is removed only if connecting to it fails. */
   socketPath: string
   auth: ControlAuth
+  brainChecks?: BrainCheckTransport
   handlers: ControlHandlers
   receipts: ReceiptStore
   now?: () => Date
@@ -349,6 +352,7 @@ interface ControlRequest {
 interface Connection {
   socket: Socket
   scope: ControlScope | null
+  brainCheck: string | null
   buffered: Buffer[]
   bufferedBytes: number
   closing: boolean
@@ -787,6 +791,7 @@ export class ControlServer {
     const connection: Connection = {
       socket,
       scope: null,
+      brainCheck: null,
       buffered: [],
       bufferedBytes: 0,
       closing: false,
@@ -852,7 +857,7 @@ export class ControlServer {
   }
 
   private async handleLine(connection: Connection, line: Buffer): Promise<void> {
-    const beforeAuth = connection.scope === null
+    const beforeAuth = connection.scope === null && connection.brainCheck === null
     let text: string
     try {
       text = utf8.decode(line)
@@ -873,6 +878,14 @@ export class ControlServer {
       request = parseRequest(message)
     } catch (error) {
       this.fail(connection, requestId(message), error, beforeAuth)
+      return
+    }
+    if(connection.brainCheck!==null){
+      try{
+        if(!this.options.brainChecks)throw unauthorized('Installed brain check unavailable')
+        const result=await this.options.brainChecks.request(connection.brainCheck,request.method,request.params)
+        this.respond(connection,{jsonrpc:'2.0',id:request.id,result:result??null})
+      }catch(error){this.fail(connection,request.id,error,true)}
       return
     }
     const scope = connection.scope
@@ -898,6 +911,8 @@ export class ControlServer {
     try {
       if (request.method !== 'auth') throw unauthorized('The first request on a connection must be auth')
       const params = closedParams(request.params, ['token'])
+      const check=this.options.brainChecks?.authenticate(params.token)
+      if(check){connection.brainCheck=check;this.respond(connection,{jsonrpc:'2.0',id:request.id,result:{scope:'brain-check'}});return}
       const scope = this.options.auth.verify(params.token)
       if (scope === null) throw unauthorized('Invalid credential')
       this.assertNotRevoked(scope)
@@ -1059,6 +1074,11 @@ export class ControlServer {
   private async dispatch(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
     const { handlers } = this.options
     switch (method) {
+      case 'brain': {
+        if (!handlers.brainRequest) throw invalidError('Brain is unavailable in this build')
+        const params = closedParams(rawParams, ['command','query','archived','name','section','links','title','kind','origin','scope','markdown','source_time','superseded_by','revision'])
+        return handlers.brainRequest(scope, params)
+      }
       case 'qa.grant.ask': {
         const params = closedParams(rawParams, ['id', 'key', 'accountId', 'origin', 'limits', 'expiresAt'])
         for (const key of ['id', 'key', 'accountId', 'origin', 'expiresAt']) requireText(params, key, { ...RULES.source, max: key === 'origin' ? 2048 : 128 })

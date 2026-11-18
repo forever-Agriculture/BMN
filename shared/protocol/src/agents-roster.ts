@@ -770,6 +770,7 @@ export interface ContextLimitPlan {
 }
 
 export interface RulesSnapshot {
+  brain?: { backup: 'ok' | 'failed' | 'unverified'; export: 'ok' | 'failed' | 'unverified'; checkedAt: string; recovery?: 'failed' } | null
   masterPath: string
   /** The home directory the agents' files resolve under, for showing them as `~/…` (display only). */
   home: string | null

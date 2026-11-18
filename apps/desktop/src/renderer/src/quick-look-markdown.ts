@@ -153,7 +153,7 @@ class Reader {
   /** Lines before this reader's text, when it begins after a front-matter block. */
   baseLines = 0
 
-  constructor(readonly source: string) {
+  constructor(readonly source: string, private readonly targets?:Readonly<Record<string,string>>) {
     for (let index = source.indexOf('\n'); index !== -1; index = source.indexOf('\n', index + 1)) this.lineStarts.push(index + 1)
   }
 
@@ -186,6 +186,9 @@ class Reader {
     }
     for (let child = node.firstChild; child; child = child.nextSibling) {
       if (child.to <= from || child.from >= to) continue
+      if(this.targets!==undefined&&child.name==='Link'&&child.from>from&&child.to<to&&this.source[child.from-1]==='['&&this.source[child.to]===']'){
+        text(child.from-1);at=child.to+1;out.push(this.wiki(child.from-1,child.to+1));continue
+      }
       text(child.from)
       at = child.to
       switch (child.name) {
@@ -234,6 +237,22 @@ class Reader {
     return this.run('code', from, to)
   }
 
+  private target(address:string,wiki=false):MarkdownTarget {
+    if(this.targets===undefined)return markdownTarget(address)
+    const clean=address.replace(/^<|>$/g,''),original=markdownTarget(clean)
+    if(!wiki&&(original.kind==='outside'||original.kind==='heading'))return original
+    const fragment=clean.indexOf('#'),base=fragment===-1?clean:clean.slice(0,fragment),prefix=wiki?'wiki:':'markdown:'
+    const mapped=this.targets[prefix+clean]??this.targets[prefix+base]
+    if(!mapped)return {kind:'none'}
+    return markdownTarget(mapped+(fragment===-1?'':clean.slice(fragment)))
+  }
+  private wiki(from:number,to:number):MarkdownInline {
+    const raw=this.slice(from,to),embedded=raw.startsWith('!'),start=from+(embedded?3:2)
+    const body=this.slice(start,to-2),bar=body.indexOf('|'),address=bar===-1?body:body.slice(0,bar)
+    const label=bar===-1?address:body.slice(bar+1),labelFrom=bar===-1?start:start+bar+1
+    if(embedded)return {kind:'image',alt:bar===-1?'':label,altFrom:bar===-1?-1:labelFrom,source:address,sourceFrom:start,target:this.target(address,true)}
+    return {kind:'link',address,addressFrom:start,target:this.target(address,true),children:[{kind:'text',text:label,from:labelFrom}]}
+  }
   /** A link's words are between its first two marks; its address is a URL, or a label defined elsewhere. */
   link(node: SyntaxNode): MarkdownInline {
     const marks = node.getChildren('LinkMark')
@@ -243,15 +262,18 @@ class Reader {
     const label = node.getChild('LinkLabel')
     const defined = url ? { address: this.slice(url.from, url.to), from: url.from }
       : this.references.get(normalLabel(label ? this.slice(label.from + 1, label.to - 1) : this.slice(open, close))) ?? { address: '', from: -1 }
-    return { kind: 'link', target: markdownTarget(defined.address), address: defined.address, addressFrom: defined.from, children: this.inlines(node, open, close) }
+    return { kind: 'link', target: this.target(defined.address), address: defined.address, addressFrom: defined.from, children: this.inlines(node, open, close) }
   }
 
   image(node: SyntaxNode): MarkdownInline {
+    if(this.targets!==undefined&&/^!\[\[[^\]]+\]\]$/.test(this.slice(node.from,node.to)))return this.wiki(node.from,node.to)
     const marks = node.getChildren('LinkMark')
     const url = node.getChild('URL')
-    const source = url ? this.slice(url.from, url.to) : ''
+    const name=node.getChild('LinkLabel')
+    const defined=url?{address:this.slice(url.from,url.to),from:url.from}:this.references.get(normalLabel(name?this.slice(name.from+1,name.to-1):this.slice(marks[0]?.to??node.from,marks[1]?.from??node.to)))
+    const source = defined?.address??''
     const altFrom = marks[0]?.to ?? node.from
-    return { kind: 'image', alt: this.slice(altFrom, marks[1]?.from ?? node.to), altFrom, source, sourceFrom: url ? url.from : -1, target: markdownTarget(source) }
+    return { kind: 'image', alt: this.slice(altFrom, marks[1]?.from ?? node.to), altFrom, source, sourceFrom: defined?.from??-1, target: this.target(source) }
   }
 
   blocks(parent: SyntaxNode): MarkdownBlock[] {
@@ -349,7 +371,7 @@ function trimInlines(inlines: MarkdownInline[]): MarkdownInline[] {
  * The page of a Markdown text (line endings already one `\n` each). A front-matter block at the top shows as
  * code; raw HTML shows as its text; link definitions are used and not shown.
  */
-export function markdownPage(text: string): MarkdownPage {
+export function markdownPage(text: string, targets?:Readonly<Record<string,string>>): MarkdownPage {
   const reader = new Reader(text)
   const blocks: MarkdownBlock[] = []
   let start = 0
@@ -363,7 +385,7 @@ export function markdownPage(text: string): MarkdownPage {
   }
   const tree = parser.parse(text.slice(start))
   // Offsets in the tree are from `start`: a reader over the rest, shifted back into the whole file.
-  const rest = new Reader(text.slice(start))
+  const rest = new Reader(text.slice(start),targets)
   rest.baseLines = start === 0 ? 0 : reader.line(start) - 1
   for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
     if (node.name !== 'LinkReference') continue

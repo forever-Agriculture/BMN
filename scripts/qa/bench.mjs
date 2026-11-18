@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { rootDeletionComplete } from './bench-state.mjs'
 // MODULE: bench.mjs - isolated QA lifecycle, shell actions and recovery through generation-bound kernel containment
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -126,7 +127,7 @@ async function stop(runId, error, retry = false) {
   const deadline = Date.now() + 45000
   while (Date.now() < deadline) {
     const current = ownState(runId) ?? readJson(join(config.run, 'receipt.json'))
-    if (current.status === 'stopped' && !outstanding(current).length && !existsSync(config.root) && !existsSync(config.group.path)) {
+    if (current.status === 'stopped' && !outstanding(current).length && rootDeletionComplete(config) && !existsSync(config.group.path)) {
       const traces = allTraces(current).map(entry => ({ key: entry.key, complete: !current.cleanupUntraced && traceCompleted(runId, entry) }))
       atomicJson(join(config.run, 'completion-proof.json'), { stopped: true, rootsDeleted: true, groupRemoved: true, traces })
       return { stopped: true, cleanupComplete: true, evidence: config.run, traceComplete: traces.every(item => item.complete) }

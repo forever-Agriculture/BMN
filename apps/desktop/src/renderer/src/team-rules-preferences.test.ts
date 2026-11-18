@@ -2184,3 +2184,10 @@ describe('QA: concise Health and Skills help', () => {
     expect(rulesMarkup('skills', rules({ snapshot: missing }))).toContain('<h3 class="page-title">Skills</h3><span class="faint">the folder does not exist</span>')
   })
 })
+
+it('keeps the brain cutover out of partial Rules Undo',()=>{
+ const earlier=earlierVersions({transactions:[{id:'synthetic-brain',createdAt:'2026-11-18',state:'complete',reason:'brain cutover',targets:['claude','codex'],valid:true}],history:[]})
+ expect(earlier).toHaveLength(1)
+ expect(earlier[0]).toMatchObject({usable:false,title:'Brain switch'})
+ expect(earlier[0]?.detail).toContain('part of the brain switch')
+})

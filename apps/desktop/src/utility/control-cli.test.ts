@@ -59,6 +59,8 @@ function runCli(
     if (key.startsWith('BMN_') || key.startsWith('AITERM_') ||
       key === 'ANTHROPIC_BASE_URL' || key === 'OPENAI_BASE_URL' || key === 'CLAUDE_CONFIG_DIR' || key === 'CLAUDE_PROJECT_DIR') delete env[key]
   }
+  env.BMN_DATA_HOME = join(NO_TEAM_HOME, 'no-brain-data')
+  env.BMN_STATE_HOME = join(NO_TEAM_HOME, 'held-brain-state')
   if (args[0] === 'hook' || args[0] === 'hooks') env.HOME = NO_TEAM_HOME
   // The lead's own BMN stays out of `hooks check`'s probe of the command guard, unless a test puts a bmn on PATH.
   if (process.env.BMN_CLI_BIN_DIR) env.PATH = (env.PATH ?? '').split(':').filter((folder) => folder !== process.env.BMN_CLI_BIN_DIR).join(':')
@@ -616,7 +618,7 @@ describe('bmn resume-command (Story 43.1)', () => {
 describe('bmn help agents', () => {
   it('prints a brief an agent can read in one screen, and sends nothing to the socket', async () => {
     const brief = await runCli(['help', 'agents'], {
-      env: { BMN_CONTROL_SOCKET: '/nonexistent/bmn-help-agents.sock', BMN_TOKEN: 'unused' }
+      env: { BMN_CONTROL_SOCKET: '/nonexistent/bmn-help-agents.sock', BMN_TOKEN: 'unused', BMN_STATE_HOME: join(NO_TEAM_HOME, 'held-brain-state') }
     })
 
     expect(brief.code).toBe(0)
@@ -664,6 +666,18 @@ describe('bmn help agents', () => {
     }
   })
 
+  it('shows the short palette hint only while the brain switch is held', async () => {
+    const state = await mkdtemp(join(tmpdir(), 'bmn-help-brain-')); createdRoots.add(state)
+    const env = { BMN_STATE_HOME: state }
+    const held = await runCli(['help', 'agents'], { env })
+    const line = held.stdout.split('\n').find(value => value.startsWith('Brain switch:'))
+    expect(line).toContain('Switch to the BMN brain…')
+    expect(line!.length).toBeLessThanOrEqual(100)
+    await mkdir(join(state, 'brain-cutover'))
+    await writeFile(join(state, 'brain-cutover/journal.json'), JSON.stringify({ state: 'complete' }))
+    expect((await runCli(['help', 'agents'], { env })).stdout).toContain('Brain switch:') // A bare complete flag has no worker receipt.
+  })
+
   it('prints the handoff outline and nothing else, without a socket or token (Story 35.2)', async () => {
     const outline = await runCli(['handoff', '--outline'], {
       env: { BMN_CONTROL_SOCKET: '/nonexistent/bmn-outline.sock', BMN_TOKEN: 'unused' }
@@ -690,7 +704,7 @@ describe('bmn help agents', () => {
 
   it('keeps the printed brief and the documented one identical', async () => {
     const [brief, documentation] = await Promise.all([
-      runCli(['help', 'agents']),
+      runCli(['help', 'agents'], { env: { BMN_STATE_HOME: join(NO_TEAM_HOME, 'held-brain-state') } }),
       readFile(AGENT_CONTROL_DOC, 'utf8')
     ])
     const fenced = /## A brief for agents[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)

@@ -23,7 +23,7 @@ vi.mock('node:fs', async original => {
       if (String(path).startsWith('/sys/fs/cgroup/')) { if (kernel.denied) throw Object.assign(new Error('denied'), { code: 'EACCES' }); return }
       return fs.accessSync(path, ...args)
     },
-    existsSync: path => String(path).startsWith('/sys/fs/cgroup/') ? kernel.present.has(path) : fs.existsSync(path),
+    existsSync: path => String(path).endsWith('/qa-bench/current.json') ? kernel.current !== null : String(path).startsWith('/sys/fs/cgroup/') ? kernel.present.has(path) : fs.existsSync(path),
     lstatSync: (path, ...args) => {
       if (String(path).startsWith('/sys/fs/cgroup/')) {
         if (kernel.present.has(path)) return { isSymbolicLink: () => true }
@@ -74,7 +74,10 @@ function fixture({ predecessor } = {}) {
   const state = { ...config, status: 'stopped', stoppedAt: new Date(bootAt - 20000).toISOString(), tracers: traces, recoveryTracePending: traces[1]?.key }
   save(run, 'config.json', config); save(run, 'receipt.json', state)
   save(run, 'completion-proof.json', { stopped: true, rootsDeleted: true, groupRemoved: true, traces: traces.map(trace => ({ key: trace.key, complete: true })) })
-  save(run, 'root-deletion-intent.json', { runId, root: config.root, identity: config.rootIdentity })
+  mkdirSync(config.root); writeFileSync(join(config.root, '.bmn-qa-run'), runId)
+  state.rootIdentity = config.rootIdentity = identity(config.root)
+  save(run, 'config.json', config); save(run, 'receipt.json', state)
+  lifecycle.deleteRoot(config) // Produce the actual creation-bound quarantine completion receipt.
   save(run, 'group-removal-workload.json', { runId, group: config.group })
   return { config, state, run, traces }
 }
