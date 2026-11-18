@@ -54,6 +54,10 @@ describe('owner root guard', () => {
     expect(() => assertOwnerRootsUnchanged(kept, rolled, 'during smoke', { runFolders: [runs, boards] })).not.toThrow()
     expect(() => assertOwnerRootsUnchanged(kept, [...kept, `${boards}/b2\tdir\t3`], 'during smoke', { runFolders: [runs, boards] }))
       .toThrow(/plan-versions\/b2/)
+    // Another session's ask refused while preparing: its child came and went, only the run folder's time moved.
+    const touched = [`${runs}\tdir\t5`, ...before.slice(1)]
+    expect(() => assertOwnerRootsUnchanged(before, touched, 'during smoke', { runFolders: [runs] })).not.toThrow()
+    expect(() => assertOwnerRootsUnchanged(before, touched, 'during smoke')).toThrow(/\/owner\/config\/runs/)
     // Only direct children of a run folder count as runs: a deeper folder that existed before excuses nothing beside it.
     const nested = [...before, `${runs}/old/inputs\tdir\t1`]
     expect(() => assertOwnerRootsUnchanged(nested, [...nested, '/owner/config/db\t1\t1'], 'during smoke', { runFolders: [runs] }))

@@ -29,7 +29,8 @@ const ownerRoots = [
 // Quit BMN first; a running copy would change these files during the smoke. Team asks other sessions started
 // before the smoke keep writing in their own run folders and are left out of the check. So are the kept versions of a
 // plan board another session already changed before the smoke: its `bmn plan set` calls go on meanwhile (the update
-// of 2026-11-17 failed on a B2Buster board). A board first changed during the smoke still fails.
+// of 2026-11-17 failed on a B2Buster board). A board first changed during the smoke still fails. An ask refused
+// while preparing leaves only its run folder's newer time, which is left out as well (update of 2026-11-18).
 const ownerRunFolders = [
   join(homedir(), '.config/bmn/agents/state/team/runs'),
   join(homedir(), '.local/state/bmn/plan-versions')

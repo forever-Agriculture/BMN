@@ -23,6 +23,9 @@ export function fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readd
  * kept versions of one plan board. A child already there before the check began belongs to work some other session
  * started; that session keeps writing inside it meanwhile, so those writes are not the run's. A leak would start a new
  * child, which still fails (updates of 2026-11-07, a Q-Automations ask, and 2026-11-17, a B2Buster plan board).
+ * The run folder's own entry is left out too: an ask another session starts and BMN refuses while preparing it adds
+ * its child and takes it away again, which leaves nothing but the folder's newer time (update of 2026-11-18). A child
+ * that stays is still named by its own entry.
  */
 export function assertOwnerRootsUnchanged(before, after, phase, { runFolders = [] } = {}) {
   // The owner's roots hold hundreds of thousands of entries; Sets keep the comparison linear.
@@ -35,7 +38,7 @@ export function assertOwnerRootsUnchanged(before, after, phase, { runFolders = [
   const changed = [
     ...before.filter((entry) => !afterSet.has(entry)),
     ...after.filter((entry) => !beforeSet.has(entry))
-  ].map((entry) => entry.split('\t')[0]).filter((path) => !outsideRun(path))
+  ].map((entry) => entry.split('\t')[0]).filter((path) => !outsideRun(path) && !runFolders.includes(path))
   if (changed.length > 0) {
     throw new Error(`real XDG roots changed ${phase}; changed: ${[...new Set(changed)].slice(0, 10).join(', ')}`)
   }
