@@ -3,21 +3,22 @@
 
 Run before asking the owner for his go on an epic (or a set of epics). The question: **could an implementing agent build these stories without inventing a decision nothing records?** `bmn plan check` covers structure; this is the content check.
 
-## Light epic: five checks
+## Light epic: the light checks
 
 A light epic (SKILL.md, Simplest first) takes only these, with one line in Reviews and no table file:
 
+0. The Boundary states the simplest approach, its real-use check, its fallback and the Efficiency line; the first implementation story is the thinnest working path; nothing extra stands without its one line.
 1. Every starting point opened in this pass and there.
 2. Every decision a story needs is recorded; his own are in Decisions.
 3. The real system exposes what each criterion needs (checked in code, documentation or a measurement), its named check can show it at the cheapest level that would catch its failure, and together the criteria show the Outcome on the path he uses.
 4. No conflict with the vision, the truth documents or an unfinished epic.
 5. Nothing needs him during the run, and the whole run fits the template allowances: QA, limits, prerequisites and delivery. If not, the epic is full.
 
-Then the Verdict below. An epic that fails 5 or meets a named risk takes the full checks.
+Then the Verdict below. An epic that fails 5 or meets a named risk takes the full checks. In them, a check that does not apply takes `n/a`; write findings only.
 
 ## Checks (full epic)
 
-0. **Simplest first.** The Boundary states the simplest approach, its real-use check and its fallback. Every rehearsal, isolated environment, new service, gate and measure-first story carries its line (the failure it prevents, why likely, why the fallback does not cover it); cut each one without. No story has more than 3 criteria. A plan review beyond one consult and one recheck is a finding.
+0. **Simplest first.** The Boundary states the simplest approach, its real-use check, its fallback and the Efficiency line; the first implementation story (after any stop gate) is the thinnest working path. Every rehearsal, isolated environment, new service, gate and measure-first story carries its line (the failure it prevents, why likely, why the fallback does not cover it); cut each one without. A story over 3 criteria, an epic over 5 stories and a plan review beyond one consult and one recheck each carry their one-line reason (his word, for the review).
 
 1. **Traceability forward.** List every requirement (the epic's `RN-FR`/`RN-NFR`, and the Outcome). Each appears in at least one story's Coverage, and that story's criteria actually establish it.
 2. **Traceability back.** Each story names what it covers; a story covering nothing is cut or tied to a requirement.
@@ -34,7 +35,7 @@ Then the Verdict below. An epic that fails 5 or meets a named risk takes the ful
 
 13. **The allowances file, end to end.** The epic has `plan/allowances/NNN.yaml` from the [template](../templates/allowances.yaml), 4 repair rounds by default, and `bmn plan check` is clean. Walk every story through implementation, review/rechecks, repairs, QA/retests, packaging, delivery and cleanup. For each expected operation, identify its command and target, authority source, prerequisite/access check and cost basis; record these in the epic's verification and allowances `may`, `prepared` and limits as applicable. Walk each limit through the expected work plus justified contingency, size it accordingly, and set its ceiling to what the lead may reach alone. A known permission gap, unbudgeted paid step or predictable extra review is a readiness finding, never “ask during implementation.” `stays_out` remains binding. An unforeseen gap can use one amendment card showing exact before/after, reason, cost/exposure and work unlocked; only his approval changes the recorded file through `bmn plan allow`, with usage preserved. Pending approval parks affected work only; Away and external refusals still hold. Recommend enough to finish, never one more slice or a narrower limit than the file's.
 
-14. **Size.** Over 5 stories, cut by outcome. Over 10 stories or 50 criteria, split the epic before he sees it; only his quoted word for that size in Decisions keeps it whole (`bmn plan check` reports it from `rules_from_size` on).
+14. **Size.** Over 5 stories, cut down or give the one-line reason. Over 10 stories or 50 criteria, split the epic before he sees it; only his quoted word for that size in Decisions keeps it whole (`bmn plan check` reports it from `rules_from_size` on).
 
 15. **Runs without asking.** List every point where the run could need him: a decision, an approval, spend, an action, a credential, a check. Each is settled in the epic (Decisions, a stop gate's rule), covered by `## Run needs`, or is a step before the go or at the end (the story's **Owner:** line). Any other point is a finding. Walk his real causes by name: a command that can prompt (a Git or SSH login, `sudo`), a message to a person (its exact text, or a draft on a card), a design choice the run might meet and its default, a command only he can run, an expired account or credential. Each ends in Decisions, `**Prepared:**`, Named actions, or an **Owner:** step before the go. While the dev-auto in force cannot read Run needs, the run records them in its handoff as his instruction.
 
