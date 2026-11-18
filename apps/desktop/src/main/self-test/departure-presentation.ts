@@ -4,6 +4,14 @@ import { BrowserWindow } from 'electron'
 import { DEPARTURE_AUTO_MS, ERROR_CODES, METHOD_REGISTRY, ownerGrantView, type OwnerAwayView, type OwnerDepartureReply, type OwnerGrantView } from '@bmn/protocol'
 import type { PtyHostClient } from '../pty-host-client'
 
+/** Unmaps and maps the window again: the one focus handoff GNOME on Wayland grants between two open windows. */
+export async function refocusWindow(window: BrowserWindow): Promise<void> {
+  window.hide()
+  await new Promise(resolve => setTimeout(resolve, 100))
+  window.show()
+  window.focus()
+}
+
 export async function checkDeparturePresentation(client: PtyHostClient, first: BrowserWindow, second: BrowserWindow, cli: (args: string[]) => string) {
   const renderer = <T>(window: BrowserWindow, code: string): Promise<T> => window.webContents.executeJavaScript(code)
   const grant = () => originalRequest<OwnerGrantView>(METHOD_REGISTRY.grantGet, {})
@@ -21,10 +29,18 @@ export async function checkDeparturePresentation(client: PtyHostClient, first: B
     passive: document.activeElement?.classList.contains('grant-list') === true
   })`)
   const focus = async (window: BrowserWindow, other: BrowserWindow): Promise<void> => {
+    const focused = async () => BrowserWindow.getFocusedWindow() === window && window.isFocused() && !other.isFocused() &&
+      (await modal(window)).focus && !(await modal(other)).focus
     window.show()
     window.focus()
-    await until(async () => BrowserWindow.getFocusedWindow() === window && window.isFocused() && !other.isFocused() &&
-      (await modal(window)).focus && !(await modal(other)).focus, `focus preflight for window ${window.id}`)
+    try {
+      await until(focused, `focus preflight for window ${window.id}`, 1_000)
+    } catch {
+      // GNOME on Wayland refuses focus() for a window that is already mapped; a window mapped
+      // anew is given focus, so hand it over the way the first preflight does.
+      await refocusWindow(window)
+      await until(focused, `focus preflight for window ${window.id}`)
+    }
   }
   const start = async () => {
     assert.match(cli(['away', '--leaving']), /^Leaving since /)

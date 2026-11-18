@@ -10,7 +10,7 @@ import type { SelfTestHost } from '../index'
 import type { PtyHostClient } from '../pty-host-client'
 import { SELF_TEST_TELEGRAM_CHAT_ID, type SelfTestRecorder } from './taps'
 import { waitForRendererLoad } from './probes'
-import { checkDeparturePresentation } from './departure-presentation'
+import { checkDeparturePresentation, refocusWindow } from './departure-presentation'
 
 const TERMS = [
   { kind: 'rounds', proposed: 3, reason: 'two review boundaries are ahead' },
@@ -186,8 +186,10 @@ async function checkGrantReset(
   const before = await get()
   assert.ok(before.revision > 10, 'the two running windows have a high revision before reset')
   const root = process.env.BMN_DATA_HOME
-  assert.ok(root && basename(root) === 'bmn' && basename(dirname(dirname(root))).startsWith('bmn-electron-self-test-'),
-    'a real reset fixture requires the run-owned Electron self-test database')
+  // Both the source self-test and the packaged smoke run on a temporary root they own.
+  assert.ok(root && basename(root) === 'bmn' &&
+    ['bmn-electron-self-test-', 'bmn-packaged-smoke-'].some(prefix => basename(dirname(dirname(root))).startsWith(prefix)),
+    'a real reset fixture requires the run-owned self-test database')
   const Sqlite = createRequire(__filename)('better-sqlite3') as new (path: string, options: { fileMustExist: boolean }) => DatabaseConnection
   const database = new Sqlite(join(root, 'state.sqlite3'), { fileMustExist: true })
   const wait = async (check: () => Promise<boolean>, label: string, ms = 5_000) => {
@@ -229,10 +231,15 @@ async function checkGrantReset(
   }
   try {
     // Make the other window miss just the transient unreadable state. Its next update is a real read.
+    const focused = async () => focus.isFocused() && !other.isFocused() &&
+      await focus.webContents.executeJavaScript('document.hasFocus()') as boolean
     focus.show()
     focus.focus()
-    await wait(async () => focus.isFocused() && !other.isFocused() &&
-      await focus.webContents.executeJavaScript('document.hasFocus()'), 'reset focus preflight')
+    // GNOME on Wayland keeps focus on an already mapped window; mapping it anew hands focus over.
+    await wait(focused, 'reset focus preflight', 1_000).catch(async () => {
+      await refocusWindow(focus)
+      await wait(focused, 'reset focus preflight')
+    })
     // The preceding fixture used direct Go IPC. Its manually opened list can still cover the summary.
     const closeList = `document.querySelector('dialog.before-you-go-dialog[open] button[aria-label="Close Before you go"]')?.click()`
     for (const window of [focus, other]) await window.webContents.executeJavaScript(closeList)
