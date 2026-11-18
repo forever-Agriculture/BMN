@@ -3360,9 +3360,8 @@ Submission is not delivery
 While the owner is away
   bmn away --status shows away or back, since when, and the revision. Set it (bmn away --revision R,
   bmn back --revision R) only on the owner's own words to you, never because he seems to be gone.
-  Leaving: forward bmn away --leaving (getting ready). Every session with unfinished authorised work
-  answers within 3 minutes on one card: bmn grant --help. No dev-auto: use its name and stable id.
-  Away starts on Go in BMN or Telegram. Forward bmn away only if he says he is already gone.
+  Leaving: forward bmn away --leaving; a session with unfinished authorised work answers within
+  3 minutes on one card (bmn grant --help). Away starts on his Go; bmn away only if he is gone.
   While he is away BMN refuses your blocking question tool (Claude Code's AskUserQuestion, Codex's
   request_user_input) and hands you this text, word for word:
   The owner is away. While the owner is away, BMN's Away notice takes precedence over skill
