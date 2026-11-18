@@ -2,7 +2,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { answerGrant, askGrant, EMPTY_GRANT_RECORD, newDepartureCollection, ownerGrantView, parseGrantCardInput, setDepartureCollection, startDeparture, type GrantRecord } from '@bmn/protocol'
+import { answerGrant, askGrant, EMPTY_GRANT_RECORD, newDepartureCollection, omittedDepartureCounts, ownerGrantView, parseGrantCardInput, selectDepartureSessions, setDepartureCollection, startDeparture, type GrantRecord } from '@bmn/protocol'
 import { awayGrantWords } from './away-check'
 import { BeforeYouGoDialog, toldWords } from './before-you-go-dialog'
 
@@ -53,6 +53,16 @@ describe('toldWords', () => {
 })
 
 describe('the dialog\'s buttons (docs/design.md B2)', () => {
+  it.each([32, 33, 64, 65, 100])('shows the counted sessions of %i recent sessions in its head (D13)', total => {
+    const sessions = Array.from({ length: total }, (_, i) => ({ sessionId: `s${i}`, incarnationId: 'i', name: `S${i}`, agent: 'claude', lastEventAt: T0 }))
+    const base = leaving(), period = base.periods.at(-1)!
+    const record = setDepartureCollection(base, period.periodId, newDepartureCollection(selectDepartureSessions(sessions, T0), T0, omittedDepartureCounts(sessions, T0)))
+    const markup = renderToStaticMarkup(createElement(BeforeYouGoDialog, {
+      grant: ownerGrantView({ state: 'read', record }), now, sessionName: name, place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onAnswer: async () => ({ outcome: 'granted' as const }), onAwayNow: () => undefined, onNotLeaving: () => undefined, onClose: () => undefined
+    }))
+    expect([...markup.matchAll(/grant-omitted">([^<]*)</gu)].map(match => match[1])).toEqual(total > 64 ? [`${total - 64} more ${total - 64 === 1 ? 'session' : 'sessions'} not asked: the list is full`] : [])
+  })
   it('shows sessions counted beyond the list in its head (D13)', () => {
     const base = leaving()
     const period = base.periods.at(-1)!

@@ -4949,6 +4949,9 @@ describe('Away (Story 76.3)', () => {
       const auto = () => departureAction(database, { action: 'auto', periodId: seen.period!.periodId, expectedRevision: readRecord().revision, expectedGeneration: 0, operationKey: `auto:${autoAt}`, source: 'app' }, autoAt)
       if (order === 'auto-first') {
         expect(auto().outcome).toBe('changed')
+        // The owner's real CLI command: refused, and the words name the departure, not an Away revision he never sent.
+        const handlers = service['control']['options'].handlers
+        await expect(handlers.changeAway({ to: 'back', scope: { kind: 'owner' } })).rejects.toThrow(/The departure changed before this arrived; nothing was changed/)
         const back = await service.changeAway({ to: 'back', source: 'cli' })
         expect(back.outcome).toBe('stale')
         expect(readRecord().periods.at(-1)?.state).toBe('away')

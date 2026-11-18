@@ -4,11 +4,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { departureOmittedLines, GRANT_RECORD_KEY, newDepartureCollection, omittedDepartureCounts, readDepartureCollection, selectDepartureSessions, type GrantRecord } from '@bmn/protocol'
+import { departureOmittedLines, ownerGrantView, GRANT_RECORD_KEY, newDepartureCollection, omittedDepartureCounts, readDepartureCollection, selectDepartureSessions, type GrantRecord } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { departureAction, departureDelivery, type DepartureAction } from './database-departure-store'
 import { answerGrantCard, askGrantCard, readGrantRow, useGrantRecord } from './database-grant-store'
 import { changeAway, getAway } from './database-away-store'
+import { departureHeadText } from './telegram-departure-head'
 
 const Database = createRequire(import.meta.url)('better-sqlite3') as new (path: string) => DatabaseConnection
 const AT = '2026-11-17T19:00:00.000Z'
@@ -365,6 +366,10 @@ describe('resumed departure gaps', () => {
       database.close(); database = new Database(path)
       const saved = record().periods.at(-1)?.collection ?? null
       expect(saved?.sessions).toHaveLength(rows.length)
+      // Telegram's head from the reread record (the window's head at the same sizes: before-you-go-dialog.test.ts).
+      const phone = departureHeadText(ownerGrantView({ state: 'read', record: record() }), new Date(AT)).split('\n')
+      const lines = departureOmittedLines(saved ?? undefined)
+      lines.forEach((line, index) => expect(phone.indexOf(line)).toBe(2 + index))
       expect(saved?.omitted).toEqual(Object.keys(omitted).length ? omitted : undefined)
       expect(departureOmittedLines(saved ?? undefined)).toEqual(total === 65 ? ['1 more session not asked: the list is full'] : total === 100 ? ['36 more sessions not asked: the list is full'] : [])
     })
