@@ -308,7 +308,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
       form, reads: { scope: reads.scope, words: reads.words, folder: cwd }, project, cwd, ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
       sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: 'Codex\'s permission profile on :read-only', approval_policy: 'never', tools: 'Codex\'s own: shell, Git, web search, sub-agents' }
-        : agent.harness === 'claude' ? { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'WebSearch', 'Agent'] }
+        : agent.harness === 'claude' ? { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'git ls-tree', 'git ls-files', 'WebSearch', 'Agent'] }
           : { mode: 'read-only', source: '--agent', agent: own.agent, tools: form === 'opencode-reader' ? ['read', 'glob', 'grep', 'list', 'git log', 'git show', 'git diff', 'git blame', 'websearch', `subagent ${OPENCODE_ASK_AGENTS.subagent}`] : [] },
       run: basename(folder), data: label, consent,
       // The project's vision the reviewer was given, by path and hash, or why it was not (Epic 112); bound with the manifest below.

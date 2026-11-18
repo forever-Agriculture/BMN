@@ -2637,7 +2637,7 @@ options, every shell redirection, a background shell) and every tool not given. 
 | App | Form | Command (after `env -i HOME PATH …`) | What it can read |
 | --- | --- | --- | --- |
 | Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c features.plugins=false -c features.apps=false -c mcp_servers=<isolated-map> -c approval_policy="never" -c default_permissions="bmn_ask" -c permissions.bmn_ask=... [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read except the listed credential stores (`native-rules.mjs` `codexDeniedPaths`), with its shell, Git, web search and sub-agents; its profile extends `:read-only`, writes nothing and keeps the shell off the network. Codex's profiles are beta: a Codex that refuses this one fails the ask with a reason naming it and `--features` says so; BMN never runs it without the profile (Epic 102 D8) |
-| Claude Code | `claude-read-tools` | `claude -p --model <model> --effort <effort> --restricted --tools Read,Grep,Glob,Bash,WebSearch,Agent --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' WebSearch Agent --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose`, BMN's `git` first on `PATH` | its working folder only (`--restricted`), with Read, Grep, Glob, Git history, web search and sub-agents |
+| Claude Code | `claude-read-tools` | `claude -p --model <model> --effort <effort> --restricted --tools Read,Grep,Glob,Bash,WebSearch,Agent --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' 'Bash(git ls-tree:*)' 'Bash(git ls-files:*)' WebSearch Agent --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose`, BMN's `git` first on `PATH` | its working folder only (`--restricted`), with Read, Grep, Glob, Git history and listings, web search and sub-agents. From a linked worktree that leaves out the main folder and an ignored `plan/` there: the asker attaches those files with `--file`, and the prompt tells the teammate to name what it could not read |
 | OpenCode, a private project ask to a teammate whose provider takes private work | `opencode-reader` | `opencode run --standalone --format json --agent bmn-ask-reader -m <provider>/<model>#<effort> --title 'BMN ask'` in BMN's own OpenCode folder (its Go sign-in, 70.4), the agents given in `OPENCODE_CONFIG_CONTENT`, BMN's `git` first on `PATH` | the project folder only, through BMN's read/glob/grep/Git broker, with web search and one bounded read-only sub-agent `bmn-reader`; outside and symlink escapes are refused |
 | OpenCode, any other ask | `opencode-asker` | the same with `--agent bmn-ask-asker`, every action denied (`"*": "deny"`) | nothing beyond the asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public work only, where the owner's folder exceptions can cover the question and files but never the project reader |
 
@@ -2654,14 +2654,18 @@ On the measured Linux OpenCode 2.0.29 and 2.0.32 paths, dispatch also checks the
 a populated, linked, unreadable or changing root is refused before dispatch. Native OpenCode can load managed
 plugins and provider settings outside BMN's folder, so BMN cannot offer its confined form with that configuration.
 
-- **BMN's `git`** (`bin/ask-git.sh`, shipped with 72.3) is the `git` the Claude Code reader finds; the OpenCode broker uses its same argument validator. It allows only `log`, `show`, `diff` and `blame`, and takes an option only when it is
+- **BMN's `git`** (`bin/ask-git.sh`, shipped with 72.3) is the `git` the Claude Code reader finds; the OpenCode broker uses its same argument validator. It allows only `log`, `show`, `diff` and `blame`, and for Claude Code the listings `ls-tree` and `ls-files` (2026-11-18: teammates asked for them and were refused; OpenCode's broker keeps its own gate at the four), and takes an option only when it is
   spelled whole as one of its read-only options (Git takes any unique beginning of a long option, so
   `--cont=` would be `--contents=`). It takes no option that names a file, runs no external diff, text
-  conversion, pager or hook, and, for Claude Code, reads no configuration but the project's own. Claude Code's
+  conversion, pager or hook, and, for Claude Code, reads no configuration but the project's own. The listings
+  take only options that print what a tree or the index holds: none that lists untracked or ignored files, reads
+  an ignore file or a working-tree file (`ls-files --format`), enters a submodule or fetches a missing object, and
+  no pathspec magic. Claude Code's
   prefix rules alone let `git blame --contents` or `--output` read or write any file (72.1). OpenCode
   uses brokered Git operations without a shell; redirections are refused.
 - **What is not offered, said plainly:** Claude Code's `WebFetch` and every Bash command but those
-  four Git reads; OpenCode's `webfetch`, `execute`, `patch`, `question`, `skill`, its own sub-agents and
+  six Git reads and what its own mode takes as a plain read inside the folder (on 2.1.327, 2026-11-18, `ls`, `cat`,
+  `head`, `grep`, `wc` and `find` answered there; `cd`, `git -C` and any path outside the folder were refused); OpenCode's `webfetch`, `execute`, `patch`, `question`, `skill`, its own sub-agents and
   its shell beyond the four Git reads. Codex's `request_user_input` is refused by Codex in an exec run.
 - **The owner's rules.** Codex and Claude Code read his global rules from their own homes, as in his
   own sessions. OpenCode, which runs in BMN's folder, gets them in the prompt for a private ask, and

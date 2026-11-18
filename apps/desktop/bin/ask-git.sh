@@ -1,5 +1,5 @@
 #!/bin/sh
-# MODULE: ask-git.sh - Epic 72: the `git` a teammate's ask runs to read a project's history: only log, show, diff and blame, only options that read, never one that writes a file or reads one outside the project
+# MODULE: ask-git.sh - Epic 72: the `git` a teammate's ask runs to read a project's history: only log, show, diff and blame, and for Claude Code the two listings ls-tree and ls-files, only options that read, never one that writes a file or reads one outside the project
 #
 # A teammate reads the project's history with git log, show, diff and blame (R72-NFR2). Its app lets only command
 # lines that start with those words run, but git itself takes options that write a file (--output), read any file
@@ -20,12 +20,53 @@ refuse() {
 command=$1
 shift
 case $command in
-  log|show|diff|blame) ;;
+  log|show|diff|blame) listing=0 ;;
+  # What a commit's tree or the index holds, by name (owner 2026-11-18: Claude Code teammates asked for these and
+  # were refused). Claude Code's reader only: OpenCode's broker still takes the four history commands alone.
+  ls-tree|ls-files) listing=1 ;;
   *) refuse "git $command" ;;
 esac
 
+# The listings take their own few options, each spelled whole: none names a file, an ignore file or the untracked
+# and ignored files of the working tree, and none leaves this repository (no submodules, no lazy fetch). ls-files
+# takes no --format: its %(eolinfo:worktree) opens the working tree's files.
 after_dashes=0
-for argument in "$@"; do
+names=0
+[ "$listing" -eq 1 ] && for argument in "$@"; do
+  if [ "$after_dashes" -eq 0 ]; then
+    case $argument in
+      --) after_dashes=1; continue ;;
+      -*)
+        case $command:$argument in
+          ls-tree:-d|ls-tree:-r|ls-tree:-t|ls-tree:-z|ls-tree:-l|ls-tree:--long|ls-tree:--name-only|ls-tree:--name-status|\
+          ls-tree:--object-only|ls-tree:--full-name|ls-tree:--abbrev|ls-tree:--abbrev=*|ls-tree:--format=*) ;;
+          ls-files:-c|ls-files:--cached|ls-files:-s|ls-files:--stage|ls-files:-u|ls-files:--unmerged|ls-files:-t|ls-files:-v|\
+          ls-files:-f|ls-files:-z|ls-files:--full-name|ls-files:--deduplicate|ls-files:--sparse|ls-files:--error-unmatch|\
+          ls-files:--resolve-undo|ls-files:--abbrev|ls-files:--abbrev=*) ;;
+          *) refuse "the option $argument (only whole, read-only options are taken)" ;;
+        esac
+        continue ;;
+    esac
+  fi
+  # A tree or a path: inside the repository, by its plain name (no pathspec magic, which can climb to the top).
+  names=$((names + 1))
+  case $argument in
+    :*|/*|../*|*/../*|*/..|..) refuse "the path $argument" ;;
+  esac
+  if [ "$command" = ls-tree ] && [ "$names" -eq 1 ]; then
+    # The tree, perhaps a revision with a path (HEAD:src): the path stays inside the repository.
+    case $argument in
+      *:*)
+        path=${argument#*:}
+        case $path in
+          /*|../*|*/../*|*/..|..) refuse "the path $argument" ;;
+        esac ;;
+    esac
+  fi
+done
+
+after_dashes=0
+[ "$listing" -eq 0 ] && for argument in "$@"; do
   if [ "$after_dashes" -eq 1 ]; then
     # A path: inside the repository only; git refuses one outside it, and none may climb out by name.
     case $argument in
@@ -78,5 +119,6 @@ GIT_NO_REPLACE_OBJECTS=1
 GIT_TERMINAL_PROMPT=0
 export GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL GIT_PAGER PAGER GIT_OPTIONAL_LOCKS GIT_NO_REPLACE_OBJECTS GIT_TERMINAL_PROMPT
 unset GIT_DIR GIT_WORK_TREE GIT_EXTERNAL_DIFF GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_EXEC_PATH
+[ "$listing" -eq 1 ] && exec /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat --no-pager --no-lazy-fetch "$command" "$@"
 exec /usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c diff.external= -c core.pager=cat -c log.showSignature=false -c gpg.program=/bin/false \
   --no-pager "$command" --no-ext-diff --no-textconv "$@"

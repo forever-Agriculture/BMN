@@ -38,7 +38,8 @@ with `--interact` its browser scripts run as your user, and can read and write f
 - **What its app's mode reaches.** Codex's read-only profile reads any file your user can read except the listed
   credential stores (SSH private keys, GnuPG private keys, the Codex and Claude Code sign-ins, the
   KeePass stores and the `gh`, AWS, Git and `.netrc` credential files; `--features` gives each path);
-  Claude Code reads only its working folder; OpenCode reads the project (and where its tracked links
+  Claude Code reads only its working folder (from a linked worktree that leaves out the main folder and an
+  ignored `plan/` there: attach the plan files your question rests on with `--file`); OpenCode reads the project (and where its tracked links
   lead) for a private project ask, and nothing beyond your text otherwise. `bmn team ask --features`
   says what each app is asked with here, and the record says what the teammate's mode could read.
 - **`--file PATH`** puts a file's whole text into the prompt (up to 64, 1 MiB each, UTF-8): right for

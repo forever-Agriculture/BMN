@@ -55,7 +55,7 @@ export const ASK_READS = Object.freeze({
   'codex-read-only': { scope: 'computer', reach: 'any file your user can read except the listed credential stores', words: `Codex's read-only permission profile: any file your user can read except the listed credential stores (${CODEX_DENIED_WORDS}), with its shell, Git, web search and sub-agents; it writes nothing` },
   'codex-qa': { scope: 'computer', reach: 'any file your user can read except the listed credential stores', words: 'Codex QA form: native command, web, app and collaboration tools switched off; read-only permission profile without the listed credential stores; tool closure remains unverified until its version-pinned fence passes' },
   'claude-qa': { scope: 'text', reach: 'nothing beyond its QA brief and browser', words: 'Claude Code QA form: restricted, no built-in tools, only the QA relay\'s browser tools; a stand-in fence proves that closure for each run' },
-  'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history through BMN\'s git, web search and sub-agents; it writes nothing' },
+  'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history and listings through BMN\'s git, web search and sub-agents; it writes nothing' },
   'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
   'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
 })
@@ -81,9 +81,9 @@ export const CODEX_QA_CONFIG = Object.freeze(['web_search="disabled"', 'features
 export const CODEX_QA_DISABLED = Object.freeze(['view_image', 'goals', 'image_generation', 'sleep_tool', 'hooks'])
 
 
-/** Claude Code's read tools, web search and sub-agents; Bash only for Git's four read commands, through BMN's git first on PATH (72.9 AC1). A browser ask replaces the empty MCP configuration and allows its browser tools (74.3). */
+/** Claude Code's read tools, web search and sub-agents; Bash only for Git's four history commands and its two listings (ls-tree, ls-files; owner 2026-11-18), through BMN's git first on PATH (72.9 AC1). A browser ask replaces the empty MCP configuration and allows its browser tools (74.3). */
 export const CLAUDE_ASK_TOOLS = Object.freeze(['--restricted', '--tools', 'Read,Grep,Glob,Bash,WebSearch,Agent',
-  '--allowedTools', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'WebSearch', 'Agent',
+  '--allowedTools', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'Bash(git ls-tree:*)', 'Bash(git ls-files:*)', 'WebSearch', 'Agent',
   '--permission-mode', 'dontAsk', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--output-format', 'stream-json', '--verbose'])
 
 /** The QA form: no built-in tools or settings, only the QA relay's named tools, refused rather than asked otherwise (100.6). */

@@ -471,6 +471,57 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(claude.verdict.receipt?.snapshots).toMatchObject({ git: createHash('sha256').update(readFileSync(SHIM)).digest('hex') })
   })
 
+  it('Claude Code is told once how to use its shell and that outside files are closed; Codex, which reads the computer, is not (owner 2026-11-18)', () => {
+    const root = makeProject()
+    const claude = ask({ role: 'designer', project: root })
+    const words = readFileSync(join(claude.folder, ASK_RUN_FILES.prompt), 'utf8')
+    expect(words).toContain('git ls-tree and git ls-files answer too. Start each shell command from this folder with relative paths, one command per call')
+    expect(words).toContain('Files outside this folder are closed to you: name any you needed')
+    expect(claude.argv).toEqual(expect.arrayContaining(['Bash(git ls-tree:*)', 'Bash(git ls-files:*)']))
+    expect(claude.verdict.receipt?.sandbox).toMatchObject({ tools: expect.arrayContaining(['git ls-tree', 'git ls-files']) })
+    const codex = ask({}, { cwd: root })
+    expect(readFileSync(join(codex.folder, ASK_RUN_FILES.prompt), 'utf8')).not.toContain('git ls-tree and git ls-files answer too')
+  })
+
+  describe('BMN\'s git for an ask: the two listings beside the four history commands (owner 2026-11-18)', () => {
+    const shim = (cwd: string, ...args: string[]): { status: number; out: string } => {
+      try {
+        return { status: 0, out: execFileSync('/bin/sh', [SHIM, ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { PATH: '/usr/bin:/bin', HOME: home } }) }
+      } catch (error) {
+        const failed = error as { status?: number; stderr?: string }
+        return { status: failed.status ?? -1, out: failed.stderr ?? '' }
+      }
+    }
+
+    it('ls-tree and ls-files list what a commit and the index hold, never an ignored or untracked file', () => {
+      const root = makeProject()
+      expect(shim(root, 'ls-tree', '-r', '--name-only', 'HEAD')).toEqual({ status: 0, out: '.gitignore\nREADME.md\nsrc/retry.ts\n' })
+      expect(shim(root, 'ls-tree', '--name-only', 'HEAD:src').out).toBe('retry.ts\n')
+      expect(shim(root, 'ls-tree', '--name-only', 'HEAD~2', '--', 'src').out).toBe('src\n')
+      expect(shim(root, 'ls-files').out).toBe('.gitignore\nREADME.md\nsrc/retry.ts\n')
+      expect(shim(root, 'ls-files', '-s', '--abbrev=8', '--', 'src').out).toMatch(/^100644 [0-9a-f]{8} 0\tsrc\/retry\.ts\n$/u)
+      // The four history commands answer as before.
+      expect(shim(root, 'log', '--format=%s', '-1').out).toBe('third: five tries\n')
+    })
+
+    it('a listing takes no option that reads the working tree\'s other files, a file by name, a submodule or the top by magic', () => {
+      const root = makeProject()
+      const refused = [
+        ['ls-files', '--others'], ['ls-files', '-o'], ['ls-files', '--ignored'], ['ls-files', '--modified'], ['ls-files', '--exclude-standard'],
+        ['ls-files', '--exclude-from=/etc/passwd'], ['ls-files', '-X', '/etc/passwd'], ['ls-files', '--exclude-per-directory=.gitignore'],
+        ['ls-files', '--recurse-submodules'], ['ls-files', '--with-tree=HEAD'], ['ls-files', '--format=%(eolinfo:worktree) %(path)'], ['ls-files', '--cach'], ['ls-files', '--', '../x'], ['ls-files', '--', ':/'],
+        ['ls-files', ':(top)*'], ['ls-files', '/etc'], ['ls-files', 'src/..'],
+        ['ls-tree', '--full-tree', 'HEAD'], ['ls-tree', 'HEAD:../x'], ['ls-tree', 'HEAD', '--', '/etc'], ['ls-tree', '--output=/tmp/x', 'HEAD'], ['ls-tree', '--nam', 'HEAD'],
+        ['status'], ['ls-remote'], ['cat-file', '-p', 'HEAD'], ['-C', '/tmp', 'log']
+      ]
+      for (const args of refused) {
+        const result = shim(root, ...args)
+        expect({ args, status: result.status }).toEqual({ args, status: 128 })
+        expect(result.out).toContain('is not allowed in a read-only project ask')
+      }
+    })
+  })
+
   it('a file ask carries the files\' text, named by their path in the project', () => {
     const root = makeProject()
     const result = ask({ files: [join(root, 'src/retry.ts')] }, { cwd: root })

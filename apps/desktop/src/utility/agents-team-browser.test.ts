@@ -204,7 +204,7 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     expect(look.argv[at - 1]).toBe('--strict-mcp-config')
     expect(JSON.parse(look.argv[at + 1] as string)).toEqual({ mcpServers: { playwright: browserServer({ origin: ORIGIN, interact: false }, look.folder) } })
     const allowed = look.argv.slice(look.argv.indexOf('--allowedTools') + 1, look.argv.indexOf('--permission-mode'))
-    expect(allowed).toEqual(['Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'WebSearch', 'Agent', ...LOOK_TOOLS.map((tool) => `mcp__playwright__${tool}`)])
+    expect(allowed).toEqual(['Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git blame:*)', 'Bash(git ls-tree:*)', 'Bash(git ls-files:*)', 'WebSearch', 'Agent', ...LOOK_TOOLS.map((tool) => `mcp__playwright__${tool}`)])
     expect(look.argv[look.argv.indexOf('--permission-mode') + 1]).toBe('dontAsk')
     const interact = ask({ role: 'designer', browser: { origin: ORIGIN, disposable: true, interact: true } })
     expect(interact.argv).toEqual(expect.arrayContaining(INTERACT_TOOLS.map((tool) => `mcp__playwright__${tool}`)))

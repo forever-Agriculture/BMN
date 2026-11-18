@@ -70,9 +70,12 @@ export function filePrompt(question, files) {
  * AC2's repair: in the gate a reviewer listed the log and judged a change without opening the commit
  * that had reverted it, so a project ask says to read the commits behind what it judges.
  */
-function projectPrompt(prompt, root) {
-  return `${prompt.replace(/\n?$/u, '\n')}\nYou work in the project ${root} (your working folder), read-only, with its Git history: git log, git show, git diff and git blame answer. The history can say why the code is as it is: before you judge code, read the commits behind it (git log -p or git blame on the lines in question, then git show).\n`
+function projectPrompt(prompt, root, form) {
+  return `${prompt.replace(/\n?$/u, '\n')}\nYou work in the project ${root} (your working folder), read-only, with its Git history: git log, git show, git diff and git blame answer. The history can say why the code is as it is: before you judge code, read the commits behind it (git log -p or git blame on the lines in question, then git show).\n${form === 'claude-read-tools' ? CLAUDE_PROJECT_WORDS : ''}`
 }
+
+/** Said once to Claude Code's form, whose teammates lost turns to cd, -C and files outside the folder (owner 2026-11-18): a reliable first move, and to name what they could not read so the asker can attach it. */
+const CLAUDE_PROJECT_WORDS = 'git ls-tree and git ls-files answer too. Start each shell command from this folder with relative paths, one command per call; Read, Glob and Grep read files without a shell. Files outside this folder are closed to you: name any you needed under what you did not check, so the asker can attach it.\n'
 
 /** A prompt with the pictures named in the order they are attached: by label, type and size, never by what was taken out of them. */
 function picturePrompt(prompt, pictures) {
@@ -263,7 +266,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   let prompt = filePrompt(request.question, texts.map((file) => ({ ...file, label: nameOf(file) })))
   if (vision?.index !== undefined) prompt = visionPrompt(prompt, { file: `${vision.index + 1}/${texts.length}`, label: nameOf(texts[vision.index]), sha256: texts[vision.index].sha256 })
   prompt = picturePrompt(prompt, pictures.map((picture) => ({ ...picture, label: nameOf(picture) })))
-  if (project !== null && ASK_READS[form].scope !== 'text') prompt = projectPrompt(prompt, project)
+  if (project !== null && ASK_READS[form].scope !== 'text') prompt = projectPrompt(prompt, project, form)
   if (browser !== null) prompt = browserPrompt(prompt, browser)
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
   // The question alone, as the asker wrote it, for the record and Agents › Asks (73.1); the prompt above is what is sent.
