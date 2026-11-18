@@ -1,7 +1,7 @@
 // MODULE: before-you-go-dialog.tsx - the departure list: passive first focus, immediate line saves and one explicit Go
 import { useLayoutEffect, useRef, useState } from 'react'
 import {
-  awayMomentWords, departureCounts, departureSessionState, grantChoice, GRANT_RULE_LINE, grantAnswerWords, grantCardHasRuleLine, grantChoiceLabel,
+  awayMomentWords, departureCounts, departureOmittedLines, departureSessionState, grantChoice, GRANT_RULE_LINE, grantAnswerWords, grantCardHasRuleLine, grantChoiceLabel,
   grantOpenProposals, grantProposedPrefix, grantRefusalWords, grantTermChoices, grantTermLabel,
   type GrantChoice, type GrantRefusalReason, type GrantRun, type OwnerGrantView
 } from '@bmn/protocol'
@@ -123,6 +123,7 @@ export function BeforeYouGoDialog(props: {
     <div className="before-you-go">
       <div className="grant-heading">
         <p className="grant-head-line">{head}{period?.collection?.autoStartedAt ? ' · started by itself' : ''}</p>
+        {departureOmittedLines(period?.collection).map(line => <p className="grant-head-note grant-omitted" key={line}>{line}</p>)}
         <p className="grant-head-note">{leaving ? `Away starts on Go, or by itself at ${awayMomentWords(period!.collection?.autoAwayAt ?? period!.startedAt, props.now)}. ` : ''}A line you leave unanswered grants nothing.</p>
         {period?.collection?.phone.state === 'unreachable' || period?.collection?.phone.state === 'uncertain' ? <p className="grant-head-note">The phone was not reached. You can answer here.</p> : null}
         {unreadable ? <p className="inline-error" role="alert">Grant records could not be read, so nothing is granted.{period === null ? '' : ' Showing the last list.'}</p> : null}

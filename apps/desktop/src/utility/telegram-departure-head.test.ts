@@ -107,6 +107,14 @@ describe('Before you go head', () => {
     h.record.offers = Array.from({ length: 32 }, (_, index) => ({ ...h.record.offers![0]!, runId: `prior-${index}`, title: '<'.repeat(120) }))
     expect(departureHeadText(h.view(), new Date(AT)).length).toBeLessThanOrEqual(4096)
   })
+  it('keeps the counted sessions in the count area, above the 20-row cut (D13)', () => {
+    const h = harness()
+    const many = Array.from({ length: 70 }, (_, index) => ({ sessionId: `s${index}`, incarnationId: 'i', name: `Synthetic ${index}`, agent: 'claude', lastEventAt: AT }))
+    h.record = setDepartureCollection(h.record, 'one', newDepartureCollection(selectDepartureSessions(many, AT), AT, { 'the list is full': 6 }))
+    const lines = departureHeadText(h.view(), new Date(AT)).split('\n')
+    expect(lines.indexOf('6 more sessions not asked: the list is full')).toBe(2)
+    expect(lines).toContain('44 more on the laptop.')
+  })
   it('stops describing repeat choices as ungranted after the owner saves them', () => {
     const h = harness()
     const terms = [{ id: 'rounds' as const, kind: 'rounds' as const, proposed: 3, reason: 'Synthetic' }]

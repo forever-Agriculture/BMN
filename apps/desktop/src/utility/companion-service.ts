@@ -74,6 +74,7 @@ import {
   departureCounts,
   newDepartureCollection,
   selectDepartureSessions,
+  omittedDepartureCounts,
   type OwnerDepartureInput,
   type OwnerDepartureReply,
   type GrantAnswerResult,
@@ -1990,7 +1991,7 @@ export class CompanionService {
           lastEventAt: last?.observedAt ?? observed?.observedAt ?? null }]
       })
       const now = this.iso()
-      collection = newDepartureCollection(selectDepartureSessions(sessions, now), now)
+      collection = newDepartureCollection(selectDepartureSessions(sessions, now), now, omittedDepartureCounts(sessions, now))
     }
     const before = this.ownerAway()
     const result = await this.options.database.companion('departureAction', { ...input, source, agentSessionId,

@@ -2,7 +2,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { answerGrant, askGrant, EMPTY_GRANT_RECORD, ownerGrantView, parseGrantCardInput, startDeparture, type GrantRecord } from '@bmn/protocol'
+import { answerGrant, askGrant, EMPTY_GRANT_RECORD, newDepartureCollection, ownerGrantView, parseGrantCardInput, setDepartureCollection, startDeparture, type GrantRecord } from '@bmn/protocol'
 import { awayGrantWords } from './away-check'
 import { BeforeYouGoDialog, toldWords } from './before-you-go-dialog'
 
@@ -53,6 +53,17 @@ describe('toldWords', () => {
 })
 
 describe('the dialog\'s buttons (docs/design.md B2)', () => {
+  it('shows sessions counted beyond the list in its head (D13)', () => {
+    const base = leaving()
+    const period = base.periods.at(-1)!
+    const record = setDepartureCollection(base, period.periodId, newDepartureCollection([], period.startedAt, { 'the list is full': 41 }))
+    const markup = renderToStaticMarkup(createElement(BeforeYouGoDialog, {
+      grant: ownerGrantView({ state: 'read', record }), now, sessionName: name,
+      place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onAnswer: async () => ({ outcome: 'granted' as const }), onAwayNow: () => undefined, onNotLeaving: () => undefined, onClose: () => undefined
+    }))
+    expect(markup).toContain('<p class="grant-head-note grant-omitted">41 more sessions not asked: the list is full</p>')
+  })
   it('makes Go the only primary; every card action is a plate', () => {
     const record = asked(asked(leaving(), 'run-80', 's-builder'), 'run-81', 's-night')
     const markup = renderToStaticMarkup(createElement(BeforeYouGoDialog, {

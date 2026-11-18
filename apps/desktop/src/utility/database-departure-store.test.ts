@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GRANT_RECORD_KEY, newDepartureCollection, selectDepartureSessions, type GrantRecord } from '@bmn/protocol'
+import { departureOmittedLines, GRANT_RECORD_KEY, newDepartureCollection, omittedDepartureCounts, readDepartureCollection, selectDepartureSessions, type GrantRecord } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { departureAction, departureDelivery, type DepartureAction } from './database-departure-store'
 import { answerGrantCard, askGrantCard, readGrantRow, useGrantRecord } from './database-grant-store'
@@ -350,5 +350,33 @@ describe('resumed departure gaps', () => {
     expect(selected).toHaveLength(64)
     expect(selected.filter(session => session.selected)).toHaveLength(32)
     expect(selected.slice(0, 32).every(session => session.selected)).toBe(true)
+  })
+  it.each([[32, 32, 0, {}], [33, 32, 1, {}], [64, 32, 32, {}], [65, 32, 32, { 'the list is full': 1 }], [100, 32, 32, { 'the list is full': 36 }]] as const)(
+    'counts every one of %i recent sessions: selected, named full, or counted beyond the rows (D13)', (total, selectedCount, fullRows, omitted) => {
+      const sessions = Array.from({ length: total }, (_, index) => ({ sessionId: `s${index}`, incarnationId: 'i', name: `Synthetic ${index}`, agent: index % 2 ? 'codex' : 'claude', lastEventAt: AT }))
+      const rows = selectDepartureSessions(sessions, AT)
+      const counted = omittedDepartureCounts(sessions, AT)
+      expect(rows.filter(row => row.selected)).toHaveLength(selectedCount)
+      expect(rows.filter(row => row.reason === 'the list is full')).toHaveLength(fullRows)
+      expect(counted).toEqual(omitted)
+      expect(rows.length + Object.values(counted).reduce((sum, count) => sum + count, 0)).toBe(total)
+      // Saved and read back with the count; the collection is valid at every size.
+      const saved = readDepartureCollection(JSON.parse(JSON.stringify(newDepartureCollection(rows, AT, counted))))
+      expect(saved?.omitted).toEqual(Object.keys(omitted).length ? omitted : undefined)
+      expect(departureOmittedLines(saved ?? undefined)).toEqual(total === 65 ? ['1 more session not asked: the list is full'] : total === 100 ? ['36 more sessions not asked: the list is full'] : [])
+    })
+  it('gives an old session beyond the rows its own reason, and never selects it (D13)', () => {
+    const recent = Array.from({ length: 40 }, (_, index) => ({ sessionId: `r${index}`, incarnationId: 'i', name: `Recent ${index}`, agent: 'claude', lastEventAt: AT }))
+    const old = Array.from({ length: 30 }, (_, index) => ({ sessionId: `o${index}`, incarnationId: 'i', name: `Old ${index}`, agent: 'codex', lastEventAt: null }))
+    const unsupported = [{ sessionId: 'x', incarnationId: 'i', name: 'Other app', agent: 'other', lastEventAt: AT }]
+    const all = [...old, ...unsupported, ...recent]
+    expect(omittedDepartureCounts(all, AT)).toEqual({ 'no work in 12 hours': 6, 'app not supported': 1 })
+    expect(selectDepartureSessions(all, AT).filter(row => row.selected).every(row => row.sessionId.startsWith('r'))).toBe(true)
+  })
+  it('refuses a malformed count and reads an older record without one', () => {
+    const base = newDepartureCollection(selectDepartureSessions([{ sessionId: 's', incarnationId: 'i', name: 'Synthetic', agent: 'claude', lastEventAt: AT }], AT), AT)
+    expect(base.omitted).toBeUndefined()
+    expect(readDepartureCollection(base)).not.toBeNull()
+    for (const omitted of [[], { 'the list is full': 0 }, { 'the list is full': 1.5 }, { '': 1 }, null]) expect(readDepartureCollection({ ...base, omitted })).toBeNull()
   })
 })

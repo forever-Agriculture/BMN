@@ -59,27 +59,48 @@ export interface DepartureCollection {
   /** Verified post-show desktop acknowledgment. Older openedAt values had mixed provenance. */
   presentedAt?: string | null
   sessions: DepartureSession[]
+  /** D13: sessions beyond the 64 rows, counted per reason; absent in older records, which never invent a count. */
+  omitted?: Record<string, number>
   phone: { state: 'pending' | 'sent' | 'unreachable' | 'uncertain'; messageId: number | null; autoAnnounced: boolean }
 }
 
-export function selectDepartureSessions(input: Array<Pick<DepartureSession, 'sessionId' | 'incarnationId' | 'name' | 'agent' | 'lastEventAt'>>, now: string): DepartureSession[] {
+type DepartureCandidate = Pick<DepartureSession, 'sessionId' | 'incarnationId' | 'name' | 'agent' | 'lastEventAt'>
+export const DEPARTURE_SELECTED_LIMIT = 32
+export const DEPARTURE_ROW_LIMIT = 64
+
+/** Every candidate with its reason, recent supported sessions first, so old rows cannot hide selected ones. */
+function rankDepartureSessions(input: DepartureCandidate[], now: string): DepartureSession[] {
   let selected = 0
-  // Recent supported sessions occupy the bounded record first, so old rows cannot hide selected ones.
-  const eligible = (session: typeof input[number]): boolean => ['claude', 'codex'].includes(session.agent) && session.lastEventAt !== null &&
+  const recent = (session: DepartureCandidate): boolean => session.lastEventAt !== null &&
     Date.parse(session.lastEventAt) <= Date.parse(now) && Date.parse(now) - Date.parse(session.lastEventAt) <= DEPARTURE_RECENT_MS
-  return [...input].sort((a, b) => Number(eligible(b)) - Number(eligible(a))).slice(0, 64).map(session => {
-    const recent = session.lastEventAt !== null && Date.parse(session.lastEventAt) <= Date.parse(now) &&
-      Date.parse(now) - Date.parse(session.lastEventAt) <= DEPARTURE_RECENT_MS
-    const reason = !['claude', 'codex'].includes(session.agent) ? 'app not supported' : !recent ? 'no work in 12 hours'
-      : selected >= 32 ? 'the list is full' : null
+  const eligible = (session: DepartureCandidate): boolean => ['claude', 'codex'].includes(session.agent) && recent(session)
+  return [...input].sort((a, b) => Number(eligible(b)) - Number(eligible(a))).map(session => {
+    const reason = !['claude', 'codex'].includes(session.agent) ? 'app not supported' : !recent(session) ? 'no work in 12 hours'
+      : selected >= DEPARTURE_SELECTED_LIMIT ? 'the list is full' : null
     if (reason === null) selected++
     return { ...session, selectedAt: now, selected: reason === null, reason, toldAt: null, via: null, claim: null }
   })
 }
 
-export function newDepartureCollection(sessions: DepartureSession[], now: string): DepartureCollection {
+export function selectDepartureSessions(input: DepartureCandidate[], now: string): DepartureSession[] {
+  return rankDepartureSessions(input, now).slice(0, DEPARTURE_ROW_LIMIT)
+}
+
+/** D13: the sessions beyond the row limit, counted per reason, so no session is left out uncounted. */
+export function omittedDepartureCounts(input: DepartureCandidate[], now: string): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const session of rankDepartureSessions(input, now).slice(DEPARTURE_ROW_LIMIT)) counts[session.reason!] = (counts[session.reason!] ?? 0) + 1
+  return counts
+}
+
+/** D13: one line per reason for sessions counted, not listed, for the window's and Telegram's heads. */
+export function departureOmittedLines(collection: DepartureCollection | undefined): string[] {
+  return Object.entries(collection?.omitted ?? {}).map(([reason, count]) => `${count} more ${count === 1 ? 'session' : 'sessions'} not asked: ${reason}`)
+}
+
+export function newDepartureCollection(sessions: DepartureSession[], now: string, omitted: Record<string, number> = {}): DepartureCollection {
   return { version: 1, selectedAt: now, autoAwayAt: new Date(Date.parse(now) + DEPARTURE_AUTO_MS).toISOString(), autoStartedAt: null, openedAt: null, presentedAt: null,
-    sessions, phone: { state: 'pending', messageId: null, autoAnnounced: false } }
+    sessions, ...(Object.keys(omitted).length > 0 ? { omitted } : {}), phone: { state: 'pending', messageId: null, autoAnnounced: false } }
 }
 
 /** Delivery fields are evidence, not proof of an idle prompt or permission to type. */
@@ -87,8 +108,10 @@ export function readDepartureCollection(value: unknown): DepartureCollection | n
   if (typeof value !== 'object' || value === null) return null
   const row = value as DepartureCollection
   if (row.version !== 1 || !isIso(row.selectedAt) || !isIso(row.autoAwayAt) ||
-    row.autoStartedAt !== null && !isIso(row.autoStartedAt) || row.openedAt !== null && !isIso(row.openedAt) || !Array.isArray(row.sessions) || row.sessions.length > 64 ||
+    row.autoStartedAt !== null && !isIso(row.autoStartedAt) || row.openedAt !== null && !isIso(row.openedAt) || !Array.isArray(row.sessions) || row.sessions.length > DEPARTURE_ROW_LIMIT ||
     row.presentedAt != null && !isIso(row.presentedAt) ||
+    row.omitted !== undefined && (typeof row.omitted !== 'object' || row.omitted === null || Array.isArray(row.omitted) || Object.entries(row.omitted).length > 8 ||
+      Object.entries(row.omitted).some(([reason, count]) => reason.length === 0 || reason.length > 80 || !Number.isSafeInteger(count) || count < 1)) ||
     !row.phone || !['pending', 'sent', 'unreachable', 'uncertain'].includes(row.phone.state) ||
     row.phone.messageId !== null && (!Number.isSafeInteger(row.phone.messageId) || row.phone.messageId < 1) || typeof row.phone.autoAnnounced !== 'boolean') return null
   const ids = new Set<string>()

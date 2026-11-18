@@ -1,6 +1,6 @@
 // MODULE: telegram-departure-head.ts - one durable Telegram head for the same departure list and revision-bound Go/cancel/repeat actions
 import { randomBytes } from 'node:crypto'
-import { awayMomentWords, departureCounts, departureSessionState, grantAnswerWords, grantChoice, type DepartureCollection, type OwnerDepartureInput, type OwnerDepartureReply, type OwnerGrantView } from '@bmn/protocol'
+import { awayMomentWords, departureCounts, departureOmittedLines, departureSessionState, grantAnswerWords, grantChoice, type DepartureCollection, type OwnerDepartureInput, type OwnerDepartureReply, type OwnerGrantView } from '@bmn/protocol'
 import { escapeHtml, said, type InlineKeyboard } from './telegram-cards'
 import { TelegramConnectorError, type InboundTap, type TelegramConnector } from './telegram-connector'
 
@@ -34,7 +34,9 @@ export function departureHeadText(view: OwnerGrantView, now: Date): string {
     const run = period.runs.find(other => other.runId === offer.runId)
     return run?.answer?.cardRevision !== run?.card.revision || grantChoice(run?.answer?.choices, id) === undefined
   }).length, 0)
-  return [head, `Asked ${counts.asked} ${counts.asked === 1 ? 'session' : 'sessions'}. ${counts.asking} still answering. ${lineWords(counts.lines)} to answer.`, '', ...shown.slice(0, 20),
+  return [head, `Asked ${counts.asked} ${counts.asked === 1 ? 'session' : 'sessions'}. ${counts.asking} still answering. ${lineWords(counts.lines)} to answer.`,
+    // D13: counted sessions sit in the count area, above the 20-row cut, so the cut never hides them.
+    ...departureOmittedLines(period.collection).map(line => headField(line, 120)), '', ...shown.slice(0, 20),
     ...(shown.length > 20 ? [`${shown.length - 20} more on the laptop.`] : []),
     ...(same > 0 && period.state === 'leaving' ? ['', `${same} lines are the same as you granted earlier. Nothing is granted before your tap.`] : []),
     '', period.state === 'leaving' ? `Away starts on Go, or by itself at ${awayMomentWords(period.collection.autoAwayAt, now)}. A line you leave unanswered grants nothing.`
