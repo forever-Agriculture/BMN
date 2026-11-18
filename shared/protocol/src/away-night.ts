@@ -1,5 +1,5 @@
 // MODULE: away-night.ts - the night's wake decisions and the observed rest since each session's last turn
-import { awayDurationWords } from './away'
+import { awayDurationWords } from './away.js'
 import type { GrantStopCause } from './grant'
 
 export const AWAY_REST_MINIMUM_MS = 30 * 60_000

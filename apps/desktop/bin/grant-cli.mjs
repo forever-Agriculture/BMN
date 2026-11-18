@@ -234,10 +234,15 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
   let result
   try {
     const { socketPath, token } = readCredentials(credentials)
-    result = await call(socketPath, token, method, params, method === 'grant.apply' ? 45_000 : undefined)
+    const timeout = method === 'grant.apply' ? 45_000 : method === 'grant.facts' || options.nothing === true ? 30_000 : undefined
+    result = await call(socketPath, token, method, params, timeout)
   } catch (error) {
     const words = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`bmn: ${method === 'grant.status' ? `the grant could not be read (${words}); nothing is granted` : method === 'grant.facts' ? `the facts could not be read (${words}); keep the checks in your run log` : words}\n`)
+    const detail = method === 'grant.status' ? `the grant could not be read (${words}); nothing is granted`
+      : method === 'grant.facts' ? `the facts could not be read (${words}). Keep the checks in your run log.`
+        : options.nothing === true && error?.code === 'IO_ERROR'
+          ? `the facts could not be confirmed (${words}). Nothing is granted. Keep the checks in your run log.` : words
+    process.stderr.write(`bmn: ${detail}\n`)
     return 1
   }
   const text = method === 'grant.ask' ? describeAsk(result) : method === 'grant.use' ? describeUse(result, { runId: options.run, boundary: options.boundary, item: options.item })

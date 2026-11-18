@@ -69,17 +69,26 @@ esac
   const access = { name: 'Fixture sign-in', command: 'fixture auth login', reason: 'The synthetic Prepared check failed' }
   const prepared = execFileSync('/bin/sh', ['-c', './fixture-access >/dev/null 2>&1; printf "%s" "$?"'], { cwd: project, encoding: 'utf8' })
   if (prepared !== '1') throw Error('The synthetic Prepared check did not start signed out')
-  written('remaining.json', JSON.stringify({
-    title: 'Synthetic night work', scope: 'One review, one login and one pull request',
-    limits: [{ name: 'rechecks', boundary: '7.1', uses: 2, reason: 'Two rechecks remain' }], access: [access]
-  }))
+  written('fixture-work.txt', `Epic 7. Story 7.1 still has two required review rechecks.
+Prepared need: "${access.name}". Check it with ./fixture-night prepared before composing. The login command is ${access.command}. Only the owner can sign in.
+Story 7.1 also needs to deliver its current pull request if policy requires approval. BMN facts have the current head and policy.
+For the composer use title and scope, a limits array of {name,boundary,uses,reason}, and an access array of {name,command,reason}. BMN facts supply the PR so leave actions out.
+`)
   executable('fixture-night', `set -eu
 PATH="$PWD/.fixture-bin:$PATH"
 export PATH
 case "$1" in
+  facts) bmn grant facts --run ${run} --epic 7 --json;;
+  work) cat fixture-work.txt;;
+  prepared)
+    if ./fixture-access >/dev/null 2>&1; then printf 'Prepared check: works\n'
+    else printf 'failed\n' >prepared-result; printf 'Prepared check: not signed in\n'; fi
+    ;;
   ask)
     if bmn grant ask --run ${run} --nothing --reason "No fixture work" >empty-result 2>&1; then exit 7; fi
     grep -qF 'limit:rechecks:7.1' empty-result
+    test "$(cat prepared-result)" = failed
+    printf '%s\n' "$2" >remaining.json
     python3 night_card.py --run ${run} --epic 7 --remaining remaining.json --key fixture-night
     ;;
   apply) bmn grant apply --run ${run} --item "$2" --use-id fixture-raise;;
@@ -90,6 +99,10 @@ case "$1" in
   *) exit 2;;
 esac
 `)
-  return { run, head, access, plan, markSignedIn: () => written('signed-in', ''), emptyWasRefused: () =>
+  return { run, head, access, plan, markSignedIn: () => written('signed-in', ''),
+    leakedOutput: () => ['state.sqlite3', 'state.sqlite3-wal'].some(file => {
+      const path = join(environment.BMN_DATA_HOME, file)
+      return existsSync(path) && readFileSync(path).includes(secretLooking)
+    }), emptyWasRefused: () =>
     existsSync(join(project, 'empty-result')) && readFileSync(join(project, 'empty-result'), 'utf8').includes('limit:rechecks:7.1') }
 }

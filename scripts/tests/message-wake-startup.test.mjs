@@ -65,6 +65,12 @@ describe('bounded startup transitions', () => {
     expect(state.state).toBe('dialog')
     expect(messageStartupStep([state], { keys: 0 }).action).toBe('fail')
   })
+  it('recognizes the captured PR status hint while refusing a login prompt', () => {
+    const lines = ['Claude Code v2.1.327', '─'.repeat(40), '❯ Try "fix typecheck errors"', '─'.repeat(40),
+      '⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · ← for agents']
+    expect(classifyMessageStartup('claude', lines, '/synthetic').state).toBe('composer')
+    expect(classifyMessageStartup('claude', [...lines, 'Sign in to continue'], '/synthetic').state).toBe('dialog')
+  })
   it('leaves even the exact informational onboarding frame for the owner', () => {
     const launchEcho = 'bash-5.3$ claude --model haiku --permission-mode dontAsk'
     const state = classifyMessageStartup('claude', [launchEcho.slice(0, 30), launchEcho.slice(30), ...security, '', ''], '/synthetic', { launchEcho, appSeen: true })

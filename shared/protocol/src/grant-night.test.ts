@@ -1,3 +1,4 @@
+// MODULE: grant-night.test.ts - replay, access and stop report checks for Epic 131
 import { describe, expect, it } from 'vitest'
 import { EMPTY_AWAY_RECORD } from './away'
 import {

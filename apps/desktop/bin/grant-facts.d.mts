@@ -1,3 +1,4 @@
+// MODULE: grant-facts.d.mts - type boundary for checkout-scoped night facts and allowance pins
 import type { GrantLimitPin, GrantLimitTerm, PushPolicyStatus } from '@bmn/protocol'
 
 export interface GrantNightFacts {

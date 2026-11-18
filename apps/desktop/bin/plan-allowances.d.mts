@@ -50,5 +50,6 @@ export declare function compareVersions(before: AllowancesData, after: Allowance
 export declare function ledgerIds(plan: { planRoot: string }, epic: number | string, folder: string): Set<string>
 
 export function withNightAllowanceLock<T>(plan: unknown, task: (lockFd: number) => Promise<T>): Promise<T>
-export function writeNightAllowance(plan: unknown, entry: GrantLimitApply, lockFd: number): Promise<{ commit: string }>
+export function writeNightAllowance(plan: unknown, entry: GrantLimitApply, lockFd: number,
+  seam?: (stage: 'created' | 'published', commit: string) => void): Promise<{ commit: string }>
 export function findNightAllowance(plan: unknown, entry: GrantLimitApply): Promise<string | null>

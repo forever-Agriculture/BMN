@@ -1,5 +1,5 @@
 // MODULE: away.ts - the owner's said away state: one versioned record, its one change rule and what each caller may see (Story 76.3)
-import { isIso, isTextOrEmpty, pad } from './shared-helpers'
+import { isIso, isTextOrEmpty, pad } from './shared-helpers.js'
 
 /** Who said it: the owner in the app, the owner's CLI token, an agent on his words, or Telegram. */
 export type AwaySource = 'app' | 'cli' | 'agent' | 'telegram'

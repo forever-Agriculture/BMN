@@ -413,6 +413,9 @@ export function messageLaunchEcho(before, launch) {
   return `${visible.join('')} ${launch}`
 }
 export function classifyMessageStartup(app, lines, folder, context = null) {
+  // Claude 2.1.327 puts this informational GitHub hint on an otherwise ready composer.
+  if (app === 'claude') lines = lines.map(line => line.replace(
+    /^(\s*⏵⏵ auto mode on \(shift\+tab to cycle\)) · gh auth login for PR status((?: · ← for agents)?\s*)$/u, '$1$2'))
   const text = lines.join('\n')
   const frame = /Choose the text style that looks best with your terminal|^\s*Accessing workspace:|^\s*Folder access|>_ OpenAI Codex \(v|Claude Code v[0-9]/mu.test(text)
   if (context && !context.appSeen && !frame) {

@@ -26,6 +26,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
   const scratchRoot = args[0], reportPath = args[1]
   const nightAt = args.indexOf('--night-composer')
   const nightComposer = nightAt < 0 ? null : resolve(args[nightAt + 1] ?? '')
+  const epic = nightComposer ? 131 : 130
   if (!scratchRoot || !reportPath) throw Error('departure cases need a synthetic scratch folder and report path')
   const at = args.indexOf('--count')
   const count = at < 0 ? 10 : Number(args[at + 1])
@@ -68,8 +69,8 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
       pid = Number(readFileSync(`/proc/${pid}/stat`, 'utf8').slice(readFileSync(`/proc/${pid}/stat`, 'utf8').lastIndexOf(')') + 1).trim().split(/\s+/)[1])
     }
     if (server?.comm !== 'Xvfb' || !ancestors.has(server.ppid)) throw Error('The private display server is not owned by this native job')
-    report.display = { display, server, privateAuthority: true, method: 'Fable M2 whole case on private X11/Xvfb; no third M1 headless patch' }
-    recordProcess({ kind: 'process', pid: server.pid, start_ticks: server.start_ticks, command: 'Epic130 private Xvfb; xvfb-run owns shutdown', evidence: reportPath }, true)
+    report.display = { display, server, privateAuthority: true, method: 'Whole native case on private X11/Xvfb' }
+    recordProcess({ kind: 'process', pid: server.pid, start_ticks: server.start_ticks, command: `Epic ${epic} private Xvfb; xvfb-run owns shutdown`, evidence: reportPath }, true)
     save()
   }
   if (args.includes('--display-preflight')) {
@@ -103,7 +104,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
             args: [privateDisplay ? '--ozone-platform=x11' : '--ozone-platform=headless', '--disable-gpu', ...tested.appArgs, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'], cwd: scratch, env: environment })
           let identity = processTree(application.process().pid)[0]
           if (!identity) throw Error('No isolated process identity')
-          let owned = { kind: 'process', pid: identity.pid, start_ticks: identity.start_ticks, command: `130 ${app} departure ${index + 1}`, evidence: reportPath }
+          let owned = { kind: 'process', pid: identity.pid, start_ticks: identity.start_ticks, command: `${epic} ${app} departure ${index + 1}`, evidence: reportPath }
           try {
             recordProcess(owned, true)
             let page = await application.firstWindow(); page.setDefaultTimeout(15_000)
@@ -130,7 +131,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
             const type = async text => { await input.focus(); await page.keyboard.type(text); await sleep(1000); await page.keyboard.press('Enter') }
             const claudeTool = night ? 'Bash(./fixture-night:*)' : 'Bash(bmn grant ask:*)'
             let command = app === 'claude'
-              ? `env XDG_DATA_HOME=${quote(process.env.XDG_DATA_HOME)} DISABLE_AUTOUPDATER=1 claude --allowedTools ${quote(claudeTool)}`
+              ? `env XDG_DATA_HOME=${quote(process.env.XDG_DATA_HOME)} DISABLE_AUTOUPDATER=1 claude${night ? ' --model haiku' : ''} --allowedTools ${quote(claudeTool)}`
               : `codex --no-alt-screen -c 'mcp_servers={}' -c ${quote(`projects."${scratch}".trust_level="trusted"`)}`
             const launchNative = async () => {
               stage('qualifying verified short launch')
@@ -172,7 +173,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
             stage('seeding synthetic unfinished work')
             let seedAt = Date.now()
             const seedPrompt = night
-              ? `This is a synthetic test. On BMN's getting-ready line, immediately run exactly ./fixture-night ask. If I ask to apply an approved line, run ./fixture-night apply ITEM using that line's item id. When BMN gives a login check notice, run ./fixture-night check ITEM ATTEMPT with its item and attempt ids. Never send check output or run bmn away or back. ${messageSocketGuidance(app, ['./fixture-night'], 'receiver')}For now use no tools and reply READY.`
+              ? `I am starting a synthetic dev-auto run and I authorize you now to finish its test work. Your next instruction to act is BMN's notification that the owner is getting ready. On that notification, run ./fixture-night facts and ./fixture-night work, then the Prepared check named in the work brief. Use your results to prepare the remaining-work JSON and pass it as one argument to ./fixture-night ask 'YOUR_JSON'. The notification does not need to grant permission because I authorize these test commands now. If I tell you to apply the synthetic approval, run ./fixture-night apply ITEM. On BMN's login check notice, run ./fixture-night check ITEM ATTEMPT using its ids. Keep check output suppressed. Never run bmn away or back.${app === 'codex' ? ' For fixture-night facts, ask, apply and check, request require_escalated on the first tool call for the synthetic BMN socket. Keep auto_review and honor any refusal.' : ''} During this setup reply READY and wait for the notification before acting.`
               : `This is a synthetic, owner-authorised test. Our unfinished work is one synthetic departure response. When BMN's fixed getting-ready line arrives, immediately run exactly: bmn grant ask --run departure-probe --nothing --reason "Synthetic departure response; nothing else needed". Never run bmn away or bmn back. ${messageSocketGuidance(app, ['bmn grant ask'], 'receiver')}For now do not use tools; reply READY.`
             await type(seedPrompt)
             if (allowTestProviders) {
@@ -313,7 +314,9 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
               check(`${app} ${index + 1}: exhausted limit refused and all three lines match`, result.answered && night.emptyWasRefused())
             }
             result.collection = (await get()).period.collection
-            result.screen = (await screen()).split('\n').slice(-6)
+            result.screen = (await screen()).split('\n').filter(line => line.trim()).slice(-12)
+            if (night) result.afterDepartureEvents = (await events()).filter(event => Date.parse(event.observedAt) >= Date.parse(told?.toldAt ?? ''))
+              .map(({ observedAt, event, toolName }) => ({ observedAt, event, toolName }))
             result.departureLineVisible = (await screen()).includes(DEPARTURE_LINE.slice(0, 45))
             if (night && !answered) result.noCardCause = /approval|declined|permission|reviewer/iu.test(result.screen.join(' '))
               ? 'Approval or permission stopped the command' : told === null ? 'BMN did not deliver the line' : 'No card reached BMN in the answer window'
@@ -341,7 +344,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
               night.markSignedIn()
               await row.getByRole('button', { name: 'Done', exact: true }).click()
               const checked = await until(async () => (await get()).period?.runs.find(run => run.runId === night.run)?.access?.find(item => item.outcome === 'works'), 'native login report', 65_000).catch(() => null)
-              check(`${app}: real session checked its synthetic sign-in`, checked !== null)
+              check(`${app}: real session checked its synthetic sign-in and no output entered the database`, checked !== null && !night.leakedOutput())
               await page.screenshot({ path: shotName(`${app}-night-result`) })
             }
             bmn('back')
@@ -381,7 +384,7 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
       report.cohorts = { ...report.cohorts, [app]: { cases: cases.length, needed, delivered, answered, answersRequired: app === 'claude' } }
       check(`${app} cohort: ${delivered} of ${cases.length} told once within 60 seconds (needs ${needed})`, delivered >= needed)
       if (app === 'claude') check(`claude cohort: ${answered} of ${cases.length} answered within 3 minutes (needs ${needed})`, answered >= needed)
-      else console.error(`[departure] ${app} cohort: ${answered} of ${cases.length} answered within 3 minutes (best effort, D12)`)
+      else console.error(`[departure] ${app} cohort: ${answered} of ${cases.length} answered within 3 minutes (best effort, D${nightComposer ? 13 : 12})`)
     }
   }
   report.result = report.checks.some(check => check.result === 'FAIL') ? 'FAIL' : 'PASS'

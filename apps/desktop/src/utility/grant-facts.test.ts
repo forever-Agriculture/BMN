@@ -1,3 +1,4 @@
+// MODULE: grant-facts.test.ts - night facts identify exhausted ceilings and required-check states
 import { describe, expect, it } from 'vitest'
 import { classifyRequiredChecks, grantFactConflicts } from '../../bin/grant-facts.mjs'
 
@@ -9,7 +10,8 @@ describe('night facts', () => {
           { boundary: '7.2', used: 4, left: 0 }, { boundary: '7.3', used: 0, left: 4 }
         ] },
         { name: 'consults', ceiling: 6, value: 4, used: 4, left: 0 },
-        { name: 'full_reviews', ceiling: 4, value: 4, used: null, left: null }
+        { name: 'full_reviews', ceiling: 4, value: 4, used: null, left: null },
+        { name: 'money_usd', ceiling: null, value: 0, used: 0, left: 0 }
       ] },
       pullRequests: { items: [
         { repository: 'example/app', number: 1, policy: 'merge-when-green', mayMerge: false },

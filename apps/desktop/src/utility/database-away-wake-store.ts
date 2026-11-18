@@ -96,6 +96,9 @@ export function awayNightData(database: DatabaseConnection, call: AwayNightCall)
     WHERE session_id = ? AND started_at < ? ORDER BY started_at DESC, number DESC LIMIT 1`)
   const changedProcess = database.prepare(`SELECT 1 FROM process_incarnation WHERE session_id = ?
     AND (started_at > ? AND started_at < ? OR incarnation_id = ? AND exited_at > ? AND exited_at < ?) LIMIT 1`)
+  const lastProgress = database.prepare(`SELECT state, observed_at FROM progress_observation
+    WHERE session_id = ? AND incarnation_id = ? AND observed_at >= ? AND received_at <= ?
+    ORDER BY observed_at DESC, received_at DESC LIMIT 1`)
   const hostStarts = [...ticks.map(tick => tick.processStartedAt), ...(call.hostStartedAt === undefined ? [] : [call.hostStartedAt])]
   for (const session of [...night.woken, ...night.skipped, ...night.missed, ...night.unknown]) {
     const turn = lastTurn.get(session.sessionId, call.until) as {
@@ -103,6 +106,15 @@ export function awayNightData(database: DatabaseConnection, call: AwayNightCall)
     } | undefined
     const reported = reports.get(session.sessionId)
     session.stopReport = reported !== undefined && (turn === undefined || reported.at >= turn.started_at) ? reported : null
+    const progress = turn?.incarnation_id ? lastProgress.get(session.sessionId, turn.incarnation_id, turn.started_at, call.until) as
+      { state: string; observed_at: string } | undefined : undefined
+    if (progress && (progress.state === 'claimed-done' || progress.state === 'verified') &&
+      (session.stopReport === null || session.stopReport.at <= progress.observed_at)) {
+      session.stopReport = null
+      session.restedFrom = null
+      session.restedMs = null
+      continue
+    }
     const finished = turn?.end_kind === 'finished' && turn.ended_at !== null && turn.ended_at <= call.until ? turn.ended_at : null
     const interrupted = finished === null || hostStarts.some(at => at > finished && at < call.until) ||
       changedProcess.get(session.sessionId, finished, call.until, turn?.incarnation_id ?? null, finished, call.until) !== undefined ||

@@ -851,6 +851,15 @@ function atomicWrite(path, text) {
   } finally { rmSync(temporary, { force: true }) }
 }
 
+/** Follow the committed file only when its index entry is still the recorded parent. */
+function followAllowanceIndex(repo, path, parentEntry, commit) {
+  const expected = /^(\d+) blob ([0-9a-f]+)\t/u.exec(parentEntry)
+  const current = gitRun(repo, ['ls-files', '-s', '--', path]).trim()
+  if (expected ? !current.startsWith(`${expected[1]} ${expected[2]} 0\t`) : current !== '') return
+  const blob = gitRun(repo, ['rev-parse', `${commit}:${path}`]).trim()
+  gitRun(repo, ['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`])
+}
+
 /** Record one or more changes as one commit of the plan's history (110.5). Everything it refuses leaves everything as it was. */
 export async function recordAllow(plan, epic, options) {
   if (typeof options.source === 'string' && options.source.trim().startsWith('night list:')) {
@@ -910,7 +919,6 @@ async function recordAllowInternal(plan, epic, { changes: words, reason, source,
     ].join('\n')
     const temporaryIndex = join(gitRun(repo, ['rev-parse', '--absolute-git-dir']).trim(), `bmn-plan-allow-${process.pid}-${randomBytes(3).toString('hex')}.index`)
     let created
-    const parentIndex = gitRun(repo, ['ls-files', '-s', '--', relFile]).trim()
     const parentEntry = gitRun(repo, ['ls-tree', head, '--', relFile]).trim()
     try {
       const own = { env: { GIT_INDEX_FILE: temporaryIndex } }
@@ -921,19 +929,15 @@ async function recordAllowInternal(plan, epic, { changes: words, reason, source,
       created = gitRun(repo, ['commit-tree', tree, '-p', head, '-F', '-'], { input: message }).trim()
       seam('created', created)
       gitRun(repo, ['update-ref', '-m', `bmn plan allow: epic ${epic}`, branch, created, head], { lockFd: night?.lockFd })
+      seam('published', created)
     } catch (error) {
       if (error?.git) throw new AllowRefusal('COMMIT_FAILED', `the change could not be committed in ${repo} (${error.message}); nothing changed`)
       throw error
     } finally { rmSync(temporaryIndex, { force: true }) }
     // The working file and an unstaged index entry follow the commit; a staged change of it would have been refused above.
     atomicWrite(join(repo, relFile), text)
-    try {
-      const entry = /^(\d+) ([0-9a-f]+)\t/u.exec(parentEntry.replace(/^(\d+) blob /u, '$1 '))
-      if (parentIndex === '' || (entry && parentIndex.startsWith(`${entry[1]} ${entry[2]} 0`))) {
-        const blob = gitRun(repo, ['rev-parse', `${created}:${relFile}`]).trim()
-        gitRun(repo, ['update-index', '--add', '--cacheinfo', `100644,${blob},${relFile}`])
-      }
-    } catch { /* the change stands; an index entry left behind only shows as a staged change */ }
+    try { followAllowanceIndex(repo, relFile, parentEntry, created) }
+    catch { /* The recorded change stands even if the index cannot be updated. */ }
     const back = await readAllowances(plan, epic)
     if (back.state !== 'recorded' || back.current.commit !== created) throw new AllowRefusal('READBACK', `commit ${created} does not read back as the recorded version; see git -C ${repo} show ${created.slice(0, 12)}`)
     return { commit: created, changes: compared.changes, token: back.token, repo, needed_words: compared.words, fields: back.current.fields }
@@ -958,33 +962,43 @@ export async function withNightAllowanceLock(plan, task) {
   }
 }
 
-export async function writeNightAllowance(plan, entry, lockFd) {
+export async function writeNightAllowance(plan, entry, lockFd, seam) {
   const { term, source } = entry
   const prefix = `limits.${term.name}`
   // JSON numeric notation preserves the exact JS value for large amounts.
   return recordAllowInternal(plan, term.epic, {
     changes: [`${prefix}.limit=${term.to}`, `${prefix}.ceiling=${term.to}`],
-    reason: term.reason, source, expect: term.pin.token
+    reason: term.reason, source, expect: term.pin.token, seam
   }, { term, lockFd })
 }
 
 /** Find this exact recorded owner act, even after a later go. Repair only a working file still holding its unchanged parent. */
 export async function findNightAllowance(plan, entry) {
   const { term, source } = entry
-  const result = await readAllowances(plan, term.epic, { at: term.pin.go })
-  if (!Array.isArray(result.changes)) throw new AllowRefusal('NIGHT_HISTORY', 'The plan history could not confirm the allowance write')
-  const change = result.changes.find(candidate => candidate.source === source && candidate.change.some(text =>
-    text === `limits.${term.name}.limit ${term.from} -> ${term.to}`) && candidate.change.some(text =>
-    text.startsWith(`limits.${term.name}.ceiling `) && text.endsWith(` -> ${term.to}`)))
-  if (!change) return null
-  if (change.commit === result.current.commit && result.hand_edit) {
-    const { repo, folder } = historyOf(plan)
-    const path = `${folder}/${result.file.slice(result.file.lastIndexOf('/') + 1)}`
-    const before = showFile(repo, term.pin.commit, path)
-    if (before !== null && existsSync(join(repo, path)) && readFileSync(join(repo, path), 'utf8') === before &&
-      showFile(repo, 'HEAD', path) === result.current.text) atomicWrite(join(repo, path), result.current.text)
-  }
-  return change.commit
+  const { lockBoard } = await import('./plan-cli.mjs')
+  const release = await lockBoard(plan.boardPath)
+  try {
+    const result = await readAllowances(plan, term.epic, { at: term.pin.go })
+    if (!Array.isArray(result.changes)) throw new AllowRefusal('NIGHT_HISTORY', 'The plan history could not confirm the allowance write')
+    const change = result.changes.find(candidate => candidate.source === source && candidate.change.some(text =>
+      text === `limits.${term.name}.limit ${term.from} -> ${term.to}`) && candidate.change.some(text =>
+      text.startsWith(`limits.${term.name}.ceiling `) && text.endsWith(` -> ${term.to}`)))
+    if (!change) return null
+    if (change.commit === result.current.commit) {
+      const { repo, folder } = historyOf(plan)
+      const path = `${folder}/${result.file.slice(result.file.lastIndexOf('/') + 1)}`
+      const target = join(repo, path)
+      if (existsSync(target) && showFile(repo, 'HEAD', path) === result.current.text) {
+        const current = readFileSync(target, 'utf8')
+        if (current === showFile(repo, term.pin.commit, path)) atomicWrite(target, result.current.text)
+        if (readFileSync(target, 'utf8') === result.current.text) {
+          try { followAllowanceIndex(repo, path, gitRun(repo, ['ls-tree', term.pin.commit, '--', path]).trim(), change.commit) }
+          catch { /* A recorded write still counts when the index is unreadable. */ }
+        }
+      }
+    }
+    return change.commit
+  } finally { release() }
 }
 
 /** Rules a plan opts into: stories and criteria of an unfinished epic (110.8, D11). */

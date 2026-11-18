@@ -141,8 +141,7 @@ async function pullRequests(project, policy) {
 export function grantFactConflicts(facts) {
   const result = []
   for (const limit of facts.plan.limits) {
-    const maximum = limit.ceiling ?? limit.value
-    if (limit.value < maximum || limit.left !== 0) continue
+    if (limit.ceiling == null || limit.value < limit.ceiling || limit.left !== 0) continue
     for (const use of limit.boundaries ?? [{ boundary: null, used: limit.used, left: limit.left }]) {
       if (use.left !== 0 || use.used === null) continue
       const where = use.boundary === null ? '' : ` at ${use.boundary}`

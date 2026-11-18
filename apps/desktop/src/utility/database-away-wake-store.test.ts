@@ -73,7 +73,7 @@ describe('recordAwayWake (Story 113.6 AC1)', () => {
 
 describe('awayNightData (Story 113.6 AC2-AC3)', () => {
   it('counts resting time within the Away period and leaves a later restart unknown', () => {
-    for (const [id, ended] of [['already-idle', T - 10_000], ['finished', T + HOUR], ['restarted', T + HOUR]] as const) {
+    for (const [id, ended] of [['already-idle', T - 10_000], ['completed', T + HOUR], ['finished', T + HOUR], ['restarted', T + HOUR]] as const) {
       agentSession(id, 'claude', T - HOUR)
       database.prepare(`INSERT INTO turn_record(turn_id, number, session_id, incarnation_id, foreground, app, state, end_kind, started_at, ended_at, totals_state)
         VALUES (?, 1, ?, ?, 'claude', 'claude', 'closed', 'finished', ?, ?, 'none')`)
@@ -81,9 +81,11 @@ describe('awayNightData (Story 113.6 AC2-AC3)', () => {
     }
     database.prepare(`INSERT INTO process_incarnation(incarnation_id, session_id, process_start_identity, state, started_at)
       VALUES ('next-process', 'restarted', 'new', 'running', ?)`).run(at(T + 2 * HOUR))
+    database.prepare(`INSERT INTO progress_observation(session_id, source, incarnation_id, state, label, observed_at, received_at)
+      VALUES ('completed', 'fixture', 'inc-completed', 'claimed-done', 'Work complete', ?, ?)`).run(at(T + HOUR), at(T + HOUR))
     const night = awayNightData(database, { periodId: 'p1', since: at(T), until: at(T + 3 * HOUR), everyMs: EVERY })
     expect(night.unknown.map(row => [row.sessionId, row.restedFrom, row.restedMs])).toEqual([
-      ['already-idle', at(T), 3 * HOUR], ['finished', at(T + HOUR), 2 * HOUR], ['restarted', null, null]
+      ['already-idle', at(T), 3 * HOUR], ['completed', null, null], ['finished', at(T + HOUR), 2 * HOUR], ['restarted', null, null]
     ])
   })
 

@@ -639,11 +639,28 @@ describe('an allowance raise from the night list', () => {
     const forged = allow(main, home, 'limits.rechecks.limit=6', ['--reason', 'fixture', '--source', entry.source])
     expect(forged.code).not.toBe(0)
     expect(forged.err + forged.out).toMatch(/only a recorded answer/iu)
-    const saved = await withNightAllowanceLock(plan, async fd => writeNightAllowance(plan, entry, fd))
+    const module = new URL('../../bin/plan-allowances.mjs', import.meta.url).href
+    const interruptAt = (stage: string) => spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import { withNightAllowanceLock, writeNightAllowance } from ${JSON.stringify(module)}
+      const plan = ${JSON.stringify(plan)}
+      const entry = ${JSON.stringify(entry)}
+      await withNightAllowanceLock(plan, fd => writeNightAllowance(plan, entry, fd, stage => {
+        if (stage === ${JSON.stringify(stage)}) process.kill(process.pid, 'SIGKILL')
+      }))
+    `], { env: process.env, encoding: 'utf8', timeout: 15_000 })
+    expect(interruptAt('created').signal).toBe('SIGKILL')
+    expect(await withNightAllowanceLock(plan, () => findNightAllowance(plan, entry))).toBeNull()
+    expect(read(main, home).current.commit).toBe(prior.current.commit)
+    expect(interruptAt('published').signal).toBe('SIGKILL')
+    expect(read(main, home).hand_edit).toMatch(/working file differs/u)
+    const recovered = await withNightAllowanceLock(plan, () => findNightAllowance(plan, entry))
     const checked = read(main, home)
     expect(checked.current.fields.limits.rechecks).toMatchObject({ limit: 6, ceiling: 6 })
+    expect(checked.current.commit).toBe(recovered)
+    expect(checked.hand_edit).toBeNull()
+    expect(git(planRoot, 'status', '--porcelain', '--', 'allowances')).toBe('')
     expect(checked.changes.at(-1).source).toEqual(entry.source)
-    expect(await withNightAllowanceLock(plan, async () => findNightAllowance(plan, entry))).toBe(saved.commit)
+    expect(await withNightAllowanceLock(plan, () => findNightAllowance(plan, entry))).toBe(recovered)
     await expect(withNightAllowanceLock(plan, async fd => writeNightAllowance(plan, entry, fd))).rejects.toThrow(/changed/u)
   })
 })

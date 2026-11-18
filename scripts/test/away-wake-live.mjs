@@ -275,6 +275,7 @@ function openCodeProfile(binary, port, earlier = false) {
 async function run(scenario, binary) {
   const upgrade = scenario === 'opencode-upgrade'
   const night = scenario === 'claude-night'
+  const parked = night && args.includes('--parked')
   // The night's woken turns run on the profile's own model; four minutes let each end before the next step is arranged.
   const every = night ? 240_000 : EVERY_MS
   const app = upgrade ? 'opencode' : night ? 'claude' : scenario
@@ -291,7 +292,7 @@ async function run(scenario, binary) {
   // the run's data root is deleted at the end (Epic 111 F20): it starts with his own data folder and its updater off.
   const claudeData = process.env.XDG_DATA_HOME
   const through = proxy ? `HTTPS_PROXY='http://127.0.0.1:${proxy.port}' HTTP_PROXY='http://127.0.0.1:${proxy.port}' NO_PROXY='127.0.0.1,localhost' CLAUDE_CODE_MAX_RETRIES=2 ` : ''
-  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 ${through}claude --allowedTools 'Bash(sleep:*)' --model haiku${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
+  const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 ${through}claude --allowedTools 'Bash(sleep:*)'${parked ? " 'Bash(bmn grant report:*)'" : ''} --model haiku${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
   try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
     const environment = {
@@ -549,6 +550,16 @@ async function run(scenario, binary) {
         state.afterWake = await latest()
         check(`${name}: the woken session reached its model again and finished its turn`, state.afterWake.at(-1)?.event === 'Stop' && state.afterWake.some((event) => event.event === 'UserPromptSubmit'), { events: state.afterWake })
         check(`${name}: the agent received the wake line only where a tick says it typed one`, wakesInTranscript(app, started) === logs().filter((line) => line.includes('typed the wake line')).length, { count: wakesInTranscript(app, started) })
+        if (parked) {
+          const sent = Date.now()
+          await type('Synthetic test only. Run exactly: bmn grant report --run parked-fixture --stopped --cause access --text "Synthetic sign-in pending". Then finish this turn. Do not exit the session.')
+          const deadline = Date.now() + 90_000
+          for (;;) {
+            if ((await hookEvents()).some(event => event.event === 'Stop' && Date.parse(event.observedAt) >= sent)) break
+            if (Date.now() >= deadline) throw new Error('The parked fixture turn did not finish')
+            await sleep(1000)
+          }
+        }
       } else {
         const one = await tick(1)
         check(`${app}: tick 1 types the line once into the idle session`, one.filter((line) => line.includes('typed')).length === 1, { logs: one })
@@ -650,6 +661,13 @@ async function run(scenario, binary) {
       check(`${name}: the night's account read back after Back matches the wake log (113.6)`, mismatches !== null && mismatches.length === 0 &&
         account.woken.length === report[`${name}Logs`].filter((line) => line.includes('typed the wake line')).map((line) => line.split(' into ')[1]?.split(' ')[0]).filter((id, index, all) => all.indexOf(id) === index).length,
       { mismatches, woken: account?.woken.length ?? null, unknownSpans: account?.unknownSpans ?? null })
+      if (parked) {
+        const row = account && [...account.woken, ...account.skipped, ...account.missed, ...account.unknown].find(item => item.sessionId === sessionId)
+        check('131.6: the parked native run has observed rest and a separate cause report in the CLI',
+          Number.isFinite(row?.restedMs) && row.restedMs >= 0 && row.restedFrom &&
+          row.stopReport?.runId === 'parked-fixture' && row.stopReport.cause === 'access',
+        { restedMs: row?.restedMs ?? null, cause: row?.stopReport?.cause ?? null })
+      }
     } finally {
       const current = processTree(identity.pid)
       const identities = current[0]?.start_ticks === identity.start_ticks ? current : [identity]
