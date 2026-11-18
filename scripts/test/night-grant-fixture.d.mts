@@ -1,6 +1,6 @@
 // MODULE: night-grant-fixture.d.mts - the disposable plan fixture used by the Electron self-test
 interface FixtureAllowanceRead {
-  current: { fields: { limits: Record<string, { limit: number; ceiling: number; per: string }> } }
+  current: { fields: { limits: Record<string, { limit: number; ceiling: number; per: string; unit: string }> } }
   changes: Array<{ source: string }>
 }
 

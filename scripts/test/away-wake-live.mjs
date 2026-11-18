@@ -295,7 +295,9 @@ async function run(scenario, binary) {
   const through = proxy ? `HTTPS_PROXY='http://127.0.0.1:${proxy.port}' HTTP_PROXY='http://127.0.0.1:${proxy.port}' NO_PROXY='127.0.0.1,localhost' CLAUDE_CODE_MAX_RETRIES=2 ` : ''
   const command = app === 'claude' ? `env XDG_DATA_HOME='${claudeData}' DISABLE_AUTOUPDATER=1 ${through}claude --allowedTools 'Bash(sleep:*)'${parked ? " 'Bash(bmn grant report:*)'" : ''} --model haiku${night ? ` --settings '${nightSettings}'` : ''}` : app === 'codex' ? `codex --no-alt-screen -c 'mcp_servers={}' -c 'projects."${scratch}".trust_level="trusted"' -c 'model_reasoning_effort="low"'`
     : `bash '${join(openCode.profile, 'start.sh')}'`
-  try { await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
+  // Keep the same guarded test home and fit the Linux socket path, as the departure driver does.
+  const contract = { ...temporaryRootContracts.electronDevelopment, prefix: 'd' }
+  try { await withTemporaryRoot(contract, async ({ roots }) => {
     const environment = {
       ...caller, SHELL: '/bin/bash',
       XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
