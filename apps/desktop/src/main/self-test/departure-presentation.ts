@@ -98,7 +98,10 @@ export async function checkDeparturePresentation(client: PtyHostClient, first: B
     // The preceding Away step ends with a Back whose morning summary each window may open late;
     // an open summary covers Before you go, so wait for it and close it in both windows first.
     const away = await originalRequest<OwnerAwayView>(METHOD_REGISTRY.awayGet, {})
-    if (away.state === 'back' && away.periodId !== null) {
+    if (away.state === 'back' && away.periodId !== null && away.summaryShownAt === null) {
+      // The summary opens by itself only in a window that has focus. A smoke started by the update
+      // service gets none on its own, so hand it to the first window before waiting.
+      await focus(first, second)
       await until(async () => (await originalRequest<OwnerAwayView>(METHOD_REGISTRY.awayGet, {})).summaryShownAt !== null,
         'the previous morning summary was presented')
     }
