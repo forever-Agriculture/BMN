@@ -107,7 +107,13 @@ const waylandDisplay =
     : originalWaylandDisplay
 
 await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) => {
-  const result = spawnSync(packagedBinary, [...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test'], {
+  // The self-test hands window focus back and forth. On the owner's desktop his own windows (and the
+  // launcher's "BMN is updating" window) take that focus mid-run, so the smoke gets a display of its own.
+  const privateDisplay = process.env.BMN_SMOKE_OWNER_DISPLAY !== '1' && spawnSync('xvfb-run', ['--help'], { stdio: 'ignore' }).status === 0
+  const selfTest = privateDisplay
+    ? ['xvfb-run', '-a', '-s', '-screen 0 1920x1080x24', packagedBinary, '--ozone-platform=x11', '--self-test']
+    : [packagedBinary, ...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test']
+  const result = spawnSync(selfTest[0], selfTest.slice(1), {
     encoding: 'utf8',
     // The self-test covers renderer and host restarts, remote answers and agent history; it took
     // about two minutes by Epic 31, so the bound leaves room for slower machines and later phases.
@@ -130,7 +136,7 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
       BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
       // The synthetic session fixtures run on this Node, as in the source self-test.
       BMN_SELF_TEST_NODE: process.execPath,
-      ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
+      ...(privateDisplay ? { WAYLAND_DISPLAY: '' } : waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
   // A timeout keeps the output so far; the self-test prints its phases on stderr, so its last lines
