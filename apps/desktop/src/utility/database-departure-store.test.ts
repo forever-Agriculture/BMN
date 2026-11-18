@@ -360,8 +360,11 @@ describe('resumed departure gaps', () => {
       expect(rows.filter(row => row.reason === 'the list is full')).toHaveLength(fullRows)
       expect(counted).toEqual(omitted)
       expect(rows.length + Object.values(counted).reduce((sum, count) => sum + count, 0)).toBe(total)
-      // Saved and read back with the count; the collection is valid at every size.
-      const saved = readDepartureCollection(JSON.parse(JSON.stringify(newDepartureCollection(rows, AT, counted))))
+      // Saved through the worker's real SQLite write, reopened from the file and read back with the count.
+      action({ action: 'start', periodId: null, collection: newDepartureCollection(rows, AT, counted) })
+      database.close(); database = new Database(path)
+      const saved = record().periods.at(-1)?.collection ?? null
+      expect(saved?.sessions).toHaveLength(rows.length)
       expect(saved?.omitted).toEqual(Object.keys(omitted).length ? omitted : undefined)
       expect(departureOmittedLines(saved ?? undefined)).toEqual(total === 65 ? ['1 more session not asked: the list is full'] : total === 100 ? ['36 more sessions not asked: the list is full'] : [])
     })

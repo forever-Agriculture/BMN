@@ -1786,9 +1786,10 @@ export class CompanionService {
         // Back while only leaving is the dialog's Not leaving: it cancels the departure and withdraws its cards (84.3 AC1).
         const result = await this.changeAway({ to, source: 'app', ...(params.note === undefined ? {} : { note: params.note as string | null }),
           ...(params.expectedGrantGeneration === undefined ? {} : { expectedGrantGeneration: params.expectedGrantGeneration as number }),
-          ...(params.expectedGrantRevision === undefined ? {} : { expectedGrantRevision: params.expectedGrantRevision as number }),
+          // D15: the window's Back is fenced on the period and its state, not on the grant revision bookkeeping moves.
           ...(params.expectedRevision === undefined ? {} : { expectedRevision: params.expectedRevision as number }),
-          ...(params.expectedPeriodId === undefined ? {} : { expectedPeriodId: params.expectedPeriodId as string | null }) })
+          ...(params.expectedPeriodId === undefined ? {} : { expectedPeriodId: params.expectedPeriodId as string | null }),
+          ...(params.expectedPeriodState === undefined ? {} : { expectedPeriodState: params.expectedPeriodState as string | null }) })
         if (result.outcome === 'invalid') invalid(result.reason)
         if (result.outcome === 'stale') throw new HostControlError(ERROR_CODES.revisionConflict, 'The departure changed. Look again; nothing was changed.')
         return ownerAwayView(result.record)
@@ -1880,11 +1881,16 @@ export class CompanionService {
     return this.departureTransition(() => this.applyAwayChange(change))
   }
 
+  private awayFence(view = this.grantForOwner()): Pick<AwayChange, 'expectedGrantGeneration' | 'expectedPeriodId' | 'expectedPeriodState'> {
+    return { expectedGrantGeneration: view.generation ?? 0, expectedPeriodId: view.period?.periodId ?? null, expectedPeriodState: view.period?.state ?? null }
+  }
+
   private async applyAwayChange(change: Omit<AwayChange, 'periodId'>): Promise<AwayChangeResult> {
     const before = this.ownerAway()
     const view = this.grantForOwner()
-    // D15: the owner's Away and Back are fenced on the generation and the period, never on the revision BMN's bookkeeping moves.
-    const result = await this.options.database.companion('changeAway', { expectedGrantGeneration: view.generation ?? 0, expectedPeriodId: view.period?.periodId ?? null, ...change }, this.iso())
+    // D15: the owner's Away and Back are fenced on the generation, the period and its state, never on the revision BMN's
+    // bookkeeping moves. A caller that already captured these facts (a Telegram retry) passes its own.
+    const result = await this.options.database.companion('changeAway', { ...this.awayFence(view), ...change }, this.iso())
     if (result.outcome === 'changed' || result.record.revision > this.awayRecord.revision) {
       this.awayRecord = result.record
       this.presenceChanged(before)
@@ -4190,10 +4196,12 @@ export class CompanionService {
    */
   private async telegramAway(connector: TelegramConnector, reply: InboundReply, command: TelegramAwayCommand, bot: string): Promise<void> {
     const operationKey = `telegram:${bot}:${reply.updateId}`
+    const grant = this.grantForOwner()
     // A worker answer lost after commit would end this update without its reply: the same key asks once more, and the
     // committed change answers as repeated, so the reply still goes once.
     const once = <T>(work: () => Promise<T>): Promise<T> => work().catch(() => work())
-    const grant = this.grantForOwner()
+    // The retry keeps the facts this update was read against, so it can never act on a later period.
+    const fence = this.awayFence(grant)
     if (command.to === 'away' && this.awayRecord.state !== 'away') {
       const result = await once(() => this.ownerDeparture({ action: grant.period?.state === 'leaving' ? 'open' : 'start',
         periodId: grant.period?.state === 'leaving' ? grant.period.periodId : null, expectedRevision: grant.revision, expectedGeneration: grant.generation ?? 0, operationKey,
@@ -4213,14 +4221,16 @@ export class CompanionService {
     const noteBefore = this.awayRecord.note
     let note: 'none' | 'kept' | 'replaced' | 'too-long' | 'refused' = 'none'
     let result = await once(() => this.changeAway(command.to === 'away'
-      ? { to: 'away', source: 'telegram', operationKey, ...(command.note === null ? {} : { note: command.note }) }
-      : { to: 'back', source: 'telegram', operationKey }))
+      ? { to: 'away', source: 'telegram', operationKey, ...fence, ...(command.note === null ? {} : { note: command.note }) }
+      : { to: 'back', source: 'telegram', operationKey, ...fence }))
     if (result.outcome === 'invalid' && command.to === 'away') {
       // Leaving never fails for a refused note: away is set and only the note is refused (Fable's question 2), with its reason.
       note = command.note !== null && [...command.note].length > AWAY_NOTE_LIMIT ? 'too-long' : 'refused'
-      result = await once(() => this.changeAway({ to: 'away', source: 'telegram', operationKey }))
+      result = await once(() => this.changeAway({ to: 'away', source: 'telegram', operationKey, ...fence }))
     } else if (command.to === 'away' && command.note !== null) note = before === 'away' && noteBefore !== command.note ? 'replaced' : 'kept'
     const record = result.record
+    // D9/D15: a competing change won first; say so instead of claiming nothing is set.
+    if (result.outcome === 'stale') return this.telegramCommandReply(connector, reply, `${record.state === 'away' ? 'Away started' : 'The departure changed'} before your /${command.to} arrived; nothing was changed. Look again and send it again.`, bot)
     const text = command.to === 'away'
       ? record.state === 'away' && record.since !== null
         ? awayReplyText({ since: record.since, repeated: result.outcome !== 'repeated' && before === 'away', note, now: this.now() })

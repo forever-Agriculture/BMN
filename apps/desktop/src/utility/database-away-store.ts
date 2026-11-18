@@ -57,7 +57,8 @@ export function changeAway(database: DatabaseConnection, change: Omit<AwayChange
   const period = grantRecord.periods.at(-1)
   if (change.expectedGrantGeneration !== undefined && change.expectedGrantGeneration !== grants.generation ||
     change.expectedGrantRevision !== undefined && change.expectedGrantRevision !== grantRecord.revision ||
-    change.expectedPeriodId !== undefined && change.expectedPeriodId !== (period?.periodId ?? null)) return { outcome: 'stale', record: current, grant: null }
+    change.expectedPeriodId !== undefined && change.expectedPeriodId !== (period?.periodId ?? null) ||
+    change.expectedPeriodState !== undefined && change.expectedPeriodState !== (period?.state ?? null)) return { outcome: 'stale', record: current, grant: null }
   const note = change.note === undefined && change.to === 'away' && period?.state === 'leaving' ? period.note : change.note
   const result = applyAwayChange(current, { ...change, ...(note === undefined ? {} : { note }), periodId: departurePeriodId(grantRecord) ?? randomUUID() }, now)
   // An unchanged state with a remembered key is written too: the key is what makes a later replay a no-op.

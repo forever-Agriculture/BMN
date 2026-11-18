@@ -56,6 +56,8 @@ export interface AwayChange {
   expectedGrantRevision?: number
   expectedGrantGeneration?: number
   expectedPeriodId?: string | null
+  /** D15: the period's state this surface saw (leaving, away, ...); a different state refuses the change. */
+  expectedPeriodState?: string | null
   /** A retry of the same operation returns the first result. */
   operationKey?: string
   periodId: string

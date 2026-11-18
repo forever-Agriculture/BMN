@@ -800,7 +800,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     return invokeBridge('aiterm:away:get', {})
   },
   /** Away (with an optional note, which replaces the period's) or back, said in the app. */
-  setAway(to: 'away' | 'back', note?: string | null, fence?: { expectedRevision: number; expectedGrantRevision: number; expectedGrantGeneration?: number; expectedPeriodId: string | null }): Promise<OwnerAwayView> {
+  setAway(to: 'away' | 'back', note?: string | null, fence?: { expectedRevision: number; expectedGrantRevision: number; expectedGrantGeneration?: number; expectedPeriodId: string | null; expectedPeriodState?: string | null }): Promise<OwnerAwayView> {
     return invokeBridge('aiterm:away:set', { to, ...(note === undefined ? {} : { note }), ...fence })
   },
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView> {

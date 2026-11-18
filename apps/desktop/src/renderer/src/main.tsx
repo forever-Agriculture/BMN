@@ -500,7 +500,7 @@ function App(): React.JSX.Element {
     if (to === 'away' && grantUnreadable) { openGrants(); return }
     if (note === undefined && to === 'away' && awayView?.state !== 'away' && grantView !== null) {
       void actDeparture(grantView.period?.state === 'leaving' ? 'open' : 'start')
-    } else void window.aiTerminal.setAway(to, note, awayView !== null && grantView !== null ? { expectedRevision: awayView.revision, expectedGrantRevision: grantView.revision, expectedGrantGeneration: grantView.generation ?? 0, expectedPeriodId: grantView.period?.periodId ?? null } : undefined).then(adoptAwayView).catch(fail('Away could not be changed'))
+    } else void window.aiTerminal.setAway(to, note, awayView !== null && grantView !== null ? { expectedRevision: awayView.revision, expectedGrantRevision: grantView.revision, expectedGrantGeneration: grantView.generation ?? 0, expectedPeriodId: grantView.period?.periodId ?? null, expectedPeriodState: grantView.period?.state ?? null } : undefined).then(adoptAwayView).catch(fail('Away could not be changed'))
   }
   const actDeparture = async (action: 'start' | 'open' | 'go' | 'cancel' | 'same'): Promise<void> => {
     if (grantView === null || grantUnreadable && action !== 'cancel') return

@@ -385,7 +385,7 @@ export interface AiTerminalBridge {
   getControlInfo(): Promise<ControlInfo>
   /** Story 76.3: the owner's said away state, as his own surfaces see it. */
   getAway(): Promise<OwnerAwayView>
-  setAway(to: 'away' | 'back', note?: string | null, fence?: { expectedRevision: number; expectedGrantRevision: number; expectedGrantGeneration?: number; expectedPeriodId: string | null }): Promise<OwnerAwayView>
+  setAway(to: 'away' | 'back', note?: string | null, fence?: { expectedRevision: number; expectedGrantRevision: number; expectedGrantGeneration?: number; expectedPeriodId: string | null; expectedPeriodState?: string | null }): Promise<OwnerAwayView>
   markAwaySummaryShown(periodId: string): Promise<OwnerAwayView>
   awaySummary(): Promise<AwaySummaryPayload>
   /** Story 83.3: the push policy as Health shows it, and the owner's one change at a time against the revision he saw. */

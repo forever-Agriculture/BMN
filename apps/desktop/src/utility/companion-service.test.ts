@@ -7,6 +7,8 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  newDepartureCollection,
+  selectDepartureSessions,
   AGENT_ATTENTION_ORIGINS,
   AGENT_START_BRIEF,
   agentStartBrief,
@@ -56,7 +58,8 @@ import type { ScreenLike } from './remote-answer'
 import { TelegramConnectorError, type TelegramConnector, type InboundReply } from './telegram-connector'
 import { TELEGRAM_HELP_TEXT } from './telegram-away'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
-import { departurePhone } from './database-departure-store'
+import { departureAction, departurePhone } from './database-departure-store'
+import { readGrantRow } from './database-grant-store'
 import { startFakeBotApi } from '../main/fake-bot-api'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -4901,6 +4904,7 @@ describe('Away (Story 76.3)', () => {
       return view
     }
     // A write the host has not read yet, as the delivery and phone bookkeeping make while the list is open.
+    const readRecord = () => { const read = readGrantRow(database); if (read.state !== 'read') throw Error('unreadable'); return read.record }
     const bookkeeping = (periodId: string, messageId: number) =>
       departurePhone(database, periodId, { state: 'sent', messageId, autoAnnounced: false }, new Date(Date.parse(clock) + 1).toISOString())
 
@@ -4935,6 +4939,62 @@ describe('Away (Story 76.3)', () => {
       await service['handleTelegramReply'](reply(61, '/back'))
       expect(service.awayForOwner()).toMatchObject({ state: 'back', endedBy: 'telegram' })
       expect(sent.at(-1)).toMatch(/^Back\. Away /)
+    })
+
+    it.each(['auto-first', 'back-first'] as const)('records exactly one of the owner\'s Back and the automatic Away: %s (130.1 AC6)', async order => {
+      const seen = await leave()
+      bookkeeping(seen.period!.periodId, 74)
+      const autoAt = seen.period!.collection!.autoAwayAt
+      // The automatic Away straight in the worker, as the host's timer does, before the host has read it.
+      const auto = () => departureAction(database, { action: 'auto', periodId: seen.period!.periodId, expectedRevision: readRecord().revision, expectedGeneration: 0, operationKey: `auto:${autoAt}`, source: 'app' }, autoAt)
+      if (order === 'auto-first') {
+        expect(auto().outcome).toBe('changed')
+        const back = await service.changeAway({ to: 'back', source: 'cli' })
+        expect(back.outcome).toBe('stale')
+        expect(readRecord().periods.at(-1)?.state).toBe('away')
+      } else {
+        // Back while only getting ready leaves the away record as it was and cancels the departure (84.3 AC1).
+        expect((await service.changeAway({ to: 'back', source: 'cli' })).outcome).toBe('unchanged')
+        expect(readRecord().periods.at(-1)?.state).toBe('cancelled')
+        expect(auto().outcome).toBe('stale')
+        expect(readRecord().periods.at(-1)?.state).toBe('cancelled')
+      }
+    })
+
+    it('takes the window\'s Back while away after bookkeeping moved the revision it showed', async () => {
+      const seen = await leave()
+      await service.route(METHOD_REGISTRY.grantDeparture, { action: 'go', periodId: seen.period!.periodId, expectedRevision: seen.revision, operationKey: 'go-window' })
+      const shown = service.grantForOwner(), away = service.awayForOwner()
+      bookkeeping(seen.period!.periodId, 75)
+      await expect(service.route(METHOD_REGISTRY.awaySet, { to: 'back', expectedRevision: away.revision, expectedGrantRevision: shown.revision,
+        expectedGrantGeneration: 0, expectedPeriodId: shown.period!.periodId, expectedPeriodState: shown.period!.state })).resolves.toMatchObject({ state: 'back', endedBy: 'app' })
+    })
+
+    it('never lets a /back retried after a pre-commit failure act on a later departure', async () => {
+      const sent: string[] = []
+      fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+      const seen = await leave()
+      await service.route(METHOD_REGISTRY.grantDeparture, { action: 'go', periodId: seen.period!.periodId, expectedRevision: seen.revision, operationKey: 'go-before-retry' })
+      const worker = service['options'].database
+      const real = worker.companion.bind(worker)
+      let failed = false
+      worker.companion = (async (operation: string, ...args: unknown[]) => {
+        if (operation === 'changeAway' && !failed) {
+          failed = true
+          // Before this update commits, he comes back in the window and starts a new departure.
+          await real('changeAway', { to: 'back', source: 'app' }, clock)
+          const now2 = new Date(Date.parse(clock) + 5).toISOString()
+          await real('departureAction', { action: 'start', periodId: null, expectedRevision: readRecord().revision, expectedGeneration: 0, operationKey: 'later-start', source: 'app',
+            collection: newDepartureCollection(selectDepartureSessions([{ sessionId: 's1', incarnationId: 'incarnation-1', name: 'One', agent: 'claude', lastEventAt: clock }], now2), now2) }, now2)
+          throw new Error('synthetic failure before commit')
+        }
+        return (real as (name: string, ...rest: unknown[]) => Promise<unknown>)(operation, ...args)
+      }) as typeof worker.companion
+      try { await service['handleTelegramReply'](reply(63, '/back')) } finally { worker.companion = real }
+      expect(failed).toBe(true)
+      expect(readRecord().periods.at(-1)).toMatchObject({ state: 'leaving' })
+      expect(readRecord().periods.at(-1)?.periodId).not.toBe(seen.period!.periodId)
+      expect(sent.at(-1)).toMatch(/before your \/back arrived; nothing was changed/)
     })
 
     it('replies to /back once when the worker committed Back but its answer was lost', async () => {
