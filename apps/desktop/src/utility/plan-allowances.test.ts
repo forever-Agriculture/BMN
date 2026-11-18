@@ -33,7 +33,7 @@ prepared:
   - {kind: account, target: gh, check: gh api, checked: 2026-11-05}
 `
 const roots: string[] = []
-afterEach(() => { roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })) })
+afterEach(() => { vi.unstubAllEnvs(); roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })) })
 
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', ...args], { encoding: 'utf8' }).trim()
@@ -616,5 +616,34 @@ describe('the plan skill gives a new epic the file (110.6 AC5, 110.8 AC3)', () =
     const readiness = read('skills/plan/methods/readiness.md')
     expect(readiness).toMatch(/Walk each limit/u)
     expect(readiness).toMatch(/split the epic before he sees it/u)
+  })
+})
+
+describe('an allowance raise from the night list', () => {
+  it('uses the stored approval source, pins the allowance commit, and reads a committed write back by its source', async () => {
+    const { main, plan: planRoot, home, commit } = goFor()
+    vi.stubEnv('XDG_STATE_HOME', join(home, 'state'))
+    git(planRoot, 'config', 'user.name', 'Fixture')
+    git(planRoot, 'config', 'user.email', 'fixture@example.invalid')
+    const { resolvePlan } = await import('../../bin/plan-board.mjs')
+    const { findNightAllowance, withNightAllowanceLock, writeNightAllowance } = await import('../../bin/plan-allowances.mjs')
+    const plan = await resolvePlan(main)
+    const prior = read(main, home)
+    const entry = {
+      runId: 'sample-run', sessionId: 'sample-session', item: 'raise', useId: 'use', cardRevision: 1,
+      term: { kind: 'limit' as const, id: 'raise', project: main, epic: 7, name: 'rechecks', from: 2, to: 6,
+        reason: 'Two more reviews remain', pin: { go: commit, commit: prior.current.commit, token: prior.token } },
+      source: 'night list: Yes to "Raise rechecks from 2 to 6" in the window at 2026-11-18T20:00:00.000Z, period sample, card revision 1, operation sample',
+      state: 'writing' as const, commit: null, at: '2026-11-18T20:00:00.000Z', detail: null
+    }
+    const forged = allow(main, home, 'limits.rechecks.limit=6', ['--reason', 'fixture', '--source', entry.source])
+    expect(forged.code).not.toBe(0)
+    expect(forged.err + forged.out).toMatch(/only a recorded answer/iu)
+    const saved = await withNightAllowanceLock(plan, async fd => writeNightAllowance(plan, entry, fd))
+    const checked = read(main, home)
+    expect(checked.current.fields.limits.rechecks).toMatchObject({ limit: 6, ceiling: 6 })
+    expect(checked.changes.at(-1).source).toEqual(entry.source)
+    expect(await withNightAllowanceLock(plan, async () => findNightAllowance(plan, entry))).toBe(saved.commit)
+    await expect(withNightAllowanceLock(plan, async fd => writeNightAllowance(plan, entry, fd))).rejects.toThrow(/changed/u)
   })
 })

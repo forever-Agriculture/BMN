@@ -151,6 +151,20 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     const laptopPhoneSyncMs = Date.now() - laptopAnswerAt
     assert.ok(laptopPhoneSyncMs <= 5000, `Laptop answer reached the phone in ${laptopPhoneSyncMs}ms`)
 
+    phase('phone login check')
+    const accessStart = bot.calls.length
+    const accessCommand = 'fixture auth login --profile ' + 'sample-'.repeat(100) + 'end'
+    const accessTitle = 'Synthetic login check'
+    ask('run-access', accessTitle, [{ kind: 'access', id: 'login', name: 'Sample sign-in',
+      command: accessCommand, reason: 'The fixture started signed out' }])
+    bot.tapOn(accessTitle, [{ tap: 'Done' }])
+    const access = await until(async () => (await run('run-access'))?.access?.[0], 'Done persisted from Telegram')
+    assert.equal(access.item, 'login')
+    assert.equal(access.outcome, null)
+    assert.ok(texts(accessStart, 'sendMessage').some(text => text.includes(accessCommand)), 'the whole sign-in command reached fake Telegram')
+    await until(async () => bot.calls.slice(accessStart).some(call => call.method === 'answerCallbackQuery' &&
+      call.body.text === 'Check requested.') ? true : undefined, 'Done callback acknowledges the check')
+
     phase('back')
     const back = bot.calls.length
     ask('run-open', 'Run left open', [TERMS[0]])
@@ -166,7 +180,7 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     phase('real grant-record reset across two windows')
     const reset = await checkGrantReset(client, window, second, cli)
     phase(`reset proof ${JSON.stringify(reset)}`)
-    return { reset, phonePreservedSavedLine: true, presentation: { repeatedPhoneCreatesNoFact: true, oneModalDuringDelayedAckAndFocusHandoff: true, passiveFocus: true, manualReopen: true }, phone: { phoneAnswerSyncMs, phoneGoSyncMs, laptopPhoneSyncMs, phoneBackSyncMs }, twoWindows: { answerSyncMs, goSyncMs }, gettingReadyHead: true, immediateCards: true, windowAnswer: true, alreadyAnswered: true, ownerUseRefused: true, phoneWalk: true, typedReply: true, laptopAnswerOnPhone: true, withdrawnAtBack: true, grantsEnded: true }
+    return { reset, phonePreservedSavedLine: true, presentation: { repeatedPhoneCreatesNoFact: true, oneModalDuringDelayedAckAndFocusHandoff: true, passiveFocus: true, manualReopen: true }, phone: { phoneAnswerSyncMs, phoneGoSyncMs, laptopPhoneSyncMs, phoneBackSyncMs, accessDone: true }, twoWindows: { answerSyncMs, goSyncMs }, gettingReadyHead: true, immediateCards: true, windowAnswer: true, alreadyAnswered: true, ownerUseRefused: true, phoneWalk: true, typedReply: true, laptopAnswerOnPhone: true, withdrawnAtBack: true, grantsEnded: true }
   } finally {
     second?.destroy()
     phase('cleanup')

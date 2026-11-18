@@ -309,6 +309,18 @@ export function AwaySummaryDialog(props: {
             {view.decided.more !== null ? <small className="away-more">{view.decided.more}</small> : null}
           </section>
 
+          {view.rested.length > 0 ? (
+            <section className="inspector-section" aria-label="Rested">
+              <h3><span>Rested</span><span className="away-count">{view.rested.length}</span></h3>
+              <ul className="away-rows">
+                {view.rested.map(row => <li key={row.sessionId}>
+                  <button type="button" className="message-row away-wake-row" onClick={() => props.onOpenSession(row.sessionId)}>
+                    <span>{row.where}</span><span>{row.duration} · {row.cause}</span>
+                  </button>
+                </li>)}
+              </ul>
+            </section>
+          ) : null}
           {view.wake !== null ? (
             <section className="inspector-section" aria-label="The wake">
               <h3><span>The wake</span><span className="away-count">{view.wake.rows.filter((row) => row.state === 'missed').length}</span></h3>

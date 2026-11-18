@@ -3,13 +3,16 @@ import { randomBytes } from 'node:crypto'
 import {
   awayMomentWords,
   GRANT_RULE_LINE,
-  grantAnswerWords,
+  grantAnswerWords, grantNothingWords,
   grantChoice,
+  grantAccessStatus,
+  grantLimitWords,
   grantButtonWords,
   grantCardHasRuleLine,
   grantChoiceLabel,
   grantNoChoices,
   grantOpenProposals,
+  grantProposedChoices,
   grantReoffer,
   type GrantReoffer,
   grantTermChoices,
@@ -86,7 +89,8 @@ const words = (text: string, max: number): string => escapeHtml(clip(said(text),
 
 /** "Extra repair rounds per boundary: 3", the term at its proposal, for the overview. */
 function overviewLine(term: GrantTerm, index: number): string {
-  return `${index + 1}. ${escapeHtml(grantTermLabel(term))}: ${escapeHtml(grantChoiceLabel(term, term.proposed))}`
+  const choice = term.proposed === undefined ? 'not answered' : grantChoiceLabel(term, term.proposed)
+  return `${index + 1}. ${escapeHtml(grantTermLabel(term))}: ${escapeHtml(choice)}`
 }
 
 /**
@@ -94,12 +98,15 @@ function overviewLine(term: GrantTerm, index: number): string {
  * lines, the rule line and the buttons always fit.
  */
 function grantCardText(input: {
-  header: CardHeader; run: GrantRun; view: View; note: string | null; now: Date; ending?: string; v2?: boolean; offer?: GrantReoffer | null
+  header: CardHeader; run: GrantRun; view: View; note: string | null; now: Date; period?: GrantPeriod; ending?: string; v2?: boolean; offer?: GrantReoffer | null
 }): string {
-  const { run, view, now } = input
+  const { run, view, now, period } = input
+  const status = (term: GrantTerm): string | null => term.kind === 'access' ? grantAccessStatus(run, term.id, now).words
+    : term.kind === 'limit' && period ? grantLimitWords(period, run, term, now) : null
   const card = run.card
   const terms = card.terms
-  const draw = (reasonChars: number | null, scopeChars: number): string => {
+  const label = (term: GrantTerm, whole: boolean) => term.kind === 'access' && !whole ? term.name : grantTermLabel(term)
+  const draw = (reasonChars: number | null, scopeChars: number, whole: boolean): string => {
     const lines: string[] = []
     if (input.note !== null && input.ending === undefined) lines.push(escapeHtml(input.note), '')
     lines.push(headerLine('❓', input.header))
@@ -114,11 +121,14 @@ function grantCardText(input: {
       const step = view.step
       for (const [index, term] of terms.slice(0, step).entries()) {
         const saved = input.v2 && run.answer?.cardRevision === card.revision ? grantChoice(run.answer.choices, term.id) : undefined
-        const value = saved ?? grantChoice(view.picks, term.id) ?? grantChoice(input.offer?.choices, term.id) ?? term.proposed
-        lines.push(`${index + 1}. ${escapeHtml(grantTermLabel(term))}: ${input.v2 && saved === undefined ? 'proposed ' : ''}${escapeHtml(grantChoiceLabel(term, value))}${input.v2 && saved === undefined ? ' · not answered' : ''}`)
+        const value = saved ?? grantChoice(view.picks, term.id) ?? grantChoice(input.offer?.choices, term.id) ?? term.proposed ?? 'no'
+        const detail = status(term) ?? `${input.v2 && saved === undefined ? 'proposed ' : ''}${grantChoiceLabel(term, value)}${input.v2 && saved === undefined ? ' · not answered' : ''}`
+        lines.push(`${index + 1}. ${escapeHtml(label(term, false))}: ${escapeHtml(detail)}`)
       }
       const term = terms[step]!
       lines.push('', `<b>${step + 1}. ${escapeHtml(grantTermLabel(term))}</b>`)
+      const detail = status(term)
+      if (detail !== null) lines.push(escapeHtml(detail))
       if (reasonChars !== null) lines.push(words(term.reason, reasonChars))
       if (term.kind === 'merge' || term.kind === 'push-default') lines.push(`<i>${GRANT_RULE_LINE}</i>`)
       if (!input.v2 && step === terms.length - 1) lines.push('', '<i>Nothing is granted until this answer.</i>')
@@ -126,23 +136,26 @@ function grantCardText(input: {
       for (const [index, term] of terms.entries()) {
         const saved = run.answer?.cardRevision === card.revision ? grantChoice(run.answer.choices, term.id) : undefined
         const prior = grantChoice(input.offer?.choices, term.id)
-        lines.push('', input.v2 ? `${index + 1}. ${escapeHtml(grantTermLabel(term))}: ${saved === undefined ? `proposed ${escapeHtml(grantChoiceLabel(term, prior ?? term.proposed))} · not answered` : escapeHtml(grantChoiceLabel(term, saved))}` : overviewLine(term, index))
-        if (input.v2 && saved !== undefined) lines.push(`Answered ${run.answer!.lines?.[term.id]?.via === 'app' || !run.answer!.lines?.[term.id] && run.answer!.via === 'app' ? 'at the laptop' : 'on Telegram'} ${awayMomentWords(run.answer!.lines?.[term.id]?.at ?? run.answer!.at, now)}`)
+        const detail = status(term)
+        lines.push('', detail !== null ? `${index + 1}. ${escapeHtml(label(term, whole))} · ${escapeHtml(detail)}`
+          : input.v2 ? `${index + 1}. ${escapeHtml(grantTermLabel(term))}: ${saved === undefined ? `proposed ${escapeHtml(grantChoiceLabel(term, prior ?? term.proposed ?? 'no'))} · not answered` : escapeHtml(grantChoiceLabel(term, saved))}` : overviewLine(term, index))
+        if (detail === null && input.v2 && saved !== undefined) lines.push(`Answered ${run.answer!.lines?.[term.id]?.via === 'app' || !run.answer!.lines?.[term.id] && run.answer!.via === 'app' ? 'at the laptop' : 'on Telegram'} ${awayMomentWords(run.answer!.lines?.[term.id]?.at ?? run.answer!.at, now)}`)
         if (saved === undefined && prior !== undefined) lines.push(`As you granted ${awayMomentWords(input.offer!.at, now)} · not granted until your tap`)
         else if (saved === undefined && input.offer?.changed.includes(term.id)) lines.push('Changed; needs a fresh answer.')
         if (reasonChars !== null) lines.push(words(term.reason, reasonChars))
       }
       if (grantCardHasRuleLine(terms)) lines.push('', `<i>${GRANT_RULE_LINE}</i>`)
       if (input.ending !== undefined) lines.push('', escapeHtml(input.ending))
-      else if (terms.length === 1) lines.push('', '<i>One tap answers.</i>')
+      else if (terms.length === 1 && terms[0]?.kind !== 'access') lines.push('', '<i>One tap answers.</i>')
     }
     return lines.join('\n')
   }
   for (const [reasons, scope] of [[300, 300], [REASON_CUT, 300], [null, 300], [null, 80], [null, 0]] as const) {
-    const text = draw(reasons, scope)
+    const text = draw(reasons, scope, true)
     if (text.length <= TELEGRAM_TEXT_LIMIT) return text
   }
-  return draw(null, 0)
+  // The chosen login always shows its entire command. Several long logins may need the Choose view.
+  return draw(null, 0, terms.length === 1)
 }
 
 function rows(buttons: Array<{ text: string; callback_data: string }>, oneRow: boolean): InlineKeyboard {
@@ -156,7 +169,7 @@ function grantEnding(period: GrantPeriod, run: GrantRun, now: Date): string | nu
   if (card.state === 'withdrawn') return card.withdrawnFor === 'back' ? 'Withdrawn: you are back.' : 'Withdrawn: you did not leave.'
   if (card.state === 'nothing') {
     const prior = run.answer !== null && isOpenPeriod(period) ? grantAnswerWords(run.answer.terms, run.answer.choices).granted : []
-    return `The run now needs nothing; nothing to answer.${prior.length > 0 ? ` Earlier answer still holds: ${prior.join(' · ')}.` : ''}`
+    return `The run now needs nothing: ${grantNothingWords(card)}.${prior.length > 0 ? ` Earlier answer still holds: ${prior.join(' · ')}.` : ''}`
   }
   if (period.collection !== undefined && period.state === 'leaving') return null
   if (card.state !== 'answered' || run.answer === null || run.answer.cardRevision !== card.revision) return null
@@ -244,7 +257,8 @@ export class TelegramGrantCards {
           card = { periodId: period.periodId, runId: run.runId, messageId: run.phone.messageId, revision: run.phone.cardRevision, view: { step: null }, tokens: [], note: null, ended: null }
           this.drawn.set(at, card)
         }
-        if ((run.card.state === 'open' || read.record.version === 2 && period.state === 'leaving' && run.card.state === 'answered') && isOpenPeriod(period)) {
+        const ongoing = run.card.terms.some(term => term.kind === 'access' || term.kind === 'limit')
+        if ((run.card.state === 'open' || read.record.version === 2 && run.card.state === 'answered' && (period.state === 'leaving' || ongoing)) && isOpenPeriod(period)) {
           if (card === undefined) {
             if (this.maySend(period, run)) await this.send(connector, period, run)
           } else if (card.revision !== run.card.revision) {
@@ -253,9 +267,12 @@ export class TelegramGrantCards {
             card.view = { step: null }
             this.retire(card)
             await this.draw(connector, card)
-          } else if (card.tokens.length === 0 || read.record.version === 2 && card.saved !== `${read.record.revision}:${JSON.stringify(run.answer)}`) {
+          } else if (card.tokens.length === 0 || read.record.version === 2 && card.saved !== this.signature(read.record.revision, run)) {
             await this.draw(connector, card)
           }
+        } else if (card === undefined && run.card.state === 'nothing' && run.card.nothingReason !== undefined &&
+          isOpenPeriod(period) && this.maySend(period, run)) {
+          await this.sendNothing(connector, period, run)
         } else if (card !== undefined) {
           await this.end(connector, card, period, run)
         }
@@ -301,7 +318,12 @@ export class TelegramGrantCards {
     if (card.revision !== run.card.revision) { card.revision = run.card.revision; card.view = { step: null }; card.note = this.changedNote(run, false) }
     const terms = run.card.terms
     const offer = period === undefined ? null : grantReoffer(read.record, period, run)
-    const frozen = (term: GrantTerm): boolean => v2 && period?.state !== 'leaving' && run.answer?.cardRevision === run.card.revision && grantChoice(run.answer.choices, term.id) !== undefined
+    const frozen = (term: GrantTerm): boolean => {
+      if (term.kind === 'access') return !grantAccessStatus(run, term.id, this.deps.now()).canCheck
+      if (term.kind === 'limit' && period?.limitApplies?.some(entry => entry.runId === run.runId && entry.item === term.id &&
+        entry.cardRevision === run.card.revision && entry.state !== 'failed')) return true
+      return v2 && period?.state !== 'leaving' && run.answer?.cardRevision === run.card.revision && grantChoice(run.answer.choices, term.id) !== undefined
+    }
     if (card.view.step !== null && frozen(terms[card.view.step]!)) {
       const next = terms.findIndex((term, index) => index > card.view.step! && !frozen(term))
       card.view = next < 0 ? { step: null } : { step: next, picks: {} }
@@ -315,6 +337,7 @@ export class TelegramGrantCards {
     }
     const choices = (term: GrantTerm, marked: GrantChoice | undefined, act: (choice: GrantChoice) => Action): InlineKeyboard => {
       if (frozen(term)) return []
+      if (term.kind === 'access') return [[button(grantAccessStatus(run, term.id, this.deps.now()).button, act('done'))]]
       const list = grantTermChoices(term).map((choice) => button(`${choice === marked ? '● ' : ''}${grantChoiceLabel(term, choice)}`, act(choice)))
       return term.kind === 'merge' && list.length > 2 ? list.map((one) => [one]) : rows(list, true)
     }
@@ -325,12 +348,13 @@ export class TelegramGrantCards {
     } else if (card.view.step === null) {
       const openTerms = terms.filter(term => !frozen(term))
       const proposed = v2 ? grantOpenProposals(openTerms, run.answer?.cardRevision === run.card.revision ? run.answer.choices : undefined, offer?.choices)
-        : Object.fromEntries(openTerms.map(term => [term.id, term.proposed]))
+        : grantProposedChoices(openTerms)
       const proposalTerms = openTerms.filter(term => Object.hasOwn(proposed, term.id))
+      const noChoices = grantNoChoices(openTerms)
       keyboard = openTerms.length === 0 ? [] : rows([
         ...(proposalTerms.length === 0 || v2 && grantButtonWords(proposalTerms, proposed) === 'Grant none' ? [] : [button(grantButtonWords(proposalTerms, proposed), { type: 'grant', choices: proposed })]),
         button('Choose…', { type: 'choose' }),
-        button('Grant none', { type: 'grant', choices: grantNoChoices(openTerms) })
+        ...(Object.keys(noChoices).length > 0 ? [button('Grant none', { type: 'grant', choices: noChoices })] : [])
       ], false)
     } else {
       const step = card.view.step
@@ -338,8 +362,23 @@ export class TelegramGrantCards {
       keyboard = [...choices(term, run.answer?.cardRevision === run.card.revision ? grantChoice(run.answer.choices, term.id) : v2 ? undefined : grantChoice(card.view.picks, term.id) ?? term.proposed, (choice) => ({ type: 'pick', step, choice })), [button('‹ Back', { type: 'back', step })]]
     }
     const text = grantCardText({ header: this.deps.header(run), run, view: card.view, note: card.note, now: this.deps.now(), v2,
-      offer })
-    return { text, keyboard, signature: `${read.record.revision}:${JSON.stringify(run.answer)}` }
+      offer, ...(period ? { period } : {}) })
+    return { text, keyboard, signature: this.signature(read.record.revision, run) }
+  }
+
+  private signature(revision: number, run: GrantRun): string {
+    const access = (run.access ?? []).map(attempt => grantAccessStatus(run, attempt.item, this.deps.now()).words)
+    return `${revision}:${JSON.stringify(run.answer)}:${JSON.stringify(access)}`
+  }
+
+  private async sendNothing(connector: Connector, period: GrantPeriod, run: GrantRun): Promise<void> {
+    const ending = grantEnding(period, run, this.deps.now())
+    if (ending === null) return
+    const text = `<b>${words(run.title, 120)}</b>\n${escapeHtml(ending)}`
+    const sent = await connector.sendMessage(text, { html: true, keyboard: null })
+    this.drawn.set(key(period.periodId, run.runId), { periodId: period.periodId, runId: run.runId,
+      messageId: sent.messageId, revision: run.card.revision, view: { step: null }, tokens: [], note: null, ended: ending })
+    await this.deps.keep(period.periodId, run.runId, { messageId: sent.messageId, cardRevision: run.card.revision })
   }
 
   private async send(connector: Connector, period: GrantPeriod, run: GrantRun): Promise<void> {
@@ -376,7 +415,7 @@ export class TelegramGrantCards {
     const ending = grantEnding(period, run, this.deps.now())
     if (ending === null || card.ended === ending) return
     this.retire(card, false)
-    const text = grantCardText({ header: this.deps.header(run), run, view: { step: null }, note: null, now: this.deps.now(), ending })
+    const text = grantCardText({ header: this.deps.header(run), run, view: { step: null }, note: null, now: this.deps.now(), ending, period })
     try {
       await connector.editMessageText(card.messageId, text, { html: true, keyboard: null })
       card.ended = ending
@@ -447,7 +486,7 @@ export class TelegramGrantCards {
     const action = entry.action
     const terms = run.card.terms
     if (action.type === 'choose' || action.type === 'back') {
-      const editable = (term: GrantTerm): boolean => entry.recordRevision === undefined || period.state === 'leaving' || run.answer?.cardRevision !== run.card.revision || grantChoice(run.answer.choices, term.id) === undefined
+      const editable = (term: GrantTerm): boolean => term.kind === 'access' ? grantAccessStatus(run, term.id, this.deps.now()).canCheck : entry.recordRevision === undefined || period.state === 'leaving' || run.answer?.cardRevision !== run.card.revision || grantChoice(run.answer.choices, term.id) === undefined
       const step = action.type === 'choose' ? terms.findIndex(editable) : terms.findLastIndex((term, index) => index < action.step && editable(term))
       card.view = step < 0 ? { step: null } : { step, picks: card.view.step === null ? {} : card.view.picks }
       await toast(card.view.step === null ? '' : `${card.view.step + 1} of ${terms.length}`)
@@ -482,14 +521,15 @@ export class TelegramGrantCards {
         ...(fence.generation === undefined ? {} : { expectedGeneration: fence.generation }) })
     } catch { /* said below as could not save */ }
     if (result !== null && (result.outcome === 'granted' || result.outcome === 'repeated')) {
-      await toast(Object.values(choices).every(isNo) ? 'Granted none.' : 'Granted.')
+      const access = Object.values(choices).includes('done')
+      await toast(access ? 'Check requested.' : Object.values(choices).every(isNo) ? 'Granted none.' : 'Granted.')
       const now = this.current(key(card.periodId, card.runId))
       if (now !== null) {
         if (advanceFrom !== undefined) {
           const next = now.run.card.terms.findIndex((term, index) => index > advanceFrom && (now.period.state === 'leaving' || now.run.answer?.cardRevision !== now.run.card.revision || grantChoice(now.run.answer.choices, term.id) === undefined))
           card.view = next < 0 ? { step: null } : { step: next, picks: {} }
         }
-        if (expectedRevision !== undefined && (now.period.state === 'leaving' || now.run.card.state === 'open')) await this.draw(connector, card)
+        if (expectedRevision !== undefined && (now.period.state === 'leaving' || now.run.card.state === 'open' || access)) await this.draw(connector, card)
         else await this.end(connector, card, now.period, now.run)
       }
       return

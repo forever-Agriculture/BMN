@@ -1,12 +1,18 @@
 // MODULE: grant-cli.mjs - `bmn grant`: a run's card before the owner leaves, the grant he answered, each use of it, and what each step did (Epic 84, Stories 84.3, 84.7)
 //
+import { resolve } from 'node:path'
+
 // Everything is decided in BMN through the control socket: the card is checked there, only the owner's own surfaces
 // answer it (no token reaching the socket can), and the grant read here is read fresh each time, never from a handoff.
 
 const GRANT_USAGE = `Usage: bmn grant [--run ID] [--json]
+       bmn grant facts --run ID --epic N [--project P] [--json]
        bmn grant ask --run ID --card-file - [--key K] [--json]
-       bmn grant ask --run ID --nothing [--title T] [--scope S] [--key K] [--json]
+       bmn grant ask --run ID --nothing --reason T [--despite FACT]... [--title T] [--scope S] [--key K] [--json]
+       bmn grant apply --run ID --use-id U --item I [--json]
        bmn grant use --run ID --use-id U (--boundary B | --item I) [--json]
+       bmn grant report --run ID --item I --access works|fails [--cause CAUSE] [--attempt A] [--json]
+       bmn grant report --run ID --stopped --cause CAUSE --text T [--json]
        bmn grant report --run ID (--period P --use-id U --result R | --boundary B --step-back | --item I) [--text T] [--json]
 
 The Away grant (Epic 84). Before the owner leaves (BMN tells your session he is leaving or away), a
@@ -16,6 +22,7 @@ every grant ends when he is back.
 
 grant        The run's grant in force, or "No grant" and why. Read it right before each step that
              uses it; a grant never comes from a handoff. Without --run: the runs this session asked.
+grant facts  Checked run limits, open pull requests, push policy and Prepared needs. An unreadable part is unknown.
 grant ask    The run's card for this departure, as JSON on standard input, for example:
                {"title": "Epic 80 · clean up ai slop", "scope": "Stories 80.2-80.6, then Epic 81",
                 "terms": [
@@ -41,8 +48,9 @@ grant ask    The run's card for this departure, as JSON on standard input, for e
              who gets it and the whole text, sent once; text you do not know yet goes as a draft on a
              bmn ask card. The card shows both whole. Ask only what the remaining work needs, each term with its reason. Asking
              again with other terms makes a new revision; his earlier answer holds until he answers
-             it. --nothing says the run needs nothing. Never on a card: force pushes, deletions,
+             it. --nothing needs a reason. Name each conflicting fact with --despite using its id from grant facts. Never on a card: force pushes, deletions,
              releases, publishes, killing BMN, credentials and acceptance changes.
+grant apply  Writes the approved limit and ceiling to the plan's allowance file, once under that use id.
 grant use    Records one extra round at a boundary (--boundary) or one use of a granted item
              (--item), before the step runs, and prints the period it is recorded in: keep it with
              the use for its report. For a command or a message it prints the exact text to run or
@@ -50,7 +58,9 @@ grant use    Records one extra round at a boundary (--boundary) or one use of a 
              returns the first record, so a retry after an
              uncertain outcome reuses it; once his answer has changed, or after he is back, a retried
              action waits. A refused use means the step waits.
-grant report Tells BMN what happened, for his morning summary; it grants nothing. --period with
+grant report Tells BMN what happened, for his morning summary; it grants nothing. --stopped marks
+             unfinished work while Away. CAUSE is limit:NAME, action:merge|push|pr|command|message,
+             access, decision, prompt or other. --period with
              --use-id and --result (the period grant use printed, also after Back): a round passed,
              failed or blocked (parked BLOCKED), an action done or
              refused (by GitHub or a guard; --text says why), or uncertain while you read the
@@ -62,7 +72,7 @@ grant report Tells BMN what happened, for his morning summary; it grants nothing
 Exit 0 printed or recorded, 1 refused or BMN unreachable (then nothing is granted), 2 usage.`
 
 const CARD_LIMIT_BYTES = 32_768
-const VALUE_OPTIONS = new Set(['--run', '--card-file', '--key', '--title', '--scope', '--period', '--use-id', '--boundary', '--item', '--result', '--text', '--socket', '--token-file'])
+const VALUE_OPTIONS = new Set(['--run', '--epic', '--project', '--reason', '--despite', '--card-file', '--key', '--title', '--scope', '--period', '--use-id', '--boundary', '--item', '--result', '--cause', '--access', '--attempt', '--text', '--socket', '--token-file'])
 
 function usage(message) {
   process.stderr.write(`bmn: ${message}\n${GRANT_USAGE}\n`)
@@ -118,31 +128,46 @@ function describeUse(result, use) {
   return line
 }
 
+function describeFacts(result) {
+  const lines = [result.plan.reason ?? `Recorded go for Epic ${result.plan.epic}`]
+  for (const limit of result.plan.limits) {
+    lines.push(`${limit.name}: ${limit.used ?? 'unknown'} of ${limit.value} used, ${limit.left ?? 'unknown'} left; ${limit.ceiling === null ? 'no ceiling' : `ceiling ${limit.ceiling}`}${limit.mayRaise ? '; may still raise within the ceiling' : ''}`)
+  }
+  for (const need of result.plan.prepared) lines.push(`Prepared: ${need.target ?? need.kind} (checked ${need.checked ?? 'unknown'})`)
+  if (result.pullRequests.reason) lines.push(result.pullRequests.reason)
+  for (const pr of result.pullRequests.items) lines.push(`${pr.repository} #${pr.number} at ${pr.headSha} into ${pr.base}: required checks ${pr.checks}; policy ${pr.policy ?? 'unknown'}`)
+  for (const fact of result.conflicts) lines.push(`${fact.id} · ${fact.words}`)
+  return lines.join('\n')
+}
+
 function describeReport(result, runId) {
   return `Kept as the agent's report for run ${runId}${result?.outcome === 'repeated' ? ' (already kept; not repeated)' : ''}; it grants nothing.`
 }
 
 /** `bmn grant …`. */
 export async function runGrantCommand(argv, { readCredentials, call }) {
-  const action = argv[0] === 'ask' || argv[0] === 'use' || argv[0] === 'report' ? argv[0] : null
+  const action = ['ask', 'use', 'report', 'facts', 'apply'].includes(argv[0]) ? argv[0] : null
   const words = action === null ? argv : argv.slice(1)
   const options = {}
   const credentials = {}
+  const despite = []
   for (let index = 0; index < words.length; index += 1) {
     const word = words[index]
     if (word === '--help' || word === '-h') { process.stdout.write(`${GRANT_USAGE}\n`); return 0 }
-    if (word === '--json' || word === '--nothing' || word === '--step-back') { options[word.slice(2)] = true; continue }
+    if (word === '--json' || word === '--nothing' || word === '--step-back' || word === '--stopped') { options[word.slice(2)] = true; continue }
     if (word === '--owner') { credentials.owner = true; continue }
     if (!VALUE_OPTIONS.has(word)) return usage(`grant${action === null ? '' : ` ${action}`} does not accept ${word.slice(0, 40)}`)
     const value = words[index + 1]
     if (value === undefined || (value.startsWith('--') && value !== '-')) return usage(`${word} needs a value`)
     if (word === '--socket' || word === '--token-file') credentials[word.slice(2)] = value
+    else if (word === '--despite') despite.push(value)
     else options[word.slice(2)] = value
     index += 1
   }
-  const allowed = action === 'ask' ? ['run', 'card-file', 'key', 'title', 'scope', 'nothing', 'json']
-    : action === 'use' ? ['run', 'use-id', 'boundary', 'item', 'json']
-      : action === 'report' ? ['run', 'period', 'use-id', 'result', 'boundary', 'step-back', 'item', 'text', 'json'] : ['run', 'json']
+  const allowed = action === 'ask' ? ['run', 'card-file', 'key', 'title', 'scope', 'nothing', 'reason', 'json']
+    : action === 'apply' ? ['run', 'use-id', 'item', 'json'] : action === 'use' ? ['run', 'use-id', 'boundary', 'item', 'json']
+      : action === 'report' ? ['run', 'period', 'use-id', 'result', 'boundary', 'step-back', 'stopped', 'cause', 'access', 'attempt', 'item', 'text', 'json'] : action === 'facts' ? ['run', 'epic', 'project', 'json'] : ['run', 'json']
+  if (despite.length > 0 && (action !== 'ask' || options.nothing !== true)) return usage('--despite goes with --nothing')
   const stray = Object.keys(options).find((name) => !allowed.includes(name))
   if (stray !== undefined) return usage(`grant${action === null ? '' : ` ${action}`} does not take --${stray}`)
   let method
@@ -151,7 +176,8 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
     if (options.run === undefined) return usage('grant ask needs --run, your run\'s id')
     if ((options['card-file'] === undefined) === (options.nothing !== true)) return usage('grant ask takes either --card-file - or --nothing')
     if (options['card-file'] !== undefined && options['card-file'] !== '-') return usage('--card-file takes - (pipe the card as JSON)')
-    if (options.nothing !== true && (options.title !== undefined || options.scope !== undefined)) return usage('--title and --scope go with --nothing; a card carries its own')
+    if (options.nothing !== true && (options.title !== undefined || options.scope !== undefined || options.reason !== undefined)) return usage('--title, --scope and --reason go with --nothing; a card carries its own')
+    if (options.nothing === true && (!options.reason?.trim() || [...options.reason.trim()].length > 300)) return usage('--nothing needs --reason of 1 to 300 characters')
     let card
     try {
       card = options.nothing === true ? { title: options.title ?? options.run, scope: options.scope ?? 'Needs nothing for the night', nothing: true } : await readCard()
@@ -159,7 +185,16 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
       return usage(error.message)
     }
     method = 'grant.ask'
-    params = { runId: options.run, card, ...(options.key === undefined ? {} : { idempotencyKey: options.key }) }
+    params = { runId: options.run, card, ...(options.nothing === true ? { reason: options.reason, despite, callerCwd: process.cwd() } : {}), ...(options.key === undefined ? {} : { idempotencyKey: options.key }) }
+  } else if (action === 'facts') {
+    const epic = Number(options.epic)
+    if (options.run === undefined || !/^[1-9]\d*$/u.test(options.epic ?? '') || !Number.isSafeInteger(epic)) return usage('grant facts needs --run and a positive --epic number')
+    method = 'grant.facts'
+    params = { runId: options.run, epic, callerCwd: process.cwd(), ...(options.project === undefined ? {} : { project: resolve(options.project) }) }
+  } else if (action === 'apply') {
+    if (!options.run || !options['use-id'] || !options.item) return usage('grant apply needs --run, --use-id and --item')
+    method = 'grant.apply'
+    params = { runId: options.run, useId: options['use-id'], item: options.item }
   } else if (action === 'use') {
     if (options.run === undefined || options['use-id'] === undefined) return usage('grant use needs --run and --use-id')
     if ((options.boundary === undefined) === (options.item === undefined)) return usage('grant use takes either --boundary (a round) or --item')
@@ -167,14 +202,25 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
     params = { runId: options.run, useId: options['use-id'], ...(options.boundary === undefined ? {} : { boundary: options.boundary }), ...(options.item === undefined ? {} : { item: options.item }) }
   } else if (action === 'report') {
     if (options.run === undefined) return usage('grant report needs --run')
-    const forms = [options['use-id'] !== undefined, options['step-back'] === true, options['use-id'] === undefined && options['step-back'] !== true && options.item !== undefined]
+    const forms = [options['use-id'] !== undefined, options['step-back'] === true, options.stopped === true,
+      options['use-id'] === undefined && options['step-back'] !== true && options.item !== undefined]
     if (forms.filter(Boolean).length !== 1) return usage('grant report takes --use-id with --result, --boundary with --step-back, or --item')
     if ((options['use-id'] !== undefined) !== (options.result !== undefined)) return usage('--result goes with --use-id')
     if ((options['use-id'] !== undefined) !== (options.period !== undefined)) return usage('--period (the period grant use printed) goes with --use-id')
     if (options['step-back'] === true && options.boundary === undefined) return usage('--step-back needs --boundary')
+    if (options.stopped === true && (!/^(?:limit:[a-z][a-z0-9_]{0,39}|action:(?:merge|push|pr|command|message)|access|decision|prompt|other)$/u.test(options.cause ?? '') || !options.text?.trim())) return usage('--stopped takes a fixed --cause and --text')
+    if (options.access !== undefined && (!options.item || options.text !== undefined ||
+      !(options.access === 'works' && options.cause === undefined ||
+        options.access === 'fails' && ['not-signed-in', 'expired', 'no-access', 'network', 'other'].includes(options.cause)))) {
+      return usage('An access report takes an item and works, or fails with a fixed cause. No check output is accepted.')
+    }
+    if (options.cause !== undefined && options.stopped !== true && options.access === undefined) return usage('--cause goes with --stopped or --access')
     method = 'grant.report'
     params = {
       runId: options.run,
+      ...(options.stopped === true ? { stopped: true, cause: options.cause } : {}),
+      ...(options.access === undefined ? {} : { access: options.access, ...(options.cause === undefined ? {} : { cause: options.cause }),
+        ...(options.attempt === undefined ? {} : { attempt: options.attempt }) }),
       ...(options['use-id'] === undefined ? {} : { periodId: options.period, useId: options['use-id'], result: options.result }),
       ...(options['step-back'] === true ? { stepBack: true, boundary: options.boundary } : {}),
       ...(options.item === undefined ? {} : { item: options.item }),
@@ -188,14 +234,14 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
   let result
   try {
     const { socketPath, token } = readCredentials(credentials)
-    result = await call(socketPath, token, method, params)
+    result = await call(socketPath, token, method, params, method === 'grant.apply' ? 45_000 : undefined)
   } catch (error) {
     const words = error instanceof Error ? error.message : String(error)
-    process.stderr.write(`bmn: ${method === 'grant.status' ? `the grant could not be read (${words}); nothing is granted` : words}\n`)
+    process.stderr.write(`bmn: ${method === 'grant.status' ? `the grant could not be read (${words}); nothing is granted` : method === 'grant.facts' ? `the facts could not be read (${words}); keep the checks in your run log` : words}\n`)
     return 1
   }
   const text = method === 'grant.ask' ? describeAsk(result) : method === 'grant.use' ? describeUse(result, { runId: options.run, boundary: options.boundary, item: options.item })
-    : method === 'grant.report' ? describeReport(result, options.run) : describeStatus(result, options.run)
+    : method === 'grant.apply' ? `Allowance ${result.state}.${result.commit ? ` Recorded in ${result.commit}.` : ''}` : method === 'grant.facts' ? describeFacts(result) : method === 'grant.report' ? describeReport(result, options.run) : describeStatus(result, options.run)
   process.stdout.write(`${options.json ? JSON.stringify(result, null, 2) : text}\n`)
   return 0
 }

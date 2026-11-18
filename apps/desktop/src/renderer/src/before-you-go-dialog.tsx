@@ -1,7 +1,7 @@
 // MODULE: before-you-go-dialog.tsx - the departure list: passive first focus, immediate line saves and one explicit Go
 import { useLayoutEffect, useRef, useState } from 'react'
 import {
-  awayMomentWords, departureCounts, departureOmittedLines, departureSessionState, grantChoice, GRANT_RULE_LINE, grantAnswerWords, grantCardHasRuleLine, grantChoiceLabel,
+  awayMomentWords, departureCounts, departureOmittedLines, departureSessionState, grantChoice, GRANT_RULE_LINE, grantAnswerWords, grantNothingWords, grantAccessStatus, grantLimitWords, grantCardHasRuleLine, grantChoiceLabel,
   grantOpenProposals, grantProposedPrefix, grantRefusalWords, grantTermChoices, grantTermLabel,
   type GrantChoice, type GrantRefusalReason, type GrantRun, type OwnerGrantView
 } from '@bmn/protocol'
@@ -71,16 +71,23 @@ function GrantCard(props: {
       const prior = grantChoice(offer?.choices, term.id)
       const reason = picked !== undefined ? term.reason : prior === undefined ? `${grantProposedPrefix(term)}${term.reason}`
         : `As you granted ${awayMomentWords(offer!.at, props.now)} · ${grantChoiceLabel(term, prior)} · not granted until your tap`
-      const disabled = held || saving || card.state === 'withdrawn' || !editable && picked !== undefined
+      const limitState = term.kind === 'limit' ? period.limitApplies?.findLast(entry =>
+        entry.runId === run.runId && entry.item === term.id && entry.cardRevision === card.revision) : undefined
+      const disabled = held || saving || card.state === 'withdrawn' || !editable && picked !== undefined ||
+        limitState?.state === 'written' || limitState?.state === 'writing'
+      const access = term.kind === 'access' ? grantAccessStatus(run, term.id, props.now) : null
       return <div className="grant-term" key={term.id}>
         <div className="grant-term-words">
-          <span id={id} className={`grant-term-label${term.kind === 'command' || term.kind === 'message' ? ' exact' : ''}`}>{grantTermLabel(term)}</span>
+          <span id={id} className={`grant-term-label${term.kind === 'command' || term.kind === 'message' || term.kind === 'access' ? ' exact' : ''}`}>{grantTermLabel(term)}</span>
+          {term.kind === 'access' ? <button type="button" className="grant-copy" onClick={() => void navigator.clipboard.writeText(term.command)}>Copy command</button> : null}
           <span className="grant-term-reason" title={reason}>{reason}{picked === undefined && offer?.changed.includes(term.id) ? ' · changed' : ''}</span>
         </div>
-        <Segmented labelledBy={id} fit manualActivation again options={grantTermChoices(term)} value={picked ?? null}
+        {access ? <button type="button" disabled={held || saving || card.state === 'withdrawn' || props.unreadable || !access.canCheck}
+          onClick={() => void send({ [term.id]: 'done' }, term.id)}>{access.button}</button>
+          : <Segmented labelledBy={id} fit manualActivation again options={grantTermChoices(term)} value={picked ?? null}
           disabled={disabled} unavailable={props.unreadable} optionLabel={choice => choice === null ? '' : grantChoiceLabel(term, choice)}
-          onChange={choice => { if (choice !== null) void send({ [term.id]: choice }, term.id) }} />
-        <p className="grant-line-seen">{picked === undefined ? 'Not answered' : `${grantChoiceLabel(term, picked)} · answered ${(answer?.lines?.[term.id]?.via ?? answer?.via) === 'telegram' ? 'from Telegram' : 'here'} ${awayMomentWords(answer?.lines?.[term.id]?.at ?? answer!.at, props.now)}`}</p>
+          onChange={choice => { if (choice !== null) void send({ [term.id]: choice }, term.id) }} />}
+        <p className="grant-line-seen">{access ? access.words : term.kind === 'limit' ? grantLimitWords(period, run, term, props.now) : picked === undefined ? 'Not answered' : `${grantChoiceLabel(term, picked)} · answered ${(answer?.lines?.[term.id]?.via ?? answer?.via) === 'telegram' ? 'from Telegram' : 'here'} ${awayMomentWords(answer?.lines?.[term.id]?.at ?? answer!.at, props.now)}`}</p>
       </div>
     })}</div>
     {grantCardHasRuleLine(card.terms) ? <p className="grant-rule">{GRANT_RULE_LINE}</p> : null}
@@ -142,9 +149,9 @@ export function BeforeYouGoDialog(props: {
           const row = departureSessionState(period!, session, props.now)
           const words = row.state === 'nothing' ? 'needs nothing' : row.state === 'no-answer' ? 'no answer' : row.state === 'not-told' ? 'not told'
             : row.state === 'not-selected' ? 'not asked' : 'asking'
-          return <div className="grant-session-row" data-state={row.state} key={session.sessionId}><span>{session.name}</span><span>{words}{row.reason ? `: ${row.reason}` : ''}</span></div>
+          return <div className="grant-session-row" data-state={row.state} data-contradicted={row.runs.some(run => (run.card.despiteFacts?.length ?? 0) > 0) || undefined} key={session.sessionId}><span>{session.name}</span><span>{words}{row.reason ? `: ${row.reason}` : ''}</span></div>
         })}
-        {runs.filter(run => run.card.nothing && !(period?.collection?.sessions ?? []).some(session => session.sessionId === run.card.sessionId)).map(run => <p className="grant-nothing" key={run.runId}>{run.title} needs nothing: {run.card.scope}</p>)}
+        {runs.filter(run => run.card.nothing && !(period?.collection?.sessions ?? []).some(session => session.sessionId === run.card.sessionId)).map(run => <p className="grant-nothing" key={run.runId}>{run.title} needs nothing: {grantNothingWords(run.card)}</p>)}
         {runs.filter(run => run.card.nothing && run.answer !== null && (period?.state === 'leaving' || period?.state === 'away')).map(run => {
           const granted = grantAnswerWords(run.answer!.terms, run.answer!.choices).granted
           return granted.length > 0 ? <p className="grant-answered" key={`prior-${run.runId}`}>{run.title}: Earlier answer still holds: {granted.join(' · ')}. A new answer replaces it.</p> : null

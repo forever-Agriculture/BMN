@@ -232,7 +232,11 @@ enforces the policy: GitHub's repository rules and the hook's deny-only command 
 `night-grant-v1`, uses a v2 envelope and keeps the current and previous departure: its state (leaving, away, ended or cancelled), each
 stored automatic-Away deadline, selected sessions, told/not-told delivery and its proof claim, phone head receipt, private departure note, and each run's latest card. It keeps prior granted lines as 12-hour proposals with no authority before a new answer. All owner actions are fenced in the same worker transaction: line answers on the card revision, Go, Not leaving, Away and Back on the generation, the period and its state, so BMN's own bookkeeping never makes them stale. It also holds the owner's answer bound to the card revision and terms he saw (his earlier answers that period
 kept as history), each use with the revision it was used under, each refusal BMN made (of a use or of his answer;
-after Back too, with the period that ended) and each agent report of a step's outcome. The rounds of a departure no
+after Back too, with the period that ended) and each agent report of a step's outcome. Limit and login lines carry no ordinary action grant.
+A limit write journals the pinned plan go, recorded allowance commit, file token, card revision and owner's answer in
+the worker before the plan writer runs. The per-plan lock also covers recovery from committed history after a restart.
+An access attempt retains its claim and fixed result, with no execution in BMN. The night account computes rest from
+the last finished turn and the retained process and wake history, and reads stop reports as the agent's explanation. The rounds of a departure no
 longer kept are carried as counts per run and boundary, never dropped. It changes in the
 same database-worker transaction as `owner-away-v1`, whose shape is unchanged: a departure made by `bmn away
 --leaving` creates the period id that Away then carries, and Back ends the period. Agents ask and read through the

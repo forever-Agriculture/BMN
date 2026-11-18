@@ -3,6 +3,7 @@ import { awayMomentWords } from './away'
 import { pad } from './shared-helpers'
 import {
   grantChoice,
+  isGrantAction,
   grantShortName,
   grantTermLabel,
   type GrantActionTerm,
@@ -50,7 +51,7 @@ function grantedWords(term: GrantTerm, choice: GrantChoice): string {
       : `Merge PR ${term.pr} in ${term.repository}${term.headSha === null ? '' : ` at ${term.headSha.slice(0, 7)}`}`
   }
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}${term.count > 1 ? `, up to ${term.count}` : ''}`
-  if (term.kind === 'command' || term.kind === 'message') return grantTermLabel(term)
+  if (term.kind === 'command' || term.kind === 'message' || term.kind === 'access' || term.kind === 'limit') return grantTermLabel(term)
   return `${grantTermLabel(term)}${term.count > 1 ? `, up to ${term.count}` : ''}`
 }
 
@@ -110,7 +111,7 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   const answers: GrantAnswer[] = [...run.earlier, ...(run.answer === null ? [] : [run.answer])]
   const answer = run.answer
   const roundsOf = (given: GrantAnswer): number => given.terms.some((term) => term.kind === 'rounds') && typeof given.choices.rounds === 'number' ? given.choices.rounds : 0
-  const itemsOf = (given: GrantAnswer): GrantActionTerm[] => given.terms.filter((term): term is GrantActionTerm => term.kind !== 'rounds' && !isNo(grantChoice(given.choices, term.id)))
+  const itemsOf = (given: GrantAnswer): GrantActionTerm[] => given.terms.filter((term): term is GrantActionTerm => isGrantAction(term) && !isNo(grantChoice(given.choices, term.id)))
   const grants = (given: GrantAnswer): boolean => roundsOf(given) > 0 || itemsOf(given).length > 0
   const terms = answer?.terms ?? run.card.terms
   const choices = answer?.choices ?? {}
@@ -122,10 +123,17 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   const uses = period.uses.filter((use) => use.runId === run.runId)
   const reports = period.reports.filter((report) => report.runId === run.runId)
   const refusals = period.refusals.filter((refusal) => refusal.runId === run.runId)
+  if (period.awayAt !== null) {
+    for (const term of run.card.terms) {
+      if (term.kind === 'access' && !run.access?.some(attempt => attempt.item === term.id && (attempt.firstAt ?? attempt.at) <= period.awayAt!)) {
+        add('Login waiting', term.name, AWAY_GRANT_RECORD)
+      }
+    }
+  }
   const answerFor = (revision: number | undefined): GrantAnswer | undefined => answers.find((given) => given.cardRevision === revision)
   const termOf = (id: string | null, revision?: number): GrantActionTerm | undefined =>
     [answerFor(revision)?.terms ?? [], terms, ...answers.map((given) => given.terms).reverse()].flat()
-      .find((term): term is GrantActionTerm => term.kind !== 'rounds' && term.id === id)
+      .find((term): term is GrantActionTerm => isGrantAction(term) && term.id === id)
   const choiceOf = (id: string | null, revision?: number): GrantChoice | undefined => id === null ? undefined : grantChoice((answerFor(revision) ?? answer)?.choices, id)
 
   // Granted, or why nothing was: each answer with when and where, or the card's state.

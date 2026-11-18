@@ -62,7 +62,7 @@ async function signedInAccounts(env) {
  * signed-in account in turn: a repository only a second account can see is still read. A token goes only into that one
  * child's environment and is never printed.
  */
-async function githubFacts(repository) {
+export async function githubFacts(repository) {
   const env = { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1' }
   const view = async (token) => {
     const { stdout } = await execFileAsync('gh', ['repo', 'view', repository, '--json', 'owner,defaultBranchRef,name'], {
@@ -96,7 +96,7 @@ function mayWords(level, branch) {
 }
 
 /** The policy for one repository: its level, and whether the policy authorizes anything there and why not. */
-function repositoryVerdict(status, asked, facts) {
+export function repositoryVerdict(status, asked, facts) {
   if ('unread' in facts) {
     return { repository: asked, owner: null, defaultBranch: null, level: 'prs-only', authorizes: false, why: facts.unread }
   }

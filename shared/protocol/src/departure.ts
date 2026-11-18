@@ -1,5 +1,5 @@
 // MODULE: departure.ts - bounded departure selection, delivery facts and the shared list shown in BMN and Telegram
-import { grantChoice, type GrantPeriod, type GrantRun } from './grant'
+import { grantChoice, grantNothingWords, type GrantPeriod, type GrantRun } from './grant'
 import type { OwnerGrantView } from './grant'
 import type { OwnerAwayView } from './away'
 import { isIso } from './shared-helpers'
@@ -8,7 +8,7 @@ export const DEPARTURE_ANSWER_MS = 3 * 60_000
 export const DEPARTURE_AUTO_MS = 10 * 60_000
 export const DEPARTURE_RECENT_MS = 12 * 60 * 60_000
 export const DEPARTURE_QUIET_MS = 20_000
-export const DEPARTURE_LINE = 'BMN: the owner is getting ready to leave. If work he authorised is unfinished, answer now with bmn grant ask: your list, or --nothing. This is not the owner: it grants nothing and lifts no stop.'
+export const DEPARTURE_LINE = 'BMN: the owner is getting ready to leave. If work he authorised is unfinished, answer now with bmn grant ask: your list, or --nothing --reason. This is not the owner: it grants nothing and lifts no stop.'
 
 export interface OwnerDepartureInput {
   action: 'start' | 'go' | 'cancel' | 'open' | 'presented' | 'same'
@@ -131,7 +131,7 @@ export type DepartureRowState = 'asking' | 'list' | 'nothing' | 'no-answer' | 'n
 export function departureSessionState(period: GrantPeriod, session: DepartureSession, now: Date): { state: DepartureRowState; runs: GrantRun[]; reason: string | null } {
   const runs = period.runs.filter(run => run.card.sessionId === session.sessionId)
   if (runs.some(run => !run.card.nothing)) return { state: 'list', runs, reason: null }
-  if (runs.length > 0) return { state: 'nothing', runs, reason: runs.map(run => run.card.scope).join(' · ') }
+  if (runs.length > 0) return { state: 'nothing', runs, reason: runs.map(run => grantNothingWords(run.card)).join(' · ') }
   if (!session.selected) return { state: 'not-selected', runs, reason: session.reason }
   if (session.toldAt !== null) return { state: now.getTime() - Date.parse(session.toldAt) < DEPARTURE_ANSWER_MS ? 'asking' : 'no-answer', runs, reason: null }
   if (now.getTime() - Date.parse(session.selectedAt) < DEPARTURE_ANSWER_MS) return { state: 'asking', runs, reason: session.reason }
@@ -143,6 +143,6 @@ export function departureCounts(period: GrantPeriod, now: Date): { asked: number
   return { asked: sessions.filter(session => session.selected).length,
     asking: sessions.filter(session => departureSessionState(period, session, now).state === 'asking').length,
     notTold: sessions.filter(session => ['not-told', 'not-selected'].includes(departureSessionState(period, session, now).state)).length,
-    lines: period.runs.reduce((count, run) => count + (run.card.state === 'withdrawn' ? 0 : run.card.terms.filter(term =>
+    lines: period.runs.reduce((count, run) => count + (run.card.state === 'withdrawn' ? 0 : run.card.nothing ? (run.card.despiteFacts?.length ?? 0) : run.card.terms.filter(term =>
       run.answer?.cardRevision !== run.card.revision || grantChoice(run.answer.choices, term.id) === undefined).length), 0) }
 }

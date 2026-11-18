@@ -3,7 +3,7 @@
 // only a commit written by `bmn plan go` or `bmn plan allow` counts; a hand edit is reported and ignored. An epic with no file reads as before.
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 
@@ -290,10 +290,10 @@ export function allowanceText(planRoot, epic) {
   return name === null ? null : readFileSync(join(planRoot, 'allowances', name), 'utf8')
 }
 
-function gitRun(repo, args, { input, env = {} } = {}) {
+function gitRun(repo, args, { input, env = {}, lockFd } = {}) {
   const inherited = { ...process.env }
   for (const name of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY']) delete inherited[name]
-  const done = spawnSync('git', ['-C', repo, ...args], { input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30_000, env: { ...inherited, LC_ALL: 'C', ...env } })
+  const done = spawnSync('git', ['-C', repo, ...args], { input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30_000, ...(lockFd === undefined ? {} : { stdio: ['pipe', 'pipe', 'pipe', lockFd] }), env: { ...inherited, LC_ALL: 'C', ...env } })
   if (done.error || done.status !== 0) {
     const reason = (done.stderr || done.error?.message || '').trim().split('\n')[0].slice(0, 200)
     throw Object.assign(new Error(`git ${args[0]} failed${reason ? `: ${reason}` : ''}`), { git: true })
@@ -635,29 +635,55 @@ export function compareVersions(before, after, uses = () => false) {
  * ids. One of them that cannot be read, or ids that cannot be confirmed, count as uses of every limit, so a frozen field
  * stays frozen.
  */
-export function ledgerUses(plan, epic, environment = process.env) {
+/** Already-settled and outstanding use of this plan's limits, from the same ledgers as the charged-use guard. */
+export function ledgerLimitUsage(plan, epic, environment = process.env) {
   const folder = ledgerFolder(environment)
-  const counted = new Set()
+  const used = new Map()
   let unreadable = false
   let names
-  // No folder: dev-auto never counted anything here. A folder that cannot be listed may hold uses, so everything freezes.
-  try { names = readdirSync(folder) } catch (error) { return error?.code === 'ENOENT' ? () => false : () => true }
-  // Dev-auto's own ids for this plan; when they cannot be confirmed, nothing is known to be unused.
+  try { names = readdirSync(folder) } catch (error) {
+    return { used, unreadable: error?.code !== 'ENOENT' }
+  }
   let ids
-  try { ids = ledgerIds(plan, epic, folder) } catch { return () => true }
+  try { ids = ledgerIds(plan, epic, folder) } catch { return { used, unreadable: true } }
   const root = realPath(plan.planRoot)
+  function add(limit, boundary, amount) {
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || typeof boundary !== 'string') {
+      unreadable = true
+      return
+    }
+    const limits = used.get(limit) ?? new Map()
+    limits.set(boundary, (limits.get(boundary) ?? 0) + amount)
+    used.set(limit, limits)
+  }
   for (const name of names) {
     if (!ledgerName(epic).test(name)) continue
     const id = name.slice(0, -'.json'.length)
     let data
     try { data = JSON.parse(readFileSync(join(folder, name), 'utf8')) } catch { if (ids.has(id)) unreadable = true; continue }
+    if (!data || typeof data !== 'object') {
+      if (ids.has(id)) unreadable = true
+      continue
+    }
     // Its id, or the folder recorded in it exactly (a ledger opened by an older dev-auto).
-    if (!data || typeof data !== 'object' || !(ids.has(id) || (typeof data.plan_root === 'string' && realPath(data.plan_root) === root))) continue
-    for (const use of Object.values(data.uses ?? {})) if (use?.answer === 'TAKEN' && typeof use.limit === 'string') counted.add(use.limit)
-    if (Object.values(data.rounds ?? {}).some((use) => use?.answer === 'TAKEN')) counted.add('repair_rounds')
-    if (Object.values(data.jobs ?? {}).some((job) => job && !['refused', 'released'].includes(job.state))) counted.add('money_usd')
+    if (!ids.has(id) && !(typeof data.plan_root === 'string' && realPath(data.plan_root) === root)) continue
+    for (const use of Object.values(data.uses ?? {})) {
+      if (use?.answer === 'TAKEN' && typeof use.limit === 'string') add(use.limit, use.boundary, use.amount)
+    }
+    for (const use of Object.values(data.rounds ?? {})) {
+      if (use?.answer === 'TAKEN') add('repair_rounds', use.boundary, 1)
+    }
+    for (const job of Object.values(data.jobs ?? {})) {
+      if (!job || ['released', 'refused'].includes(job.state)) continue
+      add('money_usd', 'epic', job.state === 'settled' ? job.spent : job.max)
+    }
   }
-  return (limit) => unreadable || counted.has(limit)
+  return { used, unreadable }
+}
+
+export function ledgerUses(plan, epic, environment = process.env) {
+  const { used, unreadable } = ledgerLimitUsage(plan, epic, environment)
+  return (limit) => unreadable || used.has(limit)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -787,13 +813,24 @@ function holdFlock(path, waitMs) {
  * Every ledger lock of this epic, held from the scan of its uses until the change is committed (D13), so a use cannot be
  * counted under a limit's old meaning in between. Taken after the board lock; a use never takes the board lock.
  */
-export async function holdLedgers(epic, environment = process.env, waitMs = 10_000) {
+export async function holdLedgers(plan, epic, environment = process.env, waitMs = 10_000) {
   const folder = ledgerFolder(environment)
   let names
-  try { names = readdirSync(folder) } catch (error) { if (error?.code === 'ENOENT') return () => {}; names = [] }
+  try {
+    mkdirSync(folder, { recursive: true })
+    names = readdirSync(folder)
+  } catch { return () => {} } // The usage reader still treats an unreadable directory as used.
+  const ids = ledgerIds(plan, epic, folder)
+  const root = realPath(plan.planRoot)
+  for (const name of names.filter(one => ledgerName(epic).test(one))) {
+    try {
+      const ledger = JSON.parse(readFileSync(join(folder, name), 'utf8'))
+      if (typeof ledger?.plan_root === 'string' && realPath(ledger.plan_root) === root) ids.add(name.slice(0, -5))
+    } catch { /* A matching canonical id is already held, and ledgerLimitUsage still checks whether it is readable. */ }
+  }
   const releases = []
   try {
-    for (const name of names.filter((one) => ledgerName(epic).test(one)).sort()) releases.push(await holdFlock(join(folder, name.replace(/\.json$/u, '.lock')), waitMs))
+    for (const id of [...ids].sort()) releases.push(await holdFlock(join(folder, `${id}.lock`), waitMs))
   } catch (error) { for (const release of releases) release(); throw error }
   return () => { for (const release of releases) release() }
 }
@@ -815,7 +852,14 @@ function atomicWrite(path, text) {
 }
 
 /** Record one or more changes as one commit of the plan's history (110.5). Everything it refuses leaves everything as it was. */
-export async function recordAllow(plan, epic, { changes: words, reason, source, expect, seam = () => {} }) {
+export async function recordAllow(plan, epic, options) {
+  if (typeof options.source === 'string' && options.source.trim().startsWith('night list:')) {
+    throw new AllowRefusal('NIGHT_SOURCE', 'Only a recorded answer in BMN may supply a night-list approval')
+  }
+  return recordAllowInternal(plan, epic, options)
+}
+
+async function recordAllowInternal(plan, epic, { changes: words, reason, source, expect, seam = () => {} }, night) {
   const { lockBoard } = await import('./plan-cli.mjs')
   if (plan.defaultAvailable === false) throw new AllowRefusal('NO_DEFAULT_CHECKOUT', `no checkout holds origin/${plan.defaultBranch ?? '<default>'}; add one with git worktree add`)
   if (plan.format !== 'bmn-plan') throw new AllowRefusal('NEEDS_MOVE', 'an allowances file belongs to a BMN-format plan; move this BMAD plan first (docs/planning.md, "Moving a BMAD plan safely")')
@@ -832,11 +876,14 @@ export async function recordAllow(plan, epic, { changes: words, reason, source, 
   const release = await lockBoard(plan.boardPath)
   let releaseLedgers = () => {}
   try {
-    releaseLedgers = await holdLedgers(epic)
+    releaseLedgers = await holdLedgers(plan, epic)
     const read = await readAllowances(plan, epic)
     if (read.state === 'withdrawn' || read.state === 'conflict') throw new AllowRefusal(read.state.toUpperCase(), read.reason)
     if (read.state !== 'recorded') throw new AllowRefusal('NOT_RECORDED', `epic ${epic}'s go records no allowances file: ${read.reason}`)
     if (read.hand_edit) throw new AllowRefusal('HAND_EDIT', `${read.hand_edit}; put the file back to the last recorded version (sha256:${read.current.sha256.slice(0, 12)}…) first, so an edit cannot ride on a real change`)
+    if (night && (read.go_commit !== night.term.pin.go || read.current.commit !== night.term.pin.commit)) {
+      throw new AllowRefusal('CONFLICT', 'The go or recorded allowance changed after the card was asked; nothing was written')
+    }
     if (expect !== read.token) throw new AllowRefusal('CONFLICT', `the last recorded version or the go changed (token ${read.token}, not ${expect}); read bmn plan allowances ${epic} --json again`)
     let text = read.current.text
     for (const change of changes) text = applyChange(text, change)
@@ -873,7 +920,7 @@ export async function recordAllow(plan, epic, { changes: words, reason, source, 
       const tree = gitRun(repo, ['write-tree'], own).trim()
       created = gitRun(repo, ['commit-tree', tree, '-p', head, '-F', '-'], { input: message }).trim()
       seam('created', created)
-      gitRun(repo, ['update-ref', '-m', `bmn plan allow: epic ${epic}`, branch, created, head])
+      gitRun(repo, ['update-ref', '-m', `bmn plan allow: epic ${epic}`, branch, created, head], { lockFd: night?.lockFd })
     } catch (error) {
       if (error?.git) throw new AllowRefusal('COMMIT_FAILED', `the change could not be committed in ${repo} (${error.message}); nothing changed`)
       throw error
@@ -891,6 +938,53 @@ export async function recordAllow(plan, epic, { changes: words, reason, source, 
     if (back.state !== 'recorded' || back.current.commit !== created) throw new AllowRefusal('READBACK', `commit ${created} does not read back as the recorded version; see git -C ${repo} show ${created.slice(0, 12)}`)
     return { commit: created, changes: compared.changes, token: back.token, repo, needed_words: compared.words, fields: back.current.fields }
   } finally { releaseLedgers(); release() }
+}
+
+/** A writing process and every reconciler take the same lock. Git's ref writer inherits the lock descriptor. */
+export async function withNightAllowanceLock(plan, task) {
+  const { repo } = historyOf(plan)
+  const directory = gitRun(repo, ['rev-parse', '--path-format=absolute', '--git-common-dir']).trim()
+  const fd = openSync(join(directory, 'bmn-night-allowance.lock'), 'a', 0o600)
+  try {
+    const locked = await new Promise(resolve => {
+      const child = spawn('flock', ['--exclusive', '--wait', '3', '3'], { stdio: ['ignore', 'ignore', 'ignore', fd], timeout: 4_000 })
+      child.once('error', () => resolve(false))
+      child.once('exit', code => resolve(code === 0))
+    })
+    if (!locked) throw new AllowRefusal('NIGHT_LOCK', 'Another allowance write is still being resolved; try again')
+    return await task(fd)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+export async function writeNightAllowance(plan, entry, lockFd) {
+  const { term, source } = entry
+  const prefix = `limits.${term.name}`
+  // JSON numeric notation preserves the exact JS value for large amounts.
+  return recordAllowInternal(plan, term.epic, {
+    changes: [`${prefix}.limit=${term.to}`, `${prefix}.ceiling=${term.to}`],
+    reason: term.reason, source, expect: term.pin.token
+  }, { term, lockFd })
+}
+
+/** Find this exact recorded owner act, even after a later go. Repair only a working file still holding its unchanged parent. */
+export async function findNightAllowance(plan, entry) {
+  const { term, source } = entry
+  const result = await readAllowances(plan, term.epic, { at: term.pin.go })
+  if (!Array.isArray(result.changes)) throw new AllowRefusal('NIGHT_HISTORY', 'The plan history could not confirm the allowance write')
+  const change = result.changes.find(candidate => candidate.source === source && candidate.change.some(text =>
+    text === `limits.${term.name}.limit ${term.from} -> ${term.to}`) && candidate.change.some(text =>
+    text.startsWith(`limits.${term.name}.ceiling `) && text.endsWith(` -> ${term.to}`)))
+  if (!change) return null
+  if (change.commit === result.current.commit && result.hand_edit) {
+    const { repo, folder } = historyOf(plan)
+    const path = `${folder}/${result.file.slice(result.file.lastIndexOf('/') + 1)}`
+    const before = showFile(repo, term.pin.commit, path)
+    if (before !== null && existsSync(join(repo, path)) && readFileSync(join(repo, path), 'utf8') === before &&
+      showFile(repo, 'HEAD', path) === result.current.text) atomicWrite(join(repo, path), result.current.text)
+  }
+  return change.commit
 }
 
 /** Rules a plan opts into: stories and criteria of an unfinished epic (110.8, D11). */

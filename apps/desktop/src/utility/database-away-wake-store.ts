@@ -3,11 +3,13 @@ import {
   AWAY_WAKE_LIMITS,
   awayNightAccount,
   type AwayNight,
+  type AwayStopReport,
   type AwayWakeDecision,
   type AwayWakeDecisionRow,
   type AwayWakeReason,
   type AwayWakeTick
 } from '@bmn/protocol'
+import { readGrantRow } from './database-grant-store'
 import type { DatabaseConnection } from './database-initialization'
 
 /**
@@ -47,6 +49,7 @@ export interface AwayNightCall {
   since: string
   until: string
   everyMs: number
+  hostStartedAt?: string
 }
 
 /**
@@ -80,7 +83,35 @@ export function awayNightData(database: DatabaseConnection, call: AwayNightCall)
   for (const row of rows) perSession.set(row.session_id, (perSession.get(row.session_id) ?? 0) + 1)
   // A bound reached may have dropped older rows: the account says so rather than reading them as never decided.
   const complete = rows.length < AWAY_WAKE_LIMITS.perPeriod && [...perSession.values()].every((count) => count < AWAY_WAKE_LIMITS.perSession)
-  return awayNightAccount({ ...call, ticks, decisions, sessions: sessions.map((row) => ({ sessionId: row.session_id, app: row.app })), complete })
+  const grant = readGrantRow(database)
+  const period = grant.state === 'read' ? grant.record.periods.find(item => item.periodId === call.periodId) : undefined
+  const reports = new Map<string, AwayStopReport>()
+  for (const report of period?.reports ?? []) {
+    if (report.kind !== 'stopped' || report.cause === undefined || report.at < call.since || report.at > call.until) continue
+    reports.set(report.sessionId, { runId: report.runId, cause: report.cause, at: report.at, text: report.text })
+    if (!sessions.some(session => session.session_id === report.sessionId)) sessions.push({ session_id: report.sessionId, app: null })
+  }
+  const night = awayNightAccount({ ...call, ticks, decisions, sessions: sessions.map((row) => ({ sessionId: row.session_id, app: row.app })), complete })
+  const lastTurn = database.prepare(`SELECT started_at, ended_at, end_kind, incarnation_id FROM turn_record
+    WHERE session_id = ? AND started_at < ? ORDER BY started_at DESC, number DESC LIMIT 1`)
+  const changedProcess = database.prepare(`SELECT 1 FROM process_incarnation WHERE session_id = ?
+    AND (started_at > ? AND started_at < ? OR incarnation_id = ? AND exited_at > ? AND exited_at < ?) LIMIT 1`)
+  const hostStarts = [...ticks.map(tick => tick.processStartedAt), ...(call.hostStartedAt === undefined ? [] : [call.hostStartedAt])]
+  for (const session of [...night.woken, ...night.skipped, ...night.missed, ...night.unknown]) {
+    const turn = lastTurn.get(session.sessionId, call.until) as {
+      started_at: string; ended_at: string | null; end_kind: string | null; incarnation_id: string | null
+    } | undefined
+    const reported = reports.get(session.sessionId)
+    session.stopReport = reported !== undefined && (turn === undefined || reported.at >= turn.started_at) ? reported : null
+    const finished = turn?.end_kind === 'finished' && turn.ended_at !== null && turn.ended_at <= call.until ? turn.ended_at : null
+    const interrupted = finished === null || hostStarts.some(at => at > finished && at < call.until) ||
+      changedProcess.get(session.sessionId, finished, call.until, turn?.incarnation_id ?? null, finished, call.until) !== undefined ||
+      (session.at !== null && session.at > finished && night.woken.includes(session))
+    const restedFrom = interrupted || finished === null ? null : finished < call.since ? call.since : finished
+    session.restedFrom = restedFrom
+    session.restedMs = restedFrom === null ? null : Date.parse(call.until) - Date.parse(restedFrom)
+  }
+  return night
 }
 
 export const AWAY_WAKE_OPERATIONS = Object.freeze({ recordAwayWake, awayNightData })

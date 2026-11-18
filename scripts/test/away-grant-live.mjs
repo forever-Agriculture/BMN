@@ -13,6 +13,7 @@ import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 import { testedApp } from '../lib/tested-app.mjs'
 import { processTree, stopTree } from './away-skills-processes.mjs'
+import { seedNightPlan } from './night-grant-fixture.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
@@ -142,7 +143,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     phase('cards')
     const first = ask('run-80', 'Epic 80 · clean up ai slop', TERMS)
     const second = ask('run-81', 'Epic 81 · harness doctor', [TERMS[0]], 'Story 81.2')
-    const nothing = bmn(['grant', 'ask', '--run', 'run-79', '--nothing', '--title', 'Epic 79 · first-run setup'])
+    const nothing = bmn(['grant', 'ask', '--run', 'run-79', '--nothing', '--reason', 'No unmet prerequisites', '--title', 'Epic 79 · first-run setup'])
     await until(async () => (await dialog.locator('article.grant-card.request').count()) === 2, 'two cards')
     const headLine = await dialog.locator('.grant-head-line').innerText()
     const cards = await dialog.locator('article.grant-card.request').count()
@@ -186,7 +187,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await no.focus()
     await page.keyboard.press('Enter')
     await until(async () => (await firstCard.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]').innerText()) === 'No', 'No saved')
-    const other = bmn(['grant', 'ask', '--run', 'run-77', '--nothing', '--title', 'Epic 77 · refresh'])
+    const other = bmn(['grant', 'ask', '--run', 'run-77', '--nothing', '--reason', 'No unmet prerequisites', '--title', 'Epic 77 · refresh'])
     await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.length === 4, 'other run saved')
     const kept = await firstCard.locator('.segmented').nth(1).locator('[role="radio"][aria-checked="true"]').innerText()
     const focusAtRead = await page.evaluate(() => ({ tag: document.activeElement?.tagName, run: document.activeElement?.closest('article')?.getAttribute('data-run-id') }))
@@ -456,6 +457,75 @@ touch '${exactSeeded}'
     const proposedAnswer = await until(async () => (await page.evaluate(() => window.aiTerminal.getGrant())).period.runs.find(row => row.runId === 'run-repeat-driver')?.answer, 'displayed bulk proposals saved')
     check('130.5: All as proposed stores the displayed repeat2 rather than original3', proposedAnswer.choices.rounds === 2 && proposedAnswer.choices['push-81'] === 'yes', { choices: proposedAnswer.choices })
     bmn(['back'])
+    {
+      phase('131: recorded facts, an allowance raise and an access line')
+      await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'back', 'Back before night facts')
+      await dismissRepeatSummary('night facts')
+      const project = join(root, 'sample-night-plan')
+      const { written, plan } = seedNightPlan(project, cli, environment)
+
+      const runner = written('run-probe.sh', `while :; do
+  if [ -f './next.sh' ]; then mv './next.sh' './current.sh'; bash './current.sh'; fi
+  sleep 0.05
+done
+`)
+      const inSession = await page.evaluate(async ({ cwd, runner }) => {
+        const [workspace] = await window.aiTerminal.listWorkspaces(false)
+        return (await window.aiTerminal.createSession({ workspaceId: workspace.workspaceId, name: 'Night facts fixture', cwd,
+          executable: '/bin/bash', argv: ['--noprofile', '--norc', runner], cols: 100, rows: 24, backgroundChoice: 'stop' })).session.sessionId
+      }, { cwd: project, runner })
+      await call(credentials.socketPath, credentials.token, 'hook.observe', { sessionId: inSession, agent: 'claude', event: 'Stop', effects: [] })
+      bmn(['away', '--leaving'])
+      const command = async (step, contents) => {
+        const out = join(project, `${step}.out`)
+        const ready = join(project, `${step}.finished`)
+        written('pending.sh', `bmn() { '${process.execPath}' '${cli}' "$@"; }\n{ ${contents}; } > '${out}' 2>&1\ntouch '${ready}'\n`)
+        renameSync(join(project, 'pending.sh'), join(project, 'next.sh'))
+        await until(() => existsSync(ready), step, 35_000)
+        return readFileSync(out, 'utf8')
+      }
+      const factual = JSON.parse(await command('facts', 'bmn grant facts --run fixture-epic-7 --epic 7 --json'))
+      check('131.2: live facts identify the exhausted recheck boundary', factual.conflicts.some(item => item.id === 'limit:rechecks:7.1'))
+      const refused = await command('empty-refused', 'bmn grant ask --run fixture-epic-7 --nothing --reason "Synthetic reason"')
+      check('131.2: the host refuses an unaddressed exhausted boundary', refused.includes('limit:rechecks:7.1'))
+      const despite = await command('empty-recorded', 'bmn grant ask --run fixture-epic-7 --nothing --reason "Fixture confirms no rechecks remain" --despite limit:rechecks:7.1')
+      await dialog.waitFor()
+      const body = await dialog.innerText()
+      check('131.2: the acknowledged fact and reason appear in the desktop row',
+        despite.includes('needs nothing') && body.includes('Fixture confirms no rechecks remain') && body.includes('4 of 4 used'))
+      const card = written('card.json', JSON.stringify({
+        title: 'Synthetic night fixes', scope: 'One review and one login',
+        terms: [
+          { id: 'raise', kind: 'limit', project, epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'Two review steps remain' },
+          { id: 'login', kind: 'access', name: 'Sample access', command: 'sample auth login', reason: 'The sign-in check failed' }
+        ]
+      }))
+      const sent = await command('ask', `bmn grant ask --run fixture-epic-7 --card-file - < '${card}'`)
+      const article = dialog.locator('[data-run-id="fixture-epic-7"]')
+      await article.waitFor()
+      check('131.3 and 131.4: the exact limit and login appear with their controls', sent.includes('Card revision') &&
+        (await article.innerText()).includes('Raise rechecks for Epic 7 from 4 to 6') &&
+        (await article.innerText()).includes('sample auth login') && await article.getByRole('button', { name: 'Done', exact: true }).count() === 1)
+      await resize(540)
+      await shot('131-night-540.png')
+      await resize(1280)
+      await shot('131-night-1280.png')
+      await article.getByRole('radio', { name: 'Yes', exact: true }).click()
+      await until(async () => (await article.innerText()).includes('Approved, waiting to write'), 'the saved approval is visible')
+      const apply = JSON.parse(await command('apply', 'bmn grant apply --run fixture-epic-7 --item raise --use-id demo --json'))
+      const duplicate = JSON.parse(await command('retry', 'bmn grant apply --run fixture-epic-7 --item raise --use-id demo --json'))
+      const allowances = plan('allowances', '7')
+      check('131.3: applying writes both values once and shows the durable approval source',
+        apply.state === 'written' && duplicate.outcome === 'repeated' && duplicate.commit === apply.commit &&
+        allowances.current.fields.limits.rechecks.limit === 6 && allowances.current.fields.limits.rechecks.ceiling === 6 &&
+        allowances.changes.at(-1).source.startsWith('night list: Yes to '))
+      await until(async () => (await article.innerText()).includes('use bmn plan allow to lower it'), 'written confirmation')
+      await article.getByRole('button', { name: 'Done', exact: true }).click()
+      await until(async () => (await article.innerText()).includes('Waiting for the agent’s check'), 'Done saves a check, not a grant')
+      const badReport = await command('privacy', 'bmn grant report --run fixture-epic-7 --item login --access fails --cause CANARY_PRIVATE_FIXTURE')
+      check('131.4: invalid check output does not appear in the refusal', badReport.includes('No check output is accepted') && !badReport.includes('CANARY_PRIVATE_FIXTURE'))
+      bmn(['back'])
+    }
   } catch (error) {
     check('the run completed', false, { error: error instanceof Error ? error.message : String(error), screen: await page.locator('.session-terminal.selected .xterm-rows').innerText().catch(() => ''), dialogs: await page.locator('dialog').allTextContents() })
     await shot('failure.png').catch(() => undefined)

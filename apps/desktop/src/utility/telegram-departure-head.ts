@@ -25,8 +25,9 @@ export function departureHeadText(view: OwnerGrantView, now: Date): string {
       : row.state === 'no-answer' ? 'no answer' : row.state === 'not-told' ? 'not told' : row.state === 'not-selected' ? 'not asked' : 'asking'
     const prior = row.runs.filter(run => run.card.nothing && run.answer !== null && (period.state === 'leaving' || period.state === 'away'))
       .flatMap(run => grantAnswerWords(run.answer!.terms, run.answer!.choices).granted)
+    const contradicted = row.runs.some(run => (run.card.despiteFacts?.length ?? 0) > 0)
     const detail = [prior.length > 0 ? `Earlier answer still holds: ${prior.join(' · ')}` : null, row.reason].filter(Boolean).join(' · ')
-    return `${headField(session.name)}: ${state}${detail ? ` · ${headField(detail)}` : ''}`
+    return `${headField(session.name)}: ${contradicted ? '● ' : ''}${state}${detail ? ` · ${headField(detail)}` : ''}`
   })
   const history = view.notAskedAgain.map(run => `${headField(run.title, 35)}: ${headField(run.granted.join(' · '), 60)} granted ${awayMomentWords(run.at, now)}; has not asked again; nothing granted.`)
   const shown = [...rows, ...history]

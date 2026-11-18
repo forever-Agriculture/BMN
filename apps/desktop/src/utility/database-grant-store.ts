@@ -5,8 +5,11 @@ import {
   EMPTY_GRANT_RECORD,
   GRANT_RECORD_KEY,
   answerGrant,
+  changeGrantAccess,
   askGrant,
   markDepartureTold,
+  markGrantLimit,
+  settleGrantLimit,
   parseAwayRecord,
   readGrantRecord,
   reportGrant,
@@ -24,7 +27,7 @@ import {
   type GrantReportInput,
   type GrantReportOutcome,
   type GrantRun,
-  type GrantTerm,
+  type GrantAskCard,
   type GrantUseResult
 } from '@bmn/protocol'
 import type { DatabaseConnection } from './database-initialization'
@@ -102,7 +105,7 @@ export function leaveAway(database: DatabaseConnection, start: { source: AwaySou
 }
 
 export function askGrantCard(database: DatabaseConnection, ask: {
-  runId: string; sessionId: string | null; agentCli: string | null; card: { title: string; scope: string; nothing: boolean; terms: GrantTerm[] }; operationKey?: string
+  runId: string; sessionId: string | null; agentCli: string | null; card: GrantAskCard; operationKey?: string
   origin: { generation: number; periodId: string | null }
 }, now: string): GrantAskResult & { read: GrantRead } {
   const read = readGrantRow(database)
@@ -141,7 +144,7 @@ export function useGrantRecord(database: DatabaseConnection, use: Parameters<typ
 /** An agent's report of a step (Story 84.7): kept for the morning; an unreadable record is never written over by one. */
 function reportGrantRecord(database: DatabaseConnection, report: GrantReportInput, now: string): GrantReportOutcome & { read: GrantRead } {
   const read = readGrantRow(database)
-  const result = reportGrant(read, report, now)
+  const result = reportGrant(read, report, now, getAway(database))
   return { ...result, read: read.state === 'read' && result.outcome === 'recorded' ? writeGrantRow(database, result.record, now) : read }
 }
 
@@ -159,4 +162,23 @@ function setGrantPhoneMessage(database: DatabaseConnection, periodId: string, ru
   return { ...result, read: result.outcome === 'changed' ? writeGrantRow(database, result.record, now) : read }
 }
 
-export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage })
+function markLimitApply(database: DatabaseConnection, request: Parameters<typeof markGrantLimit>[2],
+  period: string, revision: number, pin: Parameters<typeof markGrantLimit>[5], operation: string, now: string) {
+  const read = readGrantRow(database)
+  const result = markGrantLimit(read, getAway(database), request, period, revision, pin, operation, now)
+  return { ...result, read: result.entry === null ? read : writeGrantRow(database, result.record, now) }
+}
+
+function settleLimitApply(database: DatabaseConnection, period: string, source: string, result: Parameters<typeof settleGrantLimit>[3], now: string) {
+  const read = readGrantRow(database)
+  const settled = settleGrantLimit(read, period, source, result, now)
+  return settled === null ? read : writeGrantRow(database, settled, now)
+}
+
+function updateGrantAccess(database: DatabaseConnection, update: Parameters<typeof changeGrantAccess>[1], now: string) {
+  const read = readGrantRow(database)
+  const result = changeGrantAccess(read, update, now)
+  return { outcome: result.outcome, read: result.outcome === 'recorded' ? writeGrantRow(database, result.record, now) : read }
+}
+
+export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage, markLimitApply, settleLimitApply, updateGrantAccess })

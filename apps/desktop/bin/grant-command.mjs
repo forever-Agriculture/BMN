@@ -308,3 +308,17 @@ export function grantCommandProblem(term) {
   if (selected.file !== null && isWritable(selected.file)) return `it runs ${selected.file}, which can change; name that script on the card with its SHA-256`
   return null
 }
+
+/** An access line shows a login the owner performs, with no token, command chain or unrelated action. */
+export function grantAccessCommandProblem(command) {
+  const parsed = simpleCommandWords(command)
+  if ('problem' in parsed) return 'Name the exact single login command'
+  const [program, ...words] = parsed.words
+  const name = nameOf(program)
+  if (words.some(word => /(?:^--?(?:token|password|secret|client-secret|show-token)(?:=|$)|^--with-token$)/u.test(word))) {
+    return 'A login line cannot take a credential or print a token'
+  }
+  if (['sh', 'bash', 'dash', 'zsh', 'sudo', 'env', 'eval', 'exec', 'command', 'xargs'].includes(name) ||
+    !words.some(word => /^(?:login|log-in|signin|sign-in)$/iu.test(word))) return 'Name a direct login command the owner can run'
+  return null
+}

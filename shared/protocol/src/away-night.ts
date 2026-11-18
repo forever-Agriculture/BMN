@@ -1,4 +1,19 @@
-// MODULE: away-night.ts - Story 113.6: what the Away wake decided each tick, kept text-free, and the night's account read from it
+// MODULE: away-night.ts - the night's wake decisions and the observed rest since each session's last turn
+import { awayDurationWords } from './away'
+import type { GrantStopCause } from './grant'
+
+export const AWAY_REST_MINIMUM_MS = 30 * 60_000
+
+export interface AwayStopReport {
+  runId: string
+  cause: GrantStopCause
+  text: string | null
+  at: string
+}
+
+export function awayStopWords(report: AwayStopReport | null | undefined): string {
+  return !report ? 'No cause reported' : `Agent’s report: ${report.cause.replace(':', ' · ').replaceAll('_', ' ')}${report.text ? ` · ${report.text}` : ''}`
+}
 /**
  * Why the Away wake left a session alone on one tick, as a closed code (113.6 AC1: no prompt or screen text is kept).
  * `early` codes are the checks before BMN reads the screen; `last` codes are the final checks right before the one write.
@@ -90,6 +105,9 @@ export interface AwayNightSession {
   /** For woken, when; for skipped and missed, the reason that decides it. */
   reason: AwayWakeReason | null
   at: string | null
+  restedMs?: number | null
+  restedFrom?: string | null
+  stopReport?: AwayStopReport | null
 }
 
 /** The account of one Away period (113.6 AC2–AC3). */
@@ -181,6 +199,12 @@ export function awayNightLines(night: AwayNight, names: Readonly<Record<string, 
   for (const session of night.missed) lines.push(`missed while eligible: ${name(session)}: ${AWAY_WAKE_REASONS[session.reason ?? 'other'].words}`)
   for (const session of night.skipped) lines.push(`skipped: ${name(session)}: ${AWAY_WAKE_REASONS[session.reason ?? 'other'].words}`)
   for (const session of night.unknown) lines.push(`unknown: ${name(session)}: no tick decided it`)
+  for (const session of [...night.woken, ...night.skipped, ...night.missed, ...night.unknown]) {
+    if ((session.restedMs ?? 0) > AWAY_REST_MINIMUM_MS || session.stopReport) {
+      const duration = session.restedMs == null ? 'rest time unknown' : `rested ${awayDurationWords(session.restedFrom ?? night.until, night.until)}`
+      lines.push(`${name(session)}: ${duration}. ${awayStopWords(session.stopReport)}`)
+    }
+  }
   for (const span of night.unknownSpans) lines.push(`unknown hours: ${hours(span.from, span.to)}: ${WHY[span.why]}`)
   if (!night.complete) lines.push('Some older rows were no longer kept, so a session may read unknown.')
   if (lines.length === 1) lines.push('No agent session ran in this period.')

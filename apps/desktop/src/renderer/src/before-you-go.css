@@ -6,6 +6,8 @@
 .grant-list { min-height: 0; overflow: auto; outline: none; }
 .grant-session-row { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr); gap: 12px; padding: 5px 12px; font-size: 12px; min-height: 28px; overflow-wrap: anywhere; }
 .grant-session-row > :last-child { color: var(--muted); }
+.grant-session-row[data-contradicted] > :last-child::before { content: "● "; color: var(--accent); }
+.grant-copy { align-self: flex-start; }
 .grant-go { width: 88px; margin-left: auto; }
 .grant-line-seen { grid-column: 1 / -1; min-height: 14px; margin: 0; color: var(--muted); font-size: 11px; }
 .before-you-go .grant-head-line { margin: 0; font-size: 13px; }

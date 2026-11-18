@@ -1168,6 +1168,30 @@ No rule here grants authority, changes consent, answers a native permission, or 
 
 ### The Away grant
 
+`bmn grant facts --run ID --epic N [--project P] [--json]` reads the recorded allowance, its
+usage by boundary, the branch's open PRs and required checks, the repository's push policy,
+and the plan's Prepared checks. No recorded go returns the PR facts only. Unreadable inputs
+stay unknown. An empty answer takes `--nothing --reason TEXT` with 1–300 characters. BMN
+checks its facts again and asks for a `--despite FACT` for each conflict the run explains.
+Keep unavailable checks in the run log.
+
+A `limit` line names a project, epic, limit, current value, new value and reason. Ask only
+above the current ceiling. After the owner's Yes, `bmn grant apply --run ID --item I --use-id U`
+checks the current card and allowance, records the write once and reads it back. BMN records
+the approval source, sets the limit and ceiling to the approved value and preserves usage.
+The written value holds after Back. Use `bmn plan allow` to lower it.
+
+An `access` line shows the exact login command for the owner to run. His Done asks the run to
+check its access, with its own command output suppressed. The report takes `--item I --access
+works` or `--item I --access fails --cause not-signed-in|expired|no-access|network|other`. Include
+the `--attempt` BMN supplied, especially after Check again. BMN stores only the chosen result
+and fixed cause. A check that sends no report reads Not checked after one minute.
+
+A run that parks while Away can send `bmn grant report --run ID --stopped --cause CAUSE --text T`.
+Causes are `limit:NAME`, `action:merge|push|pr|command|message`, `access`, `decision`, `prompt`
+or `other`. The morning summary and `bmn away --night --json` carry the observed rest and its
+reported cause, separately. A restart or missing proof leaves the timing unknown.
+
 `bmn grant` (Epic 84) lets a run with authorised work left for the night ask the owner once, before he leaves, for
 only what that work needs. Only his own answer, in the BMN window or on Telegram, creates a grant, and every grant
 ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
@@ -1197,8 +1221,7 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   shows it): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
   boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
   or up to N of this run's PRs when their required checks are green), push a branch to the default branch, or open
-  or update a pull request in another repository (from a named branch, or a named PR). `--nothing` says the run needs nothing. A run on an epic with a go (Epic 90) fills the card from the plan:
-  only its Run needs' named actions, never rounds the go already gave, and `--nothing` when it names none
+  or update a pull request in another repository (from a named branch, or a named PR). `--nothing --reason TEXT` says why the run needs nothing. Read the run's facts and remaining plan before deciding
   ([dev-auto.md](dev-auto.md), "Runs on the plan's decisions"). BMN binds the asking
   session itself; it does not check that a session owns the run id it names, so a new lead resuming the run
   asks and uses under that id. A second ask for the same run is a new revision, and his earlier answer holds until he answers

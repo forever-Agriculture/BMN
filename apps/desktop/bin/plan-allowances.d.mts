@@ -1,3 +1,4 @@
+import type { GrantLimitApply } from '@bmn/protocol'
 // MODULE: plan-allowances.d.mts - types for plan-allowances.mjs (Stories 110.4, 110.5, 110.8: an epic's allowances file)
 
 export interface AllowanceLimit {
@@ -47,3 +48,7 @@ export declare function compareVersions(before: AllowancesData, after: Allowance
 }
 /** The ledger ids dev-auto would use for this plan's epic: the canonical one and what the location's alias names. */
 export declare function ledgerIds(plan: { planRoot: string }, epic: number | string, folder: string): Set<string>
+
+export function withNightAllowanceLock<T>(plan: unknown, task: (lockFd: number) => Promise<T>): Promise<T>
+export function writeNightAllowance(plan: unknown, entry: GrantLimitApply, lockFd: number): Promise<{ commit: string }>
+export function findNightAllowance(plan: unknown, entry: GrantLimitApply): Promise<string | null>

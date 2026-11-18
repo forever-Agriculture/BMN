@@ -1784,7 +1784,7 @@ describe('Away grant (Story 84.3)', () => {
     const owner = await authenticated(fixture, fixture.auth.ownerToken)
     const agent = await authenticated(fixture, sessionToken(fixture))
     expect((await agent.request('grant.ask', { runId: 'dev-auto-epics-80', card: CARD, idempotencyKey: 'k1' })).error).toBeUndefined()
-    expect((await owner.request('grant.ask', { runId: 'dev-auto-epics-80', card: { title: 'Night', scope: 'Epic 81', nothing: true } })).error).toBeUndefined()
+    expect((await owner.request('grant.ask', { runId: 'dev-auto-epics-80', card: { title: 'Night', scope: 'Epic 81', nothing: true }, reason: 'No unmet prerequisites' })).error).toBeUndefined()
     const calls = fixture.handlers.askGrant.mock.calls.map(([call]) => call)
     expect(calls[0]).toMatchObject({ runId: 'dev-auto-epics-80', card: { terms: [{ id: 'rounds', proposed: 3 }] }, operationKey: expect.stringContaining('session:') })
     expect(calls[1]).toMatchObject({ card: { nothing: true, terms: [] } })

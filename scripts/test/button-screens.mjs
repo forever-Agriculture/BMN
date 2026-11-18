@@ -467,7 +467,7 @@ async function walkStates(application, context) {
     const ask = (run, title, terms, scope) => ownerCli(['grant', 'ask', '--run', run, '--card-file', '-'], JSON.stringify({ title, scope, terms }))
     ask('run-80', 'Epic 80 · clean up ai slop', grantTerms, 'Stories 80.2–80.6, then Epic 81')
     ask('run-81', 'Epic 81 · harness doctor', [grantTerms[0]], 'Story 81.2')
-    ownerCli(['grant', 'ask', '--run', 'run-79', '--nothing', '--title', 'Epic 79 · first-run setup'])
+    ownerCli(['grant', 'ask', '--run', 'run-79', '--nothing', '--reason', 'No unmet prerequisites', '--title', 'Epic 79 · first-run setup'])
     await page.locator('.away-check button.away-grant:not(.cards)', { hasText: /^getting ready$/ }).waitFor()
   })
   await step('Before you go', 'the head\'s "getting ready"', async () => {

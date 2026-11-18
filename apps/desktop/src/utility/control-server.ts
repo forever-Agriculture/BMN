@@ -17,10 +17,14 @@ import {
   GRANT_ROUND_RESULTS,
   grantIdentifier,
   grantReportText,
+  grantStopCause,
+  grantAccessCause,
   parseGrantCardInput,
   type GrantReportInput,
   type GrantReportResult,
-  type GrantTerm,
+  type GrantAskCard,
+  type GrantAccessReport,
+  type GrantLimitRequest,
   type DecisionPayload,
   type DecisionReferenceKind,
   ERROR_CODES,
@@ -70,7 +74,7 @@ import {
 import type { ControlAuth, ControlScope } from './control-auth'
 import type {BrainCheckTransport} from './brain-check-capabilities'
 import { OPENCODE_REFERENCE_PATTERN } from './conversation-binding'
-import { grantCommandProblem } from '../../bin/grant-command.mjs'
+import { grantAccessCommandProblem, grantCommandProblem } from '../../bin/grant-command.mjs'
 
 export class ControlError extends Error {
   constructor(readonly code: ProtocolErrorCode, message: string, readonly retryable = false) {
@@ -296,7 +300,10 @@ export interface ControlHandlers {
   /** Story 84.3: his departure words, forwarded by an agent naming the away revision it saw, or the owner's CLI. */
   leaveAway(p: { scope: ControlScope; expectedRevision?: number }): Promise<unknown>
   /** Story 84.3: a run's card for the open departure; the host binds the asking session. */
-  askGrant(p: { scope: ControlScope; runId: string; card: { title: string; scope: string; nothing: boolean; terms: GrantTerm[] }; operationKey?: string }): Promise<unknown>
+  askGrant(p: { scope: ControlScope; runId: string; card: GrantAskCard; operationKey?: string; nothing?: { reason: string; despite: string[]; callerCwd?: string } }): Promise<unknown>
+  reportGrantAccess?(p: GrantAccessReport): Promise<unknown>
+  applyGrantLimit?(p: GrantLimitRequest): Promise<unknown>
+  grantFacts?(p: { scope: ControlScope; runId: string; epic: number; callerCwd?: string; project?: string }): Promise<unknown>
   /** Story 84.3 AC4: one run's grant, or every run this caller may see. */
   grantStatus(p: { scope: ControlScope; runId?: string }): Promise<unknown>
   /** R84-FR3, FR8: one round or one item use, recorded before the step it pays for. */
@@ -1758,19 +1765,43 @@ export class ControlServer {
           ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` })
         })
       }
+      case 'grant.facts': {
+        const params = closedParams(rawParams, ['runId', 'epic', 'callerCwd', 'project'])
+        const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
+        if (runId === null || typeof params.epic !== 'number' || !Number.isSafeInteger(params.epic) || params.epic < 1) throw invalidError('grant facts needs a run id and a positive epic number')
+        const callerCwd = readText(params, 'callerCwd', { min: 1, max: 4096, unit: 'characters', controls: 'reject' })
+        const project = readText(params, 'project', { min: 1, max: 4096, unit: 'characters', controls: 'reject' })
+        if (!handlers.grantFacts) throw invalidError('The run facts are unavailable; keep the checks in your run log')
+        return handlers.grantFacts({ scope, runId, epic: params.epic, ...(callerCwd === undefined ? {} : { callerCwd }), ...(project === undefined ? {} : { project }) })
+      }
       case 'grant.ask': {
-        const params = closedParams(rawParams, ['runId', 'card', 'idempotencyKey'])
+        const params = closedParams(rawParams, ['runId', 'card', 'idempotencyKey', 'reason', 'despite', 'callerCwd'])
         const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
         if (runId === null) throw invalidError(`runId must be your run's id: letters, digits and . _ : / - (at most ${GRANT_LIMITS.runId})`)
         const parsed = parseGrantCardInput(params.card)
         if ('problem' in parsed) throw invalidError(`Nothing was asked: ${parsed.problem}`)
         for (const [index, term] of parsed.card.terms.entries()) {
-          if (term.kind !== 'command') continue
-          const problem = grantCommandProblem(term)
-          if (problem !== null) throw invalidError(`Nothing was asked: term ${index + 1} (${term.command}): ${problem}`)
+          if (term.kind === 'access') {
+            const problem = grantAccessCommandProblem(term.command)
+            if (problem !== null) throw invalidError(`Nothing was asked: term ${index + 1}: ${problem}`)
+          }
+          if (term.kind === 'command') {
+            const problem = grantCommandProblem(term)
+            if (problem !== null) throw invalidError(`Nothing was asked: term ${index + 1} (${term.command}): ${problem}`)
+          }
+        }
+        let nothing: { reason: string; despite: string[]; callerCwd?: string } | undefined
+        if (parsed.card.nothing) {
+          const reason = requireText(params, 'reason', { min: 1, max: 300, unit: 'characters', controls: 'reject', strip: true })
+          const despite = params.despite ?? []
+          if (!Array.isArray(despite) || despite.length > 32 || despite.some(value => grantIdentifier(value, 240) === null)) throw invalidError('--despite names up to 32 fact ids from grant facts')
+          const callerCwd = readText(params, 'callerCwd', { min: 1, max: 4096, unit: 'characters', controls: 'reject' })
+          nothing = { reason, despite, ...(callerCwd === undefined ? {} : { callerCwd }) }
+        } else if (params.reason !== undefined || params.despite !== undefined || params.callerCwd !== undefined) {
+          throw invalidError('reason and despite go with an empty answer')
         }
         const operationKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
-        return handlers.askGrant({ scope, runId, card: parsed.card, ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` }) })
+        return handlers.askGrant({ scope, runId, card: parsed.card, ...(nothing === undefined ? {} : { nothing }), ...(operationKey === undefined ? {} : { operationKey: `${scopeKey(scope)}|${operationKey}` }) })
       }
       case 'grant.status': {
         const params = closedParams(rawParams, ['runId'])
@@ -1778,6 +1809,15 @@ export class ControlServer {
         const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
         if (runId === null) throw invalidError(`runId must be a run's id (at most ${GRANT_LIMITS.runId})`)
         return handlers.grantStatus({ scope, runId })
+      }
+      case 'grant.apply': {
+        const params = closedParams(rawParams, ['runId', 'useId', 'item'])
+        if (scope.kind !== 'session') throw unauthorized('Only the run’s session may apply its approved limit')
+        const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
+        const useId = grantIdentifier(params.useId, GRANT_LIMITS.useId)
+        const item = grantIdentifier(params.item, GRANT_LIMITS.itemId)
+        if (!runId || !useId || !item || !handlers.applyGrantLimit) throw invalidError('grant apply needs a run id, use id and limit item')
+        return handlers.applyGrantLimit({ runId, useId, item, sessionId: scope.sessionId })
       }
       case 'grant.use': {
         const params = closedParams(rawParams, ['runId', 'useId', 'boundary', 'item'])
@@ -1792,7 +1832,7 @@ export class ControlServer {
       }
       case 'grant.report': {
         // Story 84.7: what the agent saw happen, kept apart from BMN's record for the morning; it grants nothing.
-        const params = closedParams(rawParams, ['runId', 'periodId', 'useId', 'result', 'boundary', 'stepBack', 'item', 'text'])
+        const params = closedParams(rawParams, ['runId', 'periodId', 'useId', 'result', 'boundary', 'stepBack', 'item', 'text', 'stopped', 'cause', 'access', 'attempt'])
         if (scope.kind !== 'session') throw unauthorized('Only a session\'s agent reports a step of its run')
         const runId = grantIdentifier(params.runId, GRANT_LIMITS.runId)
         if (runId === null) throw invalidError('runId is an identifier: letters, digits and . _ : / -')
@@ -1802,6 +1842,27 @@ export class ControlServer {
           if ('problem' in read) throw invalidError(read.problem)
           return read.text
         }
+        if (params.access !== undefined) {
+          const item = grantIdentifier(params.item, GRANT_LIMITS.itemId)
+          const cause = grantAccessCause(params.cause)
+          const attempt = params.attempt === undefined ? undefined : grantIdentifier(params.attempt, GRANT_LIMITS.useId)
+          if (!handlers.reportGrantAccess || !item || attempt === null ||
+            ['periodId', 'useId', 'result', 'boundary', 'stepBack', 'stopped', 'text'].some(key => params[key] !== undefined) ||
+            !(params.access === 'works' && params.cause === undefined || params.access === 'fails' && cause !== null)) {
+            throw invalidError('An access report takes an item and works, or fails with a fixed cause. No check output is accepted.')
+          }
+          return handlers.reportGrantAccess({ runId, sessionId, incarnation: scope.incarnationId, item, outcome: params.access,
+            cause, ...(attempt === undefined ? {} : { attempt }) })
+        }
+        if (params.attempt !== undefined) throw invalidError('The check attempt goes with an access report')
+        if (params.stopped === true) {
+          const cause = grantStopCause(params.cause)
+          if (cause === null || ['periodId', 'useId', 'result', 'boundary', 'stepBack', 'item'].some(key => params[key] !== undefined)) {
+            throw invalidError('A stop report takes a cause and a description')
+          }
+          return handlers.reportGrant({ runId, sessionId, kind: 'stopped', cause, text: text(true) as string })
+        }
+        if (params.stopped !== undefined || params.cause !== undefined) throw invalidError('A stop cause goes with --stopped')
         if (params.useId !== undefined) {
           const useId = grantIdentifier(params.useId, GRANT_LIMITS.useId)
           if (useId === null || params.stepBack !== undefined || params.boundary !== undefined || params.item !== undefined) throw invalidError('An outcome names one use id and its result')

@@ -6546,7 +6546,7 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
     expect(asked.code).toBe(0)
     expect(asked.stdout).toBe('Card revision 1 for run dev-auto-80 is open in the BMN window and on his phone. Nothing is granted until he answers; read it with bmn grant --run dev-auto-80.\n')
     expect(fixture.handlers.askGrant).toHaveBeenLastCalledWith(expect.objectContaining({ runId: 'dev-auto-80', operationKey: 'session:session-1|card-1', card: expect.objectContaining({ terms: [expect.objectContaining({ id: 'rounds', proposed: 3 })] }) }))
-    const nothing = await runCli(['grant', 'ask', '--run', 'dev-auto-81', '--nothing'], { env: fixture.sessionEnv })
+    const nothing = await runCli(['grant', 'ask', '--run', 'dev-auto-81', '--nothing', '--reason', 'No unmet prerequisites'], { env: fixture.sessionEnv })
     expect(nothing.stdout).toBe('Recorded: run dev-auto-81 needs nothing for the night.\n')
     expect(fixture.handlers.askGrant).toHaveBeenLastCalledWith(expect.objectContaining({ card: { title: 'dev-auto-81', scope: 'Needs nothing for the night', nothing: true, terms: [] } }))
   })

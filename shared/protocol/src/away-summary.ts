@@ -4,7 +4,7 @@ import { awayDurationWords, awayMomentWords, awayPeriodWords, type DecisionRecor
 import type { AttentionKind, AttentionRecord } from './companion'
 import type { DevAutoRunsResult } from './dev-auto'
 import { awayGrantSection, type AwayGrantSection } from './away-grant-summary'
-import { AWAY_WAKE_REASONS, type AwayNight } from './away-night'
+import { AWAY_REST_MINIMUM_MS, AWAY_WAKE_REASONS, awayStopWords, type AwayNight } from './away-night'
 import type { GrantCarried, GrantPeriod } from './grant'
 import { pad } from './shared-helpers'
 
@@ -206,6 +206,7 @@ export interface AwaySummaryView {
    * Story 113.6: what the Away wake did with each agent session, missed and unknown first; `hours` the spans no tick was
    * swept. Null from a host that predates it.
    */
+  rested: Array<{ sessionId: string; where: string; duration: string; cause: string }>
   wake: { head: string; rows: AwayWakeRow[]; hours: string[]; more: string | null; empty: string | null } | null
 }
 
@@ -575,6 +576,11 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     wentOn,
     decided,
     activity: activityView,
+    rested: input.night ? [...input.night.woken, ...input.night.skipped, ...input.night.missed, ...input.night.unknown]
+      .filter(row => (row.restedMs ?? 0) > AWAY_REST_MINIMUM_MS || row.restedMs == null && row.stopReport)
+      .map(row => ({ sessionId: row.sessionId, where: where(row.sessionId),
+        duration: row.restedMs == null ? 'Rest time unknown' : `Rested ${awayDurationWords(row.restedFrom ?? input.night!.until, input.night!.until)}`,
+        cause: awayStopWords(row.stopReport) })) : [],
     wake: awayWakeView(input.night, where)
   }
 }

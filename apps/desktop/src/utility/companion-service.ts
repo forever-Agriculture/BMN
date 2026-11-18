@@ -169,7 +169,7 @@ import { TELEGRAM_HELP_TEXT, awayReplyText, backReplyText, telegramAwayCommand, 
 import { SessionMessages, type MessageDestination } from './session-messages'
 import { AgentBriefs } from './agent-briefs'
 import { AwayNotices } from './agent-away-notices'
-import { AWAY_WAKE_EVERY_MS, AwayWake } from './away-wake'
+import { AWAY_WAKE_EVERY_MS, AwayWake, typeIfIdle } from './away-wake'
 import { DepartureWake } from './departure-wake'
 import { testDepartureBarrier } from './test-departure-barrier'
 import { DEPARTURE_TOKEN_PREFIX, TelegramDepartureHead } from './telegram-departure-head'
@@ -184,6 +184,10 @@ import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 import { commandPinSha } from '../../bin/grant-command.mjs'
+import { grantFacts as readGrantFacts, pinGrantLimit, resolveGrantLimitPlan, sameGrantCheckout } from '../../bin/grant-facts.mjs'
+import { findNightAllowance, withNightAllowanceLock, writeNightAllowance } from '../../bin/plan-allowances.mjs'
+import { grantChoice, grantLimitWords, GRANT_ACCESS_TIMEOUT_MS, type GrantAccessClaim, type GrantLimitApply, type GrantLimitRequest } from '@bmn/protocol'
+import { maskSecrets } from './secret-mask'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
 type ListedSession = SessionRecord & {
@@ -1164,20 +1168,44 @@ export class CompanionService {
           }
           return this.leaveAway(p.scope.kind === 'owner' ? 'cli' : 'agent', p.scope.kind === 'session' ? p.scope.sessionId : null)
         }),
+        grantFacts: (p) => this.controlCall(async () => this.readNightFacts(p.scope, p.runId, p.callerCwd, p.project, p.epic)),
         askGrant: (p) => this.controlCall(async () => {
           const read = this.grantRead
           const origin = { generation: read.generation ?? 0,
             periodId: read.state === 'read' ? openGrantPeriod(read.record)?.periodId ?? null : null }
           const sessionId = p.scope.kind === 'session' ? p.scope.sessionId : null
           const producer = p.scope.kind === 'session' ? this.producers.stamp(p.scope.sessionId, p.scope.incarnationId) : null
+          const bound = sessionId === null ? undefined : this.options.manager.liveLaunchDirectory(sessionId) ?? this.knownSessions.get(sessionId)?.cwd
+          let card = p.card
+          try {
+            const terms = await Promise.all(card.terms.map(async term => term.kind === 'limit' ? { ...term, pin: await pinGrantLimit(bound, term) } : term))
+            card = { ...card, terms }
+          } catch (error) {
+            throw new HostControlError(ERROR_CODES.invalidArgument, error instanceof Error ? maskSecrets(error.message) : 'The requested allowance could not be confirmed')
+          }
+          if (p.nothing !== undefined) {
+            const facts = await this.readNightFacts(p.scope, p.runId, p.nothing.callerCwd)
+            if (facts.plan.state === 'unknown' || facts.pullRequests.state === 'unknown') {
+              throw new HostControlError(ERROR_CODES.invalidArgument, 'The run facts could not be confirmed; nothing was asked. Keep the checks in your run log.')
+            }
+            const missing = facts.conflicts.filter(fact => !p.nothing!.despite.includes(fact.id))
+            if (missing.length > 0) {
+              throw new HostControlError(ERROR_CODES.invalidArgument, `Needs nothing was not recorded. Read bmn grant facts or name each with --despite: ${missing.map(fact => `${fact.id} (${fact.words})`).join('; ')}`)
+            }
+            if (p.nothing.despite.some(id => !facts.conflicts.some(fact => fact.id === id))) {
+              throw new HostControlError(ERROR_CODES.invalidArgument, 'A --despite id no longer names a conflicting run fact. Read bmn grant facts again.')
+            }
+            card = { ...card, nothingReason: p.nothing.reason, ...(facts.conflicts.length > 0 ? { despiteFacts: facts.conflicts.map(fact => fact.words) } : {}) }
+          }
           const result = await this.options.database.companion('askGrantCard', {
-            runId: p.runId, sessionId, agentCli: producer?.agentCli ?? null, card: p.card, origin, ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
+            runId: p.runId, sessionId, agentCli: producer?.agentCli ?? null, card, origin, ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
           }, this.iso())
           if (result.outcome === 'no-departure') throw new HostControlError(ERROR_CODES.notFound, `${result.reason}; nothing was asked`)
           if (result.outcome === 'opened' || result.outcome === 'replaced') this.grantChanged(result.read)
           return { outcome: result.outcome, periodId: result.periodId, runId: result.run.runId, cardRevision: result.run.card.revision, state: result.run.card.state }
         }),
         grantStatus: (p) => this.controlCall(async () => this.grantStatusFor(p.scope, p.runId)),
+        applyGrantLimit: (p) => this.controlCall(async () => this.applyGrantLimit(p)),
         useGrant: (p) => this.controlCall(async () => {
           // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded. The store decides, in its
           // own transaction, against the answer in force then: another card may come between this read and that write.
@@ -1190,6 +1218,12 @@ export class CompanionService {
           if (result.outcome !== 'repeated') this.grantChanged(result.read)
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
           return { outcome: result.outcome, left: result.left, periodId: result.periodId, ...(result.exact === null ? {} : { exact: result.exact }) }
+        }),
+        reportGrantAccess: (target) => this.controlCall(async () => {
+          const result = await this.options.database.companion('updateGrantAccess', { kind: 'report', target }, this.iso())
+          if (result.outcome !== 'recorded') throw new HostControlError(ERROR_CODES.invalidArgument, 'This access check is no longer pending in this session')
+          this.grantChanged(result.read)
+          return { outcome: result.outcome }
         }),
         reportGrant: (p) => this.controlCall(async () => {
           const result = await this.options.database.companion('reportGrantRecord', p, this.iso())
@@ -1290,11 +1324,13 @@ export class CompanionService {
           const brief = due === null ? null : agentStartBrief(await this.anyOwnerAllowed())
           // Story 84.3: while he is leaving or away, once per conversation and departure: a run may ask him on one card.
           const departure = this.grantNotices.answer(p, this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null)
+          const access = eligibleTeam && p.incarnationId !== null ? await this.grantAccessForHook(p.sessionId, p.incarnationId) : null
+          const grantNotice = [departure, access].filter(Boolean).join('\n')
           return {
             ...recorded, ...(restart === null ? {} : { restartNotice: restart.text, restartClaim: restart.claim }), ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
             ...(teamNotice === null ? {} : { teamNotice: teamNotice.text, teamRevision: teamNotice.revision, teamClaim: teamNotice.claimId }),
-            ...(departure === null ? {} : { grantNotice: departure })
+            ...(grantNotice === '' ? {} : { grantNotice })
           }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
@@ -1402,6 +1438,7 @@ export class CompanionService {
     this.awayRecord = grants.away
     this.grantRead = grants.read
     this.grantOrder = ownerGrantView(this.grantRead)
+    await this.recoverNightAllowances()
     await this.options.database.companion('recoverQaGrantUses', this.iso())
     await this.options.database.companion('recoverQaRuns')
     this.awayNotices.load(await this.options.database.companion('getAwayNotices'))
@@ -1431,6 +1468,7 @@ export class CompanionService {
     this.sweepTimer.unref()
     this.departureSweepTimer = setInterval(() => {
       void this.refreshUnreadableGrant().then(() => this.departureWake.sweep()).catch(() => undefined)
+      void this.sweepGrantAccess().catch(() => undefined)
       void this.departureHead.reconcile()
     }, 20_000)
     this.departureSweepTimer.unref()
@@ -1859,7 +1897,7 @@ export class CompanionService {
 
   /** Story 113.6: the Away wake's account of one period from its kept ticks. */
   private awayNight(periodId: string, since: string, until: string): Promise<AwayNight> {
-    return this.options.database.companion('awayNightData', { periodId, since, until, everyMs: this.options.awayWake?.everyMs ?? AWAY_WAKE_EVERY_MS })
+    return this.options.database.companion('awayNightData', { periodId, since, until, everyMs: this.options.awayWake?.everyMs ?? AWAY_WAKE_EVERY_MS, hostStartedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() })
   }
 
   /**
@@ -1914,9 +1952,12 @@ export class CompanionService {
 
   /** Story 84.3 AC2–AC3: the owner's answer from the window or Telegram, the only two callers. */
   private async answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, unknown>; via: 'app' | 'telegram'; operationKey: string; expectedRevision?: number; expectedGeneration?: number; lineId?: string }): Promise<GrantAnswerResult> {
-    const result = await this.options.database.companion('answerGrantCard', answer, this.iso())
+    const accessPick = Object.entries(answer.choices).find(([, choice]) => choice === 'done')
+    const result = await this.options.database.companion('answerGrantCard',
+      { ...answer, ...(accessPick ? { lineId: answer.lineId ?? accessPick[0], accessAttemptId: randomUUID() } : {}) }, this.iso())
     // An unreadable worker snapshot must revoke the cached view even when the attempted answer was refused.
     if (result.outcome !== 'repeated') this.grantChanged(result.read)
+    if (accessPick && result.outcome === 'granted') void this.sweepGrantAccess().catch(() => undefined)
     return result
   }
 
@@ -2051,11 +2092,166 @@ export class CompanionService {
    * Story 84.3 AC4: read fresh from the store, never from a handoff or a cache. One run when named (any session may read
    * the run it names); otherwise every run whose latest card this session asked, or all for the owner's token.
    */
+  private pendingGrantAccess(sessionId?: string) {
+    const period = this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null
+    const now = this.now().getTime()
+    return (period?.runs ?? []).flatMap(run => {
+      if (run.card.sessionId === null || sessionId !== undefined && sessionId !== run.card.sessionId) return []
+      return (run.access ?? []).flatMap(attempt => {
+        const term = run.card.terms.find(term => term.id === attempt.item && term.kind === 'access')
+        return term?.kind === 'access' && attempt.incarnation === null && attempt.outcome === null &&
+          now - Date.parse(attempt.at) < GRANT_ACCESS_TIMEOUT_MS ? [{ run, attempt, term, sessionId: run.card.sessionId! }] : []
+      })
+    })
+  }
+
+  private grantAccessLine(runId: string, item: string, attempt: string): string {
+    return `BMN: The owner marked access step ${item} ready for run ${runId}. Run your own sign-in check with stdout and stderr suppressed. Report only its result: bmn grant report --run ${runId} --item ${item} --attempt ${attempt} --access works. If the check fails use --access fails --cause not-signed-in|expired|no-access|network|other (one cause). Keep any credentials and check output out of BMN.`
+  }
+
+  private async claimGrantAccess(target: GrantAccessClaim, kind: 'claim' | 'unclaim' = 'claim'): Promise<boolean> {
+    if (this.options.manager.liveIncarnationId(target.sessionId) !== target.incarnation) return false
+    const result = await this.options.database.companion('updateGrantAccess', { kind, target }, this.iso())
+    if (result.outcome !== 'recorded') return false
+    this.grantChanged(result.read)
+    return this.options.manager.liveIncarnationId(target.sessionId) === target.incarnation
+  }
+
+  private async grantAccessForHook(sessionId: string, incarnation: string): Promise<string | null> {
+    const pending = this.pendingGrantAccess(sessionId)
+    if (pending.length === 0) return null
+    const lines: string[] = []
+    for (const { run, attempt } of pending) {
+      const target = { sessionId, incarnation, runId: run.runId, item: attempt.item, attempt: attempt.id }
+      if (await this.claimGrantAccess(target)) lines.push(this.grantAccessLine(run.runId, attempt.item, attempt.id))
+    }
+    return lines.length === 0 ? null : lines.join('\n')
+  }
+
+  private async sweepGrantAccess(): Promise<void> {
+    const pending = this.pendingGrantAccess()
+    void this.grantCards.reconcile()
+    if (pending.length === 0) return
+    const open = await this.options.database.companion('listAttention')
+    for (const { run, attempt, sessionId } of pending) {
+      const seen = this.hookObservations.get(sessionId)
+      if (seen === undefined) continue
+      const target = { sessionId, incarnation: seen.incarnationId, runId: run.runId, item: attempt.item, attempt: attempt.id }
+      let claimed = false
+      let attempted = false
+      await typeIfIdle({
+        now: () => this.now(), observation: id => this.hookObservations.get(id),
+        liveIncarnation: id => this.options.manager.liveIncarnationId(id),
+        foreground: id => this.options.manager.foregroundProcessIdentity(id),
+        generation: id => this.attentionChanges.get(id) ?? { generation: 0, pending: 0 },
+        screen: async (id, incarnation) => {
+          const mirror = this.options.manager.runningScreenMirror(id, incarnation)
+          if (!mirror) return null
+          await mirror.settled()
+          return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+        },
+        write: (id, line) => { attempted = true; this.typeLine(id, line) }
+      }, {
+        seen, open, generation: this.attentionChanges.get(sessionId)?.generation ?? 0,
+        quietMs: 0, quietWords: 'Its turn is still running', line: this.grantAccessLine(run.runId, attempt.item, attempt.id),
+        finished: { at: this.finishedTurns.get(sessionId)?.incarnationId === seen.incarnationId
+          ? this.finishedTurns.get(sessionId)?.at ?? null : null, unknown: 'No fresh finished turn' },
+        stillAllowed: () => {
+          const period = this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null
+          const state = period?.runs.find(other => other.runId === run.runId)?.access?.find(other => other.id === attempt.id)
+          return state && state.outcome === null && this.now().getTime() - Date.parse(state.at) < GRANT_ACCESS_TIMEOUT_MS &&
+            (state.incarnation === null || claimed && state.incarnation === seen.incarnationId) ? null : 'Access check is no longer pending'
+        },
+        claim: async () => { claimed = await this.claimGrantAccess(target); return claimed ? null : 'Access check was already handed' },
+        unclaim: async () => { if (claimed && !attempted) await this.claimGrantAccess(target, 'unclaim') }
+      })
+    }
+  }
+
+  private async readNightFacts(scope: ControlScope, runId: string, callerCwd?: string, project?: string, epic?: number) {
+    const cwd = scope.kind === 'session' ? this.options.manager.liveLaunchDirectory(scope.sessionId) ?? this.knownSessions.get(scope.sessionId)?.cwd : callerCwd
+    const policy = pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer())
+    return readGrantFacts({ cwd, project: project ?? callerCwd, runId, epic, policy })
+  }
+
+  private async recoverNightAllowances(runId?: string): Promise<void> {
+    const read = this.grantRead
+    if (read.state !== 'read') return
+    for (const period of read.record.periods) {
+      for (const entry of period.limitApplies ?? []) {
+        if (entry.state !== 'writing' || runId !== undefined && entry.runId !== runId) continue
+        try {
+          const plan = await resolveGrantLimitPlan(entry.term.project)
+          await withNightAllowanceLock(plan, async () => {
+            const commit = await findNightAllowance(plan, entry)
+            this.grantChanged(await this.options.database.companion('settleLimitApply', period.periodId, entry.source,
+              commit === null ? { state: 'interrupted' } : { state: 'written', commit }, this.iso()))
+          })
+        } catch { /* An unreadable history or a live writer leaves the journal entry pending. */ }
+      }
+    }
+  }
+
+  private async applyGrantLimit(request: GrantLimitRequest) {
+    const refuse = (detail: string) => new HostControlError(ERROR_CODES.invalidArgument, detail)
+    const read = async () => (await this.options.database.companion('getGrants')).read
+    const earlier = (snapshot: GrantRead) => snapshot.state === 'read' ? snapshot.record.periods.flatMap(period => period.limitApplies ?? [])
+      .find(entry => entry.runId === request.runId && entry.sessionId === request.sessionId && entry.useId === request.useId) : undefined
+    const receipt = (entry: GrantLimitApply) => {
+      if (entry.item !== request.item) throw refuse('This use id belongs to a different line')
+      if (entry.state === 'failed') throw refuse(entry.detail ?? 'The allowance was not written')
+      return { outcome: 'repeated', state: entry.state, commit: entry.commit, at: entry.at }
+    }
+    await this.recoverNightAllowances(request.runId)
+    const before = await read()
+    const prior = earlier(before)
+    if (prior !== undefined) return receipt(prior)
+    const period = before.state === 'read' ? openGrantPeriod(before.record) : null
+    const run = period?.runs.find(candidate => candidate.runId === request.runId && candidate.card.sessionId === request.sessionId)
+    const term = run?.card.terms.find(candidate => candidate.kind === 'limit' && candidate.id === request.item)
+    if (!period || !run || term?.kind !== 'limit' || !term.pin) throw refuse('No current approved limit line belongs to this run')
+    const cwd = this.options.manager.liveLaunchDirectory(request.sessionId) ?? this.knownSessions.get(request.sessionId)?.cwd
+    if (!await sameGrantCheckout(cwd, term.project)) throw refuse('The allowance belongs to a different checkout')
+    const plan = await resolveGrantLimitPlan(term.project)
+    return withNightAllowanceLock(plan, async (fd) => {
+      const existing = earlier(await read())
+      if (existing !== undefined) return receipt(existing)
+      const current = await pinGrantLimit(cwd, term).catch(() => null)
+      if (!current || current.go !== term.pin!.go || current.commit !== term.pin!.commit || current.token !== term.pin!.token) {
+        throw refuse('The go or allowance changed; nothing was written')
+      }
+      const marked = await this.options.database.companion('markLimitApply', request, period.periodId, run.card.revision,
+        term.pin!, randomUUID(), this.iso())
+      if (!marked.entry) throw refuse(marked.detail ?? 'The limit line changed; nothing was written')
+      this.grantChanged(marked.read)
+      const entry = marked.entry
+      let commit: string | null
+      try {
+        commit = (await writeNightAllowance(plan, entry, fd)).commit
+      } catch (error) {
+        // The ref may have moved before the write reported failure. The commit and the exact owner act decide.
+        commit = await findNightAllowance(plan, entry)
+        if (commit === null) {
+          const detail = error instanceof Error ? maskSecrets(error.message).slice(0, 400) : 'The allowance write failed'
+          this.grantChanged(await this.options.database.companion('settleLimitApply', period.periodId, entry.source,
+            { state: 'failed', detail }, this.iso()))
+          throw refuse(detail)
+        }
+      }
+      const at = this.iso()
+      this.grantChanged(await this.options.database.companion('settleLimitApply', period.periodId, entry.source, { state: 'written', commit }, at))
+      return { outcome: 'recorded', state: 'written', commit, at }
+    })
+  }
+
   private async grantStatusFor(scope: ControlScope, runId?: string): Promise<unknown> {
     let read: GrantRead
     let away: AwayRecord
     try {
-      ({ read, away } = await this.options.database.companion('getGrants'))
+      await this.recoverNightAllowances(runId)
+      const state = await this.options.database.companion('getGrants')
+      read = state.read
+      away = state.away
     } catch {
       const reason = 'BMN could not read its grant record, so nothing is granted'
       return { departure: null, runs: runId === undefined ? [] : [{ runId, active: false, reason, lines: grantStatusLines(runId, { active: false, reason }) }] }
@@ -2068,7 +2264,14 @@ export class CompanionService {
       departure,
       runs: ids.map((id) => {
         const status = grantStatus(read, away, id)
-        return { runId: id, ...status, lines: grantStatusLines(id, status) }
+        const run = open?.runs.find(candidate => candidate.runId === id && (scope.kind === 'owner' || candidate.card.sessionId === scope.sessionId))
+        const limitRaises = open && run ? run.card.terms.filter(term => term.kind === 'limit').map(term => ({
+          item: term.id, name: term.name, epic: term.epic, from: term.from, to: term.to,
+          approved: run.answer?.cardRevision === run.card.revision && grantChoice(run.answer.choices, term.id) === 'yes',
+          state: grantLimitWords(open, run, term, this.now())
+        })) : []
+        return { runId: id, ...status, ...(limitRaises.length === 0 ? {} : { limitRaises }),
+          lines: [...grantStatusLines(id, status), ...limitRaises.map(raise => `Limit ${raise.item}: ${raise.state}`)] }
       })
     }
   }

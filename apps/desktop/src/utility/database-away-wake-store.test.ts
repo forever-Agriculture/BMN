@@ -72,6 +72,21 @@ describe('recordAwayWake (Story 113.6 AC1)', () => {
 })
 
 describe('awayNightData (Story 113.6 AC2-AC3)', () => {
+  it('counts resting time within the Away period and leaves a later restart unknown', () => {
+    for (const [id, ended] of [['already-idle', T - 10_000], ['finished', T + HOUR], ['restarted', T + HOUR]] as const) {
+      agentSession(id, 'claude', T - HOUR)
+      database.prepare(`INSERT INTO turn_record(turn_id, number, session_id, incarnation_id, foreground, app, state, end_kind, started_at, ended_at, totals_state)
+        VALUES (?, 1, ?, ?, 'claude', 'claude', 'closed', 'finished', ?, ?, 'none')`)
+        .run(id, id, `inc-${id}`, at(ended - 1_000), at(ended))
+    }
+    database.prepare(`INSERT INTO process_incarnation(incarnation_id, session_id, process_start_identity, state, started_at)
+      VALUES ('next-process', 'restarted', 'new', 'running', ?)`).run(at(T + 2 * HOUR))
+    const night = awayNightData(database, { periodId: 'p1', since: at(T), until: at(T + 3 * HOUR), everyMs: EVERY })
+    expect(night.unknown.map(row => [row.sessionId, row.restedFrom, row.restedMs])).toEqual([
+      ['already-idle', at(T), 3 * HOUR], ['finished', at(T + HOUR), 2 * HOUR], ['restarted', null, null]
+    ])
+  })
+
   it('reads the night back, with an agent session no tick decided as unknown and a plain shell left out', () => {
     agentSession('woke', 'claude', T - HOUR)
     agentSession('lost', 'codex', T - HOUR)
@@ -82,8 +97,8 @@ describe('awayNightData (Story 113.6 AC2-AC3)', () => {
     recordAwayWake(database, tick(3, { processStartedAt: at(T + 5 * HOUR) }), [decision('lost', { app: 'codex', reason: 'quiet', prompt: null, foreground: null })])
     const night = awayNightData(database, { periodId: 'p1', since: at(T), until: at(T + 7 * HOUR), everyMs: EVERY })
     expect(night.woken.map((row) => row.sessionId)).toEqual(['woke'])
-    expect(night.missed).toEqual([{ sessionId: 'lost', app: 'codex', reason: 'prompt-busy', at: at(T + EVERY) }])
-    expect(night.unknown).toEqual([{ sessionId: 'quiet', app: 'claude', reason: null, at: null }])
+    expect(night.missed).toEqual([{ sessionId: 'lost', app: 'codex', reason: 'prompt-busy', at: at(T + EVERY), restedMs: null, restedFrom: null, stopReport: null }])
+    expect(night.unknown).toEqual([{ sessionId: 'quiet', app: 'claude', reason: null, at: null, restedMs: null, restedFrom: null, stopReport: null }])
     expect(night.unknownSpans).toEqual([{ from: at(T + 2 * EVERY), to: at(T + 3 * EVERY), why: 'restart' }])
     expect(night.complete).toBe(true)
   })
