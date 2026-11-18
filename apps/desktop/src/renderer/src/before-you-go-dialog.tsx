@@ -117,7 +117,9 @@ export function BeforeYouGoDialog(props: {
   for (const run of runs) if (!run.card.nothing && !initialOrder.current.includes(run.runId)) initialOrder.current.push(run.runId)
   for (const run of runs) {
     const before = displayed.current.get(run.runId)
-    if (!holding || before === undefined || before.card.revision === run.card.revision) displayed.current.set(run.runId, run)
+    if (!holding || before === undefined || before.card.nothing || before.card.revision === run.card.revision) {
+      displayed.current.set(run.runId, run)
+    }
   }
   const ordered = initialOrder.current.map(id => displayed.current.get(id)).filter((run): run is GrantRun => run !== undefined && !run.card.nothing)
   const unseenRevision = ordered.some(run => { const latest = runs.find(other => other.runId === run.runId); return latest !== undefined && latest.card.revision !== run.card.revision })
