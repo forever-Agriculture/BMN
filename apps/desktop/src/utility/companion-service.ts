@@ -1150,8 +1150,8 @@ export class CompanionService {
           })
           if (result.outcome === 'invalid') throw new HostControlError(ERROR_CODES.invalidArgument, result.reason)
           if (result.outcome === 'stale') {
-            // The fence that refused it may be the Away revision or the departure (its period or state); say which.
-            throw new HostControlError(ERROR_CODES.revisionConflict, p.expectedRevision !== undefined && p.expectedRevision !== result.record.revision
+            // Say which fence refused it: the departure (checked first) or the Away revision the caller sent.
+            throw new HostControlError(ERROR_CODES.revisionConflict, result.fence !== 'departure' && p.expectedRevision !== undefined && p.expectedRevision !== result.record.revision
               ? `The away state changed since the revision you saw; it is at revision ${result.record.revision} now; nothing was changed`
               : `The departure changed before this arrived; nothing was changed. Look again (bmn away --json), then send it again`)
           }

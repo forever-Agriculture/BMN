@@ -370,6 +370,8 @@ describe('resumed departure gaps', () => {
       const phone = departureHeadText(ownerGrantView({ state: 'read', record: record() }), new Date(AT)).split('\n')
       const lines = departureOmittedLines(saved ?? undefined)
       lines.forEach((line, index) => expect(phone.indexOf(line)).toBe(2 + index))
+      // At every size, not only where a count exists: the phone's head holds exactly the count lines, none at 64 or fewer.
+      expect(phone.filter(line => line.includes('not asked: the list is full'))).toEqual(lines)
       expect(saved?.omitted).toEqual(Object.keys(omitted).length ? omitted : undefined)
       expect(departureOmittedLines(saved ?? undefined)).toEqual(total === 65 ? ['1 more session not asked: the list is full'] : total === 100 ? ['36 more sessions not asked: the list is full'] : [])
     })

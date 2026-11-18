@@ -4952,6 +4952,8 @@ describe('Away (Story 76.3)', () => {
         // The owner's real CLI command: refused, and the words name the departure, not an Away revision he never sent.
         const handlers = service['control']['options'].handlers
         await expect(handlers.changeAway({ to: 'back', scope: { kind: 'owner' } })).rejects.toThrow(/The departure changed before this arrived; nothing was changed/)
+        // Both fences differ (the Away revision moved with the automatic Away): the departure fence refused first, so its words.
+        await expect(handlers.changeAway({ to: 'back', scope: { kind: 'owner' }, expectedRevision: 0 })).rejects.toThrow(/The departure changed before this arrived; nothing was changed/)
         const back = await service.changeAway({ to: 'back', source: 'cli' })
         expect(back.outcome).toBe('stale')
         expect(readRecord().periods.at(-1)?.state).toBe('away')

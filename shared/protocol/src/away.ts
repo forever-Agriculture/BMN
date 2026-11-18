@@ -67,7 +67,8 @@ export type AwayChangeResult =
   | { outcome: 'changed'; record: AwayRecord }
   | { outcome: 'unchanged'; record: AwayRecord }
   | { outcome: 'repeated'; record: AwayRecord }
-  | { outcome: 'stale'; record: AwayRecord }
+  /** `fence` names the check that refused it: the Away revision, or the departure (its generation, period or state). */
+  | { outcome: 'stale'; record: AwayRecord; fence?: 'away' | 'departure' }
   | { outcome: 'invalid'; record: AwayRecord; reason: string }
 
 const orNull = <T>(value: unknown, test: (value: unknown) => value is T): T | null => test(value) ? value : null
@@ -122,7 +123,7 @@ export function applyAwayChange(current: AwayRecord, change: AwayChange, now: st
   if (change.source === 'agent' && (change.expectedRevision === undefined || !change.agentSessionId)) {
     return { outcome: 'invalid', record: current, reason: 'An agent names the away revision it saw and its session' }
   }
-  if (change.expectedRevision !== undefined && change.expectedRevision !== current.revision) return { outcome: 'stale', record: current }
+  if (change.expectedRevision !== undefined && change.expectedRevision !== current.revision) return { outcome: 'stale', record: current, fence: 'away' }
   if (change.to === 'back' && change.note !== undefined && change.note !== null) {
     return { outcome: 'invalid', record: current, reason: 'A note goes with away, not back' }
   }
