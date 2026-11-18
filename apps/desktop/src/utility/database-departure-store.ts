@@ -43,7 +43,9 @@ export function departureAction(database: DatabaseConnection, input: DepartureAc
     record = { ...record, operations: [...record.operations, { key, revision: record.revision }].slice(-500) }
     return reply('changed', writeGrantRow(database, record, now))
   }
-  if (record.revision !== input.expectedRevision) return stale()
+  // D15: Go, Not leaving and reopening are the owner's acts on a period; BMN's own bookkeeping (reasons, claims, told,
+  // phone state) moves the revision without competing with them, so they are fenced below on the period and its state.
+  if (input.action !== 'go' && input.action !== 'cancel' && input.action !== 'open' && record.revision !== input.expectedRevision) return stale()
   if (awayNoteProblem(input.note) !== null) return reply('unchanged', read, awayNoteProblem(input.note)!)
   if (period?.state === 'leaving' && period.collection === undefined && (input.action === 'open' || input.action === 'presented') && input.collection !== undefined) {
     record = setDepartureCollection(upgradeGrantRecord(record), period.periodId, input.collection)

@@ -59,30 +59,24 @@ export async function runAwaySelfTest(host: SelfTestHost, client: PtyHostClient,
 
     phase('telegram')
     const from = bot.calls.length
+    const phoneDiag = async (): Promise<void> => {
+      console.error('[130-phone-diag] '+JSON.stringify({ away: await shown(), grant: await renderer<OwnerGrantView>('window.aiTerminal.getGrant()'),
+        telegram: await client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {}), events: bot.events,
+        calls: bot.calls.slice(from).map(call => ({ method: call.method, messageId: call.messageId, text: call.body.text, replyTo: call.body.reply_to_message_id, callback: call.body.callback_query_id, keyboard: call.body.reply_markup })) }))
+    }
     bot.tapOn('Before you go · getting ready', [{ tap: 'Go now' }])
     bot.say('/away train to Kyiv')
-    let retriedStaleTap = false
+    // D15: one tap is enough; BMN's own bookkeeping never makes his Go stale.
     const phoneAway = await until(async () => {
       const view = await shown()
-      if (view.state === 'away' && view.source === 'telegram') return view
-      const updates = bot.calls.slice(from)
-      const refused = updates.some(call => call.method === 'answerCallbackQuery' && String(call.body.text).startsWith('The list changed.'))
-      const head = updates.findLast(call => call.method === 'editMessageText' && String(call.body.text).startsWith('Before you go · getting ready'))
-      if (!retriedStaleTap && refused && head?.messageId != null) {
-        retriedStaleTap = true
-        bot.tapOn('Before you go · getting ready', [{ tap: 'Go now' }], head.messageId)
-      }
-      return undefined
-    }, '/away from Telegram').catch(async error => {
-      console.error('[130-phone-diag] '+JSON.stringify({ away: await shown(), grant: await renderer<OwnerGrantView>('window.aiTerminal.getGrant()'), events: bot.events, calls: bot.calls.slice(from).map(call => ({ method: call.method, messageId: call.messageId, text: call.body.text, callback: call.body.callback_query_id, keyboard: call.body.reply_markup })) }))
-      throw error
-    })
+      return view.state === 'away' && view.source === 'telegram' ? view : undefined
+    }, '/away from Telegram').catch(async error => { await phoneDiag(); throw error })
     assert.equal(phoneAway.note, 'train to Kyiv')
     await until(async () => sent(from).some(text => /^(Away since .*Note kept on the laptop\.|Getting ready since )/.test(text)) ? true : undefined, '/away reply')
     assert.ok(!sent(from).some(text => text.includes('train to Kyiv')), 'the reply never echoes the note')
     bot.say('/back')
-    await until(async () => (await shown()).state === 'back' ? true : undefined, '/back from Telegram')
-    const backReply = await until(async () => sent(from).find(text => text.startsWith('Back. Away ')), '/back reply')
+    await until(async () => (await shown()).state === 'back' ? true : undefined, '/back from Telegram').catch(async error => { await phoneDiag(); throw error })
+    const backReply = await until(async () => sent(from).find(text => text.startsWith('Back. Away ')), '/back reply').catch(async error => { await phoneDiag(); throw error })
     assert.match(backReply, /(Nothing waits on you\.|Waiting on you\n)/)
     assert.equal((await shown()).endedBy, 'telegram')
 

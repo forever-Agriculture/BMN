@@ -56,6 +56,7 @@ import type { ScreenLike } from './remote-answer'
 import { TelegramConnectorError, type TelegramConnector, type InboundReply } from './telegram-connector'
 import { TELEGRAM_HELP_TEXT } from './telegram-away'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
+import { departurePhone } from './database-departure-store'
 import { startFakeBotApi } from '../main/fake-bot-api'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -4887,6 +4888,76 @@ describe('Away (Story 76.3)', () => {
     }
   })
 
+  describe("BMN's own bookkeeping never refuses the owner's acts (D15)", () => {
+    const leave = async () => {
+      vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
+      const handlers = service['control']['options'].handlers
+      const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+      await handlers.observeHookEvent({ ...agent, agent: 'claude', event: 'Stop', source: null, toolName: null,
+        effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+      await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+      const view = service.grantForOwner()
+      expect(view.period?.state).toBe('leaving')
+      return view
+    }
+    // A write the host has not read yet, as the delivery and phone bookkeeping make while the list is open.
+    const bookkeeping = (periodId: string, messageId: number) =>
+      departurePhone(database, periodId, { state: 'sent', messageId, autoAnnounced: false }, new Date(Date.parse(clock) + 1).toISOString())
+
+    it('starts Away on a Go and cancels on Not leaving against the period and its state, not the list revision', async () => {
+      const seen = await leave()
+      bookkeeping(seen.period!.periodId, 71)
+      await expect(service.route(METHOD_REGISTRY.grantDeparture, {
+        action: 'go', periodId: seen.period!.periodId, expectedRevision: seen.revision, operationKey: 'phone-go-after-bookkeeping'
+      })).resolves.toMatchObject({ outcome: 'changed', away: { state: 'away' } })
+      // 130.1 AC6 still holds: the competing Not leaving on the same view is stale once Go is recorded.
+      await expect(service.route(METHOD_REGISTRY.grantDeparture, {
+        action: 'cancel', periodId: seen.period!.periodId, expectedRevision: seen.revision, operationKey: 'window-cancel-late'
+      })).resolves.toMatchObject({ outcome: 'stale', away: { state: 'away' } })
+    })
+
+    it('cancels on Not leaving after bookkeeping moved the revision', async () => {
+      const seen = await leave()
+      bookkeeping(seen.period!.periodId, 72)
+      await expect(service.route(METHOD_REGISTRY.grantDeparture, {
+        action: 'cancel', periodId: seen.period!.periodId, expectedRevision: seen.revision, operationKey: 'phone-cancel-after-bookkeeping'
+      })).resolves.toMatchObject({ outcome: 'changed' })
+      expect(service.grantForOwner().period).toMatchObject({ state: 'cancelled', endedBy: 'app' })
+    })
+
+    it('takes /back while away after bookkeeping the host has not read, and replies Back', async () => {
+      const sent: string[] = []
+      fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+      const seen = await leave()
+      await service.route(METHOD_REGISTRY.grantDeparture, { action: 'go', periodId: seen.period!.periodId, expectedRevision: seen.revision, operationKey: 'go' })
+      expect(service.awayForOwner().state).toBe('away')
+      bookkeeping(seen.period!.periodId, 73)
+      await service['handleTelegramReply'](reply(61, '/back'))
+      expect(service.awayForOwner()).toMatchObject({ state: 'back', endedBy: 'telegram' })
+      expect(sent.at(-1)).toMatch(/^Back\. Away /)
+    })
+
+    it('replies to /back once when the worker committed Back but its answer was lost', async () => {
+      const sent: string[] = []
+      fakeTelegram(async (message) => { sent.push(message); return { messageId: sent.length } })
+      await setAwayAndGo()
+      const worker = service['options'].database
+      const real = worker.companion.bind(worker)
+      let lost = false
+      worker.companion = (async (operation: string, ...args: unknown[]) => {
+        const result = await (real as (name: string, ...rest: unknown[]) => Promise<unknown>)(operation, ...args)
+        if (operation === 'changeAway' && !lost) { lost = true; throw new Error('synthetic lost worker reply after commit') }
+        return result
+      }) as typeof worker.companion
+      try {
+        await service['handleTelegramReply'](reply(62, '/back'))
+      } finally { worker.companion = real }
+      expect(lost).toBe(true)
+      expect(service.awayForOwner()).toMatchObject({ state: 'back', endedBy: 'telegram' })
+      expect(sent.filter(text => text.startsWith('Back. Away '))).toHaveLength(1)
+    })
+  })
+
   it('re-reads an unreadable grant cache and restores the exact saved departure', async () => {
     vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
     const handlers = service['control']['options'].handlers
@@ -5227,7 +5298,7 @@ describe('130 D9: service routes and actual phone callbacks share the worker fen
     if (service['autoAwayTimer']) clearTimeout(service['autoAwayTimer'])
   })
   it.each(['control', 'replayed-back', 'stale-cancel', 'early-auto'] as const)('an old command does not invalidate a later claimed departure wake: %s', async mode => {
-    await start(); await command(801, '/back'); await settle(); await start()
+    await start(); const ended = service.grantForOwner(); await command(801, '/back'); await settle(); await start()
     service['finishedTurns'].set('s1', { incarnationId: 'incarnation-1', at: now })
     clock = new Date(Date.parse(now) + 30_000).toISOString()
     const reached = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
@@ -5241,7 +5312,8 @@ describe('130 D9: service routes and actual phone callbacks share the worker fen
       expect(service.grantForOwner().period!.collection!.sessions.find(row => row.sessionId === 's1')!.claim).not.toBeNull()
       const before = await records()
       if (mode === 'replayed-back') await command(801, '/back')
-      if (mode === 'stale-cancel') await app('cancel', { ...service.grantForOwner(), revision: service.grantForOwner().revision - 1 })
+      // D15: a Not leaving is stale only for another period or state; the claim moving the revision is no competitor.
+      if (mode === 'stale-cancel') await app('cancel', { ...service.grantForOwner(), period: ended.period })
       if (mode === 'early-auto') await service['automaticAway']()
       await settle(); expect(await records()).toBe(before)
     } finally { release.resolve(); await wake }

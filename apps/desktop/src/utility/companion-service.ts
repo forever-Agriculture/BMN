@@ -1882,7 +1882,8 @@ export class CompanionService {
   private async applyAwayChange(change: Omit<AwayChange, 'periodId'>): Promise<AwayChangeResult> {
     const before = this.ownerAway()
     const view = this.grantForOwner()
-    const result = await this.options.database.companion('changeAway', { expectedGrantRevision: view.revision, expectedGrantGeneration: view.generation ?? 0, expectedPeriodId: view.period?.periodId ?? null, ...change }, this.iso())
+    // D15: the owner's Away and Back are fenced on the generation and the period, never on the revision BMN's bookkeeping moves.
+    const result = await this.options.database.companion('changeAway', { expectedGrantGeneration: view.generation ?? 0, expectedPeriodId: view.period?.periodId ?? null, ...change }, this.iso())
     if (result.outcome === 'changed' || result.record.revision > this.awayRecord.revision) {
       this.awayRecord = result.record
       this.presenceChanged(before)
@@ -4188,11 +4189,14 @@ export class CompanionService {
    */
   private async telegramAway(connector: TelegramConnector, reply: InboundReply, command: TelegramAwayCommand, bot: string): Promise<void> {
     const operationKey = `telegram:${bot}:${reply.updateId}`
+    // A worker answer lost after commit would end this update without its reply: the same key asks once more, and the
+    // committed change answers as repeated, so the reply still goes once.
+    const once = <T>(work: () => Promise<T>): Promise<T> => work().catch(() => work())
     const grant = this.grantForOwner()
     if (command.to === 'away' && this.awayRecord.state !== 'away') {
-      const result = await this.ownerDeparture({ action: grant.period?.state === 'leaving' ? 'open' : 'start',
+      const result = await once(() => this.ownerDeparture({ action: grant.period?.state === 'leaving' ? 'open' : 'start',
         periodId: grant.period?.state === 'leaving' ? grant.period.periodId : null, expectedRevision: grant.revision, expectedGeneration: grant.generation ?? 0, operationKey,
-        ...(command.note !== null && awayNoteProblem(command.note) === null ? { note: command.note } : {}) }, 'telegram')
+        ...(command.note !== null && awayNoteProblem(command.note) === null ? { note: command.note } : {}) }, 'telegram'))
       const period = result.view.period
       const note = command.note === null ? 'none' : awayNoteProblem(command.note) === null ? 'kept' : [...command.note].length > AWAY_NOTE_LIMIT ? 'too-long' : 'refused'
       const text = period?.state === 'leaving'
@@ -4201,19 +4205,19 @@ export class CompanionService {
       return this.telegramCommandReply(connector, reply, text, bot)
     }
     if (command.to === 'back' && grant.period?.state === 'leaving') {
-      const result = await this.ownerDeparture({ action: 'cancel', periodId: grant.period.periodId, expectedRevision: grant.revision, expectedGeneration: grant.generation ?? 0, operationKey }, 'telegram')
+      const result = await once(() => this.ownerDeparture({ action: 'cancel', periodId: grant.period!.periodId, expectedRevision: grant.revision, expectedGeneration: grant.generation ?? 0, operationKey }, 'telegram'))
       return this.telegramCommandReply(connector, reply, result.detail ?? 'Not leaving. Open lines withdrawn.', bot)
     }
     const before = this.awayRecord.state
     const noteBefore = this.awayRecord.note
     let note: 'none' | 'kept' | 'replaced' | 'too-long' | 'refused' = 'none'
-    let result = await this.changeAway(command.to === 'away'
+    let result = await once(() => this.changeAway(command.to === 'away'
       ? { to: 'away', source: 'telegram', operationKey, ...(command.note === null ? {} : { note: command.note }) }
-      : { to: 'back', source: 'telegram', operationKey })
+      : { to: 'back', source: 'telegram', operationKey }))
     if (result.outcome === 'invalid' && command.to === 'away') {
       // Leaving never fails for a refused note: away is set and only the note is refused (Fable's question 2), with its reason.
       note = command.note !== null && [...command.note].length > AWAY_NOTE_LIMIT ? 'too-long' : 'refused'
-      result = await this.changeAway({ to: 'away', source: 'telegram', operationKey })
+      result = await once(() => this.changeAway({ to: 'away', source: 'telegram', operationKey }))
     } else if (command.to === 'away' && command.note !== null) note = before === 'away' && noteBefore !== command.note ? 'replaced' : 'kept'
     const record = result.record
     const text = command.to === 'away'
