@@ -35,6 +35,7 @@ import { testedApp } from '../lib/tested-app.mjs'
 import { AWAY_WAKE_REASONS, awayWakeReasonCode } from '../../shared/protocol/dist/away-night.js'
 import { nightMismatches } from './away-night-check.mjs'
 import { classifyMessageStartup, messageStartupStep, messageProcessIdentity } from './message-wake-startup.mjs'
+import { visibleScreen } from './away-skills-startup.mjs'
 import { processTree, stopTree } from './away-skills-processes.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -330,12 +331,18 @@ async function run(scenario, binary) {
       // Codex reads an Enter that follows fast typing as a newline in a paste, so a typist's pause comes first.
       const type = async (text, enter = true) => { await input.focus(); await page.keyboard.type(text); if (enter) { await sleep(1_000); await page.keyboard.press('Enter') } }
       const screen = () => page.locator('.session-terminal.selected .xterm-rows').innerText()
+      const sessionId = await page.locator('.session-terminal.selected').getAttribute('data-session-id')
+      const nativeScreen = async () => visibleScreen(await page.evaluate(id => globalThis.__aitermTest.snapshot(id), sessionId)).join('\n')
       await sleep(3_000)
-      await type(`cd '${scratch}' && ${command}`)
+      if (parked) {
+        const launcher = join(scratch, '.parked-native.sh')
+        writeFileSync(launcher, `#!/bin/bash\ncd ${shellQuote(scratch)} || exit 1\nexec ${command}\n`, { mode: 0o700 })
+        await type(shellQuote(launcher))
+      } else await type(`cd '${scratch}' && ${command}`)
       const ready = app === 'claude' ? /^❯/mu : app === 'codex' ? /^›/mu : /Ask anything/u
       const shown = [], startupHistory = [], startupUsed = { keys: 0 }
       const startupFrame = async () => {
-        const text = await screen().catch(() => '')
+        const text = await (parked ? nativeScreen() : screen()).catch(() => '')
         if (app === 'claude' || app === 'codex') return { text, ...classifyMessageStartup(app, text.split('\n'), scratch) }
         if (/Hooks need review|permission|authenticat|sign in|log in|onboarding|Update available|Choose the text style|Press Enter to continue/iu.test(text)) return { text, state: 'dialog' }
         return { text, state: ready.test(text) ? 'composer' : 'loading' }
@@ -347,7 +354,7 @@ async function run(scenario, binary) {
         shown.push(frame.text.split('\n').slice(-6))
         if (frame.state === 'dialog') {
           report[`${name}StartScreens`] = shown
-          throw new Error(`UNVERIFIED: ${name} requires owner startup/permission action; zero keys sent`)
+          throw new Error(`UNVERIFIED: ${name} startup: ${frame.detail ?? 'requires owner action'}; no dialog key sent`)
         }
         if (frame.state === 'composer') { promptReady = true; break }
         if (frame.state === 'trust' || frame.state === 'trust-negative') {
@@ -355,6 +362,7 @@ async function run(scenario, binary) {
           const action = messageStartupStep(startupHistory, startupUsed)
           if (action.action === 'fail') throw new Error(`UNVERIFIED: ${action.reason}`)
           if (action.action === 'key') {
+            if (parked && (await startupFrame()).state !== frame.state) continue
             await input.focus(); await page.keyboard.press(action.key)
             startupUsed.keys++; startupUsed[action.mark] = true
           }
@@ -381,7 +389,6 @@ async function run(scenario, binary) {
         return ticks(n)
       }
       const skipped = (lines) => lines.length === 1 && lines[0].includes('skipped')
-      const sessionId = await page.locator('.session-terminal.selected').getAttribute('data-session-id')
       const hookEvents = () => page.evaluate((id) => globalThis.aiTerminal.listHookEvents(id), sessionId)
       if (upgrade) {
         const wakes = () => standIn.requests.filter((request) => request.agent && request.user === `${WAKE_LINE} `).length

@@ -114,7 +114,6 @@ export interface GrantAccessAttempt {
   id: string
   item: string
   at: string
-  firstAt?: string
   incarnation: string | null
   outcome: 'works' | 'fails' | null
   cause: GrantAccessCause | null
@@ -236,6 +235,8 @@ export interface GrantPeriod {
   refusals: GrantRefusal[]
   reports: GrantReport[]
   limitApplies?: GrantLimitApply[]
+  /** The sign-in lines still waiting when Away started, even if the card was later replaced. */
+  loginsAtDeparture?: Array<{ runId: string; item: string; title: string; name: string }>
   collection?: DepartureCollection
   /** Private owner note, excluded from agent status and departure notices. */
   note?: string | null
@@ -553,7 +554,7 @@ function readPeriod(value: unknown): GrantPeriod | null {
     const access = run.access === undefined ? [] : run.access as GrantAccessAttempt[]
     if (!Array.isArray(access) || access.length > GRANT_LIMITS.terms || access.some(item => !item ||
       grantIdentifier(item.id, GRANT_LIMITS.useId) === null || !card.terms.some(term => term.kind === 'access' && term.id === item.item) ||
-      !isIso(item.at) || item.firstAt !== undefined && !isIso(item.firstAt) || item.incarnation !== null && !isTextOrEmpty(item.incarnation) ||
+      !isIso(item.at) || item.incarnation !== null && !isTextOrEmpty(item.incarnation) ||
       ![null, 'works', 'fails'].includes(item.outcome) || (item.outcome === 'fails' ? grantAccessCause(item.cause) === null : item.cause !== null))) return null
     runs.push({ runId, title: run.title, card, answer, earlier: earlier as GrantAnswer[], phone, ...(access.length > 0 ? { access } : {}) })
   }
@@ -604,9 +605,18 @@ function readPeriod(value: unknown): GrantPeriod | null {
   }
   const collection = row.collection === undefined ? undefined : readDepartureCollection(row.collection)
   if (collection === null) return null
+  const loginsAtDeparture = Array.isArray(row.loginsAtDeparture)
+    ? row.loginsAtDeparture.slice(0, GRANT_LIMITS.runs * GRANT_LIMITS.terms).flatMap(item => {
+      const runId = grantIdentifier(item?.runId, GRANT_LIMITS.runId)
+      const id = grantIdentifier(item?.item, GRANT_LIMITS.itemId)
+      const title = grantWords(item?.title, GRANT_LIMITS.title)
+      const name = grantWords(item?.name, GRANT_LIMITS.title)
+      return runId && id && title && name ? [{ runId, item: id, title, name }] : []
+    }) : []
   return {
     periodId: row.periodId, state: row.state as GrantPeriodState, startedAt: row.startedAt, startedBy: row.startedBy as AwaySource,
     ...(limitApplies.length === 0 ? {} : { limitApplies }),
+    ...(loginsAtDeparture.length === 0 ? {} : { loginsAtDeparture }),
     agentSessionId: isTextOrEmpty(row.agentSessionId) ? row.agentSessionId : null, awayAt: isIso(row.awayAt) ? row.awayAt : null,
     endedAt: isIso(row.endedAt) ? row.endedAt : null,
     endedBy: ['app', 'cli', 'agent', 'telegram'].includes(row.endedBy as string) ? row.endedBy as AwaySource : null,
@@ -759,7 +769,11 @@ export function followAwayChange(record: GrantRecord, before: AwayRecord, after:
     if (after.state !== 'away' || after.periodId === null) return { outcome: 'unchanged', record }
     if (open?.periodId === after.periodId) {
       if (open.state === 'away') return { outcome: 'unchanged', record }
-      return { outcome: 'changed', record: withPeriod(record, { ...open, state: 'away', awayAt: now }) }
+      const loginsAtDeparture = open.runs.flatMap(run => run.card.state === 'withdrawn' ? [] : run.card.terms.flatMap(term =>
+        term.kind === 'access' && !run.access?.some(attempt => attempt.item === term.id)
+          ? [{ runId: run.runId, item: term.id, title: run.title, name: term.name }] : []))
+      return { outcome: 'changed', record: withPeriod(record, { ...open, state: 'away', awayAt: now,
+        ...(loginsAtDeparture.length === 0 ? {} : { loginsAtDeparture }) }) }
     }
     // Pressed Away with no departure pending: the period starts here, at Away, and the runs are told as on a departure.
     let next = record
@@ -909,8 +923,7 @@ export function answerGrant(record: GrantRecord, answer: {
         if (patch.length !== 1 || answer.lineId !== id || grantIdentifier(answer.accessAttemptId, GRANT_LIMITS.useId) === null ||
           !grantAccessStatus(run, id, new Date(now)).canCheck) return refuse('invalid', 'This access check is already pending or confirmed')
         const previous = nextAccess.findIndex(entry => entry.item === id)
-        const firstAt = previous < 0 ? now : nextAccess[previous]!.firstAt ?? nextAccess[previous]!.at
-        const attempt: GrantAccessAttempt = { id: answer.accessAttemptId!, item: id, at: now, firstAt,
+        const attempt: GrantAccessAttempt = { id: answer.accessAttemptId!, item: id, at: now,
           incarnation: null, outcome: null, cause: null }
         if (previous < 0) nextAccess.push(attempt)
         else nextAccess[previous] = attempt

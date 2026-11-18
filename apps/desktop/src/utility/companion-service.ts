@@ -1177,11 +1177,13 @@ export class CompanionService {
           const producer = p.scope.kind === 'session' ? this.producers.stamp(p.scope.sessionId, p.scope.incarnationId) : null
           const bound = sessionId === null ? undefined : this.options.manager.liveLaunchDirectory(sessionId) ?? this.knownSessions.get(sessionId)?.cwd
           let card = p.card
-          try {
-            const terms = await Promise.all(card.terms.map(async term => term.kind === 'limit' ? { ...term, pin: await pinGrantLimit(bound, term) } : term))
-            card = { ...card, terms }
-          } catch (error) {
-            throw new HostControlError(ERROR_CODES.invalidArgument, error instanceof Error ? maskSecrets(error.message) : 'The requested allowance could not be confirmed')
+          if (card.terms.some(term => term.kind === 'limit')) {
+            try {
+              const terms = await Promise.all(card.terms.map(async term => term.kind === 'limit' ? { ...term, pin: await pinGrantLimit(bound, term) } : term))
+              card = { ...card, terms }
+            } catch (error) {
+              throw new HostControlError(ERROR_CODES.invalidArgument, error instanceof Error ? maskSecrets(error.message) : 'The requested allowance could not be confirmed')
+            }
           }
           if (p.nothing !== undefined) {
             const facts = await this.readNightFacts(p.scope, p.runId, p.nothing.callerCwd)
@@ -2130,7 +2132,9 @@ export class CompanionService {
 
   private async sweepGrantAccess(): Promise<void> {
     const pending = this.pendingGrantAccess()
-    void this.grantCards.reconcile()
+    const period = this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null
+    // A timed-out sign-in changes the phone's Check again button without a database write.
+    if (period?.runs.some(run => run.access?.some(attempt => attempt.outcome === null))) void this.grantCards.reconcile()
     if (pending.length === 0) return
     const open = await this.options.database.companion('listAttention')
     for (const { run, attempt, sessionId } of pending) {

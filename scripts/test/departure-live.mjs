@@ -338,9 +338,10 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
               await row.getByRole('radio', { name: 'Yes', exact: true }).click()
               await list.getByRole('button', { name: 'Close Before you go', exact: true }).click()
               await type(`Run ./fixture-night apply ${terms[0].id} now. This uses the synthetic approval in the test window.`)
-              const written = await until(async () => (await get()).period?.limitApplies?.find(item => item.state === 'written'), 'native allowance apply', 120_000).catch(() => null)
-              check(`${app}: real session applied the allowance approval`, written !== null &&
-                night.plan('allowances', '7').current.fields.limits.rechecks.limit === 6)
+              const applied = await until(async () => (await get()).period?.limitApplies?.find(item => item.state !== 'writing'), 'native allowance apply', 120_000).catch(() => null)
+              check(`${app}: real session applied the allowance approval`, applied?.state === 'written' &&
+                night.plan('allowances', '7').current.fields.limits.rechecks.limit === 6,
+              { state: applied?.state ?? null, detail: applied?.detail ?? null })
               await page.locator('button.away-grant').click()
               night.markSignedIn()
               await row.getByRole('button', { name: 'Done', exact: true }).click()

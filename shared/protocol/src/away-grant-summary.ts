@@ -123,13 +123,6 @@ function grantRow(run: GrantRun, period: GrantPeriod, earlier: readonly GrantPer
   const uses = period.uses.filter((use) => use.runId === run.runId)
   const reports = period.reports.filter((report) => report.runId === run.runId)
   const refusals = period.refusals.filter((refusal) => refusal.runId === run.runId)
-  if (period.awayAt !== null) {
-    for (const term of run.card.terms) {
-      if (term.kind === 'access' && !run.access?.some(attempt => attempt.item === term.id && (attempt.firstAt ?? attempt.at) <= period.awayAt!)) {
-        add('Login waiting', term.name, AWAY_GRANT_RECORD)
-      }
-    }
-  }
   const answerFor = (revision: number | undefined): GrantAnswer | undefined => answers.find((given) => given.cardRevision === revision)
   const termOf = (id: string | null, revision?: number): GrantActionTerm | undefined =>
     [answerFor(revision)?.terms ?? [], terms, ...answers.map((given) => given.terms).reverse()].flat()

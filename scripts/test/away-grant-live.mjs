@@ -159,7 +159,8 @@ done
       title: 'Synthetic night fixes', scope: 'One review and one login',
       terms: [
         { id: 'raise', kind: 'limit', project, epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'Two review steps remain' },
-        { id: 'login', kind: 'access', name: 'Sample access', command: 'sample auth login', reason: 'The sign-in check failed' }
+        { id: 'login', kind: 'access', name: 'Sample access', command: 'sample auth login', reason: 'The sign-in check failed' },
+        { id: 'morning-login', kind: 'access', name: 'Sample morning sign-in', command: 'sample morning login', reason: 'This sign-in will stay unfinished' }
       ]
     }))
     const sent = await command('ask', `bmn grant ask --run fixture-epic-7 --card-file - < '${card}'`)
@@ -167,7 +168,7 @@ done
     await article.waitFor()
     check('131.3 and 131.4: the exact limit and login appear with their controls', sent.includes('Card revision') &&
       (await article.innerText()).includes('Raise rechecks for Epic 7 from 4 to 6') &&
-      (await article.innerText()).includes('sample auth login') && await article.getByRole('button', { name: 'Done', exact: true }).count() === 1)
+      (await article.innerText()).includes('sample auth login') && await article.getByRole('button', { name: 'Done', exact: true }).count() === 2)
     await resize(540)
     await shot('131-night-540.png')
     await resize(1280)
@@ -182,11 +183,23 @@ done
       allowances.current.fields.limits.rechecks.limit === 6 && allowances.current.fields.limits.rechecks.ceiling === 6 &&
       allowances.changes.at(-1).source.startsWith('night list: Yes to '))
     await until(async () => (await article.innerText()).includes('use bmn plan allow to lower it'), 'written confirmation')
-    await article.getByRole('button', { name: 'Done', exact: true }).click()
+    await article.getByRole('button', { name: 'Done', exact: true }).first().click()
     await until(async () => (await article.innerText()).includes('Waiting for the agent’s check'), 'Done saves a check, not a grant')
     const badReport = await command('privacy', 'bmn grant report --run fixture-epic-7 --item login --access fails --cause CANARY_PRIVATE_FIXTURE')
     check('131.4: invalid check output does not appear in the refusal', badReport.includes('No check output is accepted') && !badReport.includes('CANARY_PRIVATE_FIXTURE'))
-    bmn(['back'])
+    await dialog.locator('button.grant-go').click()
+    await until(async () => await page.locator('#away-check-box').isChecked(), 'Away saved after Go')
+    await page.locator('#away-check-box').click()
+    const morning = page.getByRole('dialog', { name: 'While you were away' })
+    const waiting = morning.getByRole('region', { name: 'Sign-ins waiting when you left' })
+    await waiting.waitFor()
+    for (const width of [1280, 540]) {
+      await resize(width)
+      const words = await waiting.innerText()
+      check(`131.4: the morning shows the waiting sign-in and its run at ${width}px`,
+        words.includes('Synthetic night fixes') && words.includes('Sample morning sign-in') && !words.includes('Sample access'))
+      await shot(`131-morning-${width}.png`)
+    }
   }
   try {
     await page.waitForSelector('.session-row')

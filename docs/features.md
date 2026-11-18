@@ -573,8 +573,9 @@ BMN checks a run’s "needs nothing" against recorded limits and open PRs. If th
 a conflicting fact, the reason and the fact appear on its row. A limit you approve above its
 ceiling stays in the plan once BMN writes it. A login row shows the exact command to copy and
 a **Done** button in both places. It shows the run’s fixed result and offers **Check again**
-if it failed or did not report. In the morning, **Rested** shows independently observed idle
-time over 30 minutes alongside the run’s reported cause when it gave one.
+if it failed or did not report. The morning lists the sign-ins still waiting when you left and
+the runs that requested them. **Rested** shows independently observed idle time over 30 minutes
+alongside the run’s reported cause when it gave one.
 In the morning, **While you were away** adds **Granted** after Finished when a run held a grant: one row per run
 that asked, used, unused or none, with one line of what it used; open a row for what you granted and not, the
 rounds per boundary, each action's uses, what was refused (an answer of yours a changed card refused too) and any

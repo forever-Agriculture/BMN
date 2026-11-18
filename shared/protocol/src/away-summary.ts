@@ -194,6 +194,7 @@ export interface AwaySummaryView {
   wentOn: { count: number; incomplete: boolean; groups: Array<{ sessionId: string; where: string; rows: AwayWentOnRow[] }>; more: string | null; empty: string | null }
   /** Requests that waited long and that he answered himself; hidden when none (Story 84.8 [d29]). */
   waitedForYou: { count: number; groups: Array<{ sessionId: string; where: string; rows: AwayWaitedRow[] }>; more: string | null }
+  loginsAtDeparture: NonNullable<GrantPeriod['loginsAtDeparture']>
   decided: { incomplete: boolean; groups: Array<{ sessionId: string; where: string; records: AwayDecisionView[] }>; more: string | null; empty: string | null; tail: string }
   /** Runs blocked now, whenever they stopped: each waits on someone. */
   stuck: { rows: AwayRunRow[]; more: string | null; empty: string | null }
@@ -570,6 +571,7 @@ export function buildAwaySummary(input: AwaySummaryInput): AwaySummaryView {
     couldNotReadWhy,
     waiting,
     waitedForYou,
+    loginsAtDeparture: input.grants?.periods.find(period => period.periodId === away.periodId)?.loginsAtDeparture ?? [],
     stuck,
     finished,
     granted: awayGrantSection(input.grants === undefined ? [] : input.grants === null ? null : input.grants.periods, away.periodId, now, input.grants?.carried ?? []),

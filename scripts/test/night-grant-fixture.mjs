@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-export function seedNightPlan(project, cliPath, environment) {
+export function seedNightPlan(project, cliPath, environment, nodePath = process.execPath) {
   const written = (name, text) => {
     const target = join(project, name)
     mkdirSync(dirname(target), { recursive: true })
@@ -30,7 +30,7 @@ export function seedNightPlan(project, cliPath, environment) {
   written('plan/allowances/007.yaml', 'schema: 1\nepic: 7\nlimits:\n  rechecks: {limit: 4, ceiling: 4, per: boundary}\n')
   git(join(project, 'plan'), 'add', '-A')
   git(join(project, 'plan'), 'commit', '-qm', 'docs: fixture plan')
-  const plan = (...argv) => JSON.parse(execFileSync(process.execPath, [cliPath, 'plan', ...argv, '--json'], { cwd: project, env: environment, encoding: 'utf8' }))
+  const plan = (...argv) => JSON.parse(execFileSync(nodePath, [cliPath, 'plan', ...argv, '--json'], { cwd: project, env: environment, encoding: 'utf8' }))
   const showing = plan('status', '--epic', '7')
   plan('go', '7', '--expect', showing.rows[0].token, '--approved', `sha256:${showing.approval_texts[0].sha256}`,
     '--source', "synthetic owner 2026-11-18T20:00Z: 'Go'")
@@ -48,11 +48,12 @@ export function seedNativeNight(project, tested, environment, composer) {
   const executable = (name, body) => chmodSync(written(name, '#!/bin/sh\n' + body), 0o700)
   const run = 'fixture-epic-7'
   const head = git(project, 'rev-parse', 'HEAD')
-  git(project, 'switch', '-qc', 'epic/7-night')
   // A synthetic repository, served exclusively by the fixture's read-only gh.
   git(project, 'remote', 'add', 'origin', 'https://github.com/example-fixture/night-probe.git')
+  git(project, 'update-ref', 'refs/remotes/origin/main', head)
+  git(project, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main')
   const repo = { owner: { login: 'example-fixture' }, defaultBranchRef: { name: 'main' }, name: 'night-probe' }
-  const pulls = [{ number: 7, headRefName: 'epic/7-night', headRefOid: head, baseRefName: 'main', isCrossRepository: false }]
+  const pulls = [{ number: 7, headRefName: 'main', headRefOid: head, baseRefName: 'release-fixture', isCrossRepository: false }]
   executable('.fixture-bin/gh', `case "$1 $2" in
   'repo view') printf '%s\\n' '${JSON.stringify(repo)}';;
   'pr list') printf '%s\\n' '${JSON.stringify(pulls)}';;

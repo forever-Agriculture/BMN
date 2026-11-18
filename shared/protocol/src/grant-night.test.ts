@@ -86,4 +86,19 @@ describe('night-only lines', () => {
     expect(result.outcome).toBe('recorded')
     expect(result.record.periods[0]?.reports[0]).toMatchObject({ cause: 'access', at: later })
   })
+
+  it('keeps the exact sign-in that was waiting at Go even if the run asks again afterward', () => {
+    const opening = { ...EMPTY_AWAY_RECORD, state: 'away' as const, periodId: 'period', since: later }
+    const start = (record: GrantRecord) => followAwayChange(record, EMPTY_AWAY_RECORD,
+      opening, { to: 'away', source: 'app', outcome: 'changed' }, later).record
+    const requested = asked(access)
+    expect(start(answer(requested, 'login', 'done', target.attempt).record).periods[0]?.loginsAtDeparture).toBeUndefined()
+    const parsed = parseGrantCardInput({ title: 'Sample renamed', scope: 'One story', terms: [{ ...access, name: 'Another sign-in' }] })
+    if ('problem' in parsed) throw Error(parsed.problem)
+    const updated = askGrant(start(requested), { runId, sessionId, agentCli: 'claude', card: parsed.card }, afterTimeout)
+    const reread = readGrantRecord(JSON.stringify(updated.record))
+    expect(reread.state === 'read' && reread.record.periods[0]?.loginsAtDeparture).toEqual([
+      { runId, item: 'login', title: 'Sample', name: 'Sample sign-in' }
+    ])
+  })
 })

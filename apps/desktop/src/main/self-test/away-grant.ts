@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import { MessageChannelMain } from 'electron'
 import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import type { DatabaseConnection } from '../../utility/database-initialization'
@@ -11,6 +12,7 @@ import type { PtyHostClient } from '../pty-host-client'
 import { SELF_TEST_TELEGRAM_CHAT_ID, type SelfTestRecorder } from './taps'
 import { waitForRendererLoad } from './probes'
 import { checkDeparturePresentation, refocusWindow } from './departure-presentation'
+import { seedNightPlan } from '../../../../../scripts/test/night-grant-fixture.mjs'
 
 const TERMS = [
   { kind: 'rounds', proposed: 3, reason: 'two review boundaries are ahead' },
@@ -165,6 +167,40 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     await until(async () => bot.calls.slice(accessStart).some(call => call.method === 'answerCallbackQuery' &&
       call.body.text === 'Check requested.') ? true : undefined, 'Done callback acknowledges the check')
 
+    phase('phone limit approval')
+    const dataHome = process.env.BMN_DATA_HOME
+    assert.ok(dataHome && /^bmn-(electron-self-test|packaged-smoke)-/u.test(basename(dirname(dirname(dataHome)))),
+      'the phone limit uses only the disposable self-test root')
+    const project = join(dirname(dirname(dataHome)), 'phone-night-plan')
+    const { written, plan } = seedNightPlan(project, control.cliPath, process.env, process.env.BMN_SELF_TEST_NODE ?? 'node')
+    const title = 'Synthetic phone limit'
+    const card = written('phone-card.json', JSON.stringify({ title, scope: 'One synthetic review boundary', terms: [
+      { id: 'raise', kind: 'limit', project, epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'Two checks still wait' }
+    ] }))
+    const shellQuote = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`
+    const script = written('phone-probe.sh', `set -eu
+${shellQuote(control.cliPath)} grant ask --run phone-limit --card-file - < ${shellQuote(card)}
+while [ ! -f begin-apply ]; do sleep 0.05; done
+${shellQuote(control.cliPath)} grant apply --run phone-limit --item raise --use-id phone-demo --json > apply.json
+touch apply-finished
+`)
+    await renderer(`(async () => {
+      const [workspace] = await window.aiTerminal.listWorkspaces(false)
+      await window.aiTerminal.createSession({ workspaceId: workspace.workspaceId, name: 'Phone limit fixture', cwd: ${JSON.stringify(project)},
+        executable: '/bin/bash', argv: ['--noprofile', '--norc', ${JSON.stringify(script)}], cols: 100, rows: 24, backgroundChoice: 'stop' })
+    })()`)
+    const limitStart = bot.calls.length
+    bot.tapOn(title, [{ tap: 'Yes' }])
+    await until(async () => (await run('phone-limit'))?.answer?.choices.raise === 'yes' ? true : undefined, 'limit Yes persisted from Telegram')
+    await until(async () => texts(limitStart, 'editMessageText').some(text => /approved, waiting to write/iu.test(text)) ? true : undefined, 'pending write drawn on Telegram')
+    written('begin-apply', '')
+    await until(async () => existsSync(join(project, 'apply-finished')) ? true : undefined, 'the bound test session applied the Telegram approval')
+    assert.equal(JSON.parse(readFileSync(join(project, 'apply.json'), 'utf8')).state, 'written')
+    const allowance = plan('allowances', '7')
+    assert.deepEqual(allowance.current.fields.limits.rechecks, { limit: 6, ceiling: 6, per: 'boundary' })
+    assert.match(allowance.changes.at(-1).source, /night list: Yes to .* in Telegram/u)
+    await until(async () => texts(limitStart, 'editMessageText').some(text => /use bmn plan allow to lower it/iu.test(text)) ? true : undefined, 'durable write drawn on Telegram')
+
     phase('back')
     const back = bot.calls.length
     ask('run-open', 'Run left open', [TERMS[0]])
@@ -180,7 +216,7 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     phase('real grant-record reset across two windows')
     const reset = await checkGrantReset(client, window, second, cli)
     phase(`reset proof ${JSON.stringify(reset)}`)
-    return { reset, phonePreservedSavedLine: true, presentation: { repeatedPhoneCreatesNoFact: true, oneModalDuringDelayedAckAndFocusHandoff: true, passiveFocus: true, manualReopen: true }, phone: { phoneAnswerSyncMs, phoneGoSyncMs, laptopPhoneSyncMs, phoneBackSyncMs, accessDone: true }, twoWindows: { answerSyncMs, goSyncMs }, gettingReadyHead: true, immediateCards: true, windowAnswer: true, alreadyAnswered: true, ownerUseRefused: true, phoneWalk: true, typedReply: true, laptopAnswerOnPhone: true, withdrawnAtBack: true, grantsEnded: true }
+    return { reset, phonePreservedSavedLine: true, presentation: { repeatedPhoneCreatesNoFact: true, oneModalDuringDelayedAckAndFocusHandoff: true, passiveFocus: true, manualReopen: true }, phone: { phoneAnswerSyncMs, phoneGoSyncMs, laptopPhoneSyncMs, phoneBackSyncMs, accessDone: true, limitApplied: true }, twoWindows: { answerSyncMs, goSyncMs }, gettingReadyHead: true, immediateCards: true, windowAnswer: true, alreadyAnswered: true, ownerUseRefused: true, phoneWalk: true, typedReply: true, laptopAnswerOnPhone: true, withdrawnAtBack: true, grantsEnded: true }
   } finally {
     second?.destroy()
     phase('cleanup')

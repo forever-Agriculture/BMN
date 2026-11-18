@@ -235,6 +235,17 @@ export function AwaySummaryDialog(props: {
             {view.waiting.more !== null ? <small className="away-more">{view.waiting.more}</small> : null}
           </section>
 
+          {view.loginsAtDeparture.length > 0 ? (
+            <section className="inspector-section" aria-label="Sign-ins waiting when you left">
+              <h3><span>Sign-ins waiting when you left</span><span className="away-count">{view.loginsAtDeparture.length}</span></h3>
+              <ul className="away-rows">
+                {view.loginsAtDeparture.map(row => <li key={`${row.runId}\u0000${row.item}`}>
+                  <div className="message-row away-wake-row"><span>{row.title}</span><span>{row.name}</span></div>
+                </li>)}
+              </ul>
+            </section>
+          ) : null}
+
           {view.waitedForYou.count > 0 ? (
             <section className="inspector-section" aria-label="Waited for you">
               <h3><span>Waited for you</span><span className="away-count">{view.waitedForYou.count}</span></h3>
