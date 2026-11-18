@@ -95,6 +95,23 @@ export async function checkDeparturePresentation(client: PtyHostClient, first: B
   }
 
   try {
+    // The preceding Away step ends with a Back whose morning summary each window may open late;
+    // an open summary covers Before you go, so wait for it and close it in both windows first.
+    const away = await originalRequest<OwnerAwayView>(METHOD_REGISTRY.awayGet, {})
+    if (away.state === 'back' && away.periodId !== null) {
+      await until(async () => (await originalRequest<OwnerAwayView>(METHOD_REGISTRY.awayGet, {})).summaryShownAt !== null,
+        'the previous morning summary was presented')
+    }
+    const previousSummaryClose = 'dialog.away-summary-dialog[open] button[aria-label="Close While you were away"]'
+    const noDialog = async () => {
+      for (const window of [first, second]) await renderer(window, `document.querySelector(${JSON.stringify(previousSummaryClose)})?.click()`)
+      return (await Promise.all([first, second].map(window => renderer<boolean>(window, `document.querySelector('dialog[open]') === null`))))
+        .every(Boolean)
+    }
+    // Twice, apart: a window still holding the older away view can open the summary just after the first check.
+    await until(noDialog, 'no dialog is open before the presentation check')
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await until(noDialog, 'no dialog reopened before the presentation check')
     // Check focus both ways before any departure or receipt can be recorded.
     await focus(first, second)
     await focus(second, first)
