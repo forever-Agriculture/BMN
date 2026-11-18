@@ -151,11 +151,15 @@ limits, otherwise the story is parked under Needs your decision.
 
 ## Manual QA in the review phase
 
-dev-auto's shared Claude Code/Codex instructions run the `qa` teammate beside the quick pre-review
-on a frozen candidate with a disposable running interface. The lead supplies the goal, original
-problem, scope, criteria, designs, regression checklist and starting state, excluding implementation
-claims and earlier review conclusions. QA findings join the same consolidated repair. Repaired and
-later materially changed flows are retested inside the existing allowance.
+For BMN desktop QA, the owner has selected the [lead-run bench](qa-checklist.md#lead-run-desktop-bench)
+as the default. The implementing lead drives the frozen candidate, records the manual-QA report and
+checks the finalized receipt with `qa_gate.py --lead-bench`. A criterion that requires independent
+QA needs its own proof. Web and account QA use the approved `qa` role and session routes.
+
+The brief supplies the goal, original problem, scope, criteria, designs, regression checklist and
+starting state. It excludes implementation claims and earlier review conclusions. QA findings join
+the same consolidated repair. Repaired and later materially changed flows are retested inside the
+existing allowance.
 
 A consistent NO-GO remains blocking; report-validation exit 0 never means product acceptance.
 The workflow gate also checks the native record, frozen revision/target, retained screenshot hashes,
@@ -163,22 +167,22 @@ original finding facts and current retest observations. A finding left open prov
 an unchanged candidate cannot close an intermittent defect as a verified fix. Only approved Run needs
 can defer a criterion; its original report and product verdict remain visible.
 
-A manual-QA epic keeps an implementing lead: dispatch QA, triage, fix within scope or record allowed
-deferrals with follow-up coordinates, retest repairs, then perform whole-epic reviews. Completing its
-audit mission does not claim a product GO. Report pages show QA's goal check, verdict, findings and
+A manual-QA epic keeps an implementing lead. Run the applicable QA route, triage, fix within scope or
+record allowed deferrals with follow-up coordinates, retest repairs, then perform whole-epic reviews.
+Completing its audit mission does not claim a product GO. Report pages show QA's goal check, verdict, findings and
 their fate using synthetic or sanitized evidence. After three real epics with a running interface,
 the owner receives the planned evaluation of QA's findings, misses, coverage, unavailable passes,
 false findings and known time/usage; no automatic switch-off.
 
-The gate accepts quick-ask exports and saved `bmn qa wait --json` session receipts. A session receipt
-binds the native agent, relay, reserved brief, report and retained image hashes; a quick export's
+The gate accepts lead bench receipts, quick-ask exports and saved `bmn qa wait --json` session receipts.
+A session receipt binds the native agent, relay, reserved brief, report and retained image hashes. A quick export's
 brief, report and target must equal BMN's input manifest, retained answer and browser request. It
 establishes record consistency; tool confinement and account permission are BMN's own checks.
 
 QA runs on signed-out loopback web targets through quick asks or visible native QA sessions, and
 on saved accounts through V2 session briefs (Claude Code `claude-qa` form, host-decided account
-modes, owner grant cards; see agent-control.md, QA panes). Bench QA is unavailable. A passing
-signed-out session never qualifies authenticated access.
+modes, owner grant cards; see agent-control.md, QA panes). The teammate's desktop `--bench` route
+remains unavailable. A passing signed-out session never qualifies authenticated access.
 Candidates without any running interface record QA not applicable with the reason.
 
 ## Morning digest

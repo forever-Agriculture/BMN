@@ -53,8 +53,9 @@ Run `pnpm run test:screens` for BMN desktop changes. It builds once and runs key
 
 ## Lead-run desktop bench
 
-Desktop QA stays lead-run (`docs/agent-control.md`); the teammate's desktop route is refused. The
-route uses the V1 manual-QA brief and report. In the source brief use `mode: quick-bench`,
+The implementing lead runs BMN desktop QA directly on the disposable bench and records it as
+lead-run QA. This is the standing choice for BMN's desktop app. Use the V1 manual-QA brief and
+report. In the source brief use `mode: quick-bench`,
 `accounts: []` and `target: bmn-bench:pending`; name the frozen candidate revision and a synthetic
 seed JSON with an `id`. Start an already built disposable BMN checkout:
 
