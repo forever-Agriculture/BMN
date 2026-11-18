@@ -5321,6 +5321,64 @@ describe('130 D9: service routes and actual phone callbacks share the worker fen
     expect(bytes.split(DEPARTURE_LINE).length - 1).toBe(1)
     expect(service.grantForOwner().period!.collection!.sessions.find(row => row.sessionId === 's1')!.toldAt).toBe(clock)
   })
+  describe('never types into a resumed or restarted session; a fresh own turn in the same host gets one line (D16)', () => {
+    const rule = '─'.repeat(60)
+    const idle = (sessionId: string, agent: 'claude' | 'codex' = 'claude') => screens.set(sessionId, { settled: async () => undefined,
+      undimmedLines: () => agent === 'codex' ? ['• ok', '', '›', '', '  GPT-6.1-Sol · synthetic', '  ? for shortcuts'] : ['● ok', rule, '❯ ', rule, 'Synthetic'], cursor: () => ({ x: 0, y: 0 }) } as unknown as ScreenLike)
+    const lines = () => Buffer.concat(writes.map(row => Buffer.from(row.bytes))).toString('utf8').split(DEPARTURE_LINE).length - 1
+    const at = (seconds: number) => { clock = new Date(Date.parse(now) + seconds * 1000).toISOString() }
+    const sweepThrough = async (from: number, to: number) => { for (let second = from; second <= to; second += 20) { at(second); await service['departureWake'].sweep() } }
+    const ownTurn = async (sessionId: string, incarnationId: string, agent: 'claude' | 'codex') => {
+      const handlers = service['control']['options'].handlers
+      await handlers.observeHookEvent({ sessionId, incarnationId, agent, event: 'Stop', source: null, toolName: null, effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+      await handlers.openAttention({ sessionId, incarnationId, requestKey: `${agent}:turn`, kind: 'notice', title: 'Finished', origin: `hook:${agent}:Stop` })
+    }
+    const row = (sessionId: string) => service.grantForOwner().period!.collection!.sessions.find(session => session.sessionId === sessionId)!
+    // The start's own sweep runs on its own; wait for it, so the sweep under test is not skipped as already running.
+    const quiet = async () => { for (let pass = 0; pass < 200 && service['departureWake']['running']; pass++) await new Promise(resolve => setTimeout(resolve, 5)) }
+
+    it('keeps the saved period and deadline through a host restart, writes nothing through 181 s, then one line after a fresh own turn', async () => {
+      await start()
+      service['finishedTurns'].set('s1', { incarnationId: 'incarnation-1', at: now })
+      const saved = service.grantForOwner().period!
+      await settle(); service['grantCards'].dispose(); service['departureHead'].dispose()
+      if (service['autoAwayTimer']) clearTimeout(service['autoAwayTimer'])
+      service = new CompanionService(service['options']); await service.start()
+      vi.spyOn(service['departureWake'], 'sweep')
+      expect(service.grantForOwner().period).toMatchObject({ periodId: saved.periodId, state: 'leaving', collection: { autoAwayAt: saved.collection!.autoAwayAt } })
+      idle('s1')
+      await sweepThrough(25, 181)
+      expect(writes).toEqual([])
+      expect(service.grantForOwner().period!.collection!.autoAwayAt).toBe(saved.collection!.autoAwayAt)
+      expect(row('s1')).toMatchObject({ toldAt: null, claim: null })
+      expect(row('s1').reason).toMatch(/no fresh/)
+      // Positive control in the same restarted host: a fresh own finished turn, then a new departure, get exactly one line.
+      await app('cancel'); at(200); await ownTurn('s1', 'incarnation-1', 'claude'); at(201); await app('start'); await quiet()
+      at(225); await service['departureWake'].sweep()
+      expect(lines()).toBe(1)
+      expect(row('s1').toldAt).toBe(clock)
+    })
+
+    it.each(['after', 'before'] as const)('reads a Codex session resumed %s the start "resumed", writes nothing through 181 s, then one line after its own turn', async order => {
+      const handlers = service['control']['options'].handlers
+      const resume = async () => {
+        liveIncarnations.set('s1', 'incarnation-1b')
+        await handlers.observeHookEvent({ sessionId: 's1', incarnationId: 'incarnation-1b', agent: 'codex', event: 'SessionStart', source: 'resume', toolName: null, effects: [], turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false } })
+      }
+      vi.mocked(service['departureWake'].sweep).mockRestore()
+      if (order === 'before') await resume()
+      await start()
+      // A resume reported after the start carries the notice in its own hook answer: told by hook, never typed.
+      if (order === 'after') await resume()
+      idle('s1', 'codex')
+      await sweepThrough(25, 181)
+      expect(writes).toEqual([])
+      expect(row('s1')).toMatchObject(order === 'before' ? { toldAt: null, claim: null, reason: 'resumed' } : { via: 'hook', claim: null })
+      await app('cancel'); at(200); await ownTurn('s1', 'incarnation-1b', 'codex'); at(201); await app('start'); await quiet()
+      at(225); await service['departureWake'].sweep()
+      expect(lines()).toBe(1)
+    })
+  })
   it('a genuine cancel holds the wake through a committed but delayed worker reply', async () => {
     await start()
     service['finishedTurns'].set('s1', { incarnationId: 'incarnation-1', at: now })

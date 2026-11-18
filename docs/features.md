@@ -558,9 +558,11 @@ critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
 
 **Before you go** (Epics 84, 130): ticking Away, sending `/away` or saying you are leaving starts
 **getting ready**, with the box still unticked. The list opens by itself in the focused window and arrives on
-Telegram. Recent Claude Code and Codex sessions are selected; working sessions get the notice at their next tool
+Telegram. Recent Claude Code and Codex sessions are selected (up to 32; sessions beyond the list's 64 rows are
+counted in one line with their reason); working sessions get the notice at their next tool
 call, and resting sessions get one fixed line only when BMN proves an empty, idle prompt. Each row shows its
-requests, needs nothing with its words, no answer, or not told with the reason. A line saves when you answer it;
+requests, needs nothing with its words, no answer, or not told with the reason. Claude Code sessions answer within
+3 minutes; for Codex an answer is best effort, and a silent one reads no answer. A line saves when you answer it;
 you can change it until **Go**, while unanswered lines grant nothing. **Go** starts Away in the same period;
 **Not leaving** or Back cancels it. Esc and × close the list without cancelling. Away starts by itself 10 minutes
 after your last action on the list; with no recent session to ask, it starts at once. The same answers appear

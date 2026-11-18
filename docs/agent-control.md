@@ -1180,10 +1180,17 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   remains immediate. **Not leaving**, `/back` or `bmn back` cancels; clicking the unticked Away box only reopens
   the list. Esc and × close it without cancelling.
   BMN selects Claude Code and Codex sessions with a hook event in the last 12 hours, up to 32, with selection and
-  delivery kept apart. Working sessions receive the departure notice at the next hook; resting ones receive
+  delivery kept apart; the list keeps up to 64 rows, and any session beyond them is counted per reason in one head
+  line ("41 more sessions not asked: the list is full"), in BMN and on Telegram. Working sessions receive the departure notice at the next hook; resting ones receive
   exactly one fixed line under the wake's complete idle proof, with a 20-second quiet time. BMN retries the proof
-  every 20 seconds for 3 minutes; an unproven prompt, a resumed Codex session without its own finished turn, an
-  app question, a draft or typing is left alone. A restart does not recreate proof or replay an uncertain write.
+  every 20 seconds for 3 minutes; an unproven prompt, a resumed session without its own finished turn (it reads
+  "not told: resumed"), an app question, a draft or typing is left alone. A restart does not recreate proof or
+  replay an uncertain write. Answering within 3 minutes is required of Claude Code and best effort for Codex,
+  whose automatic approval review or own judgement may decline (owner, 2026-11-18); a silent session reads no answer.
+  BMN's own bookkeeping (reasons, claims, told, phone state) never makes his acts stale: **Go**, **Not leaving**,
+  `/back`, `bmn back` and `bmn away` are fenced on the grant record's generation, the period and its state, while an
+  answer to a line stays bound to the card revision he saw. A Telegram `/away` or `/back` whose worker answer was
+  lost after its commit asks once more with the same key and still replies once.
   Sessions without a dev-auto run answer under their session's name. The list shows asking, lines, needs nothing
   with its scope, no answer after 3 minutes from delivery, or not told with the reason. Late answers still arrive.
 - **The card.** `bmn grant ask --run ID --card-file -` takes the card as JSON on standard input (`bmn grant --help`

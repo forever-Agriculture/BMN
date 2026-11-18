@@ -301,7 +301,9 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
             result.exactlyOneFixedWrite = writes.length === 1 && writes[0].bytes === expectedBytes.length && writes[0].sha256 === createHash('sha256').update(expectedBytes).digest('hex')
             check(`${app} ${index + 1}: exactly one recorded write contains the complete fixed line`, result.exactlyOneFixedWrite, { writes: writes.length })
             await page.screenshot({ path: shotName(`${app}-${index + 1}`) })
-            check(`${app} ${index + 1}: fixed line delivered once and answered within its window`, result.delivered && result.answered && result.exactlyOneFixedWrite && result.away.state !== 'away')
+            // D12: each case is an observation; the cohort verdict below grades delivery for both apps and answers for
+            // Claude Code only. A case that set Away or wrote more than the one fixed line still fails at once.
+            check(`${app} ${index + 1}: no Away and at most the one fixed write`, result.away.state !== 'away' && writes.length <= 1)
             bmn('back')
           } catch (error) {
             const page = application.windows()[0]
@@ -325,6 +327,21 @@ export async function departureLive({ tested, args, recordProcess, caller: sanit
         // A failed representative preflight parks this route; do not spend nine more turns on the same failure.
         break
       }
+    }
+  }
+  if (!scenario) {
+    // D12 cohort verdict (130.2 AC5): of N resting cases per app, at least N - 1 when N is 10 (all of them below 10) are
+    // told within 60 seconds with exactly one fixed write; Claude Code answers as many within 3 minutes; Codex answers
+    // are best effort and recorded.
+    for (const app of apps) {
+      const cases = report.cases.filter(row => row.app === app)
+      const needed = cases.length >= 10 ? cases.length - 1 : cases.length
+      const delivered = cases.filter(row => row.delivered && row.exactlyOneFixedWrite).length
+      const answered = cases.filter(row => row.delivered && row.answered).length
+      report.cohorts = { ...report.cohorts, [app]: { cases: cases.length, needed, delivered, answered, answersRequired: app === 'claude' } }
+      check(`${app} cohort: ${delivered} of ${cases.length} told once within 60 seconds (needs ${needed})`, delivered >= needed)
+      if (app === 'claude') check(`claude cohort: ${answered} of ${cases.length} answered within 3 minutes (needs ${needed})`, answered >= needed)
+      else console.error(`[departure] ${app} cohort: ${answered} of ${cases.length} answered within 3 minutes (best effort, D12)`)
     }
   }
   report.result = report.checks.some(check => check.result === 'FAIL') ? 'FAIL' : 'PASS'

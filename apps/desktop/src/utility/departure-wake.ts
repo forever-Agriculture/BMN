@@ -41,8 +41,10 @@ export class DepartureWake {
           this.options.changed(result.read)
           return result
         }
-        if (seen === undefined || seen.incarnationId !== session.incarnationId) {
-          await delivery('reason', 'no fresh idle proof')
+        // 130.2 AC2: a session whose latest report is its own resumed start has not been through a turn of its own.
+        const resumed = seen?.event === 'SessionStart' && seen.source === 'resume'
+        if (seen === undefined || seen.incarnationId !== session.incarnationId || resumed) {
+          await delivery('reason', resumed ? 'resumed' : 'no fresh idle proof')
           continue
         }
         let attempted = false
