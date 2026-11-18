@@ -1176,7 +1176,8 @@ checks its facts again and asks for a `--despite FACT` for each conflict the run
 Keep unavailable checks in the run log.
 
 A `limit` line names a project, epic, limit, current value, new value and reason. Ask only
-above the current ceiling. After the owner's Yes, `bmn grant apply --run ID --item I --use-id U`
+above the current ceiling. BMN checks which epic the run is for at both ask and apply. Use a
+run ID with a matching handoff or an epic number if the board has several active epics. After the owner's Yes, `bmn grant apply --run ID --item I --use-id U`
 checks the current card and allowance, records the write once and reads it back. BMN records
 the approval source, sets the limit and ceiling to the approved value and preserves usage.
 The written value holds after Back. Use `bmn plan allow` to lower it.

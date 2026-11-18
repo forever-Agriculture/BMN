@@ -184,7 +184,8 @@ export async function pinGrantLimit(cwd, term, runId) {
   const board = await readBoard(plan.boardPath)
   if (boardProblems(board, plan.boardPath).length > 0) throw new Error('The run’s plan board could not be confirmed')
   const selected = await runEpic(plan.runCheckout, runId, board)
-  if (selected !== null && selected !== term.epic) throw new Error('The allowance must belong to this run’s epic')
+  if (selected === null) throw new Error('This run must name one epic or have one active epic on its board')
+  if (selected !== term.epic) throw new Error('The allowance must belong to this run’s epic')
   const recorded = await readAllowances(plan, term.epic)
   const limit = recorded.state === 'recorded' ? recorded.current.fields.limits[term.name] : null
   if (!limit || recorded.hand_edit || limit.limit !== term.from) throw new Error('Read the current recorded allowance before asking for this raise')

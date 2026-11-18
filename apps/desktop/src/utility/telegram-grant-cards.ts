@@ -28,8 +28,8 @@ import {
   type GrantTerm,
   type TelegramQuietHours
 } from '@bmn/protocol'
-import { clip, escapeHtml, headerLine, plainText, said, TELEGRAM_TEXT_LIMIT, type CardHeader, type InlineKeyboard } from './telegram-cards'
-import type { InboundTap, TelegramConnector } from './telegram-connector'
+import { clip, escapeHtml, headerLine, said, type CardHeader, type InlineKeyboard } from './telegram-cards'
+import { formattedTelegramTextFits, type InboundTap, type TelegramConnector } from './telegram-connector'
 
 /** Departure-card buttons start with this, so a tap reaches this keeper and never the request cards' one. */
 export const GRANT_TOKEN_PREFIX = 'g:'
@@ -156,7 +156,7 @@ function grantCardText(input: {
   }
   for (const [reasons, scope] of [[300, 300], [REASON_CUT, 300], [null, 300], [null, 80], [null, 0]] as const) {
     const text = draw(reasons, scope, true)
-    if (fitsGrantPhoneText(text)) return text
+    if (formattedTelegramTextFits(text)) return text
   }
   // The chosen login always shows its entire command. Several long logins may need the Choose view.
   return draw(null, 0, terms.length === 1)
@@ -166,9 +166,6 @@ function rows(buttons: Array<{ text: string; callback_data: string }>, oneRow: b
   const total = buttons.reduce((sum, button) => sum + [...button.text].length, 0)
   return oneRow || total <= ONE_ROW_CHARS ? [buttons] : buttons.map((button) => [button])
 }
-
-// Telegram measures the rendered message. All user text is escaped before this check.
-const fitsGrantPhoneText = (html: string): boolean => plainText(html).length <= TELEGRAM_TEXT_LIMIT
 
 const priorOnLaptop = 'Earlier answer still holds. See its lines on the laptop.'
 type NothingMessageCard = Pick<GrantAskCard, 'title' | 'nothingReason' | 'scope' | 'despiteFacts'>
@@ -181,7 +178,7 @@ function nothingMessage(card: NothingMessageCard): string {
 }
 
 export function grantNothingFitsPhone(card: NothingMessageCard): boolean {
-  return fitsGrantPhoneText(`${nothingMessage(card)}\n${priorOnLaptop}`)
+  return formattedTelegramTextFits(`${nothingMessage(card)}\n${priorOnLaptop}`)
 }
 
 function grantNothingText(run: GrantRun, period: GrantPeriod): string {
@@ -191,7 +188,7 @@ function grantNothingText(run: GrantRun, period: GrantPeriod): string {
   const prior = run.answer !== null && isOpenPeriod(period) ? grantAnswerWords(run.answer.terms, run.answer.choices).granted : []
   if (prior.length === 0) return text
   const full = `${text}\nEarlier answer still holds: ${escapeHtml(said(prior.join(' · ')))}.`
-  return fitsGrantPhoneText(full) ? full : `${text}\n${priorOnLaptop}`
+  return formattedTelegramTextFits(full) ? full : `${text}\n${priorOnLaptop}`
 }
 
 /** What a run's card says once it asks nothing more of him (the notes §1 After answering). */

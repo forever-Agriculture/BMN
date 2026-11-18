@@ -6,7 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { isObjectOrArray, isText } from './shared-helpers'
 
 const API_ORIGIN = 'https://api.telegram.org'
-const MESSAGE_CHAR_LIMIT = 4096
+export const MESSAGE_CHAR_LIMIT = 4096
+export const formattedTelegramTextFits = (text: string): boolean => text.length <= MESSAGE_CHAR_LIMIT
 /** Telegram delivers at most 64 bytes of callback data with a tap. */
 const CALLBACK_DATA_BYTES = 64
 const TOAST_CHARS = 200
@@ -523,7 +524,7 @@ export class TelegramConnector {
     if (!options.html) {
       return { text: truncateMessage(text), ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}) }
     }
-    if (text.length > MESSAGE_CHAR_LIMIT) {
+    if (!formattedTelegramTextFits(text)) {
       throw new TelegramConnectorError('invalid-argument', 'A formatted Telegram card must fit 4,096 characters')
     }
     return {

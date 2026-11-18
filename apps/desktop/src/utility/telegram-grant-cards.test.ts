@@ -495,6 +495,9 @@ describe('phone sign-in retries and night allowance receipts (Epic 131)', () => 
     const despiteFacts = Array.from({ length: 33 }, (_, index) => `Checks at 7.${index + 1}: 4 of 4 used & verified 😀`)
     const card = { ...parsed(), nothing: true, terms: [], nothingReason: 'Review finished <before> leaving', despiteFacts }
     expect(grantNothingFitsPhone(card)).toBe(true)
+    const escaped = Array.from({ length: 33 }, (_, index) =>
+      `rechecks at 7.${index + 1}: 4 of 4 used · confirmed counts & & & & ${'verified '.repeat(3)}`)
+    expect(grantNothingFitsPhone({ ...card, nothingReason: '&'.repeat(300), despiteFacts: escaped })).toBe(false)
     expect(grantNothingFitsPhone({ ...card, despiteFacts: Array.from({ length: 256 }, () => 'One full checked fact with a boundary and a count') })).toBe(false)
     for (const existing of [modern(), ask(modern())]) {
       const h = harness(existing)

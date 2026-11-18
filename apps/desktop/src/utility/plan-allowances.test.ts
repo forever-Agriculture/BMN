@@ -642,7 +642,11 @@ describe('an allowance raise from the night list', () => {
     const term = { kind: 'limit' as const, id: 'raise', project: main, epic: 7, name: 'rechecks', from: 2, to: 6,
       reason: 'Synthetic review' }
     await expect(pinGrantLimit(main, { ...term, epic: 8 }, 'generic-run')).rejects.toThrow(/this run’s epic/u)
-    await expect(pinGrantLimit(main, term, 'generic-run')).resolves.toMatchObject({ token: expect.any(String) })
+    const originalPin = await pinGrantLimit(main, term, 'generic-run')
+    const other = bmn(main, home, ['status', '--epic', '8', '--json']).json.rows[0]
+    expect(bmn(main, home, ['set', other.key, 'in-progress', '--expect', other.token, '--json']).code).toBe(0)
+    await expect(pinGrantLimit(main, term, 'generic-run')).rejects.toThrow(/must name one epic/u)
+    await expect(pinGrantLimit(main, term, 'fixture-epic-7')).resolves.toEqual(originalPin)
     await expect(pinGrantLimit(main, { ...term, epic: 8 }, 'fixture-epic-8')).resolves.toMatchObject({ token: expect.any(String) })
   })
 

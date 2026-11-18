@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto'
 import { awayMomentWords, departureCounts, departureOmittedLines, departureSessionState, grantAnswerWords, grantChoice, type DepartureCollection, type OwnerDepartureInput, type OwnerDepartureReply, type OwnerGrantView } from '@bmn/protocol'
 import { escapeHtml, said, type InlineKeyboard } from './telegram-cards'
-import { TelegramConnectorError, type InboundTap, type TelegramConnector } from './telegram-connector'
+import { MESSAGE_CHAR_LIMIT, TelegramConnectorError, type InboundTap, type TelegramConnector } from './telegram-connector'
 
 type Connector = Pick<TelegramConnector, 'sendMessage' | 'editMessageText' | 'answerCallbackQuery'>
 export const DEPARTURE_TOKEN_PREFIX = 'g:d:'
@@ -54,7 +54,7 @@ export function departureHeadText(view: OwnerGrantView, now: Date): string {
   const details = visible.filter(row => row.detail !== '')
   const base = [...header, ...visible.map(row => row.line), ...footer].join('\n').length
   const more = 'The laptop has the full reasons.'
-  let left = Math.max(0, 4096 - base - more.length - 1)
+  let left = Math.max(0, MESSAGE_CHAR_LIMIT - base - more.length - 1)
   let remaining = details.length
   let clipped = false
   const body = visible.map(row => {

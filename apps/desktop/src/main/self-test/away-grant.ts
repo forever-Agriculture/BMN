@@ -179,9 +179,9 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     ] }))
     const shellQuote = (text: string): string => `'${text.replaceAll("'", "'\\''")}'`
     const script = written('phone-probe.sh', `set -eu
-${shellQuote(control.cliPath)} grant ask --run phone-limit --card-file - < ${shellQuote(card)}
+${shellQuote(control.cliPath)} grant ask --run phone-limit-epic-7 --card-file - < ${shellQuote(card)}
 while [ ! -f begin-apply ]; do sleep 0.05; done
-${shellQuote(control.cliPath)} grant apply --run phone-limit --item raise --use-id phone-demo --json > apply.json
+${shellQuote(control.cliPath)} grant apply --run phone-limit-epic-7 --item raise --use-id phone-demo --json > apply.json
 touch apply-finished
 `)
     await renderer(`(async () => {
@@ -191,7 +191,7 @@ touch apply-finished
     })()`)
     const limitStart = bot.calls.length
     bot.tapOn(title, [{ tap: 'Yes' }])
-    await until(async () => (await run('phone-limit'))?.answer?.choices.raise === 'yes' ? true : undefined, 'limit Yes persisted from Telegram')
+    await until(async () => (await run('phone-limit-epic-7'))?.answer?.choices.raise === 'yes' ? true : undefined, 'limit Yes persisted from Telegram')
     await until(async () => texts(limitStart, 'editMessageText').some(text => /approved, waiting to write/iu.test(text)) ? true : undefined, 'pending write drawn on Telegram')
     written('begin-apply', '')
     await until(async () => existsSync(join(project, 'apply-finished')) ? true : undefined, 'the bound test session applied the Telegram approval')
