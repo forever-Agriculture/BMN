@@ -374,7 +374,7 @@ export class TelegramGrantCards {
   private async sendNothing(connector: Connector, period: GrantPeriod, run: GrantRun): Promise<void> {
     const ending = grantEnding(period, run, this.deps.now())
     if (ending === null) return
-    const text = `<b>${words(run.title, 120)}</b>\n${escapeHtml(ending)}`
+    const text = `<b>${words(run.title, 120)}</b>\n${escapeHtml(said(ending))}`
     const sent = await connector.sendMessage(text, { html: true, keyboard: null })
     this.drawn.set(key(period.periodId, run.runId), { periodId: period.periodId, runId: run.runId,
       messageId: sent.messageId, revision: run.card.revision, view: { step: null }, tokens: [], note: null, ended: ending })
@@ -413,12 +413,15 @@ export class TelegramGrantCards {
 
   private async end(connector: Connector, card: Drawn, period: GrantPeriod, run: GrantRun): Promise<void> {
     const ending = grantEnding(period, run, this.deps.now())
-    if (ending === null || card.ended === ending) return
+    if (ending === null) return
+    const writes = (period.limitApplies ?? []).filter(entry => entry.runId === run.runId && entry.cardRevision === run.card.revision)
+    const finalState = writes.length === 0 ? ending : `${ending}\u0000${JSON.stringify(writes.map(entry => [entry.item, entry.state, entry.commit, entry.at]))}`
+    if (card.ended === finalState) return
     this.retire(card, false)
     const text = grantCardText({ header: this.deps.header(run), run, view: { step: null }, note: null, now: this.deps.now(), ending, period })
     try {
       await connector.editMessageText(card.messageId, text, { html: true, keyboard: null })
-      card.ended = ending
+      card.ended = finalState
     } catch { /* The old ending stays retryable until Telegram acknowledges it. */ }
   }
 
@@ -465,7 +468,9 @@ export class TelegramGrantCards {
       await this.deps.answer({ periodId: period.periodId, runId: run.runId, cardRevision: tapped.revision, choices, via: 'telegram', operationKey: `telegram:${tap.callbackId}`,
         ...(tapped.generation === undefined ? {} : { expectedGeneration: tapped.generation }) }).catch(() => undefined)
     }
-    if (!isOpenPeriod(period) || run.card.state !== 'open' && !(tapped?.recordRevision !== undefined && period.state === 'leaving' && run.card.state === 'answered')) {
+    const hasLoginRetry = run.card.terms.some(term => term.kind === 'access' && grantAccessStatus(run, term.id, this.deps.now()).canCheck)
+    if (!isOpenPeriod(period) || run.card.state !== 'open' && !(tapped?.recordRevision !== undefined && run.card.state === 'answered' &&
+      (period.state === 'leaving' || hasLoginRetry))) {
       await refused()
       await toast('This button is no longer active.')
       await this.end(connector, card, period, run)
@@ -514,10 +519,14 @@ export class TelegramGrantCards {
   private async grant(connector: Connector, card: Drawn, period: GrantPeriod, run: GrantRun, choices: Record<string, GrantChoice>,
     tap: InboundTap, toast: (text: string) => Promise<void>, fence: { recordRevision?: number; generation?: number }, advanceFrom?: number): Promise<void> {
     const expectedRevision = fence.recordRevision
+    const [pick, ...others] = Object.entries(choices)
+    const exactLine = others.length === 0 && pick && run.card.terms.some(term => term.id === pick[0] &&
+      (term.kind === 'access' || term.kind === 'limit')) ? pick[0] : undefined
     let result: GrantAnswerResult | null = null
     try {
       result = await this.deps.answer({ periodId: period.periodId, runId: run.runId, cardRevision: run.card.revision, choices, via: 'telegram', operationKey: `telegram:${tap.callbackId}`,
         ...(expectedRevision === undefined ? {} : { expectedRevision }),
+        ...(exactLine === undefined ? {} : { lineId: exactLine }),
         ...(fence.generation === undefined ? {} : { expectedGeneration: fence.generation }) })
     } catch { /* said below as could not save */ }
     if (result !== null && (result.outcome === 'granted' || result.outcome === 'repeated')) {

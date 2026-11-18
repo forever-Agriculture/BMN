@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { GrantCommandTerm } from '@bmn/protocol'
 import { simpleCommandWords } from '../../bin/command-guard.mjs'
-import { commandPinSha, grantCommandProblem, pinnedFileSha } from '../../bin/grant-command.mjs'
+import { commandPinSha, grantAccessCommandProblem, grantCommandProblem, pinnedFileSha } from '../../bin/grant-command.mjs'
 
 const folder = mkdtempSync(join(tmpdir(), 'bmn-grant-command-'))
 afterAll(() => rmSync(folder, { recursive: true, force: true }))
@@ -437,5 +437,16 @@ describe('pinnedFileSha (103.3 AC3)', () => {
   it('reads nothing as no hash: a missing file, or a folder', () => {
     expect(pinnedFileSha({ path: 'missing', sha256: SHA }, folder)).toBeNull()
     expect(pinnedFileSha({ path: 'scripts', sha256: SHA }, folder)).toBeNull()
+  })
+})
+
+describe('grantAccessCommandProblem (Epic 131)', () => {
+  it.each(['gh auth login --hostname fixture.invalid', 'gcloud auth application-default login', 'aws sso login --profile fixture'])('offers an exact direct login %s', command => {
+    expect(grantAccessCommandProblem(command)).toBeNull()
+  })
+
+  it.each(['gh auth status login', "gh 'auth login'", 'echo login', 'gh auth login && whoami',
+    'gh auth login --with-token', 'docker login -p test-only'])('refuses a non-login or credential transport %s', command => {
+    expect(grantAccessCommandProblem(command)).not.toBeNull()
   })
 })

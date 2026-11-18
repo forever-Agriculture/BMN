@@ -57,34 +57,34 @@ async function signedInAccounts(env) {
   return [...text.matchAll(/Logged in to github\.com account ([A-Za-z0-9-]+)/g)].map((match) => match[1]).filter((account) => LOGIN.test(account.toLowerCase()))
 }
 
-/**
- * The repository as GitHub names it, read with the active `gh` account and then, as BMN Health does, with each other
- * signed-in account in turn: a repository only a second account can see is still read. A token goes only into that one
- * child's environment and is never printed.
- */
-export async function githubFacts(repository) {
+/** Read with the active gh account, then each other signed-in account. Tokens stay in child environments. */
+export async function readWithGithubAccounts(read) {
   const env = { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1' }
-  const view = async (token) => {
-    const { stdout } = await execFileAsync('gh', ['repo', 'view', repository, '--json', 'owner,defaultBranchRef,name'], {
-      timeout: TIMEOUT_MS, encoding: 'utf8', env: token === undefined ? env : { ...env, GH_TOKEN: token }
+  try { return await read(env) } catch { /* another signed-in account may see it */ }
+  for (const account of await signedInAccounts(env)) {
+    try {
+      const { stdout } = await execFileAsync('gh', ['auth', 'token', '--user', account], { timeout: TIMEOUT_MS, encoding: 'utf8', env })
+      if (stdout.trim()) return await read({ ...env, GH_TOKEN: stdout.trim() })
+    } catch { /* the next account */ }
+  }
+  return null
+}
+
+/** The repository and default branch as GitHub names them, including its upstream when it is a fork. */
+export async function githubFacts(repository) {
+  const checked = await readWithGithubAccounts(async env => {
+    const { stdout } = await execFileAsync('gh', ['repo', 'view', repository, '--json', 'owner,defaultBranchRef,name,isFork,parent'], {
+      timeout: TIMEOUT_MS, encoding: 'utf8', env
     })
     const value = JSON.parse(stdout)
     const owner = typeof value?.owner?.login === 'string' && LOGIN.test(value.owner.login.toLowerCase()) ? value.owner.login.toLowerCase() : null
     const branch = typeof value?.defaultBranchRef?.name === 'string' && value.defaultBranchRef.name !== '' ? value.defaultBranchRef.name : null
     const name = typeof value?.name === 'string' ? value.name.toLowerCase() : null
     if (owner === null || branch === null || name === null) return { unread: 'GitHub did not name the owner or the default branch' }
-    return { repository: `${owner}/${name}`, owner, defaultBranch: branch }
-  }
-  try {
-    return await view()
-  } catch { /* another signed-in account may see it */ }
-  for (const account of await signedInAccounts(env)) {
-    try {
-      const { stdout } = await execFileAsync('gh', ['auth', 'token', '--user', account], { timeout: TIMEOUT_MS, encoding: 'utf8', env })
-      return await view(stdout.trim())
-    } catch { /* the next account */ }
-  }
-  return { unread: 'GitHub could not be read for this repository with your gh' }
+    const parent = value.parent == null ? null : repositoryName(value.parent.nameWithOwner ?? `${value.parent.owner?.login}/${value.parent.name}`)
+    return { repository: `${owner}/${name}`, owner, defaultBranch: branch, ...(parent !== null ? { parent } : value.isFork === true ? { upstreamUnread: true } : {}) }
+  })
+  return checked ?? { unread: 'GitHub could not be read for this repository with your gh' }
 }
 
 /** What one repository's level lets an agent do without asking, when the policy authorizes it there. */

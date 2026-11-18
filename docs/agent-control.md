@@ -1184,11 +1184,11 @@ The written value holds after Back. Use `bmn plan allow` to lower it.
 An `access` line shows the exact login command for the owner to run. His Done asks the run to
 check its access, with its own command output suppressed. The report takes `--item I --access
 works` or `--item I --access fails --cause not-signed-in|expired|no-access|network|other`. Include
-the `--attempt` BMN supplied, especially after Check again. BMN stores only the chosen result
-and fixed cause. A check that sends no report reads Not checked after one minute.
+the required `--attempt` from BMN’s notice so a late result cannot update a later check.
+BMN stores only the chosen result and fixed cause. A check that sends no report reads Not checked after one minute.
 
-A run that parks while Away can send `bmn grant report --run ID --stopped --cause CAUSE --text T`.
-Causes are `limit:NAME`, `action:merge|push|pr|command|message`, `access`, `decision`, `prompt`
+A run that parks while Away can send `bmn grant report --run ID --stopped --period P --cause CAUSE --text T`.
+Use the period BMN reported when the run stopped. Causes are `limit:NAME`, `action:merge|push|pr|command|message`, `access`, `decision`, `prompt`
 or `other`. The morning summary and `bmn away --night --json` carry the observed rest and its
 reported cause, separately. A restart or missing proof leaves the timing unknown.
 

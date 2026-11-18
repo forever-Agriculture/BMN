@@ -1953,7 +1953,7 @@ export class SessionManager {
   }
 
   /** Addressed input written straight to a session's live process, independent of any attached view. */
-  writeToSession(sessionId: string, bytes: Uint8Array): void {
+  writeToSession(sessionId: string, bytes: Uint8Array, beforeWrite?: () => void): void {
     const live = this.sessions.get(sessionId)
     if (!live || live.exited) {
       throw new HostControlError(ERROR_CODES.notFound, 'The session has no live process')
@@ -1963,6 +1963,7 @@ export class SessionManager {
     }
     // Recorded first, in a test host only: a write its record could not hold is not made, so no row means no write.
     this.hostWrite?.({ sessionId, incarnationId: live.incarnationId, bytes })
+    beforeWrite?.()
     live.pty.write(bytes)
   }
 

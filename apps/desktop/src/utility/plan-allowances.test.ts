@@ -1,11 +1,16 @@
 // MODULE: plan-allowances.test.ts - Stories 110.4, 110.5, 110.8: an epic's allowances file: its check, the go's hash, the recorded version, `bmn plan allow`, the size limit
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { compareVersions, fieldsFrom, ledgerIds, parseAllowances } from '../../bin/plan-allowances.mjs'
 import { approvalText } from '../../bin/plan-cli.mjs'
+import { EMPTY_GRANT_RECORD } from '@bmn/protocol'
+import { changeAway } from './database-away-store'
+import { answerGrantCard, askGrantCard, getGrants, GRANT_OPERATIONS, leaveAway, nightAllowanceKey, writeGrantRow } from './database-grant-store'
+import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const BMN = resolve(__dirname, '../../bin/bmn')
@@ -629,29 +634,82 @@ describe('an allowance raise from the night list', () => {
     const { findNightAllowance, withNightAllowanceLock, writeNightAllowance } = await import('../../bin/plan-allowances.mjs')
     const plan = await resolvePlan(main)
     const prior = read(main, home)
-    const entry = {
-      runId: 'sample-run', sessionId: 'sample-session', item: 'raise', useId: 'use', cardRevision: 1,
-      term: { kind: 'limit' as const, id: 'raise', project: main, epic: 7, name: 'rechecks', from: 2, to: 6,
-        reason: 'Two more reviews remain', pin: { go: commit, commit: prior.current.commit, token: prior.token } },
-      source: 'night list: Yes to "Raise rechecks from 2 to 6" in the window at 2026-11-18T20:00:00.000Z, period sample, card revision 1, operation sample',
-      state: 'writing' as const, commit: null, at: '2026-11-18T20:00:00.000Z', detail: null
-    }
+    const Sqlite = createRequire(import.meta.url)('better-sqlite3') as new (file: string) => DatabaseConnection
+    const dbFile = join(home, 'night-grants.sqlite')
+    let db = new Sqlite(dbFile)
+    const at = '2026-11-18T20:00:00.000Z'
+    initializeDatabase(db, at)
+    writeGrantRow(db, { ...EMPTY_GRANT_RECORD, version: 2, offers: [] }, at)
+    const request = { runId: 'sample-run', sessionId: 'sample-session', item: 'raise', useId: 'use', incarnationId: 'inc' }
+    const pin = { go: commit, commit: prior.current.commit, token: prior.token }
+    const term = { kind: 'limit' as const, id: 'raise', project: main, epic: 7, name: 'rechecks', from: 2, to: 6,
+      reason: 'Two more reviews remain', pin }
+    db.prepare(`INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+      SELECT ?, workspace_id, 'Sample', ?, '/bin/bash', '[]', 1, ?, 0 FROM workspace LIMIT 1`)
+      .run(request.sessionId, main, at)
+    db.prepare(`INSERT INTO process_incarnation(incarnation_id, session_id, process_start_identity, state, started_at)
+      VALUES (?, ?, 'synthetic', 'running', ?)`).run(request.incarnationId, request.sessionId, at)
+    const periodId = leaveAway(db, { source: 'app', agentSessionId: null }, at).record.periods.at(-1)!.periodId
+    const asked = askGrantCard(db, { runId: request.runId, sessionId: request.sessionId, agentCli: null,
+      card: { title: 'Night sample', scope: 'Synthetic plan', nothing: false, terms: [term] },
+      origin: { generation: 0, periodId } }, at)
+    expect(asked.outcome).toBe('opened')
+    if (asked.outcome !== 'opened') throw Error('No test card')
+    const revision = asked.run.card.revision
+    expect(answerGrantCard(db, { periodId, runId: request.runId, cardRevision: revision, expectedRevision: asked.record.revision, lineId: 'raise', choices: { raise: 'yes' }, via: 'app',
+      operationKey: 'ask-op' }, at)).toMatchObject({ outcome: 'granted' })
+    const lookup = async () => GRANT_OPERATIONS.getLimitApply(db, request)?.entry ?? null
+    await expect(withNightAllowanceLock(plan, fd => writeNightAllowance(plan, lookup, fd))).rejects.toThrow(/No matching write mark/u)
+    const mark = (incarnationId: string) => GRANT_OPERATIONS.markLimitApply(db, { ...request, incarnationId }, periodId, revision, pin, 'sample', at)
+    expect(mark('revoked-inc')).toMatchObject({ entry: null, detail: expect.stringMatching(/ended before apply/u) })
+    const entry = mark(request.incarnationId).entry
+    if (entry === null) throw Error('Expected the actual store to mark the write')
     const forged = allow(main, home, 'limits.rechecks.limit=6', ['--reason', 'fixture', '--source', entry.source])
     expect(forged.code).not.toBe(0)
     expect(forged.err + forged.out).toMatch(/only a recorded answer/iu)
     const module = new URL('../../bin/plan-allowances.mjs', import.meta.url).href
-    const interruptAt = (stage: string) => spawnSync(process.execPath, ['--input-type=module', '-e', `
+    const interruptAt = (stage: string) => new Promise<{ signal: string | null; detail: string }>(finish => execFile(process.execPath, ['--input-type=module', '-e', `
+      import { DatabaseSync } from 'node:sqlite'
       import { withNightAllowanceLock, writeNightAllowance } from ${JSON.stringify(module)}
       const plan = ${JSON.stringify(plan)}
-      const entry = ${JSON.stringify(entry)}
-      await withNightAllowanceLock(plan, fd => writeNightAllowance(plan, entry, fd, stage => {
+      const db = new DatabaseSync(${JSON.stringify(dbFile)}, { readOnly: true })
+      const row = db.prepare('SELECT value_json FROM app_setting WHERE key = ?').get(${JSON.stringify(nightAllowanceKey(request))})
+      await withNightAllowanceLock(plan, fd => writeNightAllowance(plan, async () => JSON.parse(row.value_json).entry, fd, stage => {
         if (stage === ${JSON.stringify(stage)}) process.kill(process.pid, 'SIGKILL')
       }))
-    `], { env: process.env, encoding: 'utf8', timeout: 15_000 })
-    expect(interruptAt('created').signal).toBe('SIGKILL')
+    `], { env: process.env, encoding: 'utf8', timeout: 15_000 },
+    (error, _stdout, stderr) => finish({ signal: error?.signal ?? null, detail: stderr || error?.message || '' })))
+    const ref = git(planRoot, 'symbolic-ref', 'HEAD')
+    const pinnedHead = git(planRoot, 'rev-parse', ref)
+    const fileBefore = readFileSync(join(planRoot, 'allowances/007.yaml'), 'utf8')
+    const indexBefore = git(planRoot, 'ls-files', '--stage', '--', 'allowances/007.yaml')
+    let competingHead = ''
+    await expect(withNightAllowanceLock(plan, fd => writeNightAllowance(plan, lookup, fd, stage => {
+      if (stage !== 'created') return
+      git(planRoot, 'commit', '--allow-empty', '-qm', 'test: the plan moved while applying')
+      competingHead = git(planRoot, 'rev-parse', ref)
+    }))).rejects.toThrow(/nothing changed/u)
+    expect(git(planRoot, 'rev-parse', ref)).toBe(competingHead)
+    expect(competingHead).not.toBe(pinnedHead)
+    expect(readFileSync(join(planRoot, 'allowances/007.yaml'), 'utf8')).toBe(fileBefore)
+    expect(git(planRoot, 'ls-files', '--stage', '--', 'allowances/007.yaml')).toBe(indexBefore)
+    git(planRoot, 'update-ref', ref, pinnedHead, competingHead)
+    const beforePublication = await interruptAt('created')
+    expect(beforePublication.signal, beforePublication.detail).toBe('SIGKILL')
     expect(await withNightAllowanceLock(plan, () => findNightAllowance(plan, entry))).toBeNull()
     expect(read(main, home).current.commit).toBe(prior.current.commit)
-    expect(interruptAt('published').signal).toBe('SIGKILL')
+    const afterPublication = await interruptAt('published')
+    expect(afterPublication.signal, afterPublication.detail).toBe('SIGKILL')
+    for (const stamp of ['21', '22', '23']) {
+      const time = `2026-11-18T${stamp}:00:00.000Z`
+      changeAway(db, { to: 'away', source: 'app' }, time)
+      changeAway(db, { to: 'back', source: 'app' }, time)
+    }
+    db.close()
+    db = new Sqlite(dbFile)
+    const retained = getGrants(db).read
+    expect(retained.state === 'read' && retained.record.periods.some(period => period.periodId === periodId)).toBe(false)
+    expect(GRANT_OPERATIONS.openLimitApplies(db)).toContainEqual({ periodId, entry })
     expect(read(main, home).hand_edit).toMatch(/working file differs/u)
     const recovered = await withNightAllowanceLock(plan, () => findNightAllowance(plan, entry))
     const checked = read(main, home)
@@ -661,6 +719,35 @@ describe('an allowance raise from the night list', () => {
     expect(git(planRoot, 'status', '--porcelain', '--', 'allowances')).toBe('')
     expect(checked.changes.at(-1).source).toEqual(entry.source)
     expect(await withNightAllowanceLock(plan, () => findNightAllowance(plan, entry))).toBe(recovered)
-    await expect(withNightAllowanceLock(plan, async fd => writeNightAllowance(plan, entry, fd))).rejects.toThrow(/changed/u)
+    await expect(withNightAllowanceLock(plan, fd => writeNightAllowance(plan, lookup, fd))).rejects.toThrow(/changed/u)
+    expect(GRANT_OPERATIONS.settleLimitApply(db, request, entry.source, { state: 'written', commit: recovered! }, at).settled).toBe(true)
+    expect(GRANT_OPERATIONS.getLimitApply(db, request)).toMatchObject({ periodId, entry: { state: 'written', commit: recovered } })
+    expect(mark(request.incarnationId)).toMatchObject({ entry: null, detail: 'This use id was already applied' })
+
+    const { pinGrantLimit } = await import('../../bin/grant-facts.mjs')
+    await expect(pinGrantLimit(main, { ...term, epic: 8 }, 'fixture-epic-7')).rejects.toThrow(/this run’s epic/u)
+    for (const [name, to] of [['money_usd', 1e-7], ['rechecks', 1e21]] as const) {
+      const current = read(main, home)
+      const proposed = { ...term, name, from: current.current.fields.limits[name].limit, to,
+        pin: { go: current.go_commit, commit: current.current.commit, token: current.token } }
+      const open = leaveAway(db, { source: 'app', agentSessionId: null }, at).record.periods.at(-1)!
+      const next = askGrantCard(db, { runId: request.runId, sessionId: request.sessionId, agentCli: null,
+        card: { title: 'Numeric boundary', scope: 'Exact amount', nothing: false, terms: [proposed] },
+        origin: { generation: 0, periodId: open.periodId } }, at)
+      if (next.outcome !== 'opened') throw Error('Expected a fresh numeric card')
+      const cardRevision = next.run.card.revision
+      expect(answerGrantCard(db, { periodId: open.periodId, runId: request.runId, cardRevision, expectedRevision: next.record.revision,
+        lineId: 'raise', choices: { raise: 'yes' }, via: name === 'money_usd' ? 'telegram' : 'app', operationKey: 'yes' }, at).outcome).toBe('granted')
+      const numeric = { ...request, useId: name }
+      const marked = GRANT_OPERATIONS.markLimitApply(db, numeric, open.periodId, cardRevision, proposed.pin, 'numeric-op', at).entry
+      if (marked === null) throw Error('Expected the numeric allowance mark')
+      const result = await withNightAllowanceLock(plan, fd => writeNightAllowance(plan, async () =>
+        GRANT_OPERATIONS.getLimitApply(db, numeric)?.entry ?? null, fd))
+      expect(read(main, home).current.fields.limits[name]).toMatchObject({ limit: to, ceiling: to })
+      expect(await withNightAllowanceLock(plan, () => findNightAllowance(plan, marked))).toBe(result.commit)
+      expect(GRANT_OPERATIONS.settleLimitApply(db, numeric, marked.source, { state: 'written', commit: result.commit }, at).settled).toBe(true)
+      changeAway(db, { to: 'back', source: 'app' }, at)
+    }
+    db.close()
   })
 })

@@ -218,6 +218,21 @@ export interface GrantLimitApply {
   detail: string | null
 }
 
+/** Use ids survive departure retention. The period id scopes the display, not the write receipt. */
+export interface NightAllowanceReceipt { periodId: string; entry: GrantLimitApply }
+
+export function readGrantLimitApply(raw: unknown): GrantLimitApply | null {
+  const entry = raw as GrantLimitApply | null
+  const term = readTerm(entry?.term)
+  if (!entry || term?.kind !== 'limit' || !term.pin || !grantIdentifier(entry.useId, GRANT_LIMITS.useId) ||
+    !grantIdentifier(entry.runId, GRANT_LIMITS.runId) || !isTextOrEmpty(entry.sessionId) || entry.item !== term.id ||
+    !isCount(entry.cardRevision, Number.MAX_SAFE_INTEGER) || !isIso(entry.at) || !grantWords(entry.source, 500) ||
+    !['writing', 'written', 'failed'].includes(entry.state) ||
+    (entry.state === 'written' ? !entry.commit || !SHA.test(entry.commit) : entry.commit !== null) ||
+    (entry.detail !== null && !grantWords(entry.detail, 500))) return null
+  return { ...entry, term: { ...term, pin: term.pin } }
+}
+
 export interface GrantPeriod {
   periodId: string
   state: GrantPeriodState
@@ -450,6 +465,7 @@ export function parseGrantCardInput(raw: unknown): { card: { title: string; scop
   if (title === null) return { problem: `title must be plain text of at most ${GRANT_LIMITS.title} characters` }
   const scope = grantWords(input.scope, GRANT_LIMITS.scope)
   if (scope === null) return { problem: `scope must be plain text of at most ${GRANT_LIMITS.scope} characters` }
+  if (secretShapeRanges(`${title}\n${scope}`).length > 0) return { problem: 'the title or scope looks like a credential' }
   const nothing = input.nothing === true
   if (input.nothing !== undefined && typeof input.nothing !== 'boolean') return { problem: 'nothing must be true or false' }
   if (nothing) {
@@ -461,7 +477,9 @@ export function parseGrantCardInput(raw: unknown): { card: { title: string; scop
   if (parsed.terms.length === 0) return { problem: 'a card asks at least one term; a run that needs nothing says nothing: true' }
   // Asked, not stored: a shape found tomorrow must not make today's record unreadable.
   for (const [index, term] of parsed.terms.entries()) {
-    const exact = term.kind === 'command' || term.kind === 'access' ? term.command : term.kind === 'message' ? `${term.target}\n${term.text}` : ''
+    const exact = term.kind === 'access' ? `${term.name}\n${term.command}\n${term.reason}`
+      : term.kind === 'limit' ? `${term.project}\n${term.reason}`
+      : term.kind === 'command' ? term.command : term.kind === 'message' ? `${term.target}\n${term.text}` : ''
     if (secretShapeRanges(exact).length > 0) return { problem: `term ${index + 1}: this text looks like a credential, and ${GRANT_NEVER_ON_A_CARD} are never on a card` }
   }
   return { card: { title, scope, nothing, terms: parsed.terms } }
@@ -592,15 +610,9 @@ function readPeriod(value: unknown): GrantPeriod | null {
   if (row.limitApplies !== undefined) {
     if (!Array.isArray(row.limitApplies) || row.limitApplies.length > GRANT_LIMITS.uses) return null
     for (const raw of row.limitApplies) {
-      const entry = raw as GrantLimitApply | null
-      const term = readTerm(entry?.term)
-      if (!entry || term?.kind !== 'limit' || !term.pin || !grantIdentifier(entry.useId, GRANT_LIMITS.useId) ||
-        !grantIdentifier(entry.runId, GRANT_LIMITS.runId) || !isTextOrEmpty(entry.sessionId) || entry.item !== term.id ||
-        !isCount(entry.cardRevision, Number.MAX_SAFE_INTEGER) || !isIso(entry.at) || !grantWords(entry.source, 500) ||
-        !['writing', 'written', 'failed'].includes(entry.state) ||
-        (entry.state === 'written' ? !entry.commit || !SHA.test(entry.commit) : entry.commit !== null) ||
-        (entry.detail !== null && !grantWords(entry.detail, 500))) return null
-      limitApplies.push({ ...entry, term: { ...term, pin: term.pin } })
+      const entry = readGrantLimitApply(raw)
+      if (entry === null) return null
+      limitApplies.push(entry)
     }
   }
   const collection = row.collection === undefined ? undefined : readDepartureCollection(row.collection)
@@ -919,6 +931,7 @@ export function answerGrant(record: GrantRecord, answer: {
       if (applying !== undefined) return refuse('answered', applying.state === 'writing' ? 'This raise is already being written' : 'This raise was written. Use bmn plan allow to lower it.')
       const term = run.card.terms.find(other => other.id === id)
       if (term === undefined || !grantTermChoices(term).includes(choice as GrantChoice)) return refuse('invalid', 'This choice is not on the card')
+      if (term.kind === 'limit' && choice === 'yes' && answer.lineId !== id) return refuse('invalid', 'Confirm this raise on its own line')
       if (term.kind === 'access') {
         if (patch.length !== 1 || answer.lineId !== id || grantIdentifier(answer.accessAttemptId, GRANT_LIMITS.useId) === null ||
           !grantAccessStatus(run, id, new Date(now)).canCheck) return refuse('invalid', 'This access check is already pending or confirmed')
@@ -1173,7 +1186,7 @@ export function markGrantLimit(read: GrantRead, away: Pick<AwayRecord, 'state' |
   }
   if (applies.length >= GRANT_LIMITS.uses) return refuse('The departure cannot record another allowance write')
   const line = run.answer.lines?.[term.id] ?? run.answer
-  const source = `night list: Yes to "${grantTermLabel(term)}" in ${line.via === 'app' ? 'the window' : 'Telegram'} at ${line.at}, period ${periodId}, card revision ${revision}, operation ${operationId}`
+  const source = `night list: Yes to "${grantTermLabel(term, false)}" in ${line.via === 'app' ? 'the window' : 'Telegram'} at ${line.at}, period ${periodId}, card revision ${revision}, operation ${operationId}`
   const entry: GrantLimitApply = { ...request, cardRevision: revision, term: { ...term, pin: term.pin }, source,
     state: 'writing', at: now, commit: null, detail: null }
   return { record: withPeriod(record, { ...period, limitApplies: [...applies, entry] }), entry, detail: null }
@@ -1193,8 +1206,8 @@ export function settleGrantLimit(read: GrantRead, periodId: string, source: stri
 }
 
 export type GrantAccessClaim = { sessionId: string; incarnation: string; runId: string; item: string; attempt: string }
-export type GrantAccessReport = Omit<GrantAccessClaim, 'attempt'> & {
-  attempt?: string; outcome: 'works' | 'fails'; cause: GrantAccessCause | null
+export type GrantAccessReport = GrantAccessClaim & {
+  outcome: 'works' | 'fails'; cause: GrantAccessCause | null
 }
 
 export function changeGrantAccess(read: GrantRead, update:
@@ -1207,11 +1220,11 @@ export function changeGrantAccess(read: GrantRead, update:
   const run = period?.runs.find(candidate => candidate.runId === request.runId && candidate.card.sessionId === request.sessionId)
   const term = run?.card.terms.find(candidate => candidate.id === request.item)
   const entry = run?.access?.find(candidate => candidate.item === request.item)
-  if (!period || !run || term?.kind !== 'access' || !entry || request.attempt !== undefined && entry.id !== request.attempt ||
+  if (!period || !run || term?.kind !== 'access' || !entry || entry.id !== request.attempt ||
     Date.parse(now) - Date.parse(entry.at) >= GRANT_ACCESS_TIMEOUT_MS || entry.outcome !== null) return refuse
   let next: GrantAccessAttempt
   if (update.kind === 'report') {
-    if (entry.incarnation !== request.incarnation || update.target.attempt === undefined && run.earlier.some(answer => grantChoice(answer.choices, request.item) === 'done') ||
+    if (entry.incarnation !== request.incarnation ||
       (update.target.outcome === 'fails' ? grantAccessCause(update.target.cause) === null : update.target.cause !== null)) return refuse
     next = { ...entry, outcome: update.target.outcome, cause: update.target.cause }
   } else {
@@ -1226,7 +1239,7 @@ export type GrantReportInput =
   | { runId: string; sessionId: string; kind: 'outcome'; periodId: string; useId: string; result: GrantReportResult; text: string | null }
   | { runId: string; sessionId: string; kind: 'step-back'; boundary: string; text: string }
   | { runId: string; sessionId: string; kind: 'refused'; item: string; text: string }
-  | { runId: string; sessionId: string; kind: 'stopped'; cause: GrantStopCause; text: string }
+  | { runId: string; sessionId: string; kind: 'stopped'; periodId?: string; cause: GrantStopCause; text: string }
 
 export type GrantReportOutcome =
   | { outcome: 'recorded' | 'repeated'; record: GrantRecord }
@@ -1257,7 +1270,8 @@ export function reportGrant(read: GrantRead, report: GrantReportInput, now: stri
     entry = { runId: report.runId, sessionId: report.sessionId, kind: 'outcome', useId: use.id, boundary: use.boundary, item: use.item, result: report.result, text: report.text, at: now }
   } else if (report.kind === 'stopped') {
     period = openGrantPeriod(record) ?? undefined
-    if (period?.state !== 'away' || away?.state !== 'away' || away.periodId !== period.periodId) return refuse('this report needs the current Away period')
+    if (period?.state !== 'away' || away?.state !== 'away' || away.periodId !== period.periodId ||
+      report.periodId !== undefined && report.periodId !== period.periodId) return refuse('this report needs the current Away period')
     const run = period.runs.find(candidate => candidate.runId === report.runId)
     const previous = period.reports.find(candidate => candidate.kind === 'stopped' && candidate.runId === report.runId)
     if (run !== undefined && run.card.sessionId !== report.sessionId || previous !== undefined && previous.sessionId !== report.sessionId) {
@@ -1282,7 +1296,9 @@ export function reportGrant(read: GrantRead, report: GrantReportInput, now: stri
   const same = (other: GrantReport): boolean => other.runId === entry.runId && other.kind === entry.kind && other.useId === entry.useId &&
     other.boundary === entry.boundary && other.item === entry.item && other.result === entry.result && other.text === entry.text && other.cause === entry.cause
   // Only the latest report for a use counts, so a retry of the same words is the same report.
-  const latest = entry.kind === 'outcome' ? period.reports.filter((other) => other.kind === 'outcome' && other.useId === entry.useId).at(-1) : period.reports.find(same)
+  const latest = entry.kind === 'outcome' ? period.reports.findLast(other => other.kind === 'outcome' && other.useId === entry.useId)
+    : entry.kind === 'stopped' ? period.reports.findLast(other => other.kind === 'stopped' && other.runId === entry.runId && other.at === entry.at)
+    : period.reports.find(same)
   if (latest !== undefined && same(latest)) return { outcome: 'repeated', record }
   if (period.reports.length >= GRANT_LIMITS.reports) return refuse('this period holds as many reports as BMN keeps')
   return { outcome: 'recorded', record: withPeriod(record, { ...period, reports: [...period.reports, entry] }) }
@@ -1303,7 +1319,7 @@ function leftFor(grant: ActiveGrant, use: { kind: 'round'; boundary: string } | 
 // ---------- words, shared by the app, Telegram and the CLI (the notes §1) ----------
 
 /** A term's label: "Extra repair rounds per boundary", "Merge in OWNER/NAME", "Push BRANCH to the default branch in OWNER/NAME". */
-export function grantTermLabel(term: GrantTerm): string {
+export function grantTermLabel(term: GrantTerm, showProject = true): string {
   if (term.kind === 'rounds') return 'Extra repair rounds per boundary'
   if (term.kind === 'merge') return `Merge in ${term.repository}`
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}`
@@ -1312,7 +1328,7 @@ export function grantTermLabel(term: GrantTerm): string {
   if (term.kind === 'access') return `${term.name} · ${term.command}`
   if (term.kind === 'limit') {
     const amount = (value: number) => term.name === 'money_usd' ? `$${value}` : String(value)
-    return `Raise ${term.name.replaceAll('_', ' ')} for Epic ${term.epic} from ${amount(term.from)} to ${amount(term.to)}`
+    return `Raise ${term.name.replaceAll('_', ' ')} for Epic ${term.epic} from ${amount(term.from)} to ${amount(term.to)}${showProject ? ` in ${term.project}` : ''}`
   }
   const words = prElsewhereWords(term, term.repository)
   return `${words[0]!.toUpperCase()}${words.slice(1)}`

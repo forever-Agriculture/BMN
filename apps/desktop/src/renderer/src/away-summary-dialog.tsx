@@ -239,8 +239,8 @@ export function AwaySummaryDialog(props: {
             <section className="inspector-section" aria-label="Sign-ins waiting when you left">
               <h3><span>Sign-ins waiting when you left</span><span className="away-count">{view.loginsAtDeparture.length}</span></h3>
               <ul className="away-rows">
-                {view.loginsAtDeparture.map(row => <li key={`${row.runId}\u0000${row.item}`}>
-                  <div className="message-row away-wake-row"><span>{row.title}</span><span>{row.name}</span></div>
+                {view.loginsAtDeparture.map(row => <li className="away-login-row" key={`${row.runId}\u0000${row.item}`}>
+                  <strong>{row.title}</strong><span>{row.name}</span>
                 </li>)}
               </ul>
             </section>

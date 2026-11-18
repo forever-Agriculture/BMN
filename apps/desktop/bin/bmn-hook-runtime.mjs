@@ -343,6 +343,9 @@ async function runHook(args) {
     writeSync(1, contextAnswer(event, [brief, team, notice, departure, restart]))
     said.printed = true
   }
+  if (departure !== null && said.printed && Array.isArray(answer.grantAccessOffers)) {
+    await callEach(socketPath, token, [{ method: 'grant.accessPrinted', params: { offers: answer.grantAccessOffers } }], HOOK_TIMEOUT_MS).catch(() => undefined)
+  }
   if (restart !== null && said.printed) {
     await callEach(socketPath, token, [{ method: 'restart.printed', params: { claimId: answer.restartClaim } }], HOOK_TIMEOUT_MS).catch(() => undefined)
   }

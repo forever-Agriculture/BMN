@@ -78,7 +78,7 @@ function GrantCard(props: {
       const access = term.kind === 'access' ? grantAccessStatus(run, term.id, props.now) : null
       return <div className="grant-term" key={term.id}>
         <div className="grant-term-words">
-          <span id={id} className={`grant-term-label${term.kind === 'command' || term.kind === 'message' || term.kind === 'access' ? ' exact' : ''}`}>{grantTermLabel(term)}</span>
+          <span id={id} className={`grant-term-label${term.kind === 'command' || term.kind === 'message' || term.kind === 'access' || term.kind === 'limit' ? ' exact' : ''}`}>{grantTermLabel(term)}</span>
           {term.kind === 'access' ? <button type="button" className="grant-copy" onClick={() => void navigator.clipboard.writeText(term.command)}>Copy command</button> : null}
           <span className="grant-term-reason" title={reason}>{reason}{picked === undefined && offer?.changed.includes(term.id) ? ' · changed' : ''}</span>
         </div>

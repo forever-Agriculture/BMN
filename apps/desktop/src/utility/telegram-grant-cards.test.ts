@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
   answerGrant,
   askGrant,
+  changeGrantAccess,
+  markGrantLimit,
+  settleGrantLimit,
   DEFAULT_TELEGRAM_QUIET_HOURS,
   EMPTY_AWAY_RECORD,
   EMPTY_GRANT_RECORD,
@@ -71,7 +74,8 @@ function harness(start: GrantRecord, options: { atDesk?: boolean; quiet?: Partia
     answer: async (answer) => {
       answers.push(answer)
       if (options.failAnswer === true) throw new Error('database is locked')
-      const result = answerGrant(record, answer, T1)
+      const access = Object.entries(answer.choices).find(([, choice]) => choice === 'done')
+      const result = answerGrant(record, { ...answer, ...(access ? { lineId: access[0], accessAttemptId: `attempt-${answers.length}` } : {}) }, options.now ?? T1)
       // A refused answer of his is kept too, as the store keeps it.
       if (result.outcome !== 'repeated') record = result.record
       return result
@@ -457,5 +461,61 @@ describe('getting-ready Telegram choices (130.4)', () => {
     await h.tap(token)
     expect(JSON.stringify(h.record)).toBe(before)
     expect(h.answers).toHaveLength(0)
+  })
+})
+
+describe('phone sign-in retries and night allowance receipts (Epic 131)', () => {
+  const modern = () => startDeparture({ ...EMPTY_GRANT_RECORD, version: 2, offers: [] },
+    { source: 'app', agentSessionId: null, periodId: 'p-1' }, 'back', T0).record
+  const login = { id: 'login', kind: 'access', name: 'Sample sign-in', command: 'gh auth login', reason: 'The session lacks access' }
+  const pin = { go: 'a'.repeat(40), commit: 'b'.repeat(40), token: 'c'.repeat(16) }
+  const limit = { id: 'limit', kind: 'limit', project: '/sample', epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'One check is ahead' }
+
+  it('keeps Check again usable on an answered card after Go', async () => {
+    const time = { now: T1 }
+    const h = harness(away(ask(modern(), [login])), time)
+    await h.cards.reconcile()
+    await h.tap(h.button('Done'))
+    expect(h.last().text).toContain('Waiting for the agent’s check')
+    const target = { sessionId: 's-builder', incarnation: 'inc', runId: 'run-80', item: 'login', attempt: 'attempt-1' }
+    let changed = changeGrantAccess({ state: 'read', record: h.record }, { kind: 'claim', target }, T1)
+    changed = changeGrantAccess({ state: 'read', record: changed.record }, {
+      kind: 'report', target: { ...target, outcome: 'fails', cause: 'expired' }
+    }, T1)
+    expect(changed.outcome).toBe('recorded')
+    h.record = changed.record
+    await h.cards.reconcile()
+    expect(h.last().text).toMatch(/still fails.*expired/iu)
+    await h.tap(h.button('Check again'))
+    expect(h.toasts.at(-1)).toBe('Check requested.')
+    expect(h.record.periods[0]?.runs[0]?.access?.[0]).toMatchObject({ id: 'attempt-2', outcome: null })
+
+    time.now = '2026-10-19T19:41:01.000Z'
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('Not checked')
+    await h.tap(h.button('Check again'))
+    expect(h.record.periods[0]?.runs[0]?.access?.[0]?.id).toBe('attempt-3')
+  })
+
+  it('refreshes a closed phone line when a previously marked write settles after Back', async () => {
+    const initial = ask(modern(), [limit])
+    const card = initial.periods[0]!.runs[0]!.card
+    const record = { ...initial, periods: [{ ...initial.periods[0]!, runs: [{ ...initial.periods[0]!.runs[0]!,
+      card: { ...card, terms: [{ ...limit, kind: 'limit' as const, pin }] } }] }] }
+    const h = harness(away(record))
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('Epic 7 from 4 to 6 in /sample')
+    await h.tap(h.button('Yes'))
+    const marked = markGrantLimit({ state: 'read', record: h.record }, AWAY, {
+      runId: 'run-80', sessionId: 's-builder', item: 'limit', useId: 'use'
+    }, 'p-1', card.revision, pin, 'apply-op', T1)
+    expect(marked.entry).not.toBeNull()
+    h.record = followAwayChange(marked.record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, LATE).record
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('Already being written')
+    h.record = settleGrantLimit({ state: 'read', record: h.record }, 'p-1', marked.entry!.source, { state: 'written', commit: 'd'.repeat(40) }, LATE)!
+    await h.cards.reconcile()
+    expect(h.last().text).toContain('use bmn plan allow to lower it')
+    expect(h.last().keyboard).toBeNull()
   })
 })

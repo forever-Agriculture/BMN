@@ -118,6 +118,7 @@ export function awayNightData(database: DatabaseConnection, call: AwayNightCall)
     const finished = turn?.end_kind === 'finished' && turn.ended_at !== null && turn.ended_at <= call.until ? turn.ended_at : null
     const interrupted = finished === null || hostStarts.some(at => at > finished && at < call.until) ||
       changedProcess.get(session.sessionId, finished, call.until, turn?.incarnation_id ?? null, finished, call.until) !== undefined ||
+      night.unknownSpans.some(span => span.to > finished) ||
       (session.at !== null && session.at > finished && night.woken.includes(session))
     const restedFrom = interrupted || finished === null ? null : finished < call.since ? call.since : finished
     session.restedFrom = restedFrom

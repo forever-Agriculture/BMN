@@ -155,7 +155,7 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
 
     phase('phone login check')
     const accessStart = bot.calls.length
-    const accessCommand = 'fixture auth login --profile ' + 'sample-'.repeat(100) + 'end'
+    const accessCommand = 'gh auth login --hostname ' + 'sample-'.repeat(100) + 'end'
     const accessTitle = 'Synthetic login check'
     ask('run-access', accessTitle, [{ kind: 'access', id: 'login', name: 'Sample sign-in',
       command: accessCommand, reason: 'The fixture started signed out' }])

@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { ledgerLimitUsage, readAllowances } from './plan-allowances.mjs'
 import { boardProblems, readBoard, resolvePlan } from './plan-board.mjs'
-import { githubFacts, remoteRepository, repositoryVerdict } from './policy-cli.mjs'
+import { githubFacts, readWithGithubAccounts, remoteRepository, repositoryVerdict } from './policy-cli.mjs'
 
 const exec = promisify(execFile)
 const MAX_PRS = 20
@@ -20,15 +20,15 @@ const git = async (cwd, args) => (await exec('git', args, {
 })).stdout.trim()
 
 async function github(args) {
-  try {
-    const { stdout } = await exec('gh', args, {
-      timeout: TIMEOUT, maxBuffer: 256 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1' }
-    })
-    return JSON.parse(stdout)
-  } catch (error) {
-    // gh pr checks keeps its JSON on non-green exits.
-    try { return JSON.parse(error.stdout) } catch { return null }
-  }
+  return readWithGithubAccounts(async env => {
+    try {
+      const { stdout } = await exec('gh', args, { timeout: TIMEOUT, maxBuffer: 256 * 1024, env })
+      return JSON.parse(stdout)
+    } catch (error) {
+      // gh pr checks keeps its JSON on non-green exits. Refused reads try the other signed-in accounts.
+      return JSON.parse(error.stdout)
+    }
+  })
 }
 
 function limitFacts(fields, usage, stories) {
@@ -45,7 +45,7 @@ function limitFacts(fields, usage, stories) {
   })
 }
 
-async function runEpic(project, runId, board) {
+async function runEpic(project, runId, board = null) {
   // The current worktree carries the lead's run id. It is a locator; only plan history establishes a go.
   try {
     const handoff = await readFile(join(project, '.dev-auto', 'handoff.md'), 'utf8')
@@ -59,7 +59,7 @@ async function runEpic(project, runId, board) {
   const named = /(?:^|[\/:-])epic[-/](\d+)(?:$|[\/:-])/u.exec(runId)
   if (named) return Number(named[1])
   // If there is only one active epic the worktree can use it without a handoff.
-  const active = board.rows.filter(row => row.story === null && ['in-progress', 'review', 'blocked'].includes(row.status))
+  const active = (board?.rows ?? []).filter(row => row.story === null && ['in-progress', 'review', 'blocked'].includes(row.status))
   return active.length === 1 ? active[0].epic : null
 }
 
@@ -110,32 +110,44 @@ async function pullRequests(project, policy) {
     branch = await git(project, ['branch', '--show-current'])
   } catch { return unknown }
   if (origin === null || branch === '') return unknown
-  const list = () => github(['pr', 'list', '--repo', origin, '--state', 'open',
-    '--head', branch, '--limit', String(MAX_PRS), '--json', 'number,headRefName,headRefOid,baseRefName,isCrossRepository'])
-  const [rows, facts] = await Promise.all([list(), githubFacts(origin)])
-  if (!Array.isArray(rows)) return unknown
-  if (rows.length === 0) return empty
-  const verdict = facts === null ? null : repositoryVerdict(policy, origin, facts)
-  const relevant = rows.filter(row => row?.headRefName === branch && row.isCrossRepository === false &&
-    Number.isSafeInteger(row.number) && /^[a-f0-9]{40,64}$/u.test(row.headRefOid) && typeof row.baseRefName === 'string')
-  const reported = await Promise.all(relevant.map(row =>
-    github(['pr', 'checks', String(row.number), '--repo', origin, '--required', '--json', 'state,bucket'])))
-  const confirmed = relevant.length > 0 ? await list() : []
-  const items = relevant.map((row, index) => {
-    const sameHead = Array.isArray(confirmed) && confirmed.some(current => current.number === row.number &&
-      current.headRefOid === row.headRefOid && current.headRefName === branch &&
-      current.baseRefName === row.baseRefName && current.isCrossRepository === false)
-    const checks = sameHead ? classifyRequiredChecks(reported[index]) : 'unknown'
-    const status = policy?.state === 'read' && verdict && verdict.owner !== null && knownActions.has(verdict.level)
+  const source = await githubFacts(origin)
+  if ('unread' in source) return unknown
+  const relevantHead = (row, target) => row?.headRefName === branch && (target === source.repository && row.isCrossRepository === false ||
+    row.isCrossRepository === true && `${row.headRepositoryOwner?.login}/${row.headRepository?.name}`.toLowerCase() === source.repository)
+  const fields = 'number,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,headRepositoryOwner'
+  const list = target => github(['pr', 'list', '--repo', target, '--state', 'open', '--head', branch,
+    '--limit', String(MAX_PRS), '--json', fields])
+  const targets = source.parent ? [source.repository, source.parent] : [source.repository]
+  const groups = await Promise.all(targets.map(async target => {
+    const rows = await list(target)
+    if (!Array.isArray(rows)) return { items: [], gap: unknown.reason }
+    const relevant = rows.filter(row => relevantHead(row, target))
+    if (relevant.some(row => !Number.isSafeInteger(row.number) || !/^[a-f0-9]{40,64}$/u.test(row.headRefOid) || typeof row.baseRefName !== 'string')) {
+      return { items: [], gap: unknown.reason }
+    }
+    const facts = target === source.repository ? source : await githubFacts(target)
+    const verdict = repositoryVerdict(policy, target, facts)
+    const status = policy?.state === 'read' && verdict.owner !== null && knownActions.has(verdict.level)
       ? verdict.authorizes ? verdict.level : 'asks-owner' : null
-    return { repository: verdict?.repository ?? origin, number: row.number, headSha: row.headRefOid, head: branch,
-      base: row.baseRefName, checks, policy: status,
-      mayMerge: !sameHead || status === null ? null : status === 'prs-only' || status === 'asks-owner' ? false
-        : checks === 'unknown' ? null : checks === 'green' }
-  })
-  const unreadable = verdict?.owner == null || items.some(item => item.policy === null || item.checks === 'unknown')
-  return { state: unreadable || rows.length >= MAX_PRS ? 'unknown' : 'read',
-    reason: unreadable ? unknown.reason : rows.length >= MAX_PRS ? 'At most 20 open pull requests were read' : null, items }
+    const reported = await Promise.all(relevant.map(row =>
+      github(['pr', 'checks', String(row.number), '--repo', target, '--required', '--json', 'state,bucket'])))
+    const confirmed = relevant.length > 0 ? await list(target) : []
+    const items = relevant.map((row, index) => {
+      const sameHead = Array.isArray(confirmed) && confirmed.some(current => current.number === row.number &&
+        current.headRefOid === row.headRefOid && current.baseRefName === row.baseRefName && relevantHead(current, target))
+      const checks = sameHead ? classifyRequiredChecks(reported[index]) : 'unknown'
+      return { repository: verdict.repository ?? target, number: row.number, headSha: row.headRefOid, head: branch,
+        base: row.baseRefName, checks, policy: status,
+        mayMerge: !sameHead || status === null ? null : status === 'prs-only' || status === 'asks-owner' ? false
+          : checks === 'unknown' ? null : checks === 'green' }
+    })
+    const missingFork = rows.some(row => row?.isCrossRepository === true && !row.headRepository?.name && row.headRefName === branch)
+    const partial = missingFork || items.some(item => item.policy === null || item.checks === 'unknown')
+    return { items, gap: partial ? unknown.reason : rows.length >= MAX_PRS ? 'At most 20 open pull requests were read for this repository' : null }
+  }))
+  const items = groups.flatMap(group => group.items)
+  const gap = (source.upstreamUnread ? 'GitHub did not name the run’s upstream repository' : null) ?? groups.find(group => group.gap !== null)?.gap ?? (items.length > MAX_PRS ? 'At most 20 open pull requests were read' : null)
+  return { state: gap === null ? 'read' : 'unknown', reason: gap, items: items.slice(0, MAX_PRS) }
 }
 
 export function grantFactConflicts(facts) {
@@ -150,9 +162,8 @@ export function grantFactConflicts(facts) {
     }
   }
   for (const pr of facts.pullRequests.items) {
-    if (pr.mayMerge !== false) continue
-    const reason = pr.policy === 'prs-only' || pr.policy === 'asks-owner' ? 'needs merge approval' : 'is waiting for green required checks'
-    result.push({ id: `pr:${pr.repository}:${pr.number}`, words: `PR #${pr.number} in ${pr.repository} ${reason}` })
+    if (pr.mayMerge !== false || !['prs-only', 'asks-owner'].includes(pr.policy)) continue
+    result.push({ id: `pr:${pr.repository}:${pr.number}`, words: `PR #${pr.number} in ${pr.repository} needs merge approval` })
   }
   return result
 }
@@ -167,9 +178,11 @@ export async function sameGrantCheckout(cwd, project) {
   } catch { return false }
 }
 
-export async function pinGrantLimit(cwd, term) {
+export async function pinGrantLimit(cwd, term, runId) {
   if (!await sameGrantCheckout(cwd, term.project)) throw new Error('The allowance must belong to this run’s checkout')
   const plan = await resolvePlan(term.project)
+  const selected = await runEpic(plan.runCheckout, runId)
+  if (selected !== null && selected !== term.epic) throw new Error('The allowance must belong to this run’s epic')
   const recorded = await readAllowances(plan, term.epic)
   const limit = recorded.state === 'recorded' ? recorded.current.fields.limits[term.name] : null
   if (!limit || recorded.hand_edit || limit.limit !== term.from) throw new Error('Read the current recorded allowance before asking for this raise')
@@ -191,5 +204,9 @@ export async function grantFacts({ cwd, project, runId, epic, policy, environmen
     pullRequests(resolved, policy).catch(() => unknown.pullRequests)
   ])
   const facts = { runId, plan, pullRequests: prs }
-  return { ...facts, conflicts: grantFactConflicts(facts) }
+  const conflicts = grantFactConflicts(facts)
+  if (conflicts.length > 256) {
+    return { ...facts, plan: { ...plan, state: 'unknown', reason: 'Too many allowance and pull request facts to confirm on one night list' }, conflicts: [] }
+  }
+  return { ...facts, conflicts }
 }

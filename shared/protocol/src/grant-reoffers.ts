@@ -8,6 +8,8 @@ export interface GrantReoffer {
   changed: string[]
 }
 
+const canReoffer = (term: GrantTerm): boolean => term.kind !== 'access' && term.kind !== 'limit'
+
 /** Proposals and their limits are part of the line. Its id and explanatory words carry no permission. */
 function sameLine(left: GrantTerm, right: GrantTerm): boolean {
   const semantic = (term: GrantTerm): string => JSON.stringify(Object.entries(term)
@@ -28,7 +30,7 @@ export function grantReoffer(record: GrantRecord, period: GrantPeriod, run: Gran
   const choices: Record<string, GrantChoice> = {}
   const changed: string[] = []
   const matched = new Set<string>()
-  for (const term of run.card.terms) {
+  for (const term of run.card.terms.filter(canReoffer)) {
     const old = before.terms.find(other => !matched.has(other.id) && sameLine(term, other))
     if (old !== undefined) matched.add(old.id)
     const choice = old === undefined ? undefined : grantChoice(before.choices, old.id)
@@ -41,6 +43,9 @@ export function grantReoffer(record: GrantRecord, period: GrantPeriod, run: Gran
 /** A run that has not asked again is only history: no card, choices or grant is created. */
 export function grantNotAskedAgain(record: GrantRecord, period: GrantPeriod): Array<{ runId: string; title: string; at: string; granted: string[] }> {
   return priorOffers(record, period).filter(run => !period.runs.some(other => other.runId === run.runId) &&
-    Object.values(run.answer.choices).some(choice => choice !== 'no' && choice !== 0))
-    .map(run => ({ runId: run.runId, title: run.title, at: run.answer.at, granted: grantAnswerWords(run.answer.terms, run.answer.choices).granted }))
+    run.answer.terms.some(term => {
+      const choice = grantChoice(run.answer.choices, term.id)
+      return canReoffer(term) && choice !== undefined && choice !== 'no' && choice !== 0
+    }))
+    .map(run => ({ runId: run.runId, title: run.title, at: run.answer.at, granted: grantAnswerWords(run.answer.terms.filter(canReoffer), run.answer.choices).granted }))
 }

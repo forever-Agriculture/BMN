@@ -1,9 +1,10 @@
 // MODULE: grant-night.test.ts - replay, access and stop report checks for Epic 131
 import { describe, expect, it } from 'vitest'
 import { EMPTY_AWAY_RECORD } from './away'
+import { grantReoffer } from './grant-reoffers'
 import {
   EMPTY_GRANT_RECORD, answerGrant, askGrant, changeGrantAccess, followAwayChange, grantAccessStatus,
-  grantStatus, markGrantLimit, parseGrantCardInput, readGrantRecord, reportGrant,
+  grantStatus, grantTermLabel, markGrantLimit, parseGrantCardInput, readGrantRecord, reportGrant,
   settleGrantLimit, startDeparture, type GrantRecord
 } from './grant'
 
@@ -12,7 +13,7 @@ const later = '2026-11-18T20:00:30.000Z'
 const afterTimeout = '2026-11-18T20:01:01.000Z'
 const pin = { go: 'a'.repeat(40), commit: 'b'.repeat(40), token: 'c'.repeat(16) }
 const limit = { id: 'limit', kind: 'limit', project: '/sample', epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'One check is ahead', pin }
-const access = { id: 'login', kind: 'access', name: 'Sample sign-in', command: 'sample auth login', reason: 'The authorization expired' }
+const access = { id: 'login', kind: 'access', name: 'Sample sign-in', command: 'gh auth login', reason: 'The authorization expired' }
 const runId = 'run'
 const sessionId = 'session'
 const read = (record: GrantRecord) => ({ state: 'read' as const, record })
@@ -33,6 +34,47 @@ const target = { runId, sessionId, item: 'login', incarnation: 'one', attempt: '
 const mark = (record: GrantRecord, revision = 1) => markGrantLimit(read(record), back, request, 'period', revision, pin, 'operation', at)
 
 describe('night-only lines', () => {
+  it('labels the exact checkout and requires an explicit yes on the raise itself', () => {
+    const initial = asked(limit)
+    const period = initial.periods[0]!
+    const term = period.runs[0]!.card.terms[0]!
+    expect(grantTermLabel(term)).toContain('Epic 7 from 4 to 6 in /sample')
+    const bulk = answerGrant(initial, { runId, periodId: 'period', cardRevision: 1, expectedRevision: initial.revision,
+      choices: { limit: 'yes' }, via: 'telegram', operationKey: 'bulk' }, at)
+    expect(bulk).toMatchObject({ outcome: 'refused', reason: 'invalid' })
+    expect(mark(bulk.record).entry).toBeNull()
+  })
+
+  it('only reoffers ordinary grants from a mixed card with previous Yes and Done', () => {
+    const terms = [limit, access, { kind: 'rounds', proposed: 3, reason: 'One more boundary' }]
+    const card = parseGrantCardInput({ title: 'Mixed old and new choices', scope: 'Synthetic', terms })
+    if ('problem' in card) throw Error(card.problem)
+    const initial = asked(limit)
+    const period = initial.periods[0]!
+    const next = askGrant(initial, { runId, sessionId, agentCli: 'claude', card: card.card }, at).record
+    const run = next.periods[0]!.runs[0]!
+    const withOffer = { ...next, offers: [{ runId, title: run.title, endedAt: at, answer: {
+      cardRevision: run.card.revision, terms: run.card.terms, choices: { limit: 'yes' as const, login: 'done' as const, rounds: 3 as const },
+      at, via: 'app' as const, operationKey: 'earlier'
+    } }] }
+    expect(grantReoffer(withOffer, period, run)?.choices).toEqual({ rounds: 3 })
+  })
+
+  it('rejects credential-shaped text throughout the new card inputs before storage', () => {
+    const canary = 'ghp_' + 'Z'.repeat(36)
+    const tests = [
+      { title: canary }, { scope: canary },
+      { terms: [{ ...access, name: canary }] }, { terms: [{ ...access, reason: canary }] },
+      { terms: [{ ...access, command: `gh auth login --hostname ${canary}` }] },
+      { terms: [{ ...limit, reason: canary }] }, { terms: [{ ...limit, project: `/fixture/${canary}` }] }
+    ]
+    for (const field of tests) {
+      const result = parseGrantCardInput({ title: 'Fixture', scope: 'Synthetic scope', terms: [access], ...field })
+      expect(result).toHaveProperty('problem')
+      expect(JSON.stringify(result)).not.toContain(canary)
+    }
+  })
+
   it('locks one approved revision and keeps the first result in readback', () => {
     const approved = answer(asked(limit), 'limit', 'yes').record
     const marked = mark(approved)
@@ -85,6 +127,11 @@ describe('night-only lines', () => {
     const result = reportGrant(read(base), issue, later, { state: 'away', periodId: 'period' })
     expect(result.outcome).toBe('recorded')
     expect(result.record.periods[0]?.reports[0]).toMatchObject({ cause: 'access', at: later })
+    expect(reportGrant(read(result.record), { ...issue, periodId: 'earlier-departure' }, later, away).outcome).toBe('refused')
+    const prompt = reportGrant(read(result.record), { ...issue, cause: 'prompt', text: 'Approval prompt open' }, at, away)
+    const again = reportGrant(read(prompt.record), { ...issue, periodId: 'period' }, afterTimeout, away)
+    expect(again.outcome).toBe('recorded')
+    expect(again.record.periods[0]?.reports.at(-1)).toMatchObject({ cause: 'access', at: afterTimeout })
   })
 
   it('keeps the exact sign-in that was waiting at Go even if the run asks again afterward', () => {

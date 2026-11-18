@@ -206,7 +206,8 @@ function readLimit({ text: raw, line }, data, where, add) {
 
 function readNumber(value) {
   if (typeof value !== 'string' || !/^\d+(?:\.\d+)?$/u.test(value)) return null
-  return Number(value)
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
 }
 
 function readList(key, inline, block, lineNumber, data, where, add) {
@@ -375,7 +376,7 @@ export function allowanceHistoryAt(plan, epic, revision) {
  * version, then the last recorded `allow` after that go, whether or not the file is on disk now. A go whose commit holds
  * none returns the epic to its Run needs. `at` names the go's commit; without it the latest recorded go.
  */
-export async function readAllowances(plan, epic, { at = null } = {}) {
+export async function readAllowances(plan, epic, { at = null, head = 'HEAD' } = {}) {
   const base = { epic, file: `allowances/${allowanceFileName(plan.planRoot, epic) ?? allowanceName(epic)}` }
   const working = allowanceFileName(plan.planRoot, epic) === null ? null : allowanceText(plan.planRoot, epic)
   const draft = () => {
@@ -389,13 +390,13 @@ export async function readAllowances(plan, epic, { at = null } = {}) {
   if (go !== null) {
     try { go = gitRun(repo, ['rev-parse', '--verify', '--quiet', `${at}^{commit}`]).trim() } catch { throw new AllowRefusal('NO_COMMIT', `--at ${at} is no commit of the plan's history`) }
   } else {
-    go = gitRun(repo, ['log', '-1', '--format=%H', '-E', `--grep=^Go-Epic: 0*${epic}[[:space:]]*$`, 'HEAD']).trim() || null
+    go = gitRun(repo, ['log', '-1', '--format=%H', '-E', `--grep=^Go-Epic: 0*${epic}[[:space:]]*$`, head]).trim() || null
   }
   if (go === null) return draft()
   const goMessage = gitRun(repo, ['log', '-1', '--format=%B', go])
   if (trailer(goMessage, 'Go-Epic') !== String(epic)) return { ...base, state: 'not_recorded', go_commit: go, reason: `commit ${go.slice(0, 12)} is no go bmn plan go recorded for epic ${epic}; it grants nothing` }
   const goPath = pathAt(repo, folder, go, epic)
-  const headPath = pathAt(repo, folder, 'HEAD', epic)
+  const headPath = pathAt(repo, folder, head, epic)
   if (goPath === null) {
     const stray = working !== null || headPath !== null
     return { ...base, state: 'none', go_commit: go, reason: 'the go\'s commit holds no allowances file; its Run needs hold', hand_edit: stray ? 'a file exists that the go\'s commit does not hold: it grants nothing until a new go records it' : null }
@@ -404,7 +405,7 @@ export async function readAllowances(plan, epic, { at = null } = {}) {
   const goParsed = parseAllowances(goText, epic)
   if (goParsed.problems.length > 0) return { ...base, state: 'invalid', go_commit: go, reason: `the go's file does not read: line ${goParsed.problems[0].line}: ${goParsed.problems[0].reason}; it grants nothing`, problems: goParsed.problems }
 
-  const { text, commit, changes } = recordedChanges(repo, folder, epic, go, goText, 'HEAD')
+  const { text, commit, changes } = recordedChanges(repo, folder, epic, go, goText, head)
   const parsed = parseAllowances(text, epic)
   const recordedName = goPath.slice(goPath.lastIndexOf('/') + 1)
   const result = {
@@ -414,7 +415,7 @@ export async function readAllowances(plan, epic, { at = null } = {}) {
     current: { commit, source: commit === go ? 'go' : 'allow', sha256: textSha(text), text, fields: fieldsFrom(parsed.data) },
     changes, hand_edit: null
   }
-  const headText = headPath === null ? null : showFile(repo, 'HEAD', headPath)
+  const headText = headPath === null ? null : showFile(repo, head, headPath)
   if (working === null) result.hand_edit = 'the file is deleted on disk; the last recorded version stands'
   else if (textSha(working) !== textSha(text)) result.hand_edit = 'the working file differs from the last recorded version; the recorded one stands'
   else if (headText === null || textSha(headText) !== textSha(text)) result.hand_edit = 'the plan\'s history holds another text than the last recorded version; the recorded one stands'
@@ -423,7 +424,7 @@ export async function readAllowances(plan, epic, { at = null } = {}) {
   const withdrawn = (status) => status === null || status === 'backlog' || status === 'dropped'
   let boardNow = null
   try { boardNow = readFileSync(plan.boardPath, 'utf8') } catch { /* no board: nothing confirms the go */ }
-  if (withdrawn(rowStatus(showFile(repo, 'HEAD', boardRel), epic)) || withdrawn(rowStatus(boardNow, epic))) return { ...result, state: 'withdrawn', reason: 'the epic\'s row was put back after its go; this grants nothing until his next go' }
+  if (withdrawn(rowStatus(showFile(repo, head, boardRel), epic)) || withdrawn(rowStatus(boardNow, epic))) return { ...result, state: 'withdrawn', reason: 'the epic\'s row was put back after its go; this grants nothing until his next go' }
   if (plan.tracked) {
     const { publicationState } = await import('./plan-publish.mjs')
     const publication = publicationState(plan)
@@ -886,7 +887,10 @@ async function recordAllowInternal(plan, epic, { changes: words, reason, source,
   let releaseLedgers = () => {}
   try {
     releaseLedgers = await holdLedgers(plan, epic)
-    const read = await readAllowances(plan, epic)
+    const { repo, folder } = historyOf(plan)
+    const branch = gitRun(repo, ['symbolic-ref', '-q', 'HEAD']).trim()
+    const head = gitRun(repo, ['rev-parse', '--verify', `${branch}^{commit}`]).trim()
+    const read = await readAllowances(plan, epic, { head })
     if (read.state === 'withdrawn' || read.state === 'conflict') throw new AllowRefusal(read.state.toUpperCase(), read.reason)
     if (read.state !== 'recorded') throw new AllowRefusal('NOT_RECORDED', `epic ${epic}'s go records no allowances file: ${read.reason}`)
     if (read.hand_edit) throw new AllowRefusal('HAND_EDIT', `${read.hand_edit}; put the file back to the last recorded version (sha256:${read.current.sha256.slice(0, 12)}…) first, so an edit cannot ride on a real change`)
@@ -903,10 +907,7 @@ async function recordAllowInternal(plan, epic, { changes: words, reason, source,
     if (compared.frozen.length > 0) throw new AllowRefusal('USED', compared.frozen.join('; '))
     if (compared.words.length > 0 && words_ === '') throw new AllowRefusal('NEEDS_HIS_WORDS', `${compared.words.join('; ')} needs his words: --source gives his quoted words with their time; nothing changed`)
     if (after.problems.length > 0) throw new AllowRefusal('BAD_ALLOWANCES', `that would make line ${after.problems[0].line} wrong: ${after.problems[0].reason}`)
-    const { repo, folder } = historyOf(plan)
     const relFile = `${folder}/${read.file.slice(read.file.lastIndexOf('/') + 1)}`
-    const head = gitRun(repo, ['rev-parse', '--verify', 'HEAD^{commit}']).trim()
-    const branch = gitRun(repo, ['symbolic-ref', '-q', 'HEAD']).trim()
     const summary = compared.changes.map((one) => `${one.field} ${one.before} -> ${one.after}`)
     const who = words_ !== '' ? 'the owner' : `the lead (session ${process.env.BMN_SESSION_ID ?? 'unknown'})`
     const firstLine = `plan: allow on Epic ${epic}: ${summary[0]}`
@@ -928,6 +929,10 @@ async function recordAllowInternal(plan, epic, { changes: words, reason, source,
       const tree = gitRun(repo, ['write-tree'], own).trim()
       created = gitRun(repo, ['commit-tree', tree, '-p', head, '-F', '-'], { input: message }).trim()
       seam('created', created)
+      if (night && (gitRun(repo, ['symbolic-ref', '-q', 'HEAD']).trim() !== branch ||
+        readFileSync(join(repo, relFile), 'utf8') !== read.current.text)) {
+        throw new AllowRefusal('CONFLICT', 'The plan checkout or allowance changed before publication; nothing was written')
+      }
       gitRun(repo, ['update-ref', '-m', `bmn plan allow: epic ${epic}`, branch, created, head], { lockFd: night?.lockFd })
       seam('published', created)
     } catch (error) {
@@ -935,6 +940,11 @@ async function recordAllowInternal(plan, epic, { changes: words, reason, source,
       throw error
     } finally { rmSync(temporaryIndex, { force: true }) }
     // The working file and an unstaged index entry follow the commit; a staged change of it would have been refused above.
+    if (night && (gitRun(repo, ['symbolic-ref', '-q', 'HEAD']).trim() !== branch ||
+      gitRun(repo, ['rev-parse', '--verify', branch]).trim() !== created ||
+      readFileSync(join(repo, relFile), 'utf8') !== read.current.text)) {
+      throw new AllowRefusal('READBACK', 'The allowance commit was published, but the checkout changed before readback')
+    }
     atomicWrite(join(repo, relFile), text)
     try { followAllowanceIndex(repo, relFile, parentEntry, created) }
     catch { /* The recorded change stands even if the index cannot be updated. */ }
@@ -962,12 +972,14 @@ export async function withNightAllowanceLock(plan, task) {
   }
 }
 
-export async function writeNightAllowance(plan, entry, lockFd, seam) {
+export async function writeNightAllowance(plan, readMark, lockFd, seam) {
+  const entry = typeof readMark === 'function' ? await readMark() : null
+  if (entry?.state !== 'writing') throw new AllowRefusal('NIGHT_SOURCE', 'No matching write mark was read from BMN')
   const { term, source } = entry
   const prefix = `limits.${term.name}`
-  // JSON numeric notation preserves the exact JS value for large amounts.
+  const amount = new Intl.NumberFormat('en-US', { useGrouping: false, maximumSignificantDigits: 21 }).format(term.to)
   return recordAllowInternal(plan, term.epic, {
-    changes: [`${prefix}.limit=${term.to}`, `${prefix}.ceiling=${term.to}`],
+    changes: [`${prefix}.limit=${amount}`, `${prefix}.ceiling=${amount}`],
     reason: term.reason, source, expect: term.pin.token, seam
   }, { term, lockFd })
 }

@@ -186,7 +186,7 @@ import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 import { commandPinSha } from '../../bin/grant-command.mjs'
 import { grantFacts as readGrantFacts, pinGrantLimit, resolveGrantLimitPlan, sameGrantCheckout } from '../../bin/grant-facts.mjs'
 import { findNightAllowance, withNightAllowanceLock, writeNightAllowance } from '../../bin/plan-allowances.mjs'
-import { grantChoice, grantLimitWords, GRANT_ACCESS_TIMEOUT_MS, type GrantAccessClaim, type GrantLimitApply, type GrantLimitRequest } from '@bmn/protocol'
+import { grantChoice, grantLimitWords, GRANT_ACCESS_TIMEOUT_MS, GRANT_LIMITS, type GrantAccessClaim, type GrantLimitApply, type GrantLimitRequest } from '@bmn/protocol'
 import { maskSecrets } from './secret-mask'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
@@ -440,6 +440,7 @@ export class CompanionService {
   private readonly departureHanded = new Set<string>()
   private readonly messageWake: MessageWake
   /** Each session's last turn its hook reported finished with nothing in flight (110.3): a hook's withdrawal ends it, the owner reading it does not. */
+  private readonly hookAccessOffers = new Map<string, { target: GrantAccessClaim; until: number }>()
   private readonly finishedTurns = new Map<string, { incarnationId: string; at: string }>()
   /** Local ports each session's programs listen on, read from /proc on its own cadence (Story 41.1). */
   private readonly ports: PortWatch
@@ -1179,7 +1180,7 @@ export class CompanionService {
           let card = p.card
           if (card.terms.some(term => term.kind === 'limit')) {
             try {
-              const terms = await Promise.all(card.terms.map(async term => term.kind === 'limit' ? { ...term, pin: await pinGrantLimit(bound, term) } : term))
+              const terms = await Promise.all(card.terms.map(async term => term.kind === 'limit' ? { ...term, pin: await pinGrantLimit(bound, term, p.runId) } : term))
               card = { ...card, terms }
             } catch (error) {
               throw new HostControlError(ERROR_CODES.invalidArgument, error instanceof Error ? maskSecrets(error.message) : 'The requested allowance could not be confirmed')
@@ -1221,6 +1222,7 @@ export class CompanionService {
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
           return { outcome: result.outcome, left: result.left, periodId: result.periodId, ...(result.exact === null ? {} : { exact: result.exact }) }
         }),
+        grantAccessPrinted: (p) => this.controlCall(() => this.grantAccessPrinted(p)),
         reportGrantAccess: (target) => this.controlCall(async () => {
           const result = await this.options.database.companion('updateGrantAccess', { kind: 'report', target }, this.iso())
           if (result.outcome !== 'recorded') throw new HostControlError(ERROR_CODES.invalidArgument, 'This access check is no longer pending in this session')
@@ -1326,13 +1328,13 @@ export class CompanionService {
           const brief = due === null ? null : agentStartBrief(await this.anyOwnerAllowed())
           // Story 84.3: while he is leaving or away, once per conversation and departure: a run may ask him on one card.
           const departure = this.grantNotices.answer(p, this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null)
-          const access = eligibleTeam && p.incarnationId !== null ? await this.grantAccessForHook(p.sessionId, p.incarnationId) : null
-          const grantNotice = [departure, access].filter(Boolean).join('\n')
+          const access = eligibleTeam && p.incarnationId !== null ? this.grantAccessForHook(p.sessionId, p.incarnationId) : null
+          const grantNotice = [departure, ...(access?.lines ?? [])].filter(Boolean).join('\n')
           return {
             ...recorded, ...(restart === null ? {} : { restartNotice: restart.text, restartClaim: restart.claim }), ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
             ...(teamNotice === null ? {} : { teamNotice: teamNotice.text, teamRevision: teamNotice.revision, teamClaim: teamNotice.claimId }),
-            ...(grantNotice === '' ? {} : { grantNotice })
+            ...(grantNotice === '' ? {} : { grantNotice }), ...(access === null ? {} : { grantAccessOffers: access.ids })
           }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
@@ -2101,7 +2103,8 @@ export class CompanionService {
       if (run.card.sessionId === null || sessionId !== undefined && sessionId !== run.card.sessionId) return []
       return (run.access ?? []).flatMap(attempt => {
         const term = run.card.terms.find(term => term.id === attempt.item && term.kind === 'access')
-        return term?.kind === 'access' && attempt.incarnation === null && attempt.outcome === null &&
+        const held = this.grantAccessOffered(attempt.id, now)
+        return term?.kind === 'access' && !held && attempt.incarnation === null && attempt.outcome === null &&
           now - Date.parse(attempt.at) < GRANT_ACCESS_TIMEOUT_MS ? [{ run, attempt, term, sessionId: run.card.sessionId! }] : []
       })
     })
@@ -2119,15 +2122,42 @@ export class CompanionService {
     return this.options.manager.liveIncarnationId(target.sessionId) === target.incarnation
   }
 
-  private async grantAccessForHook(sessionId: string, incarnation: string): Promise<string | null> {
-    const pending = this.pendingGrantAccess(sessionId)
-    if (pending.length === 0) return null
-    const lines: string[] = []
-    for (const { run, attempt } of pending) {
-      const target = { sessionId, incarnation, runId: run.runId, item: attempt.item, attempt: attempt.id }
-      if (await this.claimGrantAccess(target)) lines.push(this.grantAccessLine(run.runId, attempt.item, attempt.id))
+  private grantAccessOffered(attempt: string, now: number): boolean {
+    return [...this.hookAccessOffers.values()].some(offer => offer.target.attempt === attempt && offer.until > now)
+  }
+
+  private grantAccessForHook(sessionId: string, incarnation: string) {
+    const now = this.now().getTime()
+    for (const [id, offer] of this.hookAccessOffers) {
+      if (offer.until <= now) this.hookAccessOffers.delete(id)
     }
-    return lines.length === 0 ? null : lines.join('\n')
+    const ids: string[] = []
+    const lines: string[] = []
+    for (const { run, attempt } of this.pendingGrantAccess(sessionId).slice(0, GRANT_LIMITS.terms)) {
+      const id = randomUUID()
+      this.hookAccessOffers.set(id, {
+        target: { sessionId, incarnation, runId: run.runId, item: attempt.item, attempt: attempt.id },
+        until: now + 8_000
+      })
+      ids.push(id)
+      lines.push(this.grantAccessLine(run.runId, attempt.item, attempt.id))
+    }
+    return ids.length === 0 ? null : { ids, lines }
+  }
+
+  private async grantAccessPrinted(p: { sessionId: string; incarnation: string; offers: string[] }) {
+    let recorded = 0
+    for (const id of p.offers) {
+      const offer = this.hookAccessOffers.get(id)
+      if (offer?.target.sessionId !== p.sessionId || offer.target.incarnation !== p.incarnation || offer.until <= this.now().getTime()) continue
+      offer.until = Infinity
+      try {
+        if (await this.claimGrantAccess(offer.target)) recorded += 1
+      } finally {
+        this.hookAccessOffers.delete(id)
+      }
+    }
+    return { recorded }
   }
 
   private async sweepGrantAccess(): Promise<void> {
@@ -2154,7 +2184,7 @@ export class CompanionService {
           await mirror.settled()
           return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
         },
-        write: (id, line) => { attempted = true; this.typeLine(id, line) }
+        write: (id, line) => this.typeLine(id, line, () => { attempted = true })
       }, {
         seen, open, generation: this.attentionChanges.get(sessionId)?.generation ?? 0,
         quietMs: 0, quietWords: 'Its turn is still running', line: this.grantAccessLine(run.runId, attempt.item, attempt.id),
@@ -2166,7 +2196,16 @@ export class CompanionService {
           return state && state.outcome === null && this.now().getTime() - Date.parse(state.at) < GRANT_ACCESS_TIMEOUT_MS &&
             (state.incarnation === null || claimed && state.incarnation === seen.incarnationId) ? null : 'Access check is no longer pending'
         },
-        claim: async () => { claimed = await this.claimGrantAccess(target); return claimed ? null : 'Access check was already handed' },
+        claim: async () => {
+          if (this.grantAccessOffered(attempt.id, this.now().getTime())) return 'Access check was already offered'
+          this.hookAccessOffers.set(attempt.id, { target, until: Infinity })
+          try {
+            claimed = await this.claimGrantAccess(target)
+          } finally {
+            this.hookAccessOffers.delete(attempt.id)
+          }
+          return claimed ? null : 'Access check was already offered'
+        },
         unclaim: async () => { if (claimed && !attempted) await this.claimGrantAccess(target, 'unclaim') }
       })
     }
@@ -2179,28 +2218,24 @@ export class CompanionService {
   }
 
   private async recoverNightAllowances(runId?: string): Promise<void> {
-    const read = this.grantRead
-    if (read.state !== 'read') return
-    for (const period of read.record.periods) {
-      for (const entry of period.limitApplies ?? []) {
-        if (entry.state !== 'writing' || runId !== undefined && entry.runId !== runId) continue
-        try {
-          const plan = await resolveGrantLimitPlan(entry.term.project)
-          await withNightAllowanceLock(plan, async () => {
-            const commit = await findNightAllowance(plan, entry)
-            this.grantChanged(await this.options.database.companion('settleLimitApply', period.periodId, entry.source,
-              commit === null ? { state: 'interrupted' } : { state: 'written', commit }, this.iso()))
-          })
-        } catch { /* An unreadable history or a live writer leaves the journal entry pending. */ }
-      }
+    const pending = await this.options.database.companion('openLimitApplies', runId).catch(() => [])
+    for (const { entry } of pending) {
+      try {
+        const plan = await resolveGrantLimitPlan(entry.term.project)
+        await withNightAllowanceLock(plan, async () => {
+          const commit = await findNightAllowance(plan, entry)
+          const result = await this.options.database.companion('settleLimitApply', entry, entry.source,
+            commit === null ? { state: 'interrupted' } : { state: 'written', commit }, this.iso())
+          this.grantChanged(result.read)
+        })
+      } catch { /* An unreadable history or a live writer leaves the journal entry pending. */ }
     }
   }
 
-  private async applyGrantLimit(request: GrantLimitRequest) {
+  private async applyGrantLimit(request: GrantLimitRequest & { incarnationId: string }) {
     const refuse = (detail: string) => new HostControlError(ERROR_CODES.invalidArgument, detail)
     const read = async () => (await this.options.database.companion('getGrants')).read
-    const earlier = (snapshot: GrantRead) => snapshot.state === 'read' ? snapshot.record.periods.flatMap(period => period.limitApplies ?? [])
-      .find(entry => entry.runId === request.runId && entry.sessionId === request.sessionId && entry.useId === request.useId) : undefined
+    const earlier = () => this.options.database.companion('getLimitApply', request)
     const receipt = (entry: GrantLimitApply) => {
       if (entry.item !== request.item) throw refuse('This use id belongs to a different line')
       if (entry.state === 'failed') throw refuse(entry.detail ?? 'The allowance was not written')
@@ -2208,8 +2243,8 @@ export class CompanionService {
     }
     await this.recoverNightAllowances(request.runId)
     const before = await read()
-    const prior = earlier(before)
-    if (prior !== undefined) return receipt(prior)
+    const prior = await earlier()
+    if (prior !== null) return receipt(prior.entry)
     const period = before.state === 'read' ? openGrantPeriod(before.record) : null
     const run = period?.runs.find(candidate => candidate.runId === request.runId && candidate.card.sessionId === request.sessionId)
     const term = run?.card.terms.find(candidate => candidate.kind === 'limit' && candidate.id === request.item)
@@ -2218,11 +2253,14 @@ export class CompanionService {
     if (!await sameGrantCheckout(cwd, term.project)) throw refuse('The allowance belongs to a different checkout')
     const plan = await resolveGrantLimitPlan(term.project)
     return withNightAllowanceLock(plan, async (fd) => {
-      const existing = earlier(await read())
-      if (existing !== undefined) return receipt(existing)
-      const current = await pinGrantLimit(cwd, term).catch(() => null)
+      const existing = await earlier()
+      if (existing !== null) return receipt(existing.entry)
+      const current = await pinGrantLimit(cwd, term, request.runId).catch(() => null)
       if (!current || current.go !== term.pin!.go || current.commit !== term.pin!.commit || current.token !== term.pin!.token) {
         throw refuse('The go or allowance changed; nothing was written')
+      }
+      if (this.options.manager.liveIncarnationId(request.sessionId) !== request.incarnationId) {
+        throw refuse('The requesting session ended before apply; nothing was written')
       }
       const marked = await this.options.database.companion('markLimitApply', request, period.periodId, run.card.revision,
         term.pin!, randomUUID(), this.iso())
@@ -2231,19 +2269,24 @@ export class CompanionService {
       const entry = marked.entry
       let commit: string | null
       try {
-        commit = (await writeNightAllowance(plan, entry, fd)).commit
+        commit = (await writeNightAllowance(plan, async () => {
+          const stored = await earlier()
+          return stored?.periodId === period.periodId && stored.entry.source === entry.source ? stored.entry : null
+        }, fd)).commit
       } catch (error) {
         // The ref may have moved before the write reported failure. The commit and the exact owner act decide.
         commit = await findNightAllowance(plan, entry)
         if (commit === null) {
           const detail = error instanceof Error ? maskSecrets(error.message).slice(0, 400) : 'The allowance write failed'
-          this.grantChanged(await this.options.database.companion('settleLimitApply', period.periodId, entry.source,
-            { state: 'failed', detail }, this.iso()))
+          const failed = await this.options.database.companion('settleLimitApply', request, entry.source, { state: 'failed', detail }, this.iso())
+          this.grantChanged(failed.read)
           throw refuse(detail)
         }
       }
       const at = this.iso()
-      this.grantChanged(await this.options.database.companion('settleLimitApply', period.periodId, entry.source, { state: 'written', commit }, at))
+      const settled = await this.options.database.companion('settleLimitApply', request, entry.source, { state: 'written', commit }, at)
+      this.grantChanged(settled.read)
+      if (!settled.settled) throw refuse('The plan changed but its write receipt could not be kept; read it back before retrying')
       return { outcome: 'recorded', state: 'written', commit, at }
     })
   }
@@ -3380,12 +3423,12 @@ export class CompanionService {
    * restart's (Epic 125). A Codex session the restart resumed is never typed into, by any of them, until its resumed
    * run finishes a turn of its own (D3, 125.5 AC4): the refusal is thrown before anything is written.
    */
-  private typeLine(sessionId: string, text: string): void {
+  private typeLine(sessionId: string, text: string, beforeWrite?: () => void): void {
     if (this.updateRestart.typesNothingInto(sessionId)) throw new Error('BMN types nothing into a Codex session it resumed after an update restart')
     this.messages.bmnTyped(sessionId)
     const changes = this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 }
     this.attentionChanges.set(sessionId, { ...changes, generation: changes.generation + 1 })
-    this.options.manager.writeToSession(sessionId, bracketedPaste(text, true))
+    this.options.manager.writeToSession(sessionId, bracketedPaste(text, true), beforeWrite)
   }
 
   private *liveHookEvents(): Generator<HookEventRecord> {

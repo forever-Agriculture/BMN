@@ -155,12 +155,14 @@ done
     const body = await dialog.innerText()
     check('131.2: the acknowledged fact and reason appear in the desktop row',
       despite.includes('needs nothing') && body.includes('Fixture confirms no rechecks remain') && body.includes('4 of 4 used'))
+    const title = 'Synthetic night fixes with a shared prefix · allowance and morning login'
+    const otherTitle = 'Synthetic night fixes with a shared prefix · deploy and repo login'
     const card = written('card.json', JSON.stringify({
-      title: 'Synthetic night fixes', scope: 'One review and one login',
+      title, scope: 'One review and one login',
       terms: [
         { id: 'raise', kind: 'limit', project, epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'Two review steps remain' },
-        { id: 'login', kind: 'access', name: 'Sample access', command: 'sample auth login', reason: 'The sign-in check failed' },
-        { id: 'morning-login', kind: 'access', name: 'Sample morning sign-in', command: 'sample morning login', reason: 'This sign-in will stay unfinished' }
+        { id: 'login', kind: 'access', name: 'Sample access', command: 'gh auth login', reason: 'The sign-in check failed' },
+        { id: 'morning-login', kind: 'access', name: 'Sample morning sign-in', command: 'gcloud auth login', reason: 'This sign-in will stay unfinished' }
       ]
     }))
     const sent = await command('ask', `bmn grant ask --run fixture-epic-7 --card-file - < '${card}'`)
@@ -168,7 +170,7 @@ done
     await article.waitFor()
     check('131.3 and 131.4: the exact limit and login appear with their controls', sent.includes('Card revision') &&
       (await article.innerText()).includes('Raise rechecks for Epic 7 from 4 to 6') &&
-      (await article.innerText()).includes('sample auth login') && await article.getByRole('button', { name: 'Done', exact: true }).count() === 2)
+      (await article.innerText()).includes('gh auth login') && await article.getByRole('button', { name: 'Done', exact: true }).count() === 2)
     await resize(540)
     await shot('131-night-540.png')
     await resize(1280)
@@ -187,6 +189,12 @@ done
     await until(async () => (await article.innerText()).includes('Waiting for the agent’s check'), 'Done saves a check, not a grant')
     const badReport = await command('privacy', 'bmn grant report --run fixture-epic-7 --item login --access fails --cause CANARY_PRIVATE_FIXTURE')
     check('131.4: invalid check output does not appear in the refusal', badReport.includes('No check output is accepted') && !badReport.includes('CANARY_PRIVATE_FIXTURE'))
+    const other = written('second-login.json', JSON.stringify({
+      title: otherTitle, scope: 'Another sign-in waiting until morning',
+      terms: [{ id: 'sign-in', kind: 'access', name: 'Sample repo sign-in', command: 'gh auth login', reason: 'This sign-in stays unfinished too' }]
+    }))
+    await command('another-waiting-login', `bmn grant ask --run fixture-repo-login --card-file - < '${other}'`)
+    await dialog.locator('[data-run-id="fixture-repo-login"]').waitFor()
     await dialog.locator('button.grant-go').click()
     await until(async () => await page.locator('#away-check-box').isChecked(), 'Away saved after Go')
     await page.locator('#away-check-box').click()
@@ -196,8 +204,12 @@ done
     for (const width of [1280, 540]) {
       await resize(width)
       const words = await waiting.innerText()
-      check(`131.4: the morning shows the waiting sign-in and its run at ${width}px`,
-        words.includes('Synthetic night fixes') && words.includes('Sample morning sign-in') && !words.includes('Sample access'))
+      const labels = await waiting.locator('li strong, li span').evaluateAll(elements => elements.map(node => ({
+        name: node.textContent, clipped: node.scrollWidth > node.clientWidth || getComputedStyle(node).textOverflow === 'ellipsis'
+      })))
+      check(`131.4: the morning shows both whole run names and their distinct sign-ins at ${width}px`,
+        [title, otherTitle].every(name => labels.some(row => row.name === name && !row.clipped)) &&
+        words.includes('Sample morning sign-in') && words.includes('Sample repo sign-in') && !words.includes('Sample access'), labels)
       await shot(`131-morning-${width}.png`)
     }
   }
@@ -544,7 +556,7 @@ touch '${exactSeeded}'
     check('130.5: All as proposed stores the displayed repeat2 rather than original3', proposedAnswer.choices.rounds === 2 && proposedAnswer.choices['push-81'] === 'yes', { choices: proposedAnswer.choices })
     bmn(['back'])
     await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'back', 'Back before night facts')
-    await dismissRepeatSummary('night facts')
+    await dialog.waitFor({ state: 'hidden' })
     await testNight(call, credentials)
   } catch (error) {
     check('the run completed', false, { error: error instanceof Error ? error.message : String(error), screen: await page.locator('.session-terminal.selected .xterm-rows').innerText().catch(() => ''), dialogs: await page.locator('dialog').allTextContents() })

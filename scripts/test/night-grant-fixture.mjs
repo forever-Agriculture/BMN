@@ -67,7 +67,7 @@ esac
   copyFileSync(composer, join(project, 'night_card.py'))
   const secretLooking = 'SYNTHETIC_LOGIN_CHECK_CANARY_131'
   executable('fixture-access', `[ -f signed-in ] || exit 1\nprintf '%s\\n' '${secretLooking}'\n`)
-  const access = { name: 'Fixture sign-in', command: 'fixture auth login', reason: 'The synthetic Prepared check failed' }
+  const access = { name: 'Fixture sign-in', command: 'gh auth login', reason: 'The synthetic Prepared check failed' }
   const prepared = execFileSync('/bin/sh', ['-c', './fixture-access >/dev/null 2>&1; printf "%s" "$?"'], { cwd: project, encoding: 'utf8' })
   if (prepared !== '1') throw Error('The synthetic Prepared check did not start signed out')
   written('fixture-work.txt', `Epic 7. Story 7.1 still has two required review rechecks.

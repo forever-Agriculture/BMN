@@ -83,7 +83,12 @@ describe('awayNightData (Story 113.6 AC2-AC3)', () => {
       VALUES ('next-process', 'restarted', 'new', 'running', ?)`).run(at(T + 2 * HOUR))
     database.prepare(`INSERT INTO progress_observation(session_id, source, incarnation_id, state, label, observed_at, received_at)
       VALUES ('completed', 'fixture', 'inc-completed', 'claimed-done', 'Work complete', ?, ?)`).run(at(T + HOUR), at(T + HOUR))
-    const night = awayNightData(database, { periodId: 'p1', since: at(T), until: at(T + 3 * HOUR), everyMs: EVERY })
+    const call = { periodId: 'p1', since: at(T), until: at(T + 3 * HOUR), everyMs: EVERY }
+    const missing = awayNightData(database, call)
+    expect(missing.unknownSpans).not.toEqual([])
+    expect(missing.unknown.every(row => row.restedMs === null)).toBe(true)
+    recordAwayWake(database, tick(1), [])
+    const night = awayNightData(database, call)
     expect(night.unknown.map(row => [row.sessionId, row.restedFrom, row.restedMs])).toEqual([
       ['already-idle', at(T), 3 * HOUR], ['completed', null, null], ['finished', at(T + HOUR), 2 * HOUR], ['restarted', null, null]
     ])

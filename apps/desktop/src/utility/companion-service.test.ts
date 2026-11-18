@@ -4857,6 +4857,47 @@ describe('Away (Story 76.3)', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('reoffers a lost access hook reply after a pre-write PTY refusal, and ignores an old receipt', async () => {
+    const handlers = service['control']['options'].handlers
+    const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    const observe = (event: string) => handlers.observeHookEvent({
+      sessionId: 's1', incarnationId: agent.incarnationId, agent: 'claude', event, source: null, toolName: null, effects: [],
+      awayLock: true, turn: { conversation: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', turn: null, nested: false }
+    }) as Promise<{ grantAccessOffers?: string[]; grantNotice?: string }>
+    await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+    await handlers.askGrant({ scope: agent, runId: 'fixture', card: { title: 'Synthetic check', scope: 'One test',
+      nothing: false, terms: [{ kind: 'access', id: 'login', name: 'GH', command: 'gh auth login', reason: 'Synthetic' }] } })
+    const view = service.grantForOwner()
+    await service.route(METHOD_REGISTRY.grantAnswer, { periodId: view.period!.periodId, expectedRevision: view.revision,
+      runId: 'fixture', cardRevision: 1, choices: { login: 'done' }, lineId: 'login', operationKey: 'press' })
+    const lost = await observe('PostToolUse')
+    expect(lost.grantAccessOffers).toHaveLength(1)
+    expect((await observe('PostToolUse')).grantAccessOffers).toBeUndefined()
+    clock = new Date(Date.parse(now) + 9_000).toISOString()
+    const ack = (offers: string[]) => handlers.grantAccessPrinted!({ sessionId: 's1', incarnation: agent.incarnationId, offers })
+    await expect(ack(lost.grantAccessOffers!)).resolves.toEqual({ recorded: 0 })
+    await observe('Stop')
+    const rule = '─'.repeat(60)
+    screens.set('s1', { settled: async () => undefined, undimmedLines: () => ['● ok', rule, '❯ ', rule, 'Synthetic'],
+      cursor: () => ({ x: 0, y: 0 }) } as unknown as ScreenLike)
+    service['finishedTurns'].set('s1', { incarnationId: agent.incarnationId, at: clock })
+    const refused = vi.spyOn(service['options'].manager, 'writeToSession').mockImplementationOnce(() => { throw Error('PTY refused before writing') })
+    await service['sweepGrantAccess']()
+    expect(refused).toHaveBeenCalledOnce()
+    expect(writes).toHaveLength(0)
+    const fresh = await observe('PostToolUse')
+    expect(fresh.grantAccessOffers).toHaveLength(1)
+    expect(fresh.grantAccessOffers).not.toEqual(lost.grantAccessOffers)
+    await expect(ack(fresh.grantAccessOffers!)).resolves.toEqual({ recorded: 1 })
+    const attempt = service.grantForOwner().period!.runs[0]!.access![0]!.id
+    expect(fresh.grantNotice).toContain(`--attempt ${attempt}`)
+    await expect(handlers.reportGrantAccess!({ sessionId: 's1', incarnation: agent.incarnationId, runId: 'fixture',
+      item: 'login', attempt: 'old-attempt', outcome: 'works', cause: null })).rejects.toThrow('no longer pending')
+    await expect(handlers.reportGrantAccess!({ sessionId: 's1', incarnation: agent.incarnationId, runId: 'fixture',
+      item: 'login', attempt, outcome: 'works', cause: null })).resolves.toEqual({ outcome: 'recorded' })
+    expect((await observe('PostToolUse')).grantAccessOffers).toBeUndefined()
+  })
+
   it('records a pinned use only against the answer it hashed: a card answered between the read and the write refuses it (the full review, finding 3)', async () => {
     const handlers = service['control']['options'].handlers
     const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }

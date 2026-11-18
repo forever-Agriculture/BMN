@@ -11,8 +11,8 @@ const GRANT_USAGE = `Usage: bmn grant [--run ID] [--json]
        bmn grant ask --run ID --nothing --reason T [--despite FACT]... [--title T] [--scope S] [--key K] [--json]
        bmn grant apply --run ID --use-id U --item I [--json]
        bmn grant use --run ID --use-id U (--boundary B | --item I) [--json]
-       bmn grant report --run ID --item I --access works|fails [--cause CAUSE] [--attempt A] [--json]
-       bmn grant report --run ID --stopped --cause CAUSE --text T [--json]
+       bmn grant report --run ID --item I --attempt A --access works|fails [--cause CAUSE] [--json]
+       bmn grant report --run ID --stopped [--period P] --cause CAUSE --text T [--json]
        bmn grant report --run ID (--period P --use-id U --result R | --boundary B --step-back | --item I) [--text T] [--json]
 
 The Away grant (Epic 84). Before the owner leaves (BMN tells your session he is leaving or away), a
@@ -206,19 +206,22 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
       options['use-id'] === undefined && options['step-back'] !== true && options.item !== undefined]
     if (forms.filter(Boolean).length !== 1) return usage('grant report takes --use-id with --result, --boundary with --step-back, or --item')
     if ((options['use-id'] !== undefined) !== (options.result !== undefined)) return usage('--result goes with --use-id')
-    if ((options['use-id'] !== undefined) !== (options.period !== undefined)) return usage('--period (the period grant use printed) goes with --use-id')
+    if (options['use-id'] !== undefined && options.period === undefined ||
+      options.period !== undefined && options['use-id'] === undefined && options.stopped !== true) {
+      return usage('--period goes with --use-id or --stopped; a use outcome requires it')
+    }
     if (options['step-back'] === true && options.boundary === undefined) return usage('--step-back needs --boundary')
     if (options.stopped === true && (!/^(?:limit:[a-z][a-z0-9_]{0,39}|action:(?:merge|push|pr|command|message)|access|decision|prompt|other)$/u.test(options.cause ?? '') || !options.text?.trim())) return usage('--stopped takes a fixed --cause and --text')
-    if (options.access !== undefined && (!options.item || options.text !== undefined ||
+    if (options.access !== undefined && (!options.item || !options.attempt || options.text !== undefined ||
       !(options.access === 'works' && options.cause === undefined ||
         options.access === 'fails' && ['not-signed-in', 'expired', 'no-access', 'network', 'other'].includes(options.cause)))) {
-      return usage('An access report takes an item and works, or fails with a fixed cause. No check output is accepted.')
+      return usage('An access report takes an item, its check attempt and works, or fails with a fixed cause. No check output is accepted.')
     }
     if (options.cause !== undefined && options.stopped !== true && options.access === undefined) return usage('--cause goes with --stopped or --access')
     method = 'grant.report'
     params = {
       runId: options.run,
-      ...(options.stopped === true ? { stopped: true, cause: options.cause } : {}),
+      ...(options.stopped === true ? { stopped: true, cause: options.cause, ...(options.period === undefined ? {} : { periodId: options.period }) } : {}),
       ...(options.access === undefined ? {} : { access: options.access, ...(options.cause === undefined ? {} : { cause: options.cause }),
         ...(options.attempt === undefined ? {} : { attempt: options.attempt }) }),
       ...(options['use-id'] === undefined ? {} : { periodId: options.period, useId: options['use-id'], result: options.result }),

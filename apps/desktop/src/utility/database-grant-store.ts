@@ -12,6 +12,7 @@ import {
   settleGrantLimit,
   parseAwayRecord,
   readGrantRecord,
+  readGrantLimitApply,
   reportGrant,
   setGrantPhone,
   startDeparture,
@@ -21,6 +22,8 @@ import {
   type GrantAnswerResult,
   type GrantAskResult,
   type GrantLifecycleResult,
+  type GrantLimitRequest,
+  type NightAllowanceReceipt,
   openGrantPeriod,
   type GrantRead,
   type GrantRecord,
@@ -162,17 +165,75 @@ function setGrantPhoneMessage(database: DatabaseConnection, periodId: string, ru
   return { ...result, read: result.outcome === 'changed' ? writeGrantRow(database, result.record, now) : read }
 }
 
-function markLimitApply(database: DatabaseConnection, request: Parameters<typeof markGrantLimit>[2],
-  period: string, revision: number, pin: Parameters<typeof markGrantLimit>[5], operation: string, now: string) {
-  const read = readGrantRow(database)
-  const result = markGrantLimit(read, getAway(database), request, period, revision, pin, operation, now)
-  return { ...result, read: result.entry === null ? read : writeGrantRow(database, result.record, now) }
+const NIGHT_ALLOWANCE_PREFIX = 'night-allowance-receipt:'
+type NightAllowanceKey = Pick<GrantLimitRequest, 'runId' | 'sessionId' | 'useId'>
+
+export function nightAllowanceKey(request: NightAllowanceKey): string {
+  return `${NIGHT_ALLOWANCE_PREFIX}${JSON.stringify([request.runId, request.sessionId, request.useId])}`
 }
 
-function settleLimitApply(database: DatabaseConnection, period: string, source: string, result: Parameters<typeof settleGrantLimit>[3], now: string) {
+function parseNightApply(row: { value_json: string; key: string }): NightAllowanceReceipt {
+  const raw = JSON.parse(row.value_json) as NightAllowanceReceipt
+  const entry = readGrantLimitApply(raw.entry)
+  if (entry === null || typeof raw.periodId !== 'string' || nightAllowanceKey(entry) !== row.key) {
+    throw new Error('The allowance write receipt could not be read')
+  }
+  return { periodId: raw.periodId, entry }
+}
+
+function getLimitApply(database: DatabaseConnection, request: NightAllowanceKey): NightAllowanceReceipt | null {
+  const key = nightAllowanceKey(request)
+  const row = database.prepare('SELECT key, value_json FROM app_setting WHERE key = ?').get(key) as { key: string; value_json: string } | undefined
+  if (row !== undefined) return parseNightApply(row)
+  const grant = readGrantRow(database)
+  if (grant.state !== 'read') return null
+  for (const period of grant.record.periods) {
+    const entry = period.limitApplies?.find(item => nightAllowanceKey(item) === key)
+    if (entry !== undefined) return { periodId: period.periodId, entry }
+  }
+  return null
+}
+
+function openLimitApplies(database: DatabaseConnection, runId?: string): NightAllowanceReceipt[] {
+  const byKey = new Map<string, NightAllowanceReceipt>()
+  const grant = readGrantRow(database)
+  if (grant.state === 'read') for (const period of grant.record.periods) for (const entry of period.limitApplies ?? []) {
+    if (entry.state === 'writing') byKey.set(nightAllowanceKey(entry), { periodId: period.periodId, entry })
+  }
+  const rows = database.prepare(`SELECT key, value_json FROM app_setting WHERE key GLOB 'night-allowance-receipt:*'
+    AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.entry.state') = 'writing' ELSE 1 END`).all() as Array<{ key: string; value_json: string }>
+  for (const row of rows) byKey.set(row.key, parseNightApply(row))
+  return [...byKey.values()].filter(({ entry }) => entry.state === 'writing' && (runId === undefined || entry.runId === runId))
+}
+
+function keepNightApply(database: DatabaseConnection, receipt: NightAllowanceReceipt, now: string): void {
+  database.prepare(`INSERT INTO app_setting(key, value_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`)
+    .run(nightAllowanceKey(receipt.entry), JSON.stringify(receipt), now)
+}
+
+function markLimitApply(database: DatabaseConnection, request: GrantLimitRequest & { incarnationId: string },
+  period: string, revision: number, pin: Parameters<typeof markGrantLimit>[5], operation: string, now: string) {
   const read = readGrantRow(database)
-  const settled = settleGrantLimit(read, period, source, result, now)
-  return settled === null ? read : writeGrantRow(database, settled, now)
+  const { incarnationId, ...scope } = request
+  if (getLimitApply(database, scope) !== null) return { entry: null, detail: 'This use id was already applied', read }
+  const live = database.prepare(`SELECT 1 FROM process_incarnation WHERE session_id = ? AND incarnation_id = ? AND state = 'running'`)
+    .get(scope.sessionId, incarnationId)
+  if (live === undefined) return { entry: null, detail: 'The requesting session ended before apply; nothing was written', read }
+  const result = markGrantLimit(read, getAway(database), scope, period, revision, pin, operation, now)
+  if (result.entry === null) return { ...result, read }
+  keepNightApply(database, { periodId: period, entry: result.entry }, now)
+  return { ...result, read: writeGrantRow(database, result.record, now) }
+}
+
+function settleLimitApply(database: DatabaseConnection, request: NightAllowanceKey, source: string, result: Parameters<typeof settleGrantLimit>[3], now: string) {
+  const read = readGrantRow(database)
+  const pending = getLimitApply(database, request)
+  if (pending?.entry.source !== source || pending.entry.state !== 'writing') return { settled: false, read }
+  const settled = settleGrantLimit(read, pending.periodId, source, result, now)
+  if (result.state === 'interrupted') database.prepare('DELETE FROM app_setting WHERE key = ?').run(nightAllowanceKey(request))
+  else keepNightApply(database, { periodId: pending.periodId, entry: { ...pending.entry, ...result, at: now } }, now)
+  return { settled: true, read: settled === null ? read : writeGrantRow(database, settled, now) }
 }
 
 function updateGrantAccess(database: DatabaseConnection, update: Parameters<typeof changeGrantAccess>[1], now: string) {
@@ -181,4 +242,4 @@ function updateGrantAccess(database: DatabaseConnection, update: Parameters<type
   return { outcome: result.outcome, read: result.outcome === 'recorded' ? writeGrantRow(database, result.record, now) : read }
 }
 
-export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage, markLimitApply, settleLimitApply, updateGrantAccess })
+export const GRANT_OPERATIONS = Object.freeze({ getGrants, leaveAway, askGrantCard, answerGrantCard, useGrantRecord, reportGrantRecord, markGrantTold, setGrantPhoneMessage, getLimitApply, openLimitApplies, markLimitApply, settleLimitApply, updateGrantAccess })

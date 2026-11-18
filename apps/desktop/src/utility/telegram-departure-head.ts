@@ -7,9 +7,16 @@ import { TelegramConnectorError, type InboundTap, type TelegramConnector } from 
 type Connector = Pick<TelegramConnector, 'sendMessage' | 'editMessageText' | 'answerCallbackQuery'>
 export const DEPARTURE_TOKEN_PREFIX = 'g:d:'
 const headField = (text: string, limit = 70): string => {
-  const points = [...said(text)]
-  while (escapeHtml(points.join('')).length > limit) points.pop()
-  return escapeHtml(points.join(''))
+  const safe = said(text)
+  const full = escapeHtml(safe)
+  if (full.length <= limit) return full
+  let clipped = ''
+  for (const point of safe) {
+    const next = escapeHtml(point)
+    if (clipped.length + next.length + 1 > limit) break
+    clipped += next
+  }
+  return `${clipped}…`
 }
 export function departureHeadText(view: OwnerGrantView, now: Date): string {
   const period = view.period
@@ -27,21 +34,42 @@ export function departureHeadText(view: OwnerGrantView, now: Date): string {
       .flatMap(run => grantAnswerWords(run.answer!.terms, run.answer!.choices).granted)
     const contradicted = row.runs.some(run => (run.card.despiteFacts?.length ?? 0) > 0)
     const detail = [prior.length > 0 ? `Earlier answer still holds: ${prior.join(' · ')}` : null, row.reason].filter(Boolean).join(' · ')
-    return `${headField(session.name)}: ${contradicted ? '● ' : ''}${state}${detail ? ` · ${headField(detail)}` : ''}`
+    return { line: `${headField(session.name)}: ${contradicted ? '● ' : ''}${state}`, detail }
   })
   const history = view.notAskedAgain.map(run => `${headField(run.title, 35)}: ${headField(run.granted.join(' · '), 60)} granted ${awayMomentWords(run.at, now)}; has not asked again; nothing granted.`)
-  const shown = [...rows, ...history]
+  const shown = [...rows, ...history.map(line => ({ line, detail: '' }))]
   const same = view.offers.reduce((sum, offer) => sum + Object.keys(offer.choices).filter(id => {
     const run = period.runs.find(other => other.runId === offer.runId)
     return run?.answer?.cardRevision !== run?.card.revision || grantChoice(run?.answer?.choices, id) === undefined
   }).length, 0)
-  return [head, `Asked ${counts.asked} ${counts.asked === 1 ? 'session' : 'sessions'}. ${counts.asking} still answering. ${lineWords(counts.lines)} to answer.`,
-    // D13: counted sessions sit in the count area, above the 20-row cut, so the cut never hides them.
-    ...departureOmittedLines(period.collection).map(line => headField(line, 120)), '', ...shown.slice(0, 20),
+  const header = [head, `Asked ${counts.asked} ${counts.asked === 1 ? 'session' : 'sessions'}. ${counts.asking} still answering. ${lineWords(counts.lines)} to answer.`,
+    // D13: counted sessions sit in the count area, above the 20-row cut.
+    ...departureOmittedLines(period.collection).map(line => headField(line, 120)), '']
+  const footer = [
     ...(shown.length > 20 ? [`${shown.length - 20} more on the laptop.`] : []),
     ...(same > 0 && period.state === 'leaving' ? ['', `${same} lines are the same as you granted earlier. Nothing is granted before your tap.`] : []),
     '', period.state === 'leaving' ? `Away starts on Go, or by itself at ${awayMomentWords(period.collection.autoAwayAt, now)}. A line you leave unanswered grants nothing.`
-      : period.state === 'away' ? 'Send /back when you return.' : 'Nothing more is granted.'].join('\n')
+      : period.state === 'away' ? 'Send /back when you return.' : 'Nothing more is granted.']
+  const visible = shown.slice(0, 20)
+  const details = visible.filter(row => row.detail !== '')
+  const base = [...header, ...visible.map(row => row.line), ...footer].join('\n').length
+  const more = 'The laptop has the full reasons.'
+  let left = Math.max(0, 4096 - base - more.length - 1)
+  let remaining = details.length
+  let clipped = false
+  const body = visible.map(row => {
+    if (row.detail === '') return row.line
+    const separator = ' · '
+    const limit = Math.floor(left / remaining) - separator.length
+    remaining -= 1
+    const full = escapeHtml(said(row.detail))
+    if (full.length > limit) clipped = true
+    if (limit < 1) return row.line
+    const detail = headField(row.detail, limit)
+    left -= separator.length + detail.length
+    return row.line + separator + detail
+  })
+  return [...header, ...body, ...(clipped ? [more] : []), ...footer].join('\n')
 }
 
 const definiteRejection = (error: unknown): boolean => error instanceof TelegramConnectorError && error.status !== null && error.status >= 400 && error.status < 500
