@@ -152,7 +152,7 @@ import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, ownerTurn, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
-import { GRANT_TOKEN_PREFIX, GRANT_TYPED_REPLY, TelegramGrantCards } from './telegram-grant-cards'
+import { GRANT_TOKEN_PREFIX, GRANT_TYPED_REPLY, grantNothingFitsPhone, TelegramGrantCards } from './telegram-grant-cards'
 import { QUIET_LEDGER_KEY, QuietHoursDelivery, phoneField } from './quiet-hours-delivery'
 import { DEFAULT_TELEGRAM_HEALTH_ALERTS, DEFAULT_TELEGRAM_MORNING_DIGEST, telegramQuietWindow, type TelegramHealthAlerts, type TelegramMorningDigest } from '@bmn/protocol'
 import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
@@ -1199,6 +1199,9 @@ export class CompanionService {
               throw new HostControlError(ERROR_CODES.invalidArgument, 'A --despite id no longer names a conflicting run fact. Read bmn grant facts again.')
             }
             card = { ...card, nothingReason: p.nothing.reason, ...(facts.conflicts.length > 0 ? { despiteFacts: facts.conflicts.map(fact => fact.words) } : {}) }
+            if (!grantNothingFitsPhone(card)) {
+              throw new HostControlError(ERROR_CODES.invalidArgument, 'The reason and acknowledged facts cannot all fit in one Telegram message. Nothing was asked; keep the full account in your run log.')
+            }
           }
           const result = await this.options.database.companion('askGrantCard', {
             runId: p.runId, sessionId, agentCli: producer?.agentCli ?? null, card, origin, ...(p.operationKey === undefined ? {} : { operationKey: p.operationKey })
@@ -1222,7 +1225,7 @@ export class CompanionService {
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not recorded: ${result.reason}; the step waits`)
           return { outcome: result.outcome, left: result.left, periodId: result.periodId, ...(result.exact === null ? {} : { exact: result.exact }) }
         }),
-        grantAccessPrinted: (p) => this.controlCall(() => this.grantAccessPrinted(p)),
+        grantAccessClaim: (p) => this.controlCall(() => this.grantAccessClaim(p)),
         reportGrantAccess: (target) => this.controlCall(async () => {
           const result = await this.options.database.companion('updateGrantAccess', { kind: 'report', target }, this.iso())
           if (result.outcome !== 'recorded') throw new HostControlError(ERROR_CODES.invalidArgument, 'This access check is no longer pending in this session')
@@ -1328,13 +1331,13 @@ export class CompanionService {
           const brief = due === null ? null : agentStartBrief(await this.anyOwnerAllowed())
           // Story 84.3: while he is leaving or away, once per conversation and departure: a run may ask him on one card.
           const departure = this.grantNotices.answer(p, this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null)
-          const access = eligibleTeam && p.incarnationId !== null ? this.grantAccessForHook(p.sessionId, p.incarnationId) : null
-          const grantNotice = [departure, ...(access?.lines ?? [])].filter(Boolean).join('\n')
+          const access = eligibleTeam && p.incarnationId !== null ? this.grantAccessForHook(p.sessionId, p.incarnationId) : []
+
           return {
             ...recorded, ...(restart === null ? {} : { restartNotice: restart.text, restartClaim: restart.claim }), ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
             ...(teamNotice === null ? {} : { teamNotice: teamNotice.text, teamRevision: teamNotice.revision, teamClaim: teamNotice.claimId }),
-            ...(grantNotice === '' ? {} : { grantNotice }), ...(access === null ? {} : { grantAccessOffers: access.ids })
+            ...(departure === null ? {} : { grantNotice: departure }), ...(access.length === 0 ? {} : { grantAccessOffers: access })
           }
         }),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
@@ -2132,7 +2135,6 @@ export class CompanionService {
       if (offer.until <= now) this.hookAccessOffers.delete(id)
     }
     const ids: string[] = []
-    const lines: string[] = []
     for (const { run, attempt } of this.pendingGrantAccess(sessionId).slice(0, GRANT_LIMITS.terms)) {
       const id = randomUUID()
       this.hookAccessOffers.set(id, {
@@ -2140,24 +2142,24 @@ export class CompanionService {
         until: now + 8_000
       })
       ids.push(id)
-      lines.push(this.grantAccessLine(run.runId, attempt.item, attempt.id))
     }
-    return ids.length === 0 ? null : { ids, lines }
+    return ids
   }
 
-  private async grantAccessPrinted(p: { sessionId: string; incarnation: string; offers: string[] }) {
-    let recorded = 0
+  private async grantAccessClaim(p: { sessionId: string; incarnation: string; offers: string[] }) {
+    const notices: string[] = []
     for (const id of p.offers) {
       const offer = this.hookAccessOffers.get(id)
       if (offer?.target.sessionId !== p.sessionId || offer.target.incarnation !== p.incarnation || offer.until <= this.now().getTime()) continue
       offer.until = Infinity
       try {
-        if (await this.claimGrantAccess(offer.target)) recorded += 1
+        const { runId, item, attempt } = offer.target
+        if (await this.claimGrantAccess(offer.target)) notices.push(this.grantAccessLine(runId, item, attempt))
       } finally {
         this.hookAccessOffers.delete(id)
       }
     }
-    return { recorded }
+    return { notices }
   }
 
   private async sweepGrantAccess(): Promise<void> {
@@ -2214,7 +2216,7 @@ export class CompanionService {
   private async readNightFacts(scope: ControlScope, runId: string, callerCwd?: string, project?: string, epic?: number) {
     const cwd = scope.kind === 'session' ? this.options.manager.liveLaunchDirectory(scope.sessionId) ?? this.knownSessions.get(scope.sessionId)?.cwd : callerCwd
     const policy = pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer())
-    return readGrantFacts({ cwd, project: project ?? callerCwd, runId, epic, policy })
+    return readGrantFacts({ cwd, project: project ?? callerCwd, runId, epic, policy, maxConflicts: GRANT_LIMITS.despiteFacts })
   }
 
   private async recoverNightAllowances(runId?: string): Promise<void> {
@@ -2271,7 +2273,10 @@ export class CompanionService {
       try {
         commit = (await writeNightAllowance(plan, async () => {
           const stored = await earlier()
-          return stored?.periodId === period.periodId && stored.entry.source === entry.source ? stored.entry : null
+          return stored?.periodId === period.periodId && stored.entry.source === entry.source &&
+            stored.entry.item === request.item && stored.entry.cardRevision === run.card.revision &&
+            stored.entry.runId === request.runId && stored.entry.sessionId === request.sessionId && stored.entry.useId === request.useId
+            ? stored.entry : null
         }, fd)).commit
       } catch (error) {
         // The ref may have moved before the write reported failure. The commit and the exact owner act decide.

@@ -181,7 +181,9 @@ export async function sameGrantCheckout(cwd, project) {
 export async function pinGrantLimit(cwd, term, runId) {
   if (!await sameGrantCheckout(cwd, term.project)) throw new Error('The allowance must belong to this run’s checkout')
   const plan = await resolvePlan(term.project)
-  const selected = await runEpic(plan.runCheckout, runId)
+  const board = await readBoard(plan.boardPath)
+  if (boardProblems(board, plan.boardPath).length > 0) throw new Error('The run’s plan board could not be confirmed')
+  const selected = await runEpic(plan.runCheckout, runId, board)
   if (selected !== null && selected !== term.epic) throw new Error('The allowance must belong to this run’s epic')
   const recorded = await readAllowances(plan, term.epic)
   const limit = recorded.state === 'recorded' ? recorded.current.fields.limits[term.name] : null
@@ -194,7 +196,7 @@ export async function pinGrantLimit(cwd, term, runId) {
 export { resolvePlan as resolveGrantLimitPlan }
 
 /** A caller path is checked against the session's checkout before it is allowed to name a different worktree. */
-export async function grantFacts({ cwd, project, runId, epic, policy, environment = process.env }) {
+export async function grantFacts({ cwd, project, runId, epic, policy, maxConflicts = Infinity, environment = process.env }) {
   const unknown = { plan: UNKNOWN_PLAN, pullRequests: { state: 'unknown', reason: 'The run project could not be bound', items: [] } }
   if (typeof cwd !== 'string' || !isAbsolute(cwd)) return { ...unknown, conflicts: [] }
   const resolved = project ?? cwd
@@ -205,7 +207,7 @@ export async function grantFacts({ cwd, project, runId, epic, policy, environmen
   ])
   const facts = { runId, plan, pullRequests: prs }
   const conflicts = grantFactConflicts(facts)
-  if (conflicts.length > 256) {
+  if (conflicts.length > maxConflicts) {
     return { ...facts, plan: { ...plan, state: 'unknown', reason: 'Too many allowance and pull request facts to confirm on one night list' }, conflicts: [] }
   }
   return { ...facts, conflicts }

@@ -14,7 +14,7 @@ export const GRANT_RECORD_KEY = 'night-grant-v1'
 
 /** Bounds: text is refused past them, never cut; lists keep their newest entries. */
 export const GRANT_LIMITS = Object.freeze({
-  runId: 120, title: 120, scope: 300, reason: 300, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
+  runId: 120, title: 120, scope: 300, reason: 300, despiteFacts: 256, factWords: 240, terms: 8, itemId: 40, runs: 32, told: 64, uses: 500, operations: 500,
   boundary: 120, useId: 120, count: 10, periods: 2, reports: 500, carried: 2000, periodId: 64,
   /** Story 103.3: a command or a message is shown whole on the card, so what it holds is bounded, and a card's sum too: Telegram draws at most 4,096 characters. */
   command: 1000, message: 1000, folder: 500, target: 200, tool: 120, exactOnCard: 2300,
@@ -510,12 +510,17 @@ function readCard(value: unknown): GrantCard | null {
   if (!['open', 'answered', 'nothing', 'withdrawn'].includes(card.state as string) || !Array.isArray(card.terms)) return null
   const terms = card.terms.map(readTerm)
   if (terms.some((term) => term === null)) return null
+  const nothingReason = grantWords(card.nothingReason, GRANT_LIMITS.reason)
+  if (card.nothingReason !== undefined && nothingReason === null) return null
+  const facts = card.despiteFacts
+  if (facts !== undefined && (!Array.isArray(facts) || facts.length > GRANT_LIMITS.despiteFacts ||
+    facts.some(fact => grantWords(fact, GRANT_LIMITS.factWords) === null))) return null
   const withdrawnFor = card.withdrawnFor === 'back' || card.withdrawnFor === 'not-leaving' ? card.withdrawnFor : null
   return {
     revision: card.revision as number, askedAt: card.askedAt, sessionId: isTextOrEmpty(card.sessionId) ? card.sessionId : null,
     agentCli: isTextOrEmpty(card.agentCli) ? card.agentCli : null, scope: card.scope, nothing: card.nothing, terms: terms as GrantTerm[],
-    ...(grantWords(card.nothingReason, 300) === null ? {} : { nothingReason: grantWords(card.nothingReason, 300)! }),
-    ...(Array.isArray(card.despiteFacts) && card.despiteFacts.length <= 32 && card.despiteFacts.every(fact => grantWords(fact, 240) !== null) ? { despiteFacts: card.despiteFacts as string[] } : {}),
+    ...(nothingReason === null ? {} : { nothingReason }),
+    ...(facts === undefined ? {} : { despiteFacts: facts as string[] }),
     state: card.state as GrantCardState, change: isTextOrEmpty(card.change) ? card.change : null, withdrawnFor
   }
 }

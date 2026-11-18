@@ -18,7 +18,7 @@ import {
   type GrantRecord,
   type TelegramQuietHours
 } from '@bmn/protocol'
-import { GRANT_TOKEN_PREFIX, TelegramGrantCards } from './telegram-grant-cards'
+import { GRANT_TOKEN_PREFIX, grantNothingFitsPhone, TelegramGrantCards } from './telegram-grant-cards'
 import { TELEGRAM_TEXT_LIMIT } from './telegram-cards'
 import type { InboundTap } from './telegram-connector'
 
@@ -470,6 +470,44 @@ describe('phone sign-in retries and night allowance receipts (Epic 131)', () => 
   const login = { id: 'login', kind: 'access', name: 'Sample sign-in', command: 'gh auth login', reason: 'The session lacks access' }
   const pin = { go: 'a'.repeat(40), commit: 'b'.repeat(40), token: 'c'.repeat(16) }
   const limit = { id: 'limit', kind: 'limit', project: '/sample', epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'One check is ahead' }
+
+  it('sends a compact overview and shows the exact checkout next to each individual Yes', async () => {
+    const project = '/' + 'x'.repeat(485) + '&<>'
+    const terms = Array.from({ length: 8 }, (_, index) => ({ ...limit, id: `raise-${index}`, name: `limit_${index}`, project }))
+    const h = harness(away(ask(modern(), terms)))
+    await h.cards.reconcile()
+    expect(h.sent[0]?.text).toContain('Choose a raise to see its checkout.')
+    expect(h.sent[0]?.text).not.toContain(project.slice(0, -3))
+    await h.tap(h.button('Choose…'))
+    for (let index = 0; index < terms.length; index += 1) {
+      expect(h.last().text).toContain(`Raise limit ${index} for Epic 7 from 4 to 6 in ${project.slice(0, -3)}&amp;&lt;&gt;`)
+      expect(h.last().text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      await h.tap(h.button(index === terms.length - 1 ? 'Yes' : 'No'))
+    }
+    expect(h.answers.at(-1)).toMatchObject({ choices: { 'raise-7': 'yes' }, lineId: 'raise-7' })
+    h.record = followAwayChange(h.record, AWAY, BACK, { to: 'back', source: 'app', outcome: 'changed' }, LATE).record
+    await h.cards.reconcile()
+    expect(h.last().keyboard).toBeNull()
+    expect(h.edits.every(edit => edit.text.length <= TELEGRAM_TEXT_LIMIT)).toBe(true)
+  })
+
+  it('keeps the reason and all fitting contradictions in one phone send or edit', async () => {
+    const despiteFacts = Array.from({ length: 33 }, (_, index) => `Checks at 7.${index + 1}: 4 of 4 used & verified 😀`)
+    const card = { ...parsed(), nothing: true, terms: [], nothingReason: 'Review finished <before> leaving', despiteFacts }
+    expect(grantNothingFitsPhone(card)).toBe(true)
+    expect(grantNothingFitsPhone({ ...card, despiteFacts: Array.from({ length: 256 }, () => 'One full checked fact with a boundary and a count') })).toBe(false)
+    for (const existing of [modern(), ask(modern())]) {
+      const h = harness(existing)
+      if (existing.periods[0]?.runs.length) await h.cards.reconcile()
+      h.record = askGrant(h.record, { runId: 'run-80', sessionId: 's-builder', agentCli: 'claude', card }, T1).record
+      await h.cards.reconcile()
+      expect(h.sent).toHaveLength(1)
+      expect(h.last().text).toContain('Review finished &lt;before&gt; leaving')
+      for (const fact of despiteFacts) expect(h.last().text).toContain(fact.replace('&', '&amp;'))
+      expect(h.last().text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+      expect(h.last().keyboard).toBeNull()
+    }
+  })
 
   it('keeps Check again usable on an answered card after Go', async () => {
     const time = { now: T1 }

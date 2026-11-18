@@ -556,6 +556,7 @@ touch '${exactSeeded}'
     check('130.5: All as proposed stores the displayed repeat2 rather than original3', proposedAnswer.choices.rounds === 2 && proposedAnswer.choices['push-81'] === 'yes', { choices: proposedAnswer.choices })
     bmn(['back'])
     await until(async () => (await page.evaluate(() => window.aiTerminal.getAway())).state === 'back', 'Back before night facts')
+    if (await dialog.isVisible()) await dialog.getByRole('button', { name: 'Close Before you go', exact: true }).click()
     await dialog.waitFor({ state: 'hidden' })
     await testNight(call, credentials)
   } catch (error) {

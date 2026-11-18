@@ -12,6 +12,7 @@ export function grantFacts(input: {
   runId: string
   epic: number | undefined
   policy: PushPolicyStatus
+  maxConflicts?: number
   environment?: NodeJS.ProcessEnv
 }): Promise<GrantNightFacts>
 

@@ -4857,7 +4857,30 @@ describe('Away (Story 76.3)', () => {
     expect(writes).toHaveLength(0)
   })
 
-  it('reoffers a lost access hook reply after a pre-write PTY refusal, and ignores an old receipt', async () => {
+  it('saves every fitting empty-answer fact and refuses an oversized answer without storing a card', async () => {
+    const handlers = service['control']['options'].handlers
+    const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
+    await handlers.leaveAway({ scope: agent, expectedRevision: 0 })
+    const facts = (size: number) => Array.from({ length: size }, (_, index) => ({
+      id: `limit:checks:7.${index + 1}`, words: `checks at 7.${index + 1}: 4 of 4 used`
+    }))
+    const read = vi.spyOn(service as unknown as { readNightFacts: typeof service['readNightFacts'] }, 'readNightFacts')
+    const inspect = (count: number) => {
+      const conflicts = facts(count)
+      read.mockResolvedValue({ plan: { state: 'recorded' }, pullRequests: { state: 'read' }, conflicts } as never)
+      return conflicts.map(fact => fact.id)
+    }
+    const ask = (runId: string, despite: string[]) => handlers.askGrant({ scope: agent, runId,
+      card: { title: 'Synthetic no work left', scope: 'Checks complete', nothing: true, terms: [] },
+      nothing: { reason: 'No remaining check depends on the exhausted allowance', despite } })
+    await expect(ask('too-long', inspect(256))).rejects.toThrow(/cannot all fit in one Telegram message/u)
+    expect(service.grantForOwner().period!.runs).toEqual([])
+    await expect(ask('fits', inspect(33))).resolves.toMatchObject({ state: 'nothing' })
+    const stored = readGrantRow(database)
+    expect(stored.state === 'read' && stored.record.periods[0]?.runs[0]?.card.despiteFacts).toEqual(facts(33).map(fact => fact.words))
+  })
+
+  it('reoffers a lost hook offer after a pre-write PTY refusal and never repeats a consumed claim', async () => {
     const handlers = service['control']['options'].handlers
     const agent = { kind: 'session' as const, sessionId: 's1', incarnationId: 'incarnation-1' }
     const observe = (event: string) => handlers.observeHookEvent({
@@ -4872,10 +4895,11 @@ describe('Away (Story 76.3)', () => {
       runId: 'fixture', cardRevision: 1, choices: { login: 'done' }, lineId: 'login', operationKey: 'press' })
     const lost = await observe('PostToolUse')
     expect(lost.grantAccessOffers).toHaveLength(1)
+    expect(lost.grantNotice ?? '').not.toContain('--access works')
     expect((await observe('PostToolUse')).grantAccessOffers).toBeUndefined()
     clock = new Date(Date.parse(now) + 9_000).toISOString()
-    const ack = (offers: string[]) => handlers.grantAccessPrinted!({ sessionId: 's1', incarnation: agent.incarnationId, offers })
-    await expect(ack(lost.grantAccessOffers!)).resolves.toEqual({ recorded: 0 })
+    const claim = (offers: string[]) => handlers.grantAccessClaim!({ sessionId: 's1', incarnation: agent.incarnationId, offers })
+    await expect(claim(lost.grantAccessOffers!)).resolves.toEqual({ notices: [] })
     await observe('Stop')
     const rule = '─'.repeat(60)
     screens.set('s1', { settled: async () => undefined, undimmedLines: () => ['● ok', rule, '❯ ', rule, 'Synthetic'],
@@ -4888,9 +4912,13 @@ describe('Away (Story 76.3)', () => {
     const fresh = await observe('PostToolUse')
     expect(fresh.grantAccessOffers).toHaveLength(1)
     expect(fresh.grantAccessOffers).not.toEqual(lost.grantAccessOffers)
-    await expect(ack(fresh.grantAccessOffers!)).resolves.toEqual({ recorded: 1 })
     const attempt = service.grantForOwner().period!.runs[0]!.access![0]!.id
-    expect(fresh.grantNotice).toContain(`--attempt ${attempt}`)
+    const delivered = await claim(fresh.grantAccessOffers!)
+    expect(delivered).toEqual({ notices: [expect.stringContaining(`--attempt ${attempt}`)] })
+    // Simulate the consume result being lost after its durable commit, without an output receipt.
+    await expect(claim(fresh.grantAccessOffers!)).resolves.toEqual({ notices: [] })
+    clock = new Date(Date.parse(now) + 20_000).toISOString()
+    expect((await observe('PostToolUse')).grantAccessOffers).toBeUndefined()
     await expect(handlers.reportGrantAccess!({ sessionId: 's1', incarnation: agent.incarnationId, runId: 'fixture',
       item: 'login', attempt: 'old-attempt', outcome: 'works', cause: null })).rejects.toThrow('no longer pending')
     await expect(handlers.reportGrantAccess!({ sessionId: 's1', incarnation: agent.incarnationId, runId: 'fixture',

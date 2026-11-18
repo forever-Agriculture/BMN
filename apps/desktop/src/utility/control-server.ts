@@ -302,7 +302,7 @@ export interface ControlHandlers {
   leaveAway(p: { scope: ControlScope; expectedRevision?: number }): Promise<unknown>
   /** Story 84.3: a run's card for the open departure; the host binds the asking session. */
   askGrant(p: { scope: ControlScope; runId: string; card: GrantAskCard; operationKey?: string; nothing?: { reason: string; despite: string[]; callerCwd?: string } }): Promise<unknown>
-  grantAccessPrinted?(p: { sessionId: string; incarnation: string; offers: string[] }): Promise<unknown>
+  grantAccessClaim?(p: { sessionId: string; incarnation: string; offers: string[] }): Promise<unknown>
   reportGrantAccess?(p: GrantAccessReport): Promise<unknown>
   applyGrantLimit?(p: GrantLimitRequest & { incarnationId: string }): Promise<unknown>
   grantFacts?(p: { scope: ControlScope; runId: string; epic: number; callerCwd?: string; project?: string }): Promise<unknown>
@@ -1710,11 +1710,11 @@ export class ControlServer {
         const claimId = requireText(params, 'claimId', IDENTIFIER)
         return handlers.restartPrinted?.({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, claimId }) ?? { recorded: false }
       }
-      case 'grant.accessPrinted': {
+      case 'grant.accessClaim': {
         const params = closedParams(rawParams, ['offers'])
-        if (scope.kind !== 'session' || scope.incarnationId === null) throw unauthorized('Only the live session hook reports what it printed')
-        return handlers.grantAccessPrinted?.({ sessionId: scope.sessionId, incarnation: scope.incarnationId,
-          offers: readIdentifiers(params, 'offers', GRANT_LIMITS.terms) }) ?? { recorded: 0 }
+        if (scope.kind !== 'session' || scope.incarnationId === null) throw unauthorized('Only the live session hook may claim its sign-in check')
+        return handlers.grantAccessClaim?.({ sessionId: scope.sessionId, incarnation: scope.incarnationId,
+          offers: readIdentifiers(params, 'offers', GRANT_LIMITS.terms) }) ?? { notices: [] }
       }
       case 'away.printed': {
         const params = closedParams(rawParams, ['agent', 'conversation', 'revision', 'claimId', 'channel'])
@@ -1803,7 +1803,9 @@ export class ControlServer {
           const reason = requireText(params, 'reason', { min: 1, max: 300, unit: 'characters', controls: 'reject', strip: true })
           if (secretShapeRanges(reason).length > 0) throw invalidError('The reason looks like a credential; nothing was recorded')
           const despite = params.despite ?? []
-          if (!Array.isArray(despite) || despite.length > 256 || despite.some(value => grantIdentifier(value, 240) === null)) throw invalidError('--despite names up to 256 fact ids from grant facts')
+          if (!Array.isArray(despite) || despite.length > GRANT_LIMITS.despiteFacts || despite.some(value => grantIdentifier(value, GRANT_LIMITS.factWords) === null)) {
+            throw invalidError(`--despite names up to ${GRANT_LIMITS.despiteFacts} fact ids from grant facts`)
+          }
           const callerCwd = readText(params, 'callerCwd', { min: 1, max: 4096, unit: 'characters', controls: 'reject' })
           nothing = { reason, despite, ...(callerCwd === undefined ? {} : { callerCwd }) }
         } else if (params.reason !== undefined || params.despite !== undefined || params.callerCwd !== undefined) {

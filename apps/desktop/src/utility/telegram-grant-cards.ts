@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import {
   awayMomentWords,
   GRANT_RULE_LINE,
-  grantAnswerWords, grantNothingWords,
+  grantAnswerWords,
   grantChoice,
   grantAccessStatus,
   grantLimitWords,
@@ -20,6 +20,7 @@ import {
   quietHoursAllow,
   telegramQuietWindow,
   type GrantAnswerResult,
+  type GrantAskCard,
   type GrantChoice,
   type GrantPeriod,
   type GrantRead,
@@ -27,7 +28,7 @@ import {
   type GrantTerm,
   type TelegramQuietHours
 } from '@bmn/protocol'
-import { clip, escapeHtml, headerLine, said, TELEGRAM_TEXT_LIMIT, type CardHeader, type InlineKeyboard } from './telegram-cards'
+import { clip, escapeHtml, headerLine, plainText, said, TELEGRAM_TEXT_LIMIT, type CardHeader, type InlineKeyboard } from './telegram-cards'
 import type { InboundTap, TelegramConnector } from './telegram-connector'
 
 /** Departure-card buttons start with this, so a tap reaches this keeper and never the request cards' one. */
@@ -105,7 +106,7 @@ function grantCardText(input: {
     : term.kind === 'limit' && period ? grantLimitWords(period, run, term, now) : null
   const card = run.card
   const terms = card.terms
-  const label = (term: GrantTerm, whole: boolean) => term.kind === 'access' && !whole ? term.name : grantTermLabel(term)
+  const label = (term: GrantTerm, whole: boolean) => term.kind === 'access' && !whole ? term.name : grantTermLabel(term, whole)
   const draw = (reasonChars: number | null, scopeChars: number, whole: boolean): string => {
     const lines: string[] = []
     if (input.note !== null && input.ending === undefined) lines.push(escapeHtml(input.note), '')
@@ -113,6 +114,9 @@ function grantCardText(input: {
     const chip = view.step === null || input.ending !== undefined ? `asked ${awayMomentWords(card.askedAt, now)}` : `${view.step + 1} of ${terms.length}`
     lines.push(`<i>Before you go · ${chip}</i>`, '', `<b>${words(run.title, 120)}</b>`)
     if (scopeChars > 0) lines.push(`Scope: ${words(card.scope, scopeChars)}`)
+    if (view.step === null && input.ending === undefined && terms.length > 1 && terms.some(term => term.kind === 'limit')) {
+      lines.push('<i>Choose a raise to see its checkout.</i>')
+    }
     if (input.v2 && input.ending === undefined && run.answer !== null && run.answer.cardRevision !== card.revision) {
       const prior = grantAnswerWords(run.answer.terms, run.answer.choices).granted
       if (prior.length > 0) lines.push(`Earlier answer still holds: ${words(prior.join(' · '), 600)}. A new answer replaces it.`)
@@ -137,7 +141,7 @@ function grantCardText(input: {
         const saved = run.answer?.cardRevision === card.revision ? grantChoice(run.answer.choices, term.id) : undefined
         const prior = grantChoice(input.offer?.choices, term.id)
         const detail = status(term)
-        lines.push('', detail !== null ? `${index + 1}. ${escapeHtml(label(term, whole))} · ${escapeHtml(detail)}`
+        lines.push('', detail !== null ? `${index + 1}. ${escapeHtml(label(term, whole && (term.kind !== 'limit' || terms.length === 1)))} · ${escapeHtml(detail)}`
           : input.v2 ? `${index + 1}. ${escapeHtml(grantTermLabel(term))}: ${saved === undefined ? `proposed ${escapeHtml(grantChoiceLabel(term, prior ?? term.proposed ?? 'no'))} · not answered` : escapeHtml(grantChoiceLabel(term, saved))}` : overviewLine(term, index))
         if (detail === null && input.v2 && saved !== undefined) lines.push(`Answered ${run.answer!.lines?.[term.id]?.via === 'app' || !run.answer!.lines?.[term.id] && run.answer!.via === 'app' ? 'at the laptop' : 'on Telegram'} ${awayMomentWords(run.answer!.lines?.[term.id]?.at ?? run.answer!.at, now)}`)
         if (saved === undefined && prior !== undefined) lines.push(`As you granted ${awayMomentWords(input.offer!.at, now)} · not granted until your tap`)
@@ -152,7 +156,7 @@ function grantCardText(input: {
   }
   for (const [reasons, scope] of [[300, 300], [REASON_CUT, 300], [null, 300], [null, 80], [null, 0]] as const) {
     const text = draw(reasons, scope, true)
-    if (text.length <= TELEGRAM_TEXT_LIMIT) return text
+    if (fitsGrantPhoneText(text)) return text
   }
   // The chosen login always shows its entire command. Several long logins may need the Choose view.
   return draw(null, 0, terms.length === 1)
@@ -163,14 +167,38 @@ function rows(buttons: Array<{ text: string; callback_data: string }>, oneRow: b
   return oneRow || total <= ONE_ROW_CHARS ? [buttons] : buttons.map((button) => [button])
 }
 
+// Telegram measures the rendered message. All user text is escaped before this check.
+const fitsGrantPhoneText = (html: string): boolean => plainText(html).length <= TELEGRAM_TEXT_LIMIT
+
+const priorOnLaptop = 'Earlier answer still holds. See its lines on the laptop.'
+type NothingMessageCard = Pick<GrantAskCard, 'title' | 'nothingReason' | 'scope' | 'despiteFacts'>
+
+function nothingMessage(card: NothingMessageCard): string {
+  const reason = escapeHtml(said(card.nothingReason ?? card.scope))
+  const facts = (card.despiteFacts ?? []).map(fact => `· ${escapeHtml(said(fact))}`)
+  return [`<b>${words(card.title, 120)}</b>`, `The run now needs nothing: ${reason}`,
+    ...(facts.length === 0 ? [] : ['Acknowledged facts:', ...facts])].join('\n')
+}
+
+export function grantNothingFitsPhone(card: NothingMessageCard): boolean {
+  return fitsGrantPhoneText(`${nothingMessage(card)}\n${priorOnLaptop}`)
+}
+
+function grantNothingText(run: GrantRun, period: GrantPeriod): string {
+  const card = { ...run.card, title: run.title }
+  if (!grantNothingFitsPhone(card)) return `<b>${words(run.title, 120)}</b>\nSee the full empty answer and its facts on the laptop.`
+  const text = nothingMessage(card)
+  const prior = run.answer !== null && isOpenPeriod(period) ? grantAnswerWords(run.answer.terms, run.answer.choices).granted : []
+  if (prior.length === 0) return text
+  const full = `${text}\nEarlier answer still holds: ${escapeHtml(said(prior.join(' · ')))}.`
+  return fitsGrantPhoneText(full) ? full : `${text}\n${priorOnLaptop}`
+}
+
 /** What a run's card says once it asks nothing more of him (the notes §1 After answering). */
 function grantEnding(period: GrantPeriod, run: GrantRun, now: Date): string | null {
   const card = run.card
   if (card.state === 'withdrawn') return card.withdrawnFor === 'back' ? 'Withdrawn: you are back.' : 'Withdrawn: you did not leave.'
-  if (card.state === 'nothing') {
-    const prior = run.answer !== null && isOpenPeriod(period) ? grantAnswerWords(run.answer.terms, run.answer.choices).granted : []
-    return `The run now needs nothing: ${grantNothingWords(card)}.${prior.length > 0 ? ` Earlier answer still holds: ${prior.join(' · ')}.` : ''}`
-  }
+  if (card.state === 'nothing') return grantNothingText(run, period)
   if (period.collection !== undefined && period.state === 'leaving') return null
   if (card.state !== 'answered' || run.answer === null || run.answer.cardRevision !== card.revision) return null
   const { granted, notGranted } = grantAnswerWords(run.answer.terms, run.answer.choices)
@@ -374,7 +402,7 @@ export class TelegramGrantCards {
   private async sendNothing(connector: Connector, period: GrantPeriod, run: GrantRun): Promise<void> {
     const ending = grantEnding(period, run, this.deps.now())
     if (ending === null) return
-    const text = `<b>${words(run.title, 120)}</b>\n${escapeHtml(said(ending))}`
+    const text = ending
     const sent = await connector.sendMessage(text, { html: true, keyboard: null })
     this.drawn.set(key(period.periodId, run.runId), { periodId: period.periodId, runId: run.runId,
       messageId: sent.messageId, revision: run.card.revision, view: { step: null }, tokens: [], note: null, ended: ending })
@@ -418,7 +446,8 @@ export class TelegramGrantCards {
     const finalState = writes.length === 0 ? ending : `${ending}\u0000${JSON.stringify(writes.map(entry => [entry.item, entry.state, entry.commit, entry.at]))}`
     if (card.ended === finalState) return
     this.retire(card, false)
-    const text = grantCardText({ header: this.deps.header(run), run, view: { step: null }, note: null, now: this.deps.now(), ending, period })
+    const text = run.card.state === 'nothing' ? ending
+      : grantCardText({ header: this.deps.header(run), run, view: { step: null }, note: null, now: this.deps.now(), ending, period })
     try {
       await connector.editMessageText(card.messageId, text, { html: true, keyboard: null })
       card.ended = finalState

@@ -625,6 +625,27 @@ describe('the plan skill gives a new epic the file (110.6 AC5, 110.8 AC3)', () =
 })
 
 describe('an allowance raise from the night list', () => {
+  it('binds a generic run to the only active epic even when another recorded go exists', async () => {
+    const { main, plan, home } = goFor()
+    const boardFile = join(plan, 'status.yaml')
+    writeFileSync(boardFile, readFileSync(boardFile, 'utf8') + '  epic-8: backlog # Suggested lead: Opus\n  8-1-fixture: backlog\n')
+    file(plan, 'epics/008-fixture.md', epicText(POINTER).replaceAll('007', '008').replace(/\b7\b/gu, '8'))
+    file(plan, 'allowances/008.yaml', FILE.replace('epic: 7', 'epic: 8'))
+    git(plan, 'add', 'status.yaml', 'epics/008-fixture.md', 'allowances/008.yaml')
+    git(plan, 'commit', '-qm', 'docs: synthetic second epic')
+    const eight = bmn(main, home, ['status', '--epic', '8', '--json']).json
+    expect(bmn(main, home, ['go', '8', '--source', SOURCE, '--approved', `sha256:${eight.approval_texts[0].sha256}`,
+      '--expect', eight.rows[0].token, '--json']).code).toBe(0)
+    expect(bmn(main, home, ['set', 'epic-7', 'in-progress', '--expect', rowToken(main, home), '--json']).code).toBe(0)
+
+    const { pinGrantLimit } = await import('../../bin/grant-facts.mjs')
+    const term = { kind: 'limit' as const, id: 'raise', project: main, epic: 7, name: 'rechecks', from: 2, to: 6,
+      reason: 'Synthetic review' }
+    await expect(pinGrantLimit(main, { ...term, epic: 8 }, 'generic-run')).rejects.toThrow(/this run’s epic/u)
+    await expect(pinGrantLimit(main, term, 'generic-run')).resolves.toMatchObject({ token: expect.any(String) })
+    await expect(pinGrantLimit(main, { ...term, epic: 8 }, 'fixture-epic-8')).resolves.toMatchObject({ token: expect.any(String) })
+  })
+
   it('uses the stored approval source, pins the allowance commit, and reads a committed write back by its source', async () => {
     const { main, plan: planRoot, home, commit } = goFor()
     vi.stubEnv('XDG_STATE_HOME', join(home, 'state'))

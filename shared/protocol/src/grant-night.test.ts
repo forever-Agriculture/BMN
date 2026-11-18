@@ -34,6 +34,21 @@ const target = { runId, sessionId, item: 'login', incarnation: 'one', attempt: '
 const mark = (record: GrantRecord, revision = 1) => markGrantLimit(read(record), back, request, 'period', revision, pin, 'operation', at)
 
 describe('night-only lines', () => {
+  it('retains each acknowledged fact and refuses an unreadable stored contradiction list', () => {
+    const record = asked(limit)
+    for (const length of [0, 32, 33, 256, 257]) {
+      const despiteFacts = Array.from({ length }, (_, index) => `checks at 7.${index + 1}: 4 of 4 used`)
+      const card = { title: 'Sample', scope: 'Fixture', nothing: true, terms: [], nothingReason: 'No further checks', despiteFacts }
+      const nothing = askGrant(record, { runId, sessionId, agentCli: 'claude', card }, later).record
+      const parsed = readGrantRecord(JSON.stringify(nothing))
+      if (length === 257) {
+        expect(parsed.state).toBe('unknown')
+      } else {
+        expect(parsed.state === 'read' && parsed.record.periods[0]?.runs[0]?.card.despiteFacts).toEqual(despiteFacts)
+      }
+    }
+  })
+
   it('labels the exact checkout and requires an explicit yes on the raise itself', () => {
     const initial = asked(limit)
     const period = initial.periods[0]!

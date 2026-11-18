@@ -317,14 +317,36 @@ const LOGIN_PREFIXES = Object.freeze({
   tailscale: ['login'], tsh: ['login'], vercel: ['login'], wrangler: ['login']
 })
 
+const LOGIN_OPERANDS = Object.freeze({
+  aws: { flags: ['--use-device-code', '--no-browser'], values: ['--profile', '--region', '--sso-session'] },
+  az: { flags: ['--use-device-code', '--allow-no-subscriptions'], values: ['--tenant'] },
+  docker: { flags: [], values: ['--username', '-u'], registry: true },
+  podman: { flags: [], values: ['--username', '-u'], registry: true },
+  gh: { flags: ['--web', '-w', '--clipboard', '-c', '--skip-ssh-key'], values: ['--hostname', '-h', '--git-protocol', '--scopes', '-s'] },
+  gcloud: { flags: ['--no-launch-browser', '--no-browser', '--update-adc'], values: ['--project'] }
+})
+const EMPTY_LOGIN_OPERANDS = { flags: [], values: [], registry: false }
+
 export function grantAccessCommandProblem(command) {
   const parsed = simpleCommandWords(command)
   if ('problem' in parsed) return 'Name the exact single login command'
   const [program, ...words] = parsed.words
-  if (words.some(word => /^--?(?:p|token(?:-file)?|password(?:-stdin)?|secret|client-secret|key-file|credentials|(?:print|show)-token|with-token)(?:=|$)/u.test(word))) {
-    return 'A login line cannot take a credential or print a token'
-  }
   const prefixes = Object.hasOwn(LOGIN_PREFIXES, program) ? LOGIN_PREFIXES[program] : []
-  if (!prefixes.some(prefix => prefix.split(' ').every((word, index) => word === words[index]))) return 'Name a supported direct login command the owner can run'
+  const prefix = prefixes.map(text => text.split(' ')).find(one => one.every((word, index) => word === words[index]))
+  if (!prefix) return 'Name a supported direct login command the owner can run'
+  const options = Object.hasOwn(LOGIN_OPERANDS, program) ? LOGIN_OPERANDS[program] : EMPTY_LOGIN_OPERANDS
+  const args = words.slice(prefix.length)
+  for (let i = 0; i < args.length; i++) {
+    const word = args[i]
+    const equals = word.indexOf('=')
+    const flag = equals < 0 ? word : word.slice(0, equals)
+    if (equals < 0 && options.flags.includes(flag)) continue
+    if (options.values.includes(flag)) {
+      const value = equals < 0 ? args[++i] : word.slice(equals + 1)
+      if (value && /^[A-Za-z0-9][A-Za-z0-9._@,:-]*$/u.test(value)) continue
+    }
+    if (options.registry && i === args.length - 1 && /^[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]+)?$/u.test(word)) continue
+    return 'A login line takes only supported interactive options, without credentials'
+  }
   return null
 }

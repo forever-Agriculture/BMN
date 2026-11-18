@@ -446,7 +446,8 @@ describe('grantAccessCommandProblem (Epic 131)', () => {
   })
 
   it.each(['gh auth status login', "gh 'auth login'", 'echo login', 'gh auth login && whoami',
-    'gh auth login --with-token', 'docker login -p test-only'])('refuses a non-login or credential transport %s', command => {
+    'gh auth login --with-token', 'docker login -p test-only', 'podman login -pFixtureOnly',
+    'podman login --password=FixtureOnly', 'az login --service-principal --username example', 'gh auth login unsupported-operand'])('refuses a non-login or credential transport %s', command => {
     expect(grantAccessCommandProblem(command)).not.toBeNull()
   })
 })

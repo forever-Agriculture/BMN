@@ -330,7 +330,12 @@ async function runHook(args) {
   const team = awayLock && typeof answer?.teamNotice === 'string' && answer.teamNotice !== '' && Number.isSafeInteger(answer.teamRevision) &&
     typeof answer.teamClaim === 'string' ? answer.teamNotice : null
   // Story 84.3: he is leaving or away, and a run may ask him on one card; once per conversation and departure.
-  const departure = typeof answer?.grantNotice === 'string' && answer.grantNotice !== '' ? answer.grantNotice : null
+  const grantNotice = typeof answer?.grantNotice === 'string' && answer.grantNotice !== '' ? answer.grantNotice : null
+  // An offer carries no printable text. Only BMN's durable claim authorizes one local delivery attempt.
+  const access = awayLock && Array.isArray(answer?.grantAccessOffers) && answer.grantAccessOffers.length > 0
+    ? (await callEach(socketPath, token, [{ method: 'grant.accessClaim', params: { offers: answer.grantAccessOffers } }], HOOK_TIMEOUT_MS)
+      .catch(() => []))[0]?.result?.notices : null
+  const departure = [grantNotice, ...(Array.isArray(access) ? access.filter(line => typeof line === 'string') : [])].filter(Boolean).join('\n') || null
   const restart = typeof answer?.restartNotice === 'string' && typeof answer?.restartClaim === 'string' ? answer.restartNotice : null
   const said = { printed: false }
   await sayDestination(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
@@ -342,9 +347,6 @@ async function runHook(args) {
   if (!said.printed && (brief !== null || team !== null || notice !== null || departure !== null || restart !== null)) {
     writeSync(1, contextAnswer(event, [brief, team, notice, departure, restart]))
     said.printed = true
-  }
-  if (departure !== null && said.printed && Array.isArray(answer.grantAccessOffers)) {
-    await callEach(socketPath, token, [{ method: 'grant.accessPrinted', params: { offers: answer.grantAccessOffers } }], HOOK_TIMEOUT_MS).catch(() => undefined)
   }
   if (restart !== null && said.printed) {
     await callEach(socketPath, token, [{ method: 'restart.printed', params: { claimId: answer.restartClaim } }], HOOK_TIMEOUT_MS).catch(() => undefined)
