@@ -12,7 +12,7 @@ The owner, <YYYY-MM-DD>: "<his words>". **Serves:** <the VISION.md principles it
 
 ## Boundary and dependencies
 
-<Story order; what is out of scope. Independent: it depends on no unfinished epic and runs on its own branch, in parallel; name what it shares with unfinished epics (files, migrations, generated text) and how it stays mergeable.>
+<Size: light, or full with its named risk. The simplest approach, the one real-use check that shows it works, and the fallback; one line for anything more (the failure it prevents, why likely, why the fallback does not cover it). Story order; what is out of scope. Independent: it depends on no unfinished epic and runs on its own branch, in parallel; name what it shares with unfinished epics (files, migrations, generated text) and how it stays mergeable.>
 
 ## Run needs
 
@@ -30,7 +30,7 @@ See `plan/allowances/NNN.yaml` ([template](allowances.yaml)): every limit and pe
 
 ## Challenges
 
-- **Scale:** <at 1000 times the data, what happens and what does a run cost?>
+- **Scale:** <at 1000 times the data, what happens and what does a run cost? `not data-bound` where nothing grows>
 - **Origin:** <who asked for each story, in whose words?>
 - **Verified:** <which facts were checked, where?>
 - **Exists:** <what here or in a sibling repository already does this?>
@@ -42,7 +42,7 @@ See `plan/allowances/NNN.yaml` ([template](allowances.yaml)): every limit and pe
 
 ## Requirements
 
-<Optional: R<N>-FR1 ..., R<N>-NFR1 ...; each traced to a story below.>
+<Optional, full epics: R<N>-FR1 ..., R<N>-NFR1 ...; each traced to a story below.>
 
 ## Decisions
 
@@ -64,10 +64,10 @@ As <the owner / a user>, I want <capability>, so that <benefit>.
 
 **Owner:** none (or `before the go` / `at the end`: his steps sit only there). **Coverage:** <requirements>. **Starting points:** <file:line of code that exists today, opened by you; then any file an earlier story creates, with that story>.
 
-**Acceptance criteria:**
+**Acceptance criteria:** (at most 3; results he or a caller can see)
 1. **Given** <state>, **when** <action>, **then** <observable result>.
 
-**Verification:** <the named check, where it runs (unit, isolated live run, packaged build, the owner's phone), the result it observes, and who runs it>.
+**Verification:** <the cheapest check that would catch the failure; one may cover several criteria: where it runs (unit, isolated live run, packaged build, the owner's phone), the result it observes, and who runs it>.
 
 ## Reviews
 
