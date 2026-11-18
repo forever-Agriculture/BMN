@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../bin/agents-check.mjs'
 import { codexAskProfile } from '../../bin/native-rules.mjs'
 import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS, askFormName } from '../../bin/agents-team-forms.mjs'
-import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
+import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, outsidePaths, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -475,12 +475,88 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     const root = makeProject()
     const claude = ask({ role: 'designer', project: root })
     const words = readFileSync(join(claude.folder, ASK_RUN_FILES.prompt), 'utf8')
-    expect(words).toContain('git ls-tree and git ls-files answer too. Start each shell command from this folder with relative paths, one command per call')
+    expect(words).toContain('git ls-tree and git ls-files answer too. Shell calls start in this folder, so use relative paths. Plain reads (ls, cat, head, sed -n, grep, wc, find) answer, piped or chained too')
+    expect(words).toContain('a call is refused whole when any part of it names a path outside this folder, uses git -C, a loop, $(...), a variable, a here-document or a redirect into a file')
+    // It describes what the app's mode does and forbids nothing of its own: chained plain reads answered 9 times in 10.
+    expect(words).not.toContain('one command per call')
     expect(words).toContain('Files outside this folder are closed to you: name any you needed')
     expect(claude.argv).toEqual(expect.arrayContaining(['Bash(git ls-tree:*)', 'Bash(git ls-files:*)']))
     expect(claude.verdict.receipt?.sandbox).toMatchObject({ tools: expect.arrayContaining(['git ls-tree', 'git ls-files']) })
     const codex = ask({}, { cwd: root })
     expect(readFileSync(join(codex.folder, ASK_RUN_FILES.prompt), 'utf8')).not.toContain('git ls-tree and git ls-files answer too')
+  })
+
+  describe('what a question names outside the one folder a teammate reads (owner 2026-11-18)', () => {
+    const outsideFile = (name = 'notes/plan.md', text = '# the plan\n'): string => {
+      mkdirSync(join(home, name, '..'), { recursive: true })
+      writeFileSync(join(home, name), text)
+      return join(home, name)
+    }
+
+    it('finds each existing file and folder of the owner\'s outside the root once, by its real path, and nothing a URL, a revision, a missing or a system path names', () => {
+      const root = makeProject()
+      const plan = outsideFile()
+      symlinkSync(plan, join(home, 'notes/link.md'))
+      const question = `Read ${plan}. Then ~/notes/plan.md and ${join(home, 'notes/link.md')} again, the folder ${join(home, 'notes')}, ${join(root, 'src/retry.ts')}:2, ` +
+        `https://example.org${plan}, origin/main:${plan}, ${join(home, 'notes/missing.md')}, ${home}, /etc/hostname, /bin/sh, /tmp and and/or.`
+      expect(outsidePaths(question, { root, cwd: root, home })).toEqual([{ path: plan, kind: 'file', attach: true }, { path: join(home, 'notes'), kind: 'folder', attach: false }])
+      // What the asker gave is not named again; with no project every existing path is outside.
+      expect(outsidePaths(question, { root, given: [plan], cwd: root, home })).toEqual([{ path: join(home, 'notes'), kind: 'folder', attach: false }])
+      expect(outsidePaths(`See ${join(root, 'src/retry.ts')}`, { root: null, cwd: root, home })).toEqual([{ path: join(root, 'src/retry.ts'), kind: 'file', attach: true }])
+    })
+
+    it('counts a file as one --file would take only when it would: not a credential location, a file that is not text, or one past the ask\'s limits', () => {
+      const root = makeProject()
+      const binary = outsideFile('notes/shot.bin', 'a\u0000b')
+      const plan = outsideFile()
+      const second = outsideFile('notes/second.md', 'two\n')
+      expect(outsidePaths(`${join(home, '.codex/auth.json')} ${binary} ${plan}`, { root, cwd: root, home }).map((item) => item.attach)).toEqual([false, false, true])
+      expect(outsidePaths(`${plan} ${second}`, { root, cwd: root, home, files: LIMITS.files - 1 }).map((item) => item.attach)).toEqual([true, false])
+      expect(outsidePaths(plan, { root, cwd: root, home, bytes: LIMITS.prompt }).map((item) => item.attach)).toEqual([false])
+    })
+
+    it('an ask to a teammate that reads one folder is refused before anything is written, naming the --file to add; given, it goes', () => {
+      const root = makeProject()
+      const plan = outsideFile()
+      const question = `Does src/retry.ts do what ${plan} asks?`
+      const refused = refusal(() => ask({ role: 'designer', project: root, question }))
+      expect(refused.code).toBe('FILES_OUTSIDE')
+      expect(refused.message).toBe(`your question names a file outside ${root}, the only folder fable (Claude Code) reads: ${plan}; nothing was sent. Give its text with --file ${plan}, or add --outside-unread to ask without it`)
+      expect(existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()) : []).toEqual([])
+      const given = ask({ role: 'designer', project: root, question, files: [plan] })
+      expect(given.verdict.verdict).toBe('PASS')
+      expect(given.outside).toEqual([])
+      expect(readFileSync(join(given.folder, ASK_RUN_FILES.prompt), 'utf8')).not.toContain('The question names')
+      expect(JSON.parse(readFileSync(join(given.folder, ASK_RUN_FILES.request), 'utf8')).outside_unread).toBeUndefined()
+    })
+
+    it('--outside-unread sends it without the file: the teammate is told which path is closed and the record keeps it', () => {
+      const root = makeProject()
+      const plan = outsideFile()
+      const sent = ask({ role: 'designer', project: root, question: `Does src/retry.ts do what ${plan} asks?`, outsideUnread: true })
+      expect(sent.verdict.verdict).toBe('PASS')
+      expect(sent.outside).toEqual([{ path: plan, kind: 'file', attach: true }])
+      expect(readFileSync(join(sent.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain(`The question names a path outside your working folder, closed to you: ${plan}. Answer without it and say what you needed from it.`)
+      expect(JSON.parse(readFileSync(join(sent.folder, ASK_RUN_FILES.request), 'utf8')).outside_unread).toEqual([{ path: plan, kind: 'file' }])
+    })
+
+    it('a folder, or a file --file would refuse, never stops the ask: it goes, and the teammate and the record say what stayed closed', () => {
+      const root = makeProject()
+      outsideFile()
+      const sent = ask({ role: 'designer', project: root, question: `Compare with ${join(home, 'notes')} and ${join(home, '.codex/auth.json')}.` })
+      expect(sent.verdict.verdict).toBe('PASS')
+      expect(sent.outside).toEqual([{ path: join(home, 'notes'), kind: 'folder', attach: false }, { path: join(home, '.codex/auth.json'), kind: 'file', attach: false }])
+      expect(readFileSync(join(sent.folder, ASK_RUN_FILES.prompt), 'utf8')).toContain(`The question names 2 paths outside your working folder, closed to you: ${join(home, 'notes')}, ${join(home, '.codex/auth.json')}. Answer without them and say what you needed from them.`)
+    })
+
+    it('a teammate that reads the computer, and a path inside the project, are asked as before', () => {
+      const root = makeProject()
+      const plan = outsideFile()
+      const codex = ask({ question: `Does src/retry.ts do what ${plan} asks?` }, { cwd: root })
+      expect(codex.verdict).toMatchObject({ verdict: 'PASS', receipt: { form: 'codex-read-only' } })
+      expect(codex.outside).toEqual([])
+      expect(ask({ role: 'designer', project: root, question: `Is ${join(root, 'src/retry.ts')} bounded?` }).outside).toEqual([])
+    })
   })
 
   describe('BMN\'s git for an ask: the two listings beside the four history commands (owner 2026-11-18)', () => {

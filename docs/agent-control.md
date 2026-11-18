@@ -2375,7 +2375,7 @@ measurements.
 ```bash
 bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
   [--small-work] [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]...
-  [--data public] [--time-limit MINUTES] [--background] [--json]
+  [--data public] [--outside-unread] [--time-limit MINUTES] [--background] [--json]
 bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K
   --origin http://127.0.0.1:PORT --disposable [--interact] [other options as above]
 bmn team ask --features [--json]
@@ -2396,6 +2396,7 @@ bmn team asks export <id> --output PATH
 | `--recheck-of ID` | A recheck of that earlier run: same project and role, its teammate, the role's recheck effort; refused (`PROJECT_CHOICE_CONFLICT`) where the owner's choice for the role there names another teammate. |
 | `--project P` | The folder the teammate works in (default: the asking session's repository root; with none, an empty folder of the run's own). Not `/`, the home folder, or a folder that holds or lies in a credential or app configuration location (`PROJECT_INVALID`). |
 | `--file PATH` | A regular UTF-8 text file the asker can read: its text goes into the prompt with its path and hash. Not a link, a key store or a file in a credential or app configuration location; the one exception there is an installed plugin's instruction file, Markdown under `skills/`, `agents/` or `commands/` of a version in `~/.codex/plugins/cache` or `~/.claude/plugins/cache`, judged by its real path and scanned like any other. Giving a file changes nothing about what the teammate's mode can read. |
+| `--outside-unread` | Ask although the question names a file outside the one folder the teammate reads (`FILES_OUTSIDE`, "What a question names outside the folder", below): the teammate is told which paths are closed and answers without them. |
 | `--image PATH` | A PNG, JPEG or WebP picture given to the teammate as image input, never as a file it can open, its metadata taken out first (Pictures, below). |
 | `--data public` | A declaration BMN verifies (R72-NFR5); refused, never raised, where it does not hold. Without it the ask is private. |
 | `--origin URL` | A browser for the web app you started at this loopback address, `http://127.0.0.1:PORT` (or `localhost`, `[::1]`) (A browser for your local app, below). |
@@ -2664,9 +2665,26 @@ plugins and provider settings outside BMN's folder, so BMN cannot offer its conf
   prefix rules alone let `git blame --contents` or `--output` read or write any file (72.1). OpenCode
   uses brokered Git operations without a shell; redirections are refused.
 - **What is not offered, said plainly:** Claude Code's `WebFetch` and every Bash command but those
-  six Git reads and what its own mode takes as a plain read inside the folder (on 2.1.327, 2026-11-18, `ls`, `cat`,
-  `head`, `grep`, `wc` and `find` answered there; `cd`, `git -C` and any path outside the folder were refused); OpenCode's `webfetch`, `execute`, `patch`, `question`, `skill`, its own sub-agents and
+  six Git reads and what its own mode takes as a plain read inside the folder. Measured on the 2,541 shell calls of
+  362 asks, Claude Code 2.1.316 to 2.1.327 (2026-11-01 to 2026-11-18): plain reads (`ls`, `cat`, `head`, `sed -n`,
+  `grep`, `wc`, `find`), piped or chained, answered 9 times in 10; every call that named a path outside the folder
+  (65), used `git -C` (50), a variable (27) or a here-document (15), or ran `python3` (46) or `awk` (10) was refused
+  whole, as were 77 of 80 with a loop, 34 of 35 with `$(...)`, 8 of 9 that wrote a file and 4 in 10 with `cd`. The
+  prompt says this once to the Claude Code form as what its shell does; BMN forbids nothing of its own there; OpenCode's `webfetch`, `execute`, `patch`, `question`, `skill`, its own sub-agents and
   its shell beyond the four Git reads. Codex's `request_user_input` is refused by Codex in an exec run.
+- **What a question names outside the folder** (owner 2026-11-18). A teammate whose mode reads one folder (Claude
+  Code, OpenCode's reader) cannot open a file the question names outside it, and in the same 362 asks 43 questions
+  named one: the teammate went for it in 36 and was refused each time. So before anything is written BMN reads the
+  question for paths (absolute with two parts or more, or under `~`; never part of a URL or a revision), keeps those
+  that exist under the home folder or the temporary folder, lie outside the project by their real path and were not
+  given with `--file` or `--image`, and refuses the ask (`FILES_OUTSIDE`) when `--file` would take one of them: the
+  refusal names each file and the `--file` options to add, the key is given back and nothing was sent.
+  `--outside-unread` asks without them. A folder, a picture, or a file `--file` would refuse (a credential or
+  configuration location, not UTF-8 text, past the ask's limits) never stops the ask. Whatever stays closed is said
+  three times: to the teammate in its prompt ("closed to you", so it spends no call on it), on the asker's start
+  line, and in `request.json` as `outside_unread` (`path`, `kind`). Replayed on 355 of those questions it refuses 16
+  asks, and in 13 of them the teammate had gone for the named file. A Codex teammate reads the computer and a QA
+  ask's inputs are its curated brief alone, so neither is judged.
 - **The owner's rules.** Codex and Claude Code read his global rules from their own homes, as in his
   own sessions. OpenCode, which runs in BMN's folder, gets them in the prompt for a private ask, and
   only the part of the master marked public (`<!-- bmn:public -->`) as OpenCode's publication allows.
@@ -2876,7 +2894,8 @@ file or picture changed between the command hashing it for the key and reading i
 sent), `PICTURE_UNTREATABLE` (Pictures, above), `CREDENTIAL_FOUND` (names the file and pattern, never
 the value; a value that says it is made up, by a word of six letters or more such as `synthetic`,
 `example` or `placeholder`, is not counted, judged by the value alone, never by a variable's name),
-`PUBLIC_NOT_VERIFIED`, `PRIVATE_NOT_ALLOWED`, `RUNNING` (`asks export` of an ask still running: its output
+`PUBLIC_NOT_VERIFIED`, `PRIVATE_NOT_ALLOWED`, `FILES_OUTSIDE` (the question names a file outside the one folder the
+chosen teammate reads; nothing was sent), `RUNNING` (`asks export` of an ask still running: its output
 is masked when it ends), `CHANGED` (the approved team, the app's program, the
 command, its folder, the prompt, the inputs or BMN's `git` changed between the check and the start;
 nothing started; found by the supervisor, the outcome and every JSON answer carry it as `refusal:

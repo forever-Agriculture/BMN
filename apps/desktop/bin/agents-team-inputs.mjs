@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 /** The numeric limits of the contract (docs/agent-control.md, "Limits"); over one an ask is refused, never cut. */
@@ -276,6 +276,56 @@ export function textFile(path, options = {}) {
   const hits = credentialHits(file.bytes.toString('utf8'))
   if (hits.length > 0) refuse('CREDENTIAL_FOUND', `${path} holds ${hits.join(' and ')}; nothing was sent`)
   return { ...file, sha256: sha256Of(file.bytes) }
+}
+
+/** A path as a question writes one: absolute with two parts or more, or under `~`; never a part of a URL, a revision or a longer word. */
+const NAMED_PATH = /(?<![\w.:~/@+-])~?(?:\/[\w.@+-]+)+/gu
+
+/**
+ * What a question names that a teammate reading one folder cannot open (owner 2026-11-18): each existing
+ * file or folder of the owner's (under the home folder or the temporary folder, never the home folder itself or a
+ * system path a question merely mentions) outside `root` (null: it has no project, so every one), judged by its
+ * real path, that the asker did not give (`given`, real paths). Measured on 362 Claude Code asks since 2026-11-01: 43 named such
+ * a path and the teammate went for it in 36, refused each time. `attach` says `--file` would take it, by the
+ * same reading and scanning; a file past the ask's limits, a credential location or a picture stays `false`.
+ * Returns `[{ path, kind: 'file' | 'folder', attach }]`, in the question's order, each once.
+ */
+export function outsidePaths(question, { root, given = [], cwd = process.cwd(), home = homedir(), files = 0, bytes = 0 } = {}) {
+  const found = []
+  const seen = new Set(given)
+  const owned = [...new Set([home, tmpdir(), '/tmp', '/var/tmp'].map(realpathSafe))]
+  let count = files
+  let size = bytes
+  for (const [written] of question.matchAll(NAMED_PATH)) {
+    const named = written.replace(/\.+$/u, '')
+    if (!named.startsWith('~') && named.split('/').length < 3) continue
+    const path = named.startsWith('~') ? join(home, named.slice(1)) : named
+    let real, stat
+    try {
+      real = realpathSync(path)
+      stat = statSync(real)
+    } catch {
+      continue
+    }
+    if (seen.has(real) || real === owned[0] || !owned.some((folder) => within(real, folder)) || (root !== null && within(real, root))) continue
+    seen.add(real)
+    if (stat.isDirectory()) found.push({ path: real, kind: 'folder', attach: false })
+    else if (stat.isFile()) {
+      let attach = false
+      try {
+        const file = textFile(real, { cwd, home })
+        attach = count + 1 <= LIMITS.files && size + file.bytes.length <= LIMITS.prompt
+        if (attach) {
+          count += 1
+          size += file.bytes.length
+        }
+      } catch (error) {
+        if (!(error instanceof InputRefusal)) throw error
+      }
+      found.push({ path: real, kind: 'file', attach })
+    }
+  }
+  return found
 }
 
 // ---------------------------------------------------------------------------------------------

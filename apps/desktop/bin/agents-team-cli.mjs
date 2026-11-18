@@ -24,7 +24,7 @@ import { askSettings, keyDay, keyPath, keyScope, keyedRun, makeKey, recordInterr
 
 const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --question-file PATH|-) --key K [--agent A] [--effort E]
          [--small-work] [--recheck-of ID] [--project P] [--file PATH]... [--image PATH]...
-         [--data public] [--time-limit MINUTES] [--background] [--json]
+         [--data public] [--outside-unread] [--time-limit MINUTES] [--background] [--json]
        bmn team ask [--role R] (--question TEXT | --question-file PATH|-) --key K
          --origin http://127.0.0.1:PORT --disposable [--interact] [other options as above]
        bmn team ask --role qa --brief BRIEF --origin http://127.0.0.1:PORT --disposable --key K
@@ -42,7 +42,10 @@ the default is your repository, else an empty folder of the run's own). Its app'
 nothing; interactive browser scripts run as your user, and can read and write files and reach the network and local sockets (below and in the record).
 --file gives whole text files in the prompt; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
-role. --origin gives the teammate (the browser role unless --role names another) a browser for your
+role. A Claude Code or OpenCode teammate reads one folder: a question that names a file outside it
+is refused before anything is sent (FILES_OUTSIDE); give the file's text with --file, or add
+--outside-unread to ask without it.
+--origin gives the teammate (the browser role unless --role names another) a browser for your
 web app at that loopback address: Playwright's tools in its own app, only that origin loading; it may
 navigate, read, take screenshots and read the console and network requests, and with --interact also
 click, type, fill in, select, press keys, hover, answer dialogs, evaluate page JavaScript and execute full Playwright
@@ -62,7 +65,7 @@ goes on. Exit: 0 answered, 1 failed, 2 usage, 3-7 team state, 10 refused, 14 bus
 const RUN_ID = /^\d{8}T\d{6}-[0-9a-f]{8}$/u
 const VALUES = ['role', 'question', 'question-file', 'agent', 'effort', 'recheck-of', 'project', 'data', 'time-limit', 'key', 'origin', 'brief']
 const REPEATED = ['file', 'image']
-const FLAGS = ['small-work', 'background', 'json', 'help', 'features', 'disposable', 'interact', 'bench']
+const FLAGS = ['small-work', 'background', 'json', 'help', 'features', 'disposable', 'interact', 'bench', 'outside-unread']
 /** Options an ask no longer takes, each refused with the new spelling (72.9 AC4). */
 const GONE = { access: ACCESS_GONE, 'wide-read': WIDE_READ_GONE }
 
@@ -457,6 +460,7 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
   const request = {
     role, question, agent: options.agent, effort: options.effort, smallWork: options['small-work'] === true, recheckOf: options['recheck-of'],
     project: options.project, files, images, data: options.data,
+    ...(options['outside-unread'] === true ? { outsideUnread: true } : {}),
     ...(qa === null ? {} : { qa: { brief: qa.brief } }),
     ...(vision === null ? {} : { vision: vision.real === undefined ? { path: vision.path, omitted: vision.omitted } : { path: vision.path, real: vision.real, sha256: vision.sha256 } }),
     ...(options.origin === undefined ? {} : { browser: { origin: options.origin, disposable: options.disposable === true, interact: qa !== null || options.interact === true } })
@@ -522,8 +526,13 @@ export async function runTeamAsk(argv, { environment = process.env, cwd = proces
     else out(id)
     return EXIT.ok
   }
-  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}${visionWords(prepared.manifest.vision)}${request.browser === undefined ? '' : `; it has a browser for ${request.browser.origin}${request.browser.interact ? ', to look and interact' : ', to look only'}`}; run ${id}, key ${key}, supervisor ${started.pid}`)
+  err(`bmn: asked ${receipt.agent} (${receipt.harness} ${receipt.model}, ${receipt.effort}; chosen by ${prepared.choice.rule}) in ${receipt.cwd}; it can read ${receipt.reads.words.replace(/^[^:]*: /u, '')}${visionWords(prepared.manifest.vision)}${request.browser === undefined ? '' : `; it has a browser for ${request.browser.origin}${request.browser.interact ? ', to look and interact' : ', to look only'}`}${outsideWords(prepared.outside)}; run ${id}, key ${key}, supervisor ${started.pid}`)
   return followRun(prepared.folder, id, asJson)
+}
+
+/** What the start line says of the paths the question names outside the one folder the teammate reads: it answers without them. */
+function outsideWords(outside) {
+  return outside.length === 0 ? '' : `; outside that folder and unread, though your question names ${outside.length === 1 ? 'it' : 'them'}: ${outside.map((item) => item.path).join(', ')}`
 }
 
 /** What the start line says of the project's vision: given with its hash, or left out and why (Epic 112). */

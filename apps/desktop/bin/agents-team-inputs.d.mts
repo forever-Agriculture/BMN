@@ -8,6 +8,9 @@ export declare function checkQuestion(text: string): { bytes: number; sha256: st
 export interface InputFile { path: string; real: string; bytes: Buffer }
 export declare function readInputFile(path: string, options?: { kind?: 'file' | 'image'; cwd?: string; home?: string; limit?: number }): InputFile
 export declare function textFile(path: string, options?: { cwd?: string; home?: string }): InputFile & { sha256: string }
+/** A path a question names outside the one folder a teammate reads; `attach` when `--file` would take it. */
+export interface OutsidePath { path: string; kind: 'file' | 'folder'; attach: boolean }
+export declare function outsidePaths(question: string, options?: { root: string | null; given?: string[]; cwd?: string; home?: string; files?: number; bytes?: number }): OutsidePath[]
 export declare function mainWorktree(top: string): string | null
 export declare function canonicalProject(folder: string): string
 export declare function askProject(named: string | undefined, options?: { cwd?: string; home?: string }): string | null

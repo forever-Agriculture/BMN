@@ -12,6 +12,8 @@ export interface AskAsked {
   /** Gone in 72.9: given, the ask is refused with the new spelling. */
   access?: string; wide?: boolean
   files?: string[]; images?: string[]; data?: string
+  /** `--outside-unread`: ask although the question names a file outside the one folder the teammate reads. */
+  outsideUnread?: boolean
   qa?: { brief: Record<string, unknown> }
   /** A browser ask (74.3): the asker's app, its `--disposable` statement and whether the teammate may click and type. */
   browser?: { origin: string; disposable?: boolean; interact?: boolean } | null
@@ -23,5 +25,7 @@ export interface PreparedAsk {
   id: string; folder: string; choice: { agent: string; effort: string; rule: string; phase: string; project_choice?: string }
   verdict: AskResult; argv: string[]; cwd: string; stdin: 'text' | 'stream-json'; manifest: Record<string, unknown> & { inputs: import('./agents-check.mjs').AskInput[] }
   program: import('./agents-team-forms.mjs').AskProgram
+  /** What the question names outside the one folder the teammate reads, and so goes unread. */
+  outside: import('./agents-team-inputs.mjs').OutsidePath[]
 }
 export declare function prepareAsk(request: AskAsked, options?: { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string; home?: string; now?: Date; runs?: string; id?: string; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }): PreparedAsk

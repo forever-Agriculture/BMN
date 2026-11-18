@@ -10,7 +10,7 @@ import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, ask
 import { readMaster, render } from './agents-rules.mjs'
 import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
-import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, sha256Of, textFile } from './agents-team-inputs.mjs'
+import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, outsidePaths, sha256Of, textFile } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
 import { pictureFile } from './agents-team-pictures.mjs'
 import { ASK_GIT } from './agents-team-run.mjs'
@@ -74,8 +74,21 @@ function projectPrompt(prompt, root, form) {
   return `${prompt.replace(/\n?$/u, '\n')}\nYou work in the project ${root} (your working folder), read-only, with its Git history: git log, git show, git diff and git blame answer. The history can say why the code is as it is: before you judge code, read the commits behind it (git log -p or git blame on the lines in question, then git show).\n${form === 'claude-read-tools' ? CLAUDE_PROJECT_WORDS : ''}`
 }
 
-/** Said once to Claude Code's form, whose teammates lost turns to cd, -C and files outside the folder (owner 2026-11-18): a reliable first move, and to name what they could not read so the asker can attach it. */
-const CLAUDE_PROJECT_WORDS = 'git ls-tree and git ls-files answer too. Start each shell command from this folder with relative paths, one command per call; Read, Glob and Grep read files without a shell. Files outside this folder are closed to you: name any you needed under what you did not check, so the asker can attach it.\n'
+/**
+ * Said once to Claude Code's form, whose teammates lost turns to refused shell calls and files outside the folder
+ * (owner 2026-11-18): what its shell answers and what it refuses, and to name what they could not read so the asker
+ * can attach it. Measured on 2,541 shell calls of 362 asks, Claude Code 2.1.316 to 2.1.327: plain reads, piped or
+ * chained, answered 9 times in 10; every call with a path outside the folder (65), `git -C` (50), a variable (27) or
+ * a here-document (15), python3 (46) or awk (10) was refused, as were 77 of 80 with a loop, 34 of 35 with `$(...)`,
+ * 8 of 9 writing a file and 4 in 10 with `cd`. It describes, it never forbids: the app's own mode decides.
+ */
+const CLAUDE_PROJECT_WORDS = 'git ls-tree and git ls-files answer too. Shell calls start in this folder, so use relative paths. Plain reads (ls, cat, head, sed -n, grep, wc, find) answer, piped or chained too; a call is refused whole when any part of it names a path outside this folder, uses git -C, a loop, $(...), a variable, a here-document or a redirect into a file, or runs a program such as python3 or awk, and often when it uses cd. Read, Glob and Grep read files without a shell. Files outside this folder are closed to you: name any you needed under what you did not check, so the asker can attach it.\n'
+
+/** What the question names but this teammate cannot open, said to it so it spends no call on them (owner 2026-11-18). */
+function outsidePrompt(prompt, outside) {
+  if (outside.length === 0) return prompt
+  return `${prompt.replace(/\n?$/u, '\n')}\nThe question names ${outside.length === 1 ? 'a path' : `${outside.length} paths`} outside your working folder, closed to you: ${outside.map((item) => item.path).join(', ')}. Answer without ${outside.length === 1 ? 'it' : 'them'} and say what you needed from ${outside.length === 1 ? 'it' : 'them'}.\n`
+}
 
 /** A prompt with the pictures named in the order they are attached: by label, type and size, never by what was taken out of them. */
 function picturePrompt(prompt, pictures) {
@@ -100,7 +113,7 @@ function writePrivate(path, text, mode = 0o600) {
 
 /**
  * Makes one ask ready. `request`: `{ role, question, agent, effort, smallWork, recheckOf, project,
- * files, images, data }` as the asker gave them, with the reservation's `{ key, keyScope,
+ * files, images, data, outsideUnread }` as the asker gave them, with the reservation's `{ key, keyScope,
  * requestSha256, askedBy }` (72.4), `cwd` the asking session's folder.
  * Returns `{ id, folder, choice, verdict, argv, cwd, stdin }`, `verdict` the check's answer for the
  * command; a refusal before the folder exists throws AskRefusal, InputRefusal or AskUsageError.
@@ -235,6 +248,16 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const harness = choice.agent.harness
   const form = formOf(choice.agent)
   const reads = askReads(form, browser)
+  // A teammate that reads one folder cannot open what the question names outside it: a file `--file` would take stops
+  // the ask before anything is sent, so the asker gives its text or says to go without (owner 2026-11-18). A QA
+  // ask's inputs are its curated brief alone, so it is left as it is.
+  const outside = reads.scope !== 'folder' || request.qa !== undefined ? [] : outsidePaths(request.question, {
+    root: project, given: [...texts, ...pictures].map((file) => file.real), cwd, home, files: texts.length, bytes: promptBytes
+  })
+  const missing = outside.filter((item) => item.attach).map((item) => item.path)
+  if (missing.length > 0 && request.outsideUnread !== true) {
+    throw new AskRefusal('FILES_OUTSIDE', `your question names ${missing.length === 1 ? 'a file' : `${missing.length} files`} outside ${project ?? 'the empty folder it works in'}, the only folder ${choice.agent.id} (${APP_NAMES[harness]}) reads: ${missing.join(', ')}; nothing was sent. Give ${missing.length === 1 ? 'its' : 'their'} text with ${missing.map((path) => `--file ${path}`).join(' ')}, or add --outside-unread to ask without ${missing.length === 1 ? 'it' : 'them'}`)
+  }
   const folder = join(runs, id)
   mkdirSync(runs, { recursive: true, mode: 0o700 })
   mkdirSync(folder, { mode: 0o700 })
@@ -267,6 +290,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   if (vision?.index !== undefined) prompt = visionPrompt(prompt, { file: `${vision.index + 1}/${texts.length}`, label: nameOf(texts[vision.index]), sha256: texts[vision.index].sha256 })
   prompt = picturePrompt(prompt, pictures.map((picture) => ({ ...picture, label: nameOf(picture) })))
   if (project !== null && ASK_READS[form].scope !== 'text') prompt = projectPrompt(prompt, project, form)
+  prompt = outsidePrompt(prompt, outside)
   if (browser !== null) prompt = browserPrompt(prompt, browser)
   writePrivate(join(folder, ASK_RUN_FILES.prompt), prompt)
   // The question alone, as the asker wrote it, for the record and Agents › Asks (73.1); the prompt above is what is sent.
@@ -305,6 +329,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     ...(browser === null ? {} : { browser: { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}), ...(browser.screenshotLimit === undefined ? {} : { screenshotLimit: browser.screenshotLimit }), statement: BROWSER_STATEMENT } }),
     // The retry key, whose it is and the request's hash (72.4): a retry with the same three finds this run.
     ...(request.key === undefined ? {} : { key: request.key, key_scope: request.keyScope, request_sha256: request.requestSha256 }),
+    // What the question named outside the one folder this teammate reads, and so went unread (owner 2026-11-18).
+    ...(outside.length === 0 ? {} : { outside_unread: outside.map((item) => ({ path: item.path, kind: item.kind })) }),
     asked_by: request.askedBy ?? askerOf(environment), asked_at: now.toISOString()
   }, null, 2)}\n`)
 
@@ -321,6 +347,6 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   if (verdict.verdict === 'PASS') writePrivate(join(folder, ASK_RUN_FILES.receipt), `${JSON.stringify(verdict.receipt, null, 2)}\n`)
   return {
     id, folder, choice: { agent: choice.agent.id, effort: choice.effort, rule: choice.rule, phase: choice.phase, ...(choice.choice === undefined ? {} : { project_choice: choice.choice }) },
-    verdict, argv: built.argv, cwd: workIn, stdin: built.stdin, manifest, program: installed.program
+    verdict, argv: built.argv, cwd: workIn, stdin: built.stdin, manifest, program: installed.program, outside
   }
 }

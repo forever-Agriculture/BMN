@@ -43,7 +43,11 @@ with `--interact` its browser scripts run as your user, and can read and write f
   lead) for a private project ask, and nothing beyond your text otherwise. `bmn team ask --features`
   says what each app is asked with here, and the record says what the teammate's mode could read.
 - **`--file PATH`** puts a file's whole text into the prompt (up to 64, 1 MiB each, UTF-8): right for
-  a file outside the project, or to make sure it is read.
+  a file outside the project, or to make sure it is read. A question that names a file outside the one
+  folder a Claude Code or OpenCode teammate reads is refused before anything is sent (`FILES_OUTSIDE`):
+  add the `--file` options the refusal gives and ask again with the same key, or add `--outside-unread`
+  only when the teammate should answer without that file. A folder cannot be given: name the files in it
+  that matter, or ask in that folder with `--project`.
 - **`--image PATH`** gives PNG, JPEG or WebP pictures (up to 8) as images; the designer answers unless
   you name another role. BMN takes the pictures' metadata out first (GPS, camera, text fields).
 - **Its tools.** Web search and its app's sub-agents; each sub-agent is named in the record and its
