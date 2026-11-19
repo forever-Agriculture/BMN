@@ -664,7 +664,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     },
     settleFailed:payloadHash=>settleBrainRollback({state:brainState,bin:join(process.resourcesPath,'bin'),skills:join(process.resourcesPath,'skills'),admin:privateBrainAdmin},payloadHash),
     run:(permit)=>runBrainCutover({permit,state:brainState,bin:join(process.resourcesPath,'bin'),skills:join(process.resourcesPath,'skills'),
-      admin:privateBrainAdmin})})
+      admin:privateBrainAdmin,sessionEnvironment:async()=>{await sessionEnvironment.refresh();return sessionEnvironment.current().env}})})
   cancelBrainSwitch=()=>{void switchBrain.dispose().catch(error=>console.error('Brain switch cancellation unavailable',error))}
   app.once('will-quit',cancelBrainSwitch)
   // The owner's return to Obsidian after a completed switch: same journal and lock, his native confirmation only.

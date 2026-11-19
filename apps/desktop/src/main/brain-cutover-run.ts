@@ -40,7 +40,20 @@ export function brainInstructionLines(home=homedir()):Record<string,string[]> {
  if(existsSync(memory))for(const project of readdirSync(memory,{withFileTypes:true}))if(project.isDirectory())visit(join(memory,project.name,'memory'))
  return Object.fromEntries(paths.filter(p=>existsSync(p)).sort().map(path=>[path,readFileSync(path,'utf8').split('\n').filter(line=>line.includes('~/brain')||line.includes(join(home,'brain')))] as const).filter(([,lines])=>lines.length))
 }
-interface BrainCutoverRuntime {state:string;bin:string;skills:string;home?:string;admin:<T>(command:string,params?:Record<string,unknown>)=>Promise<T>;guard?:()=>void}
+interface BrainCutoverRuntime {state:string;bin:string;skills:string;home?:string;admin:<T>(command:string,params?:Record<string,unknown>)=>Promise<T>;guard?:()=>void;
+ /** The owner's shell settings, where his sessions find Claude Code and Codex; BMN's own when absent. */
+ sessionEnvironment?:()=>Promise<NodeJS.ProcessEnv>}
+const BRAIN_ROUTE_ENVIRONMENT=['PATH','OPENAI_BASE_URL','ANTHROPIC_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_FOUNDRY'] as const
+/**
+ * The Rules step inspects each app as the owner's sessions run it: the program path and destination
+ * settings come from his shell, as on the Rules page. Folders stay BMN's own, as rehearsed.
+ */
+export function brainRulesEnvironment(own:NodeJS.ProcessEnv,session:NodeJS.ProcessEnv|undefined):NodeJS.ProcessEnv {
+ if(!session)return own
+ const environment={...own}
+ for(const name of BRAIN_ROUTE_ENVIRONMENT){if(session[name]===undefined)delete environment[name];else environment[name]=session[name]}
+ return environment
+}
 export function brainCutoverCommitted(state:string,admission?:BrainAdmissionStatus):boolean {
  try{const journal=JSON.parse(readFileSync(join(state,'brain-cutover','journal.json'),'utf8'));return admission?.committed===true&&journal.state==='complete'&&brainReceiptMatches(journal,admission.receipt)}catch{return false}
 }
@@ -173,8 +186,9 @@ async function executeBrainCutover(options:BrainCutoverRuntime,manager:BrainTime
   rollbackRules:async owned=>rules.rollbackCutoverRules(owned,join(journalRoot,'rules-transaction-audit')),
   renderRules:async record=>{
    if(rules.targetPath('claude')!==paths.claudeRules||rules.targetPath('codex')!==paths.codexRules)throw new Error('Rules destinations differ from the rehearsed inventory')
-   const result=await rules.installRules(['claude','codex'],{yes:true,asJson:true,cutover:true,beforeTransaction:owned=>{assertBrainCutoverPermit(permit);record(owned)},beforeTarget:()=>assertBrainCutoverPermit(permit)})
-   if(result.code!=='OK')throw new Error('Brain Rules installation failed: '+result.code)
+   const environment=brainRulesEnvironment(process.env,await options.sessionEnvironment?.())
+   const result=await rules.installRules(['claude','codex'],{yes:true,asJson:true,cutover:true,environment,beforeTransaction:owned=>{assertBrainCutoverPermit(permit);record(owned)},beforeTarget:()=>assertBrainCutoverPermit(permit)})
+   if(result.code!=='OK')throw new Error('Brain Rules installation failed: '+result.code+(result.message?': '+result.message:''))
   },
   recoverCheck:intent=>admin('recover-check',{note:intent.note,attempt:intent.attempt,title:intent.title}),
   importProof:async(current,notes)=>{const grantRoot=await admin<string>('data-root');return verifyBrainImportExport(current,grantRoot,notes)},

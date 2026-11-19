@@ -4,11 +4,27 @@ import {dirname,join,resolve} from 'node:path'
 import {brainTextFingerprint} from '../utility/brain-cutover-journal'
 import {tmpdir} from 'node:os'
 import {afterEach,it,expect,vi} from 'vitest'
-import {recoverBrainCutover,runBrainCutover,settleBrainRollback} from './brain-cutover-run'
+import {brainRulesEnvironment,recoverBrainCutover,runBrainCutover,settleBrainRollback} from './brain-cutover-run'
+import {routeStillMatches} from '../../bin/agents-rules.mjs'
 import {brainJournalCommit} from '../../bin/brain-state.mjs'
 import {randomUUID} from 'node:crypto'
 import {readBrainHealth} from '../utility/brain-health'
 afterEach(()=>vi.unstubAllEnvs())
+it('inspects the apps for the Rules step where the owner\'s sessions find them',async()=>{
+ // The fourth owner switch: BMN opened from the desktop has no shell-only folder on PATH, so Codex's version was unreadable.
+ const root=mkdtempSync(join(tmpdir(),'bmn-brain-route-')),shellOnly=join(root,'shell-bin')
+ try {
+  mkdirSync(shellOnly);writeFileSync(join(shellOnly,'codex'),'#!/bin/sh\necho "codex-cli 0.170.0"\n',{mode:0o755})
+  const desktop={HOME:root,PATH:'/usr/bin:/bin',OPENAI_BASE_URL:'https://stale.example.test/v1',XDG_CONFIG_HOME:join(root,'own-config')}
+  const session={HOME:join(root,'other-home'),PATH:shellOnly+':/usr/bin:/bin',XDG_CONFIG_HOME:join(root,'shell-config')}
+  const decision={kind:'full' as const,route:{provider:'openai'}}
+  expect(await routeStillMatches('codex',decision,{HOME:root,PATH:desktop.PATH})).toMatchObject({ok:false})
+  const environment=brainRulesEnvironment(desktop,session)
+  expect(environment).toEqual({HOME:root,PATH:session.PATH,XDG_CONFIG_HOME:desktop.XDG_CONFIG_HOME})
+  expect(await routeStillMatches('codex',decision,environment)).toMatchObject({ok:true})
+  expect(brainRulesEnvironment(desktop,undefined)).toBe(desktop)
+ }finally{rmSync(root,{recursive:true,force:true})}
+})
 it('rejects direct entry before creating a lock or journal',async()=>{
  const root=mkdtempSync(join(tmpdir(),'bmn-brain-entry-'))
  try {
