@@ -113,3 +113,14 @@ it('refuses a redirected root and a dangling link at the database before making 
   expect(existsSync(join(parent,'state2'))).toBe(false);expect(existsSync(join(parent,'nowhere'))).toBe(false)
  }finally{rmSync(parent,{recursive:true,force:true})}
 })
+it('refuses a dangling link at the state root before making the data root (recheck 2, finding 8)',async()=>{
+ const {seedSwitchedBrain}=await import('../test/brain-page-fixture.mjs')
+ const {symlinkSync}=await import('node:fs')
+ const parent=mkdtempSync(join(tmpdir(),'bmn-brain-dangling-'))
+ try{
+  symlinkSync(join(parent,'nowhere'),join(parent,'state'))
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data'),stateRoot:join(parent,'state'),notes:[]})).rejects.toThrow(/redirected/)
+  expect(existsSync(join(parent,'data'))).toBe(false);expect(existsSync(join(parent,'nowhere'))).toBe(false)
+  expect(readdirSync(parent).sort()).toEqual(['state'])
+ }finally{rmSync(parent,{recursive:true,force:true})}
+})
