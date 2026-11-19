@@ -810,7 +810,7 @@ export function PreferencesDialog(props: {
               disabled={brainContextBusy}
               onChange={(event) => void saveBrainContext(event.target.checked)}
             />
-            <p className="preferences-help">Give Claude Code and Codex relevant note titles at startup and after compaction.</p>
+            <p className="preferences-help">Give Claude Code and Codex the newest brain note titles at startup and after compaction.</p>
           </div>
         </div>
         {brainContextError && <p className="preferences-error" role="alert">{brainContextError}</p>}

@@ -175,10 +175,11 @@ async function brainContextForHook(agent, event, agentPid, procRoot, socketPath,
   const provider = agent === 'claude' ? 'anthropic' : agent === 'codex' ? 'openai' : null
   if (provider === null) return null
   const guard = await import('./agents-guard.mjs')
-  const left = () => guard.MESSAGE_LIMIT_MS - (Date.now() - reported)
+  const limit = Number(process.env.BMN_HOOK_MESSAGE_LIMIT_MS) || guard.MESSAGE_LIMIT_MS
+  const left = () => limit - (Date.now() - reported)
   if (left() <= 0) return null
   const destination = await guard.messageDestinationWithin({
-    agent, pid: agentPid, procRoot,
+    agent, pid: agentPid, procRoot, unwritten: true,
     event: { cwd: event.cwd, session_id: event.session_id, transcript_path: event.transcript_path }
   }, left())
   if (destination?.provider !== provider || !destination.default || destination.basis !== 'observed-default' || left() <= 0) return null

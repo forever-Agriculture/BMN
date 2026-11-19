@@ -203,7 +203,7 @@ describe('six pages in one flat list (Story 75.10 AC1)', () => {
       const shown = new RegExp(`<div class="preferences-page"><header class="page-head"><h3 class="page-title"[^>]*>${page}</h3>.*?(?=<div class="preferences-page"|</main>)`, 's').exec(markup)?.[0] ?? ''
       return [...shown.matchAll(/<h4 class="group-head"[^>]*>([A-Za-z ]+)/g)].map((match) => match[1] as string)
     }
-    expect(heads(dialog('general'), 'General')).toEqual(['Appearance', 'Terminal'])
+    expect(heads(dialog('general'), 'General')).toEqual(['Appearance', 'Terminal', 'Brain'])
     expect(heads(dialog('notifications'), 'Notifications')).toEqual(['Desktop', 'Telegram'])
     expect(heads(dialog('data'), 'Data')).toEqual(['History', 'Backup'])
     // One page shows at a time; the others are rendered hidden.

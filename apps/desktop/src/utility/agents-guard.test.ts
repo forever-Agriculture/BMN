@@ -496,6 +496,24 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
       ...(agent === 'claude' && !('transcript_path' in event) ? claudeRecord() : {}), ...event
     } })
 
+  it('takes a Claude Code record that is not written yet only for a start, only in that process\'s own folder, and never a dangling link', () => {
+    approve(team())
+    const pid = session(['claude'])
+    const { transcript_path: written } = claudeRecord()
+    const fresh = join(dirname(written), 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl')
+    const start = (transcript_path: string, unwritten = true) => messageDestination({ agent: 'claude', pid, procRoot: proc, unwritten,
+      event: { cwd: workspace, session_id: SESSION, transcript_path } })
+    expect(start(fresh)).toMatchObject({ provider: 'anthropic', default: true })
+    expect(start(written)).toMatchObject({ provider: 'anthropic' })
+    expect(start(fresh, false)).toBeNull()
+    expect(afterTool('claude', pid, { transcript_path: fresh })).toBeNull()
+    expect(start(join(home, 'elsewhere', 'fresh.jsonl'))).toBeNull()
+    expect(start(join(home, '.claude/projects/missing-folder/fresh.jsonl'))).toBeNull()
+    const dangling = join(dirname(written), 'cccccccc-cccc-cccc-cccc-cccccccccccc.jsonl')
+    symlinkSync(join(home, 'nowhere.jsonl'), dangling)
+    expect(start(dangling)).toBeNull()
+  })
+
   it('holds the hook\'s record of measured apps and the window\'s to one', () => {
     expect(MESSAGE_HANDOVER).toEqual(SESSION_MESSAGE_HANDOVER)
     // The two apps docs/session-messages.md holds a PASS for, each on the event after a tool call.

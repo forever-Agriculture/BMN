@@ -102,6 +102,7 @@ export class BrainStore {
     const lines = [heading]
     let bytes = Buffer.byteLength(heading)
     for (const { id, title, scope } of rows) {
+      // Only an imported note can carry a project scope; the write door refuses one (validateContent).
       const isProject = project !== '' && (scope === `project:${project}`
         || (scope.startsWith('group:') && scope.slice(6).split(',').some(member => member.trim() === project)))
       if (scope !== 'all' && !isProject) continue

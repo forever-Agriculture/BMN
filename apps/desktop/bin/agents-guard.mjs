@@ -1,6 +1,6 @@
 // MODULE: agents-guard.mjs - Epic 60.8: the decision a prompt hook takes, from the approved team on disk, before a prompt leaves a session the owner started
-import { readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
-import { basename, isAbsolute } from 'node:path'
+import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute } from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { APP_NAMES, RosterError, appName, isRetired, retiredWords } from './agents-roster.mjs'
 import { everApproved, neverApproved, readApproved } from './agents-state.mjs'
@@ -324,6 +324,11 @@ export function messageDestination(input) {
  * of another app that runs `bmn hook claude` by mistake would have its agent, which sends work somewhere this
  * resolver never looked, judged as Claude Code. Codex's resolver already ties its event to Codex's own saved
  * record (`codexSession`). An event that names no such record gets no message; the prompt guard is unchanged.
+ *
+ * `unwritten` is for a session start alone (Epic 127.2): Claude Code writes a new conversation's record with its
+ * first turn (measured on 2.1.328, 2026-11-19: absent at SessionStart and at the prompt, there at Stop), so the start
+ * names a record that is not there yet. Then the folder it would lie in must be that process's own, and nothing,
+ * not even a dangling link, may stand at the name. A message still needs the written record.
  */
 function claudeConversation(input) {
   const named = input.event?.transcript_path
@@ -332,6 +337,9 @@ function claudeConversation(input) {
   if (!env?.HOME) return false
   try {
     const root = realpathSync(`${env.CLAUDE_CONFIG_DIR || `${env.HOME}/.claude`}/projects`)
+    if (input.unwritten === true && lstatSync(named, { throwIfNoEntry: false }) === undefined) {
+      return realpathSync(dirname(named)).startsWith(`${root}/`)
+    }
     const real = realpathSync(named)
     return real.startsWith(`${root}/`) && statSync(real).isFile()
   } catch {

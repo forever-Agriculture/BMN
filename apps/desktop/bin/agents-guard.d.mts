@@ -5,6 +5,8 @@ export interface GuardInput {
   /** The owner's agent process; 0 when the process table could not tell. */
   pid: number
   procRoot?: string
+  /** A session start alone: Claude Code's record of a new conversation may not be written yet (Epic 127.2). */
+  unwritten?: boolean
   /** Only where and which session: the prompt is never part of a decision. */
   event: { cwd?: unknown; session_id?: unknown; transcript_path?: unknown }
 }

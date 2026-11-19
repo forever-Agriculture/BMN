@@ -1361,7 +1361,11 @@ post-compaction brief in Claude Code and Codex. It lists active note titles and 
 first, for scope `all` or a group naming the project. BMN requires a verified, approved
 default provider that may receive private work. Turn it off under **Preferences → General →
 Brain → Session context**. If the note store or destination check is unavailable, the usual
-brief still appears.
+brief still appears. The titles are asked for in one more call inside the hook's 300 ms; past
+that the brief goes out alone. Claude Code writes a new conversation's record with its first
+turn (measured on 2.1.328), so at a start the hook takes a record not written yet when its
+folder is that process's own; a message still needs the written record. Codex reports no start
+for a manual `/compact`, so that compaction gets no titles.
 
 ```sh
 bmn brain search "cross-project preference"
@@ -3462,7 +3466,7 @@ reach the agent in Codex 0.162.1 and Claude Code 2.1.301, five of five each
 - Only the agent the owner typed into the session, in its main conversation; never an agent another
   agent started, and never OpenCode, which has no measured path.
 - It travels in BMN's answer to the hook's own report of the start, so it adds no call and spends none
-  of the hook's time of its own. A message travels after a tool call and the prompt guard answers a
+  of the hook's time of its own (the brain titles above are the one further call). A message travels after a tool call and the prompt guard answers a
   prompt, so neither shares this answer; should BMN ever answer a brief and a message for one event,
   the hook prints them as one answer, the brief first. A prompt the guard stops goes out alone, never
   with a brief: Claude Code drops what rides on a refused prompt.

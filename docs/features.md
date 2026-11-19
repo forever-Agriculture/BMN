@@ -776,7 +776,7 @@ personal preferences, durable cross-project decisions and lessons, and ideas wit
 The brain keeps handoffs, transcripts, progress and daily logs out of its store. Saving,
 searching, importing, exporting and backing up notes call no model.
 
-After the brain switch, BMN can give Claude Code and Codex a short list of relevant note
+After the brain switch, BMN can give Claude Code and Codex a short list of the newest note
 titles and IDs at startup and after compaction. **Preferences → General → Brain** controls it.
 
 Search returns at most ten titles with short summaries. Whole-note reads include the revision,

@@ -3414,6 +3414,69 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
   })
 })
 
+describe('brain context for a session start (Epic 127.2)', () => {
+  const ANTHROPIC = { provider: 'anthropic', host: 'default:anthropic', basis: 'observed-default', default: true }
+  const ask = () => service['control']['options'].handlers.brainStartupContext!('s1', 'incarnation-1', ANTHROPIC)
+  const titles = vi.fn(async (project: string) => `titles for ${project}`)
+  const root = vi.fn(async (): Promise<string | null> => '/synthetic/code/Repo')
+  const admission = { open: true }
+  const saved = (startupContext: boolean) => service['options'].database.companion('putSettingsSection', 'brain', { startupContext }, new Date().toISOString())
+  beforeEach(() => {
+    titles.mockClear()
+    root.mockReset().mockResolvedValue('/synthetic/code/Repo')
+    admission.open = true
+    liveDirectories.set('s1', '/synthetic/code/Repo-worktree/src')
+    Object.assign(service['options'], { brain: { client: { admissionState: admission, startupContext: titles } }, brainContextRoot: root })
+  })
+
+  it('asks the approved team with the session folder and reads the titles for the repository folder name', async () => {
+    expect(await ask()).toBe('titles for Repo')
+    expect(root).toHaveBeenCalledWith(ANTHROPIC, '/synthetic/code/Repo-worktree/src')
+    expect(titles).toHaveBeenCalledWith('Repo')
+  })
+
+  it('adds nothing with the setting off, the brain closed, the team refusing, no folder or a failing read', async () => {
+    await saved(false)
+    expect(await ask()).toBeNull()
+    expect(titles).not.toHaveBeenCalled()
+    await saved(true)
+    admission.open = false
+    expect(await ask()).toBeNull()
+    expect(root).toHaveBeenCalledTimes(1)
+    admission.open = true
+    root.mockResolvedValueOnce(null)
+    expect(await ask()).toBeNull()
+    liveDirectories.delete('s1')
+    expect(await ask()).toBeNull()
+    liveDirectories.set('s1', '/synthetic/code/Repo')
+    titles.mockRejectedValueOnce(new Error('Synthetic brain failure'))
+    expect(await ask()).toBeNull()
+    expect(await ask()).toBe('titles for Repo')
+  })
+
+  it('answers nothing to a session replaced while the team or the brain was answering', async () => {
+    root.mockImplementationOnce(async () => { liveIncarnations.set('s1', 'incarnation-9'); return '/synthetic/code/Repo' })
+    expect(await ask()).toBeNull()
+    expect(titles).not.toHaveBeenCalled()
+    liveIncarnations.set('s1', 'incarnation-1')
+    titles.mockImplementationOnce(async () => { liveIncarnations.set('s1', 'incarnation-9'); return 'late titles' })
+    expect(await ask()).toBeNull()
+  })
+
+  it('offers the context with a due brief only while the brain is open and the setting is on', async () => {
+    const started = (conversation: string) => service['control']['options'].handlers.observeHookEvent({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'claude',
+      event: 'SessionStart', source: 'startup', toolName: null, effects: [], turn: { conversation, turn: null, nested: false } }) as Promise<Record<string, unknown>>
+    const first = await started('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1')
+    expect(first).toMatchObject({ brainContextOffered: true })
+    expect(typeof first.brief).toBe('string')
+    await saved(false)
+    expect(await started('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2')).not.toHaveProperty('brainContextOffered')
+    await saved(true)
+    admission.open = false
+    expect(await started('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3')).not.toHaveProperty('brainContextOffered')
+  })
+})
+
 describe('messages between sessions, through the service (Epic 66, Story 75.4)', () => {
   type Listing = import('@bmn/protocol').SessionMessageListing
   const handlers = () => service['control']['options'].handlers

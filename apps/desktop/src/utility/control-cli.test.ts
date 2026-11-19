@@ -1909,6 +1909,20 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       expect(fixture.handlers.brainStartupContext).toHaveBeenCalledWith('session-1', 'incarnation-1', app === 'codex' ? OPENAI : ANTHROPIC)
     })
 
+    it('adds brain context at a Claude Code start whose record is not written yet, and hands such a start no message', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      // Measured 2026-11-19: a new conversation's record is absent at SessionStart; only its folder is there.
+      const fresh = { ...session, record: join(dirname(session.record), 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl') }
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF, brainContextOffered: true })
+      fixture.handlers.brainStartupContext.mockResolvedValue('Synthetic note titles')
+      const result = await runCli(['hook', 'claude'], { env, input: start(fresh) })
+      expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toBe(`${BRIEF}\n\nSynthetic note titles`)
+      expect(fixture.handlers.brainStartupContext).toHaveBeenCalledWith('session-1', 'incarnation-1', ANTHROPIC)
+      expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
+    })
+
     it('preserves the ordinary brief when the Claude hook has no proven transcript', async () => {
       const fixture = await cliFixture()
       const session = await claudeSession(fixture.root)
