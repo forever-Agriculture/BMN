@@ -57,7 +57,8 @@ export function BrainMapView(props: {
       const archived = from.status === 'archived' || to.status === 'archived'
       const tree = edge.tree && !archived
       const stroke = tree ? kindColour(to.kind, to.status) : 'var(--text)'
-      const group = groups.get(stroke) ?? { stroke, opacity: tree ? (dense ? 0.35 : 0.45) : (dense ? 0.06 : 0.1), tree, d: [] }
+      // Above 500 links the haze drops to 4% so the tree spokes still read (visual review; the design allows it).
+      const group = groups.get(stroke) ?? { stroke, opacity: tree ? (dense ? 0.35 : 0.45) : (dense ? 0.04 : 0.1), tree, d: [] }
       group.d.push(`M${from.x.toFixed(1)} ${from.y.toFixed(1)}L${to.x.toFixed(1)} ${to.y.toFixed(1)}`)
       groups.set(stroke, group)
     }

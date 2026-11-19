@@ -329,6 +329,32 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(new Set(requests.map((r) => r.command))).toEqual(new Set(['status', 'list', 'map', 'read', 'graph']))
   })
 
+  it('beside the map shows only the note now selected: while the next one loads, no button acts on the one before (pre-review)', async () => {
+    PAIRED = true
+    await mount()
+    await press(container!.querySelector('.b-box')!, 'm')
+    const svg = (): Element => container!.querySelector('svg.b-map')!
+    await press(svg(), 'Enter')
+    const first = container!.querySelector('svg.b-map .b-node.selected')!.getAttribute('data-node')!
+    expect(container!.querySelector('.b-side-title')).not.toBeNull()
+    // The next read is held: the panel says it is opening and offers no Open note or Graph for the first note.
+    held = (request) => request.command === 'read'
+    // Its one neighbour sits straight above the group's centre.
+    await press(svg(), 'ArrowUp')
+    await press(svg(), 'Enter')
+    const second = container!.querySelector('svg.b-map .b-node.selected')!.getAttribute('data-node')!
+    expect(second).not.toBe(first)
+    expect(container!.querySelector('.b-side-title')).toBeNull()
+    expect(text()).toContain('Opening the note…')
+    expect([...container!.querySelectorAll('.b-side button')].map((b) => b.textContent)).toEqual([])
+    held = null
+    await act(async () => { for (const go of release.splice(0)) go() })
+    await flush()
+    expect(container!.querySelector('.b-side-title')!.textContent).toBe(NOTES[second]!.title)
+    // While the map is open, Note | Graph shows neither as chosen: one gold bar, on Map.
+    expect(container!.querySelector('.b-map-toggle')!.getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('after a refocus in the narrow sheet the new centre is selected and the graph stays', async () => {
     PAIRED = true
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })

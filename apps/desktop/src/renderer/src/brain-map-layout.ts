@@ -89,12 +89,12 @@ function layoutGroup(members: BrainMapNode[], near: ReadonlyMap<string, readonly
       rings = nextRing
       nextRing += 1
     }
-    // Around the centre every slot is as near as any other: the first layer is spread evenly, from the top.
-    if (layer.length === 1 && layer[0] === centre.id && slots.length) {
+    // Around the centre every place on ring 1 is as near as any other: a first layer that fits ring 1 is spread
+    // evenly by true angle, from the top (review: slots gave 0, 1, 3, 4 for four notes); a bigger one takes slots.
+    if (layer.length === 1 && layer[0] === centre.id && found.length <= 6) {
       found.forEach((id, index) => {
-        const slot = slots[Math.floor((index * slots.length) / found.length)]!
-        slot.free = false
-        points.set(id, { x: slot.x, y: slot.y })
+        const angle = -Math.PI / 2 + (index * 2 * Math.PI) / found.length
+        points.set(id, { x: Math.cos(angle), y: Math.sin(angle) })
       })
       layer = found
       continue
@@ -255,7 +255,10 @@ const touches = (p: Box, q: Box): boolean => p.left < q.right && q.left < p.righ
  * links, at most `rest` of them; unlinked notes are never labelled at rest. Then the hovered note and its neighbours
  * (its whole group when it has 8 notes or fewer); a hovered label that only collides with rest labels replaces them.
  * Each label sits under its node at r + 15, else above at r + 7, else right or left of it at r + 6 (a group's centre is
- * often closed in above and below by its own ring), else is not drawn; boxes pad 4 px and never touch.
+ * often closed in above and below by its own ring), else is not drawn; boxes pad 4 px, never touch, and keep 8 px from
+ * any other dot so a label never reads as another dot's (visual review). The selected note follows the hover rule; on
+ * narrow (rest of 4 or fewer), when it still cannot be named, no rest labels are drawn so none reads as its name.
+ * Under a pitch of 10 px no rest labels are drawn: the hover and the bar name notes.
  */
 export function placeMapLabels(layout: MapLayout, options: { open: string | null; selected: string | null; hovered: string | null; rest: number; measure(text: string): number }): MapLabel[] {
   const byId = new Map(layout.nodes.map((node) => [node.id, node]))
@@ -274,7 +277,8 @@ export function placeMapLabels(layout: MapLayout, options: { open: string | null
     const neighbours = group.length && group.length <= 8 ? group : layout.edges.flatMap((edge) => edge.from === hovered.id ? [edge.to] : edge.to === hovered.id ? [edge.from] : []).map((id) => byId.get(id)!)
     for (const node of neighbours) add(hoverOrder, node.id)
   }
-  const nodeBoxes = layout.nodes.map((node) => ({ id: node.id, box: { left: node.x - node.r, right: node.x + node.r, top: node.y - node.r, bottom: node.y + node.r } }))
+  const CLEAR = 8
+  const nodeBoxes = layout.nodes.map((node) => ({ id: node.id, box: { left: node.x - node.r - CLEAR, right: node.x + node.r + CLEAR, top: node.y - node.r - CLEAR, bottom: node.y + node.r + CLEAR } }))
   const placed: (MapLabel & { box: Box; rest: boolean })[] = []
   const tryPlace = (node: MapNode, rest: boolean, replace: boolean): boolean => {
     const text = labelText(node.title)
@@ -298,9 +302,13 @@ export function placeMapLabels(layout: MapLayout, options: { open: string | null
     }
     return false
   }
+  const selected = options.selected ? byId.get(options.selected) : undefined
+  const selectedNamed = selected ? tryPlace(selected, false, false) : true
   let shown = 0
-  for (const node of restOrder) {
+  const quiet = layout.pitch < 10 || (!selectedNamed && options.rest <= 4)
+  for (const node of quiet ? [] : restOrder) {
     if (shown >= options.rest) break
+    if (node === selected) continue
     if (tryPlace(node, true, false)) shown += 1
   }
   hoverOrder.forEach((node, at) => {

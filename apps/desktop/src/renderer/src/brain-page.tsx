@@ -608,7 +608,8 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   }
 
   const mapBody = (): ReactNode => {
-    const shown = mapBeside
+    // Only the note now selected is shown beside, so its buttons never act on the one before (pre-review).
+    const shown = mapBeside && mapBeside.id === mapSelected ? mapBeside : null
     const side = (
       <aside className="b-side" aria-label="Selected note">
         {shown ? <>
@@ -620,7 +621,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
             <button type="button" className="b-plate" onClick={() => graphFromMap(shown.id)} title="Shift Enter">Graph</button>
           </div>
           <div className="b-side-text"><NoteText key={shown.id} note={shown} onOpen={(id) => setMapSelected(id)} /></div>
-        </> : <p className="b-side-empty">Pick a note to read it here.</p>}
+        </> : <p className="b-side-empty" aria-busy={mapSelected ? 'true' : undefined}>{mapSelected ? 'Opening the note…' : 'Pick a note to read it here.'}</p>}
       </aside>
     )
     return (
@@ -684,8 +685,9 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
           <div className="b-bar-end">
             {note && graphable && !typed && !narrow ? (
               <><span id="b-view" hidden>View</span>
-                <Segmented labelledBy="b-view" fit options={['note', 'graph'] as const} value={view}
-                  optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => { closeMap(); focusGraph.current = value === 'graph'; setView(value) }} /></>
+                {/* While the map is open neither is chosen: one gold bar, on Map (visual review). */}
+                <Segmented<'note' | 'graph' | null> labelledBy="b-view" fit options={['note', 'graph']} value={mapOpen ? null : view}
+                  optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => { if (!value) return; closeMap(); focusGraph.current = value === 'graph'; setView(value) }} /></>
             ) : null}
             {status.kind === 'ready' && !typed ? <button type="button" className="b-quiet b-map-toggle" aria-pressed={mapOpen} title="Whole-brain map (M)" onClick={() => (mapOpen ? closeMap() : openMap())}>Map</button> : null}
             {(note || mapOpen) && !typed ? <button type="button" className="b-quiet" onClick={toList}>All notes</button> : null}
