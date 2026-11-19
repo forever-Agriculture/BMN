@@ -1914,7 +1914,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       const session = await claudeSession(fixture.root)
       const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
       // Measured 2026-11-19: a new conversation's record is absent at SessionStart; only its folder is there.
-      const fresh = { ...session, record: join(dirname(session.record), 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl') }
+      const fresh = { ...session, record: join(dirname(dirname(session.record)), '-synthetic-new-project', `${SESSION}.jsonl`) }
       fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF, brainContextOffered: true })
       fixture.handlers.brainStartupContext.mockResolvedValue('Synthetic note titles')
       const result = await runCli(['hook', 'claude'], { env, input: start(fresh) })

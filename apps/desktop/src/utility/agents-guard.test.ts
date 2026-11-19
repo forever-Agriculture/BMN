@@ -500,18 +500,24 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     approve(team())
     const pid = session(['claude'])
     const { transcript_path: written } = claudeRecord()
-    const fresh = join(dirname(written), 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jsonl')
-    const start = (transcript_path: string, unwritten = true) => messageDestination({ agent: 'claude', pid, procRoot: proc, unwritten,
-      event: { cwd: workspace, session_id: SESSION, transcript_path } })
+    const FRESH = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+    const fresh = join(dirname(written), `${FRESH}.jsonl`)
+    const start = (transcript_path: string, unwritten = true, session_id = FRESH) => messageDestination({ agent: 'claude', pid, procRoot: proc, unwritten,
+      event: { cwd: workspace, session_id, transcript_path } })
     expect(start(fresh)).toMatchObject({ provider: 'anthropic', default: true })
     expect(start(written)).toMatchObject({ provider: 'anthropic' })
     expect(start(fresh, false)).toBeNull()
     expect(afterTool('claude', pid, { transcript_path: fresh })).toBeNull()
-    expect(start(join(home, 'elsewhere', 'fresh.jsonl'))).toBeNull()
-    expect(start(join(home, '.claude/projects/missing-folder/fresh.jsonl'))).toBeNull()
+    expect(start(join(home, 'elsewhere', `${FRESH}.jsonl`))).toBeNull()
+    // The record is named after the session it belongs to, and no other.
+    expect(start(fresh, true, SESSION)).toBeNull()
+    // A project's first conversation: its folder is not made yet, and may only be missing right under the projects folder.
+    expect(start(join(home, `.claude/projects/-synthetic-new-project/${FRESH}.jsonl`))).toMatchObject({ provider: 'anthropic' })
+    expect(start(join(home, `.claude/projects/-synthetic-new-project/deeper/${FRESH}.jsonl`))).toBeNull()
+    expect(start(join(home, `.claude/${FRESH}.jsonl`))).toBeNull()
     const dangling = join(dirname(written), 'cccccccc-cccc-cccc-cccc-cccccccccccc.jsonl')
     symlinkSync(join(home, 'nowhere.jsonl'), dangling)
-    expect(start(dangling)).toBeNull()
+    expect(start(dangling, true, 'cccccccc-cccc-cccc-cccc-cccccccccccc')).toBeNull()
   })
 
   it('holds the hook\'s record of measured apps and the window\'s to one', () => {

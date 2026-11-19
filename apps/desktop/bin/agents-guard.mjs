@@ -327,8 +327,10 @@ export function messageDestination(input) {
  *
  * `unwritten` is for a session start alone (Epic 127.2): Claude Code writes a new conversation's record with its
  * first turn (measured on 2.1.328, 2026-11-19: absent at SessionStart and at the prompt, there at Stop), so the start
- * names a record that is not there yet. Then the folder it would lie in must be that process's own, and nothing,
- * not even a dangling link, may stand at the name. A message still needs the written record.
+ * names a record that is not there yet. Then the record must carry the session's own id as its name, the folder
+ * it would lie in must be that process's own (or, for a project's first conversation, not made yet right under
+ * that process's projects folder), and nothing, not even a dangling link, may stand at the name. A message still
+ * needs the written record.
  */
 function claudeConversation(input) {
   const named = input.event?.transcript_path
@@ -338,7 +340,11 @@ function claudeConversation(input) {
   try {
     const root = realpathSync(`${env.CLAUDE_CONFIG_DIR || `${env.HOME}/.claude`}/projects`)
     if (input.unwritten === true && lstatSync(named, { throwIfNoEntry: false }) === undefined) {
-      return realpathSync(dirname(named)).startsWith(`${root}/`)
+      const id = input.event?.session_id
+      if (typeof id !== 'string' || id === '' || basename(named) !== `${id}.jsonl`) return false
+      const folder = dirname(named)
+      if (lstatSync(folder, { throwIfNoEntry: false }) === undefined) return realpathSync(dirname(folder)) === root
+      return realpathSync(folder).startsWith(`${root}/`)
     }
     const real = realpathSync(named)
     return real.startsWith(`${root}/`) && statSync(real).isFile()

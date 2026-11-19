@@ -1363,8 +1363,8 @@ default provider that may receive private work. Turn it off under **Preferences 
 Brain → Session context**. If the note store or destination check is unavailable, the usual
 brief still appears. The titles are asked for in one more call inside the hook's 300 ms; past
 that the brief goes out alone. Claude Code writes a new conversation's record with its first
-turn (measured on 2.1.328), so at a start the hook takes a record not written yet when its
-folder is that process's own; a message still needs the written record. Codex reports no start
+turn (measured on 2.1.328), so at a start the hook takes a record not written yet when it is
+named after the session and its folder is that process's own; a message still needs the written record. Codex reports no start
 for a manual `/compact`, so that compaction gets no titles.
 
 ```sh
