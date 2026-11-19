@@ -136,8 +136,10 @@ describe('Health alerts row (Story 62.2)', () => {
     expect(waiting).toMatch(/<button[^>]*disabled=""[^>]*>Send test<\/button>/)
   })
 
-  it('tells in the Quiet hours help that health alerts are sent anyway', () => {
-    expect(dialog(DEFAULT_APP_SETTINGS)).toContain('Held messages are sent when quiet hours end. Health alerts are sent anyway.')
+  it('explains which messages still arrive during quiet hours', () => {
+    const markup = dialog(DEFAULT_APP_SETTINGS)
+    expect(markup).toContain('Choice cards arrive silently unless allowed below.')
+    expect(markup).toContain('Health alerts always go through.')
   })
 })
 

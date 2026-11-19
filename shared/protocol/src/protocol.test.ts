@@ -123,6 +123,7 @@ describe('protocol surface', () => {
         'quick.look.save',
         'attention.list',
         'attention.seen',
+        'attention.answer',
         'attention.resolve',
         'attention.terminalNotice',
         'hookEvents.list',
@@ -179,7 +180,7 @@ describe('protocol surface', () => {
     // Story79.4 adds the one-time ownership identity claim.
     // Story79.3 also reads state-only evidence that a Codex hook was observed.
     // Epic100 adds the main-only exact QA binding.
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(101)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(102)
   })
 
   it('exports the initial stable error codes', () => {

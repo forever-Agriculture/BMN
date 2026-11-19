@@ -1,6 +1,10 @@
-// MODULE: session-request-card.tsx - read-only request details and explicit owner actions over the pane
+// MODULE: session-request-card.tsx - request details and owner actions over the pane
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { stripFormatCharacters, manualChoiceQuestion, type AttentionRecord, type TelegramStatus } from '@bmn/protocol'
+import {
+  stripFormatCharacters, manualChoiceQuestion, hasAttentionChoices,
+  type AnswerOutcome, type AttentionRecord, type QuestionChoice, type TelegramStatus
+} from '@bmn/protocol'
+import { AttentionChoices } from './attention-choices'
 import { attentionProvenance, expiryText, isActionableAttention, openRequests, relativeAge } from './session-presentation'
 
 export interface SessionPlace { workspace: string; session: string }
@@ -16,6 +20,7 @@ export function SessionRequestCard(props: {
   focusRequestId?: string | undefined
   onAcknowledge(request: AttentionRecord): void
   onMarkAnswered(request: AttentionRecord): void
+  onAnswer?(request: AttentionRecord, choices: QuestionChoice[]): Promise<AnswerOutcome>
   onAnswerGrant?(request: AttentionRecord, choice: 0 | 1): void
   onClose(returnFocus: boolean): void
 }): React.JSX.Element {
@@ -74,7 +79,9 @@ export function SessionRequestCard(props: {
 
   const item = (request: AttentionRecord, cleared: boolean, phone = props.phone): React.JSX.Element => {
     const actionable = isActionableAttention(request)
-    const answerable = actionable && request.kind !== 'handoff' && !request.qaGrantId
+    const answer = props.onAnswer
+    const interactive = !!answer && !cleared && request.incarnationId !== null && hasAttentionChoices(request)
+    const answerable = actionable && request.kind !== 'handoff' && !request.qaGrantId && !interactive
     const place = props.place(request.sessionId)
     const age = relativeAge(request.openedAt, props.now)
     const expiry = expiryText(request.expiresAt, props.now)
@@ -93,7 +100,11 @@ export function SessionRequestCard(props: {
         <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
       </div>
       {!(request.manualChoices || questions?.length === 1 && questions[0]?.text === request.title) ? <h3>{request.title}</h3> : null}
-      {questions ? <div className="attention-questions">{questions.map((question, index) =>
+      {interactive && questions ? <AttentionChoices questions={questions}
+        context={request.manualChoices ? request.body ?? undefined : undefined}
+        allowsCustom={question => request.prompt?.harness !== 'opencode' || question.custom !== false}
+        onAnswer={choices => answer(request, choices)} />
+        : questions ? <div className="attention-questions">{questions.map((question, index) =>
         <section key={index} aria-label={stripFormatCharacters(question.text)}>
           <h4>{stripFormatCharacters(question.text)}</h4>
           <ul>{question.options.map((option, optionIndex) => <li key={optionIndex}>
@@ -107,7 +118,7 @@ export function SessionRequestCard(props: {
           {request.prompt.command ? <pre>{stripFormatCharacters(request.prompt.command)}</pre> : null}
           {request.prompt.cwd ? <span className="attention-prompt-where">in {stripFormatCharacters(request.prompt.cwd)}</span> : null}
         </div> : null}
-      {request.body && (!questions || request.manualChoices) ? <pre>{stripFormatCharacters(request.body)}</pre> : null}
+      {request.body && (!questions || request.manualChoices && !interactive) ? <pre>{stripFormatCharacters(request.body)}</pre> : null}
       <p className="seen">{request.seenAt ? `Seen ${relativeAge(request.seenAt, props.now)}` : 'Unseen'}
         {` · ${cleared ? 'reminder cleared' : actionable ? 'awaiting answer' : 'update'} · `}
         <span className="provenance">{attentionProvenance(request)}</span></p>
@@ -117,7 +128,7 @@ export function SessionRequestCard(props: {
         ? <p className="seen">Phone: an earlier revision may not have arrived</p> : null}
       {!cleared ? <div className="actions">
         {/* With Mark answered beside it, Dismiss is the quiet word and Mark answered the primary (owner 2026-10-19, B5). */}
-        <button type="button" className={answerable ? 'ghost' : 'primary'}
+        <button type="button" className={answerable || interactive ? 'ghost' : 'primary'}
           onClick={() => props.onAcknowledge(request)} title="Clear this reminder; keep the task or draft.">Dismiss</button>
         {answerable ? <button type="button" className="primary" title="Close this request after answering it in the terminal"
           onClick={() => props.onMarkAnswered(request)}>Mark answered</button> : null}

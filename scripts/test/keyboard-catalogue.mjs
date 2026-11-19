@@ -1,3 +1,4 @@
+// MODULE: keyboard-catalogue.mjs - Electron keyboard and request-card checks
 /* global window, document */
 // Epic 55: real Electron catalogue, addressed editing and response-card keyboard navigation.
 // Run on a private X display after building; all sessions and requests are synthetic.
@@ -184,12 +185,13 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
       toast.y + toast.height <= bounds.y, 'Confirmation covers response actions')
     const nav = card.getByRole('button', { name: 'Dismiss', exact: true })
     assert.equal(await nav.count(), 7) // six north manual requests and its native question
-    await nav.nth(4).focus()
     const identity = await nav.nth(4).evaluate(button => button.closest('article').dataset.requestId)
+    const focusedCard = card.locator(`article[data-request-id="${identity}"]`)
+    await focusedCard.getByRole('button', { name: 'First', exact: true }).focus()
     await emit('north', 'incoming', ['ask', 'incoming', 'Scope: New synthetic request'])
     assert.equal(await page.evaluate(() => document.activeElement.closest('article').dataset.requestId), identity, 'Arrival stole focus')
     await page.keyboard.press('Tab')
-    assert.ok(await page.evaluate(() => document.activeElement.textContent === 'Mark answered'))
+    assert.ok(await focusedCard.getByRole('button', { name: 'Second', exact: true }).evaluate(el => document.activeElement === el))
     const request = (await page.evaluate(() => window.aiTerminal.listAttention())).find(row => row.requestId === identity)
     await page.evaluate(r => window.aiTerminal.resolveAttention(r.requestId, 'Synthetic removal', { kind: r.kind, revision: r.revision }, 'owner', 'withdrawn'), request)
     await page.waitForFunction(id => document.activeElement.closest('article')?.dataset.requestId !== id && !!document.activeElement.closest('.session-request-card'), identity)

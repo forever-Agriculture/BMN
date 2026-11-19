@@ -939,7 +939,7 @@ describe('durable new-card boundary', () => {
   it('rechecks state after claiming and returns a no-send race to pending', async () => {
     const settle = vi.fn(async () => undefined)
     const f = setup({ delivery: {
-      beforeNewDelivery: async () => { f.state.record = { ...f.state.record!, seenAt: '2026-10-07T23:00:00Z' }; return { action: 'send', claim: 'claim-2' } },
+      beforeNewDelivery: async () => { f.state.record = { ...f.state.record!, revision: 2 }; return { action: 'send', claim: 'claim-2' } },
       settleNewDelivery: settle
     } })
     expect(await f.keeper.page(f.state.record!)).toBe(false)

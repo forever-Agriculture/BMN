@@ -50,6 +50,8 @@ import {
   type ArtifactRecord,
   type AttentionOrigin,
   type AttentionRecord,
+  type AnswerOutcome,
+  type QuestionChoice,
   type AutoTestsView,
   type HookEventRecord,
   type HookEventsView,
@@ -671,6 +673,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   markAttentionSeen(requestId: string): Promise<AttentionRecord> {
     return invokeBridge('aiterm:attention:seen', { requestId })
+  },
+  answerAttention(requestId: string, revision: number, choices: QuestionChoice[]): Promise<AnswerOutcome> {
+    return invokeBridge('aiterm:attention:answer', { requestId, revision, choices })
   },
   answerQaGrant(requestId: string, revision: number, choice: 0 | 1): Promise<AttentionRecord> {
     return invokeBridge('aiterm:qa:grant-answer', { requestId, revision, choice })

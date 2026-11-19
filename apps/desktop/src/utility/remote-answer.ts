@@ -1,5 +1,7 @@
 // MODULE: remote-answer.ts - delivers an answer chosen away from the desk into the exact dialog that asked (Epic 30.2)
 import type { AttentionEvidence, AttentionPrompt, AttentionPromptQuestion, AttentionQuestionsPrompt, AttentionRecord } from '@bmn/protocol'
+import type { AnswerOutcome, AnswerRefusal, QuestionChoice } from '@bmn/protocol'
+export type { AnswerOutcome, AnswerRefusal, QuestionChoice } from '@bmn/protocol'
 import {
   claudePermissionOnScreen,
   claudeQuestionState,
@@ -12,17 +14,11 @@ import {
 } from './screen-mirror'
 
 /*
- * Only the utility process calls `answer`: it is reached from the Telegram tap handler and from nothing
+ * Only the utility process calls `answer`: it is reached from the BMN window or Telegram and from nothing
  * on the control socket or in the `bmn` CLI, because the owner token is readable by the agents
  * themselves. The one socket route here, `take`, hands an OpenCode plugin an answer already decided;
  * it can neither create nor change one.
  */
-
-/**
- * How one question is answered: an option index; for a multi-select question the set of option indices,
- * ascending, and optionally a typed answer with them; or a typed answer alone.
- */
-export type QuestionChoice = number | { set: number[]; typed?: string } | { typed: string }
 
 /** One choice per question, or a permission decision. "Always allow" does not exist here. */
 export type RemoteAnswer =
@@ -47,35 +43,6 @@ export function typedAnswerable(prompt: AttentionQuestionsPrompt, question: Atte
   return prompt.harness !== 'opencode' || question.custom !== false
 }
 
-export type AnswerRefusal =
-  /** The request closed, or the process that asked is gone. */
-  | 'gone'
-  /** The request or its dialog changed since the card was sent. */
-  | 'changed'
-  /** The mirrored screen does not show that dialog with that choice. */
-  | 'not-on-screen'
-  /** No verified way to answer this shape (docs/remote-answers.md), or an answer that does not fit it. */
-  | 'unsupported'
-  /** A permission, and the owner has not allowed answering permissions from the phone. */
-  | 'permissions-off'
-  /** Another answer for this request is already on its way. */
-  | 'claimed'
-  /** OpenCode's plugin did not collect the answer in time; nothing was sent. */
-  | 'not-delivered'
-  /** OpenCode's server refused the reply the plugin posted; nothing was applied. */
-  | 'api-refused'
-
-export type AnswerOutcome =
-  | { state: 'refused'; reason: AnswerRefusal }
-  /** An ordinary conversation message was submitted; no native question-consumption claim. */
-  | { state: 'submitted'; sent: string[] }
-  /** The harness itself reported exactly this answer. */
-  | { state: 'confirmed'; sent: string[] }
-  /** Sent, but nothing attributable came back; never retried and never shown as success. */
-  | { state: 'sent-unconfirmed'; sent: string[] }
-  /** Some questions were answered, then the dialog stopped matching; nothing more was written. */
-  | { state: 'partial'; sent: string[]; total: number }
-
 export interface AnswerRequest {
   requestId: string
   /** The request revision, dialog epoch and process the card was sent for. */
@@ -83,6 +50,7 @@ export interface AnswerRequest {
   epoch: number
   incarnationId: string
   answer: RemoteAnswer
+  via?: 'app' | 'telegram'
 }
 
 type AnswerRoute = 'claude-keys' | 'claude-hook' | 'codex-keys' | 'opencode-api' | 'codex-message'

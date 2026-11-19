@@ -1161,6 +1161,8 @@ export class ControlServer {
       }
       case 'qa.grant.answer':
         throw unauthorized('Only the owner answers QA activity grants in the BMN window')
+      case 'attention.answer':
+        throw unauthorized('Only the owner answers choice cards in the BMN window or Telegram')
       case 'auth':
         throw invalidError('Connection is already authenticated')
       case 'state.snapshot': {

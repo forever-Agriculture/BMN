@@ -48,6 +48,7 @@ const ROUTES = {
   'aiterm:artifact:deliver': METHOD_REGISTRY.artifactDeliver,
   'aiterm:attention:list': METHOD_REGISTRY.attentionList,
   'aiterm:attention:seen': METHOD_REGISTRY.attentionSeen,
+  'aiterm:attention:answer': METHOD_REGISTRY.attentionAnswer,
   'aiterm:attention:resolve': METHOD_REGISTRY.attentionResolve,
   'aiterm:qa:grant-answer': METHOD_REGISTRY.qaGrantAnswer,
   'aiterm:hook-events:list': METHOD_REGISTRY.hookEventsList,

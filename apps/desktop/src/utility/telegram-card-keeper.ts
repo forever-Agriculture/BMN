@@ -1,6 +1,7 @@
 // MODULE: telegram-card-keeper.ts - keeps each Telegram card true to its request: sends, edits in place, taps and outcomes (Story 30.3)
 import { randomBytes } from 'node:crypto'
 import { hasControlOrFormatCharacter, manualChoiceQuestion, type AttentionQuestionsPrompt, type AttentionRecord } from '@bmn/protocol'
+import { phoneCardOpen } from './attention-pager'
 
 function questionsFor(record: AttentionRecord | null): Pick<AttentionQuestionsPrompt, 'questions'> | null {
   return record?.manualChoices ? { questions: [manualChoiceQuestion(record.title, record.manualChoices)] }
@@ -80,6 +81,7 @@ export interface CardKeeperDependencies {
   observeDelivery?: TelegramDeliveryObserver
   beforeNewDelivery?(record: AttentionRecord): Promise<NewDeliveryDecision>
   maySend?(record: AttentionRecord, managed: boolean): boolean
+  silent?(record: AttentionRecord): boolean
   settleNewDelivery?(claim: string, outcome: 'mapped' | 'unsent' | 'uncertain'): Promise<void>
   holdExit?(sessionId: string, incarnationId: string | null): Promise<boolean>
 }
@@ -205,10 +207,10 @@ export class TelegramCardKeeper {
   private async pageCurrent(record: AttentionRecord): Promise<boolean> {
     if (this.disposed) return true
     const current = await this.deps.getAttention(record.requestId)
-    if (!current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) {
+    if (!current || !phoneCardOpen(current) || current.revision !== record.revision) {
       observeTelegramDelivery(this.deps.observeDelivery, record,
         !current ? 'request-unavailable' : current.state !== 'open' ? 'request-closed'
-          : current.seenAt !== null ? 'request-seen' : 'request-revised')
+          : !phoneCardOpen(current) ? 'request-seen' : 'request-revised')
       return true
     }
     const connector = this.deps.connector()
@@ -243,8 +245,8 @@ export class TelegramCardKeeper {
     }
     const canDispatch = async (): Promise<boolean> => {
       const final = await this.deps.getAttention(record.requestId).catch(() => null)
-      return !this.disposed && connector === this.deps.connector() && !!final && final.state === 'open' &&
-        final.seenAt === null && final.revision === record.revision && (this.deps.maySend?.(final, !!claim) ?? true)
+      return !this.disposed && connector === this.deps.connector() && !!final && phoneCardOpen(final) &&
+        final.revision === record.revision && (this.deps.maySend?.(final, !!claim) ?? true)
     }
     if (!await canDispatch()) { await settle('unsent'); return false }
     // Story 78.4: a command too long for the card goes first, whole, as a file; the card's buttons need its confirmed delivery.
@@ -266,11 +268,13 @@ export class TelegramCardKeeper {
     }
     let format: TelegramCardData['format'] = 'html'
     let messageId: number
+    const silent = (): CardMessageOptions => this.deps.silent?.(record) ? { silent: true } : {}
     observeTelegramDelivery(this.deps.observeDelivery, record, 'send-started')
     try {
       messageId = (await connector.sendMessage(composed.rendered.text, {
         html: true,
-        keyboard: composed.rendered.keyboard
+        keyboard: composed.rendered.keyboard,
+        ...silent()
       })).messageId
     } catch (error) {
       if (!isFormattingRefusal(error)) {
@@ -286,7 +290,7 @@ export class TelegramCardKeeper {
       if (!await canDispatch()) { await settle('unsent'); return false }
       try {
         messageId = (await connector.sendMessage(record.manualChoices ? plainText(composed.rendered.text) : fallback,
-          record.manualChoices ? { keyboard: composed.rendered.keyboard } : undefined)).messageId
+          record.manualChoices ? { keyboard: composed.rendered.keyboard, ...silent() } : silent())).messageId
       } catch (error) {
         observeTelegramDelivery(this.deps.observeDelivery, record, 'fallback-failed')
         if (telegramSendDefinitelyUnsent(error)) { await settle('unsent'); return false }

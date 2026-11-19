@@ -1,3 +1,4 @@
+<!-- MODULE: remote-answers.md - agent question and permission delivery -->
 # Remote answers: how each agent is answered
 
 BMN can answer an agent's question or permission prompt from Telegram (Epic 30). This page records,
@@ -398,15 +399,15 @@ reaches it (a unit test reads the sources to keep it that way).
 
 `bmn ask --choices-json '{"options":[{"label":"Proceed","description":null},{"label":"Wait","description":null}]}'`
 (or `--choices-file -`) stores separate manual choices, never a native prompt.
-Other is automatic. Phone options/Other send one bounded, addressed ordinary message naming the request and
+Other is automatic. Laptop and phone options/Other send one bounded, addressed ordinary message naming the request and
 decision to its freshly attributed foreground conversation, an agent launched in a shell included;
 manual permission decisions additionally require `answerPermissions` (**Answer permissions**) and convey the
 owner's decision as text: native Allow, Auto Review and command execution remain separate. Direct text
 replies follow `autoSubmitReplies`, including ordinary follow-ups to completed cards
 without renewing a permission grant. Every manual write, including a follow-up,
 requires fresh current-incarnation Claude/Codex ownership; an unstamped shell target
-stays unavailable/draft-only. No submitted or uncertain attempt is replayed. Desktop Copy answer is
-clipboard-only.
+stays unavailable/draft-only. No submitted or uncertain attempt is replayed. Telegram permission settings apply
+to phone answers.
 
 The native Codex Default missing-ID compatibility route retains its prior guards
 and “Conversation not confirmed” label only before a switch/conflict or ambiguous

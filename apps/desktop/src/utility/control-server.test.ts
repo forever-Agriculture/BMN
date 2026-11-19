@@ -846,7 +846,6 @@ describe('control server validation', () => {
     ['answer.take reporting without an outcome', 'answer.take', { reported: { requestRef: 'per_1' } }],
     ['answer.take reporting an answer', 'answer.take', { reported: { requestRef: 'per_1', delivered: true, reply: 'once' } }],
     ['a method that would give an answer', 'answer.give', { requestId: 'r1' }],
-    ['an attention answer method', 'attention.answer', { requestId: 'r1' }],
     ['missing input key', 'input.submit', { text: 'ls' }],
     ['oversize text', 'input.submit', { text: 'x'.repeat(64 * 1024 + 1), idempotencyKey: 'k' }],
     ['non-boolean submit', 'input.submit', { text: 'ls', submit: 'yes', idempotencyKey: 'k' }],
@@ -1828,6 +1827,9 @@ describe('Away grant (Story 84.3)', () => {
     const qaAnswer = { requestId: 'synthetic-card', revision: 1, choice: 0 }
     expectError(await owner.request('qa.grant.answer', qaAnswer), ERROR_CODES.unauthorized)
     expectError(await agent.request('qa.grant.answer', qaAnswer), ERROR_CODES.unauthorized)
+    const cardAnswer = { requestId: 'synthetic-card', revision: 1, choices: [0] }
+    expectError(await owner.request('attention.answer', cardAnswer), ERROR_CODES.unauthorized)
+    expectError(await agent.request('attention.answer', cardAnswer), ERROR_CODES.unauthorized)
   })
 
   it('reads a grant for any scope and records a use from a session only, naming one boundary or one item', async () => {

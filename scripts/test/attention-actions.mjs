@@ -280,7 +280,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await emit(question('focus-report-question'))
     const beforeReports = await grid()
     await openCard(); await page.keyboard.press('Escape'); await openCard()
-    await card('Which color?').getByRole('button',{name:'Mark answered',exact:true}).click()
+    await card('Which color?').getByRole('button',{name:'Dismiss',exact:true}).click()
     const afterReports = await grid()
     for (const key of ['cols','rows','ptyCols','ptyRows']) assert.equal(afterReports[key],beforeReports[key],key)
     assert.equal(readFileSync(sourceInput,'utf8').split('\x1b[I').join('').split('\x1b[O').join(''), '')
@@ -454,7 +454,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.equal((await restarted.evaluate(() => window.aiTerminal.listAttention())).find(r => r.requestKey === 'stopped-review').state, 'withdrawn')
     result.status = 'passed'
     result.checks = ['notice-only selection/notification/pointer', 'no acknowledgement on arrival/remount', 'snapshot exact text/reopen/lifetime',
-      'read-only multi-question', 'focus arrival/removal/revision/outside/Escape', 'review shortcut', 'handoff refused to its sender, no request/editor/input', 'stopped restart/archived actions']
+      'multi-question card inspection', 'focus arrival/removal/revision/outside/Escape', 'review shortcut', 'handoff refused to its sender, no request/editor/input', 'stopped restart/archived actions']
     writeAtomic(join(evidence, 'result.json'), JSON.stringify(result, null, 2))
     console.log('PASS Epic59 pane requests', JSON.stringify(result.checks))
   } catch (error) {

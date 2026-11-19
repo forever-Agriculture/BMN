@@ -1076,7 +1076,7 @@ describe('Telegram attention notifications', () => {
     }
   })
 
-  it('delivers an unseen async card after the real connector recovers from a network failure', async () => {
+  it('delivers an opened async card at the desk after the real connector recovers from a network failure', async () => {
     const bot = await startFakeBotApi(424242, 424242)
     const options = service['options']
     await service.close()
@@ -1088,12 +1088,13 @@ describe('Telegram attention notifications', () => {
       bot.failWith('network')
       const status = await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' }) as TelegramStatus
       expect(status.state).toBe('backoff')
-      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      await service.route(METHOD_REGISTRY.presenceSet, { away: false })
       const opened = await service['openAttention']({
         sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question', title: 'Reconnect question',
         prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'reconnect',
           questions: [{ id: null, header: null, text: 'Reconnect question', multiSelect: false, options: [{ label: 'Blue', description: null }] }] }
       })
+      await service.route(METHOD_REGISTRY.attentionSeen, { requestId: opened.requestId })
       await new Promise(resolve => setTimeout(resolve, 80))
       expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
       bot.failWith(null)
@@ -4264,6 +4265,51 @@ describe('explicit manual answers to a live foreground conversation', () => {
   const answer = (record: AttentionRecord, choice: number | { typed: string } = 0) => ({ requestId: record.requestId,
     revision: record.revision, epoch: -1, incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [choice] } })
   const stamp = () => service['producers'].observe('s1', 'incarnation-1', producer)
+
+  it.each([
+    { away: false, quiet: false, via: 'telegram' },
+    { away: true, quiet: false, via: 'app' },
+    { away: false, quiet: true, via: 'app' },
+    { away: true, quiet: true, via: 'telegram' }
+  ] as const)('offers one answer on both surfaces (away=$away, quiet=$quiet, chosen via $via)', async ({ away, quiet, via }) => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 50 })
+    clock = new Date('2026-09-14T23:00:00').toISOString()
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram,
+        enabled: true, allowedChatId: 424242, allowedUserId: 424242,
+        quietHours: { enabled: quiet, start: '22:00', end: '07:00', allowKinds: [], allowSessions: [] } }, clock)
+      await service.sessionsChanged()
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' })
+      await service.route(METHOD_REGISTRY.presenceSet, { away })
+      if (away) await setAwayAndGo()
+      stamp()
+      const card = await ask()
+      await service.route(METHOD_REGISTRY.attentionSeen, { requestId: card.requestId })
+      const sent = () => bot.calls.find(call => call.method === 'sendMessage' && String(call.body.text).includes('Synthetic checkpoint'))
+      await vi.waitFor(() => expect(sent()?.body).toMatchObject({
+        reply_markup: { inline_keyboard: expect.arrayContaining([[expect.objectContaining({ text: 'Proceed' })]]) }
+      }), { timeout: 3000, interval: 20 })
+      expect(sent()?.body.disable_notification).toBe(quiet ? true : undefined)
+      const cardAnswer = { requestId: card.requestId, revision: card.revision, choices: [1] }
+      if (via === 'app') {
+        expect(await service.route(METHOD_REGISTRY.attentionAnswer, cardAnswer)).toMatchObject({ state: 'submitted' })
+        await vi.waitFor(() => expect(bot.calls.some(call => call.method === 'editMessageText' &&
+          String(call.body.text).includes('Answered at the laptop'))).toBe(true))
+      } else {
+        bot.tapOn('Synthetic checkpoint', [1], sent()!.messageId!)
+        await vi.waitFor(() => expect(COMPANION_OPERATIONS.getAttention(database, card.requestId).state).toBe('answered'))
+      }
+      expect(await service.route(METHOD_REGISTRY.attentionAnswer, cardAnswer)).toMatchObject({ state: 'refused', reason: 'gone' })
+      expect(await service.answerAttention(answer(card, 1))).toMatchObject({ state: 'refused' })
+      expect(writes.map(write => Buffer.from(write.bytes).toString())).toEqual([
+        '\x1b[200~Owner answer to "manual" ("Synthetic checkpoint"):\nWait\x1b[201~\r'
+      ])
+      expect(COMPANION_OPERATIONS.getAttention(database, card.requestId).resolvedBy).toBe(via === 'app' ? 'owner' : 'telegram')
+    } finally { await service.close(); await bot.close() }
+  })
 
   it('requires fresh identity for a shell-launched interactive agent, and keeps native epochs absent', async () => {
     const unknown = await ask()

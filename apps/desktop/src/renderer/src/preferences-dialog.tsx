@@ -1066,7 +1066,7 @@ export function PreferencesDialog(props: {
                   />
                 </span>
               </div>
-              <p className="preferences-help">Local time. Held messages are sent when quiet hours end. Health alerts are sent anyway.</p>
+              <p className="preferences-help">Local time. Choice cards arrive silently unless allowed below. Other held messages wait until quiet hours end. Health alerts always go through.</p>
             </div>
           </div>
 

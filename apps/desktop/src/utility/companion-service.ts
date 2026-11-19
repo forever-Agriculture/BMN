@@ -88,6 +88,9 @@ import {
   type AttentionProducer,
   type ManualChoices,
   type AttentionRecord,
+  ATTENTION_PROMPT_LIMITS,
+  hasAttentionChoices,
+  type QuestionChoice,
   type BackupExportResult,
   type BackupManifest,
   type BackupManifestEntry,
@@ -149,7 +152,7 @@ import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
 import { PAGE_AFTER_MS, askedTwice, createAttentionPager, mirrorOf } from './attention-pager'
 import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
-import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
+import { RemoteAnswers, answerRoute, cleanTypedAnswer, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, ownerTurn, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
 import { GRANT_TOKEN_PREFIX, GRANT_TYPED_REPLY, grantNothingFitsPhone, TelegramGrantCards } from './telegram-grant-cards'
@@ -954,7 +957,7 @@ export class CompanionService {
       screen: (sessionId, incarnationId) => options.manager.screenMirror(sessionId, incarnationId),
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
       submitMessage: (record, request, text, current, markWritten) =>
-        this.submitTelegramAnswerMessage(record, request, text, current, markWritten),
+        this.submitAnswerMessage(record, request, text, current, markWritten),
       answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions,
       countdownChanged: (sessionId) => this.cards.changed(sessionId),
       now: () => this.now().getTime()
@@ -1000,6 +1003,7 @@ export class CompanionService {
         return decision
       },
       maySend: (record, managed) => this.quietDelivery.maySend(record, managed),
+      silent: record => this.quietDelivery.silent(record),
       settleNewDelivery: (claim, outcome) => this.quietDelivery.settle(claim, outcome),
       holdExit: (sessionId, incarnationId) => this.quietDelivery.holdExit(sessionId, incarnationId),
       observeDelivery: (event) => this.logTelegramDelivery(event)
@@ -1677,6 +1681,8 @@ export class CompanionService {
         this.emit('attention', record.sessionId)
         return record
       }
+      case METHOD_REGISTRY.attentionAnswer:
+        return this.answerAttentionFromWindow(params)
       case METHOD_REGISTRY.qaGrantAnswer: {
         if (Object.keys(params).some(key => !['requestId', 'revision', 'choice'].includes(key)) ||
           !Number.isSafeInteger(params.revision) || Number(params.revision) < 1 ||
@@ -2832,7 +2838,7 @@ export class CompanionService {
     }, randomUUID(), this.iso())
     this.answers.track(record)
     this.emit('attention', p.sessionId)
-    if (!p.phoneNotified) this.pager.opened(record)
+    if (!p.phoneNotified || hasAttentionChoices(record)) this.pager.opened(record)
     else observeTelegramDelivery((event) => this.logTelegramDelivery(event), record, 'already-notified-elsewhere')
     return record
   }
@@ -3010,8 +3016,7 @@ export class CompanionService {
   }
 
   /**
-   * Answers an open request from a Telegram tap (Story 30.3). Internal to the utility process: no control
-   * socket method, owner route or CLI command reaches it, because agents can read the owner token.
+   * Answers an open request from the owner. Neither the control socket nor the CLI can call this.
    */
   async answerAttention(request: AnswerRequest): Promise<AnswerOutcome> {
     const manual = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
@@ -3033,10 +3038,11 @@ export class CompanionService {
     }
     if (manual?.manualChoices) return this.answerManual(manual, request, false)
     const outcome = await this.answers.answer(request)
+    const via = request.via ?? 'telegram'
     if (outcome.state === 'submitted') {
-      await this.clearSubmittedQuestionReminder(request.requestId, request.revision)
+      await this.clearSubmittedQuestionReminder(request.requestId, request.revision, via)
     }
-    if (outcome.state === 'submitted' || outcome.state === 'confirmed') await this.withdrawMirrorCards(request.requestId)
+    if (outcome.state === 'submitted' || outcome.state === 'confirmed') await this.withdrawMirrorCards(request.requestId, via)
     if (outcome.state === 'sent-unconfirmed' && request.answer.type === 'permission' && request.answer.decision === 'deny') {
       // Claude reports a deny through no hook, so its request would otherwise stay open after the dialog closed.
       const record = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
@@ -3053,17 +3059,41 @@ export class CompanionService {
     return outcome
   }
 
+  private async answerAttentionFromWindow(params: Record<string, unknown>): Promise<AnswerOutcome> {
+    const requestId = text(params, 'requestId', 200)
+    const { revision, choices } = params
+    if (!Number.isSafeInteger(revision) || Number(revision) < 1 || !Array.isArray(choices) || !choices.length ||
+      choices.length > ATTENTION_PROMPT_LIMITS.questions || !choices.every(choice => typeof choice === 'number' ||
+        choice !== null && typeof choice === 'object' && !Array.isArray(choice) &&
+        Object.keys(choice).every(key => key === 'typed' || key === 'set') &&
+        (choice.typed === undefined || typeof choice.typed === 'string' && choice.typed.length <= ATTENTION_PROMPT_LIMITS.answer) &&
+        (choice.set === undefined || Array.isArray(choice.set) && choice.set.length <= ATTENTION_PROMPT_LIMITS.options))) {
+      invalid('A card revision and a valid choice for each question are required')
+    }
+    const record = await this.attentionForDelivery(requestId)
+    if (!record || record.state !== 'open' || this.requestExpired(record)) return { state: 'refused', reason: 'gone' }
+    if (record.revision !== revision || record.incarnationId === null) return { state: 'refused', reason: 'changed' }
+    if (!hasAttentionChoices(record)) return { state: 'refused', reason: 'unsupported' }
+    const answers = (choices as QuestionChoice[]).map(choice => {
+      if (record.manualChoices || typeof choice === 'number' || choice.typed === undefined) return choice
+      return { ...choice, typed: cleanTypedAnswer(choice.typed) }
+    })
+    return this.answerAttention({ requestId, revision: record.revision, epoch: this.answerEpoch(requestId) ?? -1,
+      incarnationId: record.incarnationId, answer: { type: 'choices', choices: answers }, via: 'app' })
+  }
+
   /**
-   * The agent's own question was answered from the phone: a `bmn ask` card it opened for the same decision (askedTwice)
+   * The agent's own question was answered: a `bmn ask` card it opened for the same decision (askedTwice)
    * closes too, so nobody answers it twice. A card's answer never closes the agent's question, whose dialog may still wait.
    */
-  private async withdrawMirrorCards(requestId: string): Promise<void> {
+  private async withdrawMirrorCards(requestId: string, via: 'app' | 'telegram'): Promise<void> {
     const all = await this.options.database.companion('listAttention').catch(() => [] as AttentionRecord[])
     const answered = all.find(item => item.requestId === requestId)
     if (!answered || answered.openedBy === 'cli') return
+    const source = via === 'app' ? 'the laptop' : 'Telegram'
     for (const card of all.filter(item => item.state === 'open' && item.openedBy === 'cli' && askedTwice(answered, item))) {
       const closed = await this.options.database.companion('closeAttention', { requestId: card.requestId, expectedRevision: card.revision },
-        'withdrawn', 'Answered from Telegram through the agent\'s own question', this.iso(), 'telegram').catch(() => null)
+        'withdrawn', `Answered from ${source} through the agent's own question`, this.iso(), via === 'app' ? 'owner' : 'telegram').catch(() => null)
       if (closed) {
         this.answers.closed(closed)
         this.emit('attention', closed.sessionId)
@@ -3110,12 +3140,14 @@ export class CompanionService {
     let attempted = false
     try {
       const text = `Owner answer to ${JSON.stringify(record.requestKey)} (${JSON.stringify(record.title)}):\n${label}`
-      const outcome = await this.submitTelegramAnswerMessage(record, request, text,
+      const outcome = await this.submitAnswerMessage(record, request, text,
         current, () => { attempted = true }, automatic)
       if (outcome.state === 'submitted') {
+        const source = request.via === 'app' ? 'the laptop' : 'Telegram'
         const closed = await this.options.database.companion('closeAttention',
           { requestId: record.requestId, expectedRevision: record.revision, expectedProducer: record.producer ?? null },
-          'answered', `Submitted from Telegram: ${typeof choice === 'number' ? label : 'Other'}`, this.iso(), 'telegram').catch(() => null)
+          'answered', `Submitted from ${source}: ${typeof choice === 'number' ? label : 'Other'}`, this.iso(),
+          request.via === 'app' ? 'owner' : 'telegram').catch(() => null)
         if (closed) this.emit('attention', closed.sessionId)
       }
       return outcome.state === 'submitted' ? { state: 'submitted', sent: [label] } : outcome
@@ -3125,14 +3157,15 @@ export class CompanionService {
   }
 
   /** A successful ordinary message clears only its reminder, without a native answer receipt. */
-  private async clearSubmittedQuestionReminder(requestId: string, revision: number): Promise<void> {
+  private async clearSubmittedQuestionReminder(requestId: string, revision: number, via: 'app' | 'telegram' = 'telegram'): Promise<void> {
     const database = this.options.database
     const record = await database.companion('getAttention', requestId).catch(() => null)
     if (!record || record.state !== 'open' || record.revision !== revision || record.kind !== 'question' ||
       answerRoute(record.prompt) !== 'codex-message') return
+    const source = via === 'app' ? 'the laptop' : 'Telegram'
     const closed = await database.companion('closeAttention',
       { requestId, expectedKind: 'question', expectedRevision: revision }, 'withdrawn',
-      'Message submitted from Telegram; native answer not confirmed; reminder cleared', this.iso(), 'telegram'
+      `Message submitted from ${source}; native answer not confirmed; reminder cleared`, this.iso(), via === 'app' ? 'owner' : 'telegram'
     ).catch(() => null)
     if (closed) {
       this.answers.closed(closed)
@@ -3146,7 +3179,7 @@ export class CompanionService {
   }
 
   /** A Codex Default card sends an ordinary message, never picker keys or a consumption receipt. */
-  private async submitTelegramAnswerMessage(
+  private async submitAnswerMessage(
     attention: AttentionRecord, request: AnswerRequest, text: string,
     current: () => boolean, markWritten: () => void, automatic = false
   ): Promise<AnswerOutcome> {
@@ -3159,7 +3192,7 @@ export class CompanionService {
     const attentionGeneration = this.attentionChanges.get(attention.sessionId)?.generation ?? 0
     const availabilityEpoch = this.fileReferenceAvailabilityEpoch
     const { record } = await database.companion('createDraft', {
-      draftId: randomUUID(), sessionId: attention.sessionId, origin: 'telegram',
+      draftId: randomUUID(), sessionId: attention.sessionId, origin: request.via === 'app' ? 'control' : 'telegram',
       originKey: `telegram-answer:${attention.requestId}:${attention.revision}`, requestId: attention.requestId,
       text, artifactId: null, state: 'draft', detail: null
     }, this.iso())
@@ -3175,7 +3208,8 @@ export class CompanionService {
         const latest = open.find(row => row.requestId === attention.requestId)
         const nativeDialog = open.some(row => row.sessionId === attention.sessionId && row.state === 'open' &&
           row.requestId !== attention.requestId && this.nativeMessageBlocker(row))
-        const policyOff = attention.manualChoices && (attention.kind === 'permission' && !settings.telegram.answerPermissions || automatic && !settings.telegram.autoSubmitReplies)
+        const policyOff = request.via !== 'app' && attention.manualChoices &&
+          (attention.kind === 'permission' && !settings.telegram.answerPermissions || automatic && !settings.telegram.autoSubmitReplies)
         const reason = !latest || latest.state !== 'open' || this.requestExpired(latest) ? 'gone' :
           latest.revision !== request.revision || !current() || !available ||
             (this.attentionChanges.get(attention.sessionId)?.generation ?? 0) !== attentionGeneration ||

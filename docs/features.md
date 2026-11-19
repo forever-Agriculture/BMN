@@ -288,9 +288,9 @@ or *notice*; a *handoff* request stored before Story 75.5 still shows, with **Di
 Blocking requests stay open until answered, explicitly dismissed, withdrawn by the agent or expired. Typing, pasting or dictating into a session also resolves
 its open prompts and notices, the way answering in the terminal does. Typing does not close review
 requests. Click the session’s status word to open its request card, including for stopped or archived sessions.
-It offers **Dismiss**, and **Mark answered** once you have dealt with it in the terminal.
+**Dismiss** clears the card. **Mark answered** is available on requests you handle in the terminal.
 
-Questions and choices are read-only in the card; answer in the terminal or on Telegram.
+For choice cards, pick an option or enter your own answer from the card. You can also respond on Telegram.
 `Ctrl+Shift+U` cycles sessions in the highest waiting tier, opens a review’s card,
 and focuses the terminal for questions and permissions. A gold dot on Focus signals requests in other sessions.
 Incoming requests leave your focus in place; cards overlay the pane without resizing its terminal.

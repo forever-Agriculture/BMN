@@ -1,3 +1,4 @@
+<!-- MODULE: telegram.md - Telegram setup, delivery and replies -->
 # Telegram
 
 BMN can message you on Telegram when a session needs you, and take your reply back to that
@@ -6,7 +7,8 @@ session. It uses a bot you create and own. It is off by default.
 ## What it does
 
 - **Quiet hours** in Preferences → Notifications → Telegram are off by default. Choose different local start
-  and end times, including overnight windows. New request and exit messages wait; session dots and request cards,
+  and end times, including overnight windows. Choice cards arrive silently unless you allow their kind or
+  session through. Other request and exit messages wait. Session dots and request cards,
   desktop notifications, existing-card edits, replies and the test message stay available.
   Allow chosen request kinds through in Preferences, or up to 20 sessions from their menus.
   The window follows local wall-clock time, including clock and daylight-saving changes.
@@ -53,8 +55,8 @@ session. It uses a bot you create and own. It is off by default.
   whether there is a battery, it decides nothing and raises no battery or mains alert, and a test
   says so. A battery that was there and can no longer be read counts as no longer detected. If you also run a watch of your own (a
   script on a timer), switch one of them off, or both will message you. Linux only.
-- When an agent asks for your attention (`bmn ask`, or a Claude Code, Codex or OpenCode hook), the bot
-  sends you the request while you are away from the desk and the request is still unanswered. If
+- The bot sends open choice cards whether you are at the desk or away, including cards you have
+  already opened on the laptop. Other requests page while you are away from the desk. If
   BMN cannot read idle time, it treats you as away. Once you have said you are away (`/away`, or
   `bmn away` on your word), a permission goes out at once instead of after BMN's usual 15 s wait.
   One decision is one message: when an agent asks with its own question tool and also opens a `bmn ask`
@@ -130,7 +132,7 @@ conversation. A tap or Other reply submits deliberately; a direct reply follows
 permission prompts**. With either required setting off, keep the answer as a draft
 or use the laptop. Typed manual answers retain exact text up to 4,000 characters;
 invalid/control-bearing text is refused. Native picker limits below remain separate.
-Desktop request cards show choices read-only; answer in the terminal. A completed manual permission card
+Desktop request cards also accept a choice or Other. A completed manual permission card
 can receive an ordinary follow-up under reply settings; that never renews its grant.
 An unconfirmed or stale manual destination stays draft-only/unavailable, even after
 its reminder is dismissed. Uncertain/submitted attempts never replay.

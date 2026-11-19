@@ -98,6 +98,23 @@ export interface AttentionRecord {
   qaGrantId?: string
 }
 
+/** Decisions that are offered on both surfaces, even after the desktop opens the card. */
+export function hasAttentionChoices(record: AttentionRecord): boolean {
+  return !record.qaGrantId && (Boolean(record.manualChoices) || record.prompt?.type === 'questions')
+}
+
+export type QuestionChoice = number | { set: number[]; typed?: string } | { typed: string }
+
+export type AnswerRefusal = 'gone' | 'changed' | 'not-on-screen' | 'unsupported' | 'permissions-off' |
+  'claimed' | 'not-delivered' | 'api-refused'
+
+export type AnswerOutcome =
+  | { state: 'refused'; reason: AnswerRefusal }
+  | { state: 'submitted'; sent: string[] }
+  | { state: 'confirmed'; sent: string[] }
+  | { state: 'sent-unconfirmed'; sent: string[] }
+  | { state: 'partial'; sent: string[]; total: number }
+
 /**
  * Who or what acted on a request. `hook:<agent>:<Event>` names the harness hook that did it; the rest name
  * the owner's own routes. Free-form by shape so an unknown hook event still reads, closed by validation.

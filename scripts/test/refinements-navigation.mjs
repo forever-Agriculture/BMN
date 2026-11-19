@@ -1,3 +1,4 @@
+// MODULE: refinements-navigation.mjs - desktop navigation and choice-card acceptance
 /* global window, document, requestAnimationFrame */
 // Epics51/52 and manual desktop choices: isolated owner UI → store → host/PTY acceptance.
 import { toggleSessionRequests } from './session-request-helpers.mjs'
@@ -12,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { waitForAsyncState } from './session-request-helpers.mjs'
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const evidence = process.env.BMN_REFINEMENTS_EVIDENCE ?? join(repo, '.dev-auto/evidence/epics-50-52/runtime')
 mkdirSync(evidence, { recursive: true })
@@ -259,11 +261,30 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
     assert.equal(await card.locator('input, textarea').count(), 0)
     await card.getByRole('button', { name: 'Dismiss', exact: true }).click()
     assert.equal(readFileSync(input('A'), 'utf8'), '')
-    result.checks.push('Actual bmn ask API reaches read-only desktop choices; Dismiss writes no input')
+    result.checks.push('Dismiss on a choice card writes no input')
     const publishCard = async params => {
       unlinkSync(ready); writeFileSync(command, JSON.stringify(params)); await waitFile(ready)
       assert.equal(JSON.parse(readFileSync(ready)).status, 0)
     }
+    for (const [key, typed] of [['desktop-choice', null], ['desktop-other', 'Keep the exact  double space.']]) {
+      const title = `Synthetic answer ${key}`
+      await publishCard({ key, title })
+      if (!await page.locator('.session-request-card').isVisible()) await toggleSessionRequests(page)
+      const request = page.locator('.attention-item').filter({ hasText: title })
+      assert.equal(await request.getByRole('button', { name: 'Mark answered' }).count(), 0)
+      if (typed === null) {
+        await request.getByRole('button', { name: 'Proceed', exact: true }).click()
+      } else {
+        await request.getByRole('button', { name: 'Other…', exact: true }).click()
+        await request.getByRole('textbox', { name: /Other answer/ }).fill(typed)
+        await request.getByRole('button', { name: 'Send answer', exact: true }).click()
+      }
+      await waitForAsyncState(page, async key => (await window.aiTerminal.listAttention()).some(row =>
+        row.requestKey === key && row.state === 'answered' && row.resolvedBy === 'owner'), key)
+      assert.equal(readFileSync(input('A'), 'utf8'), `\x1b[200~Owner answer to "${key}" ("Scope: ${title}"):\n${typed ?? 'Proceed'}\x1b[201~\r`)
+      writeFileSync(input('A'), '')
+    }
+    result.checks.push('bmn ask choice and Other submit exactly once to the addressed PTY from the desktop card')
     await publishCard({ native: { requestKey: 'synthetic-native-multiple', kind: 'question', title: 'Synthetic two-part question',
       origin: 'hook:codex:PreToolUse', body: 'Synthetic current question context',
       prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: 'synthetic-request', toolUseId: 'synthetic-tool',
@@ -286,6 +307,18 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
       await page.screenshot({ path: join(evidence, `populated-cards-${width}.png`) })
     }
     result.checks.push('Synthetic native multi-question and long permission target retain context and fit all three sizes')
+    await permission.getByRole('button', { name: 'Dismiss', exact: true }).click()
+    await permission.waitFor({ state: 'detached' })
+    await multiple.getByRole('button', { name: /First option/ }).click()
+    assert.equal(await multiple.getByRole('button', { name: 'Send answer' }).isEnabled(), false)
+    await multiple.getByRole('button', { name: 'Wait', exact: true }).click()
+    await multiple.getByRole('button', { name: 'Send answer' }).click()
+    await waitForAsyncState(page, async () => (await window.aiTerminal.listAttention()).some(row =>
+      row.requestKey === 'synthetic-native-multiple' && row.state === 'withdrawn' && row.resolvedBy === 'owner'))
+    assert.equal(readFileSync(input('A'), 'utf8'),
+      '\x1b[200~Synthetic first question with enough context to wrap safely in a narrow card?\nFirst option\n\nSynthetic second question?\nWait\x1b[201~\r')
+    writeFileSync(input('A'), '')
+    result.checks.push('A two-question Codex card submits both choices only after Send answer')
     await page.keyboard.press('Escape')
     // Race an actual safe-reader operation with archive; the final workspace revision must reject it.
     writeFileSync(join(dirB, 'race.txt'), 'R'.repeat(1024 * 1024))

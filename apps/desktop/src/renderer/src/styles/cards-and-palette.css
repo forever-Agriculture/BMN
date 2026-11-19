@@ -29,6 +29,10 @@
 .attention-questions h4 { margin: 0 0 6px; font-size: 12.5px; font-weight: 500; overflow-wrap: anywhere; }
 .attention-questions ul { margin: 0; padding-left: 18px; }
 .attention-questions li { margin-bottom: 6px; overflow-wrap: anywhere; }
+.attention-questions .attention-choice-options { padding: 0; list-style: none; }
+.attention-choice-options button { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.attention-choice-options button[aria-pressed='true'] { border-color: var(--attention); }
+.attention-choice-options input { width: 100%; margin-top: 6px; }
 .attention-item.cleared { opacity: 0.85; }
 .session-guard-card .guard-line { margin: 0; overflow-wrap: anywhere; }
 .session-guard-card .guard-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; font-size: 12.5px; }

@@ -1,7 +1,7 @@
-// Bounded claim/history ledger plus private request-row delivery markers. No request-state or PTY capability.
+// MODULE: quiet-hours-delivery.ts - bounded delivery history and quiet-hours policy
 import { randomUUID } from 'node:crypto'
-import { quietHoursAllow, telegramQuietWindow, type AttentionRecord, type TelegramQuietHours } from '@bmn/protocol'
-import { LEFT_WITHIN_MS } from './attention-pager'
+import { hasAttentionChoices, quietHoursAllow, telegramQuietWindow, type AttentionRecord, type TelegramQuietHours } from '@bmn/protocol'
+import { LEFT_WITHIN_MS, phoneCardOpen } from './attention-pager'
 import { said, TELEGRAM_TEXT_LIMIT } from './telegram-cards'
 import { telegramSendDefinitelyUnsent } from './telegram-delivery'
 
@@ -170,12 +170,20 @@ export class QuietHoursDelivery {
     if (!sameWindow) delete state.lastBatchAt
   }
 
-  private held(record: AttentionRecord): boolean {
+  private quiet(record: AttentionRecord): boolean {
     return this.windowNow().active && !quietHoursAllow(this.deps.settings(), record.kind, record.sessionId)
   }
 
+  private held(record: AttentionRecord): boolean {
+    return !hasAttentionChoices(record) && this.quiet(record)
+  }
+
+  silent(record: AttentionRecord): boolean {
+    return hasAttentionChoices(record) && this.quiet(record)
+  }
+
   private pendingRecord(record: AttentionRecord): boolean {
-    return record.state === 'open' && record.seenAt === null &&
+    return phoneCardOpen(record) &&
       (record.expiresAt === null || Date.parse(record.expiresAt) > this.deps.now().getTime())
   }
 
@@ -235,8 +243,8 @@ export class QuietHoursDelivery {
         return { action: 'hold', reason: 'held-quiet' }
       }
       if (!this.deps.ready()) return { action: 'hold', reason: 'quiet-restarting' }
-      if (this.deps.ownerAway() === false) return { action: 'hold', reason: 'held-at-desk' }
-      const allowed = this.windowNow().active && quietHoursAllow(this.deps.settings(), record.kind, record.sessionId)
+      if (!hasAttentionChoices(current) && this.deps.ownerAway() === false) return { action: 'hold', reason: 'held-at-desk' }
+      const allowed = hasAttentionChoices(current) || this.windowNow().active && quietHoursAllow(this.deps.settings(), record.kind, record.sessionId)
       if (!allowed && (!marker?.eligible || !this.permits.has(record.requestId))) return { action: 'hold', reason: 'quiet-backlog' }
       if (!prior && state.entries.length >= QUIET_LEDGER_LIMIT) {
         const reusable = state.entries.findIndex(entry => 'requestId' in entry && entry.phase === 'held')
@@ -254,7 +262,8 @@ export class QuietHoursDelivery {
 
   /** Synchronous last check after persistence awaits, and before a formatting fallback. */
   maySend(record: AttentionRecord, managed = true): boolean {
-    return (!managed || this.deps.ready()) && this.deps.ownerAway() !== false && !this.held(record) && this.pendingRecord(record)
+    return (!managed || this.deps.ready()) && (hasAttentionChoices(record) || this.deps.ownerAway() !== false) &&
+      !this.held(record) && this.pendingRecord(record)
   }
 
   settle(claim: string | null, outcome: 'mapped' | 'unsent' | 'uncertain'): Promise<void> {

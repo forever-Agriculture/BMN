@@ -1,5 +1,5 @@
-// MODULE: attention-pager.ts - sends an attention request to the owner's phone only when the owner is away and it waited unseen
-import type { AttentionKind, AttentionRecord } from '@bmn/protocol'
+// MODULE: attention-pager.ts - delivers open choice cards and pages unseen reminders when the owner is away
+import { hasAttentionChoices, type AttentionKind, type AttentionRecord } from '@bmn/protocol'
 import { observeTelegramDelivery, type TelegramDeliveryObserver } from './telegram-delivery'
 
 /** How long a request may wait for the owner in the app before it is also sent away from the desk. */
@@ -13,6 +13,10 @@ export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.fre
 
 /** A request that fell due while the owner was at the desk is still sent if they leave this soon after it opened. */
 export const LEFT_WITHIN_MS = 10 * 60_000
+
+export function phoneCardOpen(record: AttentionRecord): boolean {
+  return record.state === 'open' && (record.seenAt === null || hasAttentionChoices(record))
+}
 
 /** How far apart an agent's own question and its `bmn ask` card may open and still be one decision. */
 export const MIRROR_WINDOW_MS = 120_000
@@ -122,7 +126,8 @@ function sameDecision(one: AttentionRecord, other: AttentionRecord): boolean {
  */
 export function mirrorOf(record: AttentionRecord, others: readonly AttentionRecord[]): AttentionRecord | null {
   const opened = Date.parse(record.openedAt)
-  return others.find(other => other.state === 'open' && askedTwice(record, other) &&
+  return others.find(other => other.state === 'open' && (!hasAttentionChoices(record) || hasAttentionChoices(other)) &&
+    askedTwice(record, other) &&
     (Date.parse(other.openedAt) < opened || Date.parse(other.openedAt) === opened && other.requestId < record.requestId)) ?? null
 }
 
@@ -163,9 +168,8 @@ interface AttentionPagerOptions {
 }
 
 /**
- * Agents repeat the same request and the owner often answers at the desk, so each request revision is sent at most
- * once, only if it is still open and unseen when its wait ends, and only while the owner is away. A request that fell
- * due at the desk waits a while for the owner to leave; when presence cannot be read, it is sent as before.
+ * Choice cards go to both surfaces while open. Other reminders wait until the owner is away and
+ * still need to be unseen. A request revision is sent at most once.
  */
 export function createAttentionPager(options: AttentionPagerOptions): {
   opened(record: AttentionRecord): void
@@ -214,10 +218,10 @@ export function createAttentionPager(options: AttentionPagerOptions): {
     let retry = false
     try {
       const current = await options.current(record.requestId).catch(() => null)
-      if (closed || !current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) {
+      if (closed || !current || !phoneCardOpen(current) || current.revision !== record.revision) {
         observeTelegramDelivery(options.observeDelivery, record,
           closed || !current ? 'request-unavailable' : current.state !== 'open' ? 'request-closed'
-            : current.seenAt !== null ? 'request-seen' : 'request-revised')
+            : !phoneCardOpen(current) ? 'request-seen' : 'request-revised')
         finish(key)
         return
       }
@@ -247,7 +251,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         return
       }
       if (handled.has(key)) return
-      if (options.ownerAway() === false) {
+      if (!hasAttentionChoices(current) && options.ownerAway() === false) {
         observeTelegramDelivery(options.observeDelivery, record, 'held-at-desk', { away: false })
         if (openedAt !== undefined) atDesk.set(key, { record: current, openedAt })
         else unsent.set(key, current)
@@ -271,7 +275,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
     } finally {
       inFlight.delete(key)
       // Recovery may arrive while an unavailable attempt is still settling.
-      if (retry && options.ownerAway() !== false) void page(key, record)
+      if (retry && (hasAttentionChoices(record) || options.ownerAway() !== false)) void page(key, record)
     }
   }
   const forgetStale = (): void => {
@@ -290,7 +294,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
     },
     opened: (record) => {
       const key = `${record.requestId}:${record.revision}`
-      if (closed || record.state !== 'open' || record.seenAt !== null || pending.has(key) || atDesk.has(key) || handled.has(key) || unsent.has(key) || inFlight.has(key) || mirrors.has(key)) {
+      if (closed || !phoneCardOpen(record) || pending.has(key) || atDesk.has(key) || handled.has(key) || unsent.has(key) || inFlight.has(key) || mirrors.has(key)) {
         return
       }
       const openedAt = options.now()
@@ -303,7 +307,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         forgetStale()
         const away = options.ownerAway()
         observeTelegramDelivery(options.observeDelivery, record, 'timer-fired', { away, elapsedMs: options.now() - openedAt })
-        if (away === false && !options.holdQuiet) {
+        if (away === false && !options.holdQuiet && !hasAttentionChoices(record)) {
           observeTelegramDelivery(options.observeDelivery, record, 'held-at-desk', { away })
           atDesk.set(key, { record, openedAt })
         }
@@ -320,9 +324,11 @@ export function createAttentionPager(options: AttentionPagerOptions): {
       }
     },
     retryUnsent: () => {
-      if (closed || options.ownerAway() === false) return
+      if (closed) return
       availability += 1
-      for (const [key, record] of [...unsent]) void page(key, record)
+      for (const [key, record] of [...unsent]) {
+        if (hasAttentionChoices(record) || options.ownerAway() !== false) void page(key, record)
+      }
     },
     close: () => {
       closed = true

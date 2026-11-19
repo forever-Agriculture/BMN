@@ -2544,6 +2544,11 @@ function App(): React.JSX.Element {
             onAcknowledge={request => {
               void dismissAttentionReminder(window.aiTerminal, request, 'Dismissed in BMN', refresh.attention).catch(fail('Request update failed'))
             }}
+            onAnswer={async (request, choices) => {
+              const outcome = await window.aiTerminal.answerAttention(request.requestId, request.revision, choices)
+              void refresh.attention().catch(fail('Request update failed'))
+              return outcome
+            }}
             onAnswerGrant={(request, choice) => {
               if (answering.current.has(request.requestId)) return
               answering.current.add(request.requestId)

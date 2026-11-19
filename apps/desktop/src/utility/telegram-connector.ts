@@ -85,6 +85,7 @@ interface InlineKeyboardButton {
 
 export interface CardMessageOptions {
   replyToMessageId?: number
+  silent?: boolean
   /** Sends the text as Telegram HTML; it must already fit the limit, because HTML cannot be cut safely. */
   html?: boolean
   keyboard?: InlineKeyboardButton[][] | null
@@ -473,6 +474,7 @@ export class TelegramConnector {
     const result = await this.call('sendMessage', {
       chat_id: this.options.allowedChatId,
       ...this.body(text, options),
+      ...(options.silent ? { disable_notification: true } : {}),
       ...(options.replyToMessageId !== undefined
         ? { reply_parameters: { message_id: options.replyToMessageId, allow_sending_without_reply: true } }
         : {})

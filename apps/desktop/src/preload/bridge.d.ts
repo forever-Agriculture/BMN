@@ -42,6 +42,8 @@ import type {
   ArtifactRecord,
   AttentionOrigin,
   AttentionRecord,
+  AnswerOutcome,
+  QuestionChoice,
   AutoTestsView,
   BackupExportResult,
   ClosePromptDecision,
@@ -300,6 +302,7 @@ export interface AiTerminalBridge {
   listAttention(): Promise<AttentionRecord[]>
   markAttentionSeen(requestId: string): Promise<AttentionRecord>
   answerQaGrant(requestId: string, revision: number, choice: 0 | 1): Promise<AttentionRecord>
+  answerAttention(requestId: string, revision: number, choices: QuestionChoice[]): Promise<AnswerOutcome>
   resolveAttention(
     requestId: string,
     resolution?: string,
