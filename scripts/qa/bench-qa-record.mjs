@@ -6,6 +6,7 @@ import { join, relative, resolve } from 'node:path'
 import { atomicJson } from './bench-lib.mjs'
 import { fileDigest } from './bench-file.mjs'
 import { approvedTeam } from '../measure/calibration-environment.mjs'
+import { brainQaAdapterBytes } from '../test/brain-qa-fixture.mjs'
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
 const read = path => JSON.parse(readFileSync(path, 'utf8'))
 
@@ -24,7 +25,7 @@ export function prepareBenchQa({ options, run, runId, candidateSha256 }) {
     candidateSha256, fixture: { id: seed.id, seedSha256: hash(readFileSync(join(run, 'bench/seed.json'))) },
     briefSha256: hash(readFileSync(join(run, 'qa/brief.json'))), startedAt: new Date().toISOString() }
   if (seed.kind === 'update-restart-v2') input.fixture.adapterSha256 = hash(readFileSync(new URL('../test/update-restart-qa-fixture.mjs', import.meta.url)))
-  if (seed.kind === 'brain-v1') input.fixture.adapterSha256 = hash(readFileSync(new URL('../test/brain-qa-fixture.mjs', import.meta.url)))
+  if (seed.kind === 'brain-v1') input.fixture.adapterSha256 = hash(brainQaAdapterBytes())
   atomicJson(join(run, 'bench/input.json'), input)
   return input
 }

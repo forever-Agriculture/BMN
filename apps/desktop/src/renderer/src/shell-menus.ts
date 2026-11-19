@@ -96,7 +96,7 @@ export function paneMenu(
  */
 export function readOnlyViewCommands(
   state: { workspace: string | null; session: string | null; progress: boolean; turnRecorded: boolean; awayPeriod?: string | null },
-  open: { results(): void; messages(): void; progress(): void; turnChanges(): void; hookEvents(): void; now(): void; planUse(): void; awaySummary?(): void }
+  open: { results(): void; messages(): void; progress(): void; turnChanges(): void; hookEvents(): void; now(): void; brain?(): void; planUse(): void; awaySummary?(): void }
 ): PaletteCommand[] {
   const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand => ({ id, group: 'Commands', label, run, ...extra })
   const workspace = state.workspace ?? undefined
@@ -111,6 +111,8 @@ export function readOnlyViewCommands(
     command('turn-changes', 'Turn changes…', open.turnChanges, { disabled: state.session === null || !state.turnRecorded, context: session }),
     command('hook-events', 'Hook events…', open.hookEvents, { disabled: state.session === null, context: session }),
     command('now', 'Now…', open.now, { shortcut: 'Ctrl Shift N' }),
+    // Epic 128: the Brain page, read-only.
+    command('brain', 'Brain…', () => open.brain?.(), { shortcut: 'Ctrl Shift B', disabled: !open.brain }),
     command('plan-use', 'Plan use…', open.planUse)
   ]
 }

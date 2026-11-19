@@ -562,6 +562,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   brainSwitch(action:'status'|'begin'|'return'):Promise<{available:boolean;running:boolean;complete:boolean}> {
     return invokeBridge('aiterm:brain:switch',action)
   },
+  /** Epic 128: the Brain page's reads; the route offers no write. */
+  brainPage<Result>(request: import('@bmn/protocol').BrainPageRequest): Promise<Result> {
+    return invokeBridge('aiterm:brain:page', request)
+  },
   quitApplication(): Promise<void> {
     return invokeBridge('aiterm:app:quit')
   },

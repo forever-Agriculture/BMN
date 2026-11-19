@@ -20,6 +20,7 @@ type ShellDialog =
   | { kind: 'new-workspace' }
   /** Story 110.9: where every session is; it replaced the dev-auto runs dialog. */
   | { kind: 'now' }
+  | { kind: 'brain' }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }

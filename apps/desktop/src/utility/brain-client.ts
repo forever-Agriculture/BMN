@@ -2,6 +2,7 @@
 import { Worker } from 'node:worker_threads'
 import type { BrainAdmissionStatus } from './brain-admission'
 import { BrainError, type BrainContent, type BrainImport, type BrainNote, type BrainLink } from './brain-store'
+import type { BrainGraph, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from './brain-page'
 type ReadNote = BrainNote & { links?: BrainLink[]; backlinks?: BrainLink[] }
 export class BrainWorkerClient {
   private readonly worker: Worker
@@ -28,6 +29,11 @@ export class BrainWorkerClient {
   startupContext(project: string) { return this.request('startup-context', [project]) as Promise<string | null> }
   list() {return this.request('list') as Promise<BrainNote[]>}
   history(name:string) {return this.request('history',[name]) as Promise<BrainNote[]>}
+  pageList(options:{archived?:boolean;withdrawn?:boolean;offset?:number}) {return this.request('page-list',[options]) as Promise<BrainPageList>}
+  pageSearch(query:string,archived:boolean) {return this.request('page-search',[query,archived]) as Promise<BrainPageSearch>}
+  pageRead(id:string) {return this.request('page-read',[id]) as Promise<BrainPageNote>}
+  pageHistory(id:string) {return this.request('page-history',[id]) as Promise<BrainPageVersion[]>}
+  pageGraph(id:string,options:{depth?:1|2|3;archived?:boolean}) {return this.request('page-graph',[id,options]) as Promise<BrainGraph>}
   create(content:BrainContent,session:string) {return this.request('create',[content,session]) as Promise<BrainNote>}
   edit(name:string,revision:number,content:BrainContent,session:string) {return this.request('edit',[name,revision,content,session]) as Promise<BrainNote>}
   withdraw(name:string,revision:number,session:string) {return this.request('withdraw',[name,revision,session]) as Promise<BrainNote>}

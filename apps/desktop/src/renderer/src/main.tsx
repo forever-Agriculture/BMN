@@ -65,6 +65,7 @@ import { WorkspaceResultsDialog } from './workspace-results'
 import { SessionMessagesDialog } from './session-messages-dialog'
 import { mergeSessionActivity } from '@bmn/protocol'
 import { NowSheet, createNowMemory, createNowTestControl, type NowTestPreset } from './now-sheet'
+import { BrainSheet, createBrainMemory } from './brain-page'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { SessionPortsSection, portDetail, portsFor } from './session-ports'
@@ -266,6 +267,7 @@ function App(): React.JSX.Element {
   useEffect(()=>{if(dialog?.kind==='palette')void window.aiTerminal.brainSwitch('status').then(s=>{setBrainSwitchAvailable(s.available);setBrainSwitched(s.complete)}).catch(()=>undefined)},[dialog?.kind])
   /** Story 110.9: the row, scroll and open rows the Now sheet comes back on, and its last read of the runs. */
   const nowMemory = useRef(createNowMemory())
+  const brainMemory = useRef(createBrainMemory())
   const nowFixtureMemory = useRef(createNowMemory())
   const nowFixtureSequence = useRef(0)
   const [nowFixture, setNowFixture] = useState<{ preset: NowTestPreset; sequence: number }>()
@@ -945,7 +947,8 @@ function App(): React.JSX.Element {
       }
       const command = resolveShortcut(event)
       // Story 110.9: the Now key also closes the open Now sheet; every other shortcut waits for a dialog to close.
-      if (!command || document.querySelector('dialog[open]') && !(command === 'now' && document.querySelector('dialog[open].now-dialog'))) return
+      if (!command || document.querySelector('dialog[open]') && !(command === 'now' && document.querySelector('dialog[open].now-dialog')) &&
+        !(command === 'brain' && document.querySelector('dialog[open].brain-dialog'))) return
       const target = event.target instanceof HTMLElement ? event.target : null
       const inTerminal = !!target?.closest('.terminal-surface')
       // Clipboard and select-all keys keep their text-field meaning outside the terminal.
@@ -1742,6 +1745,7 @@ function App(): React.JSX.Element {
       case 'attention-next': return nextNeedingYou()
       case 'palette': return setDialog({ kind: 'palette' })
       case 'now': return toggleNow()
+      case 'brain': return toggleBrain()
       case 'quick-look': {
         // Text selected in the terminal that reads as one file reference opens that file at its line (Story 67.6 AC8).
         const reference = selectedReference(selectedSessionId ? controllers.current.get(selectedSessionId)?.selection() ?? '' : '')
@@ -1950,6 +1954,7 @@ function App(): React.JSX.Element {
         turnChanges: () => selectedRecord && setDialog({ kind: 'turn-changes', sessionId: selectedRecord.sessionId }),
         hookEvents: () => selectedRecord && setDialog({ kind: 'hook-events', session: selectedRecord }),
         now: () => setDialog({ kind: 'now' }),
+        brain: () => setDialog({ kind: 'brain' }),
         planUse: () => setDialog({ kind: 'plan-use' }),
         awaySummary: () => setDialog({ kind: 'away-summary' })
       }),
@@ -2044,6 +2049,8 @@ function App(): React.JSX.Element {
   const selectedProgress = selectedRecord ? observedProgressFor(selectedRecord) : null
   /** Story 110.9: the Now key and the list icon open the sheet from anywhere, and close it when it is open. */
   const toggleNow = (): void => setDialog((current) => current?.kind === 'now' ? null : current === null ? { kind: 'now' } : current)
+  /** Epic 128: the Brain key, the top bar's word and the palette entry open the page; the key also closes it. */
+  const toggleBrain = (): void => setDialog((current) => current?.kind === 'brain' ? null : current === null ? { kind: 'brain' } : current)
   const nowWorkspaces = useMemo(() => visibleWorkspaces(workspaces, false).map((workspace) => ({ workspaceId: workspace.workspaceId, name: workspace.name })), [workspaces])
   /** What the window knows of each session, as the sidebar shows it, for the Now rows; hooks decide whether an agent is in front. */
   const nowSessions = useMemo((): NowSessionInput[] => dialog?.kind !== 'now' ? [] : nowWorkspaces.flatMap((workspace) =>
@@ -2210,6 +2217,7 @@ function App(): React.JSX.Element {
           <button type="button" className="icon-button" aria-label="Now" title={`Now (${SHORTCUT_LABELS.now})`} onClick={toggleNow}>
             <Icon name="now" />
           </button>
+          <button type="button" className="header-word" aria-pressed={dialog?.kind === 'brain'} title={`Brain (${SHORTCUT_LABELS.brain})`} onClick={toggleBrain}>Brain</button>
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
           </button>
@@ -3082,6 +3090,7 @@ function App(): React.JSX.Element {
           } : undefined}
         />
       ) : null}
+      {dialog?.kind === 'brain' ? <BrainSheet memory={brainMemory.current} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'now' ? <NowSheet key={startup?.testMode === true && nowFixture ? 'fixture' : 'live'}
         workspaces={nowWorkspaces} sessions={nowSessions} home={home}
         testRead={startup?.testMode === true ? nowFixture : undefined}

@@ -49,6 +49,21 @@ describe('brain worker and authenticated write door',()=>{
    await expect(call(f.socket,f.token,'brain',{command:'write',revision:0,...content,session:'forged'})).rejects.toThrow(/Unknown parameter|Unexpected|not allowed/)
   }finally{await f.close()}
  })
+ it('answers the Brain page reads through the real worker, and the control socket offers none of them (Epic 128 D5)',async()=>{
+  const f=await fixture();try {
+   await f.client.importNotes([{source:'synthetic/a.md',title:'Alpha',kind:'fact',origin:'import',scope:'all',markdown:'Alpha links [[Beta]] about backup decision.',status:'active'},
+    {source:'synthetic/b.md',title:'Beta',kind:'map',origin:'import',scope:'all',markdown:'Beta decision and a backup.',status:'active'}])
+   expect((await f.client.pageList({})).notes.map(n=>n.title).sort()).toEqual(['Alpha','Beta'])
+   const found=await f.client.pageSearch('decision backup',false)
+   expect(found.notes.map(n=>n.title).sort()).toEqual(['Alpha','Beta'])
+   const alpha=found.notes.find(n=>n.title==='Alpha')!
+   expect((await f.client.pageRead(alpha.id)).linksTo.map(n=>n.title)).toEqual(['Beta'])
+   expect((await f.client.pageHistory(alpha.id)).map(v=>v.revision)).toEqual([1])
+   expect((await f.client.pageGraph(alpha.id,{})).nodes).toHaveLength(2)
+   for(const command of ['list','page-list','page-read','page-search','page-graph'])await expect(call(f.socket,f.token,'brain',{command})).rejects.toThrow(/Unknown brain/)
+   await expect(call(f.socket,f.token,'app.brainPage',{command:'list'})).rejects.toThrow(/Unknown method|not allowed|invalid/i)
+  }finally{await f.close()}
+ })
  it('uses the authenticated session for caps and atomically refuses a racing stale writer',async()=>{
   const f=await fixture();try {
    await f.client.setWriteDoor(true)

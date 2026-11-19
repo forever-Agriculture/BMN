@@ -8,6 +8,7 @@ export const METHOD_REGISTRY = Object.freeze({
   hello: 'hello',
   updateRestart: 'app.updateRestart',
   brainAdmin: 'app.brainAdmin',
+  brainPage: 'app.brainPage',
   healthGet: 'health.get',
   workspaceList: 'workspace.list',
   workspaceCreate: 'workspace.create',

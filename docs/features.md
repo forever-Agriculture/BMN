@@ -800,6 +800,32 @@ uses FTS5 trigrams with a short-query fallback. For a Ukrainian question, agents
 for individual English keywords separately and try the original wording. If a Cyrillic search
 finds nothing, the CLI suggests trying English.
 
+### The Brain page
+
+After the switch, the owner reads his brain in BMN's window: **Ctrl Shift B**, the word **Brain**
+beside Now in the top bar, or **Brain…** in the palette (the same key closes it). Before the switch,
+or when the brain cannot be read, the page shows one line saying why. It opens on the note he last
+read, else on the list of notes, newest change first, a hundred at a time, with withdrawn notes
+folded at its end. The page only reads: it has no edit, new-note, withdraw or restore action, and
+he changes a note by telling an agent.
+
+- **Search** replaces the list as he types and finds notes that hold every typed word, in any
+  order, not only the exact phrase; words under three letters are checked in the text. It shows
+  the first 10. `bmn brain search` for agents still matches the typed text as one phrase.
+- **A note** reads as a page with its kind, status, origin, scope, last change and version, the
+  notes it links to and the notes that link to it. A link opens its note; a name that is no note
+  in the brain is muted text. **H** shows History, every earlier version read-only.
+- **The graph** (**G**) draws a note's neighbourhood on fixed rings: depth **1 2 3**, opening at
+  the least depth that shows 8 notes. It walks links only between visible notes (archived ones
+  when **Archived** is on, withdrawn ones never), draws at most 150 notes and counts the rest as
+  "+ N more". A click shows a note beside the graph; **Shift Enter** or Refocus makes it the
+  centre. Nodes take the colour of their kind.
+- **Keys:** `/` search, ↑ ↓ Enter in the list, **Alt ← / Alt →** back and forward, **Esc**
+  steps back (History, the graph, the search text), then closes. Letters act only outside a field.
+  In the graph, ← → move along a ring, ↑ to the parent, ↓ to the first child.
+
+The page calls no model, sends nothing off the machine and adds nothing to any agent session.
+
 Writes require a live BMN session and the completed owner-held switch. Edits require the revision
 the agent read. A stale edit, duplicate normalized title, fourth new note in one session or a
 single-project scope is refused. Withdrawal is reversible and keeps history; this feature has no

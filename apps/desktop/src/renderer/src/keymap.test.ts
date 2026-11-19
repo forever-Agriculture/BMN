@@ -35,6 +35,10 @@ describe('app keymap', () => {
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyN', key: 'N' }))).toBe('now')
     expect(SHORTCUT_LABELS.now).toBe('Ctrl Shift N')
     expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyN', key: 'n' }))).toBeNull()
+    // Epic 128: the Brain page, from anywhere; Ctrl B alone stays Quick look's and the terminal's.
+    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyB', key: 'B' }))).toBe('brain')
+    expect(SHORTCUT_LABELS.brain).toBe('Ctrl Shift B')
+    expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyB', key: 'b' }))).toBeNull()
     expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyP', key: 'p' }))).toBeNull()
   })
 

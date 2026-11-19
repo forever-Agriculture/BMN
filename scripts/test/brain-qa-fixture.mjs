@@ -5,8 +5,11 @@ import {chmodSync,closeSync,constants,existsSync,fchmodSync,fstatSync,lstatSync,
 import {join,resolve,dirname} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {atomicJson} from '../qa/bench-lib.mjs'
+import {linkedNotes,seedSwitchedBrain} from './brain-page-fixture.mjs'
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../..')
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
+/** The reserved adapter: this file and the Brain page fixture it seeds with (Epic 128). */
+export const brainQaAdapterBytes=()=>Buffer.concat([readFileSync(fileURLToPath(import.meta.url)),readFileSync(fileURLToPath(new URL('./brain-page-fixture.mjs',import.meta.url)))])
 function reserved(config){
  if(!config.qaInput)return false
  const bytes=readFileSync(join(config.run,'bench/seed.json')),seed=JSON.parse(bytes)
@@ -14,7 +17,7 @@ function reserved(config){
  if(config.packaged)throw new Error('The brain QA fixture requires the reserved source build')
  if(realpathSync(config.root)!==config.root||readFileSync(join(config.root,'.bmn-qa-run'),'utf8')!==config.runId||
   config.qaInput.runId!==config.runId||hash(bytes)!==config.qaInput.fixture.seedSha256||
-  hash(readFileSync(fileURLToPath(import.meta.url)))!==config.qaInput.fixture.adapterSha256)throw new Error('Brain QA fixture differs from its reserved root, seed or adapter')
+  hash(brainQaAdapterBytes())!==config.qaInput.fixture.adapterSha256)throw new Error('Brain QA fixture differs from its reserved root, seed or adapter')
  return true
 }
 /** Data is seeded before QA starts, using the candidate's actual worker. No Brain IPC is replaced. */
@@ -24,8 +27,20 @@ export async function prepareBrainQaFixture(config){
  if(seed.backupFailure!==undefined&&typeof seed.backupFailure!=='boolean')throw new Error('Invalid brain backup fixture')
  if(seed.useExportWorkspace!==undefined&&typeof seed.useExportWorkspace!=='boolean')throw new Error('Invalid brain workspace fixture')
  if(seed.clockStart!==undefined)throw new Error('A brain clock fixture is not supported by this bench')
+ if(seed.notes!==undefined&&seed.notes!=='linked-switched')throw new Error('Unknown brain notes fixture')
  const data=join(config.root,'data/bmn'),databasePath=join(data,'brain.sqlite3'),attachments=join(config.root,'home/brain/files')
  if(existsSync(databasePath))throw new Error('Brain QA requires a fresh synthetic database')
+ // Epic 128: a switched synthetic brain with linked notes, every status and a name not in the brain, for the Brain page.
+ if(seed.notes==='linked-switched'){
+  const seeded=await seedSwitchedBrain({dataRoot:data,stateRoot:join(config.root,'state/bmn'),notes:linkedNotes()})
+  const backup=join(data,'brain-backups'),stat=lstatSync(backup)
+  if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('Brain QA backup fixture is not its own directory')
+  const installed={version:1,runId:config.runId,id:config.qaInput.fixture.id,notes:seeded.notes,switched:true,defaultCwd:null,
+   backup:{path:backup,device:stat.dev,inode:stat.ino,priorMode:stat.mode&0o7777}}
+  atomicJson(join(config.run,'bench/brain-seed-install.json'),installed)
+  if(JSON.stringify(JSON.parse(readFileSync(join(config.run,'bench/brain-seed-install.json'),'utf8')))!==JSON.stringify(installed))throw new Error('Brain QA seed read-back failed')
+  return installed
+ }
  mkdirSync(attachments,{recursive:true,mode:0o700})
  const entry=join(repo,'apps/desktop/out/main/brain-worker.js');if(!lstatSync(entry).isFile())throw new Error('The reserved built brain worker is missing')
  const worker=new Worker(entry,{workerData:{databasePath,attachmentsRoot:attachments}})

@@ -43,6 +43,8 @@ interface MarkdownPageProps {
   onOpenFile(path: string, line: number | null, column: number | null, heading: string | null): void
   onAddress(address: string): void
   onFocus(): void
+  /** A tooltip for a link that leads nowhere (the Brain page's "No note with this name"); Quick look leaves it out. */
+  unresolvedTitle?: string
 }
 
 interface Draw {
@@ -54,6 +56,7 @@ interface Draw {
   /** Opens or copies a target; `address` is its address with each hidden value masked unless revealed. */
   onTarget(target: MarkdownTarget, address: string): void
   onStatus(text: string): void
+  unresolvedTitle?: string | undefined
 }
 
 /**
@@ -144,6 +147,7 @@ function Inlines(props: { inlines: readonly MarkdownInline[]; draw: Draw }): Rea
             // No href: nothing on the page can make the window go anywhere; Quick look handles every activation.
             return (
               <a key={index} className="ql-md-a" role="link" tabIndex={0} data-target={inline.target.kind}
+                title={inline.target.kind === 'none' ? draw.unresolvedTitle : undefined}
                 onClick={activate}
                 onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); activate() } }}
                 onFocus={() => draw.onStatus(label)} onMouseEnter={() => draw.onStatus(label)}>
@@ -345,6 +349,7 @@ export const MarkdownPageView = forwardRef<MarkdownPageHandle, MarkdownPageProps
     current: props.current,
     onReveal: props.onReveal,
     onStatus: props.onStatus,
+    unresolvedTitle: props.unresolvedTitle,
     onTarget: (target, address) => {
       switch (target.kind) {
         case 'outside': props.onAddress(address); return

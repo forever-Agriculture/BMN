@@ -96,8 +96,11 @@ async function main() {
     const seed = JSON.parse(readFileSync(join(config.run, 'bench/seed.json'), 'utf8'))
     if (seed.kind === 'brain-v1') {
       const viewport = seed.viewport ?? 'normal'
-      if (!['minimum', 'normal', 'normal-then-minimum'].includes(viewport)) throw new Error('Unknown brain QA viewport')
-      await page.setViewportSize(viewport === 'minimum' ? { width: 680, height: 720 } : { width: 1200, height: 900 })
+      // Epic 128: the Brain page is checked at 1280 x 800 and at BMN's narrowest 320 px.
+      const sizes = { minimum: { width: 680, height: 720 }, normal: { width: 1200, height: 900 }, 'normal-then-minimum': { width: 1200, height: 900 },
+        'brain-wide': { width: 1280, height: 800 }, 'brain-narrow': { width: 320, height: 720 } }
+      if (!Object.hasOwn(sizes, viewport)) throw new Error('Unknown brain QA viewport')
+      await page.setViewportSize(sizes[viewport])
       if (viewport === 'normal-then-minimum') setTimeout(() => {
         if (!stopping) void page.setViewportSize({ width: 680, height: 720 }).catch(fatal)
       }, 180_000).unref()

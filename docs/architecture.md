@@ -331,6 +331,15 @@ identity comes from the socket scope, never request metadata. Owner tokens do no
 a live session. There is no public import, write-door or cutover command. Read commands open the
 existing brain read-only, including while BMN is closed.
 
+The Brain page (Epic 128) reads through its own narrow route: renderer → `aiterm:brain:page` →
+main (the brain switch's sender, main-frame, application-window and packaged-page checks) →
+`app.brainPage` on the PTY host's inherited private parent port → the worker's `page-*` reads. The
+route offers `status`, `list`, `search`, `read`, `history` and `graph` only, with checked keys; it
+has no write operation, and the control socket gains no method. Its search needs every typed word
+in any order (the store's trigram index for words of three letters or more, a text check for
+shorter ones); the agents' `brain` search is unchanged. The neighbourhood is computed in the worker
+and capped at 150 notes ring by ring; the window lays it out on fixed orbits in plain SVG.
+
 Each change batch publishes a read-only Markdown export, with full history in `history.json`.
 The two most recent generated folders are kept; primary history stays in SQLite. Nightly snapshots
 use `VACUUM INTO`, retain14nightly/8weekly copies and catch up a missed night on startup. Explicit

@@ -16,6 +16,7 @@ function launchBrainReturn():void {
   void brainReturnLauncher().catch((error:unknown)=>dialog.showErrorBox('Return to the Obsidian brain',(error instanceof Error?error.message:String(error))+'\nThe journal keeps the return held; nothing was overwritten.'))
 }
 import {startBrainDeliveryRetry} from './brain-cutover-delivery'
+import { installBrainPageIpc } from './brain-page-ipc'
 import { brainCutoverAvailable, brainCutoverCommitted, recoverBrainCutover, rollbackBrainCutover, runBrainCutover, settleBrainRollback } from './brain-cutover-run'
 import {configureBrainReceiptReader} from '../../bin/brain-state.mjs'
 import type {BrainAdmissionStatus} from '../utility/brain-admission'
@@ -693,6 +694,13 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     if(action!=='begin'||!applicationWindow?.isFocused())throw new MainIpcError(ERROR_CODES.unauthorized,'Choose the brain switch in BMN’s focused command palette')
     if(!app.isPackaged||rendererTestMode||selfTestTaps)throw new MainIpcError(ERROR_CODES.invalidArgument,'The real brain switch is available only in the installed app')
     await switchBrain.begin();return switchBrain.status()
+  })
+  // Epic 128: the Brain page reads through the same window checks as the switch, then the private parent port only.
+  installBrainPageIpc(bridgeIpc, {
+    senderIsAllowed,
+    fromApplicationWindow: (event) => BrowserWindow.fromWebContents(event.sender) === applicationWindow,
+    fromPackagedPage: (event) => !app.isPackaged || event.senderFrame?.url === pathToFileURL(join(__dirname, '../renderer/index.html')).href,
+    request: (method, params) => requireHostClient().request(method, params)
   })
   installWorkspaceIpcHandlers(bridgeIpc, senderIsAllowed, {
     client: () => ({

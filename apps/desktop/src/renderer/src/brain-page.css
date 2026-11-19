@@ -1,0 +1,504 @@
+/* MODULE: brain-page.css - Epic 128: the Brain page and graph, from plan/references/128/design.md; the one place kinds take colour (C4) */
+
+/* C4: colour by kind, brain view only (the owner's exception to C2, design.md). One hue per family; the same in all four modes. */
+.brain-dialog {
+  --kind-fact: #5cbfb0;
+  --kind-map: #6fa8e8;
+  --kind-lesson: #a98fe6;
+  --kind-preference: #e08ab8;
+  --kind-check: #8fa3b8;
+}
+
+/* L4: the shared sheet, the window less 24 px, at most 1280 x 800. */
+.app-dialog.brain-dialog {
+  width: min(1280px, calc(100vw - 24px));
+  height: min(800px, calc(100vh - 24px));
+  max-height: none;
+}
+
+.brain-dialog .app-dialog-body {
+  flex: 1 1 auto;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* The sheet's own key target draws no ring; its rows, fields and the graph keep F1. */
+.shell-window .brain-dialog .b-box:focus-visible { outline: none; }
+
+.brain-dialog .b-box {
+  outline: none;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.brain-dialog .b-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.brain-dialog .b-bar .icon-button { font-size: 18px; line-height: 1; }
+
+.brain-dialog .b-search {
+  position: relative;
+  display: flex;
+  flex: 0 1 380px;
+  min-width: 120px;
+  align-items: center;
+}
+
+.brain-dialog .b-search input {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 10px;
+}
+
+.brain-dialog .b-search kbd,
+.brain-dialog .b-keys kbd {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+  font: 11px/16px var(--font-mono);
+}
+
+.brain-dialog .b-search kbd { position: absolute; right: 8px; pointer-events: none; }
+
+.brain-dialog .b-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* B4: a toggle is a muted word when off; on, the word in --text with a 2px bar under it. */
+.brain-dialog button.b-toggle,
+.brain-dialog button.b-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.brain-dialog button.b-toggle[aria-pressed='true'] {
+  color: var(--text);
+  border-radius: 6px 6px 2px 2px;
+  box-shadow: inset 0 -2px 0 var(--text);
+}
+
+.brain-dialog button.b-toggle:hover,
+.brain-dialog button.b-quiet:hover { color: var(--text); background: transparent; }
+
+.brain-dialog button.b-plate { border-color: transparent; }
+.brain-dialog button.b-plate.small { min-height: 22px; height: 22px; padding: 0 8px; font-size: 12px; }
+
+.brain-dialog .b-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.brain-dialog .b-alert { margin: 8px 16px; color: var(--error); font-size: 12px; }
+.brain-dialog .b-muted { color: var(--muted); font-size: 12px; }
+.brain-dialog .b-strong { color: var(--text); font-weight: 500; }
+.brain-dialog .b-count { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+
+.brain-dialog .b-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.brain-dialog .b-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.brain-dialog .b-skeleton {
+  width: min(420px, 80%);
+  height: 14px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.brain-dialog .b-skeleton.short { width: min(260px, 50%); }
+
+/* The kind marker: 4 x 12, the only place a kind's colour sits beside words. */
+.brain-dialog .b-mark {
+  display: inline-block;
+  flex: none;
+  width: 4px;
+  height: 12px;
+  margin-right: 6px;
+  border-radius: 1px;
+  vertical-align: -1px;
+}
+
+.brain-dialog .b-chip {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+/* List and results: rows parted by hairlines (L2, B7); the current row has the gold bar and the selected fill (F2). */
+.brain-dialog .b-list-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 16px 16px;
+  scrollbar-gutter: stable;
+}
+
+.brain-dialog .b-list-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 4px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.brain-dialog .b-keys { display: inline-flex; gap: 4px; align-items: center; }
+
+.brain-dialog .b-list,
+.brain-dialog .b-versions,
+.brain-dialog .b-refs,
+.brain-dialog .b-kinds {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.brain-dialog .b-list > li { border-bottom: 1px solid var(--hairline); }
+
+.brain-dialog button.b-row {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  height: auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 7px 10px 7px 12px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+  box-shadow: none;
+}
+
+.brain-dialog button.b-row:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+
+.brain-dialog button.b-row.current {
+  border-left-color: var(--identity);
+  background: var(--selected);
+}
+
+.brain-dialog .b-row-head {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0;
+}
+
+.brain-dialog .b-row-title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.brain-dialog .b-row-kind,
+.brain-dialog .b-row-date {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.brain-dialog .b-row-kind { margin-left: auto; padding-left: 12px; }
+.brain-dialog .b-row-date { width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+
+.brain-dialog .b-row-summary {
+  overflow: hidden;
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.brain-dialog .b-hit {
+  color: var(--text);
+  background: var(--selection);
+  box-shadow: inset 0 -2px 0 var(--identity);
+}
+
+.brain-dialog .b-more { margin: 10px 4px; }
+
+.brain-dialog .b-withdrawn { margin-top: 10px; }
+
+.brain-dialog button.b-fold {
+  height: auto;
+  min-height: 26px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  font-weight: 500;
+}
+.brain-dialog button.b-fold::before { content: '▸ '; }
+.brain-dialog button.b-fold[aria-expanded='true']::before { content: '▾ '; }
+.brain-dialog button.b-fold:hover { color: var(--text); }
+
+/* A note: a text column of 680 px at most, and the side panel. */
+.brain-dialog .b-note {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.brain-dialog .b-text {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  padding: 18px 24px 0;
+}
+
+.brain-dialog .b-text > .ql-page-wrap,
+.brain-dialog .b-side-text > .ql-page-wrap,
+.brain-dialog .b-history-text > .ql-page-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.brain-dialog .b-text .ql-md { max-width: 680px; }
+
+/* The note's text sits on the sheet itself, not in a well; it scrolls in its own column. */
+.brain-dialog .ql-page { padding: 6px 16px 40px; background: transparent; }
+.brain-dialog .b-side-text .ql-page { padding: 4px 0 24px; }
+
+.brain-dialog .b-note-head { max-width: 680px; padding: 0 0 6px 16px; }
+
+.brain-dialog .b-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.brain-dialog .b-title {
+  margin: 6px 0 2px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+/* An unresolved name is muted text, not a link (design.md frame 1). */
+.brain-dialog .ql-md-a[data-target='none'] {
+  color: var(--muted);
+  text-decoration: none;
+  cursor: default;
+}
+
+.brain-dialog .b-side {
+  display: flex;
+  flex: 0 0 300px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  padding: 14px 16px 16px;
+  border-left: 1px solid var(--hairline);
+}
+
+.brain-dialog .b-side-head,
+.brain-dialog .b-section h3 {
+  margin: 8px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.brain-dialog .b-section h3 .b-fold { padding: 0; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+.brain-dialog .b-kv { grid-template-columns: 84px minmax(0, 1fr); }
+.brain-dialog .b-kv dd { display: flex; align-items: center; }
+.brain-dialog .b-version { justify-content: space-between; }
+
+.brain-dialog button.b-ref {
+  display: flex;
+  width: 100%;
+  min-height: 26px;
+  height: auto;
+  align-items: center;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+  font-weight: 400;
+  font-size: 12.5px;
+  text-align: left;
+  justify-content: flex-start;
+}
+.brain-dialog button.b-ref span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.brain-dialog button.b-ref:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+
+.brain-dialog .b-missing { padding: 2px 4px; color: var(--muted); font-size: 12.5px; }
+.brain-dialog .b-paths { grid-template-columns: minmax(0, 1fr); }
+
+/* The graph: a --ground well (L3) beside the side panel. */
+.brain-dialog .b-note.graph .b-side { flex-basis: 320px; }
+
+.brain-dialog .b-graph-pane {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  padding: 10px 12px 12px 16px;
+}
+
+.brain-dialog .b-graph-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.brain-dialog .b-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.brain-dialog .b-graph-count { margin-left: auto; }
+
+.brain-dialog .b-graph-well {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--ground);
+}
+
+.brain-dialog svg.b-graph { display: block; outline: none; }
+.brain-dialog svg.b-graph:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); border-radius: 10px; }
+
+.brain-dialog .b-ring { fill: none; stroke: var(--hairline); stroke-width: 1; }
+.brain-dialog .b-edge.tree { stroke-width: 1.25; }
+.brain-dialog .b-edge.other { stroke: color-mix(in srgb, var(--text) 10%, transparent); stroke-width: 1; }
+.brain-dialog .b-edge.other[data-lifted='yes'] { stroke: color-mix(in srgb, var(--text) 90%, transparent); }
+.brain-dialog .b-node { cursor: pointer; }
+.brain-dialog .b-node .b-hit { fill: transparent; }
+.brain-dialog .b-bloom { opacity: 0.18; }
+.brain-dialog .b-select { fill: none; stroke: var(--identity); stroke-width: 1.5; }
+.brain-dialog .b-node.cursor:not(.selected) .b-select { stroke: var(--focus); }
+
+.brain-dialog .b-node-label {
+  fill: var(--text);
+  font-size: 12px;
+  paint-order: stroke;
+  stroke: var(--ground);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.brain-dialog .b-node-label.archived { fill: var(--muted); }
+.brain-dialog .b-node-label.selected { text-decoration: underline 2px var(--identity); text-underline-offset: 4px; }
+
+.brain-dialog .b-more-chip { cursor: pointer; }
+.brain-dialog .b-more-chip rect { fill: color-mix(in srgb, var(--text) 8%, var(--ground)); }
+.brain-dialog .b-more-chip text { fill: var(--muted); font-size: 11px; }
+
+.brain-dialog .b-graph-alone {
+  position: absolute;
+  bottom: 44px;
+  left: 0;
+  right: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.brain-dialog .b-kinds {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.brain-dialog .b-side-title { margin: 4px 0 6px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.brain-dialog .b-actions { display: flex; gap: 6px; margin: 8px 0; }
+.brain-dialog .b-side-text { display: flex; flex: 1; min-height: 120px; flex-direction: column; font-size: 12.5px; }
+
+/* History: read-only versions on the left, the chosen one's text on the right. */
+.brain-dialog .b-history { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.brain-dialog .b-history-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px 6px; }
+.brain-dialog .b-history-head h3 { margin: 0; font-size: 13px; }
+.brain-dialog .b-history-head .b-quiet { margin-left: auto; }
+.brain-dialog .b-history-body { display: flex; flex: 1; min-height: 0; }
+.brain-dialog .b-versions { flex: 0 0 260px; overflow: auto; border-right: 1px solid var(--hairline); }
+.brain-dialog .b-versions > li { border-bottom: 1px solid var(--hairline); }
+.brain-dialog .b-history-text { display: flex; flex: 1; min-width: 0; flex-direction: column; padding: 8px 16px 0; }
+
+/* At 720 px and under, text, links and the graph sit behind one segmented choice. */
+.brain-dialog .b-note.narrow { flex-direction: column; overflow: hidden; }
+.brain-dialog .b-note.narrow .b-note-head { padding: 12px 14px 4px; }
+.brain-dialog .b-note.narrow .b-panes { padding: 0 14px 8px; }
+.brain-dialog .b-note.narrow .b-text { padding: 0 6px; }
+.brain-dialog .b-note.narrow .b-side { flex: 1 1 auto; border-left: 0; }
+.brain-dialog .b-note.narrow .b-graph-pane { flex: 1 1 0; min-height: 220px; padding: 0 10px 8px; }
+.brain-dialog .b-note.narrow .b-graph-pane + .b-side { flex: 0 0 auto; max-height: 40%; padding: 8px 14px; border-top: 1px solid var(--hairline); }
+.brain-dialog .b-note.narrow .b-side-text { display: none; }
+
+@media (max-width: 720px) {
+  .brain-dialog .b-bar { flex-wrap: wrap; padding: 8px 10px; }
+  .brain-dialog .b-search { flex: 1 1 100%; order: 3; }
+  .brain-dialog .b-list-wrap { padding: 4px 8px 12px; }
+  .brain-dialog .b-row-date { width: auto; padding-left: 8px; }
+  .brain-dialog .b-keys { display: none; }
+  .brain-dialog .b-history-body { flex-direction: column; }
+  .brain-dialog .b-versions { flex: 0 0 auto; max-height: 30%; border-right: 0; border-bottom: 1px solid var(--hairline); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brain-dialog * { transition: none !important; }
+}

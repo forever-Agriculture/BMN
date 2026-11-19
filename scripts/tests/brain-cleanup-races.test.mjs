@@ -32,7 +32,7 @@ const root=join(parent,'workload'),run=join(parent,'evidence'),backup=join(root,
 mkdirSync(backup,{recursive:true});mkdirSync(join(run,'bench'),{recursive:true});writeFileSync(join(root,'.bmn-qa-run'),runId);
 const seed=JSON.stringify({kind:'brain-v1'});writeFileSync(join(run,'bench/seed.json'),seed);
 const hash=b=>createHash('sha256').update(b).digest('hex'),stat=lstatSync(backup);
-const config={root,run,runId,packaged:false,qaInput:{runId,fixture:{seedSha256:hash(seed),adapterSha256:hash(readFileSync(new URL(${JSON.stringify(qa)})))}}};
+const config={root,run,runId,packaged:false,qaInput:{runId,fixture:{seedSha256:hash(seed),adapterSha256:hash((await import(${JSON.stringify(qa)})).brainQaAdapterBytes())}}};
 writeFileSync(join(run,'bench/brain-seed-install.json'),JSON.stringify({runId,backup:{path:backup,device:stat.dev,inode:stat.ino,priorMode:0o700}}));chmodSync(backup,0o500);
 process.env.BMN126_CLEANUP_ROOT=backup;let error=null;try{releaseBrainQaFixture(config)}catch(e){error=e.message};console.log(JSON.stringify({error,root:backup,mode:lstatSync(backup).mode&0o777}));
 `:common+`

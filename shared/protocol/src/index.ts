@@ -48,3 +48,4 @@ export { isRecord, named, pad, plural, thousandsWithCommas } from './shared-help
 export * from './browser-accounts'
 
 export * from './qa-grants'
+export * from './brain-page'

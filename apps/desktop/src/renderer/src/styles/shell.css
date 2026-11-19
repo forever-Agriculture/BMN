@@ -204,3 +204,23 @@
   width: var(--side-panel-width);
   box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
 }
+
+/* Epic 128: the word Brain beside Now (B4): a muted word when off; with the page open, --text and a 2px bar under it. */
+.header-actions button.header-word {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  font-weight: 500;
+}
+
+.header-actions button.header-word:hover { color: var(--text); }
+
+.header-actions button.header-word[aria-pressed='true'] {
+  color: var(--text);
+  border-radius: 6px 6px 2px 2px;
+  box-shadow: inset 0 -2px 0 var(--text);
+}

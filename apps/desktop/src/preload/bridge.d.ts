@@ -256,6 +256,8 @@ export interface AiTerminalBridge {
   /** Quits the app; the owner is asked first when sessions are running. */
   updateRestart(op: import('@bmn/protocol').UpdateRestartOperation, runId?: string): Promise<import('@bmn/protocol').UpdateRestartSnapshot & { recovered: TerminalStartupSuccess[] }>
   brainSwitch(action:'status'|'begin'|'return'):Promise<{available:boolean;running:boolean;complete:boolean}>
+  /** Epic 128: the Brain page's reads on the private, read-only route. */
+  brainPage<Result>(request: import('@bmn/protocol').BrainPageRequest): Promise<Result>
   quitApplication(): Promise<void>
   onAppEvent(listener: (message: AppEventMessage) => void): () => void
   onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void

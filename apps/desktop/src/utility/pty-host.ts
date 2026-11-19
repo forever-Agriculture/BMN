@@ -45,6 +45,7 @@ import { BrainWorkerClient } from './brain-client'
 import {configureBrainReceiptReader} from '../../bin/brain-state.mjs'
 import {brainCutoverStateRoot} from '../../../../scripts/lib/brain-provenance.mjs'
 import { BrainService } from './brain-service'
+import { brainPageRequest } from './brain-page-route'
 import {BrainCheckCapabilities} from './brain-check-capabilities'
 import { recordBrainInitialization } from './brain-health'
 import { readFileReference } from './file-reference-reader'
@@ -787,6 +788,9 @@ async function start(): Promise<void> {
           default: throw new HostControlError(ERROR_CODES.invalidArgument,'Unknown private brain operation')
         }
       }
+      // The Brain page's reads (Epic 128 D5): also only on the private parent port, and it offers no write.
+      case METHOD_REGISTRY.brainPage:
+        return brainPageRequest(brainClient, params)
       case METHOD_REGISTRY.healthGet:
         return selfTestHealthProbe(params) ?? manager.health()
       case METHOD_REGISTRY.setupInitialize: {

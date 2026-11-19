@@ -66,6 +66,7 @@ describe('protocol surface', () => {
         'hello',
         'app.updateRestart',
         'app.brainAdmin',
+        'app.brainPage',
         'health.get',
         'workspace.list',
         'workspace.create',
@@ -183,7 +184,8 @@ describe('protocol surface', () => {
     // Story79.4 adds the one-time ownership identity claim.
     // Story79.3 also reads state-only evidence that a Codex hook was observed.
     // Epic100 adds the main-only exact QA binding.
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(105)
+    // Epic128 adds the Brain page's private, read-only parent-port route.
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(106)
   })
 
   it('exports the initial stable error codes', () => {

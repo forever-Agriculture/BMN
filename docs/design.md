@@ -1,4 +1,4 @@
-# MODULE: design.md - Shared screen rules, the approved Health doctor design and the Now sheet
+# MODULE: design.md - Shared screen rules, the approved Health doctor design, the Now sheet and the Brain page
 # Screen design rules
 
 These are the rules every BMN screen follows. Fable wrote them in Story 80.2 from a review of every screen, and
@@ -118,6 +118,20 @@ rule has an ID that reviews and commits cite. "Text 8%" means `color-mix(in srgb
   name) and attention (dots, bars). No second hue.
 - **C3 Quick Look** keeps its tint for literals (`--ql-plate-*`, the owner's one exception); its lines follow
   L4, L5 and F2 all the same.
+- **C4 Kinds in the brain view.** Inside the Brain page only, a note's kind takes a colour (the owner's
+  second exception, "Brain may use colour", 2026-11-16). Colour is a node, a tree edge, the 4x12 marker
+  and the focus bloom, never text or a plate; gold stays C2. One hue per family, the same in all four
+  modes (WCAG contrast against each mode's `--ground`, script-computed 2026-11-19):
+
+  | Kind | Colour | black | dark | steel | brown |
+  |---|---|---|---|---|---|
+  | fact, project | `#5cbfb0` | 8.99 | 8.22 | 8.16 | 7.96 |
+  | map, reference | `#6fa8e8` | 7.96 | 7.27 | 7.23 | 7.05 |
+  | lesson | `#a98fe6` | 7.31 | 6.69 | 6.64 | 6.48 |
+  | preference, feedback, user | `#e08ab8` | 8.01 | 7.32 | 7.27 | 7.09 |
+  | check | `#8fa3b8` | 7.64 | 6.98 | 6.93 | 6.76 |
+  | any other kind | `--muted` | 7.85 | 7.20 | 7.93 | 6.96 |
+  | archived | `--faint` | 4.18 | 3.84 | 4.25 | 3.78 |
 
 ## Health doctor
 
@@ -241,6 +255,45 @@ Under each action's words, in the row's quiet reason style: `Deploy rule: …` a
 cover the action, `Held: …`; a held row offers No only. In Health › Pushes and merges each repository has a
 second, indented row **What deploys** with one three-step control (Not set, Nothing deploys, These deploy);
 "These deploy" opens a wrapped line of five named switches below it. No new colour.
+
+## Brain page and graph (Epic 128)
+
+From `plan/references/128/design.md` revision 2 (Fable-2, 2026-11-19; the owner accepted the board on
+2026-11-16). The page only reads.
+
+- **Opening.** `Ctrl Shift B` (also closes), the word Brain beside Now in the top bar (a B4 toggle) and
+  **Brain…** in the palette. It opens on the note he last read, else the list.
+- **Sheet.** An L4 dialog, the window less 24 px, at most 1280x800. Bar: back and forward, the search
+  field with its `/` cap, then Note | Graph (B6), All notes and the Archived toggle (B4). The graph is a
+  `--ground` well (L3). The note's text uses Quick Look's Markdown page, 680 px at most, on the sheet.
+- **List and search.** Rows parted by hairlines (L2, B7): marker, title, kind, date, one summary line;
+  the current row has the F2 bar; matched words take the `--selection` fill with the gold bar under them.
+  At 10 results the count reads "First 10". Nothing found: "No note has these words. Try one word.",
+  with a Cyrillic letter "… The notes are in English, so try English words." Empty: "The brain is
+  empty." Withdrawn notes are in none of these; a folded Withdrawn row with its count ends the list.
+- **Note.** Side panel of `.kv` rows Kind, Status, Origin, Scope, Last change, Version (History…), then
+  L1 sections Links to, Linked from, Projects and Not in the brain (folded), each with its count. An
+  unresolved name is `--muted` text. History is read-only: versions on the left, the chosen text right.
+- **G1 Depth.** The graph shows one note's neighbourhood, never the whole brain: it opens at the least
+  depth that draws 8 nodes, else the deepest there is; a note with no visible neighbour draws alone
+  with "No linked notes yet". Rings by depth: three depths 0.40, 0.72, 1.00 of `a = W/2 - 64` and
+  `b = H/2 - 48` (at most 520 and 380); two 0.45, 0.85; one 0.55; neighbours alternate x0.93 and x1.07.
+  Depth-1 notes share 360 degrees by weight `1 + min(descendants, 8)`, ordered by kind then title, the
+  first at -90 degrees (at 0 for one or two); children spread across their parent's share. Radii 9, 6,
+  3.5, 2.2 (at 15 nodes or fewer 12, 8, 6, 5, with the rings drawn as hairline ellipses). At most 150
+  nodes (36, 60, 53 by ring, unused places passing on); a full ring ends in a "+ N more" chip (L7).
+- **G3 Labels.** 12 px `--text` (archived `--muted`), cut at 24 characters, a 4 px `--ground` halo,
+  under the node at `r + 15`, else above at `r + 7`, else not drawn; boxes pad 4 px and never touch
+  another label or node. Order: focus, selected, hovered, depth 1, then by links. Above 15 nodes,
+  deeper notes are labelled on hover or selection only. The selected note is always named in the
+  side panel.
+- **Edges.** Tree edges in the child's colour at 45%, 1.25 px; other and archived links `--text` 10%,
+  1 px; hover or selection lifts a node's edges to 90%. The selected node has a gold ring.
+- **G4 Motion.** One `requestAnimationFrame` tween: new nodes leave their parent in 240 ms, moved nodes
+  and a refocus take 300 ms; the old graph stays while a new focus loads. Reduced motion: one frame.
+- **Kind key.** Under the graph, a plain key of the kinds present with their counts, not toggles.
+- **Narrow.** At 720 px and under, down to 320, Text | Links N | Graph sit behind one segmented choice
+  and the search field takes its own row.
 
 ## Reviews
 

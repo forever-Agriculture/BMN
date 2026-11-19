@@ -12,6 +12,7 @@ import { BrainAdmission } from './brain-admission'
 import { restoreBrainCheck } from './brain-restore'
 import type { DatabaseConnection } from './database-initialization'
 import { BrainStore, type BrainContent, type BrainImport } from './brain-store'
+import { BrainPageReader } from './brain-page'
 
 const port = parentPort
 if (!port) throw new Error('Brain worker needs a parent port')
@@ -21,6 +22,7 @@ mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 })
 const require = createRequire(__filename)
 const SQLite = require('better-sqlite3') as new (path: string) => DatabaseConnection
 const store = new BrainStore(new SQLite(databasePath))
+const page = new BrainPageReader(store.database)
 const admission=cutoverJournal?new BrainAdmission(store,cutoverJournal):undefined
 const files = new BrainFiles(store, dirname(databasePath), attachmentsRoot ?? join(homedir(),'brain','files'))
 const healthPath=join(dirname(databasePath),'brain-health.json')
@@ -61,6 +63,12 @@ port.on('message', (request: { id: number; operation: string; args: unknown[] })
       case 'search': result = store.search(args[0] as string, args[1] as boolean); break
       case 'list': result = store.list(); break
       case 'history': result = store.history(args[0] as string); break
+      // The Brain page's reads (Epic 128): the window reaches them only through the private parent port.
+      case 'page-list': result = page.list(args[0] as Parameters<BrainPageReader['list']>[0]); break
+      case 'page-search': result = page.search(args[0] as string, args[1] as boolean); break
+      case 'page-read': result = page.read(args[0] as string); break
+      case 'page-history': result = page.history(args[0] as string); break
+      case 'page-graph': result = page.graph(args[0] as string, args[1] as Parameters<BrainPageReader['graph']>[1]); break
       case 'create': result = store.create(args[0] as BrainContent, args[1] as string); break
       case 'edit': result = store.edit(args[0] as string, args[1] as number, args[2] as BrainContent, args[3] as string); break
       case 'withdraw': result = store.withdraw(args[0] as string, args[1] as number, args[2] as string); break
