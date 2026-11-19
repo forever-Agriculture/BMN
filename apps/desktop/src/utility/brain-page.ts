@@ -23,9 +23,9 @@ export function summaryLine(markdown: string, words: readonly string[] = []): st
     .replace(/\s+/gu, ' ').slice(0, 180)
 }
 
-/** The words of a query: split on spaces, each at most 100 characters, at most 12 of them. */
+/** The words of a query, split on spaces, every one kept (the route caps a query at 500 characters). */
 export function queryWords(query: string): string[] {
-  return [...new Set(query.normalize('NFKC').trim().split(/\s+/u).filter(Boolean).map((word) => word.slice(0, 100)))].slice(0, 12)
+  return [...new Set(query.normalize('NFKC').trim().split(/\s+/u).filter(Boolean))]
 }
 
 function statusesFor(archived: boolean): readonly BrainStatus[] { return archived ? ['active', 'archived'] : ['active'] }
@@ -139,7 +139,8 @@ export class BrainPageReader {
     const marks = statuses.map(() => '?').join(',')
     const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.status IN (${marks})`)
       .all(...statuses) as BrainPageNoteRef[]).map((note) => [note.id, note]))
-    if (!visible.has(id)) visible.set(id, focus)
+    // A hidden note has no graph: withdrawn notes are in none, archived ones only with Archived on (D7).
+    if (!visible.has(id)) throw new BrainError('NOT_VISIBLE', 'This note is not shown in the graph')
     const near = new Map<string, Set<string>>()
     const join = (a: string, b: string): void => { const set = near.get(a) ?? new Set<string>(); set.add(b); near.set(a, set) }
     for (const link of this.database.prepare("SELECT note, resolved FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").iterate() as Iterable<{ note: string; resolved: string }>) {

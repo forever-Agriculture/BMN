@@ -19,7 +19,11 @@ const note = (id: string, title: string, over: Partial<BrainPageNote> = {}): Bra
   linkedFrom: [{ id: 'n3', title: 'Back', kind: 'map', status: 'active' }, { id: 'n4', title: 'Old', kind: 'fact', status: 'archived' }],
   projects: ['~/code/synthetic'], missing: ['Nowhere'], targets: { Other: 'n2', Nowhere: null }, ...over
 })
-const NOTES: Record<string, BrainPageNote> = { n1: note('n1', 'Backup plan'), n2: note('n2', 'Other', { linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Other text.' }) }
+const NOTES: Record<string, BrainPageNote> = {
+  n1: note('n1', 'Backup plan'), n2: note('n2', 'Other', { linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Other text.' }),
+  w1: note('w1', 'Mistake', { status: 'withdrawn', linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Withdrawn text.' })
+}
+const WITHDRAWN = Array.from({ length: 101 }, (_, i) => summary(i ? `w${i + 1}` : 'w1', i ? `Withdrawn ${i}` : 'Mistake', { status: 'withdrawn' }))
 
 function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list: BrainPageSummary[] = [summary('n1', 'Backup plan'), summary('n2', 'Other')]) {
   return async <Result,>(request: BrainPageRequest): Promise<Result> => {
@@ -28,8 +32,8 @@ function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list: BrainPa
     switch (request.command) {
       case 'status': return { state } as Result
       case 'list': return (request.withdrawn
-        ? { notes: [summary('w1', 'Mistake', { status: 'withdrawn' })], total: 1, withdrawn: 1, offset: 0 }
-        : { notes: list, total: list.length, withdrawn: 1, offset: 0 }) as BrainPageList as Result
+        ? { notes: WITHDRAWN.slice(request.offset ?? 0, (request.offset ?? 0) + 100), total: WITHDRAWN.length, withdrawn: WITHDRAWN.length, offset: request.offset ?? 0 }
+        : { notes: list, total: list.length, withdrawn: WITHDRAWN.length, offset: 0 }) as BrainPageList as Result
       case 'search': {
         const found = request.query.includes('zzz') || /[\u0400-\u04ff]/u.test(request.query) ? [] : list.slice(0, 1)
         return { notes: found, limited: false } satisfies BrainPageSearch as Result
@@ -101,11 +105,27 @@ describe('Brain page (128.1)', () => {
     await mount()
     expect([...container!.querySelectorAll('.b-list .b-row-title')].map((e) => e.textContent)).toEqual(['Backup plan', 'Other'])
     const fold = container!.querySelector<HTMLButtonElement>('.b-withdrawn .b-fold')!
-    expect(fold.textContent).toBe('Withdrawn 1')
+    expect(fold.textContent).toBe('Withdrawn 101')
     await act(async () => { fold.click() })
     await flush()
     expect(text()).toContain('Mistake')
     expect(requests.some((r) => r.command === 'list' && r.withdrawn === true)).toBe(true)
+    // Past the first hundred, the fold has its own Show more.
+    expect(container!.querySelectorAll('.b-withdrawn .b-row')).toHaveLength(100)
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-withdrawn .b-more')!.click() })
+    await flush()
+    expect(container!.querySelectorAll('.b-withdrawn .b-row')).toHaveLength(101)
+    expect(container!.querySelector('.b-withdrawn .b-more')).toBeNull()
+  })
+
+  it('reads a withdrawn note with History and offers no graph for it', async () => {
+    await mount({ noteId: 'w1', archived: false })
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Mistake')
+    expect(container!.querySelector('[aria-labelledby="b-view"]')).toBeNull()
+    await press(container!.querySelector('.b-box')!, 'g')
+    expect(container!.querySelector('svg.b-graph')).toBeNull()
+    expect(requests.some((r) => r.command === 'graph')).toBe(false)
+    expect(container!.querySelector('.b-side')!.textContent).toContain('History')
   })
 
   it('opens on the note he last read, and on the list when that note is gone', async () => {

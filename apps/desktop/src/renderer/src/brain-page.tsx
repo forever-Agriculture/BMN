@@ -301,7 +301,10 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     })
   }, [query, archived, status.kind, read])
 
-  const showGraph = note !== null && !query.trim() && (narrow ? pane === 'graph' : view === 'graph')
+  // Only a visible note has a graph (D7): never a withdrawn one, an archived one only with Archived on.
+  const graphable = note !== null && (note.status === 'active' || (note.status === 'archived' && archived))
+  useEffect(() => { if (!graphable) { setView('note'); setPane((current) => (current === 'graph' ? 'text' : current)) } }, [graphable])
+  const showGraph = graphable && !query.trim() && (narrow ? pane === 'graph' : view === 'graph')
   useEffect(() => {
     if (!showGraph || !note) return
     const seq = ++graphSeq.current
@@ -376,7 +379,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (!note && !typed && event.key === 'Enter' && rows[cursor] && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); openNote(rows[cursor]!.id); return }
     if (!note) return
     const key = event.key.toLowerCase()
-    if (key === 'g') { event.preventDefault(); if (narrow) setPane(pane === 'graph' ? 'text' : 'graph'); else setView(view === 'graph' ? 'note' : 'graph'); return }
+    if (key === 'g') { event.preventDefault(); if (!graphable) return; if (narrow) setPane(pane === 'graph' ? 'text' : 'graph'); else setView(view === 'graph' ? 'note' : 'graph'); return }
     if (key === 'h') { event.preventDefault(); if (history) setHistory(null); else openHistory(); return }
     if (showGraph && (event.key === '1' || event.key === '2' || event.key === '3')) { event.preventDefault(); setDepth(Number(event.key) as Depth); return }
   }
@@ -428,6 +431,11 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
               read<BrainPageList>({ command: 'list', withdrawn: true }).then(setWithdrawn).catch((error: unknown) => setListError(errorText(error)))
             }}>Withdrawn <span className="b-count">{list.withdrawn}</span></button>
             {withdrawn ? <ul className="b-list">{withdrawn.notes.map((row) => <NoteRow key={row.id} note={row} current={false} onOpen={() => openNote(row.id)} onPoint={() => undefined} />)}</ul> : null}
+            {withdrawn && withdrawn.notes.length < withdrawn.total ? <button type="button" className="b-plate b-more" onClick={() => {
+              read<BrainPageList>({ command: 'list', withdrawn: true, offset: withdrawn.notes.length })
+                .then((next) => setWithdrawn((current) => (current ? { ...next, notes: [...current.notes, ...next.notes], offset: 0 } : next)))
+                .catch((error: unknown) => setListError(errorText(error)))
+            }}>Show more</button> : null}
           </div>
         ) : null}
       </div>
@@ -492,16 +500,16 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
         <div className="b-note narrow">
           {noteHead(current)}
           <div className="b-panes"><span id="b-pane" hidden>Show</span>
-            <Segmented labelledBy="b-pane" fit options={['text', 'links', 'graph'] as const} value={pane}
+            <Segmented labelledBy="b-pane" fit options={graphable ? ['text', 'links', 'graph'] as const : ['text', 'links'] as const} value={pane}
               optionLabel={(value) => (value === 'text' ? 'Text' : value === 'links' ? `Links ${links}` : 'Graph')} onChange={(value) => setPane(value)} />
           </div>
           {pane === 'text' ? <div className="b-text"><NoteText note={current} onOpen={(id) => openNote(id)} /></div> : null}
           {pane === 'links' ? panel : null}
-          {pane === 'graph' ? <>{graphPane()}{besidePanel()}</> : null}
+          {pane === 'graph' && graphable ? <>{graphPane()}{besidePanel()}</> : null}
         </div>
       )
     }
-    if (view === 'graph') return <div className="b-note graph">{graphPane()}{besidePanel()}</div>
+    if (view === 'graph' && graphable) return <div className="b-note graph">{graphPane()}{besidePanel()}</div>
     return (
       <div className="b-note">
         <div className="b-text">
@@ -526,7 +534,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
             <kbd id="b-search-key" aria-label="Press slash to search">/</kbd>
           </label>
           <div className="b-bar-end">
-            {note && !typed && !narrow ? (
+            {note && graphable && !typed && !narrow ? (
               <><span id="b-view" hidden>View</span>
                 <Segmented labelledBy="b-view" fit options={['note', 'graph'] as const} value={view}
                   optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => setView(value)} /></>

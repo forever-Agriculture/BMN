@@ -50,6 +50,11 @@ describe('Brain page list and search', () => {
       expect(b.store.search('decision backup').map((n) => n.title)).toEqual([])
       expect(b.store.search('backup decision').map((n) => n.title)).toEqual(['Phrase note'])
       expect(b.page.search('BACKUP').notes).toHaveLength(2)
+      // Every typed word counts, the thirteenth too, and a long word is never cut short.
+      const many = 'the nightly backup runs at three a later paragraph names the decision'
+      expect(b.page.search(`${many} plus thirteenth`).notes).toEqual([])
+      expect(b.page.search(many).notes.map((n) => n.title)).toEqual(['Backup plan'])
+      expect(b.page.search(`${'x'.repeat(100)}y`).notes).toEqual([])
       expect(b.page.search('backup').notes.find((n) => n.title === 'Backup plan')!.summary).toContain('nightly backup')
     } finally { b.close() }
   })
@@ -145,6 +150,10 @@ describe('Brain page neighbourhood (D7)', () => {
       const shown = b.page.graph(b.id('Focus'), { depth: 1, archived: true })
       expect(shown.nodes.map((n) => n.title).sort()).toEqual(['Back', 'Focus', 'Kept', 'Live'])
       expect(shown.edges.every((edge) => edge.tree && edge.from === b.id('Focus'))).toBe(true)
+      // A hidden note has no graph of its own: withdrawn never, archived only when shown.
+      expect(() => b.page.graph(b.id('Gone'), { archived: true })).toThrow(/not shown in the graph/)
+      expect(() => b.page.graph(b.id('Kept'))).toThrow(/not shown in the graph/)
+      expect(b.page.graph(b.id('Kept'), { depth: 1, archived: true }).nodes.map((n) => n.title)).toEqual(['Kept', 'Focus'])
     } finally { b.close() }
   })
 

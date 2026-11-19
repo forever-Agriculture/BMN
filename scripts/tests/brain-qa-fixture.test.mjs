@@ -63,3 +63,15 @@ it('seeds a switched synthetic brain with linked notes for the Brain page (Epic 
   await expect(seedSwitchedBrain({dataRoot:join(homedir(),'.local/share/bmn'),stateRoot:join(parent,'s'),notes:[]})).rejects.toThrow(/non-test root/)
  }finally{if(worker)await worker.terminate();makeOwnedDirectoriesWritable(parent,{device:stat.dev,inode:stat.ino});rmSync(parent,{recursive:true,force:true})}
 },20_000)
+it('refuses the owner real roots through a symbolic link or .. as well (pre-review)',async()=>{
+ const {seedSwitchedBrain}=await import('../test/brain-page-fixture.mjs')
+ const {homedir}=await import('node:os')
+ const {symlinkSync}=await import('node:fs')
+ const parent=mkdtempSync(join(tmpdir(),'bmn-brain-alias-'))
+ try{
+  symlinkSync(join(homedir(),'.local'),join(parent,'alias'))
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'alias/share/bmn-never'),stateRoot:join(parent,'s'),notes:[]})).rejects.toThrow(/non-test root/)
+  await expect(seedSwitchedBrain({dataRoot:`${parent}/../../..${homedir()}/.config/bmn-never`,stateRoot:join(parent,'s'),notes:[]})).rejects.toThrow(/non-test root/)
+  expect(existsSync(join(homedir(),'.local/share/bmn-never'))).toBe(false)
+ }finally{rmSync(parent,{recursive:true,force:true})}
+})

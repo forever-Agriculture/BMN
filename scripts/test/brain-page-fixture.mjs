@@ -1,7 +1,7 @@
 // MODULE: brain-page-fixture.mjs - A switched synthetic brain for the Brain page's checks (Epic 128): linked notes, every status, and a dense 1,000-note brain
 import { Worker } from 'node:worker_threads'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -57,9 +57,18 @@ function workerRequests(entry, workerData) {
  * Never point it at a real data or state root.
  */
 export async function seedSwitchedBrain({ dataRoot, stateRoot, notes, withdraw = ['Mistaken note'] }) {
-  // Never the owner's real data, state, config or vault, whatever the caller passes.
-  const real = ['.local', '.config', 'brain'].map(name => join(homedir(), name))
-  for (const root of [dataRoot, stateRoot]) if (!root.startsWith('/') || real.some(path => root === path || root.startsWith(path + '/'))) throw new Error(`Refusing a non-test root: ${root}`)
+  // Never the owner's real data, state, config or vault, whatever the caller passes: compared as resolved paths,
+  // through symbolic links and `..`, from the nearest folder that exists.
+  const resolved = path => {
+    let head = resolve(path), tail = ''
+    while (!existsSync(head)) { tail = join(head.slice(dirname(head).length + 1), tail); head = dirname(head) }
+    return join(realpathSync(head), tail)
+  }
+  const real = ['.local', '.config', 'brain'].map(name => resolved(join(homedir(), name)))
+  for (const root of [dataRoot, stateRoot]) {
+    const actual = resolved(root)
+    if (!root.startsWith('/') || real.some(path => actual === path || actual.startsWith(path + '/'))) throw new Error(`Refusing a non-test root: ${root}`)
+  }
   const databasePath = join(dataRoot, 'brain.sqlite3')
   if (existsSync(databasePath)) throw new Error('The Brain page fixture needs a fresh synthetic database')
   mkdirSync(dataRoot, { recursive: true, mode: 0o700 })
