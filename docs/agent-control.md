@@ -1069,8 +1069,10 @@ approval decision to the harness. The check reads the exact command, folder, rem
 BMN reads these once more after it has taken the use and right before it answers; a change it finds then
 leaves the use spent and the record says BMN withheld it. One tool call gets one decision: a retry returns to
 the approval that first paid for it, the file's or the night's, and never takes a second use from the other.
-Which approval pays is decided from the waiting receipts in one transaction: no night receipt leaves the call to a
-file receipt, one pays, and two night receipts for one call keep it held. What a held command does (a push, a merge,
+Which approval pays is decided from the waiting receipts, read from the grant record itself: no night receipt leaves
+the call to a file receipt, one pays, and two night receipts for one call keep it held. BMN checks that one approval's
+own target and pinned file, then attaches the call only while that receipt is still the sole one waiting, and checks
+the same approval once more before it answers. What a held command does (a push, a merge,
 a release, a publish) is read from its parsed words, never its raw text, so a quoted subcommand is classified the same.
 A night command belongs to the epic, go and session whose bound run asked for it.
 

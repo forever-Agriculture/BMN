@@ -214,19 +214,19 @@ describe('Epic action authorization', () => {
     expect(answer.outcome).toBe('granted')
     writeGrantRow(database, answer.record, AT)
     const target = { runId, item: term.id, targetHash: nightCommandHash(term) }
-    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call }, AT))()?.use ?? null
+    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { command: ACTION.command, folder: ACTION.folder, call }, AT))()?.use ?? null
     // S7: with no night receipt waiting the night decides nothing; the call is the file's to decide.
     expect(claim('pre-use')).toBeNull()
     const reserve = database.transaction(() => reserveNightEpicCommand(database, PLAN, binding, { ...target, id: 'night-use' }, AT))()
     expect(reserve).toMatchObject({ outcome: 'recorded', left: 0 })
-    const claimed = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))()!
+    const claimed = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { command: ACTION.command, folder: ACTION.folder, call: 'tool-one' }, AT))()!
     expect(claimed.use).toMatchObject({ id: 'night-use', dispatch: { call: 'tool-one' } })
     // The written row is handed back for the window; it already holds the call.
     expect(claimed.read?.state === 'read' && openGrantPeriod(claimed.read.record)?.uses[0]?.dispatch?.call).toBe('tool-one')
     // D4/D9 at the edge: the night term in force passes; after Back it no longer does.
     expect(epicAuthorityProblem(database, PLAN, binding, { kind: 'night', ...target }, AT)).toBeNull()
     expect(epicAuthorityProblem(database, PLAN, binding, { kind: 'night', ...target, targetHash: 'other' }, AT)).toMatch(/changed/u)
-    const repeat = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))()!
+    const repeat = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { command: ACTION.command, folder: ACTION.folder, call: 'tool-one' }, AT))()!
     expect(repeat.use.id).toBe('night-use')
     expect(repeat.read).toBeNull()
     expect(claim('tool-two')).toBeNull()
@@ -281,8 +281,9 @@ describe('Epic action authorization', () => {
       const target = { runId, item: term.id, targetHash: nightCommandHash(term) }
       expect(() => database.transaction(() => reserveNightEpicCommand(database, PLAN, binding, { ...target, id: 'night-use' }, AT))())
         .toThrow(/another epic or go/iu)
-      expect(() => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))())
-        .toThrow(/another epic or go/iu)
+      // Approved for another epic, go, plan or session, it is no candidate: the night pays nothing for this call.
+      expect(database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { command: ACTION.command, folder: ACTION.folder, call: 'tool-one' }, AT))())
+        .toBeNull()
     }
     const read = readGrantRow(database)
     expect(read.state === 'read' && openGrantPeriod(read.record)?.uses).toHaveLength(0)
@@ -363,8 +364,7 @@ describe('The deploy rule on an epic action (D3)', () => {
     const reserved = database.transaction(() => reserveEpicAction(database, PLAN, binding,
       { id: 'file-receipt', action: ACTION.id, targetHash: 'exact', call: null, mayReserve: true, commandHash: 'hash' }, AT))()
     expect(reserved.call).toBeNull()
-    const target = { runId: 'run-s7', item: term.id, targetHash: nightCommandHash(term) }
-    expect(database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-s7' }, AT))()).toBeNull()
+    expect(database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { command: ACTION.command, folder: ACTION.folder, call: 'tool-s7' }, AT))()).toBeNull()
     const claimed = database.transaction(() => reserveEpicAction(database, PLAN, binding,
       { id: 'hook:tool-s7', action: ACTION.id, targetHash: 'exact', call: 'tool-s7', mayReserve: true, commandHash: 'hash' }, AT))()
     expect(claimed).toMatchObject({ id: 'file-receipt', call: 'tool-s7' })
@@ -383,7 +383,7 @@ describe('The deploy rule on an epic action (D3)', () => {
     writeGrantRow(database, answerGrant(asked.record, { periodId: 'night-s7b', runId: 'run-s7b', cardRevision: 1, via: 'app',
       choices: { [one.id]: 'yes', [two.id]: 'yes' }, operationKey: 'owner-s7b' }, AT).record, AT)
     const candidates = [one, two].map(term => ({ runId: 'run-s7b', item: term.id, targetHash: nightCommandHash(term) }))
-    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { candidates, call }, AT))()
+    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { command: ACTION.command, folder: ACTION.folder, call }, AT))()
     // Two approvals, no night receipt: the sole file receipt decides.
     database.transaction(() => reserveEpicAction(database, PLAN, binding,
       { id: 'file-receipt', action: ACTION.id, targetHash: 'exact', call: null, mayReserve: true, commandHash: 'hash' }, AT))()

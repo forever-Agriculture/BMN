@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
-import { deployHold, deployRule, deployRuleWords, grantStatus, nightTermHold, openGrantPeriod, type AwayRecord, type DeployEvent,
+import { deployHold, deployRule, deployRuleWords, grantStatus, nightTermHold, type AwayRecord, type DeployEvent,
   type EpicActionAnswer, type EpicActionCard, type EpicPlanContext, type EpicRunBinding, type GrantCommandTerm, type GrantRead,
   type GrantTerm, type PlanAction, type PushPolicyRead } from '@bmn/protocol'
 import { epicCommandTarget, pinnedFileSha } from '../../bin/grant-command.mjs'
@@ -606,28 +606,27 @@ export class EpicActionsService {
     return await this.options.database.companion('epicAuthorityProblem', fresh, binding, source, this.options.now())
   }
 
+  /**
+   * The night half of one held tool call (S7): the store names the one receipt this call would spend, this service checks that
+   * approval's own target, pin, CI fence and deploy rule, the store attaches the call only while that receipt is still the sole
+   * one waiting, and the same approval and its authority are checked once more before the answer.
+   */
   private async claimNight(run: NonNullable<Awaited<ReturnType<EpicActionsService['bound']>>>, command: string, cwd: string, call: string) {
-    const { read, away } = await this.options.database.companion('getGrants')
-    if (read.state !== 'read') throw new Error('The night grant could not be read before deciding which approval to use')
-    const period = openGrantPeriod(read.record)
-    const matched = (period?.runs ?? []).flatMap(card => {
-      if (card.card.sessionId !== run.binding.sessionId) return []
-      const status = grantStatus(read, away, card.runId)
-      if (!status.active) return []
-      return status.grant.items.flatMap(({ term }) => term.kind === 'command' && term.repository !== undefined &&
-        term.command === command && term.folder === cwd && nightBoundTo(term, run.plan, run.binding) ? [{ runId: card.runId, term }] : [])
-    })
-    if (matched.length === 0) return null
-    // The same exact command and folder name the same target, so one check covers every candidate.
-    const check = async () => await heldCommandProblem(nightCommand(matched[0]!.term), cwd) ?? await this.deployProblem(nightCommand(matched[0]!.term))
-    const problem = await check()
-    if (problem) throw new Error(problem)
     const current = await this.dispatchPlan(run.binding, run.plan)
-    // Which approval pays is decided from the receipts in the claiming transaction (S7), never from the count of approvals.
-    const claimed = await this.options.database.companion('claimNightEpicCommand', current, run.binding,
-      { candidates: matched.map(({ runId, term }) => ({ runId, item: term.id, targetHash: nightCommandHash(term) })), call }, this.options.now())
+    const input = { command, folder: cwd, call }
+    const selected = await this.options.database.companion('selectNightEpicCommand', current, run.binding, input)
     // No night receipt waits for this command: the file's approval, if any, decides the call.
-    if (claimed === null) return null
+    if (selected === null) return null
+    const term = selected.term
+    const check = async () => await heldCommandProblem(nightCommand(term), cwd) ?? await this.deployProblem(nightCommand(term))
+    if (selected.kind === 'one') {
+      const problem = await check()
+      // Held before the claim: the receipt stays reserved and unclaimed.
+      if (problem) throw new Error(problem)
+    }
+    const expect = { useId: selected.useId, runId: selected.runId, item: selected.item, targetHash: selected.targetHash }
+    const claimed = await this.options.database.companion('claimNightEpicCommand', current, run.binding, { ...input, expect }, this.options.now())
+    if (claimed === null) throw new Error('The night reservation changed before the claim')
     const { use, read: written, runId, item, targetHash } = claimed
     if (written !== null) this.options.grantChanged(written)
     await this.lastCheck(current, run.binding, call,
