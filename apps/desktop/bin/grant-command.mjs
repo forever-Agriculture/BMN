@@ -358,7 +358,7 @@ export function epicCommandTarget(term) {
     const target = epicPushTarget(args)
     if (!target) return { problem: 'name one explicit remote and branch or tag, with no broad push flags' }
     if (target.ref !== term.ref) return { problem: 'the push destination differs from the named ref' }
-    return { ...target, script: null, program }
+    return { ...target, script: null, program, action: 'push' }
   }
 
   if (program === 'gh' && (verb === 'release' && ['create', 'edit', 'delete'].includes(args[0]) ||
@@ -377,7 +377,8 @@ export function epicCommandTarget(term) {
         return { problem: 'a release action needs its named tag and --repo github.com/OWNER/NAME; creation must use --verify-tag' }
       }
     }
-    return { remote: 'origin', ref: target, script: null, program }
+    // What it does is read from the parsed words, never the raw text: a quoted subcommand is still a merge (S2).
+    return { remote: 'origin', ref: target, script: null, program, action: verb === 'pr' ? 'merge' : 'release' }
   }
 
   if (held === 'publishing a package') {
@@ -388,7 +389,7 @@ export function epicCommandTarget(term) {
       term.script?.path !== file || term.ref !== registry) {
       return { problem: 'name a pinned package tarball and one explicit HTTPS registry' }
     }
-    return { remote: null, ref: registry, script: file, program }
+    return { remote: null, ref: registry, script: file, program, action: 'publish' }
   }
 
   return { problem: held ?? neverOnACard(simple.words, term.folder) ?? 'this is outside the owner’s approved Git, GitHub and package actions' }

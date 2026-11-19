@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { changeAway, markAwaySummaryShown } from './database-away-store'
 import { answerGrantCard, askGrantCard, getGrants, leaveAway, markGrantTold, readGrantRow, useGrantRecord } from './database-grant-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
+import { changePushPolicy, getPushPolicy } from './database-push-policy-store'
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string) => DatabaseConnection
@@ -91,6 +92,31 @@ describe('grant store (Story 84.3)', () => {
     expect(answerGrantCard(database, { periodId: away.periodId!, runId: 'run-81', cardRevision: 1, choices: { rounds: 3 }, via: 'app', operationKey: 'k' }, T2))
       .toMatchObject({ outcome: 'refused', reason: 'withdrawn-back' })
     expect(useGrantRecord(database, { runId: 'run-80', sessionId: 's-builder', id: 'u2', kind: 'round', boundary: '80.3' }, T2)).toMatchObject({ outcome: 'refused' })
+  })
+
+  it('refuses a typed night merge in the spending transaction when his deploy rule holds it, taking no use (Epic 132 S1)', () => {
+    const periodId = leaveAway(database, { source: 'agent', agentSessionId: 's-builder' }, T0).record.periods[0]!.periodId
+    const read = readGrantRow(database)
+    const merge = { id: 'merge-12', kind: 'merge' as const, repository: 'octo/widgets', pr: 12, headSha: '3f2a9c1', upTo: null, proposed: 'pr' as const, reason: 'green' }
+    expect(askGrantCard(database, { runId: 'run-80', sessionId: 's-builder', agentCli: 'claude', card: { ...CARD, terms: [merge] },
+      origin: { generation: read.generation ?? 0, periodId } }, T0).outcome).toBe('opened')
+    changeAway(database, { to: 'away', source: 'agent', agentSessionId: 's-builder', expectedRevision: 0 }, T1)
+    expect(answerGrantCard(database, { periodId, runId: 'run-80', cardRevision: 1, choices: { 'merge-12': 'pr' }, via: 'app', operationKey: 'op-1' }, T1).outcome).toBe('granted')
+    const rule = (events: Array<'default-branch'> | []) => {
+      const now = getPushPolicy(database)
+      if (now.state !== 'read') throw Error('policy unread')
+      changePushPolicy(database, { kind: 'deploys', repository: 'octo/widgets', events, expectedRevision: now.record.revision }, T1)
+    }
+    const use = (id: string) => useGrantRecord(database, { runId: 'run-80', sessionId: 's-builder', id, kind: 'action', item: 'merge-12' }, T1)
+    const uses = () => { const now = readGrantRow(database); return now.state === 'read' ? now.record.periods[0]!.uses.length : -1 }
+    // No rule, then a rule that the default branch deploys: refused by name, nothing spent; nothing deploys: one use.
+    expect(use('m0')).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('no deploy rule for octo/widgets') })
+    rule(['default-branch'])
+    expect(use('m1')).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('default branch deploys') })
+    expect(uses()).toBe(0)
+    rule([])
+    expect(use('m2')).toMatchObject({ outcome: 'recorded', left: 0 })
+    expect(uses()).toBe(1)
   })
 
   it('cancels a departure on back while only leaving, with the away record untouched', () => {

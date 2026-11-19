@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
-import { deployHold, deployRule, deployRuleWords, grantStatus, openGrantPeriod, type AwayRecord, type DeployEvent,
+import { deployHold, deployRule, deployRuleWords, grantStatus, nightTermHold, openGrantPeriod, type AwayRecord, type DeployEvent,
   type EpicActionAnswer, type EpicActionCard, type EpicPlanContext, type EpicRunBinding, type GrantCommandTerm, type GrantRead,
   type GrantTerm, type PlanAction, type PushPolicyRead } from '@bmn/protocol'
 import { epicCommandTarget, pinnedFileSha } from '../../bin/grant-command.mjs'
@@ -115,7 +115,9 @@ function commandProblem(term: Command, cwd: string): string | null {
 async function heldCommandProblem(term: Command, cwd: string): Promise<string | null> {
   const problem = commandProblem(term, cwd)
   if (problem !== null) return problem
-  return /^gh\s+pr\s+merge\s/u.test(term.command) ? await heldMergeProblem(cwd, term.repository, term.ref) : null
+  // Every accepted merge spelling is a merge here: the parsed target says so, not the raw text (S2).
+  const target = epicCommandTarget(term)
+  return 'problem' in target ? target.problem : target.action === 'merge' ? await heldMergeProblem(cwd, term.repository, term.ref) : null
 }
 
 const RECEIVE_HOOKS = ['pre-receive', 'update', 'proc-receive', 'post-receive', 'post-update', 'reference-transaction', 'push-to-checkout']
@@ -145,7 +147,8 @@ export function actionEvents(action: PlanAction, defaultBranch: string | null): 
   if (action.kind === 'merge') return ['default-branch', 'branches', 'pull-requests']
   const target = epicCommandTarget(action)
   if ('problem' in target) return null
-  if (target.program === 'gh') return /^gh\s+release\s/u.test(action.command) ? ['releases', 'tags'] : ['default-branch', 'branches', 'pull-requests']
+  if (target.action === 'release') return ['releases', 'tags']
+  if (target.action === 'merge') return ['default-branch', 'branches', 'pull-requests']
   if (target.program !== 'git') return null
   if (action.ref.startsWith('refs/tags/')) return ['tags']
   if (defaultBranch === null) return null
@@ -153,17 +156,6 @@ export function actionEvents(action: PlanAction, defaultBranch: string | null): 
   const name = qualified ? action.ref.slice('refs/heads/'.length) : action.ref
   if (action.ref.startsWith('refs/') && !qualified) return null
   return [name === defaultBranch ? 'default-branch' : 'branches', ...(qualified ? [] : ['tags' as const])]
-}
-
-/**
- * Owner 2026-11-19 (S1, "Yes, same rule"): a night merge, default-branch push or PR write passes only where his deploy rule
- * says nothing it sets off deploys, exactly as the epic action of that kind; no rule keeps it held. Null for other terms.
- */
-export function nightTermHold(read: PushPolicyRead, term: GrantTerm): string | null {
-  if (term.kind === 'merge') return deployHold(read, term.repository, ['default-branch', 'branches', 'pull-requests'])
-  if (term.kind === 'push-default') return deployHold(read, term.repository, ['default-branch'])
-  if (term.kind === 'pr-elsewhere') return deployHold(read, term.repository, ['branches', 'pull-requests'])
-  return null
 }
 
 function nightCommand(term: GrantCommandTerm): Command {
@@ -626,21 +618,20 @@ export class EpicActionsService {
         term.command === command && term.folder === cwd && nightBoundTo(term, run.plan, run.binding) ? [{ runId: card.runId, term }] : [])
     })
     if (matched.length === 0) return null
-    if (matched.length !== 1) throw new Error('More than one night action names this exact command')
-    const { runId, term } = matched[0]!
-    const check = async () => await heldCommandProblem(nightCommand(term), cwd) ?? await this.deployProblem(nightCommand(term))
+    // The same exact command and folder name the same target, so one check covers every candidate.
+    const check = async () => await heldCommandProblem(nightCommand(matched[0]!.term), cwd) ?? await this.deployProblem(nightCommand(matched[0]!.term))
     const problem = await check()
     if (problem) throw new Error(problem)
     const current = await this.dispatchPlan(run.binding, run.plan)
-    const targetHash = nightCommandHash(term)
+    // Which approval pays is decided from the receipts in the claiming transaction (S7), never from the count of approvals.
     const claimed = await this.options.database.companion('claimNightEpicCommand', current, run.binding,
-      { runId, item: term.id, targetHash, call }, this.options.now())
+      { candidates: matched.map(({ runId, term }) => ({ runId, item: term.id, targetHash: nightCommandHash(term) })), call }, this.options.now())
     // No night receipt waits for this command: the file's approval, if any, decides the call.
     if (claimed === null) return null
-    const { use, read: written } = claimed
+    const { use, read: written, runId, item, targetHash } = claimed
     if (written !== null) this.options.grantChanged(written)
     await this.lastCheck(current, run.binding, call,
-      async () => await check() ?? await this.authority(run.binding, current, { kind: 'night', runId, item: term.id, targetHash }))
-    return { plan: current, answer: { allowed: true, epic: run.plan.epic, action: term.id, useId: use.id, at: use.at } }
+      async () => await check() ?? await this.authority(run.binding, current, { kind: 'night', runId, item, targetHash }))
+    return { plan: current, answer: { allowed: true, epic: run.plan.epic, action: item, useId: use.id, at: use.at } }
   }
 }

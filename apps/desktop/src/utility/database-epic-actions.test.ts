@@ -15,7 +15,9 @@ import { answerEpicActionCard, askEpicActionCard, bindEpicRun, epicActionRecord,
 import { readGrantRow, writeGrantRow } from './database-grant-store'
 import { heldMergeProblem, parsePlanAction, planActionsHash, planPolicyTarget } from '../../bin/plan-actions.mjs'
 import { bashExit, callOwnListener } from '../../bin/shared-helpers.mjs'
-import { actionEvents, nightTermHold, receiverProblem } from './epic-actions-service'
+import { epicCommandTarget } from '../../bin/grant-command.mjs'
+import { actionEvents, receiverProblem } from './epic-actions-service'
+import { nightTermHold } from '@bmn/protocol'
 
 const DB = createRequire(import.meta.url)('better-sqlite3') as new (path: string) => DatabaseConnection
 const AT = '2026-11-19T14:00:00.000Z'
@@ -368,6 +370,36 @@ describe('The deploy rule on an epic action (D3)', () => {
     expect(claimed).toMatchObject({ id: 'file-receipt', call: 'tool-s7' })
   })
 
+  it('decides between two approved night terms for one command from their receipts, not their count (S7 recheck)', () => {
+    const { database, binding } = setup()
+    bindEpicRun(database, PLAN, binding, null, false)
+    const one: GrantCommandTerm = { ...ACTION, proposed: 'yes', reason: 'Synthetic exact push',
+      bound: { plan: PLAN.planKey, epic: PLAN.epic, go: GO, session: 'one' } }
+    const two: GrantCommandTerm = { ...one, id: 'second-night-push' }
+    const first = startDeparture(EMPTY_GRANT_RECORD, { periodId: 'night-s7b', source: 'app', agentSessionId: null }, 'back', AT)
+    const asked = askGrant(first.record, { runId: 'run-s7b', sessionId: binding.sessionId, agentCli: binding.agent,
+      card: { title: 'Synthetic night', scope: 'One exact command, twice', terms: [one, two], nothing: false } }, AT)
+    expect(asked.outcome).toBe('opened')
+    writeGrantRow(database, answerGrant(asked.record, { periodId: 'night-s7b', runId: 'run-s7b', cardRevision: 1, via: 'app',
+      choices: { [one.id]: 'yes', [two.id]: 'yes' }, operationKey: 'owner-s7b' }, AT).record, AT)
+    const candidates = [one, two].map(term => ({ runId: 'run-s7b', item: term.id, targetHash: nightCommandHash(term) }))
+    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { candidates, call }, AT))()
+    // Two approvals, no night receipt: the sole file receipt decides.
+    database.transaction(() => reserveEpicAction(database, PLAN, binding,
+      { id: 'file-receipt', action: ACTION.id, targetHash: 'exact', call: null, mayReserve: true, commandHash: 'hash' }, AT))()
+    expect(claim('tool-file')).toBeNull()
+    expect(database.transaction(() => reserveEpicAction(database, PLAN, binding,
+      { id: 'hook:tool-file', action: ACTION.id, targetHash: 'exact', call: 'tool-file', mayReserve: true, commandHash: 'hash' }, AT))())
+      .toMatchObject({ id: 'file-receipt', call: 'tool-file' })
+    // Two night receipts waiting for one call: it stays held, and neither is claimed.
+    for (const [index, id] of ['night-one', 'night-two'].entries()) {
+      expect(database.transaction(() => reserveNightEpicCommand(database, PLAN, binding, { ...candidates[index]!, id }, AT))()).toMatchObject({ outcome: 'recorded' })
+    }
+    expect(() => claim('tool-night')).toThrow(/More than one night reservation waits/u)
+    const read = readGrantRow(database)
+    expect(read.state === 'read' && openGrantPeriod(read.record)!.uses.map(use => use.dispatch?.call)).toEqual([null, null])
+  })
+
   it('places each action among the events a rule names, and a local receiver by its hooks', () => {
     const push = { id: 'p', kind: 'push-default', repository: 'fixture/repo', count: 1, branch: 'main' } as const
     expect(actionEvents(push, null)).toEqual(['default-branch'])
@@ -379,6 +411,16 @@ describe('The deploy rule on an epic action (D3)', () => {
     expect(actionEvents(ACTION, null)).toBeNull()
     const release = parsePlanAction({ ...ACTION, repository: 'fixture/repo', ref: 'v1', script: undefined, command: 'gh release delete v1 --repo github.com/fixture/repo' })
     expect('action' in release && actionEvents(release.action, null)).toEqual(['releases', 'tags'])
+    // S2 recheck: what a command does is read from its parsed words; a quoted subcommand is still a release or a merge.
+    for (const command of ["gh 'release' delete v1 --repo github.com/fixture/repo", 'gh release "delete" v1 --repo github.com/fixture/repo']) {
+      const quoted = parsePlanAction({ ...ACTION, repository: 'fixture/repo', ref: 'v1', script: undefined, command })
+      expect('action' in quoted && actionEvents(quoted.action, null)).toEqual(['releases', 'tags'])
+    }
+    for (const command of ["gh pr 'merge' 12 --repo github.com/fixture/repo --admin --merge", "gh 'pr' merge 12 --repo github.com/fixture/repo --admin"]) {
+      const quoted = parsePlanAction({ ...ACTION, repository: 'fixture/repo', ref: '12', script: undefined, command })
+      expect('action' in quoted && epicCommandTarget(quoted.action as never)).toMatchObject({ action: 'merge' })
+      expect('action' in quoted && actionEvents(quoted.action, null)).toEqual(['default-branch', 'branches', 'pull-requests'])
+    }
 
     const root = mkdtempSync(join(tmpdir(), 'bmn-receiver-'))
     try {
@@ -460,4 +502,3 @@ describe('Who the hook asks to lift a hold (F5, S5)', () => {
     }
   })
 })
-

@@ -33,7 +33,9 @@ import {
   type GrantAskCard,
   type GrantUseResult
 } from '@bmn/protocol'
+import { grantStatus, nightTermHold } from '@bmn/protocol'
 import type { DatabaseConnection } from './database-initialization'
+import { getPushPolicy } from './database-push-policy-store'
 
 /** The away record as the away store reads it (read here too, so neither store imports the other's module). */
 function getAway(database: DatabaseConnection): AwayRecord {
@@ -138,7 +140,16 @@ export function answerGrantCard(database: DatabaseConnection, answer: Parameters
 
 export function useGrantRecord(database: DatabaseConnection, use: Parameters<typeof useGrant>[2], now: string): GrantUseResult & { read: GrantRead } {
   const read = readGrantRow(database)
-  const result = useGrant(read, getAway(database), use, now)
+  const away = getAway(database)
+  // Epic 132 S1 (owner 2026-11-19): a typed night merge, push or PR write his deploy rule holds is refused here, in the
+  // transaction that would spend it, against the rule in force now; no use is taken.
+  if (use.kind === 'action' && read.state === 'read') {
+    const status = grantStatus(read, away, use.runId)
+    const term = status.active ? status.grant.items.find(item => item.term.id === use.item)?.term : undefined
+    const hold = term === undefined ? null : nightTermHold(getPushPolicy(database), term)
+    if (hold !== null) return { outcome: 'refused', record: read.record, reason: hold, read }
+  }
+  const result = useGrant(read, away, use, now)
   // A refusal is kept too, for the morning; an unreadable record is never written over by a use.
   const next = read.state === 'read' && result.outcome !== 'repeated' && result.record !== read.record ? writeGrantRow(database, result.record, now) : read
   return { ...result, read: next }

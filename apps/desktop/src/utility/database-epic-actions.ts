@@ -360,48 +360,60 @@ export function reserveNightEpicCommand(database: DatabaseConnection, plan: Epic
   return { ...outcome, read: writeGrantRow(database, outcome.record, now) }
 }
 
+type NightCandidate = { runId: string; item: string; targetHash: string }
+
+/**
+ * Claims the night receipt that pays for one held tool call. Every approved night term naming the command is a candidate;
+ * which of them pays is decided here, from the receipts in this transaction (S7): none waiting leaves the call to a file
+ * reservation, one waiting pays, two waiting keep it held.
+ */
 export function claimNightEpicCommand(database: DatabaseConnection, plan: EpicPlanContext, binding: EpicRunBinding,
-  input: { runId: string; item: string; targetHash: string; call: string }, now: string) {
+  input: (NightCandidate | { candidates: NightCandidate[] }) & { call: string }, now: string) {
   assertStoredBinding(database, plan, binding)
   const record = load(database, plan.planKey, plan.epic)
   const { read, away } = getGrants(database)
   if (read.state !== 'read') throw new Error('The night grant could not be read')
-  const status = grantStatus(read, away, input.runId)
   const period = openGrantPeriod(read.record)
-  if (!status.active || !period || period.runs.find(run => run.runId === input.runId)?.card.sessionId !== binding.sessionId) {
-    throw new Error('The night grant expired or belongs to another session')
-  }
-  const term = status.grant.items.find(item => item.term.id === input.item)?.term
-  if (term?.kind !== 'command' || nightCommandHash(term) !== input.targetHash) throw new Error('The night action changed before dispatch')
-  if (!nightBoundTo(term, plan, binding)) throw new Error('The night command was approved for another epic or go')
-  const matching = period.uses.filter(use => use.runId === input.runId && use.item === input.item &&
-    use.cardRevision === status.grant.cardRevision && use.dispatch?.binding === binding.id && use.dispatch.targetHash === input.targetHash)
+  const candidates = 'candidates' in input ? input.candidates : [input]
+  const terms = candidates.map(candidate => {
+    const status = grantStatus(read, away, candidate.runId)
+    if (!status.active || !period || period.runs.find(run => run.runId === candidate.runId)?.card.sessionId !== binding.sessionId) {
+      throw new Error('The night grant expired or belongs to another session')
+    }
+    const term = status.grant.items.find(item => item.term.id === candidate.item)?.term
+    if (term?.kind !== 'command' || nightCommandHash(term) !== candidate.targetHash) throw new Error('The night action changed before dispatch')
+    if (!nightBoundTo(term, plan, binding)) throw new Error('The night command was approved for another epic or go')
+    const matching = period.uses.filter(use => use.runId === candidate.runId && use.item === candidate.item &&
+      use.cardRevision === status.grant.cardRevision && use.dispatch?.binding === binding.id && use.dispatch.targetHash === candidate.targetHash)
+    return { candidate, term, matching }
+  })
+  if (!period || terms.length === 0) return null
   // One decision per call (D9): what this call was first given, a night receipt of this period or a file use, is all it gets.
   const decided = record.audit.find(row => row.bindingId === binding.id && row.call === input.call)
-  const repeated = matching.find(use => use.dispatch?.call === input.call)
-  if (decided && (decided.source !== 'night' || repeated?.id !== decided.receipt)) {
+  const repeated = terms.flatMap(entry => entry.matching.filter(use => use.dispatch?.call === input.call).map(use => ({ ...entry, use })))
+  if (decided && (decided.source !== 'night' || repeated[0]?.use.id !== decided.receipt)) {
     throw new Error(decided.source === 'night' ? 'The night approval this tool call used is no longer in force' : 'The tool call already belongs to another operation')
   }
-  if (repeated) return { use: repeated, read: null }
+  if (repeated.length > 0) return { use: repeated[0]!.use, read: null, ...repeated[0]!.candidate }
   if (period.uses.some(use => use.dispatch?.binding === binding.id && use.dispatch.call === input.call)) {
     throw new Error('The tool call already belongs to another operation')
   }
-  const pending = matching.filter(use => use.dispatch?.call === null)
+  const pending = terms.flatMap(entry => entry.matching.filter(use => use.dispatch?.call === null).map(use => ({ ...entry, use })))
   // No night receipt waits for this command: the night decides nothing, and a file reservation may pay for the call.
   if (pending.length === 0) return null
-  if (pending.length !== 1) throw new Error('Too many matching night reservations')
+  if (pending.length !== 1) throw new Error('More than one night reservation waits for this exact command')
+  const { use, term, candidate } = pending[0]!
   const fileAction = plan.actions.find(action => action.kind === 'command' && action.command === term.command && action.folder === term.folder)
   if (fileAction && record.uses.some(use => use.binding === binding.id && use.action === fileAction.id && use.call === null)) {
     throw new Error('Both sources have a pending reservation')
   }
-  const use = pending[0]!
   use.dispatch!.call = input.call
   // The written row goes back to the caller, so the window's night view shows the call, as a reservation's does.
   const written = writeGrantRow(database, read.record, now)
-  record.audit.push({ ...audit(plan, binding, input.item, now, createHash('sha256').update(term.command).digest('hex'), 'night'),
+  record.audit.push({ ...audit(plan, binding, candidate.item, now, createHash('sha256').update(term.command).digest('hex'), 'night'),
     receipt: use.id, bindingId: binding.id, call: input.call, outcome: 'unreported' })
   save(database, record, now)
-  return { use, read: written }
+  return { use, read: written, ...candidate }
 }
 
 export const EPIC_ACTION_OPERATIONS = Object.freeze({

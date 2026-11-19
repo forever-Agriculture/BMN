@@ -1069,6 +1069,9 @@ approval decision to the harness. The check reads the exact command, folder, rem
 BMN reads these once more after it has taken the use and right before it answers; a change it finds then
 leaves the use spent and the record says BMN withheld it. One tool call gets one decision: a retry returns to
 the approval that first paid for it, the file's or the night's, and never takes a second use from the other.
+Which approval pays is decided from the waiting receipts in one transaction: no night receipt leaves the call to a
+file receipt, one pays, and two night receipts for one call keep it held. What a held command does (a push, a merge,
+a release, a publish) is read from its parsed words, never its raw text, so a quoted subcommand is classified the same.
 A night command belongs to the epic, go and session whose bound run asked for it.
 
 **The deploy rule (Epic 132, D3).** BMN cannot see a repository's workflows, or what another service does
@@ -1080,10 +1083,12 @@ and on the phone (each line shows the rule, and a held line has no Yes), his ans
 prints, `bmn run reserve` and `dispatch`, the guard's claim and its retry, a night command at its card, its
 reservation and its claim, and the last check. The night's typed merges, default-branch pushes and PR writes
 (`bmn grant`) take the same rule (owner, 2026-11-19): `bmn grant ask` refuses one the rule holds by name, `bmn
-policy` does not list it, and `bmn grant use` refuses it without taking a use. An action is let through only where the rule says none of
+policy` does not list it, and `bmn grant use` refuses it without taking a use, checked in the same database
+transaction that would spend it. An action is let through only where the rule says none of
 its events deploys. No rule keeps every such action held. A Yes is saved with the rule he saw; under another
 rule it is no longer his answer and the card asks again. Each answer carries the rule its own surface showed
-(the window's card, or the very phone message he tapped); a Yes whose rule is not the one in force now is refused,
+(the window's card, or the very phone button he tapped, whose callback data carries a mark of the rule it was drawn
+under); a Yes whose rule is not the one in force now is refused,
 so a tap on a message the phone has not redrawn yet never saves a Yes under a rule he did not see. A push names its event by its ref (a bare name counts
 as a branch and a tag); a merge counts as a push to any branch and a pull-request event; a release counts as
 a release and a tag. A local repository on this computer has no rule of his, so BMN holds an action on it;

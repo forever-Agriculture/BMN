@@ -64,6 +64,7 @@ import {
   parseAwayRecord,
   EMPTY_GRANT_RECORD,
   grantStatus,
+  nightTermHold,
   grantStatusLines,
   grantedRepositoryActions,
   grantPinnedFile,
@@ -188,7 +189,7 @@ import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 import { commandPinSha } from '../../bin/grant-command.mjs'
-import { EpicActionsService, nightTermHold } from './epic-actions-service'
+import { EpicActionsService } from './epic-actions-service'
 import { EPIC_ACTION_TAP, TelegramEpicActions } from './telegram-epic-actions'
 import { grantFacts as readGrantFacts, pinGrantLimit, readGrantRoundBudget, resolveGrantLimitPlan, sameGrantCheckout } from '../../bin/grant-facts.mjs'
 import { findNightAllowance, withNightAllowanceLock, writeNightAllowance } from '../../bin/plan-allowances.mjs'
@@ -1280,11 +1281,6 @@ export class CompanionService {
               if (night.outcome === 'refused') return { outcome: night.outcome, reason: night.reason }
               return { outcome: night.outcome, left: night.left, periodId: night.periodId, exact: night.exact }
             }
-            // Owner 2026-11-19 (S1): a typed night merge, push or PR write his deploy rule holds spends no use.
-            const status = grantStatus(read, away, p.runId)
-            const typed = status.active ? status.grant.items.find(item => item.term.id === p.item)?.term : undefined
-            const hold = typed === undefined ? null : await this.epicActions.nightRepositoryHold(typed)
-            if (hold !== null) return { outcome: 'refused', reason: hold }
           }
           // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded. The store decides, in its
           // own transaction, against the answer in force then: another card may come between this read and that write.

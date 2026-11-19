@@ -7,4 +7,4 @@ export function grantCommandProblem(term: GrantCommandTerm): string | null
 
 export function grantAccessCommandProblem(command: string): string | null
 export function epicCommandTarget(term: Extract<PlanAction, { kind: 'command' }>):
-  { remote: string | null; ref: string; script: string | null; program: string } | { problem: string }
+  { remote: string | null; ref: string; script: string | null; program: string; action: 'push' | 'merge' | 'release' | 'publish' } | { problem: string }

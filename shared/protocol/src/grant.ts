@@ -1,6 +1,6 @@
 // MODULE: grant.ts - the Away grant: one versioned record of each departure's cards, the owner's answers and their uses, and its change rules (Epic 84)
 import { awayMomentWords, type AwayRecord, type AwaySource } from './away'
-import { pushPolicyRepository } from './push-policy'
+import { deployHold, pushPolicyRepository, type PushPolicyRead } from './push-policy'
 import { secretShapeRanges } from './secret-ranges'
 import { isIso, isTextOrEmpty } from './shared-helpers'
 import { DEPARTURE_AUTO_MS, readDepartureCollection, type DepartureCollection } from './departure'
@@ -1549,6 +1549,17 @@ function grantItemWords(term: GrantActionTerm, choice: GrantChoice): string {
   if (term.kind === 'command') return `run exactly \`${term.command}\`, in ${term.folder}${term.script === null ? '' : `, while ${term.script.path} has SHA-256 ${term.script.sha256}`}; another text, folder or changed file waits`
   if (term.kind === 'message') return `send with ${term.tool} to ${term.target}, exactly: ${term.text}; another target or text waits`
   return `${prElsewhereWords(term, term.repository)}; another PR or branch waits`
+}
+
+/**
+ * Owner 2026-11-19 (S1, "Yes, same rule"): a night merge, default-branch push or PR write passes only where his deploy rule
+ * says nothing it sets off deploys, exactly as the epic action of that kind; no rule keeps it held. Null for other terms.
+ */
+export function nightTermHold(read: PushPolicyRead, term: GrantTerm): string | null {
+  if (term.kind === 'merge') return deployHold(read, term.repository, ['default-branch', 'branches', 'pull-requests'])
+  if (term.kind === 'push-default') return deployHold(read, term.repository, ['default-branch'])
+  if (term.kind === 'pr-elsewhere') return deployHold(read, term.repository, ['branches', 'pull-requests'])
+  return null
 }
 
 /** A merge, push, command or message granted to one run, in force now, as `bmn policy --repo` lists it after the level's lines (84.9 AC1, 103.3 AC4). */
