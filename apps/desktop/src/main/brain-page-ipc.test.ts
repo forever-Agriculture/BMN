@@ -62,28 +62,31 @@ describe('Brain page route on the private parent port', () => {
     pageSearch: async (query, archived) => { calls.push(`search ${query} ${archived}`); return { notes: [], limited: false } },
     pageRead: async (id) => { calls.push('read ' + id); return {} as never },
     pageHistory: async (id) => { calls.push('history ' + id); return [] },
-    pageGraph: async (id, options) => { calls.push('graph ' + id + ' ' + JSON.stringify(options)); return {} as never }
+    pageGraph: async (id, options) => { calls.push('graph ' + id + ' ' + JSON.stringify(options)); return {} as never },
+    pageMap: async (options) => { calls.push('map ' + JSON.stringify(options)); return {} as never }
   }
 
   it('offers reads only: no write command exists, and unknown ones are refused', async () => {
-    expect(Object.keys(BRAIN_PAGE_COMMANDS).sort()).toEqual(['graph', 'history', 'list', 'read', 'search', 'status'])
+    expect(Object.keys(BRAIN_PAGE_COMMANDS).sort()).toEqual(['graph', 'history', 'list', 'map', 'read', 'search', 'status'])
     for (const command of ['write', 'edit', 'withdraw', 'restore', 'delete', 'import', 'open-door', 'export', 'backup']) {
       await expect(brainPageRequest(reads, { command })).rejects.toThrow(/Unknown Brain page request/)
     }
     await expect(brainPageRequest(reads, { command: 'read', id: 'a', revision: 1 })).rejects.toThrow(/Unexpected/)
     await expect(brainPageRequest(reads, { command: 'graph', id: 'a', depth: 4 })).rejects.toThrow(/depth/)
     await expect(brainPageRequest(reads, { command: 'list', offset: -1 })).rejects.toThrow(/offset/)
+    await expect(brainPageRequest(reads, { command: 'map', id: 'a' })).rejects.toThrow(/Unexpected/)
     expect(calls).toEqual([])
   })
 
-  it('answers status, list, search, read, history and graph from the worker reads', async () => {
+  it('answers status, list, search, read, history, graph and map from the worker reads', async () => {
     await expect(brainPageRequest(reads, { command: 'status' })).resolves.toEqual({ state: 'ready' })
     await brainPageRequest(reads, { command: 'list', archived: true })
     await brainPageRequest(reads, { command: 'search', query: 'QA backup' })
     await brainPageRequest(reads, { command: 'read', id: 'n1' })
     await brainPageRequest(reads, { command: 'history', id: 'n1' })
     await brainPageRequest(reads, { command: 'graph', id: 'n1', depth: 2, archived: true })
-    expect(calls).toEqual(['status', 'list {"archived":true,"withdrawn":false,"offset":0}', 'search QA backup false', 'read n1', 'history n1', 'graph n1 {"depth":2,"archived":true}'])
+    await brainPageRequest(reads, { command: 'map', archived: true })
+    expect(calls).toEqual(['status', 'list {"archived":true,"withdrawn":false,"offset":0}', 'search QA backup false', 'read n1', 'history n1', 'graph n1 {"depth":2,"archived":true}', 'map {"archived":true}'])
   })
 
   it('passes on the worker answer that the switch is not complete', async () => {

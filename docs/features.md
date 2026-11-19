@@ -821,9 +821,17 @@ look. **H** shows History, every earlier version read-only.
   when **Archived** is on, withdrawn ones never), draws at most 150 notes and counts the rest as
   "+ N more". A click shows a note beside the graph; **Shift Enter** or Refocus makes it the
   centre. Nodes take the colour of their kind.
+- **The map** (**M**, or **Map** in the bar, from a note or the list) draws the whole brain in one
+  fitted picture: every visible note a dot in its kind's colour, every link between visible notes,
+  linked groups packed biggest first in the middle and notes with no link in a quiet ring around
+  them, with a line such as "57 notes · 17 links · 33 alone · 8 groups, largest 5". Hover names a
+  note and lights its links; a click shows it beside; a double-click or **Shift Enter** opens its
+  neighbourhood graph, and **M** comes back. It draws at most 3,000 notes, busiest first ("First
+  3,000 of N"); there is no pan or zoom.
 - **Keys:** `/` search, ↑ ↓ Enter in the list, **Alt ← / Alt →** back and forward, **Esc**
-  steps back (History, the graph, the search text), then closes. Letters act only outside a field.
-  In the graph, ← → move along a ring, ↑ to the parent, ↓ to the first child.
+  steps back (History, the search text, the map, the graph), then closes. Letters act only outside a
+  field. In the graph, ← → move along a ring, ↑ to the parent, ↓ to the first child; on the map the
+  arrows move to the nearest note that way.
 
 The page calls no model, sends nothing off the machine and adds nothing to any agent session.
 

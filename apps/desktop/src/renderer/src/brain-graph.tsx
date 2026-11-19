@@ -79,17 +79,6 @@ export function BrainGraphView(props: {
   const labels = useMemo(() => placeLabels(layout, { selected: props.selected, hovered, measure: measureLabel }), [layout, props.selected, hovered])
   const at = (id: string): GraphPoint => points.get(id) ?? layout.nodes.find((node) => node.id === id) ?? layout.centre
   const lifted = (id: string): boolean => id === hovered || id === props.selected
-  const kinds = useMemo(() => {
-    const counts = new Map<string, { kind: string; status: string; count: number }>()
-    for (const node of props.graph.nodes) {
-      const key = node.status === 'archived' ? 'archived' : node.kind
-      const entry = counts.get(key) ?? { kind: key, status: node.status === 'archived' ? 'archived' : 'active', count: 0 }
-      entry.count += 1
-      counts.set(key, entry)
-    }
-    return [...counts.values()].sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
-  }, [props.graph.nodes])
-
   const onKeyDown = (event: ReactKeyboardEvent<SVGSVGElement>): void => {
     const current = cursor ?? props.selected ?? props.graph.focus
     if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown') {
@@ -165,11 +154,28 @@ export function BrainGraphView(props: {
         ))}
       </svg>
       {props.graph.nodes.length === 1 ? <p className="b-graph-alone">No linked notes yet</p> : null}
-      <ul className="b-kinds" aria-label="Kinds" ref={key}>
-        {kinds.map((entry) => (
-          <li key={entry.kind}><span className="b-mark" style={{ background: kindColour(entry.kind, entry.status) }} aria-hidden="true" />{entry.kind} <span className="b-count">{entry.count}</span></li>
-        ))}
-      </ul>
+      <KindKey nodes={props.graph.nodes} listRef={key} />
     </div>
+  )
+}
+
+/** The plain kind key under a drawing (C4): kinds present with their counts, archived notes counted apart. */
+export function KindKey(props: { nodes: readonly { kind: string; status: string }[]; listRef?: React.Ref<HTMLUListElement> }): React.JSX.Element {
+  const kinds = useMemo(() => {
+    const counts = new Map<string, { kind: string; status: string; count: number }>()
+    for (const node of props.nodes) {
+      const key = node.status === 'archived' ? 'archived' : node.kind
+      const entry = counts.get(key) ?? { kind: key, status: node.status === 'archived' ? 'archived' : 'active', count: 0 }
+      entry.count += 1
+      counts.set(key, entry)
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
+  }, [props.nodes])
+  return (
+    <ul className="b-kinds" aria-label="Kinds" ref={props.listRef}>
+      {kinds.map((entry) => (
+        <li key={entry.kind}><span className="b-mark" style={{ background: kindColour(entry.kind, entry.status) }} aria-hidden="true" />{entry.kind} <span className="b-count">{entry.count}</span></li>
+      ))}
+    </ul>
   )
 }

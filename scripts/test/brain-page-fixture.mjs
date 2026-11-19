@@ -29,6 +29,32 @@ export function linkedNotes() {
   ]
 }
 
+/**
+ * A synthetic brain shaped like the owner's on 2026-11-19 (counts only, every word made up, Epic 128.5): 57 active notes
+ * in linked groups of 5, 4, 4, 3, 2, 2, 2, 2 (17 links) and 33 alone, kinds feedback 33, fact 9, project 7, user 4,
+ * reference 3, map 1; plus 6 archived notes linked to active ones, so Archived adds links.
+ */
+export function shapedNotes() {
+  const kinds = [...Array(33).fill('feedback'), ...Array(9).fill('fact'), ...Array(7).fill('project'), ...Array(4).fill('user'), ...Array(3).fill('reference'), 'map']
+  const words = ['design', 'boards', 'stay', 'calm', 'backup', 'restore', 'session', 'agents', 'review', 'budget', 'restart', 'update', 'notes', 'graph', 'keys', 'colour', 'plan', 'epic', 'runs', 'night']
+  // Kinds are dealt in a fixed shuffle, so groups mix kinds as real notes do.
+  const order = kinds.map((kind, i) => [kind, (i * 37) % 57]).sort((a, b) => a[1] - b[1]).map(([kind]) => kind)
+  const titles = order.map((_, i) => [words[i % 20], words[(i * 7 + 3) % 20], words[(i * 11 + 5) % 20], i].join('-'))
+  const links = new Map(titles.map(title => [title, []]))
+  let at0 = 0
+  for (const size of [5, 4, 4, 3, 2, 2, 2, 2]) {
+    const group = titles.slice(at0, at0 + size)
+    for (let i = 1; i < size; i += 1) links.get(group[0]).push(group[i])
+    at0 += size
+  }
+  links.get(titles[1]).push(titles[2])
+  const notes = titles.map((title, i) => ({ source: `shaped/${i}.md`, title, kind: order[i], origin: 'import', scope: 'all', status: 'active', source_time: at(1 + (i % 28)),
+    markdown: `Synthetic note ${i} about ${title.replaceAll('-', ' ')}.\n` + links.get(title).map(to => `\n- [[${to}]]`).join('') + '\n' }))
+  for (let i = 0; i < 6; i += 1) notes.push({ source: `shaped/archived-${i}.md`, title: `archived-${words[i]}-${i}`, kind: 'fact', origin: 'import', scope: 'all', status: 'archived',
+    source_time: at(1), markdown: `Old synthetic note.\n\n- [[${titles[25 + i * 2]}]]\n` })
+  return notes
+}
+
 /** A dense synthetic brain: 1,000 notes, each linking to three distinct others by a fixed pseudo-random sequence (3,000 links). */
 export function denseNotes(count = 1000) {
   let seed = 128

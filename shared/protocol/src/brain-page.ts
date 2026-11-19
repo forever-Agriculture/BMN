@@ -55,6 +55,16 @@ export interface BrainGraph {
   more: [number, number, number]
 }
 
+export interface BrainMapNode extends BrainPageNoteRef { links: number }
+/** The whole brain (Epic 128.5): visible notes, busiest first up to the cap, and each link between them once. */
+export interface BrainMap {
+  nodes: BrainMapNode[]
+  /** Each link once, `from` before `to` in id order. */
+  edges: { from: string; to: string }[]
+  /** Visible notes before the cap; above `nodes.length` the map reads "First N of total". */
+  total: number
+}
+
 /** One request from the window; each command names its own keys (the route refuses any other). */
 export type BrainPageRequest =
   | { command: 'status' }
@@ -63,3 +73,4 @@ export type BrainPageRequest =
   | { command: 'read'; id: string }
   | { command: 'history'; id: string }
   | { command: 'graph'; id: string; depth?: 1 | 2 | 3; archived?: boolean }
+  | { command: 'map'; archived?: boolean }

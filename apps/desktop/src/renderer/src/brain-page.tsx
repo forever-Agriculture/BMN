@@ -1,12 +1,13 @@
 // MODULE: brain-page.tsx - The Brain page (Epic 128): search, read and follow his notes, and a note's neighbourhood graph; it only reads
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
-import type { BrainGraph, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageRequest, BrainPageSearch, BrainPageSummary, BrainPageVersion } from '@bmn/protocol'
+import type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageRequest, BrainPageSearch, BrainPageSummary, BrainPageVersion } from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { Segmented } from './history-preferences'
 import { markdownPage } from './quick-look-markdown'
 import { MarkdownPageView } from './quick-look-page'
 import { quickLookSecretRanges, reveal, revealSecondsLeft, viewText, type Reveal } from './quick-look-secrets'
 import { BrainGraphView } from './brain-graph'
+import { BrainMapView } from './brain-map'
 import { kindColour } from './brain-graph-layout'
 import './brain-page.css'
 
@@ -224,6 +225,14 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const [selected, setSelected] = useState<string | null>(null)
   const [beside, setBeside] = useState<BrainPageNote | null>(null)
   const [narrow, setNarrow] = useState(false)
+  // The whole-brain map (Epic 128.5): open from a note or the list; its own selection and side panel.
+  const [mapOpen, setMapOpen] = useState(false)
+  const [brainMap, setBrainMap] = useState<BrainMap | null>(null)
+  const [mapError, setMapError] = useState<string | null>(null)
+  const [mapSelected, setMapSelected] = useState<string | null>(null)
+  const [mapBeside, setMapBeside] = useState<BrainPageNote | null>(null)
+  const mapSeq = useRef(0)
+  const focusMap = useRef(false)
   const box = useRef<HTMLDivElement>(null)
   const search = useRef<HTMLInputElement>(null)
   const searchSeq = useRef(0)
@@ -344,7 +353,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   // Only a visible note has a graph (D7): never a withdrawn one, an archived one only with Archived on.
   const graphable = note !== null && (note.status === 'active' || (note.status === 'archived' && archived))
   useEffect(() => { if (!graphable) { setView('note'); setPane((current) => (current === 'graph' ? 'text' : current)) } }, [graphable])
-  const showGraph = graphable && !query.trim() && (narrow ? pane === 'graph' : view === 'graph')
+  const showGraph = graphable && !mapOpen && !query.trim() && (narrow ? pane === 'graph' : view === 'graph')
   useEffect(() => {
     if (!showGraph || !note) return
     const seq = ++graphSeq.current
@@ -376,6 +385,51 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     return () => { live = false }
   }, [showGraph, selected, note, read])
 
+  // The map is read when shown and again when Archived changes; an older answer never replaces a newer one.
+  const showMap = status.kind === 'ready' && mapOpen && !query.trim()
+  useEffect(() => {
+    if (!showMap) return
+    const seq = ++mapSeq.current
+    setMapError(null)
+    read<BrainMap>({ command: 'map', archived }).then((next) => {
+      if (seq !== mapSeq.current) return
+      setBrainMap(next)
+      setMapSelected((current) => (current && next.nodes.some((node) => node.id === current) ? current : null))
+    }).catch((error: unknown) => { if (seq === mapSeq.current) { setBrainMap(null); setMapError(errorText(error)) } })
+  }, [showMap, archived, read])
+  // M (or the Map button) gives the keys to the map once it is drawn.
+  useEffect(() => {
+    if (!showMap || !brainMap || !focusMap.current) return
+    focusMap.current = false
+    box.current?.querySelector<SVGElement>('svg.b-map')?.focus()
+  }, [showMap, brainMap])
+  // The note shown beside the map.
+  useEffect(() => {
+    if (!showMap || !mapSelected) { setMapBeside(null); return }
+    if (note && mapSelected === note.id) { setMapBeside(note); return }
+    let live = true
+    read<BrainPageNote>({ command: 'read', id: mapSelected }).then((next) => { if (live) setMapBeside(next) }).catch(() => { if (live) setMapBeside(null) })
+    return () => { live = false }
+  }, [showMap, mapSelected, note, read])
+  const openMap = (): void => {
+    historySeq.current += 1
+    setHistory(null)
+    setQuery('')
+    setMapSelected(note?.id ?? mapSelected)
+    focusMap.current = true
+    setMapOpen(true)
+  }
+  const closeMap = (): void => { mapSeq.current += 1; setMapOpen(false) }
+  /** Double-click or Shift Enter on the map: that note's neighbourhood graph; M comes back with it selected. */
+  const graphFromMap = (id: string): void => {
+    closeMap()
+    setMapSelected(id)
+    focusGraph.current = true
+    setView('graph')
+    setPane('graph')
+    openNote(id, 'push', true)
+  }
+
   // A History answer counts only for the note and the opening it was asked for; closing it first drops the answer.
   const openHistory = (): void => {
     if (!note) return
@@ -389,7 +443,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const goForward = (): void => { const id = forward[0]; if (id) { setForward(forward.slice(1)); openNote(id, 'forward') } }
   // The new centre opens at its own depth (openNote resets it with the note), never by asking again for the old centre.
   const refocus = (id: string): void => { openNote(id, 'push', true) }
-  const toList = (): void => { noteSeq.current += 1; shownNote.current = null; setNote(null); memory.noteId = null; setView('note'); setGraph(null) }
+  const toList = (): void => { closeMap(); noteSeq.current += 1; shownNote.current = null; setNote(null); memory.noteId = null; setView('note'); setGraph(null) }
 
   const typed = query.trim()
   // Only results for the words now typed, under the Archived setting now on, can be moved through or opened.
@@ -400,6 +454,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const stepBack = (): boolean => {
     if (history) { closeHistory(); return true }
     if (typed) { setQuery(''); return true }
+    if (mapOpen) { closeMap(); return true }
     if (note && (narrow ? pane !== 'text' : view === 'graph')) { setView('note'); setPane('text'); return true }
     return false
   }
@@ -430,6 +485,11 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (event.ctrlKey || event.metaKey || event.altKey) return
     // Letters and digits act only outside a field (design.md Keys).
     if (event.key === '/') { event.preventDefault(); search.current?.focus(); return }
+    if (event.key.toLowerCase() === 'm' && !event.shiftKey && status.kind === 'ready') { event.preventDefault(); if (mapOpen) closeMap(); else openMap(); return }
+    if (mapOpen && !typed) {
+      if (event.key.toLowerCase() === 'h' && note) { event.preventDefault(); closeMap(); openHistory() }
+      return
+    }
     if (!note && !typed && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) {
       event.preventDefault(); setCursor((at) => (at + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length); return
     }
@@ -469,7 +529,9 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (status.kind === 'loading') return <div className="b-empty" aria-busy="true"><p className="b-muted">Opening the brain…</p><div className="b-skeleton" /><div className="b-skeleton" /><div className="b-skeleton short" /></div>
     if (status.kind === 'not-switched') return <div className="b-empty"><p>The Brain page opens after the switch to the BMN brain. Choose Switch to the BMN brain… in the palette.</p></div>
     if (status.kind === 'unavailable') return <div className="b-empty"><p role="alert" className="b-alert">The brain could not be read: {status.reason}</p></div>
-    if (typed || !note) return listBody()
+    if (typed) return listBody()
+    if (mapOpen) return mapBody()
+    if (!note) return listBody()
     return noteBody(note)
   }
 
@@ -545,6 +607,32 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     )
   }
 
+  const mapBody = (): ReactNode => {
+    const shown = mapBeside
+    const side = (
+      <aside className="b-side" aria-label="Selected note">
+        {shown ? <>
+          <span className="b-eyebrow"><KindMark kind={shown.kind} status={shown.status} />{shown.kind}</span>
+          <h2 className="b-side-title">{shown.title}</h2>
+          <dl className="kv b-kv"><dt>Last change</dt><dd>{brainTime(shown.changed)}</dd><dt>Version</dt><dd>{shown.revision}</dd></dl>
+          <div className="b-actions">
+            <button type="button" className="b-plate" onClick={() => { closeMap(); setView('note'); setPane('text'); if (shown.id !== note?.id) openNote(shown.id) }}>Open note</button>
+            <button type="button" className="b-plate" onClick={() => graphFromMap(shown.id)} title="Shift Enter">Graph</button>
+          </div>
+          <div className="b-side-text"><NoteText key={shown.id} note={shown} onOpen={(id) => setMapSelected(id)} /></div>
+        </> : <p className="b-side-empty">Pick a note to read it here.</p>}
+      </aside>
+    )
+    return (
+      <div className={`b-note map${narrow ? ' narrow' : ''}`}>
+        {mapError ? <p className="b-alert" role="alert">{mapError}</p> : null}
+        {brainMap ? <BrainMapView map={brainMap} open={note?.id ?? null} selected={mapSelected} narrow={narrow} reducedMotion={props.reducedMotion}
+          onSelect={setMapSelected} onOpenGraph={graphFromMap} /> : <div className="b-graph-pane"><div className="b-graph-well" aria-busy="true" /></div>}
+        {side}
+      </div>
+    )
+  }
+
   const noteBody = (current: BrainPageNote): ReactNode => {
     if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={closeHistory} />
     const panel = (
@@ -597,9 +685,10 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
             {note && graphable && !typed && !narrow ? (
               <><span id="b-view" hidden>View</span>
                 <Segmented labelledBy="b-view" fit options={['note', 'graph'] as const} value={view}
-                  optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => { focusGraph.current = value === 'graph'; setView(value) }} /></>
+                  optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => { closeMap(); focusGraph.current = value === 'graph'; setView(value) }} /></>
             ) : null}
-            {note && !typed ? <button type="button" className="b-quiet" onClick={toList}>All notes</button> : null}
+            {status.kind === 'ready' && !typed ? <button type="button" className="b-quiet b-map-toggle" aria-pressed={mapOpen} title="Whole-brain map (M)" onClick={() => (mapOpen ? closeMap() : openMap())}>Map</button> : null}
+            {(note || mapOpen) && !typed ? <button type="button" className="b-quiet" onClick={toList}>All notes</button> : null}
             <button type="button" className="b-toggle" aria-pressed={archived} onClick={() => setArchived(!archived)}>Archived</button>
           </div>
         </div>

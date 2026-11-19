@@ -9,10 +9,11 @@ export const BRAIN_PAGE_COMMANDS: Readonly<Record<string, readonly string[]>> = 
   search: ['query', 'archived'],
   read: ['id'],
   history: ['id'],
-  graph: ['id', 'depth', 'archived']
+  graph: ['id', 'depth', 'archived'],
+  map: ['archived']
 })
 
-export type BrainPageReads = Pick<BrainWorkerClient, 'pageStatus' | 'pageList' | 'pageSearch' | 'pageRead' | 'pageHistory' | 'pageGraph'>
+export type BrainPageReads = Pick<BrainWorkerClient, 'pageStatus' | 'pageList' | 'pageSearch' | 'pageRead' | 'pageHistory' | 'pageGraph' | 'pageMap'>
 export type BrainPageState = 'ready' | 'not-switched'
 
 function invalid(message: string): never { throw new BrainError('INVALID_ARGUMENT', message) }
@@ -48,6 +49,7 @@ export async function brainPageRequest(client: BrainPageReads, params: Record<st
       if (depth !== undefined && depth !== 1 && depth !== 2 && depth !== 3) invalid('Brain page depth must be 1, 2 or 3')
       return client.pageGraph(text('id', 64), { ...(depth === undefined ? {} : { depth }), archived: flag('archived') })
     }
+    case 'map': return client.pageMap({ archived: flag('archived') })
   }
   return invalid('Unknown Brain page request')
 }

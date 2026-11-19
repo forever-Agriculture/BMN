@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // MODULE: brain-page.dom.test.tsx - Epic 128 128.1: the real Brain page mounted on a synthetic read route; opening, search, reading, history and Esc
-import type { BrainGraph, BrainPageList, BrainPageNote, BrainPageRequest, BrainPageSearch, BrainPageSummary, BrainPageVersion } from '@bmn/protocol'
+import type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageRequest, BrainPageSearch, BrainPageSummary, BrainPageVersion } from '@bmn/protocol'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -64,6 +64,8 @@ function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainP
         return { focus: request.id, depth: 1, nodes: [{ id: request.id, title: NOTES[request.id]!.title, kind: 'project', status: 'active', depth: 0, parent: null, links: 1 },
           { id: other, title: NOTES[other]!.title, kind: 'fact', status: 'active', depth: 1, parent: request.id, links: 1 }], edges: [{ from: request.id, to: other, tree: true }], more: [0, 0, 0] } satisfies BrainGraph as Result
       }
+      case 'map': return { nodes: [{ id: 'n1', title: 'Backup plan', kind: 'project', status: 'active', links: 1 }, { id: 'n2', title: 'Other', kind: 'fact', status: 'active', links: 1 },
+        { id: 's1', title: 'Keys', kind: 'fact', status: 'active', links: 0 }], edges: [{ from: 'n1', to: 'n2' }], total: 3 } satisfies BrainMap as Result
     }
   }
 }
@@ -294,6 +296,37 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(container!.querySelector('svg.b-graph')!.getAttribute('data-focus')).toBe('n2')
     expect(container!.querySelector('.b-node.selected')!.getAttribute('data-node')).toBe('n2')
     expect(container!.querySelector('.b-side-title')!.textContent).toBe('Other')
+  })
+
+  it('M opens the whole-brain map from the list; Enter shows a note beside, Shift Enter opens its graph, M comes back, Esc leaves', async () => {
+    PAIRED = true
+    await mount()
+    const box = container!.querySelector('.b-box')!
+    await press(box, 'm')
+    expect(requests.some((r) => r.command === 'map')).toBe(true)
+    const svg = container!.querySelector('svg.b-map')!
+    expect(svg).not.toBeNull()
+    expect(text()).toContain('3 notes · 1 link · 1 alone · 1 group, largest 2')
+    expect(container!.querySelector('.b-map-toggle')!.getAttribute('aria-pressed')).toBe('true')
+    expect(text()).toContain('Pick a note to read it here.')
+    expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(3)
+    // Enter on the cursor (the biggest group's centre) shows that note beside the map.
+    await press(svg, 'Enter')
+    expect(container!.querySelector('.b-side-title')!.textContent).toMatch(/Backup plan|Other/)
+    const picked = container!.querySelector('svg.b-map .b-node.selected')!.getAttribute('data-node')!
+    // Shift Enter opens that note's neighbourhood graph.
+    await press(container!.querySelector('svg.b-map')!, 'Enter', { shiftKey: true })
+    await flush()
+    expect(container!.querySelector('svg.b-map')).toBeNull()
+    expect(container!.querySelector('svg.b-graph')!.getAttribute('data-focus')).toBe(picked)
+    // M comes back to the map with that note selected; Esc leaves it to the note.
+    await press(container!.querySelector('.b-box')!, 'm')
+    expect(container!.querySelector('svg.b-map .b-node.selected')!.getAttribute('data-node')).toBe(picked)
+    await press(container!.querySelector('.b-box')!, 'Escape')
+    expect(container!.querySelector('svg.b-map')).toBeNull()
+    expect(closed).toBe(0)
+    // The route stayed read-only: only reads were asked.
+    expect(new Set(requests.map((r) => r.command))).toEqual(new Set(['status', 'list', 'map', 'read', 'graph']))
   })
 
   it('after a refocus in the narrow sheet the new centre is selected and the graph stays', async () => {

@@ -223,3 +223,47 @@ describe('Brain page neighbourhood (D7)', () => {
     } finally { b.close() }
   }, 30_000)
 })
+
+describe('Brain page whole-brain map (128.5)', () => {
+  it('holds every visible note and each link between visible notes once; archived ones join when shown, withdrawn ones never', () => {
+    const b = brain([
+      note('Hub', '[[Live]] [[Kept]] [[Gone]] [[Nowhere]]'),
+      note('Live', 'back to [[Hub]]'),
+      note('Kept', 'plain', { status: 'archived' }),
+      note('Gone', 'plain'),
+      note('Alone', 'no links')
+    ])
+    try {
+      b.store.setWriteDoor(true)
+      b.store.withdraw(b.id('Gone'), 1, 'synthetic-session')
+      const map = b.page.map()
+      expect(map.nodes.map((n) => n.title)).toEqual(['Hub', 'Live', 'Alone'])
+      expect(map.total).toBe(3)
+      // Hub and Live link both ways: one link, drawn once, in id order.
+      expect(map.edges).toEqual([b.id('Hub') < b.id('Live') ? { from: b.id('Hub'), to: b.id('Live') } : { from: b.id('Live'), to: b.id('Hub') }])
+      expect(map.nodes.find((n) => n.title === 'Hub')!.links).toBe(1)
+      const shown = b.page.map({ archived: true })
+      expect(shown.nodes.map((n) => n.title).sort()).toEqual(['Alone', 'Hub', 'Kept', 'Live'])
+      expect(shown.edges).toHaveLength(2)
+      expect(shown.nodes.find((n) => n.title === 'Hub')!.links).toBe(2)
+    } finally { b.close() }
+  })
+
+  it('reads a 1,000-note, 3,000-link brain quickly', () => {
+    const titles = Array.from({ length: 1000 }, (_, i) => `Synthetic ${i}`)
+    let seed = 1285
+    const next = (): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % 1000 }
+    const b = brain(titles.map((title, i) => note(title, [0, 1, 2].map(() => { let to = next(); if (to === i) to = (to + 1) % 1000; return `[[${titles[to]}]]` }).join(' '))))
+    try {
+      const start = performance.now()
+      const map = b.page.map()
+      const took = performance.now() - start
+      expect(map.nodes).toHaveLength(1000)
+      expect(map.edges.length).toBeGreaterThan(2500)
+      expect(new Set(map.edges.map((edge) => `${edge.from} ${edge.to}`)).size).toBe(map.edges.length)
+      expect(map.edges.every((edge) => edge.from < edge.to)).toBe(true)
+      console.log(JSON.stringify({ map: true, notes: map.nodes.length, links: map.edges.length, ms: Math.round(took) }))
+      expect(took).toBeLessThan(200)
+    } finally { b.close() }
+  }, 30_000)
+})

@@ -1,14 +1,16 @@
-// MODULE: brain-page.ts - The Brain page's read-only view of the store: paged summaries, every-word search, a note with its links, history and a capped neighbourhood (Epic 128)
+// MODULE: brain-page.ts - The Brain page's read-only view of the store: paged summaries, every-word search, a note with its links, history, a capped neighbourhood and the whole-brain map (Epic 128)
 import type { DatabaseConnection } from './database-initialization'
-import type { BrainGraph, BrainGraphNode, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
+import type { BrainGraph, BrainGraphNode, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
 import { BrainError } from './brain-store'
-export type { BrainGraph, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
+export type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
 
 /** The 150-node cap after the focus: 36, 60 and 53 by ring; a ring's unused places pass to the next (Epic 128 D7). */
 export const GRAPH_RING_PLACES = [36, 60, 53] as const
 export const GRAPH_OPEN_NODES = 8
 export const BRAIN_PAGE_LIST_LIMIT = 100
 export const BRAIN_PAGE_SEARCH_LIMIT = 10
+/** The map draws at most this many notes, most links first (design-128-5.md: under about 8 px a pitch no longer reads). */
+export const BRAIN_MAP_CAP = 3000
 
 const HEAD = `FROM brain_note n JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision`
 const NEWEST = 'ORDER BY julianday(v.source_time) DESC, v.recorded_at DESC, n.id'
@@ -126,6 +128,37 @@ export class BrainPageReader {
       FROM brain_version WHERE note=? ORDER BY revision DESC`).all(id) as BrainPageVersion[])
   }
 
+  /** Visible notes (active, plus archived when shown, never withdrawn) and the links between them, both ways (D7). */
+  private visibleLinks(archived: boolean): { visible: Map<string, BrainPageNoteRef>; near: Map<string, Set<string>> } {
+    const statuses = statusesFor(archived)
+    const marks = statuses.map(() => '?').join(',')
+    const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.status IN (${marks})`)
+      .all(...statuses) as BrainPageNoteRef[]).map((note) => [note.id, note]))
+    const near = new Map<string, Set<string>>()
+    const join = (a: string, b: string): void => { const set = near.get(a) ?? new Set<string>(); set.add(b); near.set(a, set) }
+    for (const link of this.database.prepare("SELECT note, resolved FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").iterate() as Iterable<{ note: string; resolved: string }>) {
+      if (link.note === link.resolved || !visible.has(link.note) || !visible.has(link.resolved)) continue
+      join(link.note, link.resolved); join(link.resolved, link.note)
+    }
+    return { visible, near }
+  }
+
+  /**
+   * The whole brain (Epic 128.5, design-128-5.md): every visible note with its link count and each link between visible
+   * notes once. Above the cap the busiest notes are kept (then title, then id), and only links between kept notes.
+   */
+  map(options: { archived?: boolean } = {}): BrainMap {
+    const { visible, near } = this.visibleLinks(options.archived === true)
+    const degree = (id: string): number => near.get(id)?.size ?? 0
+    const ordered = [...visible.values()].sort((a, b) => degree(b.id) - degree(a.id) || a.title.localeCompare(b.title) || a.id.localeCompare(b.id))
+    const kept = ordered.slice(0, BRAIN_MAP_CAP)
+    const ids = new Set(kept.map((note) => note.id))
+    const edges: BrainMap['edges'] = []
+    for (const note of kept) for (const to of near.get(note.id) ?? []) if (note.id < to && ids.has(to)) edges.push({ from: note.id, to })
+    edges.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to))
+    return { nodes: kept.map((note) => ({ id: note.id, title: note.title, kind: note.kind, status: note.status, links: degree(note.id) })), edges, total: visible.size }
+  }
+
   /**
    * A note's neighbourhood (Epic 128 D7): links walked only between visible notes (active, plus archived when shown,
    * never withdrawn), in both directions. Ring by ring, most links first, then title; a ring keeps at most its places
@@ -135,18 +168,9 @@ export class BrainPageReader {
   graph(id: string, options: { depth?: 1 | 2 | 3; archived?: boolean } = {}): BrainGraph {
     const focus = this.ref(id)
     if (!focus) throw new BrainError('NOT_FOUND', 'Brain note not found')
-    const statuses = statusesFor(options.archived === true)
-    const marks = statuses.map(() => '?').join(',')
-    const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.status IN (${marks})`)
-      .all(...statuses) as BrainPageNoteRef[]).map((note) => [note.id, note]))
+    const { visible, near } = this.visibleLinks(options.archived === true)
     // A hidden note has no graph: withdrawn notes are in none, archived ones only with Archived on (D7).
     if (!visible.has(id)) throw new BrainError('NOT_VISIBLE', 'This note is not shown in the graph')
-    const near = new Map<string, Set<string>>()
-    const join = (a: string, b: string): void => { const set = near.get(a) ?? new Set<string>(); set.add(b); near.set(a, set) }
-    for (const link of this.database.prepare("SELECT note, resolved FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").iterate() as Iterable<{ note: string; resolved: string }>) {
-      if (link.note === link.resolved || !visible.has(link.note) || !visible.has(link.resolved)) continue
-      join(link.note, link.resolved); join(link.resolved, link.note)
-    }
     const degree = (note: string): number => near.get(note)?.size ?? 0
     const byTitle = (a: string, b: string): number => visible.get(a)!.title.localeCompare(visible.get(b)!.title) || a.localeCompare(b)
     const walk = (depth: number): { rings: string[][]; parent: Map<string, string | null>; more: [number, number, number] } => {

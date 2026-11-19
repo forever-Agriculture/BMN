@@ -72,6 +72,7 @@ port.on('message', (request: { id: number; operation: string; args: unknown[] })
       case 'page-read': switchedForPage(); result = page.read(args[0] as string); break
       case 'page-history': switchedForPage(); result = page.history(args[0] as string); break
       case 'page-graph': switchedForPage(); result = page.graph(args[0] as string, args[1] as Parameters<BrainPageReader['graph']>[1]); break
+      case 'page-map': switchedForPage(); result = page.map(args[0] as Parameters<BrainPageReader['map']>[0]); break
       case 'create': result = store.create(args[0] as BrainContent, args[1] as string); break
       case 'edit': result = store.edit(args[0] as string, args[1] as number, args[2] as BrainContent, args[3] as string); break
       case 'withdraw': result = store.withdraw(args[0] as string, args[1] as number, args[2] as string); break

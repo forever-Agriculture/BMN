@@ -72,7 +72,8 @@ describe('brain worker and authenticated write door',()=>{
    expect((await f.client.pageRead(alpha.id)).linksTo.map(n=>n.title)).toEqual(['Beta'])
    expect((await f.client.pageHistory(alpha.id)).map(v=>v.revision)).toEqual([1])
    expect((await f.client.pageGraph(alpha.id,{})).nodes).toHaveLength(2)
-   for(const command of ['list','page-list','page-read','page-search','page-graph'])await expect(call(f.socket,f.token,'brain',{command})).rejects.toThrow(/Unknown brain/)
+   expect((await f.client.pageMap({})).nodes.length).toBeGreaterThanOrEqual(2)
+   for(const command of ['list','page-list','page-read','page-search','page-graph','page-map'])await expect(call(f.socket,f.token,'brain',{command})).rejects.toThrow(/Unknown brain/)
    await expect(call(f.socket,f.token,'app.brainPage',{command:'list'})).rejects.toThrow(/Unknown method|not allowed|invalid/i)
   }finally{await f.close()}
  })
