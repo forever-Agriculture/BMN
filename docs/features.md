@@ -782,8 +782,8 @@ titles and IDs at startup and after compaction. **Preferences → General → Br
 Search returns at most ten titles with short summaries. Whole-note reads include the revision,
 origin, date and scope; a heading can select one section, and links/backlinks are optional. Search
 uses FTS5 trigrams with a short-query fallback. For a Ukrainian question, agents can search
-with short English keywords and try the original wording. If a Cyrillic search finds nothing,
-the CLI suggests trying English.
+for individual English keywords separately and try the original wording. If a Cyrillic search
+finds nothing, the CLI suggests trying English.
 
 Writes require a live BMN session and the completed owner-held switch. Edits require the revision
 the agent read. A stale edit, duplicate normalized title, fourth new note in one session or a

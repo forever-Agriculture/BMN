@@ -16,7 +16,7 @@ repeated searches and duplicated project context. Decide within existing authori
 record uncertainty.
 
 - `bmn brain search "words"`: at most 10 titles, one-line summaries and scores; archives need `--archived`.
-- For a non-English question, search with short English keywords and also try the original language.
+- For a non-English question, try two distinctive English keywords in separate searches and also search the original wording. Start with one word per search because BMN matches the phrase literally.
 - `bmn brain read "title or id"`: whole note with revision, origin, date and scope.
   Add `--section "heading"` for one part or `--links` for links/backlinks.
 - Save lasting personal preferences, his words, people, machine rules, cross-project lessons,
