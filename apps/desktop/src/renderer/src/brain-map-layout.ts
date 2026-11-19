@@ -31,7 +31,7 @@ const kindRank = (kind: string): number => { const at = KIND_ORDER.indexOf(kind)
 const byTitle = (a: BrainMapNode, b: BrainMapNode): number => a.title.localeCompare(b.title) || a.id.localeCompare(b.id)
 const byKindTitle = (a: BrainMapNode, b: BrainMapNode): number => kindRank(a.kind) - kindRank(b.kind) || byTitle(a, b)
 
-/** Exact centres (least farthest note) up to this group size; a bigger group is centred on its busiest note. */
+/** Exact centres (least farthest note) up to this group size; a bigger group takes the middle of a longest path (two sweeps). */
 const EXACT_CENTRE = 400
 export const MAP_PITCH_MAX = 40
 const STRETCH_MAX = 1.45
@@ -64,7 +64,20 @@ function layoutGroup(members: BrainMapNode[], near: ReadonlyMap<string, readonly
       const far = Math.max(...distances(note.id, near).values())
       if (far < best) { best = far; centre = note }
     }
-  } else centre = [...members].sort((a, b) => b.links - a.links || byTitle(a, b))[0]!
+  } else {
+    // Two sweeps: the note farthest from the busiest, then the note farthest from that; the middle of the path between
+    // them is the centre (exact for a tree, near it otherwise), so a long chain is not hung from one end (review).
+    const busiest = [...members].sort((a, b) => b.links - a.links || byTitle(a, b))[0]!
+    const farthest = (from: string): string => { let best = from, most = -1; for (const [id, d] of distances(from, near)) if (d > most || d === most && id < best) { best = id; most = d } return best }
+    const a = farthest(busiest.id)
+    const fromA = distances(a, near)
+    const b = farthest(a)
+    const length = fromA.get(b)!
+    // Walk back from b toward a to the middle of the path.
+    let at = b
+    for (let step = length; step > Math.ceil(length / 2); step -= 1) at = [...(near.get(at) ?? [])].filter((id) => fromA.get(id) === step - 1).sort()[0]!
+    centre = byId.get(at)!
+  }
   const points = new Map<string, Unit>([[centre.id, { x: 0, y: 0 }]])
   const parent = new Map<string, string | null>([[centre.id, null]])
   let layer = [centre.id]
@@ -212,7 +225,8 @@ export function layoutMap(map: BrainMap, width: number, height: number): MapLayo
   const sx = wide ? stretch : 1
   const sy = wide ? 1 : stretch
   const side = width < 480 ? 16 : 72
-  const pitch = Math.max(1, Math.min(MAP_PITCH_MAX, (width - 2 * side) / (2 * extent * sx), (height - 40) / (2 * extent * sy)))
+  // No floor: the whole brain always fits; a very long chain draws its dots closer than they read (design 2, review).
+  const pitch = Math.max(0.01, Math.min(MAP_PITCH_MAX, (width - 2 * side) / (2 * extent * sx), (height - 40) / (2 * extent * sy)))
   const cx = width / 2
   const cy = height / 2
   const nodes = map.nodes.map((note): MapNode => {

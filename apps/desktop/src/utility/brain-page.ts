@@ -147,11 +147,11 @@ export class BrainPageReader {
    * The whole brain (Epic 128.5, design-128-5.md): every visible note with its link count and each link between visible
    * notes once. Above the cap the busiest notes are kept (then title, then id), and only links between kept notes.
    */
-  map(options: { archived?: boolean } = {}): BrainMap {
+  map(options: { archived?: boolean; limit?: number } = {}): BrainMap {
     const { visible, near } = this.visibleLinks(options.archived === true)
     const degree = (id: string): number => near.get(id)?.size ?? 0
     const ordered = [...visible.values()].sort((a, b) => degree(b.id) - degree(a.id) || a.title.localeCompare(b.title) || a.id.localeCompare(b.id))
-    const kept = ordered.slice(0, BRAIN_MAP_CAP)
+    const kept = ordered.slice(0, Math.max(1, Math.min(BRAIN_MAP_CAP, options.limit ?? BRAIN_MAP_CAP)))
     const ids = new Set(kept.map((note) => note.id))
     const edges: BrainMap['edges'] = []
     for (const note of kept) for (const to of near.get(note.id) ?? []) if (note.id < to && ids.has(to)) edges.push({ from: note.id, to })

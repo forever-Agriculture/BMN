@@ -249,6 +249,18 @@ describe('Brain page whole-brain map (128.5)', () => {
     } finally { b.close() }
   })
 
+  it('above the cap keeps the busiest notes, only links between kept notes, and counts every visible note', () => {
+    const b = brain([note('Hub', '[[A]] [[B]] [[C]]'), note('A', '[[B]]'), note('B', 'plain'), note('C', 'plain'), note('Lone', 'plain')])
+    try {
+      const map = b.page.map({ limit: 3 })
+      expect(map.total).toBe(5)
+      expect(map.nodes.map((n) => n.title)).toEqual(['Hub', 'A', 'B'])
+      const kept = new Set(map.nodes.map((n) => n.id))
+      expect(map.edges.every((edge) => kept.has(edge.from) && kept.has(edge.to))).toBe(true)
+      expect(map.edges).toHaveLength(3)
+    } finally { b.close() }
+  })
+
   it('reads a 1,000-note, 3,000-link brain quickly', () => {
     const titles = Array.from({ length: 1000 }, (_, i) => `Synthetic ${i}`)
     let seed = 1285

@@ -227,10 +227,11 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const [narrow, setNarrow] = useState(false)
   // The whole-brain map (Epic 128.5): open from a note or the list; its own selection and side panel.
   const [mapOpen, setMapOpen] = useState(false)
-  const [brainMap, setBrainMap] = useState<BrainMap | null>(null)
+  const [brainMap, setBrainMap] = useState<(BrainMap & { archived: boolean }) | null>(null)
   const [mapError, setMapError] = useState<string | null>(null)
   const [mapSelected, setMapSelected] = useState<string | null>(null)
   const [mapBeside, setMapBeside] = useState<BrainPageNote | null>(null)
+  const [mapBesideError, setMapBesideError] = useState<string | null>(null)
   const mapSeq = useRef(0)
   const focusMap = useRef(false)
   const box = useRef<HTMLDivElement>(null)
@@ -391,9 +392,11 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (!showMap) return
     const seq = ++mapSeq.current
     setMapError(null)
+    // Until the new map answers, the old one (another Archived setting) offers nothing to act on.
+    setBrainMap((current) => (current && current.archived === archived ? current : null))
     read<BrainMap>({ command: 'map', archived }).then((next) => {
       if (seq !== mapSeq.current) return
-      setBrainMap(next)
+      setBrainMap({ ...next, archived })
       setMapSelected((current) => (current && next.nodes.some((node) => node.id === current) ? current : null))
     }).catch((error: unknown) => { if (seq === mapSeq.current) { setBrainMap(null); setMapError(errorText(error)) } })
   }, [showMap, archived, read])
@@ -405,10 +408,12 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   }, [showMap, brainMap])
   // The note shown beside the map.
   useEffect(() => {
+    setMapBesideError(null)
     if (!showMap || !mapSelected) { setMapBeside(null); return }
     if (note && mapSelected === note.id) { setMapBeside(note); return }
     let live = true
-    read<BrainPageNote>({ command: 'read', id: mapSelected }).then((next) => { if (live) setMapBeside(next) }).catch(() => { if (live) setMapBeside(null) })
+    read<BrainPageNote>({ command: 'read', id: mapSelected }).then((next) => { if (live) setMapBeside(next) })
+      .catch((error: unknown) => { if (live) { setMapBeside(null); setMapBesideError(errorText(error)) } })
     return () => { live = false }
   }, [showMap, mapSelected, note, read])
   const openMap = (): void => {
@@ -420,6 +425,13 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     setMapOpen(true)
   }
   const closeMap = (): void => { mapSeq.current += 1; setMapOpen(false) }
+  /** A note picked from the list or search opens as a page, leaving the map (review). */
+  const pick = (id: string): void => { closeMap(); openNote(id) }
+  /** Only a note drawn on the current map can be selected on it; any other link opens that note as a page (review). */
+  const selectOnMap = (id: string): void => {
+    if (brainMap?.nodes.some((node) => node.id === id)) setMapSelected(id)
+    else pick(id)
+  }
   /** Double-click or Shift Enter on the map: that note's neighbourhood graph; M comes back with it selected. */
   const graphFromMap = (id: string): void => {
     closeMap()
@@ -478,7 +490,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
         if (rows.length) setCursor((at) => (at + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length)
       } else if (event.key === 'Enter' && rows[cursor]) {
         event.preventDefault()
-        openNote(rows[cursor]!.id)
+        pick(rows[cursor]!.id)
       }
       return
     }
@@ -493,7 +505,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (!note && !typed && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows.length) {
       event.preventDefault(); setCursor((at) => (at + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length); return
     }
-    if (!note && !typed && event.key === 'Enter' && rows[cursor] && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); openNote(rows[cursor]!.id); return }
+    if (!note && !typed && event.key === 'Enter' && rows[cursor] && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); pick(rows[cursor]!.id); return }
     if (!note) return
     const key = event.key.toLowerCase()
     if (key === 'g') {
@@ -547,7 +559,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
           <span className="b-keys"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>Enter</kbd> open</span>
         </div>
         <ul className="b-list" aria-label={typed ? 'Search results' : 'Notes, newest change first'}>
-          {rows.map((row, index) => <NoteRow key={row.id} note={row} current={index === cursor} words={words} onOpen={() => openNote(row.id)} onPoint={() => setCursor(index)} />)}
+          {rows.map((row, index) => <NoteRow key={row.id} note={row} current={index === cursor} words={words} onOpen={() => pick(row.id)} onPoint={() => setCursor(index)} />)}
         </ul>
         {!typed && list && list.notes.length < list.total ? <button type="button" className="b-plate b-more" onClick={() => loadList(list.notes.length)}>Show more</button> : null}
         {!typed && list && list.withdrawn > 0 ? (
@@ -556,7 +568,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
               if (withdrawn) { setWithdrawn(null); return }
               loadWithdrawn(0)
             }}>Withdrawn <span className="b-count">{list.withdrawn}</span></button>
-            {withdrawn ? <ul className="b-list">{withdrawn.notes.map((row) => <NoteRow key={row.id} note={row} current={false} onOpen={() => openNote(row.id)} onPoint={() => undefined} />)}</ul> : null}
+            {withdrawn ? <ul className="b-list">{withdrawn.notes.map((row) => <NoteRow key={row.id} note={row} current={false} onOpen={() => pick(row.id)} onPoint={() => undefined} />)}</ul> : null}
             {withdrawn && withdrawn.notes.length < withdrawn.total ? <button type="button" className="b-plate b-more" onClick={() => loadWithdrawn(withdrawn.notes.length)}>Show more</button> : null}
           </div>
         ) : null}
@@ -609,7 +621,8 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
 
   const mapBody = (): ReactNode => {
     // Only the note now selected is shown beside, so its buttons never act on the one before (pre-review).
-    const shown = mapBeside && mapBeside.id === mapSelected ? mapBeside : null
+    const onMap = brainMap !== null && mapSelected !== null && brainMap.nodes.some((node) => node.id === mapSelected)
+    const shown = onMap && mapBeside && mapBeside.id === mapSelected ? mapBeside : null
     const side = (
       <aside className="b-side" aria-label="Selected note">
         {shown ? <>
@@ -620,15 +633,16 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
             <button type="button" className="b-plate" onClick={() => { closeMap(); setView('note'); setPane('text'); if (shown.id !== note?.id) openNote(shown.id) }}>Open note</button>
             <button type="button" className="b-plate" onClick={() => graphFromMap(shown.id)} title="Shift Enter">Graph</button>
           </div>
-          <div className="b-side-text"><NoteText key={shown.id} note={shown} onOpen={(id) => setMapSelected(id)} /></div>
-        </> : <p className="b-side-empty" aria-busy={mapSelected ? 'true' : undefined}>{mapSelected ? 'Opening the note…' : 'Pick a note to read it here.'}</p>}
+          <div className="b-side-text"><NoteText key={shown.id} note={shown} onOpen={selectOnMap} /></div>
+        </> : mapBesideError && onMap ? <p className="b-alert" role="alert">This note could not be read: {mapBesideError}</p>
+          : <p className="b-side-empty" aria-busy={onMap ? 'true' : undefined}>{onMap ? 'Opening the note…' : 'Pick a note to read it here.'}</p>}
       </aside>
     )
     return (
       <div className={`b-note map${narrow ? ' narrow' : ''}`}>
         {mapError ? <p className="b-alert" role="alert">{mapError}</p> : null}
         {brainMap ? <BrainMapView map={brainMap} open={note?.id ?? null} selected={mapSelected} narrow={narrow} reducedMotion={props.reducedMotion}
-          onSelect={setMapSelected} onOpenGraph={graphFromMap} /> : <div className="b-graph-pane"><div className="b-graph-well" aria-busy="true" /></div>}
+          onSelect={selectOnMap} onOpenGraph={graphFromMap} /> : <div className="b-graph-pane"><div className="b-graph-well" aria-busy="true" /></div>}
         {side}
       </div>
     )

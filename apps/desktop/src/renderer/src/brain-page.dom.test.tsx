@@ -24,6 +24,7 @@ const NOTES: Record<string, BrainPageNote> = {
   s1: note('s1', 'Keys', { linksTo: [{ id: 'n2', title: 'Other', kind: 'fact', status: 'active' }], linkedFrom: [], missing: [], targets: { Other: 'n2' },
     markdown: 'The key is AKIAABCDEFGHIJKLMNOP.\r\nSee [[Other]].' }),
   o2: note('o2', 'Other', { linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Another key AKIAZYXWVUTSRQPONMLK here.' }),
+  h1: note('h1', 'Hidden link', { linksTo: [], linkedFrom: [], missing: [], targets: { Old: 'n4' }, markdown: 'See [[Old]].' }),
   w1: note('w1', 'Mistake', { status: 'withdrawn', linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Withdrawn text.' })
 }
 const WITHDRAWN = Array.from({ length: 101 }, (_, i) => summary(i ? `w${i + 1}` : 'w1', i ? `Withdrawn ${i}` : 'Mistake', { status: 'withdrawn' }))
@@ -35,6 +36,7 @@ let LIST = [summary('n1', 'Backup plan'), summary('n2', 'Other')]
 let FOUND: BrainPageSummary[] | null = null
 let PAIRED = false
 let GRAPH_FAILS = false
+let READ_FAILS = new Set<string>()
 function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainPageSummary[]) {
   return async <Result,>(request: BrainPageRequest): Promise<Result> => {
     requests.push(request)
@@ -51,6 +53,7 @@ function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainP
         return { notes: found, limited: false } satisfies BrainPageSearch as Result
       }
       case 'read': {
+        if (READ_FAILS.has(request.id)) throw new Error('Brain worker exited (1)')
         const found = request.id === 'n2' && NOTES.o2 && requests.some((r) => r.command === 'read' && r.id === 's1') ? NOTES.o2 : NOTES[request.id]
         if (!found) throw new Error('Brain note not found')
         return found as Result
@@ -65,7 +68,8 @@ function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainP
           { id: other, title: NOTES[other]!.title, kind: 'fact', status: 'active', depth: 1, parent: request.id, links: 1 }], edges: [{ from: request.id, to: other, tree: true }], more: [0, 0, 0] } satisfies BrainGraph as Result
       }
       case 'map': return { nodes: [{ id: 'n1', title: 'Backup plan', kind: 'project', status: 'active', links: 1 }, { id: 'n2', title: 'Other', kind: 'fact', status: 'active', links: 1 },
-        { id: 's1', title: 'Keys', kind: 'fact', status: 'active', links: 0 }], edges: [{ from: 'n1', to: 'n2' }], total: 3 } satisfies BrainMap as Result
+        { id: 's1', title: 'Keys', kind: 'fact', status: 'active', links: 0 }, { id: 'h1', title: 'Hidden link', kind: 'fact', status: 'active', links: 0 }, ...(request.archived ? [{ id: 'n4', title: 'Old', kind: 'fact', status: 'archived' as const, links: 0 }] : [])],
+        edges: [{ from: 'n1', to: 'n2' }], total: request.archived ? 5 : 4 } satisfies BrainMap as Result
     }
   }
 }
@@ -103,6 +107,7 @@ beforeEach(() => {
   closed = 0
   held = null
   release = []
+  READ_FAILS = new Set()
   LIST = [summary('n1', 'Backup plan'), summary('n2', 'Other')]
   FOUND = null
   PAIRED = false
@@ -306,10 +311,10 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(requests.some((r) => r.command === 'map')).toBe(true)
     const svg = container!.querySelector('svg.b-map')!
     expect(svg).not.toBeNull()
-    expect(text()).toContain('3 notes · 1 link · 1 alone · 1 group, largest 2')
+    expect(text()).toContain('4 notes · 1 link · 2 alone · 1 group, largest 2')
     expect(container!.querySelector('.b-map-toggle')!.getAttribute('aria-pressed')).toBe('true')
     expect(text()).toContain('Pick a note to read it here.')
-    expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(3)
+    expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(4)
     // Enter on the cursor (the biggest group's centre) shows that note beside the map.
     await press(svg, 'Enter')
     expect(container!.querySelector('.b-side-title')!.textContent).toMatch(/Backup plan|Other/)
@@ -353,6 +358,67 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(container!.querySelector('.b-side-title')!.textContent).toBe(NOTES[second]!.title)
     // While the map is open, Note | Graph shows neither as chosen: one gold bar, on Map.
     expect(container!.querySelector('.b-map-toggle')!.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('from the map, a search result opens as a page and leaves the map (review)', async () => {
+    await mount()
+    await press(container!.querySelector('.b-box')!, 'm')
+    expect(container!.querySelector('svg.b-map')).not.toBeNull()
+    await type('backup')
+    await press(container!.querySelector('.b-search input')!, 'Enter')
+    await flush()
+    expect(container!.querySelector('svg.b-map')).toBeNull()
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Backup plan')
+    await press(container!.querySelector('.b-box')!, 'm')
+    await type('backup')
+    await act(async () => { container!.querySelector<HTMLElement>('.b-row[data-note]')!.click() })
+    await flush()
+    expect(container!.querySelector('svg.b-map')).toBeNull()
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Backup plan')
+  })
+
+  it('a map read for another Archived setting takes the old picture and panel away until it answers; a hidden note never shows beside it (review)', async () => {
+    await mount({ noteId: null, archived: true })
+    await press(container!.querySelector('.b-box')!, 'm')
+    // n4 (archived) is on the map while Archived is on.
+    await act(async () => { (container!.querySelector('svg.b-map') as SVGElement).focus() })
+    expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(5)
+    held = (request) => request.command === 'map'
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-toggle')!.click() })
+    await flush()
+    expect(container!.querySelector('svg.b-map')).toBeNull()
+    expect(container!.querySelector('.b-side-title')).toBeNull()
+    held = null
+    await releaseAll()
+    expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(4)
+  })
+
+  it('a link beside the map to a note not on it opens that note as a page; a failed read says so (review)', async () => {
+    await mount()
+    await press(container!.querySelector('.b-box')!, 'm')
+    const clickDot = async (id: string): Promise<void> => {
+      const dot = container!.querySelector(`svg.b-map .b-node[data-node="${id}"] circle:not(.b-bloom):not(.b-select)`)!
+      await act(async () => { container!.querySelector('svg.b-map')!.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: Number(dot.getAttribute('cx')), clientY: Number(dot.getAttribute('cy')) })) })
+      await flush()
+    }
+    await clickDot('h1')
+    expect(container!.querySelector('.b-side-title')!.textContent).toBe('Hidden link')
+    // Its link names Old, which is archived and not on the map: it opens Old as a page, and the map closes.
+    NOTES.n4 = note('n4', 'Old', { status: 'archived', linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Old text.' })
+    await act(async () => { [...container!.querySelectorAll<HTMLElement>('.b-side .ql-md-a')].find((a) => a.textContent === 'Old')!.click() })
+    await flush()
+    expect(container!.querySelector('svg.b-map')).toBeNull()
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Old')
+    delete (NOTES as Record<string, BrainPageNote | undefined>).n4
+    // A selection whose read fails says why, not an endless "Opening".
+    await press(container!.querySelector('.b-box')!, 'm')
+    READ_FAILS = new Set(['s1'])
+    await clickDot('s1')
+    expect(container!.querySelector('.b-side .b-alert')!.textContent).toContain('could not be read')
+    expect(container!.querySelector('.b-side [aria-busy="true"]')).toBeNull()
+    READ_FAILS = new Set()
+    await clickDot('h1')
+    expect(container!.querySelector('.b-side-title')!.textContent).toBe('Hidden link')
   })
 
   it('after a refocus in the narrow sheet the new centre is selected and the graph stays', async () => {

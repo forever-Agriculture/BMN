@@ -132,6 +132,21 @@ describe('whole-brain map layout', () => {
     expect(overlaps(layout)).toBe(0)
   })
 
+  it('fits a long chain whole, at both sizes, on either side of the exact-centre limit (review)', () => {
+    for (const length of [300, 401, 900]) {
+      const nodes: BrainMapNode[] = Array.from({ length }, (_, i) => ({ id: `c${String(i).padStart(4, '0')}`, title: `Chain ${i}`, kind: 'fact', status: 'active', links: i === 0 || i === length - 1 ? 1 : 2 }))
+      const edges = nodes.slice(1).map((node, i) => ({ from: nodes[i]!.id, to: node.id }))
+      for (const [width, height] of [[288, 288], [940, 640]] as const) {
+        const layout = layoutMap({ nodes, edges, total: length }, width, height)
+        const outside = layout.nodes.filter((node) => node.x < 0 || node.x > width || node.y < 0 || node.y > height)
+        expect(outside, `${length} at ${width}x${height}`).toEqual([])
+        // The centre is the chain's middle, not an end.
+        const centre = Number(layout.centres[0]!.slice(1))
+        expect(Math.abs(centre - (length - 1) / 2)).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
   it('places a brain with no links as a belt from the centre, and one note in the middle', () => {
     const lone = layoutMap({ nodes: [{ id: 'a', title: 'Alone', kind: 'fact', status: 'active', links: 0 }], edges: [], total: 1 }, 600, 400)
     expect(lone.nodes[0]).toMatchObject({ x: 300, y: 200, group: -1 })

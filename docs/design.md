@@ -297,12 +297,14 @@ From `plan/references/128/design.md` revision 2 (Fable-2, 2026-11-19; the owner 
 - **G5 Map** (Epic 128.5, `plan/references/128/design-128-5.md`, Fable-2). **Map** (`M`) is a quiet word
   right of Note | Graph, with the gold bar when on; it works from a note or the list. One fitted picture,
   no pan or zoom, on one pitch `p` (at most 40 px), stretched along the longer side by at most 1.45.
-  A linked group is a disc: its centre note (least farthest note) in the middle, layer `d` on the fewest
+  A linked group is a disc: its centre note (least farthest note; above 400 notes the middle of a longest
+  path) in the middle, layer `d` on the fewest
   whole rings of radius `k·p` with `6k` slots, the first layer spread evenly from the top, each later note
   in the free slot nearest its parent; groups of 3 or more get a hairline outline. Discs go biggest first
   on a spiral out of the centre, a pitch apart; notes with no link, by kind then title, form a belt from
   1.5 pitches outside. Radii: unlinked `0.12p` (1.5 to 4 px), linked `0.15p + 0.02p·min(links, 8)` (2 to
-  9 px). Edges as the graph's, one path per colour, at 35% and 6% above 500 links. Labels as G3, also
+  9 px). Edges as the graph's, one path per colour, at 35% and 4% above 500 links. The picture always fits:
+  a very long chain draws its dots closer than they read. Labels as G3, also
   right or left of the dot at `r + 6`; at rest the open and selected notes, then group centres biggest
   first, at most 24 (4 at 320 px), never an unlinked note; hover adds the note and its neighbours, and the
   bar always names the note under the pointer or keys. The numbers line ("57 notes · 17 links · 33 alone
