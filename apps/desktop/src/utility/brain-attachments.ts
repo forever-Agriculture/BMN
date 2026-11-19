@@ -87,7 +87,11 @@ export class BrainAttachments {
       if(!inside(child))continue
       if(!existsSync(file)){targets.set(reference,{path:child,state:'missing',address:text,wiki});continue}
       const actual=realpathSync(file)
-      if(!inside(relative(root,actual))||!lstatSync(actual).isFile())throw new Error('Brain attachment leaves its approved root or is not a file')
+      if(!inside(relative(root,actual)))throw new Error('Brain attachment leaves its approved root or is not a file')
+      const kind=lstatSync(actual)
+      // A link to a folder names no bytes to bind: it stays as text and the folder stays in files/.
+      if(kind.isDirectory())continue
+      if(!kind.isFile())throw new Error('Brain attachment leaves its approved root or is not a file')
       const path=relative(root,actual).split(sep).join('/')
       targets.set(reference,{path,file:actual,state:'unknown',address:text,wiki})
     }

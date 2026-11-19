@@ -346,6 +346,29 @@ it.each([true,false])('reuses only the existing exact Codex link and metadata (m
  }finally{f.close()}
 })
 
+it.each([false,true])('ignores records of entries that no longer exist and refuses a live one that needs the old skill (live=%s)',async live=>{
+ const f=fixture()
+ try{
+  const {paths}=f
+  rmSync(paths.codexSkill,{recursive:true});symlinkSync(paths.claudeSkill,paths.codexSkill)
+  const writtenPath=join(f.root,'.config/bmn/agents/state/rules/skills-written.json')
+  mkdirSync(join(writtenPath,'..'),{recursive:true})
+  // Finished test profiles leave such rows behind; their folders are gone.
+  const other=join(f.root,'ended-profile/config/claude/skills/brain')
+  if(live){mkdirSync(join(other,'..'),{recursive:true});symlinkSync(paths.claudeSkill,other)}
+  const written=JSON.stringify({[paths.codexSkill]:{harness:'codex',skill:'brain',kind:'link',target:paths.claudeSkill},[other]:{harness:'claude',skill:'brain',kind:'link',target:paths.claudeSkill}})
+  writeFileSync(writtenPath,written)
+  if(live)await expect(f.run()).rejects.toThrow(/another app entry depends on the brain copy/)
+  else{
+   await f.run()
+   expect(readFileSync(join(paths.codexSkill,'SKILL.md'),'utf8')).toBe('bmn brain')
+   f.confirmReturn();await f.journal.rollback()
+   expect(readFileSync(join(paths.codexSkill,'SKILL.md'),'utf8')).toBe('old vault skill');expect(f.restored()).toBe(true)
+  }
+  expect(readFileSync(writtenPath,'utf8')).toBe(written)
+ }finally{f.close()}
+})
+
 it('preserves an existing owner brain opt-out before switching any original file',async()=>{
  const f=fixture()
  try{

@@ -71,7 +71,8 @@ export function brainCutoverSkills(paths,guard){
   if(current.own.removed.brain!==undefined||!((partial&&current.own.skills.brain===undefined)||normalOwn||isDeepStrictEqual(current.own.skills.brain??null,proof.ownRow))||
     !codexAllowed)throw failure('a brain record, legacy Codex link or owner opt-out changed')
   for(const [name,row]of Object.entries(current.own.skills))if(name!=='brain'&&[paths.managedSkill,paths.claudeSkill].some(root=>row.copy===root||row.copy.startsWith(root+'/')))throw failure('another own skill depends on the brain copy')
-  for(const [path,row]of Object.entries(current.written))if(path!==paths.codexSkill&&row.kind==='link'&&[paths.managedSkill,paths.claudeSkill].some(root=>row.target===root||row.target.startsWith(root+'/')))throw failure('another app entry depends on the brain copy')
+  // A record whose entry is gone (an ended test profile) resolves nothing through the brain skill.
+  for(const [path,row]of Object.entries(current.written))if(path!==paths.codexSkill&&row.kind==='link'&&!missing(path)&&[paths.managedSkill,paths.claudeSkill].some(root=>row.target===root||row.target.startsWith(root+'/')))throw failure('another app entry depends on the brain copy')
   const journal=optionalDefaultsOwnership()
   if((journal?.snapshot().setupId??null)!==proof.setupId)throw failure('setup identity changed')
   if(journal){

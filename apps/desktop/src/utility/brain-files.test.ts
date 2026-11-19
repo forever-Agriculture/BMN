@@ -266,6 +266,19 @@ it('refuses an attachment symlink outside the approved root without copying the 
  }finally{f.close()}
 })
 
+it('leaves a link to a folder under the attachment root as text and still binds the files beside it',()=>{
+ const f=fixture()
+ try {
+  mkdirSync(join(f.attachments,'evidence-pack'));const asset=join(f.attachments,'evidence-pack','a.bin');writeFileSync(asset,'synthetic pack file')
+  f.store.importNotes([{source:'vault:projects/note.md',title:'Synthetic',kind:'fact',origin:'import',scope:'all',markdown:'[pack](../files/evidence-pack/) and [file](../files/evidence-pack/a.bin)',status:'active'}])
+  expect(f.files.dump().attachments).toMatchObject([{reference:'markdown:../files/evidence-pack/a.bin',path:'evidence-pack/a.bin',hash:fileHash(asset),state:'captured'}])
+  expect(restoreBrainCheck(f.files.snapshot('test'),join(f.root,'scratch'),path=>new SQLite(path)).attachments).toBe(1)
+  // A folder reached through a link out of the root is still refused.
+  const outside=join(f.root,'outside-folder');mkdirSync(outside);symlinkSync(outside,join(f.attachments,'escape'))
+  expect(()=>f.store.importNotes([{source:'vault:projects/other.md',title:'Other',kind:'fact',origin:'import',scope:'all',markdown:'[out](../files/escape/)',status:'active'}])).toThrow(/attachment.*approved root/)
+ }finally{f.close()}
+})
+
 it('keeps one exported workspace path usable through subsequent publications',()=>{
  const f=fixture()
  try {
