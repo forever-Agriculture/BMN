@@ -118,7 +118,11 @@ export async function runBrainCommand(argv,{readCredentials,call,output=text=>pr
   let result
   if(['search','read','history'].includes(command)) {
    if(!name)throw new Error('Supply a brain title or query')
-   result=await readBrain(command,{name,query:words.join(' '),section:o.section,links:o.links,archived:o.archived},root)
+   const query=words.join(' ')
+   result=await readBrain(command,{name,query,section:o.section,links:o.links,archived:o.archived},root)
+   if(command==='search'&&result.length===0&&/[\p{Script=Cyrillic}&&\p{Letter}]/v.test(query)) {
+    errorOutput('Brain notes are mostly in English. Try searching again in English.\n')
+   }
   } else {
    if(o['data-root'])throw new Error('--data-root is for read-only commands')
    const params={command}

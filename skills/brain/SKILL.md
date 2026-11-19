@@ -2,6 +2,8 @@
 name: brain
 description: Read or capture lasting cross-project memory through bmn brain when the owner asks to note, remember or recall something, or a recorded personal decision is needed. Project facts stay in their project records.
 ---
+# MODULE: SKILL.md - Search and save lasting cross-project memory through BMN
+
 # Brain
 
 Use `bmn brain` only. The old `~/brain` vault is a read-only archive after the owner's switch;
@@ -13,6 +15,7 @@ on every message, duplicate project context or inject memory into sessions. No b
 for the owner: decide within the existing authority and record uncertainty.
 
 - `bmn brain search "words"`: at most 10 titles, one-line summaries and scores; archives need `--archived`.
+- For a non-English question, search with short English keywords and also try the original language.
 - `bmn brain read "title or id"`: whole note with revision, origin, date and scope.
   Add `--section "heading"` for one part or `--links` for links/backlinks.
 - Save lasting personal preferences, his words, people, machine rules, cross-project lessons,

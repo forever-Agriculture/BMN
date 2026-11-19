@@ -1371,6 +1371,9 @@ bmn brain export
 ten rows; `--archived` includes archived notes. Read metadata includes revision, origin, date and
 scope. Section reads keep child headings and ignore headings inside fenced examples. Imported
 duplicate titles require a note id. `--data-root DIR` is available only for read commands.
+An empty search with Cyrillic letters adds an English-search hint on stderr and returns the
+usual empty array with exit status 0. For a Ukrainian question, try short English keywords
+and search in Ukrainian as well.
 
 Writes require the current authenticated session and a completed cutover. The server enforces at
 most three new notes per session, unique normalized titles, and scope `all` or a group of at least
