@@ -216,6 +216,15 @@ done
   try {
     await page.waitForSelector('.session-row')
     await resize(1280)
+    // Epic 132 S1 (owner 2026-11-19): a night merge or push waits without his deploy rule, so the fixture's repositories say
+    // nothing deploys, as he would set in Health.
+    for (const repository of ['octo-probe/widgets', 'octo-probe/tools']) {
+      const now = await page.evaluate(() => window.aiTerminal.getPushPolicy())
+      if (now.state !== 'read') throw Error(`Push policy unread: ${JSON.stringify(now)}`)
+      await page.evaluate(change => window.aiTerminal.setPushPolicy(change), { kind: 'deploys', repository, events: [], expectedRevision: now.revision })
+      const after = await page.evaluate(() => window.aiTerminal.getPushPolicy())
+      if (after.state !== 'read' || after.revision !== now.revision + 1) throw Error(`Deploy rule for ${repository} not set`)
+    }
 
     // Owner-scoped diagnostic observations cannot prove a live native prompt, but they select a synthetic shell for list QA.
     const { call, readCredentials } = await import(new URL(`../../apps/desktop/bin/bmn-commands.mjs`, import.meta.url))

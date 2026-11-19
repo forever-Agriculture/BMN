@@ -27,6 +27,8 @@ export interface EpicPlanContext {
   goApproval: string | null
   goActionsHash: string | null
   withdrawn: boolean
+  /** Why the allowance file's action list cannot be read. Its hash is then the malformed text's, so a stored answer voids. */
+  malformed?: string
 }
 
 export interface EpicRunBinding {
@@ -59,6 +61,8 @@ export interface EpicActionAnswer {
   action: string
   choice: 'yes' | 'no'
   revision: number
+  /** The deploy rule the answering surface showed for this action (D3); a Yes counts only if it is the rule now. */
+  rule?: string | null
 }
 
 export interface EpicActionAudit {

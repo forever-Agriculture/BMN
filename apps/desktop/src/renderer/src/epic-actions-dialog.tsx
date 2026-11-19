@@ -51,7 +51,7 @@ export function EpicActionsDialog(props: {
                 value={answer?.choice ?? null} disabled={saving} optionLabel={choice => choice === 'yes' ? 'Yes' : 'No'}
                 onChange={choice => {
                   if (choice === null) return
-                  const input: EpicActionAnswer = { card: card.id, action: action.id, choice, revision: card.revision }
+                  const input: EpicActionAnswer = { card: card.id, action: action.id, choice, revision: card.revision, rule: action.rule ?? null }
                   void save(() => window.aiTerminal.answerEpicAction(input))
                 }} />
             </div>

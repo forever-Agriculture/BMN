@@ -188,7 +188,7 @@ import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 import { commandPinSha } from '../../bin/grant-command.mjs'
-import { EpicActionsService } from './epic-actions-service'
+import { EpicActionsService, nightTermHold } from './epic-actions-service'
 import { EPIC_ACTION_TAP, TelegramEpicActions } from './telegram-epic-actions'
 import { grantFacts as readGrantFacts, pinGrantLimit, readGrantRoundBudget, resolveGrantLimitPlan, sameGrantCheckout } from '../../bin/grant-facts.mjs'
 import { findNightAllowance, withNightAllowanceLock, writeNightAllowance } from '../../bin/plan-allowances.mjs'
@@ -291,6 +291,8 @@ interface CompanionServiceOptions {
   qaLaunch?: (request: import('@bmn/protocol').QaLaunchRequest) => Promise<import('@bmn/protocol').MessageTeamAnswer>
   /** A test-mode run's synthetic studio origin, the only site with a reviewed contract (100.6). */
   qaContractOrigin?: string | null
+  /** A test-mode host (Epic 132): pushes to a local fixture repository it inspected may be lifted. */
+  localReceivers?: boolean
   qaPicheOrigins?: import('./qa-sessions').QaReviewedContract['origins'] | null
   /** Story 83.3: the git and gh reads Health's policy listing needs; tests give their own. */
   policyReader?: PolicyReader
@@ -625,7 +627,8 @@ export class CompanionService {
       foreground: (sessionId, agent) => this.agentProcess(sessionId, agent),
       now: () => this.iso(),
       changed: () => this.epicActionsChanged(),
-      grantChanged: read => this.grantChanged(read)
+      grantChanged: read => this.grantChanged(read),
+      localReceivers: options.localReceivers === true
     })
     this.epicActionPhone = new TelegramEpicActions(
       () => this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
@@ -1277,6 +1280,11 @@ export class CompanionService {
               if (night.outcome === 'refused') return { outcome: night.outcome, reason: night.reason }
               return { outcome: night.outcome, left: night.left, periodId: night.periodId, exact: night.exact }
             }
+            // Owner 2026-11-19 (S1): a typed night merge, push or PR write his deploy rule holds spends no use.
+            const status = grantStatus(read, away, p.runId)
+            const typed = status.active ? status.grant.items.find(item => item.term.id === p.item)?.term : undefined
+            const hold = typed === undefined ? null : await this.epicActions.nightRepositoryHold(typed)
+            if (hold !== null) return { outcome: 'refused', reason: hold }
           }
           // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded. The store decides, in its
           // own transaction, against the answer in force then: another card may come between this read and that write.
@@ -1915,10 +1923,12 @@ export class CompanionService {
       case METHOD_REGISTRY.epicActionsList:
         return this.epicActions.list()
       case METHOD_REGISTRY.epicActionsAnswer: {
-        const { card, action, choice, revision } = params
+        const { card, action, choice, revision, rule } = params
         if (typeof card !== 'string' || typeof action !== 'string' || (choice !== 'yes' && choice !== 'no') ||
-          typeof revision !== 'number' || !Number.isSafeInteger(revision)) return invalid('Name the card, action, choice and visible revision')
-        await this.epicActions.answer({ card, action, choice, revision }, 'app')
+          typeof revision !== 'number' || !Number.isSafeInteger(revision) || (rule !== undefined && rule !== null && typeof rule !== 'string')) {
+          return invalid('Name the card, action, choice, visible revision and the deploy rule shown')
+        }
+        await this.epicActions.answer({ card, action, choice, revision, ...(rule === undefined ? {} : { rule }) }, 'app')
         return null
       }
       case METHOD_REGISTRY.epicRunUnbind: {
@@ -2458,7 +2468,8 @@ export class CompanionService {
   private async grantedActions(binding?: { epic: number; go: string; sessionId: string }): Promise<GrantedRepositoryAction[]> {
     try {
       const { read, away } = await this.options.database.companion('getGrants')
-      return grantedRepositoryActions(read, away, binding)
+      const policy = await this.options.database.companion('getPushPolicy')
+      return grantedRepositoryActions(read, away, binding, term => nightTermHold(policy, term) !== null)
     } catch {
       return []
     }

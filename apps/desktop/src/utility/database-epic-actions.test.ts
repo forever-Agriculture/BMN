@@ -2,20 +2,20 @@
 import { createRequire } from 'node:module'
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EMPTY_GRANT_RECORD, askGrant, answerGrant, startDeparture, openGrantPeriod,
   type EpicPlanContext, type EpicRunBinding, type GrantCommandTerm, type PlanAction } from '@bmn/protocol'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { answerEpicActionCard, askEpicActionCard, bindEpicRun, epicActionRecord, epicActionRemaining,
-  matchingEpicCard, reserveEpicAction, revokeEpicRun, claimNightEpicCommand, nightCommandHash, reserveNightEpicCommand,
+  matchingEpicCard, reserveEpicAction, revokeEpicRun, claimNightEpicCommand, nightCommandHash, reserveNightEpicCommand, epicAuthorityProblem,
   recordEpicActionOutcome, epicCallDecision, settledEpicActionRecord } from './database-epic-actions'
 import { readGrantRow, writeGrantRow } from './database-grant-store'
-import { parsePlanAction, planActionsHash } from '../../bin/plan-actions.mjs'
-import { bashExit, launchedByListener } from '../../bin/shared-helpers.mjs'
-import { actionEvents, receiverProblem } from './epic-actions-service'
+import { heldMergeProblem, parsePlanAction, planActionsHash, planPolicyTarget } from '../../bin/plan-actions.mjs'
+import { bashExit, callOwnListener } from '../../bin/shared-helpers.mjs'
+import { actionEvents, nightTermHold, receiverProblem } from './epic-actions-service'
 
 const DB = createRequire(import.meta.url)('better-sqlite3') as new (path: string) => DatabaseConnection
 const AT = '2026-11-19T14:00:00.000Z'
@@ -138,9 +138,12 @@ describe('Epic action authorization', () => {
     expect(() => bindEpicRun(database, PLAN, { ...identity('two'), conversation: binding.conversation }, null, false)).toThrow(/unbound/u)
     // The same conversation stays out after a process restart (a new incarnation and generation of that session).
     expect(() => bindEpicRun(database, PLAN, { ...binding, generation: 'restarted', id: 'another-binding' }, null, false)).toThrow(/unbound/u)
-    // D10 as approved: a genuinely new conversation, in that terminal or another, may bind the go nobody holds.
-    const fresh = { ...binding, conversation: 'conversation-after-clear', generation: 'changed', id: 'fresh-binding' }
-    expect(bindEpicRun(database, PLAN, fresh, null, false)).toEqual(fresh)
+    // Owner 2026-11-19T18:00Z: no new conversation of that same agent process binds again (a /clear or a made-up report);
+    // a new agent process, or another session, may bind the go nobody holds.
+    const cleared = { ...binding, conversation: 'conversation-after-clear', generation: 'changed', id: 'cleared-binding' }
+    expect(() => bindEpicRun(database, PLAN, cleared, null, false)).toThrow(/unbound this agent/u)
+    const restarted = { ...cleared, foreground: 'synthetic-restarted', id: 'restarted-binding' }
+    expect(bindEpicRun(database, PLAN, restarted, null, false)).toEqual(restarted)
   })
 
   it('uses one count for reservation plus hook claim and protects the retry and exhausted paths', () => {
@@ -209,18 +212,22 @@ describe('Epic action authorization', () => {
     expect(answer.outcome).toBe('granted')
     writeGrantRow(database, answer.record, AT)
     const target = { runId, item: term.id, targetHash: nightCommandHash(term) }
-    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call }, AT))().use
-    expect(() => claim('pre-use')).toThrow(/no matching night/iu)
+    const claim = (call: string) => database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call }, AT))()?.use ?? null
+    // S7: with no night receipt waiting the night decides nothing; the call is the file's to decide.
+    expect(claim('pre-use')).toBeNull()
     const reserve = database.transaction(() => reserveNightEpicCommand(database, PLAN, binding, { ...target, id: 'night-use' }, AT))()
     expect(reserve).toMatchObject({ outcome: 'recorded', left: 0 })
-    const claimed = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))()
+    const claimed = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))()!
     expect(claimed.use).toMatchObject({ id: 'night-use', dispatch: { call: 'tool-one' } })
     // The written row is handed back for the window; it already holds the call.
     expect(claimed.read?.state === 'read' && openGrantPeriod(claimed.read.record)?.uses[0]?.dispatch?.call).toBe('tool-one')
-    const repeat = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))()
+    // D4/D9 at the edge: the night term in force passes; after Back it no longer does.
+    expect(epicAuthorityProblem(database, PLAN, binding, { kind: 'night', ...target }, AT)).toBeNull()
+    expect(epicAuthorityProblem(database, PLAN, binding, { kind: 'night', ...target, targetHash: 'other' }, AT)).toMatch(/changed/u)
+    const repeat = database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-one' }, AT))()!
     expect(repeat.use.id).toBe('night-use')
     expect(repeat.read).toBeNull()
-    expect(() => claim('tool-two')).toThrow(/no matching night/iu)
+    expect(claim('tool-two')).toBeNull()
     const read = readGrantRow(database)
     expect(read.state === 'read' && openGrantPeriod(read.record)?.uses).toHaveLength(1)
     expect(epicActionRecord(database, PLAN).audit).toEqual([expect.objectContaining({
@@ -280,6 +287,35 @@ describe('Epic action authorization', () => {
   })
 })
 
+describe('The exact target of a typed or held write (S2)', () => {
+  it('takes a default-branch push only with its full destination and a gh write only with the GitHub host', async () => {
+    const push = parsePlanAction({ kind: 'push-default', id: 'main', repository: 'sample/fixture', branch: 'main', count: 1 })
+    const pr = parsePlanAction({ kind: 'pr-elsewhere', id: 'pr', repository: 'sample/fixture', branch: 'feature/x', count: 1 })
+    if ('problem' in push || 'problem' in pr) throw Error('fixture')
+    const target = (action: typeof push.action, command: string) => planPolicyTarget(action as never, command, '/fixture/repo')
+    // A bare name can resolve to a same-named local tag.
+    expect(await target(push.action, 'git push origin main')).toMatchObject({ problem: expect.stringMatching(/HEAD:refs\/heads\/main/u) })
+    expect(await target(push.action, 'git push origin HEAD:refs/heads/main')).toEqual({ remote: 'origin' })
+    const create = (repo: string) => `gh pr create --repo ${repo} --head feature/x --title T`
+    expect(await target(pr.action, create('sample/fixture'))).toMatchObject({ problem: expect.stringMatching(/github\.com\/OWNER\/NAME/u) })
+    expect(await target(pr.action, create('github.com/sample/fixture'))).toEqual({ remote: null })
+  })
+
+  it('holds a guarded PR merge whose current files change CI, as a typed merge without CI approval is held', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-held-merge-'))
+    try {
+      const files = (paths: string[]) => writeFileSync(join(root, 'gh'), `#!/bin/sh\nprintf '%s' '${JSON.stringify({ files: paths.map(path => ({ path })) })}'\n`)
+      files(['README.md']); chmodSync(join(root, 'gh'), 0o755)
+      vi.stubEnv('PATH', `${root}:${process.env.PATH}`)
+      expect(await heldMergeProblem(root, 'sample/fixture', '12')).toBeNull()
+      files(['.github/workflows/ci.yml'])
+      expect(await heldMergeProblem(root, 'sample/fixture', '12')).toMatch(/changes CI/u)
+      writeFileSync(join(root, 'gh'), '#!/bin/sh\nexit 1\n')
+      expect(await heldMergeProblem(root, 'sample/fixture', '12')).toMatch(/could not confirm/u)
+    } finally { vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
 describe('The deploy rule on an epic action (D3)', () => {
   it('keeps the rule he saw with a Yes and refuses the use under another rule', () => {
     const { database, binding } = setup(false)
@@ -296,6 +332,40 @@ describe('The deploy rule on an epic action (D3)', () => {
     // The same Yes under a new rule is a new answer, written with that rule.
     const again = answerEpicActionCard(database, PLAN, { card: card.id, action: ACTION.id, choice: 'yes', revision: 2 }, 'telegram', AT, 'deploys on: tags')
     expect(again.answers[ACTION.id]).toMatchObject({ rule: 'deploys on: tags', via: 'telegram' })
+  })
+
+  it('reads the authority behind a taken use once more at the edge: his answer under the same rule, the bound run (S3)', () => {
+    const { database, card, binding } = setup(false)
+    answerEpicActionCard(database, draft, { card: card.id, action: ACTION.id, choice: 'yes', revision: 1 }, 'app', AT, 'nothing deploys')
+    bindEpicRun(database, PLAN, binding, null, false)
+    const file = (rule: string | null) => epicAuthorityProblem(database, PLAN, binding, { kind: 'file', action: ACTION.id, rule }, AT)
+    expect(file('nothing deploys')).toBeNull()
+    expect(file('deploys on: tags')).toMatch(/approval of this action ended/u)
+    answerEpicActionCard(database, PLAN, { card: card.id, action: ACTION.id, choice: 'no', revision: 2 }, 'app', AT)
+    expect(file('nothing deploys')).toMatch(/approval of this action ended/u)
+    expect(revokeEpicRun(database, PLAN, binding.id, AT)).toBe(true)
+    expect(file('nothing deploys')).toMatch(/bound run ended/u)
+    expect(epicAuthorityProblem(database, { ...PLAN, go: 'd'.repeat(40) }, binding, { kind: 'file', action: ACTION.id, rule: null }, AT)).toMatch(/bound run ended/u)
+  })
+
+  it('leaves a call to the sole pending file receipt when an approved night term holds no reservation (S7)', () => {
+    const { database, binding } = setup()
+    bindEpicRun(database, PLAN, binding, null, false)
+    const term: GrantCommandTerm = { ...ACTION, proposed: 'yes', reason: 'Synthetic exact push',
+      bound: { plan: PLAN.planKey, epic: PLAN.epic, go: GO, session: 'one' } }
+    const first = startDeparture(EMPTY_GRANT_RECORD, { periodId: 'night-s7', source: 'app', agentSessionId: null }, 'back', AT)
+    const asked = askGrant(first.record, { runId: 'run-s7', sessionId: binding.sessionId, agentCli: binding.agent,
+      card: { title: 'Synthetic night', scope: 'One exact command', terms: [term], nothing: false } }, AT)
+    writeGrantRow(database, answerGrant(asked.record, { periodId: 'night-s7', runId: 'run-s7', cardRevision: 1, via: 'app',
+      choices: { [term.id]: 'yes' }, operationKey: 'owner-s7' }, AT).record, AT)
+    const reserved = database.transaction(() => reserveEpicAction(database, PLAN, binding,
+      { id: 'file-receipt', action: ACTION.id, targetHash: 'exact', call: null, mayReserve: true, commandHash: 'hash' }, AT))()
+    expect(reserved.call).toBeNull()
+    const target = { runId: 'run-s7', item: term.id, targetHash: nightCommandHash(term) }
+    expect(database.transaction(() => claimNightEpicCommand(database, PLAN, binding, { ...target, call: 'tool-s7' }, AT))()).toBeNull()
+    const claimed = database.transaction(() => reserveEpicAction(database, PLAN, binding,
+      { id: 'hook:tool-s7', action: ACTION.id, targetHash: 'exact', call: 'tool-s7', mayReserve: true, commandHash: 'hash' }, AT))()
+    expect(claimed).toMatchObject({ id: 'file-receipt', call: 'tool-s7' })
   })
 
   it('places each action among the events a rule names, and a local receiver by its hooks', () => {
@@ -319,6 +389,27 @@ describe('The deploy rule on an epic action (D3)', () => {
       expect(receiverProblem(join(root, 'absent'))).toMatch(/could not be inspected/u)
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
+
+  it('holds a typed night merge, push or PR write as the epic action of that kind (S1, owner 2026-11-19)', () => {
+    const policy = (deploys: { repository: string; events: string[] }[]) => ({ state: 'read' as const,
+      record: { version: 1 as const, revision: 1, owners: [], levels: [], deploys: deploys.map(rule => ({ ...rule, changedAt: '2026-11-19T00:00:00.000Z' })) } }) as never
+    const merge = { id: 'm', kind: 'merge', repository: 'fixture/repo', pr: 4, headSha: null, upTo: null, proposed: 'green', reason: 'r' } as never
+    const push = { id: 'p', kind: 'push-default', repository: 'fixture/repo', branch: 'epic/1', count: 1, proposed: 'yes', reason: 'r' } as never
+    const pr = { id: 'q', kind: 'pr-elsewhere', repository: 'fixture/repo', branch: 'fix/x', pr: null, count: 1, proposed: 'yes', reason: 'r' } as never
+    // No rule: all three wait for him; a rule that nothing deploys lets them through.
+    for (const term of [merge, push, pr]) {
+      expect(nightTermHold(policy([]), term)).toMatch(/no deploy rule for fixture\/repo/u)
+      expect(nightTermHold(policy([{ repository: 'fixture/repo', events: [] }]), term)).toBeNull()
+      expect(nightTermHold({ state: 'unknown', reason: 'x' } as never, term)).toMatch(/could not be read/u)
+    }
+    // A default-branch deploy holds the merge and the push, not a PR write on another branch.
+    const main = policy([{ repository: 'fixture/repo', events: ['default-branch'] }])
+    expect(nightTermHold(main, merge)).toMatch(/deploys/u)
+    expect(nightTermHold(main, push)).toMatch(/deploys/u)
+    expect(nightTermHold(main, pr)).toBeNull()
+    expect(nightTermHold(policy([{ repository: 'fixture/repo', events: ['pull-requests'] }]), pr)).toMatch(/deploys/u)
+    expect(nightTermHold(policy([]), { id: 'r', kind: 'rounds', rounds: 1, proposed: 1, reason: 'r' } as never)).toBeNull()
+  })
 })
 
 describe('A native Bash result as an action outcome', () => {
@@ -332,19 +423,36 @@ describe('A native Bash result as an action outcome', () => {
   })
 })
 
-describe('Who the hook asks to lift a hold (F5)', () => {
-  it.runIf(process.platform === 'linux')('trusts only a control socket whose listener started this process', async () => {
+describe('Who the hook asks to lift a hold (F5, S5)', () => {
+  it.runIf(process.platform === 'linux')('sends the token only on the connection whose listener the kernel names as its ancestor', async () => {
     const root = mkdtempSync(join(tmpdir(), 'bmn-listener-'))
-    const own = createServer()
-    // Stands in for any other local process that opened a socket and put its path in the environment.
-    const other = spawn(process.execPath, ['-e', `require('node:net').createServer().listen(${JSON.stringify(join(root, 'other.sock'))}, () => console.log('up')); setTimeout(() => {}, 30000)`],
-      { stdio: ['ignore', 'pipe', 'ignore'] })
+    const seen: string[] = []
+    // BMN's side: answers auth, then the claim, on one connection.
+    const own = createServer(socket => {
+      let buffer = ''
+      socket.on('data', chunk => {
+        buffer += chunk.toString()
+        for (let at = buffer.indexOf('\n'); at !== -1; at = buffer.indexOf('\n')) {
+          const message = JSON.parse(buffer.slice(0, at)); buffer = buffer.slice(at + 1)
+          seen.push(message.method)
+          socket.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: message.method === 'auth' ? { ok: true } : { allowed: true } }) + '\n')
+        }
+      })
+    })
+    // Stands in for any other local process that opened a socket and put its path in the environment; it logs what arrives.
+    const other = spawn(process.execPath, ['-e', `require('node:net').createServer(s => s.on('data', d => process.stderr.write(d))).listen(${JSON.stringify(join(root, 'other.sock'))}, () => console.log('up')); setTimeout(() => {}, 30000)`],
+      { stdio: ['ignore', 'pipe', 'pipe'] })
+    let leaked = ''
+    other.stderr.on('data', chunk => { leaked += chunk.toString() })
     try {
       await new Promise<void>(resolve => own.listen(join(root, 'own.sock'), resolve))
       await new Promise<void>(resolve => other.stdout.once('data', () => resolve()))
-      expect(launchedByListener(join(root, 'own.sock'))).toBe(true)
-      expect(launchedByListener(join(root, 'other.sock'))).toBe(false)
-      expect(launchedByListener(join(root, 'absent.sock'))).toBe(false)
+      expect(await callOwnListener(join(root, 'own.sock'), 'synthetic-token', 'epic.guard.claim', { callId: 'c1' })).toEqual({ result: { allowed: true } })
+      expect(seen).toEqual(['auth', 'epic.guard.claim'])
+      expect(await callOwnListener(join(root, 'other.sock'), 'synthetic-token', 'epic.guard.claim', { callId: 'c2' })).toBeNull()
+      expect(await callOwnListener(join(root, 'absent.sock'), 'synthetic-token', 'epic.guard.claim', { callId: 'c3' })).toBeNull()
+      await new Promise(resolve => setTimeout(resolve, 200))
+      expect(leaked).not.toContain('synthetic-token')
     } finally {
       other.kill()
       await new Promise<void>(resolve => own.close(() => resolve()))
@@ -352,3 +460,4 @@ describe('Who the hook asks to lift a hold (F5)', () => {
     }
   })
 })
+

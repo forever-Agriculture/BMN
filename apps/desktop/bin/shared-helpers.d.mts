@@ -19,4 +19,5 @@ export declare function insideDirectory(root: string, path: string): boolean
 /** What a native Bash result says about its exit; `unknown` when it names no exit code. */
 export function bashExit(response: unknown): 'ok' | 'failed' | 'unknown'
 /** Whether the process listening on this control socket is an ancestor of the caller, by the kernel's word (Linux). */
-export function launchedByListener(socketPath: string): boolean
+export function callOwnListener(socketPath: string, token: string, method: string, params: Record<string, unknown>, timeoutMs?: number):
+  Promise<{ result: unknown } | { error: { message?: string; data?: { code?: string } } } | null>

@@ -4,9 +4,9 @@ import { existsSync, readFileSync, writeSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { bashExit, isObject, launchedByListener } from './shared-helpers.mjs'
+import { bashExit, callOwnListener, isObject } from './shared-helpers.mjs'
 import { CONVERSATION_REFERENCE, HOOK_TIMEOUT_MS, TIMEOUT_MS } from './bmn-words.mjs'
-import { call, callEach } from './bmn-commands.mjs'
+import { callEach } from './bmn-commands.mjs'
 import { HOOK_AGENTS } from './bmn-opencode-plugin.mjs'
 import { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, hookEventName, hookRequests, openCodeSubagent, resumesByItself, phoneAnswerable, retiredOr, userInputTool } from './bmn-hooks.mjs'
 
@@ -230,18 +230,15 @@ async function answerFromGuard(agent, event, ownerSession = false) {
   let problem
   if (ownerSession && socketPath && token && event.agent_id == null &&
     typeof event.session_id === 'string' && CONVERSATION_REFERENCE.test(event.session_id) &&
-    typeof event.tool_use_id === 'string' && typeof event.cwd === 'string' && typeof event.tool_input?.command === 'string' &&
-    // The hold is lifted only by the BMN that runs this terminal: no token goes to, and no "allowed" is taken from, anyone else.
-    launchedByListener(socketPath)) {
-    try {
-      const result = await call(socketPath, token, 'epic.guard.claim', {
-        agent, conversation: event.session_id.toLowerCase(), callerPid: process.pid,
-        command: event.tool_input.command, cwd: event.cwd, callId: event.tool_use_id
-      }, 2500)
-      if (result?.allowed === true) return false
-    } catch (error) {
-      if (error?.code === 'INVALID_ARGUMENT' && typeof error.message === 'string') problem = error.message
-    }
+    typeof event.tool_use_id === 'string' && typeof event.cwd === 'string' && typeof event.tool_input?.command === 'string') {
+    // The hold is lifted only by the BMN that runs this terminal: the token goes, on the connection the kernel confirmed,
+    // to no one else, and no "allowed" is taken from anyone else.
+    const reply = await callOwnListener(socketPath, token, 'epic.guard.claim', {
+      agent, conversation: event.session_id.toLowerCase(), callerPid: process.pid,
+      command: event.tool_input.command, cwd: event.cwd, callId: event.tool_use_id
+    })
+    if (reply && 'result' in reply && reply.result?.allowed === true) return false
+    if (reply && 'error' in reply && reply.error?.data?.code === 'INVALID_ARGUMENT' && typeof reply.error.message === 'string') problem = reply.error.message
   }
   writeSync(1, problem ? guard.guardAnswer(agent, event, problem) ?? answer : answer)
   return answer !== null

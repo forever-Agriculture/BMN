@@ -33,7 +33,8 @@ export interface EpicActionRecord {
   card: StoredCard | null
   priorCards: StoredCard[]
   binding: EpicRunBinding | null
-  revoked: { agent: string; conversation: string; go: string }[]
+  /** His Unbinds: the conversation, and (owner 2026-11-19T18:00Z) the agent process it ran in, by pid and start time. */
+  revoked: { agent: string; conversation: string; go: string; foreground?: string }[]
   uses: EpicUse[]
   audit: EpicActionAudit[]
 }
@@ -155,9 +156,13 @@ export function bindEpicRun(database: DatabaseConnection, plan: EpicPlanContext,
   observedHolder: string | null, holderCurrent: boolean): EpicRunBinding {
   const record = load(database, plan.planKey, plan.epic)
   if (!plan.go || plan.go !== binding.go || !processIsLive(database, binding)) throw new Error('The go or the running process could not be confirmed')
-  // D10 as approved: the unbound conversation stays out of this go, in any process; a new conversation may bind.
+  // The unbound conversation stays out of this go in any process, and (owner 2026-11-19T18:00Z) so does every conversation
+  // of the agent process it ran in: BMN cannot tell a real /clear from a made-up report inside that process.
   if (record.revoked.some(item => item.go === binding.go && item.agent === binding.agent && item.conversation === binding.conversation)) {
     throw new Error('The owner unbound this conversation from this go')
+  }
+  if (record.revoked.some(item => item.go === binding.go && item.foreground !== undefined && item.foreground === binding.foreground)) {
+    throw new Error('The owner unbound this agent from this go; close the agent and start it again to bind')
   }
   const before = record.binding
   if (before && before.sessionId === binding.sessionId && before.generation === binding.generation && before.go === binding.go) return before
@@ -173,7 +178,7 @@ export function revokeEpicRun(database: DatabaseConnection, plan: EpicPlanContex
   const record = load(database, plan.planKey, plan.epic)
   const binding = record.binding
   if (!binding || binding.id !== bindingId) return false
-  record.revoked.push({ agent: binding.agent, conversation: binding.conversation, go: binding.go })
+  record.revoked.push({ agent: binding.agent, conversation: binding.conversation, go: binding.go, foreground: binding.foreground })
   record.binding = null
   save(database, record, now)
   return true
@@ -252,6 +257,35 @@ export function epicCallDecision(database: DatabaseConnection, plan: EpicPlanCon
   if (row.commandHash !== commandHash) throw new Error('The tool call already belongs to another operation')
   if (row.outcome === 'withheld') throw new Error('BMN withheld this tool call at its last check; the use stays spent')
   return row.source
+}
+
+/** Where the authority behind one use comes from: his Yes on the file's action, or a night term of this period. */
+export type EpicAuthority = { kind: 'file'; action: string; rule: string | null } | { kind: 'night'; runId: string; item: string; targetHash: string }
+
+/**
+ * D4/D9 at the decision's edge: the bound run, its go and his answer, or the night period and its exact term, still stand.
+ * Null when they do; otherwise why not. Read right before BMN answers `allowed`, after the use was taken.
+ */
+export function epicAuthorityProblem(database: DatabaseConnection, plan: EpicPlanContext, binding: EpicRunBinding,
+  source: EpicAuthority, now: string): string | null {
+  const record = settledEpicActionRecord(database, plan, now)
+  if (record.binding?.id !== binding.id || binding.go !== plan.go || !processIsLive(database, binding)) return 'The bound run ended before the action'
+  if (source.kind === 'file') {
+    const card = matchingEpicCard(record, plan)
+    const answer = card?.answers[source.action]
+    return !plan.activeApproval || card?.go !== binding.go || answer?.choice !== 'yes' || (answer.rule ?? null) !== source.rule
+      ? 'His approval of this action ended before the action' : null
+  }
+  const { read, away } = getGrants(database)
+  if (read.state !== 'read') return 'The night grant could not be read'
+  const status = grantStatus(read, away, source.runId)
+  const period = openGrantPeriod(read.record)
+  if (!status.active || !period || period.runs.find(run => run.runId === source.runId)?.card.sessionId !== binding.sessionId) {
+    return 'The night grant ended before the action'
+  }
+  const term = status.grant.items.find(item => item.term.id === source.item)?.term
+  return term?.kind !== 'command' || nightCommandHash(term) !== source.targetHash || !nightBoundTo(term, plan, binding)
+    ? 'The night action changed before the action' : null
 }
 
 function fileAudit(record: EpicActionRecord, binding: EpicRunBinding, receipt: string): EpicActionAudit | undefined {
@@ -340,10 +374,6 @@ export function claimNightEpicCommand(database: DatabaseConnection, plan: EpicPl
   const term = status.grant.items.find(item => item.term.id === input.item)?.term
   if (term?.kind !== 'command' || nightCommandHash(term) !== input.targetHash) throw new Error('The night action changed before dispatch')
   if (!nightBoundTo(term, plan, binding)) throw new Error('The night command was approved for another epic or go')
-  const fileAction = plan.actions.find(action => action.kind === 'command' && action.command === term.command && action.folder === term.folder)
-  if (fileAction && record.uses.some(use => use.binding === binding.id && use.action === fileAction.id && use.call === null)) {
-    throw new Error('Both sources have a pending reservation')
-  }
   const matching = period.uses.filter(use => use.runId === input.runId && use.item === input.item &&
     use.cardRevision === status.grant.cardRevision && use.dispatch?.binding === binding.id && use.dispatch.targetHash === input.targetHash)
   // One decision per call (D9): what this call was first given, a night receipt of this period or a file use, is all it gets.
@@ -357,7 +387,13 @@ export function claimNightEpicCommand(database: DatabaseConnection, plan: EpicPl
     throw new Error('The tool call already belongs to another operation')
   }
   const pending = matching.filter(use => use.dispatch?.call === null)
-  if (pending.length !== 1) throw new Error(pending.length ? 'Too many matching night reservations' : 'No matching night reservation')
+  // No night receipt waits for this command: the night decides nothing, and a file reservation may pay for the call.
+  if (pending.length === 0) return null
+  if (pending.length !== 1) throw new Error('Too many matching night reservations')
+  const fileAction = plan.actions.find(action => action.kind === 'command' && action.command === term.command && action.folder === term.folder)
+  if (fileAction && record.uses.some(use => use.binding === binding.id && use.action === fileAction.id && use.call === null)) {
+    throw new Error('Both sources have a pending reservation')
+  }
   const use = pending[0]!
   use.dispatch!.call = input.call
   // The written row goes back to the caller, so the window's night view shows the call, as a reservation's does.
@@ -371,5 +407,5 @@ export function claimNightEpicCommand(database: DatabaseConnection, plan: EpicPl
 export const EPIC_ACTION_OPERATIONS = Object.freeze({
   epicActionRecord, listEpicActionRecords, askEpicActionCard, answerEpicActionCard, bindEpicRun, revokeEpicRun, reserveEpicAction,
   reserveNightEpicCommand, claimNightEpicCommand, epicActionsDuring, recordEpicActionOutcome, epicCallDecision,
-  settledEpicActionRecord
+  settledEpicActionRecord, epicAuthorityProblem
 })

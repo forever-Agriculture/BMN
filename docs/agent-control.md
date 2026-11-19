@@ -1046,9 +1046,14 @@ read.
   including their remaining uses. A read takes no use. Read `bmn policy --repo` before each write.
   Run `bmn run reserve` with the action id, use id and exact command. Run `bmn run dispatch`
   with those same arguments. BMN rechecks the target and current go and claims the use before
-  launching the command. A claimed dispatch receipt cannot launch the command again. Failed or missing
-  outcomes leave the use spent.
-- **Granted for the night** shows the merges and pushes he granted on the run's card.
+  launching the command. Right before it answers, it reads once more that the binding, the go, his Yes under
+  the same deploy rule (or the night term) still stand; a change there withholds the call and the use stays
+  spent. A claimed dispatch receipt cannot launch the command again, and a withheld one stays withheld on a
+  retry. Failed or missing outcomes leave the use spent. A `gh` write names `--repo github.com/OWNER/NAME`; a
+  default-branch push names `HEAD:refs/heads/BRANCH`. A merge whose PR changes CI waits for him on both paths,
+  typed or held by the guard, unless a typed merge's action approved CI changes.
+- **Granted for the night** shows the merges and pushes he granted on the run's card that the repository's
+  deploy rule lets through; one it holds is not listed.
 
 The standing policy is the agents' own rule. The hard limits are GitHub's
 repository rules where a repository can carry them (`non_fast_forward` and `deletion` on the default branch, and
@@ -1073,26 +1078,33 @@ tags, releases, pull requests). One evaluator (`deployHold` in `shared/protocol/
 that rule everywhere an approved action could be let through: `bmn plan actions ask`, the card in the window
 and on the phone (each line shows the rule, and a held line has no Yes), his answer, the lines `bmn policy`
 prints, `bmn run reserve` and `dispatch`, the guard's claim and its retry, a night command at its card, its
-reservation and its claim, and the last check. An action is let through only where the rule says none of
+reservation and its claim, and the last check. The night's typed merges, default-branch pushes and PR writes
+(`bmn grant`) take the same rule (owner, 2026-11-19): `bmn grant ask` refuses one the rule holds by name, `bmn
+policy` does not list it, and `bmn grant use` refuses it without taking a use. An action is let through only where the rule says none of
 its events deploys. No rule keeps every such action held. A Yes is saved with the rule he saw; under another
-rule it is no longer his answer and the card asks again. A push names its event by its ref (a bare name counts
+rule it is no longer his answer and the card asks again. Each answer carries the rule its own surface showed
+(the window's card, or the very phone message he tapped); a Yes whose rule is not the one in force now is refused,
+so a tap on a message the phone has not redrawn yet never saves a Yes under a rule he did not see. A push names its event by its ref (a bare name counts
 as a branch and a tag); a merge counts as a push to any branch and a pull-request event; a release counts as
-a release and a tag. A local repository on this computer needs no rule: BMN reads it and lets the action
-through only while that repository runs no hook on a push. A package registry is not a repository event.
+a release and a tag. A local repository on this computer has no rule of his, so BMN holds an action on it;
+only an isolated test instance lifts one, after reading that its fixture repository runs no hook on a push. A package registry is not a repository event.
 The rule is the owner's statement, not a fact BMN verified: if it is wrong, BMN lets through what he said
 was safe.
 
 **An answer belongs to one go (D6).** Asked while a go is in force, it is that go's. Asked before a go, it
 attaches once, to the first go recorded after it, and only when that go was recorded on the same approval
 text and action list. A changed list, a withdrawn go, a later go or changed text before the go ends it for
-good; putting the old state back does not bring the old Yes back. A limit amendment keeps it.
+good; putting the old state back does not bring the old Yes back. An action list BMN cannot read counts as a
+changed list: the stored answer ends before BMN refuses. A limit amendment keeps it.
 
 **Who may ask BMN to lift a hold.** The hook asks only the BMN that runs its terminal: it checks, by the
-kernel's word for the socket's listener, that this process is one of its own ancestors, and otherwise sends
-no token and accepts no answer. BMN binds the Claude Code or Codex conversation it saw start in that terminal,
+kernel's word for the socket's listener, that this process is one of its own ancestors, and sends the token
+only over that same confirmed connection; otherwise it sends no token and accepts no answer. BMN binds the Claude Code or Codex conversation it saw start in that terminal,
 whether BMN started the agent or the owner typed it into a shell. Each new conversation report replaces the
 old one, so `/clear`, a resume of another conversation or an unconfirmed report ends what the old one could
-spend, for typed `bmn run` commands as well as for the hook. Codex does not report a failed command as an
+spend, for typed `bmn run` commands as well as for the hook. **Unbind** holds the whole agent process (owner,
+2026-11-19): BMN records its process id and start time with the revoked binding, and no conversation of that
+process binds that go again; a newly started agent may. Codex does not report a failed command as an
 event; BMN reads the exit code from the result, and a result that names none stays "outcome unreported".
 
 What is not bound, by the owner's decision of 2026-11-19 and D7: which program the bare name finds on the

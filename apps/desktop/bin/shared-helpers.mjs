@@ -1,5 +1,5 @@
 // MODULE: shared-helpers.mjs - the small helpers several bin modules use, each defined once (Story 80.15); it imports only Node
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -102,35 +102,66 @@ export function bashExit(response) {
   return code === undefined ? 'unknown' : code === 0 ? 'ok' : 'failed'
 }
 
-const LISTENER_IS_ANCESTOR = `import os, socket, struct, sys
+// One connection: the kernel names its listener, which must be this process's ancestor; only then do the token and the
+// request go out on that same connection, and its answer is printed. The token and request come on standard input.
+const VERIFIED_CALL = `import json, os, socket, struct, sys
+request = json.loads(sys.stdin.read())
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.settimeout(0.5)
+s.settimeout(request['seconds'])
 s.connect(sys.argv[1])
 pid, uid, _ = struct.unpack('3i', s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-s.close()
 if uid != os.getuid() or pid <= 1:
-    sys.exit(1)
+    sys.exit(3)
 at = os.getppid()
 for _ in range(32):
     if at == pid:
-        sys.exit(0)
-    if at <= 1:
         break
+    if at <= 1:
+        sys.exit(3)
     with open(f'/proc/{at}/stat') as status:
         at = int(status.read().rsplit(')', 1)[1].split()[1])
-sys.exit(1)
+else:
+    sys.exit(3)
+line = lambda message: (json.dumps(message) + '\\n').encode()
+s.sendall(line({'jsonrpc': '2.0', 'id': 1, 'method': 'auth', 'params': {'token': request['token']}}))
+s.sendall(line({'jsonrpc': '2.0', 'id': 2, 'method': request['method'], 'params': request['params']}))
+buffer = b''
+while True:
+    chunk = s.recv(65536)
+    if not chunk:
+        sys.exit(4)
+    buffer += chunk
+    while b'\\n' in buffer:
+        raw, buffer = buffer.split(b'\\n', 1)
+        if not raw.strip():
+            continue
+        message = json.loads(raw)
+        if message.get('id') == 1 and 'error' in message or message.get('id') == 2:
+            sys.stdout.write(json.dumps(message))
+            sys.exit(0)
 `
 
 /**
- * Whether the process listening on the control socket is an ancestor of this hook, as the kernel reports both: BMN starts
- * every session's terminal, so its own socket always is, and a socket some other process opened never is. The path comes
- * from the environment; this is what keeps a substituted one from lifting a hold. Linux only; anything unconfirmed is false.
+ * One request to the control socket, sent only if the process listening on it is an ancestor of this one, as the kernel
+ * reports on the very connection that then carries the token (Epic 132 F5, S5). BMN starts every session's terminal, so
+ * its own socket always is; a socket some other process opened never is, and gets no token. Linux only. Returns the
+ * reply ({ result } or { error }), or null when the listener was not confirmed or no reply came.
  */
-export function launchedByListener(socketPath) {
-  if (process.platform !== 'linux') return false
-  try {
-    return spawnSync('/usr/bin/python3', ['-I', '-S', '-c', LISTENER_IS_ANCESTOR, socketPath], { stdio: 'ignore', timeout: 1500 }).status === 0
-  } catch {
-    return false
-  }
+export function callOwnListener(socketPath, token, method, params, timeoutMs = 2500) {
+  if (process.platform !== 'linux') return Promise.resolve(null)
+  return new Promise((resolveCall) => {
+    let out = ''
+    const child = spawn('/usr/bin/python3', ['-I', '-S', '-c', VERIFIED_CALL, socketPath], { stdio: ['pipe', 'pipe', 'ignore'], timeout: timeoutMs + 500 })
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk })
+    child.on('error', () => resolveCall(null))
+    child.on('close', (status) => {
+      try {
+        if (status !== 0 || !out) return resolveCall(null)
+        const message = JSON.parse(out)
+        resolveCall(message.error !== undefined ? { error: message.error } : { result: message.result })
+      } catch { resolveCall(null) }
+    })
+    child.stdin.on('error', () => undefined)
+    child.stdin.end(JSON.stringify({ token, method, params, seconds: timeoutMs / 1000 }))
+  })
 }

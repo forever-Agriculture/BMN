@@ -108,6 +108,22 @@ export function planActionWords(action) {
   return `Run ${action.command}\nFolder ${action.folder}\nTarget ${action.repository} · ${action.ref} · ${uses}${action.script === null ? '' : `\nFile ${action.script.path} SHA-256 ${action.script.sha256}`}`
 }
 
+/** A path CI runs: workflows, actions and the pipelines of the common hosts. */
+const changesCI = path => /^\.github\/|(^|\/)(?:Jenkinsfile|\.gitlab-ci\.yml|azure-pipelines.yml)$/u.test(path)
+
+/**
+ * The CI fence for a merge held by the guard (D7), as for a typed merge: null when the PR's current files are readable and
+ * change no CI, else why it stays held. A held command carries no CI approval, so a CI change always waits for him.
+ */
+export async function heldMergeProblem(cwd, repository, pr) {
+  try {
+    const found = await readGh(cwd, ['pr', 'view', String(pr), '--repo', `github.com/${repository}`, '--json', 'files'])
+    const paths = Array.isArray(found.files) ? found.files.map(file => file?.path) : null
+    if (paths === null || paths.some(path => typeof path !== 'string')) return 'The files in the current PR could not be confirmed'
+    return paths.some(changesCI) ? 'This PR changes CI and the owner did not approve that' : null
+  } catch { return 'GitHub could not confirm the files of the current PR' }
+}
+
 /** Check one policy operation against its approved target before counting it. */
 export async function planPolicyTarget(action, command, cwd) {
   const parsed = simpleCommandWords(command)
@@ -115,16 +131,18 @@ export async function planPolicyTarget(action, command, cwd) {
   const [program, noun, verb, ...args] = parsed.words
   if (action.kind === 'push-default') {
     const [spec, ...other] = args
+    // Only a full destination names the branch: a bare name can resolve to a same-named local tag (D7).
     if (program !== 'git' || noun !== 'push' || !/^[A-Za-z0-9_][\w.-]*$/u.test(verb ?? '') ||
-      spec !== action.branch && spec !== `HEAD:refs/heads/${action.branch}` || other.length > 0) {
-      return invalid('Name one direct push to the approved default branch')
+      spec !== `HEAD:refs/heads/${action.branch}` || other.length > 0) {
+      return invalid(`Name one direct push to the approved default branch: git push REMOTE HEAD:refs/heads/${action.branch}`)
     }
     return { remote: verb }
   }
   if (program !== 'gh' || noun !== 'pr' || !['create', 'edit', 'merge'].includes(verb)) return invalid('Name the exact gh pr write')
   const at = args.indexOf('--repo')
-  if (at === -1 || args[at + 1]?.toLowerCase() !== action.repository || args.filter(word => word === '--repo').length !== 1) {
-    return invalid('Name the approved repository with --repo OWNER/NAME')
+  // The host is named, as on a held write: a hostless OWNER/NAME follows the caller's gh host, which BMN cannot see.
+  if (at === -1 || args[at + 1]?.toLowerCase() !== `github.com/${action.repository}` || args.filter(word => word === '--repo').length !== 1) {
+    return invalid('Name the approved repository with --repo github.com/OWNER/NAME')
   }
   if (action.kind === 'pr-elsewhere') {
     const [pr, repoFlag, , ...options] = args
@@ -132,7 +150,7 @@ export async function planPolicyTarget(action, command, cwd) {
       options.length % 2 === 0 && options.every((value, index) => index % 2 === 1 || ['--title', '--body', '--base'].includes(value))) {
       if (action.branch === null) return { remote: null }
       try {
-        const found = await readGh(cwd, ['pr', 'view', String(action.pr), '--repo', action.repository, '--json', 'headRefName'])
+        const found = await readGh(cwd, ['pr', 'view', String(action.pr), '--repo', `github.com/${action.repository}`, '--json', 'headRefName'])
         if (found.headRefName === action.branch) return { remote: null }
       } catch { /* Unconfirmed branches may not use the line. */ }
       return invalid('The current PR does not confirm the approved branch')
@@ -152,14 +170,14 @@ export async function planPolicyTarget(action, command, cwd) {
   if (action.headSha !== null && head !== action.headSha) return invalid('The merge head differs from the approved commit')
   try {
     const read = list => readGh(cwd, list)
-    const pr = await read(['pr', 'view', String(action.pr), '--repo', action.repository, '--json', 'headRefOid,state,files'])
+    const pr = await read(['pr', 'view', String(action.pr), '--repo', `github.com/${action.repository}`, '--json', 'headRefOid,state,files'])
     if (pr.headRefOid !== head || pr.state !== 'OPEN' || !Array.isArray(pr.files)) return invalid('The current PR head or open state could not be confirmed')
     const paths = pr.files.map(file => file?.path)
     if (paths.some(path => typeof path !== 'string')) return invalid('The files in the current PR could not be confirmed')
-    if (!action.changesCI && paths.some(path => /^\.github\/|(^|\/)(?:Jenkinsfile|\.gitlab-ci\.yml|azure-pipelines.yml)$/u.test(path))) {
+    if (!action.changesCI && paths.some(changesCI)) {
       return invalid('This PR changes CI and the owner did not approve that')
     }
-    const checks = await read(['pr', 'checks', String(action.pr), '--repo', action.repository, '--required', '--json', 'bucket,state'])
+    const checks = await read(['pr', 'checks', String(action.pr), '--repo', `github.com/${action.repository}`, '--required', '--json', 'bucket,state'])
     if (!Array.isArray(checks) || checks.length === 0 || !checks.every(check => check.state === 'SUCCESS' && check.bucket === 'pass')) {
       return invalid('The current PR must have green required checks')
     }

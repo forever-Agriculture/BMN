@@ -1571,7 +1571,7 @@ export interface GrantedRepositoryAction {
  * or an unreadable record lists none. The list raises no level and changes no guard: it says what he answered.
  */
 export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>,
-  bound?: { epic: number; go: string; sessionId: string }): GrantedRepositoryAction[] {
+  bound?: { epic: number; go: string; sessionId: string }, held?: (term: GrantTerm) => boolean): GrantedRepositoryAction[] {
   const open = read.state === 'read' ? openGrantPeriod(read.record) : null
   const actions: GrantedRepositoryAction[] = []
   for (const run of open?.runs ?? []) {
@@ -1579,6 +1579,8 @@ export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord,
     if (!status.active) continue
     for (const { term, choice, left, count } of status.grant.items) {
       if (term.kind === 'pr-elsewhere') continue
+      // A merge or push his deploy rule holds is never listed as granted (owner 2026-11-19, S1).
+      if (held?.(term) === true) continue
       const binding = bound?.sessionId === run.card.sessionId ? bound : undefined
       // A held night command is listed only for the run of the epic and go it was approved for.
       if (term.kind === 'command' && term.repository !== undefined &&

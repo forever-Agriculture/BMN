@@ -588,6 +588,8 @@ describe('the night\'s grant where the agent apps look (Story 84.9)', () => {
     expect(grantedRepositoryActions(read(granted(away(asked()), { ...all, 'merge-12': 'no', 'push-81': 'no' })), AWAY)).toEqual([])
     expect(grantedRepositoryActions(read(record), BACK)).toEqual([])
     expect(grantedRepositoryActions({ state: 'unknown', reason: 'the grant record is not valid JSON' }, AWAY)).toEqual([])
+    // A merge or push his deploy rule holds is not listed as granted (owner 2026-11-19, S1).
+    expect(grantedRepositoryActions(read(record), AWAY, undefined, (term) => term.kind === 'merge').map((entry) => entry.item)).toEqual(['push-81'])
   })
 
   it('takes a report text of up to 1,000 characters and refuses a longer one with the limit named (AC2)', () => {

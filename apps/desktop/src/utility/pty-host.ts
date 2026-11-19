@@ -426,6 +426,8 @@ async function start(): Promise<void> {
     messageWake: testMessageWakeQuiet(process.argv, process.env),
     // A test-mode run (100.6): its synthetic studio is the only site with a reviewed QA contract.
     qaContractOrigin: testQaContractOrigin(process.argv, process.env),
+    // A test-mode run (132): its fixture's local receiving repositories may be lifted after inspection; BMN itself holds them.
+    localReceivers: process.argv.includes('--bmn-test-host') || process.argv.includes('--self-test-host'),
     qaPicheOrigins: testQaPicheOrigins(process.argv, process.env),
     // Electron self-test only (Story 62.2): the health watch reads a fixture tree and starts no nvidia-smi.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_SYSFS_ROOT

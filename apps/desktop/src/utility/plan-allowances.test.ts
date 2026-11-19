@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { compareVersions, fieldsFrom, ledgerIds, parseAllowances } from '../../bin/plan-allowances.mjs'
-import { approvalText } from '../../bin/plan-cli.mjs'
+import { approvalText, readEpicActionContext } from '../../bin/plan-cli.mjs'
 import { EMPTY_GRANT_RECORD } from '@bmn/protocol'
 import { changeAway } from './database-away-store'
 import { answerGrantCard, askGrantCard, getGrants, GRANT_OPERATIONS, leaveAway, nightAllowanceKey, writeGrantRow } from './database-grant-store'
@@ -274,6 +274,21 @@ describe('bmn plan allowances (110.4 AC4)', () => {
     const { main, home } = goFor('schema: 1\nepic: 7\n')
     expect(read(main, home).current.fields).toMatchObject({ rounds: 4, money_cap: null, deferrable: [], messages: [], prepared: [], may: [], stays_out: [] })
   })
+  it('reads a malformed action list as a changed list, so the host voids a stored answer before refusing (Epic 132 D6)', async () => {
+    const { main } = goFor()
+    const good = await readEpicActionContext(main, 7)
+    expect(good.malformed).toBeUndefined()
+    writeFileSync(join(main, 'plan/allowances/007.yaml'), FILE.replace('limits:', 'limits: [broken'))
+    const broken = await readEpicActionContext(main, 7)
+    expect(broken.malformed).toEqual(expect.any(String))
+    expect(broken.actionsHash).toMatch(/^malformed:[0-9a-f]{64}$/u)
+    expect(broken.actionsHash).not.toBe(good.actionsHash)
+    expect(broken.actions).toEqual([])
+    expect(broken.activeApproval).toBeNull()
+    writeFileSync(join(main, 'plan/allowances/007.yaml'), FILE)
+    expect((await readEpicActionContext(main, 7)).actionsHash).toBe(good.actionsHash)
+  })
+
   it('a planned file is a draft: it reads, and grants nothing', () => {
     const { main, home } = project()
     expect(read(main, home)).toMatchObject({ state: 'draft', draft: { rounds: 4 } })

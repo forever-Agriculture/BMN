@@ -123,7 +123,8 @@ absolute folder, repository and ref, plus a path and SHA-256 for a pinned file. 
 `bmn plan actions ask N` in the readiness batch and record the go on the matching proposal.
 It refuses, by name, an action the repository's deploy rule does not cover (Health › Pushes and merges ›
 What deploys; no rule is a refusal), so set that rule with him before the batch.
-A held `gh` write must include `--repo github.com/OWNER/NAME`. The
+Every `gh` write, held or typed, must include `--repo github.com/OWNER/NAME`, and a default-branch push names its
+full destination (`git push origin HEAD:refs/heads/main`), never a bare name a tag could match. The
 owner's Yes or No is kept by BMN with the proposal. `bmn plan allowances N` shows the recorded answer
 and any remaining uses. Ordinary directions stay in `may`.
 

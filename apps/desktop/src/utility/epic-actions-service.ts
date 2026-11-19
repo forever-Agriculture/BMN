@@ -8,11 +8,11 @@ import { deployHold, deployRule, deployRuleWords, grantStatus, openGrantPeriod, 
   type GrantTerm, type PlanAction, type PushPolicyRead } from '@bmn/protocol'
 import { epicCommandTarget, pinnedFileSha } from '../../bin/grant-command.mjs'
 import { readEpicActionContext } from '../../bin/plan-cli.mjs'
-import { parsePlanAction, planPolicyTarget } from '../../bin/plan-actions.mjs'
+import { heldMergeProblem, parsePlanAction, planPolicyTarget } from '../../bin/plan-actions.mjs'
 import { githubFacts, remoteRepository } from '../../bin/policy-cli.mjs'
 import type { ControlScope } from './control-auth'
 import type { DatabaseWorkerClient } from './database-client'
-import { epicActionRemaining, matchingEpicCard, nightBoundTo, nightCommandHash, type EpicActionRecord } from './database-epic-actions'
+import { epicActionRemaining, matchingEpicCard, nightBoundTo, nightCommandHash, type EpicActionRecord, type EpicAuthority } from './database-epic-actions'
 import { foregroundClientChild, foregroundProcessFolder, type ForegroundCaller } from './foreground-process'
 
 type Agent = EpicRunBinding['agent']
@@ -28,6 +28,8 @@ interface Options {
   changed(): void
   /** A native claim wrote the night grant row; the window's night view is refreshed from it. */
   grantChanged(read: GrantRead): void
+  /** Only an isolated test instance may lift a push to a local repository it inspected; BMN itself holds one (S1). */
+  localReceivers?: boolean
 }
 
 function text(value: unknown, name: string, max = 1000): string {
@@ -109,6 +111,13 @@ function commandProblem(term: Command, cwd: string): string | null {
   return null
 }
 
+/** Everything a held command is checked for before and at its use: its exact target, and a merge's CI fence (D7). */
+async function heldCommandProblem(term: Command, cwd: string): Promise<string | null> {
+  const problem = commandProblem(term, cwd)
+  if (problem !== null) return problem
+  return /^gh\s+pr\s+merge\s/u.test(term.command) ? await heldMergeProblem(cwd, term.repository, term.ref) : null
+}
+
 const RECEIVE_HOOKS = ['pre-receive', 'update', 'proc-receive', 'post-receive', 'post-update', 'reference-transaction', 'push-to-checkout']
 const LOCAL_RULE = 'a local repository that runs no hook on a push'
 
@@ -144,6 +153,17 @@ export function actionEvents(action: PlanAction, defaultBranch: string | null): 
   const name = qualified ? action.ref.slice('refs/heads/'.length) : action.ref
   if (action.ref.startsWith('refs/') && !qualified) return null
   return [name === defaultBranch ? 'default-branch' : 'branches', ...(qualified ? [] : ['tags' as const])]
+}
+
+/**
+ * Owner 2026-11-19 (S1, "Yes, same rule"): a night merge, default-branch push or PR write passes only where his deploy rule
+ * says nothing it sets off deploys, exactly as the epic action of that kind; no rule keeps it held. Null for other terms.
+ */
+export function nightTermHold(read: PushPolicyRead, term: GrantTerm): string | null {
+  if (term.kind === 'merge') return deployHold(read, term.repository, ['default-branch', 'branches', 'pull-requests'])
+  if (term.kind === 'push-default') return deployHold(read, term.repository, ['default-branch'])
+  if (term.kind === 'pr-elsewhere') return deployHold(read, term.repository, ['branches', 'pull-requests'])
+  return null
 }
 
 function nightCommand(term: GrantCommandTerm): Command {
@@ -206,8 +226,16 @@ export class EpicActionsService {
     return life?.generation === binding.generation ? binding : null
   }
 
-  private async scopedPlan(scope: ControlScope, project: string, epic: number): Promise<EpicPlanContext> {
+  /** The plan as BMN reads it now. A malformed action list voids the stored answer first, then refuses (D6). */
+  private async context(project: string, epic: number): Promise<EpicPlanContext> {
     const plan = await readEpicActionContext(project, epic)
+    if (plan.malformed === undefined) return plan
+    await this.options.database.companion('settledEpicActionRecord', plan, this.options.now())
+    throw new Error(`The allowance file cannot be read: ${plan.malformed}`)
+  }
+
+  private async scopedPlan(scope: ControlScope, project: string, epic: number): Promise<EpicPlanContext> {
+    const plan = await this.context(project, epic)
     if (scope.kind === 'session') {
       const life = this.life(scope)
       if (!life) throw new Error('The live Claude Code or Codex conversation could not be confirmed')
@@ -240,7 +268,11 @@ export class EpicActionsService {
       const target = epicCommandTarget(action)
       if ('problem' in target) return { rule: null, hold: target.problem }
       if (target.remote === null) return { rule: null, hold: null }
-      if (isAbsolute(action.repository)) return { rule: LOCAL_RULE, hold: receiverProblem(action.repository) }
+      if (isAbsolute(action.repository)) {
+        // A local repository has no deploy rule of his in Health, so BMN holds it; a test instance inspects its own fixture.
+        return this.options.localReceivers === true ? { rule: LOCAL_RULE, hold: receiverProblem(action.repository) }
+          : { rule: null, hold: 'A local receiving repository has no deploy rule in Health; BMN holds this action' }
+      }
     }
     const read = policy ?? await this.options.database.companion('getPushPolicy')
     const set = deployRule(read, action.repository)
@@ -258,10 +290,13 @@ export class EpicActionsService {
     return (await this.deploy(action)).hold
   }
 
-  /** The rule each card last showed him, by card and action: a Yes is taken only for the rule that was on his screen. */
-  private readonly shownRules = new Map<string, string | null>()
+  /** The night term's deploy hold under the policy BMN reads now; see nightTermHold. */
+  async nightRepositoryHold(term: GrantTerm, policy?: PushPolicyRead): Promise<string | null> {
+    if (term.kind !== 'merge' && term.kind !== 'push-default' && term.kind !== 'pr-elsewhere') return null
+    return nightTermHold(policy ?? await this.options.database.companion('getPushPolicy'), term)
+  }
 
-  private async view(record: EpicActionRecord, plan: EpicPlanContext, shown = false): Promise<EpicActionCard | null> {
+  private async view(record: EpicActionRecord, plan: EpicPlanContext): Promise<EpicActionCard | null> {
     const card = matchingEpicCard(record, plan)
     const binding = this.current(record.binding, plan)
     const visible = binding === null ? null : { id: binding.id, sessionId: binding.sessionId, go: binding.go, at: binding.at }
@@ -272,7 +307,6 @@ export class EpicActionsService {
       for (const item of card.actions) {
         const action = plan.actions.find(action => action.id === item.id)
         const state = action ? await this.deploy(action, policy) : { rule: null, hold: 'The action is no longer in the list' }
-        if (shown) this.shownRules.set(`${card.id}\n${item.id}`, state.rule)
         actions.push({ ...item, ...(state.rule === null ? {} : { rule: state.rule }), ...(state.hold === null ? {} : { held: state.hold }) })
         const answer = card.answers[item.id]
         // A Yes given under another rule, or for an action now held, is no answer: the card asks again.
@@ -286,34 +320,32 @@ export class EpicActionsService {
       revision: 0, actions: [], answers: {}, binding: visible }
   }
 
-  /** `shown`: the caller puts these cards in front of him (the window, the phone), so their rules are what he saw. */
-  async list(shown = true): Promise<EpicActionCard[]> {
+  async list(): Promise<EpicActionCard[]> {
     const records = await this.options.database.companion('listEpicActionRecords')
     const results = await Promise.all(records.map(async record => {
       const run = record.binding === null ? null : this.runs.get(record.binding.sessionId)
       const project = record.card?.project ?? run?.project
       if (!project) return null
       try {
-        const plan = await readEpicActionContext(project, record.epic)
+        const plan = await this.context(project, record.epic)
         if (plan.planKey !== record.planKey) return null
-        return await this.view(await this.options.database.companion('settledEpicActionRecord', plan, this.options.now()), plan, shown)
+        return await this.view(await this.options.database.companion('settledEpicActionRecord', plan, this.options.now()), plan)
       } catch { return null }
     }))
     return results.filter(card => card !== null)
   }
 
   async answer(input: EpicActionAnswer, via: 'app' | 'telegram'): Promise<void> {
-    const card = (await this.list(false)).find(card => card.id === input.card)
+    const card = (await this.list()).find(card => card.id === input.card)
     if (!card) throw new Error('The actions changed. Open the current card.')
-    const plan = await readEpicActionContext(card.project, card.epic)
+    const plan = await this.context(card.project, card.epic)
     let rule: string | null = null
     if (input.choice === 'yes') {
-      // Checked again at the answer (D3): the rule must be the one his card showed, and it must cover the action.
+      // Checked again at the answer (D3): the rule must be the one the answering surface showed, and it must cover the action.
       const action = plan.actions.find(action => action.id === input.action)
       if (!action) throw new Error('The actions changed. Open the current card.')
-      const shown = this.shownRules.get(`${card.id}\n${input.action}`)
       const state = await this.deploy(action)
-      if (shown === undefined || shown !== state.rule) {
+      if (input.rule === undefined || input.rule !== state.rule) {
         this.options.changed()
         throw new Error('The deploy rule for this repository changed. Look at the card again.')
       }
@@ -325,7 +357,7 @@ export class EpicActionsService {
   }
 
   async unbind(project: string, epic: number, binding: string): Promise<boolean> {
-    const plan = await readEpicActionContext(project, epic)
+    const plan = await this.context(project, epic)
     const result = await this.options.database.companion('revokeEpicRun', plan, binding, this.options.now())
     if (result) this.options.changed()
     return result
@@ -333,13 +365,18 @@ export class EpicActionsService {
 
   /** The card's terms, each held command checked and stamped with the plan, epic and go of the bound run asking for it. */
   async checkNightCard(scope: ControlScope, terms: readonly GrantTerm[]): Promise<GrantTerm[]> {
+    // A merge or push his deploy rule does not cover is refused by name before any card, as an epic action is.
+    for (const term of terms) {
+      const hold = term.kind === 'rounds' || term.kind === 'limit' || term.proposed === 'no' ? null : await this.nightRepositoryHold(term)
+      if (hold !== null) throw new Error(`${term.id}: ${hold}`)
+    }
     if (!terms.some(term => term.kind === 'command' && term.repository !== undefined)) return [...terms]
     const run = await this.bound(scope)
     if (!run) throw new Error('A night command held by the guard needs a bound run')
     return Promise.all(terms.map(async term => {
       if (term.kind !== 'command' || term.repository === undefined) return term
       const action = nightCommand(term)
-      const problem = commandProblem(action, action.folder) ?? await this.deployProblem(action)
+      const problem = await heldCommandProblem(action, action.folder) ?? await this.deployProblem(action)
       if (problem) throw new Error(problem)
       return { ...term, bound: { plan: run.plan.planKey, epic: run.plan.epic, go: run.binding.go, session: run.binding.sessionId } }
     }))
@@ -357,7 +394,7 @@ export class EpicActionsService {
     if (!caller || !foregroundClientChild(run.binding.foreground, caller, run.binding.agent)) {
       throw new Error('The caller does not belong to the bound foreground conversation')
     }
-    const problem = commandProblem(nightCommand(term), term.folder) ?? await this.deployProblem(nightCommand(term))
+    const problem = await heldCommandProblem(nightCommand(term), term.folder) ?? await this.deployProblem(nightCommand(term))
     if (problem) throw new Error(problem)
     const file = term.script === null ? undefined : {
       folder: term.folder, path: term.script.path, sha256: pinnedFileSha(term.script, term.folder),
@@ -422,7 +459,7 @@ export class EpicActionsService {
       if (plan.actions.length === 0) throw new Error('This epic names no actions')
       for (const action of plan.actions) {
         // Nothing he cannot approve reaches his card: an action his deploy rule does not cover is refused here, by name.
-        const problem = (action.kind === 'command' ? commandProblem(action, action.folder) : null) ?? await this.deployProblem(action)
+        const problem = (action.kind === 'command' ? await heldCommandProblem(action, action.folder) : null) ?? await this.deployProblem(action)
         if (problem !== null) throw new Error(`Action ${action.id}: ${problem}`)
       }
       await this.options.database.companion('askEpicActionCard', plan, this.options.now())
@@ -455,7 +492,7 @@ export class EpicActionsService {
   }
 
   private async dispatchPlan(binding: EpicRunBinding, plan: EpicPlanContext): Promise<EpicPlanContext> {
-    const current = await readEpicActionContext(plan.project, plan.epic)
+    const current = await this.context(plan.project, plan.epic)
     if (current.actionsHash !== plan.actionsHash || current.activeApproval !== plan.activeApproval ||
       this.current(binding, current) === null) throw new Error('The go, action list or live conversation changed before the use')
     return current
@@ -484,6 +521,8 @@ export class EpicActionsService {
       pending.set(call, { plan: current, binding })
       this.guardOutcomes.set(scope.sessionId, pending)
     }
+    // A typed dispatch BMN withheld at its last check stays withheld when retried; the use stays spent (D9).
+    if (dispatch && call !== null) await this.options.database.companion('epicCallDecision', plan, binding, call, commandHash)
     if (guard && call !== null) {
       // One decision per tool call across the file and the night: a retry gets the first one back and takes nothing.
       // The retry still passes every live check of its own source; it never moves to the other one.
@@ -507,7 +546,7 @@ export class EpicActionsService {
     const check = async (): Promise<string | null> => {
       if (action.kind === 'command') {
         if (action.command !== command) return 'The exact command text differs'
-        const problem = commandProblem(action, cwd)
+        const problem = await heldCommandProblem(action, cwd)
         if (problem !== null) return problem
       } else {
         const repository = await githubFacts(action.repository)
@@ -536,7 +575,8 @@ export class EpicActionsService {
         ...(dispatch ? { receipt: id } : {}), mayReserve: !dispatch }, this.options.now())
     if (guard && !('repeated' in use)) track(current)
     // The command that follows this answer is the one that runs: a held command's hook, or a typed push or merge's dispatch.
-    if (call !== null) await this.lastCheck(current, binding, call, check)
+    if (call !== null) await this.lastCheck(current, binding, call,
+      async () => await check() ?? await this.authority(binding, current, { kind: 'file', action: action.id, rule }))
     return { allowed: true, epic: plan.epic, action: action.id, useId: use.id, at: use.at,
       ...(dispatch ? { launch: !('repeated' in use) } : {}) }
   }
@@ -568,6 +608,12 @@ export class EpicActionsService {
     throw new Error(`${problem}; the use stays spent`)
   }
 
+  /** The authority behind a taken use, read once more at the decision's edge (D4/D9): go, binding, answer or night term. */
+  private async authority(binding: EpicRunBinding, plan: EpicPlanContext, source: EpicAuthority): Promise<string | null> {
+    const fresh = await this.dispatchPlan(binding, plan)
+    return await this.options.database.companion('epicAuthorityProblem', fresh, binding, source, this.options.now())
+  }
+
   private async claimNight(run: NonNullable<Awaited<ReturnType<EpicActionsService['bound']>>>, command: string, cwd: string, call: string) {
     const { read, away } = await this.options.database.companion('getGrants')
     if (read.state !== 'read') throw new Error('The night grant could not be read before deciding which approval to use')
@@ -582,14 +628,19 @@ export class EpicActionsService {
     if (matched.length === 0) return null
     if (matched.length !== 1) throw new Error('More than one night action names this exact command')
     const { runId, term } = matched[0]!
-    const check = async () => commandProblem(nightCommand(term), cwd) ?? await this.deployProblem(nightCommand(term))
+    const check = async () => await heldCommandProblem(nightCommand(term), cwd) ?? await this.deployProblem(nightCommand(term))
     const problem = await check()
     if (problem) throw new Error(problem)
     const current = await this.dispatchPlan(run.binding, run.plan)
-    const { use, read: written } = await this.options.database.companion('claimNightEpicCommand', current, run.binding,
-      { runId, item: term.id, targetHash: nightCommandHash(term), call }, this.options.now())
+    const targetHash = nightCommandHash(term)
+    const claimed = await this.options.database.companion('claimNightEpicCommand', current, run.binding,
+      { runId, item: term.id, targetHash, call }, this.options.now())
+    // No night receipt waits for this command: the file's approval, if any, decides the call.
+    if (claimed === null) return null
+    const { use, read: written } = claimed
     if (written !== null) this.options.grantChanged(written)
-    await this.lastCheck(current, run.binding, call, check)
+    await this.lastCheck(current, run.binding, call,
+      async () => await check() ?? await this.authority(run.binding, current, { kind: 'night', runId, item: term.id, targetHash }))
     return { plan: current, answer: { allowed: true, epic: run.plan.epic, action: term.id, useId: use.id, at: use.at } }
   }
 }

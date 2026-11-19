@@ -5302,6 +5302,9 @@ describe('Away (Story 76.3)', () => {
     const card = { title: 'Epic 80 · clean up', scope: 'Stories 80.2–80.6', nothing: false, terms: [
       { id: 'merge-12', kind: 'merge' as const, repository: 'octo/widgets', pr: 12, headSha: '3f2a9c1', upTo: null, proposed: 'pr' as const, reason: 'green at 22:20' }
     ] }
+    // Epic 132 S1: without his deploy rule the night merge is refused by name before any card.
+    await expect(handlers.askGrant({ scope: agent, runId: 'run-80', card })).rejects.toThrow(/merge-12: Health has no deploy rule for octo\/widgets/u)
+    nothingDeploys('octo/widgets')
     await handlers.askGrant({ scope: agent, runId: 'run-80', card })
     const periodId = service.grantForOwner().period!.periodId
     await setAwayAndGo()
@@ -5311,6 +5314,14 @@ describe('Away (Story 76.3)', () => {
       runId: 'run-80', title: 'Epic 80 · clean up', item: 'merge-12', kind: 'merge', repository: 'octo/widgets',
       words: 'merge PR 12 in octo/widgets, only at head 3f2a9c1; another head waits', left: 1, count: 1
     }])
+    // Once his rule says the default branch deploys there, the granted merge is neither listed nor spent.
+    const ruled = COMPANION_OPERATIONS.getPushPolicy(database)
+    if (ruled.state !== 'read') throw Error('Synthetic push policy unread')
+    COMPANION_OPERATIONS.changePushPolicy(database, { kind: 'deploys', repository: 'octo/widgets', events: ['default-branch'], expectedRevision: ruled.record.revision }, now)
+    expect(await handlers.policyStatus()).toMatchObject({ granted: [] })
+    expect(await handlers.useGrant({ sessionId: 's1', incarnationId: agent.incarnationId, runId: 'run-80', useId: 'm1', item: 'merge-12' }))
+      .toEqual({ outcome: 'refused', reason: expect.stringContaining('default branch deploys') })
+    expect(service.grantForOwner().period!.uses.filter(use => use.runId === 'run-80')).toEqual([])
     await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
     expect(await handlers.policyStatus()).toMatchObject({ granted: [] })
   })
@@ -5494,6 +5505,15 @@ describe('the Away wake-up through the service (Story 90.6, epic review)', () =>
 
 // This integration layer uses the existing service clock and real SQLite transactions. It does not
 // replace the wall-clock Electron/native acceptance checks or make a native prompt safe to type into.
+/** Epic 132 S1 (owner 2026-11-19): a night merge or push needs his deploy rule; the fixture's says nothing deploys. */
+function nothingDeploys(...repositories: string[]): void {
+  for (const repository of repositories) {
+    const read = COMPANION_OPERATIONS.getPushPolicy(database)
+    if (read.state !== 'read') throw Error('Synthetic push policy unread')
+    expect(COMPANION_OPERATIONS.changePushPolicy(database, { kind: 'deploys', repository, events: [], expectedRevision: read.record.revision }, now).outcome).toBe('changed')
+  }
+}
+
 describe('130 D9: service routes and actual phone callbacks share the worker fence', () => {
   type Message = { text: string; keyboard: Array<Array<{ text: string; callback_data: string }>> | null }
   let messages: Map<number, Message>, nextMessage: number, callback: number, toasts: string[]
@@ -5525,6 +5545,7 @@ describe('130 D9: service routes and actual phone callbacks share the worker fen
   const start = async () => { await app('start'); await settle(); expect(service.grantForOwner().period?.state).toBe('leaving') }
   beforeEach(async () => {
     messages = new Map(); nextMessage = 100; callback = 0; toasts = []; failedEdit = null; beforeEdit = null
+    nothingDeploys('synthetic/repo')
     vi.spyOn(service['departureWake'], 'sweep').mockResolvedValue()
     service['telegram'] = {
       botUsername: () => 'bmn_synthetic_bot',

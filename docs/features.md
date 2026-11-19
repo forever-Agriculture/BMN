@@ -559,8 +559,9 @@ critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
 **Epic actions** (Epic 132) shows the typed actions a plan requested for your answer. Each line
 shows the complete action and target. Yes or No saves that line. Reopen **Epic actions…** in the
 command palette to see the choices and the bound session. **Unbind** ends that session's permission
-for the go and keeps that conversation from binding to it again, in any process. A new conversation can
-bind a go nobody holds; what it gets is still only what you approved for the epic.
+for the go and keeps that whole agent process from binding to it again: no conversation in that agent window,
+`/clear` included, binds it until the agent is closed and started again. A newly started agent can bind a go
+nobody holds; what it gets is still only what you approved for the epic.
 Each line also shows the repository's **deploy rule**. You set it in Health › Pushes and merges, under the
 repository's level: **What deploys** is **Not set**, **Nothing deploys** or **These deploy** with a switch
 for the default branch, other branches, tags, releases and pull requests. BMN lets an approved action

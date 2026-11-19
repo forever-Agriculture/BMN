@@ -71,7 +71,7 @@ await withTemporaryRoot({ ...temporaryRootContracts.electronDevelopment, prefix:
   const bare = join(root, 'remote.git')
   const ghLog = join(root, 'synthetic-gh-writes')
   const head = 'a'.repeat(40)
-  const merge = `gh pr merge 12 --repo sample/fixture --match-head-commit ${head} --merge`
+  const merge = `gh pr merge 12 --repo github.com/sample/fixture --match-head-commit ${head} --merge`
   if (scenario === 'policy') {
     const bin = join(root, 'bin')
     mkdirSync(bin, { mode: 0o700 })
@@ -80,8 +80,8 @@ const fs = require('node:fs')
 const args = process.argv.slice(2).join(' ')
 const replies = {
   'repo view sample/fixture --json owner,defaultBranchRef,name,isFork,parent': { owner: { login: 'sample' }, name: 'fixture', defaultBranchRef: { name: 'main' }, isFork: false },
-  'pr view 12 --repo sample/fixture --json headRefOid,state,files': { headRefOid: '${head}', state: 'OPEN', files: [{ path: 'README.md' }] },
-  'pr checks 12 --repo sample/fixture --required --json bucket,state': [{ bucket: 'pass', state: 'SUCCESS' }]
+  'pr view 12 --repo github.com/sample/fixture --json headRefOid,state,files': { headRefOid: '${head}', state: 'OPEN', files: [{ path: 'README.md' }] },
+  'pr checks 12 --repo github.com/sample/fixture --required --json bucket,state': [{ bucket: 'pass', state: 'SUCCESS' }]
 }
 if (Object.hasOwn(replies, args)) console.log(JSON.stringify(replies[args]))
 else if (args === ${JSON.stringify(merge.slice(3))}) fs.appendFileSync(${JSON.stringify(ghLog)}, args + '\\n')
@@ -386,11 +386,23 @@ else process.exit(91)
       return lines.map((line, index) => agent === 'claude' && /^\s*❯\s*\S/u.test(line) && !(rule(lines[index - 1]) && rule(lines[index + 1]))
         ? `  (earlier prompt) ${line.replace(/^\s*❯\s*/u, '')}` : line)
     }
-    const waitForComposer = async ({ resumed = false } = {}) => {
+    const waitForComposer = async ({ resumed = false, fresh = false } = {}) => {
       const history = [], keys = { keys: 0 }
       let unclassifiedSince = null
       await until(`${agent} prompt`, async () => {
-        const lines = resumed ? earlier(await terminal()) : await terminal()
+        const all = await terminal()
+        // After /clear or /new the old conversation may stay on screen above the new one: read from the last header down,
+        // with earlier prompts marked as history, as after a resume.
+        const header = all.findLastIndex(line => /Claude Code v|>_ OpenAI Codex \(v/u.test(line))
+        const lines = fresh ? earlier(all.map((line, index) => index < header ? '' : line)) : resumed ? earlier(all) : all
+        // Codex 0.170 asks where /new runs; the current worktree (option 1, selected) keeps the same agent and folder.
+        if (fresh && agent === 'codex' && !report.newConversationWhere && lines.some(line => /Where should the new conversation run\?/u.test(line)) &&
+          lines.some(line => /^›\s*1\. Use current Git worktree/u.test(line))) {
+          report.newConversationWhere = 'Use current Git worktree'
+          await input.focus()
+          await page.keyboard.press('Enter')
+          return false
+        }
         const screen = classifyMessageStartup(agent, lines, project)
         // What the last look saw, kept for a timeout's report.
         report.composerWait = { state: screen.state, detail: screen.detail ?? null, lines: lines.length, session: selectedSession,
@@ -557,7 +569,7 @@ else process.exit(91)
       await departure.locator('.grant-footer .grant-go').click()
       await departure.waitFor({ state: 'hidden' })
       const reserve = `bmn grant use --run ${runId} --item night-push --use-id synthetic-night-use`
-      await type(`Use two Bash calls. First run exactly \`${reserve}\`. ${messageSocketGuidance(agent, [reserve], 'sender')}Only if the reservation succeeded, ${gitPrompt(exact)}`)
+      await type(`Use two Bash calls. First run exactly \`${reserve}\`. ${messageSocketGuidance(agent, [reserve], 'sender')}Only if the reservation succeeded, ${gitPrompt(exact)} The remote is a local bare test repository, not GitHub: \`bmn policy\` does not cover it, and BMN's command guard decides this push when it runs.`)
       const use = await until('night reserve and native hook claim on the local bare ref', () => {
         const { uses } = cli('plan', 'allowances', '7')
         return bareRef() === git(project, 'rev-parse', 'feature/x') && uses?.length === 1 ? uses[0] : false
@@ -603,8 +615,18 @@ else process.exit(91)
     await select(other)
     await waitForComposer()
     await type(prompt)
-    await until('second native session refused binding', () => nativeRefusals().some(entry => entry.method === 'epic.run.bind' &&
-      entry.reason.includes('already has a live bound session')), 80_000)
+    let competingRetried = false
+    await until('second native session refused binding', async () => {
+      if (nativeRefusals().some(entry => entry.method === 'epic.run.bind' && entry.reason.includes('already has a live bound session'))) return true
+      // The same single re-ask as for the first session, when a low-effort Codex stops at BMN's own sandbox refusal.
+      const shown = (await terminal()).join('\n')
+      if (agent === 'codex' && !competingRetried && /A sandbox may be keeping this command from BMN/u.test(shown) && /Worked for \d/u.test(shown)) {
+        competingRetried = true
+        report.retriedCompetingEscalationAfterSandboxRefusal = true
+        await type(`Run \`bmn run bind --epic 7\` again using Bash, this time with sandbox_permissions=require_escalated and justification: synthetic BMN socket check. Honor any refusal.`)
+      }
+      return false
+    }, 80_000)
     check('A competing native session in the same folder cannot take the binding',
       cli('plan', 'allowances', '7').binding?.sessionId === sessionId)
     await type(gitPrompt(exact))
@@ -627,10 +649,22 @@ else process.exit(91)
     await dialog.getByRole('button', { name: 'Unbind', exact: true }).click()
     await until('owner unbind removes the binding', () => !cli('plan', 'allowances', '7').binding)
     await page.keyboard.press('Escape')
+    const refusedTurn = Date.now()
     await type(prompt)
     await until('same conversation is refused after owner Unbind', () => nativeRefusals().some(entry =>
       entry.method === 'epic.run.bind' && entry.reason.includes('The owner unbound this conversation')), 80_000)
     check('The owner can unbind in the window and that native conversation cannot rebind',
+      !cli('plan', 'allowances', '7').binding)
+    // Codex refuses /new while a turn is running.
+    await turnEnded(refusedTurn, 'the refused turn to end')
+    // Owner 2026-11-19 (S5): Unbind holds the whole agent process, so a fresh conversation in it cannot bind either.
+    await type(agent === 'codex' ? '/new' : '/clear')
+    await sleep(3000)
+    await waitForComposer({ fresh: true })
+    await type(prompt)
+    await until('a new conversation in the unbound agent is refused', () => nativeRefusals().some(entry =>
+      entry.method === 'epic.run.bind' && entry.reason.includes('The owner unbound this agent')), 80_000)
+    check('After Unbind a new conversation in the same agent process cannot bind (owner 2026-11-19)',
       !cli('plan', 'allowances', '7').binding)
   } finally {
     await lastLook().catch(() => undefined)

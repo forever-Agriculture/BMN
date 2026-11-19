@@ -6,3 +6,4 @@ export function planActionsHash(actions: readonly PlanAction[]): string
 export function planActionWords(action: PlanAction): string
 export function planPolicyTarget(action: Exclude<PlanAction, { kind: 'command' }>, command: string, cwd: string):
   Promise<{ remote: string | null } | { problem: string }>
+export function heldMergeProblem(cwd: string, repository: string, pr: string): Promise<string | null>

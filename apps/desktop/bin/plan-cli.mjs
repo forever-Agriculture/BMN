@@ -540,9 +540,11 @@ export async function readEpicActionContext(project, epic) {
   const text = readFileSync(join(plan.planRoot, 'epics', name), 'utf8')
   const working = allowanceText(plan.planRoot, epic)
   const parsed = working === null ? null : parseAllowances(working, epic)
-  if (parsed?.problems.length) throw new PlanError('MALFORMED', parsed.problems[0].reason)
-  const actions = parsed?.data.actions ?? []
-  const actionsHash = planActionsHash(actions)
+  // A list BMN cannot read is a changed list: the host voids the stored answer before it refuses (D6), so restoring the
+  // old list later never brings the old Yes back.
+  const malformed = parsed?.problems.length ? parsed.problems[0].reason : null
+  const actions = malformed === null ? parsed?.data.actions ?? [] : []
+  const actionsHash = malformed === null ? planActionsHash(actions) : `malformed:${createHash('sha256').update(working).digest('hex')}`
   const approval = `sha256:${approvalText(text, working)}`
   const recorded = await readAllowances(plan, epic)
   const usable = !['backlog', 'dropped', 'paused', 'done'].includes(row.status) &&
@@ -559,7 +561,7 @@ export async function readEpicActionContext(project, epic) {
     precedingGo: latestGo === null ? null : precedingEpicGo(plan, epic, latestGo),
     goApproval: latestGo === null ? null : recorded.approved_text ?? null,
     goActionsHash: latestGo === null || recorded.state === 'not_recorded' ? null : planActionsHash(recorded.at_go?.fields.actions ?? []),
-    withdrawn: recorded.state === 'withdrawn' }
+    withdrawn: recorded.state === 'withdrawn', ...(malformed === null ? {} : { malformed }) }
 }
 
 /** The board with `epic` last in its `queue:` (unchanged when already there); null for a queue written in another form. */

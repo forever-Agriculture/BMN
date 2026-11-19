@@ -9,6 +9,8 @@ export function epicActionPhoneCard(card: EpicActionCard) {
   let text = `<b>Actions for Epic ${card.epic}</b>`
   const keyboard: InlineKeyboard = []
   const visible = new Set<number>()
+  // The deploy rule each action's line shows on this message; a tap answers under that rule, never a newer one (D3).
+  const rules: Record<string, string | null> = {}
   let phoneOverflow = false
   for (const [index, action] of card.actions.entries()) {
     const saved = card.answers[action.id]
@@ -24,16 +26,17 @@ export function epicActionPhoneCard(card: EpicActionCard) {
     }
     text += line
     visible.add(index)
+    rules[action.id] = action.rule ?? null
     const token = `${EPIC_ACTION_TAP}${card.id}:${card.revision.toString(36)}:${index.toString(36)}:`
     if (!saved) keyboard.push([{ text: `No · ${action.id}`, callback_data: token + 'n' },
       ...(action.held ? [] : [{ text: `Yes · ${action.id}`, callback_data: token + 'y' }])])
   }
   if (phoneOverflow) text += '\n\nMore actions: answer on desktop.'
-  return { text, keyboard, visible }
+  return { text, keyboard, visible, rules }
 }
 
 export class TelegramEpicActions {
-  private readonly sent = new Map<string, { revision: number; id: number; text: string }>()
+  private readonly sent = new Map<string, { revision: number; id: number; text: string; rules: Record<string, string | null> }>()
   private pending: Promise<void> = Promise.resolve()
 
   constructor(private readonly connector: () => TelegramConnector | undefined,
@@ -53,16 +56,17 @@ export class TelegramEpicActions {
       for (const card of cards) {
         const sent = this.sent.get(card.id)
         if (!sent && card.actions.every(action => card.answers[action.id])) continue
-        const { text, keyboard } = epicActionPhoneCard(card)
+        const { text, keyboard, rules } = epicActionPhoneCard(card)
         // A changed deploy rule changes the words without a new revision; the phone shows it before a Yes can be taken.
         if (sent?.revision === card.revision && sent.text === text) continue
         if (sent) {
           await telegram.editMessageText(sent.id, text, { html: true, keyboard })
           sent.revision = card.revision
           sent.text = text
+          sent.rules = rules
         } else {
           const message = await telegram.sendMessage(text, { html: true, keyboard })
-          this.sent.set(card.id, { revision: card.revision, id: message.messageId, text })
+          this.sent.set(card.id, { revision: card.revision, id: message.messageId, text, rules })
         }
       }
     }).catch(() => undefined)
@@ -77,9 +81,10 @@ export class TelegramEpicActions {
       const index = match ? Number.parseInt(match[3]!, 36) : -1
       const revision = match ? Number.parseInt(match[2]!, 36) : -1
       const action = card && card.actions[index]
+      const sent = card ? this.sent.get(card.id) : undefined
       if (!card || !action || card.revision !== revision || !epicActionPhoneCard(card).visible.has(index) ||
-        this.sent.get(card.id)?.id !== tap.messageId) throw new Error('This card changed')
-      await this.answer({ card: card.id, action: action.id, choice: match![4] === 'y' ? 'yes' : 'no', revision })
+        sent?.id !== tap.messageId || !Object.hasOwn(sent.rules, action.id)) throw new Error('This card changed')
+      await this.answer({ card: card.id, action: action.id, choice: match![4] === 'y' ? 'yes' : 'no', revision, rule: sent.rules[action.id] ?? null })
       await telegram.answerCallbackQuery(tap.callbackId, 'Saved')
     } catch {
       await telegram.answerCallbackQuery(tap.callbackId, 'This card changed. Open the current actions.')
