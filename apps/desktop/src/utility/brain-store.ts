@@ -135,6 +135,27 @@ export class BrainStore {
       return this.read(id)
     })()
   }
+  /**
+   * Epic 127.3, the owner's one-time exception (2026-11-19): the memory keepers become one note each without
+   * the three-notes limit. Only the worker calls this, for the one manifest whose hash it holds. A title already
+   * there is left alone, so a second run adds nothing.
+   */
+  fileKeepers(notes: BrainContent[], session: string): { created: number; existing: number } {
+    for (const content of notes) validateContent(content)
+    return this.database.transaction(() => {
+      this.writeAllowed(session)
+      let created = 0
+      for (const content of notes) {
+        if (this.database.prepare('SELECT 1 FROM brain_note WHERE normalized_title=?').get(normalizeBrainTitle(content.title))) continue
+        const id = randomUUID()
+        this.database.prepare("INSERT INTO brain_note VALUES (?,0,'active',?,NULL)").run(id, normalizeBrainTitle(content.title))
+        this.append(id, 0, content, 'create', 'active', session)
+        created += 1
+      }
+      this.resolveLinks()
+      return { created, existing: notes.length - created }
+    })()
+  }
   edit(name: string, revision: number, content: BrainContent, session: string): BrainNote {
     validateContent(content)
     return this.change(name,revision,session,(note) => {

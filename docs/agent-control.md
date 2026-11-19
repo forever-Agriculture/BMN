@@ -1367,6 +1367,12 @@ turn (measured on 2.1.328), so at a start the hook takes a record not written ye
 named after the session and its folder is that process's own; a message still needs the written record. Codex reports no start
 for a manual `/compact`, so that compaction gets no titles.
 
+One-time exception (Epic 127.3, owner 2026-11-19): at its start BMN files the 48 memory keepers
+as one note each from `brain-keepers-127.json` in its state folder, past the three-notes limit.
+The brain worker takes only the manifest whose sha256 it holds, backs up first, leaves existing
+titles alone, and BMN removes the manifest after it ran (`brain-keepers-127.done.json`, or
+`.failed.json` with the reason). The limit is unchanged for every session.
+
 ```sh
 bmn brain search "cross-project preference"
 bmn brain read "title or id" --section "Heading" --links
