@@ -124,7 +124,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const testNight = async (call, credentials) => {
     phase('131: recorded facts, an allowance raise and an access line')
     const project = join(root, 'sample-night-plan')
-    const { written, plan } = seedNightPlan(project, cli, environment)
+    const { written, plan } = seedNightPlan(project, process.execPath, environment, [cli])
 
     const runner = written('run-probe.sh', `while :; do
   if [ -f './next.sh' ]; then mv './next.sh' './current.sh'; bash './current.sh'; fi

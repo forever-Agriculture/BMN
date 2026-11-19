@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-export function seedNightPlan(project, cliPath, environment, nodePath = process.execPath) {
+export function seedNightPlan(project, cliExecutable, environment, cliArgs = []) {
   const written = (name, text) => {
     const target = join(project, name)
     mkdirSync(dirname(target), { recursive: true })
@@ -30,7 +30,7 @@ export function seedNightPlan(project, cliPath, environment, nodePath = process.
   written('plan/allowances/007.yaml', 'schema: 1\nepic: 7\nlimits:\n  rechecks: {limit: 4, ceiling: 4, per: boundary}\n')
   git(join(project, 'plan'), 'add', '-A')
   git(join(project, 'plan'), 'commit', '-qm', 'docs: fixture plan')
-  const plan = (...argv) => JSON.parse(execFileSync(nodePath, [cliPath, 'plan', ...argv, '--json'], { cwd: project, env: environment, encoding: 'utf8' }))
+  const plan = (...argv) => JSON.parse(execFileSync(cliExecutable, [...cliArgs, 'plan', ...argv, '--json'], { cwd: project, env: environment, encoding: 'utf8' }))
   const showing = plan('status', '--epic', '7')
   plan('go', '7', '--expect', showing.rows[0].token, '--approved', `sha256:${showing.approval_texts[0].sha256}`,
     '--source', "synthetic owner 2026-11-18T20:00Z: 'Go'")
@@ -44,7 +44,7 @@ export function seedNightPlan(project, cliPath, environment, nodePath = process.
 }
 
 export function seedNativeNight(project, tested, environment, composer) {
-  const { written, git, plan } = seedNightPlan(project, tested.cliPath, environment)
+  const { written, git, plan } = seedNightPlan(project, process.execPath, environment, [tested.cliPath])
   const executable = (name, body) => chmodSync(written(name, '#!/bin/sh\n' + body), 0o700)
   const run = 'fixture-epic-7'
   const head = git(project, 'rev-parse', 'HEAD')

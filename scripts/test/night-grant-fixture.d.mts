@@ -4,7 +4,7 @@ interface FixtureAllowanceRead {
   changes: Array<{ source: string }>
 }
 
-export function seedNightPlan(project: string, cliPath: string, environment: NodeJS.ProcessEnv, nodePath?: string): {
+export function seedNightPlan(project: string, cliExecutable: string, environment: NodeJS.ProcessEnv, cliArgs?: string[]): {
   written(name: string, text: string): string
   git(where: string, ...argv: string[]): string
   plan(action: 'allowances', epic: string): FixtureAllowanceRead

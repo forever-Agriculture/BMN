@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { MessageChannelMain } from 'electron'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import type { DatabaseConnection } from '../../utility/database-initialization'
@@ -172,7 +172,7 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     assert.ok(dataHome && /^bmn-(electron-self-test|packaged-smoke)-/u.test(basename(dirname(dirname(dataHome)))),
       'the phone limit uses only the disposable self-test root')
     const project = join(dirname(dirname(dataHome)), 'phone-night-plan')
-    const { written, plan } = seedNightPlan(project, control.cliPath, process.env, process.env.BMN_SELF_TEST_NODE ?? 'node')
+    const { written, plan } = seedNightPlan(project, control.cliPath, process.env)
     const title = 'Synthetic phone limit'
     const card = written('phone-card.json', JSON.stringify({ title, scope: 'One synthetic review boundary', terms: [
       { id: 'raise', kind: 'limit', project, epic: 7, name: 'rechecks', from: 4, to: 6, reason: 'Two checks still wait' }
