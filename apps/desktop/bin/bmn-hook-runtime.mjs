@@ -169,14 +169,18 @@ async function sayDestination(agent, event, agentPid, procRoot, socketPath, toke
   await callEach(socketPath, token, [{ method: 'message.destination', params: { destination } }], Math.max(1, left())).catch(() => undefined)
 }
 
-/** An optional brain slice shares the existing context answer and leaves the normal brief alone on failure. */
-async function brainContextForHook(agent, event, agentPid, procRoot, socketPath, token, reported) {
+/**
+ * An optional brain slice shares the existing context answer and leaves the normal brief alone on failure. It keeps its own
+ * limit, counted from here, so a slow start brief cannot use it up.
+ */
+async function brainContextForHook(agent, event, agentPid, procRoot, socketPath, token) {
   if (!agentPid || event.hook_event_name !== 'SessionStart') return null
   const provider = agent === 'claude' ? 'anthropic' : agent === 'codex' ? 'openai' : null
   if (provider === null) return null
+  const asked = Date.now()
   const guard = await import('./agents-guard.mjs')
-  const limit = Number(process.env.BMN_HOOK_MESSAGE_LIMIT_MS) || guard.MESSAGE_LIMIT_MS
-  const left = () => limit - (Date.now() - reported)
+  const limit = Number(process.env.BMN_HOOK_BRAIN_LIMIT_MS) || guard.BRAIN_CONTEXT_LIMIT_MS
+  const left = () => limit - (Date.now() - asked)
   if (left() <= 0) return null
   const destination = await guard.messageDestinationWithin({
     agent, pid: agentPid, procRoot, unwritten: true,
@@ -345,7 +349,7 @@ async function runHook(args) {
   const answer = outcomes[requests.length]?.result
   const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
   const brainContext = brief !== null && answer?.brainContextOffered === true
-    ? await brainContextForHook(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => null) : null
+    ? await brainContextForHook(agent, event, agentPid, procRoot, socketPath, token).catch(() => null) : null
   const notice = awayLock && typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) &&
     typeof answer.awayClaim === 'string' ? answer.awayNotice : null
   const team = awayLock && typeof answer?.teamNotice === 'string' && answer.teamNotice !== '' && Number.isSafeInteger(answer.teamRevision) &&

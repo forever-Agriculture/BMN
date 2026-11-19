@@ -1909,6 +1909,29 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       expect(fixture.handlers.brainStartupContext).toHaveBeenCalledWith('session-1', 'incarnation-1', app === 'codex' ? OPENAI : ANTHROPIC)
     })
 
+    it.each(['claude', 'codex'] as const)('still adds brain context to a %s start whose brief took longer than the message limit', async app => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      // Measured live 2026-11-19: while several sessions started, the brief's round trip used up the 300 ms message limit.
+      const env = { ...fixture.sessionEnv, BMN_HOOK_MESSAGE_LIMIT_MS: '300', BMN_PROC_ROOT: session.proc, HOME: session.home }
+      fixture.handlers.observeHookEvent.mockImplementation(() => new Promise(resolve => {
+        setTimeout(() => resolve({ recorded: true, brief: BRIEF, brainContextOffered: true }), 500)
+      }))
+      fixture.handlers.brainStartupContext.mockResolvedValue('Synthetic note titles')
+      const result = await runCli(['hook', app], { env, input: start(session) })
+      expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toBe(`${BRIEF}\n\nSynthetic note titles`)
+    })
+
+    it('leaves the brief alone when the brain slice is slower than its own limit', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_HOOK_BRAIN_LIMIT_MS: '200', BMN_PROC_ROOT: session.proc, HOME: session.home }
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF, brainContextOffered: true })
+      fixture.handlers.brainStartupContext.mockImplementation(() => new Promise(resolve => { setTimeout(() => resolve('Synthetic note titles'), 1_000) }))
+      const result = await runCli(['hook', 'claude'], { env, input: start(session) })
+      expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toBe(BRIEF)
+    })
+
     it('adds brain context at a Claude Code start whose record is not written yet, and hands such a start no message', async () => {
       const fixture = await cliFixture()
       const session = await claudeSession(fixture.root)

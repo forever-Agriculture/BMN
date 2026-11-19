@@ -303,6 +303,13 @@ export const MESSAGE_HANDOVER = {
 export const MESSAGE_LIMIT_MS = 300
 
 /**
+ * How long a session start or compaction may wait for its brain slice (Epic 127.2), counted from when the hook asks for it.
+ * Its own clock: measured live on 2026-11-19, the start brief's round trip alone used up the 300 ms message limit while
+ * several sessions started, and 4 of 8 starts got no slice. Once per start, so a longer bound costs little.
+ */
+export const BRAIN_CONTEXT_LIMIT_MS = 1_500
+
+/**
  * Where the owner's agent sends work, for a message or brain context: the prompt guard's own decision for
  * that event, and the destination its resolver found. null when no team is approved, when the guard would
  * stop this event for any reason, when it found no destination, and when a Claude Code event does not name

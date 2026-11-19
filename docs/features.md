@@ -778,6 +778,8 @@ searching, importing, exporting and backing up notes call no model.
 
 After the brain switch, BMN can give Claude Code and Codex a short list of the newest note
 titles and IDs at startup and after compaction. **Preferences → General → Brain** controls it.
+The hook waits at most 1.5 seconds for that list, on its own clock; past that the session starts
+without it.
 
 Search returns at most ten titles with short summaries. Whole-note reads include the revision,
 origin, date and scope; a heading can select one section, and links/backlinks are optional. Search
