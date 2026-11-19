@@ -156,12 +156,14 @@ export class BrainCutoverJournal {
     this.phase('rendered-rules')
    })
    await this.rules(async()=>{
-    this.operations.skills.verify(this.state.skills!)
-    for(const path of [this.paths.claudeSkill,this.paths.codexSkill,this.paths.managedSkill,...this.paths.indexes])this.remember(path)
+    const skills=this.state.skills!
+    this.operations.skills.verify(skills)
+    const links=skills.legacyCodexLink?[this.paths.claudeSkill]:[this.paths.claudeSkill,this.paths.codexSkill]
+    for(const path of [...links,this.paths.managedSkill,...this.paths.indexes])this.remember(path)
     this.planned(this.paths.managedSkill,brainPathFingerprint(this.paths.shippedSkill),true)
     this.planned(this.paths.claudeSkill,JSON.stringify(['link',this.paths.managedSkill]),true)
-    this.planned(this.paths.codexSkill,JSON.stringify(['link',this.paths.claudeSkill]),true)
-    for(const path of [this.paths.claudeSkill,this.paths.codexSkill]){
+    if(!skills.legacyCodexLink)this.planned(this.paths.codexSkill,JSON.stringify(['link',this.paths.claudeSkill]),true)
+    for(const path of links){
      if(!existsSync(path)&&!safeLink(path))continue
      const stat=lstatSync(path),index=this.state.saved.findIndex(saved=>saved.path===path),saved=this.state.saved[index]!
      if(!stat.isDirectory()&&!stat.isSymbolicLink())throw new Error('The rehearsed legacy brain skill must be a folder or link')
@@ -169,8 +171,8 @@ export class BrainCutoverJournal {
      saved.held={path:held,dev:stat.dev,ino:stat.ino};this.save();this.operations.guard()
      this.operations.atomicRename({operation:'no-replace',source:path,target:held,sourceIdentity:{dev:stat.dev,ino:stat.ino},targetIdentity:null})
     }
-    this.operations.skills.install(this.state.skills!,proof=>{this.operations.guard();this.state.skills=proof;this.save()})
-    for(const path of [this.paths.managedSkill,this.paths.claudeSkill,this.paths.codexSkill]){
+    this.operations.skills.install(skills,proof=>{this.operations.guard();this.state.skills=proof;this.save()})
+    for(const path of [this.paths.managedSkill,...links]){
      const saved=this.state.saved.find(saved=>saved.path===path)!
      if(brainPathFingerprint(path)!==saved.written)throw new Error('Normal brain skill installation differs from its journal plan')
      syncBrainTree(path);syncBrainDirectory(dirname(path))
@@ -185,6 +187,8 @@ export class BrainCutoverJournal {
    this.state.checks=await this.operations.installedProof(this.state.checkIntent);this.phase('installed-checks')
    if(JSON.stringify(await protectedVaultManifest(this.paths.vault,()=>this.operations.guard()))!==JSON.stringify(this.state.protectedManifest))throw new Error('Protected vault source changed after switch')
    this.verifyBarrier();this.operations.guard()
+   const skillProof=this.state.skills!
+   if(skillProof.legacyCodexLink)await this.rules(async()=>{this.operations.skills.verify(skillProof)})
    this.state.commit=brainJournalCommit(this.state,initialAdmission.storeId);this.save()
    this.operations.guard();await this.operations.decide(this.state.commit.payloadHash);publicationAttempted=true
    const committed=await this.operations.brain.commitCutover(this.state.commit.payloadHash)

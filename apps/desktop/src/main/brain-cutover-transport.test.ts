@@ -47,6 +47,7 @@ async function fixture(hooks:{before?:()=>Promise<void>;after?:()=>Promise<void>
    for(;;){const end=buffered.indexOf('\n');if(end<0)break;const line=buffered.slice(0,end);buffered=buffered.slice(end+1);waiting.shift()?.resolve(JSON.parse(line) as Record<string,unknown>)}
   })
   socket.on('error',error=>{for(const pending of waiting.splice(0))pending.reject(error)})
+  socket.on('close',()=>{for(const pending of waiting.splice(0))pending.reject(new Error('Brain broker closed before replying'))})
   const send=(command:string):Promise<Record<string,unknown>>=>new Promise((resolve,reject)=>{waiting.push({resolve,reject});socket!.write(JSON.stringify({command,invocation:'a'.repeat(32)})+'\n')})
   expect(await send('begin')).toHaveProperty('result.accepted',true)
   return {socket,app,send,finished,async close(){socket!.destroy();await app.dispose();rmSync(root,{recursive:true,force:true})}}
@@ -60,6 +61,15 @@ it('composes the actual Python decision response with the main permit before pub
   expect(synthetic.starts).toHaveLength(1)
  }finally{await f.close()}
 })
+it('returns the actual error after an early cutover rollback',async()=>{
+ const f=await fixture({before:async()=>{throw new Error('Synthetic legacy skill conflict')}})
+ try{
+  expect(await f.send('run')).toMatchObject({error:'Synthetic legacy skill conflict'})
+  expect(await f.app.status()).toMatchObject({available:true,complete:false})
+  expect(synthetic.starts).toHaveLength(1)
+ }finally{await f.close()}
+})
+
 it('a kernel half-close between final preparation and decision prevents main publication',async()=>{
  let release:()=>void=()=>{},entered:()=>void=()=>{}
  const hold=new Promise<void>(resolve=>{release=resolve}),started=new Promise<void>(resolve=>{entered=resolve})

@@ -322,6 +322,30 @@ it.each([false,true])('selectively restores normal skill ownership and preserves
   if(setup)expect(Object.values(readDefaultsOwnership('synthetic-brain-rollback').snapshot().entries).some(row=>(row as {target:{entry:string}}).target.entry==='brain')).toBe(false)
  }finally{f.close()}
 })
+it.each([true,false])('reuses only the existing exact Codex link and metadata (matches=%s)',async matches=>{
+ const f=fixture()
+ try{
+  const {paths}=f
+  rmSync(paths.codexSkill,{recursive:true});symlinkSync(matches?paths.claudeSkill:paths.shippedSkill,paths.codexSkill)
+  const link=lstatSync(paths.codexSkill)
+  const writtenPath=join(f.root,'.config/bmn/agents/state/rules/skills-written.json')
+  mkdirSync(join(writtenPath,'..'),{recursive:true})
+  const written=JSON.stringify({[paths.codexSkill]:{harness:'codex',skill:'brain',kind:'link',target:paths.claudeSkill}})
+  writeFileSync(writtenPath,written)
+  if(matches){
+   await f.run()
+   expect(readFileSync(join(paths.codexSkill,'SKILL.md'),'utf8')).toBe('bmn brain')
+   f.confirmReturn();await f.journal.rollback();await f.journal.rollback()
+   expect(readFileSync(join(paths.codexSkill,'SKILL.md'),'utf8')).toBe('old vault skill')
+  }else{
+   await expect(f.run()).rejects.toThrow(/ownership conflict/)
+   expect(await f.brain.admission()).toMatchObject({committed:false,open:false})
+  }
+  expect(lstatSync(paths.codexSkill).ino).toBe(link.ino)
+  expect(readFileSync(writtenPath,'utf8')).toBe(written)
+ }finally{f.close()}
+})
+
 it('preserves an existing owner brain opt-out before switching any original file',async()=>{
  const f=fixture()
  try{

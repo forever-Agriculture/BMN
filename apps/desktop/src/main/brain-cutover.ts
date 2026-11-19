@@ -72,7 +72,17 @@ export function brainCutover(options:Options) {
   await auth.check(peer)
   if(executing)throw new Error('The brain cutover is already running')
   executing=true
-  try{if(!permit)throw new Error('No live owner authorization');const result=await options.run(permit);if(!auth.status().complete)auth.finish();return result}catch(error){if(current===generation){auth.invalidate();if(auth.status().available)await stopBroker()}throw error}finally{executing=false}
+  try{
+   if(!permit)throw new Error('No live owner authorization')
+   const result=await options.run(permit)
+   if(!auth.status().complete)auth.finish()
+   return result
+  }catch(error){
+   // Revoke the permit now. Keep the transport alive to deliver the failure, as
+   // with a failed build proof. A new confirmation replaces the old broker.
+   if(current===generation)auth.invalidate()
+   throw error
+  }finally{executing=false}
  }
  async function startBroker(current:number):Promise<void>{
   await stopBroker()

@@ -1,5 +1,5 @@
 // MODULE: brain-cutover-skills.mjs - Scoped adoption and selective recovery through normal skill ownership
-import {constants,closeSync,fstatSync,fsyncSync,openSync,lstatSync,mkdirSync,readFileSync,symlinkSync} from 'node:fs'
+import {constants,closeSync,fstatSync,fsyncSync,openSync,lstatSync,mkdirSync,readFileSync,readlinkSync,symlinkSync} from 'node:fs'
 import {homedir} from 'node:os'
 import {dirname,join} from 'node:path'
 import {isDeepStrictEqual} from 'node:util'
@@ -18,6 +18,15 @@ export function brainCutoverSkills(paths,guard){
  const environment={...process.env,HOME:paths.home,BMN_SHIPPED_SKILLS:dirname(paths.shippedSkill)}
  const targets=[{kind:'own-skills',app:'source',path:paths.managedSkill,entry:'brain'},{kind:'skills',app:'source',path:paths.claudeSkill,entry:'brain'},{kind:'skills',app:'codex',path:paths.codexSkill,entry:'brain'}]
  const ownPath=join(paths.home,'.config/bmn/agents/state/own-skills.json'),writtenPath=join(paths.home,'.config/bmn/agents/state/rules/skills-written.json')
+ const codexRow={harness:'codex',skill:'brain',kind:'link',target:paths.claudeSkill}
+ const observeCodexLink=()=>{
+  try{
+   const stat=lstatSync(paths.codexSkill)
+   if(!stat.isSymbolicLink()||readlinkSync(paths.codexSkill)!==paths.claudeSkill)return null
+   const current=lstatSync(paths.codexSkill)
+   return current.dev===stat.dev&&current.ino===stat.ino?{device:stat.dev,inode:stat.ino}:null
+  }catch(error){if(error.code==='ENOENT')return null;throw error}
+ }
  const assertPaths=()=>{
   assertDefaultsAdmission()
   if(homedir()!==paths.home||paths.claudeSkill!==join(paths.home,'.claude/skills/brain')||paths.codexSkill!==join(paths.home,'.agents/skills/brain')||paths.managedSkill!==managedBrainSkillPath(paths.home)||paths.shippedSkill!==join(environment.BMN_SHIPPED_SKILLS,'brain'))throw failure('fixed home or skill destinations changed')
@@ -47,14 +56,20 @@ export function brainCutoverSkills(paths,guard){
   if(!proof||proof.version!==1||!isDeepStrictEqual(proof.paths,{home:paths.home,copy:paths.managedSkill,source:paths.claudeSkill,codex:paths.codexSkill})||
     !['planned','installing','complete','rollback-started','rolled-back'].includes(proof.state)||!Array.isArray(proof.installations)||proof.installations.length>3||
     proof.installations.some(row=>!targets.some(target=>isDeepStrictEqual(target,row.target))))throw failure('journal ownership scope changed')
+  if(proof.legacyCodexLink!==undefined&&(proof.setupId!==null||!isDeepStrictEqual(proof.codexRow,codexRow)||
+    !Number.isSafeInteger(proof.legacyCodexLink?.device)||!Number.isSafeInteger(proof.legacyCodexLink?.inode)))throw failure('journal legacy link proof changed')
  }
  const verify=(proof,restored=[])=>{
   assertProof(proof)
   const current=records(),partial=proof.state!=='complete'
   let normalOwn=false
   if(!proof.setupId&&current.own.skills.brain&&proof.ownRow?.brain){verifyBrainOwnSkillRow(current.own.skills.brain,proof.ownRow,restored);normalOwn=true}
+  const codexMatches=isDeepStrictEqual(current.written[paths.codexSkill]??null,proof.codexRow)
+  const codexAllowed=proof.legacyCodexLink
+   ? codexMatches&&isDeepStrictEqual(observeCodexLink(),proof.legacyCodexLink)
+   : codexMatches||(partial&&current.written[paths.codexSkill]===undefined)
   if(current.own.removed.brain!==undefined||!((partial&&current.own.skills.brain===undefined)||normalOwn||isDeepStrictEqual(current.own.skills.brain??null,proof.ownRow))||
-    !((partial&&current.written[paths.codexSkill]===undefined)||isDeepStrictEqual(current.written[paths.codexSkill]??null,proof.codexRow)))throw failure('a brain record or owner opt-out changed')
+    !codexAllowed)throw failure('a brain record, legacy Codex link or owner opt-out changed')
   for(const [name,row]of Object.entries(current.own.skills))if(name!=='brain'&&[paths.managedSkill,paths.claudeSkill].some(root=>row.copy===root||row.copy.startsWith(root+'/')))throw failure('another own skill depends on the brain copy')
   for(const [path,row]of Object.entries(current.written))if(path!==paths.codexSkill&&row.kind==='link'&&[paths.managedSkill,paths.claudeSkill].some(root=>row.target===root||row.target.startsWith(root+'/')))throw failure('another app entry depends on the brain copy')
   const journal=optionalDefaultsOwnership()
@@ -81,14 +96,20 @@ export function brainCutoverSkills(paths,guard){
   prepare:()=>withDefaultsAdmission(()=>{
    assertPaths();guard()
    const prior=records(),journal=optionalDefaultsOwnership()
-   if(prior.own.skills.brain!==undefined||prior.own.removed.brain!==undefined||prior.written[paths.codexSkill]!==undefined||!missing(paths.managedSkill)||
+   // Legacy BMN already owns this exact link. Replacing its Claude target changes
+   // what it resolves to while the existing Codex entry and record stay intact.
+   const priorCodex=prior.written[paths.codexSkill]
+   const legacyCodexLink=!journal&&isDeepStrictEqual(priorCodex,codexRow)?observeCodexLink():null
+   if(prior.own.skills.brain!==undefined||prior.own.removed.brain!==undefined||(priorCodex!==undefined&&!legacyCodexLink)||!missing(paths.managedSkill)||
      journal&&targets.some(target=>journal.snapshot().entries[defaultsTargetKey(target)]))throw failure('existing managed brain ownership or opt-out is never replaced')
    for(const path of [paths.managedSkill,paths.claudeSkill,paths.codexSkill])mkdirSync(dirname(path),{recursive:true,mode:0o700})
-   return {version:1,state:'planned',paths:{home:paths.home,copy:paths.managedSkill,source:paths.claudeSkill,codex:paths.codexSkill},setupId:journal?.snapshot().setupId??null,installations:[],ownRow:null,codexRow:null}
+   return {version:1,state:'planned',paths:{home:paths.home,copy:paths.managedSkill,source:paths.claudeSkill,codex:paths.codexSkill},setupId:journal?.snapshot().setupId??null,installations:[],ownRow:null,
+    codexRow:legacyCodexLink?codexRow:null,...(legacyCodexLink?{legacyCodexLink}:{})}
   }),
   install:(proof,record)=>withDefaultsAdmission(()=>{
    assertProof(proof);guard()
-   if(!targets.every(target=>missing(target.path)))throw failure('rehearsed legacy entries were not held before adoption')
+   if(proof.legacyCodexLink)verify(proof)
+   if(!targets.every(target=>target.path===paths.codexSkill&&proof.legacyCodexLink||missing(target.path)))throw failure('rehearsed legacy entries were not held before adoption')
    proof.state='installing';record(proof)
    if(proof.setupId){
     const desires=[{kind:'tree',source:paths.shippedSkill},{kind:'link',text:paths.managedSkill},{kind:'link',text:paths.claudeSkill}]
@@ -104,9 +125,11 @@ export function brainCutoverSkills(paths,guard){
     }
    }else{
     installBrainCutoverOwnSkill({source:dirname(paths.claudeSkill),environment,guard,beforeRecord:row=>{proof.ownRow=row;record(proof)}})
-    proof.codexRow={harness:'codex',skill:'brain',kind:'link',target:paths.claudeSkill};record(proof);guard()
-    symlinkSync(paths.claudeSkill,paths.codexSkill)
-    const current=records();current.written[paths.codexSkill]=proof.codexRow;writeCompatibleSkillMetadata(current.written,join(paths.journal,'skill-ownership-audit'))
+    if(!proof.legacyCodexLink){
+     proof.codexRow=codexRow;record(proof);guard()
+     symlinkSync(paths.claudeSkill,paths.codexSkill)
+     const current=records();current.written[paths.codexSkill]=codexRow;writeCompatibleSkillMetadata(current.written,join(paths.journal,'skill-ownership-audit'))
+    }
    }
    syncRecords();proof.state='complete';record(proof);verify(proof)
   }),
@@ -116,7 +139,8 @@ export function brainCutoverSkills(paths,guard){
    if(proof.state==='rolled-back')return
    proof.state='rollback-started';record(proof)
    const current=records(),own=structuredClone(current.own),written=structuredClone(current.written)
-   delete own.skills.brain;delete written[paths.codexSkill]
+   delete own.skills.brain
+   if(!proof.legacyCodexLink)delete written[paths.codexSkill]
    const audit=join(paths.journal,'skill-ownership-audit');mkdirSync(audit,{recursive:true,mode:0o700})
    if(proof.setupId){
     for(const [kind,value]of [['own-skills',own],['skills-written',written]]){
