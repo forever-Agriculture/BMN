@@ -393,6 +393,51 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(4)
   })
 
+  it('an archived note selected on the map is gone from map and panel once Archived turns off, and stays gone after (recheck)', async () => {
+    NOTES.n4 = note('n4', 'Old', { status: 'archived', linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Old text.' })
+    try {
+      await mount({ noteId: null, archived: true })
+      await press(container!.querySelector('.b-box')!, 'm')
+      const dot = container!.querySelector('svg.b-map .b-node[data-node="n4"] circle:not(.b-bloom):not(.b-select)')!
+      await act(async () => { container!.querySelector('svg.b-map')!.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: Number(dot.getAttribute('cx')), clientY: Number(dot.getAttribute('cy')) })) })
+      await flush()
+      expect(container!.querySelector('.b-side-title')!.textContent).toBe('Old')
+      held = (request) => request.command === 'map'
+      await act(async () => { container!.querySelector<HTMLButtonElement>('.b-toggle')!.click() })
+      await flush()
+      // While the new read is pending: no map, no panel, no button for Old.
+      expect(container!.querySelector('svg.b-map')).toBeNull()
+      expect(container!.querySelector('.b-side-title')).toBeNull()
+      expect([...container!.querySelectorAll('.b-side button')]).toEqual([])
+      held = null
+      await releaseAll()
+      expect(container!.querySelector('svg.b-map .b-node[data-node="n4"]')).toBeNull()
+      expect(container!.querySelector('svg.b-map .b-node.selected')).toBeNull()
+      expect(container!.querySelector('.b-side-title')).toBeNull()
+      expect(text()).toContain('Pick a note to read it here.')
+    } finally { delete (NOTES as Record<string, BrainPageNote | undefined>).n4 }
+  })
+
+  it('an older map answer that arrives last is dropped (recheck)', async () => {
+    await mount()
+    held = (request) => request.command === 'map'
+    await press(container!.querySelector('.b-box')!, 'm')
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-toggle')!.click() })
+    await flush()
+    const maps = requests.filter((r) => r.command === 'map')
+    expect(maps.map((r) => r.command === 'map' && r.archived)).toEqual([false, true])
+    expect(release).toHaveLength(2)
+    held = null
+    const [older, newer] = release.splice(0)
+    // The newer answer (Archived on, 5 notes) comes first, the older one (Archived off, 4 notes) last.
+    await act(async () => { newer!() })
+    await flush()
+    await act(async () => { older!() })
+    await flush()
+    expect(container!.querySelectorAll('svg.b-map .b-node')).toHaveLength(5)
+    expect(container!.querySelector('svg.b-map .b-node[data-node="n4"]')).not.toBeNull()
+  })
+
   it('a link beside the map to a note not on it opens that note as a page; a failed read says so (review)', async () => {
     await mount()
     await press(container!.querySelector('.b-box')!, 'm')
