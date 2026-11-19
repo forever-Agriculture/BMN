@@ -710,7 +710,7 @@ export function locationIdentity(planRoot) {
   try { const { top, common } = repositoryOf(root); return `${common}::${posixRelative(top, root)}` } catch { return root }
 }
 
-/** run_needs.py `migration_origin`, as far as identity needs it: the first committed move's source board, or null. */
+/** run_needs.py `migration_origin`, as far as identity needs it: the committed move's source board, or null. */
 function migrationSource(repo, root) {
   const boardRel = posixRelative(repo, join(root, 'status.yaml'))
   const metaRel = posixRelative(repo, join(root, 'migration.json'))
@@ -718,20 +718,24 @@ function migrationSource(repo, root) {
   try { header = readFileSync(join(root, 'status.yaml'), 'utf8') } catch { /* no board */ }
   const moved = MOVED_FROM.exec(header)
   let origin = null
+  let headMetadata
+  try { headMetadata = JSON.parse(gitRun(repo, ['show', `HEAD:${metaRel}`])) } catch { /* no committed declaration */ }
   let commits = []
-  try { commits = gitRun(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-filter=A', '--format=%H', 'HEAD', '--', metaRel]).split(/\s+/u).filter(Boolean) } catch { /* an unborn history */ }
+  // A recut merges the previous move but introduces the new declaration against its first parent.
+  try { commits = gitRun(repo, ['log', '--reverse', '--topo-order', '--full-history', '--diff-merges=first-parent', '--diff-filter=A', '--format=%H', 'HEAD', '--', metaRel]).split(/\s+/u).filter(Boolean) } catch { /* an unborn history */ }
   for (const commit of commits) {
     try {
       const recorded = JSON.parse(gitRun(repo, ['show', `${commit}:${metaRel}`]))
       const source = recorded.source_board
       const anchor = recorded.history_head
       if (source === undefined || anchor === undefined) continue
+      if (headMetadata?.history_head != null && anchor !== headMetadata.history_head) continue
       const committed = MOVED_FROM.exec(gitRun(repo, ['show', `${commit}:${boardRel}`]))
       if (recorded.version !== 1 || !committed || committed[1] !== source) continue
       if (typeof anchor !== 'string' || !/^[0-9a-f]{40,64}$/u.test(anchor) || gitRun(repo, ['rev-parse', `${commit}^1`]).trim() !== anchor) continue
       if (typeof source !== 'string' || posix.isAbsolute(source) || source.split('/').some((part) => part === '.' || part === '..') || posix.basename(source) !== 'sprint-status.yaml') continue
       origin = { source, anchor }
-      const local = JSON.parse(gitRun(repo, ['show', `HEAD:${metaRel}`])).local_history_head
+      const local = headMetadata?.local_history_head
       if (local !== undefined && local !== null) {
         const named = gitRun(repo, ['log', '--reverse', '--first-parent', '--format=%H', '-G', 'local_history_head', 'HEAD', '--', metaRel]).split(/\s+/u).filter(Boolean)
         if (!/^[0-9a-f]{40,64}$/u.test(String(local)) || named.length === 0 || gitRun(repo, ['rev-parse', `${named[0]}^1`]).trim() !== local || !gitRun(repo, ['log', '-1', '--format=%B', named[0]]).includes('Plan-Cutover: yes')) {

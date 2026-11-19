@@ -38,25 +38,42 @@ function world() {
   return { root, repo, env, ledger, identity, allow }
 }
 
-/** A BMAD board with a go whose ledger takes a repair round, then the committed move to plan/ and a BMN go with an allowances file. */
-async function movedAfterARound(w, source = OLD) {
+function oldPlan(w) {
   file(w.repo, OLD, 'development_status:\n  epic-7: ready # go 2026-11-02\n  7-1-keep-the-original-requirement: ready-for-dev\n')
   file(w.repo, '_bmad-output/planning-artifacts/epics.md', EPIC)
   git(w.repo, 'add', '-A'); git(w.repo, 'commit', '-qm', 'old plan')
-  const opened = w.ledger('open', '--epic', '7', '--project', w.repo)
-  expect(opened.status, opened.stdout + opened.stderr).toBe(0)
-  const budget = /BUDGET\s+([0-9a-f]{16}-epic-7)/u.exec(opened.stdout)[1]
-  const round = w.ledger('round', '--budget', budget, '--boundary', '7.1', '--use-id', 'r1')
-  expect(round.stdout, round.stderr).toMatch(/TAKEN/u)
-  const anchor = git(w.repo, 'rev-parse', 'HEAD')
+  return git(w.repo, 'rev-parse', 'HEAD')
+}
+
+function commitMove(w, source, anchor) {
   file(w.repo, 'plan/status.yaml', `format: bmn-plan\nschema_version: 1\nmoved_from: ${source}\nqueue: []\ndevelopment_status:\n  epic-7: backlog\n  7-1-keep-the-original-requirement: backlog\n`)
   file(w.repo, 'plan/migration.json', JSON.stringify({ version: 1, source_board: source, history_head: anchor }))
   file(w.repo, 'plan/epics/007-fixture.md', EPIC)
   file(w.repo, 'plan/allowances/007.yaml', ALLOWANCES)
   rmSync(join(w.repo, OLD))
   git(w.repo, 'add', '-A'); git(w.repo, 'commit', '-qm', 'plan: move to plan/')
+  return git(w.repo, 'rev-parse', 'HEAD')
+}
+
+async function recordFixtureGo(w) {
   const plan = await resolvePlan(w.repo)
   await recordGo(plan, { epic: 7, source: WORDS, approved: `sha256:${approvalText(EPIC, ALLOWANCES)}`, expect: rowToken('epic-7', 'backlog', '') })
+}
+
+function openBudget(w) {
+  const opened = w.ledger('open', '--epic', '7', '--project', w.repo)
+  expect(opened.status, opened.stdout + opened.stderr).toBe(0)
+  return /BUDGET\s+([0-9a-f]{16}-epic-7)/u.exec(opened.stdout)[1]
+}
+
+/** A BMAD board with a go whose ledger takes a repair round, then the committed move to plan/ and a BMN go with an allowances file. */
+async function movedAfterARound(w, source = OLD) {
+  const anchor = oldPlan(w)
+  const budget = openBudget(w)
+  const round = w.ledger('round', '--budget', budget, '--boundary', '7.1', '--use-id', 'r1')
+  expect(round.stdout, round.stderr).toMatch(/TAKEN/u)
+  commitMove(w, source, anchor)
+  await recordFixtureGo(w)
   return budget
 }
 
@@ -81,6 +98,29 @@ describe.skipIf(!RUN_NEEDS)('which ledger is the plan\'s, with dev-auto\'s own s
     expect((await w.allow('limits.rechecks.per=epic', false)).error?.code).toBe('USED')
     // A limit's value still changes.
     expect((await w.allow('limits.rechecks.limit=3', false)).ok).toBe(true)
+  }, 120_000)
+
+  it('uses the committed recut, preserves ledger identity, and refuses a working edit', async () => {
+    const w = world()
+    const anchor = oldPlan(w)
+    const originalMove = commitMove(w, OLD, anchor)
+    const identity = w.identity(join(w.repo, 'plan'))
+    git(w.repo, 'reset', '--hard', anchor)
+    git(w.repo, 'commit', '-qm', 'new base', '--allow-empty')
+    const recutAnchor = git(w.repo, 'rev-parse', 'HEAD')
+    git(w.repo, 'merge', '--no-ff', '--no-commit', originalMove)
+    file(w.repo, 'plan/migration.json', JSON.stringify({ version: 1, source_board: OLD, history_head: recutAnchor }))
+    git(w.repo, 'add', 'plan/migration.json'); git(w.repo, 'commit', '-qm', 'plan: recut the move')
+    await recordFixtureGo(w)
+    const budget = openBudget(w)
+    expect(budget.slice(0, 16)).toBe(identity)
+    const use = w.ledger('use', '--budget', budget, '--limit', 'rechecks', '--boundary', '7.1', '--use-id', 'recut-1')
+    expect(use.stdout, use.stderr).toMatch(/^TAKEN/u)
+    expect((await w.allow('limits.rechecks.per=epic')).error?.code).toBe('USED')
+    expect((await w.allow('limits.rechecks.limit=3', false)).ok).toBe(true)
+
+    file(w.repo, 'plan/migration.json', JSON.stringify({ version: 1, source_board: OLD, history_head: anchor }))
+    expect((await w.allow('limits.rechecks.limit=4', false)).error?.code).toBe('UNREADABLE')
   }, 120_000)
 
   it('a move recorded with a doubled slash in its source board reads as dev-auto reads it (second recheck)', async () => {
