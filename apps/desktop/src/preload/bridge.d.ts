@@ -396,6 +396,9 @@ export interface AiTerminalBridge {
   setPushPolicy(change: PushPolicyChange): Promise<PushPolicyView>
   /** Story 84.3: the departure's cards, and the owner's answer to one; nothing else can answer it. */
   getGrant(): Promise<OwnerGrantView>
+  epicActions(): Promise<import('@bmn/protocol').EpicActionCard[]>
+  answerEpicAction(answer: import('@bmn/protocol').EpicActionAnswer): Promise<void>
+  unbindEpicAction(project: string, epic: number, binding: string): Promise<boolean>
   departurePresentation(input: DeparturePresentationInput): Promise<DeparturePresentationReply>
   departure(input: DesktopDepartureInput): Promise<OwnerDepartureReply>
   answerGrant(answer: { periodId: string; runId: string; cardRevision: number; choices: Record<string, GrantChoice>; operationKey: string; expectedRevision?: number; expectedGeneration?: number; lineId?: string }): Promise<{

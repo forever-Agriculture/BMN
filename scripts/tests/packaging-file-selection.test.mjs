@@ -53,7 +53,10 @@ it('loads migration, copy and publish helpers from the configured package resour
   const resources = load(readFileSync(join(appDir, 'electron-builder.yml'), 'utf8')).extraResources
   const root = mkdtempSync(join(tmpdir(), 'bmn-plan-package-')), modules = []
   try {
-    for (const entry of resources.filter(entry => /^(?:scripts\/plan|apps\/desktop\/bin|bin\/(?:plan-|shared-helpers))/u.test(entry.to))) {
+    // Every top-level copy of a file the plan layout carries is loaded too, so a new import there is checked in both (Epic 132).
+    const planLayout = resources.find(entry => entry.to === 'apps/desktop/bin').filter
+    for (const entry of resources.filter(entry => /^(?:scripts\/plan|apps\/desktop\/bin|bin\/(?:plan-|shared-helpers))/u.test(entry.to) ||
+      (entry.to.startsWith('bin/') && planLayout.includes(entry.to.slice(4))))) {
       const source = resolve(appDir, entry.from)
       const names = statSync(source).isDirectory() ? readdirSync(source).filter(name => entry.filter.includes(name) || (entry.filter.includes('*.mjs') && name.endsWith('.mjs'))) : [null]
       for (const name of names) {

@@ -4951,7 +4951,7 @@ describe('Away (Story 76.3)', () => {
     const status = await handlers.grantStatus({ scope: agent, runId: 'run-80' }) as { runs: Array<{ active: boolean; lines: string[] }> }
     expect(status.runs[0]!.active).toBe(true)
     expect(status.runs[0]!.lines[1]).toBe('  Extra repair rounds: 3 per boundary; none used.')
-    expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u1', boundary: '80.3-review' })).toEqual({ outcome: 'recorded', left: 2, periodId })
+    expect(await handlers.useGrant({ sessionId: 's1', incarnationId: agent.incarnationId, runId: 'run-80', useId: 'u1', boundary: '80.3-review' })).toEqual({ outcome: 'recorded', left: 2, periodId })
     // matrix full-3: a report with no use after it was missing from the window's view.
     expect(await handlers.reportGrant({ runId: 'run-80', sessionId: 's1', kind: 'outcome', periodId, useId: 'u1', result: 'blocked', text: null })).toEqual({ outcome: 'recorded' })
     expect(service.grantForOwner().period?.reports).toMatchObject([{ useId: 'u1', result: 'blocked' }])
@@ -4962,7 +4962,7 @@ describe('Away (Story 76.3)', () => {
     expect(await after.grantStatus({ scope: agent, runId: 'run-80' })).toMatchObject({ runs: [{ active: true, grant: { roundsUsed: { '80.3-review': 1 } } }] })
     await service.route(METHOD_REGISTRY.awaySet, { to: 'back' })
     expect(await after.grantStatus({ scope: agent, runId: 'run-80' })).toMatchObject({ runs: [{ active: false, reason: expect.stringContaining('the owner is back since') }] })
-    await expect(after.useGrant({ sessionId: 's1', runId: 'run-80', useId: 'u2', boundary: '80.3-review' })).rejects.toThrow('Not recorded')
+    await expect(after.useGrant({ sessionId: 's1', incarnationId: agent.incarnationId, runId: 'run-80', useId: 'u2', boundary: '80.3-review' })).rejects.toThrow('Not recorded')
     expect(writes).toHaveLength(0)
   })
 
@@ -5061,8 +5061,8 @@ describe('Away (Story 76.3)', () => {
       return result
     }) as typeof database.companion
     try {
-      await expect(handlers.useGrant({ sessionId: 's1', runId: 'run-103', useId: 'u1', item: 'check-1' })).rejects.toThrow('his answer changed')
-      expect(await handlers.useGrant({ sessionId: 's1', runId: 'run-103', useId: 'u2', item: 'check-1' })).toMatchObject({ outcome: 'recorded', exact: { kind: 'command', command: './b.sh' } })
+      await expect(handlers.useGrant({ sessionId: 's1', incarnationId: agent.incarnationId, runId: 'run-103', useId: 'u1', item: 'check-1' })).rejects.toThrow('his answer changed')
+      expect(await handlers.useGrant({ sessionId: 's1', incarnationId: agent.incarnationId, runId: 'run-103', useId: 'u2', item: 'check-1' })).toMatchObject({ outcome: 'recorded', exact: { kind: 'command', command: './b.sh' } })
     } finally {
       database.companion = real
       rmSync(folder, { recursive: true, force: true })
@@ -5658,8 +5658,14 @@ describe('130 D9: service routes and actual phone callbacks share the worker fen
         ...['middle', 'third', 'end'].map(id => ({ kind: 'push-default' as const, id, repository: 'synthetic/repo', branch: id, count: 1, proposed: 'yes' as const, reason: 'Synthetic' }))
       ]
     } })
+    // Let the phone publish the card before taking the displayed revision for this owner action.
+    await settle()
     const seen = service.grantForOwner()
-    await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'skip-phone', cardRevision: 1, expectedRevision: seen.revision, operationKey: 'preanswered-middle-end', choices: { middle: 'no', end: 'yes' } })
+    const answered = await service.route(METHOD_REGISTRY.grantAnswer, { periodId: seen.period!.periodId, runId: 'skip-phone',
+      cardRevision: seen.period!.runs[0]!.card.revision, expectedRevision: seen.revision,
+      operationKey: 'preanswered-middle-end', choices: { middle: 'no', end: 'yes' } })
+    const receipt = answered as { outcome: string; reason?: string; detail?: string }
+    expect(receipt.outcome, receipt.detail ?? receipt.reason).toBe('granted')
     const before = structuredClone(service.grantForOwner().period!.runs[0]!.answer!.lines)
     await settle(); await phone('Synthetic skipped phone', 'Choose…', false)(); await settle()
     await phone('Synthetic skipped phone', '2', false)(); await settle()

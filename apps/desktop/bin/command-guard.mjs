@@ -567,14 +567,15 @@ export function simpleCommandWords(source) {
 }
 
 /** The guard's answer for one hook event, as printed to the app, or null for nothing: never an allow. */
-export function guardAnswer(agent, event) {
+export function guardAnswer(agent, event, problem = null) {
   if (event?.hook_event_name !== 'PreToolUse' || GUARDED_TOOLS[agent] === undefined || event.tool_name !== GUARDED_TOOLS[agent]) return null
   const held = heldCommand(event.tool_input?.command, 0, false, typeof event.cwd === 'string' ? event.cwd : null)
   if (held === null) return null
+  const detail = problem === null ? '' : ` Epic allowance: ${problem}.`
   if (agent === 'claude') {
-    const reason = `BMN holds ${held} for the owner (his policy: \`bmn policy\`).`
+    const reason = `BMN holds ${held} for the owner (his policy: \`bmn policy\`).${detail}`
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: reason } })
   }
-  const reason = `BMN held this command: ${held}. Only the owner approves it; ask him before running it.`
+  const reason = `BMN held this command: ${held}. Only the owner approves it; ask him before running it.${detail}`
   return JSON.stringify({ decision: 'block', reason, hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } })
 }

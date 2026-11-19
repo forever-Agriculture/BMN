@@ -231,6 +231,17 @@ Approved by the owner on 2026-11-06 ("Approve as drawn", card `epic110-now-desig
 - **Scrollbar.** BMN's 8 px thumb (as the palette's), rimmed in the sheet's colour; the list and the column
   labels both keep a stable gutter, so labels stay over their values.
 
+## Epic actions
+
+The card shows each action in full and saves Yes or No per line. Focus starts on the list.
+Arrow keys move between choices and Enter or Space saves one. The row keeps focus after saving.
+At narrow widths, the command and hashes wrap above the controls. Escape closes the card.
+Reopen it from the command palette. The bound session and go sit beside the desktop Unbind control.
+Under each action's words, in the row's quiet reason style: `Deploy rule: …` and, when the rule does not
+cover the action, `Held: …`; a held row offers No only. In Health › Pushes and merges each repository has a
+second, indented row **What deploys** with one three-step control (Not set, Nothing deploys, These deploy);
+"These deploy" opens a wrapped line of five named switches below it. No new colour.
+
 ## Reviews
 
 Every visual change is reviewed by Fable before it is delivered and again after it is built (R80-NFR2). A

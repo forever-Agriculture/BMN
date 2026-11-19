@@ -272,6 +272,31 @@ export function AwaySummaryDialog(props: {
           <RunSection label="Stuck" section={view.stuck} openKey={openKey} setOpenKey={setOpenKey} links={links} />
           <RunSection label="Finished" section={view.finished} openKey={openKey} setOpenKey={setOpenKey} links={links} />
           {view.granted !== null ? <GrantSection section={view.granted} openKey={openKey} setOpenKey={setOpenKey} /> : null}
+          {sources?.payload.epicBindings === null ? <p className="dialog-note">The bound epic runs could not be read.</p> : null}
+          {sources?.payload.epicBindings?.length ? <section className="inspector-section" aria-label="Bound epic runs">
+            <h3>Bound epic runs</h3>
+            <ul className="message-list">{sources.payload.epicBindings.map(row =>
+              <li key={row.id}>
+                <button type="button" className="message-row away-run-row" onClick={() => props.onOpenSession(row.sessionId)}>
+                  <span className="route">Epic {row.epic}</span>
+                  <span className="state">Go {row.go.slice(0, 12)}</span>
+                  <span className="first-line">{sources.payload.sessions.find(session => session.sessionId === row.sessionId)?.name ?? row.sessionId}</span>
+                </button>
+              </li>)}</ul>
+          </section> : null}
+          {sources?.payload.epicActions === null ? <p className="dialog-note">The epic action record could not be read.</p> : null}
+          {sources?.payload.epicActions?.length ? <section className="inspector-section" aria-label="Epic actions used">
+            <h3>Epic actions used</h3>
+            <ul className="message-list">{sources.payload.epicActions.map((row, index) =>
+              <li key={`${row.epic}:${row.action}:${row.at}:${index}`}>
+                <button type="button" className="message-row away-run-row" onClick={() => props.onOpenSession(row.sessionId)}>
+                  <span className="route">Epic {row.epic} · {row.action}</span>
+                  <span className="state">{row.source === 'night' ? 'Night grant' : 'Allowance'}{row.outcome === 'reserved' ? ' · Reserved without dispatch'
+                    : row.outcome === 'unreported' ? ' · Outcome unreported' : row.outcome === 'failed' ? ' · Failed' : row.outcome === 'withheld' ? ' · Withheld at the last check' : ''}</span>
+                  <span className="first-line">{sources.payload.sessions.find(session => session.sessionId === row.sessionId)?.name ?? row.sessionId} · {new Date(row.at).toLocaleTimeString()}</span>
+                </button>
+              </li>)}</ul>
+          </section> : null}
 
           {view.wentOn.count > 0 ? (
             <section className="inspector-section" aria-label="Closed without you">

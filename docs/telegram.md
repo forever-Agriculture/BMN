@@ -106,6 +106,12 @@ session. It uses a bot you create and own. It is off by default.
   the same stored head and cards; an uncertain head send is not replayed. Typed replies to a card say
   **Answer this card with its buttons.** Cards asked later during Away retain the existing quiet-hours rule.
 
+- **Epic actions** shows the full proposed action with a Yes and No choice. Oversized lines say
+  **Answer on desktop**. Saved answers sync with the window, and a stale button makes no change.
+  Each action carries its repository's deploy rule; a held action has only **No**, and a rule changed in
+  Health rewrites the message before a Yes can be taken.
+  Use the BMN window to unbind a session.
+
 - It cannot manage sessions remotely. A handoff delivers itself to its agent (Story 75.5), so no
   handoff reaches Telegram; a reply to a handoff card sent before then goes to its source session.
 

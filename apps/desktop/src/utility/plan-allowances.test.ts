@@ -107,6 +107,31 @@ function checkFindings(main: string, home: string): Array<{ where: string; reaso
   return bmn(main, home, ['check', '--json']).json.findings
 }
 
+it('reads six recorded base repair rounds and preserves four counted rounds through a persistent raise', async () => {
+  const { main, plan, home, commit } = goFor(FILE.replace('{limit: 4, ceiling: 8, per: boundary}', '{limit: 6, ceiling: 6, per: boundary}'))
+  const stateHome = join(home, 'state')
+  const folder = join(stateHome, 'dev-auto/budgets')
+  mkdirSync(folder, { recursive: true })
+  const [own] = ledgerIds({ planRoot: plan }, 7, folder)
+  const ledger = {
+    rounds: Object.fromEntries([1, 2, 3, 4].map(n => [`r${n}`, { answer: 'TAKEN', boundary: '7.1' }])),
+    round_limit: { go: commit, rounds: 5 }
+  }
+  const ledgerFile = join(folder, `${own}.json`)
+  writeFileSync(ledgerFile, JSON.stringify({ rounds: ledger.rounds }))
+  const { readGrantRoundBudget } = await import('../../bin/grant-facts.mjs')
+  const readBudget = () => readGrantRoundBudget(main, 'fixture-epic-7', { XDG_STATE_HOME: stateHome })
+  await expect(readBudget()).resolves.toEqual({ base: 6, used: { '7.1': 4 } })
+  expect(allow(main, home, 'limits.repair_rounds={limit: 8, ceiling: 8, per: boundary}',
+    ['--reason', 'Synthetic persistent approval', '--source', WORDS]).code).toBe(0)
+  await expect(readBudget()).resolves.toEqual({ base: 8, used: { '7.1': 4 } })
+  writeFileSync(ledgerFile, JSON.stringify(ledger))
+  await expect(readBudget()).resolves.toEqual({ base: 5, used: { '7.1': 4 } })
+  const noFile = project({ allowances: null })
+  go(noFile.main, noFile.home)
+  await expect(readGrantRoundBudget(noFile.main, 'fixture-epic-7', { XDG_STATE_HOME: stateHome })).resolves.toBeNull()
+})
+
 describe('allowances opt-in warning (119.2)', () => {
   it('names the missing line and first file number, with no finding without files or with opt-in', async () => {
     const { main, home } = project()

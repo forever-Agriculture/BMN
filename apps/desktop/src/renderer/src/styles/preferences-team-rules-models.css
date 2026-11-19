@@ -1308,6 +1308,27 @@
   padding-left: 14px;
 }
 
+/* Epic 132 D3: under a repository's level, what he says deploys there; the events only while some deploy. */
+.preferences-dialog .health-row.policy-deploys {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 28px;
+}
+
+.preferences-dialog .policy-deploy-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding: 2px 0 8px 28px;
+}
+
+.preferences-dialog .policy-deploy-event {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* The one switch above the apps' rows: its name, what it starts, and the switch at the row's end. */
 .preferences-dialog .health-row.auto-test {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
@@ -1411,7 +1432,7 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .preferences-dialog .health-row:is(.policy-owner, .policy-repository) > :nth-child(2) {
+  .preferences-dialog .health-row:is(.policy-owner, .policy-repository, .policy-deploys) > :nth-child(2) {
     grid-column: auto;
     grid-row: auto;
   }
@@ -1419,16 +1440,16 @@
 
 /* Story 96.6, 640 px: two columns, the name and its state, then the path across, then the time and the actions, left. */
 @media (max-width: 680px) {
-  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .auto-test) {
+  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .policy-deploys, .auto-test) {
     grid-template-columns: 80px minmax(0, 1fr);
   }
 
-  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .auto-test) > :nth-child(2) {
+  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .policy-deploys, .auto-test) > :nth-child(2) {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .auto-test) > :nth-child(n + 4) {
+  .preferences-dialog .health-row:not(.policy-owner, .policy-repository, .policy-deploys, .auto-test) > :nth-child(n + 4) {
     grid-column: 1 / -1;
     grid-row: 3;
     justify-self: start;

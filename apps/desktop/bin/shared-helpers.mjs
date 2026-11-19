@@ -1,4 +1,5 @@
 // MODULE: shared-helpers.mjs - the small helpers several bin modules use, each defined once (Story 80.15); it imports only Node
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -85,4 +86,51 @@ export function ensurePrivateDirectory(path) {
 export function insideDirectory(root, path) {
   const part = relative(root, path)
   return part === '' || (!isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`))
+}
+
+/**
+ * What a native Bash result says about its exit: `ok`, `failed`, or `unknown` when it names no exit code (Claude Code's
+ * result has none; Codex gives an object or a JSON string with the code in it). Unknown is never called a pass.
+ */
+export function bashExit(response) {
+  let result = response
+  if (typeof result === 'string') {
+    try { result = JSON.parse(result) } catch { return 'unknown' }
+  }
+  if (!isObject(result)) return 'unknown'
+  const code = [result.exit_code, result.exitCode, result.metadata?.exit_code, result.metadata?.exitCode].find(value => typeof value === 'number')
+  return code === undefined ? 'unknown' : code === 0 ? 'ok' : 'failed'
+}
+
+const LISTENER_IS_ANCESTOR = `import os, socket, struct, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(0.5)
+s.connect(sys.argv[1])
+pid, uid, _ = struct.unpack('3i', s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+s.close()
+if uid != os.getuid() or pid <= 1:
+    sys.exit(1)
+at = os.getppid()
+for _ in range(32):
+    if at == pid:
+        sys.exit(0)
+    if at <= 1:
+        break
+    with open(f'/proc/{at}/stat') as status:
+        at = int(status.read().rsplit(')', 1)[1].split()[1])
+sys.exit(1)
+`
+
+/**
+ * Whether the process listening on the control socket is an ancestor of this hook, as the kernel reports both: BMN starts
+ * every session's terminal, so its own socket always is, and a socket some other process opened never is. The path comes
+ * from the environment; this is what keeps a substituted one from lifting a hold. Linux only; anything unconfirmed is false.
+ */
+export function launchedByListener(socketPath) {
+  if (process.platform !== 'linux') return false
+  try {
+    return spawnSync('/usr/bin/python3', ['-I', '-S', '-c', LISTENER_IS_ANCESTOR, socketPath], { stdio: 'ignore', timeout: 1500 }).status === 0
+  } catch {
+    return false
+  }
 }

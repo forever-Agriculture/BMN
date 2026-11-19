@@ -41,7 +41,7 @@ Then the Verdict below. An epic that fails 5 or meets a named risk takes the ful
 
 16. **People and messages.** Walk every repository the stories touch and every acceptance step, by name: who owns it, who accepts, did they agree. Each is a `person` line in Prepared with its check and date, or a named message in `**Messages:**` (person, destination, purpose; only facts or access). A person's answer the plan needs and does not have is a fact to ask them now, not at run time.
 17. **Challenges.** Each `## Challenges` answer holds against the code and the people named (Scale, Origin, Verified, Exists, People). The lead answers; the epic reviewer checks.
-18. **One batch.** Everything only he can decide and that planning can foresee goes in one batch of cards here, the go last, each with your recommendation and its fallback if he does not answer. Later technical choices stay with the run. A genuinely unforeseen allowance or permission gap follows the amendment-card rule above; other reserved decisions follow dev-auto's question timing. Do not make routine execution depend on later answers.
+18. **One batch.** Everything only he can decide and that planning can foresee goes in one batch of cards here, the go last, each with your recommendation and its fallback if he does not answer. Put reserved Git or GitHub actions in `actions` with their exact targets and include `bmn plan actions ask N` in the batch. Keep ordinary run permissions under `may`. Later technical choices stay with the run. A genuinely unforeseen allowance or permission gap follows the amendment-card rule above; other reserved decisions follow dev-auto's question timing. Do not make routine execution depend on later answers.
 
 ## Verdict
 

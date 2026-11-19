@@ -56,7 +56,7 @@ async function runEpic(project, runId, board = null) {
       if (epics.length === 1) return epics[0]
     }
   } catch { /* Most non-dev-auto runs have no handoff. */ }
-  const named = /(?:^|[\/:-])epic[-/](\d+)(?:$|[\/:-])/u.exec(runId)
+  const named = /(?:^|[/:-])epic[-/](\d+)(?:$|[/:-])/u.exec(runId)
   if (named) return Number(named[1])
   // If there is only one active epic the worktree can use it without a handoff.
   const active = (board?.rows ?? []).filter(row => row.story === null && ['in-progress', 'review', 'blocked'].includes(row.status))
@@ -192,6 +192,31 @@ export async function pinGrantLimit(cwd, term, runId) {
   if (limit.ceiling !== undefined && term.to <= limit.ceiling) throw new Error('This is within the ceiling. Use bmn plan allow.')
   if (limit.unit === 'count' && !Number.isInteger(term.to)) throw new Error('This limit takes a whole number')
   return { go: recorded.go_commit, commit: recorded.current.commit, token: recorded.token }
+}
+
+/** A night-round offer shows the run's recorded base and current ledger use. It still grants only extras. */
+export async function readGrantRoundBudget(cwd, runId, environment = process.env) {
+  if (!cwd || !isAbsolute(cwd)) return null
+  let plan
+  try {
+    plan = await resolvePlan(cwd)
+  } catch (error) {
+    if (['NO_PROJECT', 'NO_REPOSITORY', 'NO_PLAN'].includes(error.code)) return null
+    throw error
+  }
+  if (plan.format !== 'bmn-plan') return null
+  const board = await readBoard(plan.boardPath)
+  if (boardProblems(board, plan.boardPath).length > 0) throw new Error('The run’s plan board could not be confirmed')
+  const epic = await runEpic(plan.runCheckout, runId, board)
+  if (epic === null) return null
+  const allowance = await readAllowances(plan, epic)
+  if (allowance.state === 'none' || allowance.state === 'draft') return null
+  if (allowance.state !== 'recorded') throw new Error('The run’s base round allowance could not be confirmed')
+  const usage = ledgerLimitUsage(plan, epic, environment, allowance.go_commit)
+  if (usage.unreadable) throw new Error('The run’s repair round usage could not be read')
+  const base = Math.min(allowance.current.fields.rounds, usage.roundCap ?? Infinity)
+  if (!Number.isSafeInteger(base) || base > Number.MAX_SAFE_INTEGER - 4) throw new Error('The recorded base round count is too large')
+  return { base, used: Object.fromEntries(usage.used.get('repair_rounds') ?? []) }
 }
 
 export { resolvePlan as resolveGrantLimitPlan }

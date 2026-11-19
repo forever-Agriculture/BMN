@@ -160,6 +160,9 @@ Commands:
                                             rows, check the plan's structure, change one row safely, record
                                             the owner's go in the plan's history; not the subscription's Plan
                                             use (bmn plan --help)
+  run bind --epic N | run status           Bind a live Claude Code or Codex conversation to the epic's go.
+  run reserve|dispatch --action I --use-id U --command TEXT
+                                            Use the exact repository write approved for the bound epic.
   policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
                                             the repository's level and what still asks (bmn policy --help)
   grant [--run ID] | grant ask | grant use  The Away grant: a run's one card before the owner leaves, what he
@@ -1039,19 +1042,66 @@ read.
   settings, force pushes and deletions, publishing, secrets, PR labels or comments that trigger a deployment or a bot, a merge without green required checks, a merge or a
   push of the default branch before the work passed its acceptance, anything in a repository of a denied or
   unknown owner, and more). The policy removes the ask; it never makes work ready.
-- **Granted for the night**: while he is away, the merges and pushes he granted on a run's card in that repository
-  follow the level's lines (`bmn grant`, below); they raise no level and change no Still asks line.
+- **Allowed for Epic N** shows the exact approved operations for the live session bound to that go,
+  including their remaining uses. A read takes no use. Read `bmn policy --repo` before each write.
+  Run `bmn run reserve` with the action id, use id and exact command. Run `bmn run dispatch`
+  with those same arguments. BMN rechecks the target and current go and claims the use before
+  launching the command. A claimed dispatch receipt cannot launch the command again. Failed or missing
+  outcomes leave the use spent.
+- **Granted for the night** shows the merges and pushes he granted on the run's card.
 
-The policy is the agents' own rule: nothing in BMN allows a command because of it. The hard limits are GitHub's
+The standing policy is the agents' own rule. The hard limits are GitHub's
 repository rules where a repository can carry them (`non_fast_forward` and `deletion` on the default branch, and
 required checks where merges go through pull requests; a private repository on GitHub's free plan cannot carry a
 ruleset at all, so there only the agents' rule and the guard below hold) and the command guard.
 
 ### The command guard
 
-A small, deny-only guard in `bmn hook` holds the clearly critical shell commands for the owner, in Claude Code and
-Codex, in the main conversation and in sub-agents, and in an agent another agent started. It decides inside the
-hook process from the command text alone: it reads no socket and no file, in every session of those two apps, started
+A small guard in `bmn hook` holds critical shell commands for the owner in Claude Code and
+Codex, including sub-agents. The ordinary command check runs in the hook. For a held command in a live,
+bound conversation, BMN can count one use of a matching owner-approved action and leave the harness's
+approval decision to the harness. The check reads the exact command, folder, remote, ref and any file pin.
+BMN reads these once more after it has taken the use and right before it answers; a change it finds then
+leaves the use spent and the record says BMN withheld it. One tool call gets one decision: a retry returns to
+the approval that first paid for it, the file's or the night's, and never takes a second use from the other.
+A night command belongs to the epic, go and session whose bound run asked for it.
+
+**The deploy rule (Epic 132, D3).** BMN cannot see a repository's workflows, or what another service does
+when a branch moves. So the owner says it once per repository, in Health › Pushes and merges › **What
+deploys**: not set, nothing deploys, or which of five events deploy (the default branch, other branches,
+tags, releases, pull requests). One evaluator (`deployHold` in `shared/protocol/src/push-policy.ts`) reads
+that rule everywhere an approved action could be let through: `bmn plan actions ask`, the card in the window
+and on the phone (each line shows the rule, and a held line has no Yes), his answer, the lines `bmn policy`
+prints, `bmn run reserve` and `dispatch`, the guard's claim and its retry, a night command at its card, its
+reservation and its claim, and the last check. An action is let through only where the rule says none of
+its events deploys. No rule keeps every such action held. A Yes is saved with the rule he saw; under another
+rule it is no longer his answer and the card asks again. A push names its event by its ref (a bare name counts
+as a branch and a tag); a merge counts as a push to any branch and a pull-request event; a release counts as
+a release and a tag. A local repository on this computer needs no rule: BMN reads it and lets the action
+through only while that repository runs no hook on a push. A package registry is not a repository event.
+The rule is the owner's statement, not a fact BMN verified: if it is wrong, BMN lets through what he said
+was safe.
+
+**An answer belongs to one go (D6).** Asked while a go is in force, it is that go's. Asked before a go, it
+attaches once, to the first go recorded after it, and only when that go was recorded on the same approval
+text and action list. A changed list, a withdrawn go, a later go or changed text before the go ends it for
+good; putting the old state back does not bring the old Yes back. A limit amendment keeps it.
+
+**Who may ask BMN to lift a hold.** The hook asks only the BMN that runs its terminal: it checks, by the
+kernel's word for the socket's listener, that this process is one of its own ancestors, and otherwise sends
+no token and accepts no answer. BMN binds the Claude Code or Codex conversation it saw start in that terminal,
+whether BMN started the agent or the owner typed it into a shell. Each new conversation report replaces the
+old one, so `/clear`, a resume of another conversation or an unconfirmed report ends what the old one could
+spend, for typed `bmn run` commands as well as for the hook. Codex does not report a failed command as an
+event; BMN reads the exit code from the result, and a result that names none stays "outcome unreported".
+
+What is not bound, by the owner's decision of 2026-11-19 and D7: which program the bare name finds on the
+client's PATH; Git configuration read from outside the repository; anything that changes after BMN's last
+check and before the client itself runs the command; and whether a claim comes from BMN's own hook or from
+another command of the same bound agent, which runs as the same user with the same session. Such a claim can
+only spend that run's own approved uses for the exact approved command, folder, repository and count. It
+never widens them. Machine rules, repository settings, deployments, secrets and acceptance changes stay held.
+The ordinary check runs in every session of those two apps, started
 in BMN or not, BMN open or closed: the `PreToolUse` entry no longer depends on BMN's socket, and `bmn` is reachable at
 `~/.local/bin/bmn` outside BMN (`install:desktop` writes that launcher). In a teammate's run the guard answers first and
 every other command stays refused there. It never allows anything and never loosens a hold or deny the app makes itself:
@@ -1226,14 +1276,15 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   ([dev-auto.md](dev-auto.md), "Runs on the plan's decisions"). BMN binds the asking
   session itself; it does not check that a session owns the run id it names, so a new lead resuming the run
   asks and uses under that id. A second ask for the same run is a new revision, and his earlier answer holds until he answers
-  it. Never on a card: force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance
-  changes.
+  it. A bound run can request an exact Git or GitHub action the guard holds, with the folder,
+  repository, ref and count. Machine rules, repository settings, deployment and its triggers,
+  credentials and acceptance changes remain outside the card.
 - **A command and a message (Epic 103).** A `command` term is one simple command exactly as it will run, with its
   absolute folder and a count of 1-10; a `message` term is the tool that sends it, who gets it and the whole text,
   up to 1,000 characters, sent once. The window and Telegram show both whole and offer no and yes; a card holds at
   most 2,300 characters of them, so a longer one goes as a draft on a `bmn ask` card. `grant ask` refuses, naming
-  why: a chain, pipe, redirect, substitution, variable, wildcard, wrapper, assignment or `sh -c`; whatever the
-  command guard holds; a deletion, release, publish, stopping a process, a credential, `bmn` itself; a folder that
+  why: a chain, pipe, redirect, substitution, variable, wildcard, wrapper, assignment or `sh -c`; a held
+  action outside the exact Git and GitHub list; stopping a process, a credential, `bmn` itself; a folder that
   is not there; a text shaped like a credential. It reads git's and gh's verb past the few options a card may use
   (`git -C x`, `-P`, `--no-pager`, `gh -R o/r`), and refuses any other option before it, since `git -c` can name what
   runs and an option's value can hide the verb. Docker, Podman and Compose are not read as words at all: a publish needs

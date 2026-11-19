@@ -18,6 +18,8 @@ export function grantFacts(input: {
 
 export function sameGrantCheckout(cwd: string | undefined, project: string): Promise<boolean>
 export function pinGrantLimit(cwd: string | undefined, term: GrantLimitTerm, runId: string): Promise<GrantLimitPin>
+export function readGrantRoundBudget(cwd: string | undefined, runId: string,
+  environment?: NodeJS.ProcessEnv): Promise<{ base: number; used: Record<string, number> } | null>
 export function resolveGrantLimitPlan(project: string): Promise<unknown>
 export function classifyRequiredChecks(rows: unknown): 'unknown' | 'green' | 'failed' | 'pending' | 'unconfirmed'
 export function grantFactConflicts(facts: { plan: { limits: unknown[] }; pullRequests: { items: unknown[] } }): { id: string; words: string }[]

@@ -49,6 +49,21 @@ export function pushPolicyRepository(value: unknown): string | null {
   return REPOSITORY.test(lower) && lower.split('/')[1] !== '.' && lower.split('/')[1] !== '..' ? lower : null
 }
 
+/**
+ * What deploys in a repository, as the owner said in Health (Epic 132, D3). BMN cannot see a repository's workflows or what
+ * another service does on a push, so it lifts a held action only where his rule says the action's events deploy nothing.
+ * A repository without a rule stays held; an empty list is "nothing deploys".
+ */
+export type DeployEvent = 'default-branch' | 'branches' | 'tags' | 'releases' | 'pull-requests'
+export const DEPLOY_EVENTS: readonly DeployEvent[] = Object.freeze(['default-branch', 'branches', 'tags', 'releases', 'pull-requests'])
+export const DEPLOY_EVENT_WORDS: Readonly<Record<DeployEvent, string>> = Object.freeze({
+  'default-branch': 'Default branch', branches: 'Other branches', tags: 'Tags', releases: 'Releases', 'pull-requests': 'Pull requests'
+})
+const DEPLOY_EVENT_PHRASES: Readonly<Record<DeployEvent, string>> = Object.freeze({
+  'default-branch': 'a push to the default branch', branches: 'a push to another branch', tags: 'a tag', releases: 'a release',
+  'pull-requests': 'a pull-request event'
+})
+
 interface PushPolicyRecord {
   version: 1
   /** Grows by one with every change; Health names the one it saw. */
@@ -57,16 +72,18 @@ interface PushPolicyRecord {
   owners: Array<{ login: string; allowed: boolean; changedAt: string }>
   /** Repositories he raised; one absent here is at PRs only. */
   levels: Array<{ repository: string; level: PushLevel; changedAt: string }>
+  /** Repositories he gave a deploy rule; one absent here has none, and its held actions stay held. */
+  deploys: Array<{ repository: string; events: DeployEvent[]; changedAt: string }>
 }
 
 /** The record as stored, or `unknown` when a row exists that cannot be read: unknown counts as denied and is never re-initialised by itself. */
 export type PushPolicyRead = { state: 'read'; record: PushPolicyRecord } | { state: 'unknown'; reason: string }
 
-const EMPTY_PUSH_POLICY: PushPolicyRecord = Object.freeze({ version: 1, revision: 0, owners: [], levels: [] }) as PushPolicyRecord
+const EMPTY_PUSH_POLICY: PushPolicyRecord = Object.freeze({ version: 1, revision: 0, owners: [], levels: [], deploys: [] }) as PushPolicyRecord
 
 /** A missing row is the empty start (no owner allowed); a row that is not a valid record is `unknown`. */
 export function readPushPolicy(raw: string | undefined): PushPolicyRead {
-  if (raw === undefined) return { state: 'read', record: { ...EMPTY_PUSH_POLICY, owners: [], levels: [] } }
+  if (raw === undefined) return { state: 'read', record: { ...EMPTY_PUSH_POLICY, owners: [], levels: [], deploys: [] } }
   let value: unknown
   try { value = JSON.parse(raw) } catch { return { state: 'unknown', reason: 'the stored policy is not valid JSON' } }
   if (typeof value !== 'object' || value === null) return { state: 'unknown', reason: 'the stored policy is not a record' }
@@ -93,12 +110,62 @@ export function readPushPolicy(raw: string | undefined): PushPolicyRead {
     }
     levels.push({ repository, level: entry.level as PushLevel, changedAt: entry.changedAt })
   }
-  return { state: 'read', record: { version: 1, revision: row.revision as number, owners, levels } }
+  // A record written before Epic 132 has no list: no repository has a rule yet.
+  if (row.deploys !== undefined && !Array.isArray(row.deploys)) return { state: 'unknown', reason: 'the stored policy has no readable deploy rules' }
+  const deploys: PushPolicyRecord['deploys'] = []
+  for (const item of (row.deploys ?? []) as unknown[]) {
+    const entry = item as Record<string, unknown>
+    const repository = pushPolicyRepository(entry?.repository)
+    const events = deployEvents(entry?.events)
+    if (repository === null || repository !== entry.repository || events === null || !isIso(entry.changedAt) ||
+      deploys.some((d) => d.repository === repository)) {
+      return { state: 'unknown', reason: 'the stored policy has a deploy rule it cannot read' }
+    }
+    deploys.push({ repository, events, changedAt: entry.changedAt })
+  }
+  return { state: 'read', record: { version: 1, revision: row.revision as number, owners, levels, deploys } }
+}
+
+/** A rule's events in their one order, or null when the value is not a list of distinct known events. */
+function deployEvents(value: unknown): DeployEvent[] | null {
+  if (!Array.isArray(value) || value.some((event) => !DEPLOY_EVENTS.includes(event as DeployEvent)) || new Set(value).size !== value.length) return null
+  return DEPLOY_EVENTS.filter((event) => value.includes(event))
+}
+
+/** The repository's rule: its events (none = nothing deploys), `null` when he set none, `unknown` when the policy cannot be read. */
+export function deployRule(read: PushPolicyRead, repository: string): DeployEvent[] | null | 'unknown' {
+  if (read.state === 'unknown') return 'unknown'
+  return read.record.deploys.find((entry) => entry.repository === repository.toLowerCase())?.events ?? null
+}
+
+/** One short stable text for a rule: what a card shows, and what an answer is compared with later. */
+export function deployRuleWords(rule: readonly DeployEvent[] | null | 'unknown'): string {
+  if (rule === 'unknown') return 'the deploy rule could not be read'
+  if (rule === null) return 'no deploy rule set in Health'
+  if (rule.length === 0) return 'nothing deploys'
+  return `deploys on: ${rule.map((event) => DEPLOY_EVENT_WORDS[event].toLowerCase()).join(', ')}`
+}
+
+/**
+ * The one evaluator (Epic 132 D3) for the policy lines, the guard, both cards and typed night actions: why an action whose
+ * events are these stays held in this repository, or null when his rule says none of them deploys. `events` null is an
+ * action BMN cannot place; only "nothing deploys" covers it.
+ */
+export function deployHold(read: PushPolicyRead, repository: string, events: readonly DeployEvent[] | null): string | null {
+  const rule = deployRule(read, repository)
+  if (rule === 'unknown') return `The deploy rule for ${repository} could not be read, so this stays held`
+  if (rule === null) return `Health has no deploy rule for ${repository}, so this stays held; only he sets it (Health › Pushes and merges)`
+  if (rule.length === 0) return null
+  if (events === null) return `BMN cannot tell what this action triggers in ${repository}, and his rule says something deploys there; a deploy is never approved here`
+  const hit = events.find((event) => rule.includes(event))
+  return hit === undefined ? null : `His deploy rule for ${repository} says ${DEPLOY_EVENT_PHRASES[hit]} deploys; a deploy is never approved here`
 }
 
 export type PushPolicyChange =
   | { kind: 'owner'; login: string; allowed: boolean; expectedRevision: number }
   | { kind: 'level'; repository: string; level: PushLevel; expectedRevision: number }
+  /** `events` null removes the rule; an empty list says nothing deploys. */
+  | { kind: 'deploys'; repository: string; events: DeployEvent[] | null; expectedRevision: number }
 
 export type PushPolicyChangeResult =
   | { outcome: 'changed' | 'unchanged'; record: PushPolicyRecord }
@@ -120,6 +187,16 @@ export function applyPushPolicyChange(current: PushPolicyRead, change: PushPolic
     const owners = [...record.owners.filter((owner) => owner.login !== login), { login, allowed: change.allowed, changedAt: now }]
       .sort((a, b) => a.login.localeCompare(b.login))
     return { outcome: 'changed', record: { ...record, revision: record.revision + 1, owners } }
+  }
+  if (change.kind === 'deploys') {
+    const repository = pushPolicyRepository(change.repository)
+    const events = change.events === null ? null : deployEvents(change.events)
+    if (repository === null || change.events !== null && events === null) return { outcome: 'invalid', reason: 'a deploy rule names owner/name and a list of known events, or null for no rule' }
+    const before = record.deploys.find((entry) => entry.repository === repository)?.events ?? null
+    if (JSON.stringify(before) === JSON.stringify(events)) return { outcome: 'unchanged', record }
+    const rest = record.deploys.filter((entry) => entry.repository !== repository)
+    const deploys = (events === null ? rest : [...rest, { repository, events, changedAt: now }]).sort((a, b) => a.repository.localeCompare(b.repository))
+    return { outcome: 'changed', record: { ...record, revision: record.revision + 1, deploys } }
   }
   const repository = pushPolicyRepository(change.repository)
   if (repository === null || !PUSH_LEVELS.includes(change.level)) return { outcome: 'invalid', reason: 'a level change names owner/name and one of the three levels' }
@@ -152,6 +229,8 @@ export interface PushPolicyRepositoryView {
   repository: string
   name: string
   level: PushLevel
+  /** His deploy rule: the events that deploy (none = nothing deploys), or null while he set none. */
+  deploys: DeployEvent[] | null
   /** The default branch GitHub reports; null with `unread` when it could not be read. */
   defaultBranch: string | null
   /** Why the owner or default branch could not be read; Health shows it, and `bmn policy` reads the repository itself. */
@@ -176,17 +255,18 @@ export type PushPolicyView =
 
 /** What `bmn policy` reads through the control socket: the record's facts, never any repository listing. */
 export type PushPolicyStatus =
-  | { state: 'read'; revision: number; standing: PushPolicyStanding; allowed: string[]; denied: string[]; levels: Array<{ repository: string; level: PushLevel }>; stillAsks: readonly string[] }
-  | { state: 'unknown'; reason: string; standing: PushPolicyStanding; allowed: []; denied: []; levels: []; stillAsks: readonly string[] }
+  | { state: 'read'; revision: number; standing: PushPolicyStanding; allowed: string[]; denied: string[]; levels: Array<{ repository: string; level: PushLevel }>; deploys: Array<{ repository: string; events: DeployEvent[] }>; stillAsks: readonly string[] }
+  | { state: 'unknown'; reason: string; standing: PushPolicyStanding; allowed: []; denied: []; levels: []; deploys: []; stillAsks: readonly string[] }
 
 export function pushPolicyStatus(read: PushPolicyRead, masterHasPointer: boolean | null): PushPolicyStatus {
   const standing = pushPolicyStanding(read, masterHasPointer)
-  if (read.state === 'unknown') return { state: 'unknown', reason: read.reason, standing, allowed: [], denied: [], levels: [], stillAsks: PUSH_POLICY_STILL_ASKS }
+  if (read.state === 'unknown') return { state: 'unknown', reason: read.reason, standing, allowed: [], denied: [], levels: [], deploys: [], stillAsks: PUSH_POLICY_STILL_ASKS }
   return {
     state: 'read', revision: read.record.revision, standing,
     allowed: read.record.owners.filter((owner) => owner.allowed).map((owner) => owner.login),
     denied: read.record.owners.filter((owner) => !owner.allowed).map((owner) => owner.login),
     levels: read.record.levels.map(({ repository, level }) => ({ repository, level })),
+    deploys: read.record.deploys.map(({ repository, events }) => ({ repository, events })),
     stillAsks: PUSH_POLICY_STILL_ASKS
   }
 }

@@ -164,7 +164,10 @@ describe('protocol surface', () => {
         'policy.set',
         'grant.get',
         'grant.answer',
-        'grant.departure'
+        'grant.departure',
+        'epic.actions.list',
+        'epic.actions.answer',
+        'epic.run.unbind'
       ])
     )
     // Story 75.3 removed the two methods of custom templates and the six of launch sets (91 before); Story 75.4 the
@@ -180,7 +183,7 @@ describe('protocol surface', () => {
     // Story79.4 adds the one-time ownership identity claim.
     // Story79.3 also reads state-only evidence that a Codex hook was observed.
     // Epic100 adds the main-only exact QA binding.
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(102)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(105)
   })
 
   it('exports the initial stable error codes', () => {

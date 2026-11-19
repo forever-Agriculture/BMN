@@ -33,7 +33,15 @@ type GrantActionKind = 'merge' | 'push-default' | 'pr-elsewhere' | 'command' | '
 const GRANT_ACTION_KINDS: readonly GrantActionKind[] = Object.freeze(['merge', 'push-default', 'pr-elsewhere', 'command', 'message'])
 const GRANT_NEVER_ON_A_CARD = 'force pushes, deletions, releases, publishes, killing BMN, credentials and acceptance changes'
 
-interface GrantRoundsTerm { id: 'rounds'; kind: 'rounds'; proposed: number; reason: string }
+interface GrantRoundBudget {
+  base: number
+  used: Record<string, number>
+}
+interface GrantRoundsTerm {
+  id: 'rounds'; kind: 'rounds'; proposed: number; reason: string
+  /** Snapshot supplied by BMN from this run's recorded allowance and ledger. */
+  budget?: GrantRoundBudget
+}
 interface GrantMergeTerm {
   id: string; kind: 'merge'; repository: string; pr: number
   /** "this PR at head SHA X" is offered only with a SHA; "up to N of this run's PRs when green" only with upTo. */
@@ -48,7 +56,14 @@ export interface GrantPinnedFile { path: string; sha256: string }
 /** What `bmn grant use` needs to hash a pin: the term in force and the answer it stands on. */
 export interface GrantPinRead { command: string; folder: string; script: GrantPinnedFile; periodId: string; cardRevision: number }
 /** Story 103.3: one simple command, exactly as it will run, in one folder. BMN checks its form when it is asked (the guard's parser); the app's own rules still apply when it runs. */
-export interface GrantCommandTerm { id: string; kind: 'command'; command: string; folder: string; script: GrantPinnedFile | null; count: number; proposed: 'no' | 'yes'; reason: string }
+export interface GrantCommandTerm {
+  id: string; kind: 'command'; command: string; folder: string; script: GrantPinnedFile | null; count: number; proposed: 'no' | 'yes'; reason: string
+  repository?: string
+  ref?: string
+  /** Stamped by BMN when a held command is asked: the plan, epic and go whose bound run asked for it. Never read from an agent. */
+  bound?: GrantCommandBinding
+}
+export interface GrantCommandBinding { plan: string; epic: number; go: string; session: string }
 /** Story 103.3: one message in his voice: the tool that sends it, to whom, and the whole text (Epic 103, D5). Sent once. */
 export interface GrantMessageTerm { id: string; kind: 'message'; tool: string; target: string; text: string; count: 1; proposed: 'no' | 'yes'; reason: string }
 export interface GrantLimitPin { go: string; commit: string; token: string }
@@ -156,6 +171,7 @@ export interface GrantUse {
   /** The answered card revision in force when it was recorded: the terms it was used under. */
   cardRevision: number
   at: string
+  dispatch?: { binding: string; targetHash: string; call: string | null }
 }
 
 /** A refusal BMN made, kept for the morning (R84-FR6, "what was refused"). */
@@ -331,12 +347,14 @@ function grantPinWords(pin: GrantPinnedFile): string {
 }
 
 function exactCharacters(term: GrantTerm): number {
-  const fields = term.kind === 'command' ? [term.command, term.folder, term.script === null ? '' : grantPinWords(term.script)] : term.kind === 'message' ? [term.text, term.target, term.tool] : term.kind === 'access' ? [term.command] : []
+  const fields = term.kind === 'command'
+    ? [term.command, term.folder, term.repository ?? '', term.ref ?? '', term.script === null ? '' : grantPinWords(term.script)]
+    : term.kind === 'message' ? [term.text, term.target, term.tool] : term.kind === 'access' ? [term.command] : []
   return fields.reduce((sum, field) => sum + field.replace(/[&<>]/g, '&amp;').length, 0)
 }
 
 /** A command term's own fields, or why not (D7's form is read by the host: bin/grant-command.mjs). */
-function parseCommandTerm(term: Record<string, unknown>, where: string, id: string, reason: string): GrantCommandTerm | { problem: string } {
+function parseCommandTerm(term: Record<string, unknown>, where: string, id: string, reason: string, stored: boolean): GrantCommandTerm | { problem: string } {
   const command = grantExactText(term.command, GRANT_LIMITS.command, false)
   if (command === null) return { problem: `${where}: command must be one line of plain text of at most ${GRANT_LIMITS.command} characters` }
   const folder = grantFolder(term.folder)
@@ -351,7 +369,23 @@ function parseCommandTerm(term: Record<string, unknown>, where: string, id: stri
     if (path === null || typeof pin.sha256 !== 'string' || !SHA256.test(pin.sha256.toLowerCase())) return { problem: `${where}: script names its path and its SHA-256` }
     script = { path, sha256: pin.sha256.toLowerCase() }
   }
-  return { id, kind: 'command', command, folder, script, count, proposed: term.proposed, reason }
+  const repository = term.repository === undefined ? null : grantExactText(term.repository, GRANT_LIMITS.folder, false)
+  const ref = term.ref === undefined ? null : grantExactText(term.ref, GRANT_LIMITS.target, false)
+  if ((term.repository !== undefined || term.ref !== undefined) && (repository === null || ref === null)) {
+    return { problem: `${where}: an epic command names both its repository and ref` }
+  }
+  // Only BMN's own stored card carries the binding; an agent's proposal cannot name one.
+  let bound: GrantCommandBinding | undefined
+  if (stored && term.bound !== undefined) {
+    const raw = term.bound as Partial<GrantCommandBinding> | null
+    if (!raw || typeof raw !== 'object' || typeof raw.plan !== 'string' || raw.plan === '' || !isCount(raw.epic, Number.MAX_SAFE_INTEGER) ||
+      typeof raw.go !== 'string' || !/^[a-f0-9]{40}$/u.test(raw.go) || typeof raw.session !== 'string' || raw.session === '' || !repository || !ref) {
+      return { problem: `${where}: the recorded epic binding could not be read` }
+    }
+    bound = { plan: raw.plan, epic: raw.epic as number, go: raw.go, session: raw.session }
+  }
+  return { id, kind: 'command', command, folder, script, count, proposed: term.proposed, reason,
+    ...(repository && ref ? { repository, ref } : {}), ...(bound === undefined ? {} : { bound }) }
 }
 
 /** A message term's own fields, or why not. */
@@ -368,7 +402,17 @@ function parseMessageTerm(term: Record<string, unknown>, where: string, id: stri
 }
 
 /** The terms an agent proposed, checked against the fixed list, or why not. Never-on-a-card kinds are refused by name. */
-function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: string } {
+function readRoundBudget(raw: unknown): GrantRoundBudget | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const { base, used } = raw as Partial<GrantRoundBudget>
+  if (!(base === 0 || isCount(base, Number.MAX_SAFE_INTEGER - 4)) ||
+    typeof used !== 'object' || used === null || Array.isArray(used)) return null
+  if (Object.entries(used).some(([boundary, amount]) =>
+    grantIdentifier(boundary, GRANT_LIMITS.boundary) === null || !isCount(amount, Number.MAX_SAFE_INTEGER))) return null
+  return { base, used }
+}
+
+function parseGrantTerms(raw: unknown, stored = false): { terms: GrantTerm[] } | { problem: string } {
   if (!Array.isArray(raw)) return { problem: 'terms must be a list' }
   if (raw.length > GRANT_LIMITS.terms) return { problem: `a card holds at most ${GRANT_LIMITS.terms} terms` }
   const terms: GrantTerm[] = []
@@ -381,7 +425,9 @@ function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: stri
     if (term.kind === 'rounds') {
       if (terms.some((other) => other.kind === 'rounds')) return { problem: 'a card asks for rounds once' }
       if (!GRANT_ROUND_CHOICES.includes(term.proposed as number) || term.proposed === 0) return { problem: `${where}: rounds proposes 2, 3 or 4` }
-      terms.push({ id: 'rounds', kind: 'rounds', proposed: term.proposed as number, reason })
+      const budget = stored && term.budget !== undefined ? readRoundBudget(term.budget) : undefined
+      if (budget === null) return { problem: `${where}: the recorded round budget could not be read` }
+      terms.push({ id: 'rounds', kind: 'rounds', proposed: term.proposed as number, reason, ...(budget === undefined ? {} : { budget }) })
       continue
     }
     if (!GRANT_ACTION_KINDS.includes(term.kind as GrantActionKind) && term.kind !== 'limit' && term.kind !== 'access') {
@@ -412,7 +458,7 @@ function parseGrantTerms(raw: unknown): { terms: GrantTerm[] } | { problem: stri
       continue
     }
     if (term.kind === 'command' || term.kind === 'message') {
-      const parsed = term.kind === 'command' ? parseCommandTerm(term, where, id, reason) : parseMessageTerm(term, where, id, reason)
+      const parsed = term.kind === 'command' ? parseCommandTerm(term, where, id, reason, stored) : parseMessageTerm(term, where, id, reason)
       if ('problem' in parsed) return parsed
       terms.push(parsed)
       continue
@@ -496,7 +542,7 @@ export function grantTermChoices(term: GrantTerm): GrantChoice[] {
 const isNo = (choice: GrantChoice): boolean => choice === 'no' || choice === 0
 
 function readTerm(value: unknown): GrantTerm | null {
-  const parsed = parseGrantTerms([value])
+  const parsed = parseGrantTerms([value], true)
   if ('problem' in parsed) return null
   const term = parsed.terms[0]!
   // A stored id is kept as stored (parseGrantTerms numbers a missing one, which a stored term never lacks).
@@ -589,7 +635,12 @@ function readPeriod(value: unknown): GrantPeriod | null {
     const boundary = use.kind === 'round' ? grantIdentifier(use.boundary, GRANT_LIMITS.boundary) : null
     const itemId = use.kind === 'action' ? grantIdentifier(use.item, GRANT_LIMITS.itemId) : null
     if ((use.kind === 'round' ? boundary : itemId) === null || !isCount(use.cardRevision, Number.MAX_SAFE_INTEGER)) return null
-    uses.push({ id: use.id, runId: use.runId, sessionId: use.sessionId, kind: use.kind, boundary, item: itemId, cardRevision: use.cardRevision as number, at: use.at })
+    const dispatch = use.dispatch as GrantUse['dispatch']
+    if (dispatch !== undefined && (!dispatch || use.kind !== 'action' || typeof dispatch.binding !== 'string' ||
+      typeof dispatch.targetHash !== 'string' || !SHA256.test(dispatch.targetHash) ||
+      dispatch.call !== null && (typeof dispatch.call !== 'string' || dispatch.call.length === 0))) return null
+    uses.push({ id: use.id, runId: use.runId, sessionId: use.sessionId, kind: use.kind, boundary, item: itemId,
+      cardRevision: use.cardRevision as number, at: use.at, ...(dispatch ? { dispatch } : {}) })
   }
   const refusals: GrantRefusal[] = Array.isArray(row.refusals)
     ? row.refusals.filter((item): item is GrantRefusal => typeof item === 'object' && item !== null && isTextOrEmpty((item as GrantRefusal).runId) &&
@@ -873,7 +924,8 @@ export function askGrant(record: GrantRecord, ask: {
     return { outcome: 'unchanged', record: remember(record, ask.operationKey, true), run: existing, periodId: open.periodId }
   }
   if (existing !== undefined && existing.card.sessionId !== ask.sessionId &&
-    (ask.card.nothingReason !== undefined || [...existing.card.terms, ...ask.card.terms].some(term => term.kind === 'limit' || term.kind === 'access'))) {
+    (ask.card.nothingReason !== undefined || [...existing.card.terms, ...ask.card.terms].some(term => term.kind === 'limit' || term.kind === 'access' ||
+      term.kind === 'command' && term.repository !== undefined))) {
     return { outcome: 'no-departure', record, reason: 'This run already belongs to another session' }
   }
   if (existing === undefined && open.runs.length >= GRANT_LIMITS.runs) {
@@ -1325,10 +1377,18 @@ function leftFor(grant: ActiveGrant, use: { kind: 'round'; boundary: string } | 
 
 /** A term's label: "Extra repair rounds per boundary", "Merge in OWNER/NAME", "Push BRANCH to the default branch in OWNER/NAME". */
 export function grantTermLabel(term: GrantTerm, showProject = true): string {
-  if (term.kind === 'rounds') return 'Extra repair rounds per boundary'
+  if (term.kind === 'rounds') {
+    if (!term.budget) return 'Extra repair rounds per boundary'
+    const { base, used } = term.budget
+    const extra = term.proposed
+    const total = base + extra
+    const remaining = Object.entries(used).map(([boundary, amount]) => `${Math.max(0, base - amount) + extra} remaining at ${boundary}`)
+    const balance = remaining.length ? `${remaining.join(', ')} · ${total} remaining at unused boundaries` : `${total} remaining`
+    return `Extra repair rounds per boundary · ${base} base · ${total} total if approved with ${extra} extra · ${balance}`
+  }
   if (term.kind === 'merge') return `Merge in ${term.repository}`
   if (term.kind === 'push-default') return `Push ${term.branch} to the default branch in ${term.repository}`
-  if (term.kind === 'command') return `Run in ${term.folder}: ${term.command}${term.script === null ? '' : `\n${grantPinWords(term.script)}`}`
+  if (term.kind === 'command') return `Run in ${term.folder}: ${term.command}${term.repository ? `\nTarget ${term.repository} · ${term.ref}` : ''}${term.script === null ? '' : `\n${grantPinWords(term.script)}`}`
   if (term.kind === 'message') return `Send with ${term.tool} to ${term.target}: ${term.text}`
   if (term.kind === 'access') return `${term.name} · ${term.command}`
   if (term.kind === 'limit') {
@@ -1503,13 +1563,15 @@ export interface GrantedRepositoryAction {
   words: string
   left: number
   count: number
+  night?: { epic: number; source: GrantAnswerSource; at: string; expiry: 'owner-back' }
 }
 
 /**
  * Every run's granted merges and pushes in the open period, read as `bmn grant` reads each run, so an unanswered card, Back
  * or an unreadable record lists none. The list raises no level and changes no guard: it says what he answered.
  */
-export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>): GrantedRepositoryAction[] {
+export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord, 'state' | 'periodId'>,
+  bound?: { epic: number; go: string; sessionId: string }): GrantedRepositoryAction[] {
   const open = read.state === 'read' ? openGrantPeriod(read.record) : null
   const actions: GrantedRepositoryAction[] = []
   for (const run of open?.runs ?? []) {
@@ -1517,8 +1579,13 @@ export function grantedRepositoryActions(read: GrantRead, away: Pick<AwayRecord,
     if (!status.active) continue
     for (const { term, choice, left, count } of status.grant.items) {
       if (term.kind === 'pr-elsewhere') continue
-      const repository = term.kind === 'merge' || term.kind === 'push-default' ? term.repository : null
-      actions.push({ runId: run.runId, title: run.title, item: term.id, kind: term.kind, repository, words: grantItemWords(term, choice), left, count })
+      const binding = bound?.sessionId === run.card.sessionId ? bound : undefined
+      // A held night command is listed only for the run of the epic and go it was approved for.
+      if (term.kind === 'command' && term.repository !== undefined &&
+        (binding === undefined || term.bound?.epic !== binding.epic || term.bound.go !== binding.go || term.bound.session !== binding.sessionId)) continue
+      const repository = term.kind === 'merge' || term.kind === 'push-default' || term.kind === 'command' ? term.repository ?? null : null
+      actions.push({ runId: run.runId, title: run.title, item: term.id, kind: term.kind, repository, words: grantItemWords(term, choice), left, count,
+        ...(binding === undefined ? {} : { night: { epic: binding.epic, source: status.grant.via, at: status.grant.answeredAt, expiry: 'owner-back' } }) })
     }
   }
   return actions

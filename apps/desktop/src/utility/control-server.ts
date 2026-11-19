@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { chmod, lstat, mkdir, unlink } from 'node:fs/promises'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import { dirname, isAbsolute } from 'node:path'
+import { controlPeer } from './control-peer'
+import { EPIC_ACTION_PARAMS, EPIC_OWNER_ONLY, nativeHookFields, observerPid, type NativeHookObservation, type NativePeer } from './control-epic-fields'
 import {
   AGENT_ATTENTION_ORIGINS,
   HOOK_CARD_LIMITS,
@@ -189,7 +191,8 @@ export interface ControlHandlers {
     conversationReference: string
     source: ConversationObservationSource
     transcriptPath?: string
-  }): Promise<unknown>
+    callerPid?: number
+  }, peer?: NativePeer): Promise<unknown>
   withdrawAttention(p: { sessionId: string; requestKey: string; origin?: string; evidence?: AttentionEvidence; producer?: AttentionProducer }): Promise<unknown>
   resolveAttention(p: {
     sessionId: string
@@ -237,7 +240,7 @@ export interface ControlHandlers {
     hookRun?: { runId: string; cards: readonly HookCardRecord[] } | undefined
     /** Story 76.4 AC2: the hook holds its conversation's away lock, so it may be handed the away state. */
     awayLock?: true | undefined
-  }): Promise<unknown>
+  } & NativeHookObservation, peer?: NativePeer): Promise<unknown>
   /**
    * Epic 69: one mark of a turn's start, of the hook's confirmation or of its end, from a session's own hook.
    * The answer is one status word and nothing else; never reachable by the owner token.
@@ -286,7 +289,7 @@ export interface ControlHandlers {
   /** Story 113.6: the Away wake's account of the last period (or this one while away), read by any scope, written by none. */
   awayNight(): Promise<unknown>
   /** Story 83.3: the push policy's stored facts and standing, for `bmn policy`; read by any scope, written by none. */
-  policyStatus(): Promise<unknown>
+  policyStatus(scope?: ControlScope): Promise<unknown>
   /** Story 76.4: the session's hook printed the away snapshot BMN handed for this conversation; printed is never read. */
   restartPrinted?(p: { sessionId: string; incarnationId: string | null; claimId: string }): Promise<unknown>
   awayPrinted(p: { sessionId: string; agent: string; conversation: string; revision: number; claimId: string; channel?: 'team' }): Promise<unknown>
@@ -307,10 +310,12 @@ export interface ControlHandlers {
   reportGrantAccess?(p: GrantAccessReport): Promise<unknown>
   applyGrantLimit?(p: GrantLimitRequest & { incarnationId: string }): Promise<unknown>
   grantFacts?(p: { scope: ControlScope; runId: string; epic: number; callerCwd?: string; project?: string }): Promise<unknown>
+  epicActions?(scope: ControlScope, method: string, params: Record<string, unknown>): Promise<unknown>
   /** Story 84.3 AC4: one run's grant, or every run this caller may see. */
   grantStatus(p: { scope: ControlScope; runId?: string }): Promise<unknown>
   /** R84-FR3, FR8: one round or one item use, recorded before the step it pays for. */
-  useGrant(p: { sessionId: string; runId: string; useId: string; boundary?: string; item?: string }): Promise<unknown>
+  useGrant(p: { sessionId: string; incarnationId: string; runId: string; useId: string; boundary?: string; item?: string;
+    peer?: NativePeer }): Promise<unknown>
   reportGrant(p: GrantReportInput): Promise<unknown>
 }
 
@@ -1083,6 +1088,13 @@ export class ControlServer {
 
   private async dispatch(scope: ControlScope, method: string, rawParams: unknown, connection?: Connection): Promise<unknown> {
     const { handlers } = this.options
+    if (method === 'epic.actions.answer' || method === 'epic.run.unbind') throw unauthorized(EPIC_OWNER_ONLY)
+    if (Object.hasOwn(EPIC_ACTION_PARAMS, method)) {
+      if (!handlers.epicActions) throw invalidError('Epic actions are unavailable')
+      const params = closedParams(rawParams, EPIC_ACTION_PARAMS[method]!)
+      return handlers.epicActions(scope, method, { ...params,
+        caller: scope.kind === 'session' && params.callerPid !== undefined ? await controlPeer(connection?.socket) : undefined })
+    }
     switch (method) {
       case 'brain': {
         if (!handlers.brainRequest) throw invalidError('Brain is unavailable in this build')
@@ -1404,7 +1416,7 @@ export class ControlServer {
         // A hook discards what this call answers, so every refusal is recorded instead of vanishing.
         try {
           const params = closedParams(rawParams, [
-            'sessionId', 'agentCli', 'conversationReference', 'source', 'transcriptPath'
+            'sessionId', 'agentCli', 'conversationReference', 'source', 'transcriptPath', 'callerPid'
           ])
           // The owner keeps the explicit replace route; only a session may speak for its own process.
           if (scope.kind !== 'session') {
@@ -1428,14 +1440,19 @@ export class ControlServer {
             throw invalidError('transcriptPath must be absolute')
           }
           const sessionId = this.target(scope, params)
-          return await handlers.observeConversation({
+          const callerPid = observerPid(params.callerPid)
+          if (callerPid === null) throw invalidError('callerPid must identify the hook process')
+          const observation = {
             sessionId,
             incarnationId: incarnationOf(scope),
             agentCli: observedCli,
             conversationReference: observedCli === 'opencode' ? conversationReference : conversationReference.toLowerCase(),
             source,
+            ...(callerPid === undefined ? {} : { callerPid }),
             ...(transcriptPath === undefined ? {} : { transcriptPath })
-          })
+          }
+          return callerPid === undefined ? await handlers.observeConversation(observation) :
+            await handlers.observeConversation(observation, () => controlPeer(connection?.socket))
         } catch (error) {
           handlers.reportRefusal(
             method,
@@ -1506,7 +1523,7 @@ export class ControlServer {
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
         const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'plugin', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
-          'conversation', 'turn', 'nested', 'awayLock', 'runId', 'cards'])
+          'conversation', 'turn', 'nested', 'awayLock', 'runId', 'cards', 'callerPid', 'epicActionCall', 'epicActionExit'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const hookRun = readHookCards(params)
         // A run's card records come only from a session's own hook, never from the owner's token observing for one.
@@ -1548,10 +1565,14 @@ export class ControlServer {
           throw invalidError('conversation, turn and nested must name a conversation, a turn id and true')
         }
         if (conversation !== undefined && scope.kind !== 'session') throw unauthorized('Only a session may report its own turn')
+        const native = nativeHookFields(params, { session: scope.kind === 'session', name: event, conversation, agent,
+          toolName: toolName ?? undefined, call: readText(params, 'epicActionCall', IDENTIFIER) })
+        if (typeof native === 'string') throw invalidError(native)
         // Story 76.4 AC2: the hook holds its conversation's away lock; only then may it be handed the away state.
         if (params.awayLock !== undefined && (params.awayLock !== true || conversation === undefined)) throw invalidError('awayLock must be true, with a conversation')
         const sessionId = this.target(scope, params)
-        return handlers.observeHookEvent({
+        const caller = native.callerPid === undefined ? undefined : await controlPeer(connection?.socket)
+        const observation: Parameters<ControlHandlers['observeHookEvent']>[0] = {
           sessionId,
           incarnationId: incarnationOf(scope),
           agent,
@@ -1566,8 +1587,12 @@ export class ControlServer {
           ...(conversation === undefined ? {} : { turn: { conversation: conversation.toLowerCase(), turn: turnId ?? null, nested: params.nested === true } }),
           ...(params.awayLock === true ? { awayLock: true } : {}),
           ...(hookRun === undefined ? {} : { hookRun }),
+          ...native,
+          ...(caller === undefined ? {} : { caller }),
           effects
-        })
+        }
+        return native.epicActionCall === undefined ? handlers.observeHookEvent(observation) :
+          handlers.observeHookEvent(observation, () => controlPeer(connection?.socket))
       }
       case 'usage.report': {
         // Only a session's own status line reports, and only what it read for the run it belongs to.
@@ -1747,7 +1772,7 @@ export class ControlServer {
       }
       case 'policy.status': {
         closedParams(rawParams, [])
-        return handlers.policyStatus()
+        return handlers.policyStatus(scope)
       }
       // Story 83.3: the push policy changes only in Health, by the owner's own hand; no caller of the socket writes it.
       case 'policy.set':
@@ -1847,7 +1872,9 @@ export class ControlServer {
         const boundary = params.boundary === undefined ? undefined : grantIdentifier(params.boundary, GRANT_LIMITS.boundary)
         const item = params.item === undefined ? undefined : grantIdentifier(params.item, GRANT_LIMITS.itemId)
         if (boundary === null || item === null || (boundary === undefined) === (item === undefined)) throw invalidError('A use names either one boundary (a round) or one item')
-        return handlers.useGrant({ sessionId: scope.sessionId, runId, useId, ...(boundary === undefined ? {} : { boundary }), ...(item === undefined ? {} : { item }) })
+        return handlers.useGrant({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, runId, useId,
+          ...(boundary === undefined ? {} : { boundary }), ...(item === undefined ? {} :
+            { item, peer: () => controlPeer(connection?.socket) }) })
       }
       case 'grant.report': {
         // Story 84.7: what the agent saw happen, kept apart from BMN's record for the morning; it grants nothing.

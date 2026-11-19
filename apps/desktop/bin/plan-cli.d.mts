@@ -1,4 +1,5 @@
 // MODULE: plan-cli.d.mts - types for plan-cli.mjs (Epic 77: bmn plan status|check|set; 96.1: go)
+import type { EpicPlanContext } from '@bmn/protocol'
 export declare const KEPT_VERSIONS: number
 type Environment = NodeJS.ProcessEnv | Record<string, string>
 export declare function versionsDirectory(boardPath: string, environment?: Environment): string
@@ -15,6 +16,7 @@ export declare function setRow(boardPath: string, options: {
 >
 export declare function runPlanCommand(argv: string[]): Promise<number>
 export declare function approvalText(text: string | null | undefined, allowances?: string | null): string
+export declare function readEpicActionContext(project: string, epic: number): Promise<EpicPlanContext>
 export declare function addToQueue(text: string, epic: number): string | null
 export declare function removeFromQueue(text: string, epic: number): string | null
 export declare function recordGo(plan: Awaited<ReturnType<typeof import('./plan-board.mjs').resolvePlan>>, options: {

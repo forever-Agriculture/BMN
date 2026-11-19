@@ -246,6 +246,12 @@ read grants nothing and is never written over by a use. The departure notice rid
 notice, once per conversation and period. The away summary reads the kept periods up to its own in the same
 transaction as its other sources (Story 84.7).
 
+**Epic actions and the live run (Epic 132).** The utility resolves the canonical plan, checks the
+current go and observes the active Claude Code or Codex foreground conversation. The database worker
+stores the owner answers, binding, revocations and uses. The owner window and verified Telegram taps
+can record action answers. The window alone can revoke the binding. Policy reads are free. A held
+command claims one exact reservation in the worker. A night claim shares the existing grant receipt.
+
 **Palette file search is an on-demand directory read.** It uses the selected session's live launch
 directory (or stored directory after exit), or the workspace's default directory when no session
 is selected. The utility caps traversal at six directory levels, 20,000 entries and 50 results,

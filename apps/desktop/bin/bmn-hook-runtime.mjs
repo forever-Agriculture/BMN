@@ -4,9 +4,9 @@ import { existsSync, readFileSync, writeSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isObject } from './shared-helpers.mjs'
+import { bashExit, isObject, launchedByListener } from './shared-helpers.mjs'
 import { CONVERSATION_REFERENCE, HOOK_TIMEOUT_MS, TIMEOUT_MS } from './bmn-words.mjs'
-import { callEach } from './bmn-commands.mjs'
+import { call, callEach } from './bmn-commands.mjs'
 import { HOOK_AGENTS } from './bmn-opencode-plugin.mjs'
 import { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, hookEventName, hookRequests, openCodeSubagent, resumesByItself, phoneAnswerable, retiredOr, userInputTool } from './bmn-hooks.mjs'
 
@@ -218,13 +218,32 @@ async function markTurnStart(marks, mark, socketPath, token) {
  * Story 83.4: the command guard's answer for one event, printed; whether it held. It fails open by the owner's choice (Epic 102,
  * D3), so the reason a guard cannot load goes to the error stream, for `bmn hooks check` to say.
  */
-async function answerFromGuard(agent, event) {
+async function answerFromGuard(agent, event, ownerSession = false) {
   const guard = await import('./command-guard.mjs').catch((error) => {
     process.stderr.write(`bmn: the command guard cannot load (${error.code ?? error.message})\n`)
     return null
   })
   const answer = guard?.guardAnswer(agent, event) ?? null
-  if (answer !== null) writeSync(1, answer)
+  if (answer === null) return false
+  const socketPath = process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
+  const token = process.env.BMN_TOKEN ?? process.env.AITERM_TOKEN
+  let problem
+  if (ownerSession && socketPath && token && event.agent_id == null &&
+    typeof event.session_id === 'string' && CONVERSATION_REFERENCE.test(event.session_id) &&
+    typeof event.tool_use_id === 'string' && typeof event.cwd === 'string' && typeof event.tool_input?.command === 'string' &&
+    // The hold is lifted only by the BMN that runs this terminal: no token goes to, and no "allowed" is taken from, anyone else.
+    launchedByListener(socketPath)) {
+    try {
+      const result = await call(socketPath, token, 'epic.guard.claim', {
+        agent, conversation: event.session_id.toLowerCase(), callerPid: process.pid,
+        command: event.tool_input.command, cwd: event.cwd, callId: event.tool_use_id
+      }, 2500)
+      if (result?.allowed === true) return false
+    } catch (error) {
+      if (error?.code === 'INVALID_ARGUMENT' && typeof error.message === 'string') problem = error.message
+    }
+  }
+  writeSync(1, problem ? guard.guardAnswer(agent, event, problem) ?? answer : answer)
   return answer !== null
 }
 
@@ -266,7 +285,7 @@ async function runHook(args) {
   // Story 83.4: the command guard decides first, from the command text alone, for every agent this entry runs for (a
   // dispatched one too), before any process, file or socket is read. It only ever holds; a command it does not hold goes on.
   if (event.hook_event_name === 'PreToolUse' && event.tool_name === 'Bash') {
-    if (await answerFromGuard(agent, event)) return 0
+    if (await answerFromGuard(agent, event, true)) return 0
     // Claude's Bash reaches this hook only for the guard (its matcher), so nothing else is delivered for it.
     if (agent === 'claude') return 0
   }
@@ -303,6 +322,11 @@ async function runHook(args) {
   // Epic 78: a permission the phone may answer gets its own single-use ref, and this hook waits for that answer.
   const permissionRef = phoneAnswerable(agent, event, { pid: agentPid, procRoot }) ? randomUUID() : null
   const requests = [...ended, ...report, ...hookRequests(agent, event, permissionRef)]
+  if (agentPid > 0) {
+    for (const request of requests) {
+      if (request.method === 'conversation.observe') request.params.callerPid = process.pid
+    }
+  }
   const opens = requests.filter((request) => request.method === 'attention.open')
   // Story 76.4 AC3: the typed agent's own blocking question, in its main conversation, can still be refused here, before its
   // native request opens; BMN says whether it is (only while the owner said away).
@@ -334,7 +358,15 @@ async function runHook(args) {
     reported = Date.now()
     // Story 75.6: a conversation's start names the conversation whatever turn changes do, so BMN can brief it once.
     // Story 76.4: and a tool call names it too, so the away state can follow the conversation it was handed to.
-    const facts = marks !== null && (turns || ['SessionStart', 'PostToolUse'].includes(event.hook_event_name)) ? marks.turnFacts(agent, event) : {}
+    const facts = marks !== null && (turns || ['SessionStart', 'PostToolUse', 'PostToolUseFailure', 'SessionEnd'].includes(event.hook_event_name)) ? marks.turnFacts(agent, event) : {}
+    if (agentPid > 0 && event.hook_event_name === 'SessionEnd' && facts.conversation && !facts.nested) facts.callerPid = process.pid
+    if ((agent === 'claude' || agent === 'codex') && agentPid > 0 && facts.conversation && !facts.nested && event.tool_name === 'Bash' &&
+      ['PostToolUse', 'PostToolUseFailure'].includes(event.hook_event_name) && typeof event.tool_use_id === 'string' &&
+      CARD_ID.test(event.tool_use_id)) {
+      facts.epicActionCall = event.tool_use_id
+      const exit = event.hook_event_name === 'PostToolUse' ? bashExit(event.tool_response) : 'unknown'
+      if (exit !== 'unknown') facts.epicActionExit = exit
+    }
     return hookObservation(agent, event, requests, outcomes, apiHost, model, configDir, awayLock && facts.conversation !== undefined ? { ...facts, awayLock: true } : facts, runId)
   }]
   const outcomes = await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => [])

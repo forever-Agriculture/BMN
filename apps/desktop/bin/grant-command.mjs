@@ -287,7 +287,12 @@ export function grantCommandProblem(term) {
   if ('problem' in simple) return `${simple.problem} (one simple command, exactly as it will run)`
   const { words } = simple
   const held = heldCommand(term.command, 0, false, term.folder)
-  if (held !== null) return `BMN's command guard holds it for the owner: ${held}`
+  if (held !== null) {
+    if (!term.repository || !term.ref) return `BMN's command guard holds it for the owner: ${held}`
+    const target = epicCommandTarget(term)
+    return 'problem' in target ? target.problem : null
+  }
+  if (term.repository || term.ref) return 'The epic target is for exact commands that the guard holds'
   const never = neverOnACard(words, term.folder)
   if (never !== null) return `${never} is never on a card`
   try {
@@ -307,6 +312,86 @@ export function grantCommandProblem(term) {
   }
   if (selected.file !== null && isWritable(selected.file)) return `it runs ${selected.file}, which can change; name that script on the card with its SHA-256`
   return null
+}
+
+const EPIC_PROGRAMS = new Set(['git', 'gh', 'npm', 'pnpm', 'yarn'])
+const EXPLICIT_REF = /^(?:refs\/(?:heads|tags)\/)?[A-Za-z0-9_][A-Za-z0-9_./-]*$/u
+const GIT_PUSH_FLAGS = new Set(['--force', '-f', '--force-with-lease', '--force-if-includes', '--delete', '-d'])
+
+/** The destination read from a single push, or null for a command with an implicit or wider target. */
+function epicPushTarget(args) {
+  const flags = args.filter(word => word.startsWith('-'))
+  const [remote, spec, ...more] = args.filter(word => !word.startsWith('-'))
+  if (!/^[A-Za-z0-9_][\w.-]*$/u.test(remote ?? '') || !spec || more.length ||
+    flags.some(word => !GIT_PUSH_FLAGS.has(word))) return null
+  const [source, destination = source, ...rest] = spec.replace(/^\+/u, '').split(':')
+  if (!EXPLICIT_REF.test(destination ?? '') || rest.length ||
+    (source !== '' && !EXPLICIT_REF.test(source ?? ''))) return null
+  return { remote, ref: destination }
+}
+
+function approvedGhOptions(options, booleanFlags, valueFlags, repository) {
+  const seen = new Set()
+  for (let index = 0; index < options.length; index += 1) {
+    const option = options[index] === '-R' ? '--repo' : options[index]
+    if (seen.has(option)) return null
+    seen.add(option)
+    if (booleanFlags.includes(option)) continue
+    if (!valueFlags.includes(option) && option !== '--repo') return null
+    const value = options[++index]
+    if (!value || value.startsWith('-') || option === '--repo' && value.toLowerCase() !== `github.com/${repository}`) return null
+  }
+  return seen.has('--repo') ? seen : null
+}
+
+/** A held command that can be named for one epic. This recognizes targets without running Git or a package manager. */
+export function epicCommandTarget(term) {
+  const simple = simpleCommandWords(term.command)
+  if ('problem' in simple) return { problem: simple.problem }
+  const [program, verb, ...args] = simple.words
+  if (simple.words.some(secretIn)) return { problem: 'credentials and secrets can never be approved' }
+  const held = heldCommand(term.command, 0, false, term.folder)
+  if (!EPIC_PROGRAMS.has(program)) return { problem: held ?? neverOnACard(simple.words, term.folder) ?? 'name a supported bare Git, GitHub or package program' }
+
+  if (program === 'git' && verb === 'push' &&
+    ['a force push', 'a branch or tag deletion on a remote', 'a push of tags or a mirror'].includes(held)) {
+    const target = epicPushTarget(args)
+    if (!target) return { problem: 'name one explicit remote and branch or tag, with no broad push flags' }
+    if (target.ref !== term.ref) return { problem: 'the push destination differs from the named ref' }
+    return { ...target, script: null, program }
+  }
+
+  if (program === 'gh' && (verb === 'release' && ['create', 'edit', 'delete'].includes(args[0]) ||
+    verb === 'pr' && args[0] === 'merge' && held !== null)) {
+    const [action, target, ...options] = args
+    if (!target || target !== term.ref || target.startsWith('-')) return { problem: 'name one explicit release tag or PR and the same ref on the action' }
+    if (verb === 'pr') {
+      if (!/^\d+$/u.test(target)) return { problem: 'name the numbered PR that will be merged' }
+      if (!approvedGhOptions(options, ['--admin', '--auto', '--delete-branch', '--merge', '--squash', '--rebase'],
+        ['--match-head-commit'], term.repository)) return { problem: 'a PR merge names one PR, --repo github.com/OWNER/NAME and approved merge options' }
+    } else {
+      const choices = action === 'delete'
+        ? approvedGhOptions(options, ['--yes'], [], term.repository)
+        : approvedGhOptions(options, ['--draft', '--prerelease', '--verify-tag'], ['--title', '--notes'], term.repository)
+      if (!choices || action === 'create' && !choices.has('--verify-tag')) {
+        return { problem: 'a release action needs its named tag and --repo github.com/OWNER/NAME; creation must use --verify-tag' }
+      }
+    }
+    return { remote: 'origin', ref: target, script: null, program }
+  }
+
+  if (held === 'publishing a package') {
+    const operands = program === 'yarn' && verb === 'npm' ? args.slice(1) : args
+    const [file, registryFlag, registry] = operands
+    if (!file || !file.endsWith('.tgz') || registryFlag !== '--registry' ||
+      !/^https:\/\/[^\s/@]+(?:\/[^\s]*)?$/u.test(registry ?? '') || operands.length !== 3 ||
+      term.script?.path !== file || term.ref !== registry) {
+      return { problem: 'name a pinned package tarball and one explicit HTTPS registry' }
+    }
+    return { remote: null, ref: registry, script: file, program }
+  }
+
+  return { problem: held ?? neverOnACard(simple.words, term.folder) ?? 'this is outside the owner’s approved Git, GitHub and package actions' }
 }
 
 /** An access line shows a login the owner performs, with no token, command chain or unrelated action. */

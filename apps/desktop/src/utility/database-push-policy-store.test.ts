@@ -4,6 +4,9 @@ import {
   PUSH_POLICY_KEY,
   PUSH_POLICY_POINTER,
   githubRepositoryFromRemote,
+  deployHold,
+  deployRule,
+  deployRuleWords,
   pushPolicyStanding,
   pushPolicyStatus,
   readPushPolicy
@@ -32,7 +35,7 @@ const stored = (): string | undefined =>
 describe('push policy store (Story 83.3)', () => {
   it('starts with no owner allowed, writes nothing until a change, and authorizes nothing by itself', () => {
     const start = getPushPolicy(database)
-    expect(start).toEqual({ state: 'read', record: { version: 1, revision: 0, owners: [], levels: [] } })
+    expect(start).toEqual({ state: 'read', record: { version: 1, revision: 0, owners: [], levels: [], deploys: [] } })
     expect(stored()).toBeUndefined()
     expect(pushPolicyStanding(start, true)).toEqual({ authorizes: false, why: 'no owner is allowed in Health' })
   })
@@ -98,5 +101,46 @@ describe('push policy store (Story 83.3)', () => {
       expect(remoteRepository(url)).toBe(expected)
     }
     expect(LEVEL_WORDS).toEqual(PUSH_LEVEL_WORDS)
+  })
+})
+
+describe('the deploy rule of a repository (Epic 132 D3)', () => {
+  const set = (events: Parameters<typeof deployHold>[2] | null, repository = 'Fixture/App') => changePushPolicy(database,
+    { kind: 'deploys', repository, events: events === null ? null : [...events], expectedRevision: getPushPolicy(database).state === 'read'
+      ? (getPushPolicy(database) as Extract<ReturnType<typeof getPushPolicy>, { state: 'read' }>).record.revision : -1 }, T1)
+
+  it('holds everything where he set no rule, and reads a record written before the rule existed', () => {
+    const old = readPushPolicy(JSON.stringify({ version: 1, revision: 3, owners: [], levels: [] }))
+    expect(old).toMatchObject({ state: 'read', record: { deploys: [] } })
+    expect(deployRule(old, 'fixture/app')).toBeNull()
+    expect(deployRuleWords(null)).toBe('no deploy rule set in Health')
+    expect(deployHold(old, 'fixture/app', ['branches'])).toMatch(/no deploy rule for fixture\/app.*stays held/u)
+    expect(deployHold({ state: 'unknown', reason: 'synthetic' }, 'fixture/app', [])).toMatch(/could not be read/u)
+    expect(readPushPolicy(JSON.stringify({ version: 1, revision: 3, owners: [], levels: [], deploys: [{ repository: 'fixture/app', events: ['pushes'], changedAt: T0 }] })))
+      .toMatchObject({ state: 'unknown' })
+  })
+
+  it('lifts only an action whose every event his rule says does not deploy, one change against the revision at a time', () => {
+    expect(set([])).toMatchObject({ outcome: 'changed', record: { revision: 1, deploys: [{ repository: 'fixture/app', events: [], changedAt: T1 }] } })
+    expect(set([])).toMatchObject({ outcome: 'unchanged' })
+    let read = getPushPolicy(database)
+    expect(deployRuleWords(deployRule(read, 'fixture/app'))).toBe('nothing deploys')
+    for (const events of [['default-branch'], ['tags', 'releases'], null] as const) expect(deployHold(read, 'fixture/app', events)).toBeNull()
+    expect(deployHold(read, 'fixture/other', ['branches'])).toMatch(/no deploy rule/u)
+
+    expect(set(['tags', 'default-branch'])).toMatchObject({ outcome: 'changed', record: { revision: 2, deploys: [{ events: ['default-branch', 'tags'] }] } })
+    read = getPushPolicy(database)
+    expect(deployRuleWords(deployRule(read, 'fixture/app'))).toBe('deploys on: default branch, tags')
+    expect(deployHold(read, 'fixture/app', ['branches', 'pull-requests'])).toBeNull()
+    expect(deployHold(read, 'fixture/app', ['default-branch'])).toMatch(/a push to the default branch deploys; a deploy is never approved/u)
+    expect(deployHold(read, 'fixture/app', ['branches', 'tags'])).toMatch(/a tag deploys/u)
+    // An action BMN cannot place is covered only by "nothing deploys".
+    expect(deployHold(read, 'fixture/app', null)).toMatch(/cannot tell what this action triggers/u)
+    expect(pushPolicyStatus(read, true)).toMatchObject({ deploys: [{ repository: 'fixture/app', events: ['default-branch', 'tags'] }] })
+
+    expect(changePushPolicy(database, { kind: 'deploys', repository: 'fixture/app', events: [], expectedRevision: 1 }, T1)).toMatchObject({ outcome: 'stale' })
+    expect(changePushPolicy(database, { kind: 'deploys', repository: 'fixture/app', events: ['pushes' as never], expectedRevision: 2 }, T1)).toMatchObject({ outcome: 'invalid' })
+    expect(set(null)).toMatchObject({ outcome: 'changed', record: { revision: 3, deploys: [] } })
+    expect(deployHold(getPushPolicy(database), 'fixture/app', ['branches'])).toMatch(/no deploy rule/u)
   })
 })

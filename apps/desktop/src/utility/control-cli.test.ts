@@ -1066,6 +1066,7 @@ describe('bmn hook', () => {
       agentCli: agent,
       conversationReference: OBSERVED_REFERENCE,
       source,
+      callerPid: expect.any(Number),
       ...('transcript_path' in extra ? { transcriptPath: extra.transcript_path } : {})
     })
   })
@@ -4703,7 +4704,7 @@ describe('OpenCode hooks', () => {
   it.each([['session.created', 'startup'], ['tui.session.select', 'resume']])('captures %s with the OpenCode reference', async (event, source) => {
     const fixture = await cliFixture()
     await runHook(fixture, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION }, OPENCODE_FOREGROUND)
-    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: OPENCODE_SESSION, source }))
+    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: OPENCODE_SESSION, source }), expect.any(Function))
     if (source === 'resume') expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(6)
   })
 
@@ -5611,7 +5612,7 @@ describe('bmn policy (Story 83.3)', () => {
     return `${folder}:${process.env.PATH}`
   }
   const inForce = (levels: Array<{ repository: string; level: PushLevel }> = []): PushPolicyStatus => ({
-    state: 'read', revision: 4, standing: { authorizes: true, why: null }, allowed: ['octo'], denied: ['other'], levels, stillAsks: ['deploys, releases and tags']
+    state: 'read', revision: 4, standing: { authorizes: true, why: null }, allowed: ['octo'], denied: ['other'], levels, deploys: [], stillAsks: ['deploys, releases and tags']
   })
   const widgets = { owner: { login: 'Octo' }, defaultBranchRef: { name: 'trunk' }, name: 'widgets' }
 
@@ -5866,7 +5867,7 @@ describe('evidence of how a prompt ended, from the recorded hooks (Epic 30.2)', 
     // The busy event before each request also resolves its row; the answer is the one its replied event made.
     const answered = (event: string) => fixture.handlers.resolveAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
       .find((params) => params.origin === `hook:opencode:${event}`)
-    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: session, source: 'startup' }))
+    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: session, source: 'startup' }), expect.any(Function))
     expect(opened('opencode:permission')).toMatchObject({
       kind: 'permission', title: 'OpenCode asks to shell', body: 'echo *',
       prompt: { harness: 'opencode', command: 'echo probe-shell-ran', requestRef: 'per_139c07408001JpDHJ2zCSER6L3' }
@@ -6646,7 +6647,9 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
     expect(mine.stdout).toMatch(/^The owner is away since 2026-10-19T19:31:00.000Z \(period p-1\)\.\n/)
     const used = await runCli(['grant', 'use', '--run', 'dev-auto-80', '--use-id', 'u1', '--boundary', '80.3-review'], { env: fixture.sessionEnv })
     expect(used.stdout).toBe('Recorded one extra round at 80.3-review for run dev-auto-80 in period p-1; 2 left. Report its outcome with --period p-1.\n')
-    expect(fixture.handlers.useGrant).toHaveBeenLastCalledWith({ sessionId: 'session-1', runId: 'dev-auto-80', useId: 'u1', boundary: '80.3-review' })
+    expect(fixture.handlers.useGrant).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', runId: 'dev-auto-80', useId: 'u1', boundary: '80.3-review'
+    })
   })
 
   it('prints the exact text to run or send with a recorded use of a command or a message (Story 103.3 AC3)', async () => {

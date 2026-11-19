@@ -43,7 +43,7 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     const acme = view.owners.find((owner) => owner.login === 'acme')!
     expect(acme).toMatchObject({ allowed: true, repositories: [{ repository: 'acme/api', level: 'merge-and-push-main', defaultBranch: 'trunk', unread: null }] })
     const gone = view.owners.find((owner) => owner.login === 'octo')!.repositories.find((r) => r.name === 'gone')!
-    expect(gone).toEqual({ repository: 'octo/gone', name: 'gone', level: 'merge-when-green', defaultBranch: null, unread: 'GitHub did not answer for this repository' })
+    expect(gone).toEqual({ repository: 'octo/gone', name: 'gone', level: 'merge-when-green', deploys: null, defaultBranch: null, unread: 'GitHub did not answer for this repository' })
   })
 
   it('looks up at most the limit on GitHub and still lists every repository past it, unread, under its remote\'s owner', async () => {
@@ -60,7 +60,7 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     expect(asked).toHaveLength(REPOSITORY_LIMIT)
     expect(view.owners.find((owner) => owner.login === 'octo')!.repositories).toHaveLength(REPOSITORY_LIMIT + 2)
     expect(view.owners.find((owner) => owner.login === 'zeta-org')!.repositories).toEqual([
-      { repository: 'zeta-org/last', name: 'last', level: 'prs-only', defaultBranch: null, unread: `not looked up: Health reads at most ${REPOSITORY_LIMIT} repositories from GitHub` }
+      { repository: 'zeta-org/last', name: 'last', level: 'prs-only', deploys: null, defaultBranch: null, unread: `not looked up: Health reads at most ${REPOSITORY_LIMIT} repositories from GitHub` }
     ])
   })
 
@@ -72,8 +72,12 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
     expect(view.standing.authorizes).toBe(true)
     expect(view.owners.map((owner) => [owner.login, owner.allowed])).toEqual([['octo', false], ['far-org', true]])
     expect(view.owners[1]!.repositories).toEqual([
-      { repository: 'far-org/tool', name: 'tool', level: 'merge-and-push-main', defaultBranch: null, unread: null, note: 'no session works in it now' }
+      { repository: 'far-org/tool', name: 'tool', level: 'merge-and-push-main', deploys: null, defaultBranch: null, unread: null, note: 'no session works in it now' }
     ])
+    // A repository with a deploy rule stays listed the same way, under its owner whether allowed or denied (Epic 132 D3).
+    const ruled = await pushPolicyView(stored({ deploys: [{ repository: 'octo/site', events: ['tags'], changedAt: '2026-11-19T16:00:00.000Z' }] }), [], { ...reader(), signedIn: async () => [] })
+    expect(ruled.owners).toMatchObject([{ login: 'octo', allowed: false, repositories: [
+      { repository: 'octo/site', level: 'prs-only', deploys: ['tags'], note: 'no session works in it now' }] }])
     // When discovery fails outright, the same holds.
     const failing = await pushPolicyView(stored({ owners: [{ login: 'far-org', allowed: true, changedAt: '2026-10-18T19:00:00.000Z' }] }),
       ['/work/widgets'], { ...reader(), remote: async () => null, signedIn: async () => [] })
@@ -91,7 +95,7 @@ describe('Health\'s push policy listing (Story 83.3)', () => {
       repository: async () => renamed
     })
     expect(view.owners.find((owner) => owner.login === 'octo')!.repositories).toEqual([
-      { repository: 'octo/gadgets', name: 'gadgets', level: 'merge-and-push-main', defaultBranch: 'main', unread: null }
+      { repository: 'octo/gadgets', name: 'gadgets', level: 'merge-and-push-main', deploys: null, defaultBranch: 'main', unread: null }
     ])
   })
 

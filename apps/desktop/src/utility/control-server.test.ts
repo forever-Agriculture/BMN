@@ -141,7 +141,7 @@ function fakeHandlers(current: Map<string, string>) {
       (p.edge === 'start' ? 'captured' : p.edge === 'confirm' ? 'confirmed' : 'queued')),
     dropTurnMark: vi.fn(),
     reportRefusal: vi.fn(),
-    observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
+    observeConversation: vi.fn<ControlHandlers['observeConversation']>(async () => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
     observeHookEvent: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
@@ -297,6 +297,22 @@ describe('control server authentication', () => {
 })
 
 describe('conversation observation from a session hook', () => {
+  it.runIf(process.platform === 'linux')('reads the authentic peer from the socket rather than the claimed process id', async () => {
+    const fixture = await serverFixture()
+    let observed: Awaited<ReturnType<NonNullable<Parameters<ControlHandlers['observeConversation']>[1]>>>
+    fixture.handlers.observeConversation.mockImplementationOnce(async (_observation, peer) => {
+      observed = await peer?.()
+      return { accepted: true, detail: 'observed' }
+    })
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const response = await client.request('conversation.observe', { agentCli: 'claude',
+      conversationReference: OBSERVED_REFERENCE, source: 'startup', callerPid: process.pid + 10000 })
+    expect(response.result).toEqual({ accepted: true, detail: 'observed' })
+    expect(fixture.handlers.observeConversation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ callerPid: process.pid + 10000 }), expect.any(Function))
+    expect(observed).toEqual({ pid: process.pid, start: expect.stringMatching(/^\d+$/u) })
+  })
+
   it('passes the session, its incarnation and a lowercased reference to the handler', async () => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))

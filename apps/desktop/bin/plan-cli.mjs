@@ -3,8 +3,11 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { chmodSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, relative, sep } from 'node:path'
-import { AllowRefusal, DECISION_REFERENCE, SOURCE_QUOTE, SOURCE_TIME, allowanceFileName, allowanceName, allowancePathAt, allowanceText, allowanceTextAt, parseAllowances, readAllowances, recordAllow } from './plan-allowances.mjs'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { AllowRefusal, DECISION_REFERENCE, SOURCE_QUOTE, SOURCE_TIME, allowanceFileName, allowanceName, allowancePathAt, allowanceText, allowanceTextAt, parseAllowances, precedingEpicGo, readAllowances, recordAllow } from './plan-allowances.mjs'
+import { planActionsHash, planActionWords } from './plan-actions.mjs'
+import { call, readCredentials } from './bmn-commands.mjs'
+import { simpleCommandWords } from './command-guard.mjs'
 import {
   EXIT, FORMAT, NOTE_LIMIT, PlanError, ROW, STATUSES, boardBytes, boardProblems, checkPlan, epicLeadHint, needsMove, readBoard, resolvePlan, rowToken, withLeadHint
 } from './plan-board.mjs'
@@ -14,6 +17,7 @@ const PLAN_USAGE = `Usage: bmn plan status [--json] [--project P] [--epic N]...
        bmn plan set <row> <status> --expect TOKEN [--note TEXT] [--project P] [--json]
        bmn plan go <epic> --source TEXT --approved sha256:HEX|COMMIT --expect TOKEN [--date YYYY-MM-DD] [--note TEXT] [--project P] [--json]
        bmn plan allowances <epic> [--at COMMIT] [--project P] [--json]
+       bmn plan actions ask <epic> [--project P] [--json]
        bmn plan allow <epic> CHANGE... --reason R --expect TOKEN [--source TEXT] [--project P] [--json]
        bmn plan publish [--project P] [--json]
        bmn plan copy --row KEY --expect TOKEN [--project P] [--json]
@@ -523,6 +527,41 @@ function epicFileName(planRoot, epic) {
   return matching.length === 1 ? matching[0] : null
 }
 
+/** The canonical proposal and the one go that can put it in force. Only host code uses this for authority. */
+export async function readEpicActionContext(project, epic) {
+  const plan = await resolvePlan(project)
+  if (plan.format !== 'bmn-plan' || plan.history === 'none' || !plan.defaultAvailable) {
+    throw new PlanError('NO_PLAN', 'The product must have a canonical BMN plan with Git history')
+  }
+  const board = await readBoard(plan.boardPath)
+  const row = board.rows.find(row => row.epic === epic && row.story === null)
+  const name = epicFileName(plan.planRoot, epic)
+  if (!row || name === null) throw new PlanError('UNKNOWN_ROW', `Epic ${epic} is absent from the plan`)
+  const text = readFileSync(join(plan.planRoot, 'epics', name), 'utf8')
+  const working = allowanceText(plan.planRoot, epic)
+  const parsed = working === null ? null : parseAllowances(working, epic)
+  if (parsed?.problems.length) throw new PlanError('MALFORMED', parsed.problems[0].reason)
+  const actions = parsed?.data.actions ?? []
+  const actionsHash = planActionsHash(actions)
+  const approval = `sha256:${approvalText(text, working)}`
+  const recorded = await readAllowances(plan, epic)
+  const usable = !['backlog', 'dropped', 'paused', 'done'].includes(row.status) &&
+    (recorded.state === 'recorded' || recorded.state === 'none' && recorded.go_commit && !recorded.hand_edit)
+  const baseApproval = usable && `sha256:${approvalText(text, recorded.at_go?.text ?? null)}` === recorded.approved_text
+    ? recorded.approved_text : null
+  const go = baseApproval === null ? null : recorded.go_commit
+  // In force: the go stands, and the list on disk is the last recorded one (a limit amendment keeps it; a hand edit does not).
+  const activeApproval = go !== null && planActionsHash(recorded.current?.fields.actions ?? []) === actionsHash ? baseApproval : null
+  const latestGo = recorded.go_commit ?? null
+  return { planKey: plan.planRoot, project: plan.defaultCheckout, epic, actions, actionsHash, approval,
+    go, previousGo: latestGo, activeApproval,
+    // What the latest go itself recorded, whatever the board says now: an answer given before it attaches to it once, by these.
+    precedingGo: latestGo === null ? null : precedingEpicGo(plan, epic, latestGo),
+    goApproval: latestGo === null ? null : recorded.approved_text ?? null,
+    goActionsHash: latestGo === null || recorded.state === 'not_recorded' ? null : planActionsHash(recorded.at_go?.fields.actions ?? []),
+    withdrawn: recorded.state === 'withdrawn' }
+}
+
 /** The board with `epic` last in its `queue:` (unchanged when already there); null for a queue written in another form. */
 export function addToQueue(text, epic) {
   const lines = text.split('\n')
@@ -918,17 +957,96 @@ async function allowances(argv) {
     if (error instanceof AllowRefusal) return refuse(json, error.code, error.message)
     return failure(error, json)
   }
-  if (json) { out(JSON.stringify({ ok: true, ...read }, null, 2)); return EXIT.ok }
   const fields = read.current?.fields ?? read.draft ?? null
+  let actionStatus = null
+  if (options.at === undefined) {
+    try {
+      const { socketPath, token } = readCredentials({})
+      actionStatus = await call(socketPath, token, 'epic.actions.status', { epic: read.epic, project: resolve(options.project ?? process.cwd()) })
+    } catch { /* The file is readable offline; owner answers require BMN. */ }
+  }
+  const visibleActions = actionStatus?.actionsHash === planActionsHash(fields?.actions ?? []) ? actionStatus.actions : []
+  if (fields?.actions?.length) read.actions = fields.actions.map(action => ({
+    ...action, status: visibleActions.find(one => one.id === action.id)?.status ?? 'not asked',
+    remaining: visibleActions.find(one => one.id === action.id)?.remaining ?? null,
+    // D3: the repository's deploy rule as Health holds it, and why the action stays held under it.
+    ...(visibleActions.find(one => one.id === action.id)?.rule === undefined ? {} : { rule: visibleActions.find(one => one.id === action.id).rule }),
+    ...(visibleActions.find(one => one.id === action.id)?.held === undefined ? {} : { held: visibleActions.find(one => one.id === action.id).held })
+  }))
+  // With BMN reachable the answer always says who is bound and what was used, empty included; offline it says neither.
+  if (actionStatus) {
+    read.binding = actionStatus.binding ?? null
+    read.uses = actionStatus.uses ?? []
+  }
+  if (json) { out(JSON.stringify({ ok: true, ...read }, null, 2)); return EXIT.ok }
   out([
     `epic ${read.epic}: ${read.state}${read.reason ? ` (${read.reason})` : ''}`,
     ...(read.go_commit ? [`go commit ${read.go_commit.slice(0, 12)}${read.current ? `; last recorded ${read.current.commit.slice(0, 12)} (${read.current.source}); token ${read.token}` : ''}`] : []),
     ...(fields ? Object.entries(fields.limits).map(([name, one]) => `${name}: ${one.limit}${one.ceiling === undefined ? '' : ` of ${one.ceiling}`} ${one.unit === 'count' ? '' : `${one.unit} `}per ${one.per}`) : []),
     ...(fields?.may.length ? [`may: ${fields.may.join('; ')}`] : []),
     ...(fields?.stays_out.length ? [`stays out: ${fields.stays_out.join('; ')}`] : []),
+    ...((read.actions ?? []).map(action => `action ${action.id}: ${planActionWords(action).replaceAll('\n', ' · ')} · ${action.status}${action.remaining === null ? '' : ` · ${action.remaining} left`}${action.rule ? ` · deploy rule: ${action.rule}` : ''}${action.held ? ` · held: ${action.held}` : ''}`)),
+    ...(actionStatus?.binding ? [`bound session: ${actionStatus.binding.sessionId}`] : []),
+    ...((read.uses ?? []).map(use => {
+      const outcome = use.outcome === 'reserved' ? 'reserved without dispatch' :
+        use.outcome === 'unreported' ? 'dispatched, outcome unreported' :
+          use.outcome === 'failed' ? 'dispatch failed' : use.outcome === 'withheld' ? 'withheld at the last check, use spent' : 'pass'
+      return `${outcome} ${use.action}: session ${use.sessionId} · ${use.at} · ${use.source} · sha256:${use.commandHash}`
+    })),
     ...(read.hand_edit ? [`HAND_EDIT: ${read.hand_edit}`] : [])
   ].join('\n'))
   return EXIT.ok
+}
+
+async function askEpicActions(argv) {
+  const { positionals, options } = parse(argv, { flags: ['json'], values: ['project'] })
+  if (positionals.length !== 2 || positionals[0] !== 'ask' || !/^\d{1,6}$/u.test(positionals[1])) {
+    throw new PlanUsageError('plan actions takes: bmn plan actions ask N [--project P]')
+  }
+  const { socketPath, token } = readCredentials({})
+  const result = await call(socketPath, token, 'epic.actions.ask', { epic: Number(positionals[1]), project: resolve(options.project ?? process.cwd()) })
+  out(options.json ? JSON.stringify(result) : `Actions for Epic ${positionals[1]} · ${result.pending} awaiting an answer`)
+  return EXIT.ok
+}
+
+export async function runEpicRunCommand(argv) {
+  try {
+    const [action, ...rest] = argv
+    if (action === undefined || action === '--help' || rest.includes('--help')) {
+      out('Usage: bmn run bind --epic N [--project P] | bmn run status | bmn run reserve|dispatch --action I --use-id U --command TEXT')
+      return EXIT.ok
+    }
+    const { positionals, options } = parse(rest, {
+      flags: ['json'], values: action === 'bind' ? ['epic', 'project'] : ['reserve', 'dispatch'].includes(action) ? ['action', 'use-id', 'command'] : []
+    })
+    if (!['bind', 'status', 'reserve', 'dispatch'].includes(action) || positionals.length) throw new PlanUsageError('See bmn run --help')
+    if (action === 'bind' && !/^\d{1,6}$/u.test(options.epic ?? '')) throw new PlanUsageError('run bind needs --epic N')
+    if (['reserve', 'dispatch'].includes(action) && (!options.action || !options['use-id'] || !options.command)) {
+      throw new PlanUsageError(`run ${action} needs --action, --use-id and --command`)
+    }
+    const { socketPath, token } = readCredentials({})
+    const params = action === 'bind' ? { epic: Number(options.epic), project: resolve(options.project ?? process.cwd()), callerPid: process.pid }
+      : ['reserve', 'dispatch'].includes(action) ? { action: options.action, useId: options['use-id'], command: options.command, cwd: process.cwd(), callerPid: process.pid } : {}
+    const result = await call(socketPath, token, `epic.run.${action}`, params)
+    if (action === 'dispatch') {
+      if (result?.allowed !== true || typeof result.launch !== 'boolean') throw new Error('BMN returned no dispatch decision')
+      if (!result.launch) { out(JSON.stringify({ ...result, repeated: true })); return EXIT.ok }
+      const exact = simpleCommandWords(options.command)
+      if ('problem' in exact) throw new Error(exact.problem)
+      const [program, ...args] = exact.words
+      if (program !== 'git' && program !== 'gh') throw new Error('Only typed Git or GitHub policy actions can dispatch here')
+      const child = spawnSync(program, args, { stdio: 'inherit' })
+      await call(socketPath, token, 'epic.run.result', {
+        useId: options['use-id'], callerPid: process.pid, outcome: child.status === 0 ? 'returned' : 'failed'
+      }).catch(() => undefined)
+      if (child.error) throw child.error
+      return child.status ?? EXIT.unable
+    }
+    out(JSON.stringify(result))
+    return EXIT.ok
+  } catch (error) {
+    return failure(error, argv.includes('--json'))
+  }
 }
 
 /** `bmn plan allow N CHANGE... --reason R --expect TOKEN [--source WORDS]`: D1 and D7, against the last recorded version. */
@@ -990,6 +1108,7 @@ export async function runPlanCommand(argv, migrationLocked = false) {
     if (action === 'set') return await set(rest)
     if (action === 'go') return await go(rest)
     if (action === 'allowances') return await allowances(rest)
+    if (action === 'actions') return await askEpicActions(rest)
     if (action === 'allow') return await allow(rest)
     if (action === 'sync') {
       const { positionals, options } = parse(rest, { flags: ['json'], values: ['project'] })

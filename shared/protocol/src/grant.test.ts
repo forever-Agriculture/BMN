@@ -325,6 +325,27 @@ describe('useGrant (R84-FR3, FR8)', () => {
   const read = (record: GrantRecord) => ({ state: 'read' as const, record })
   const round = (id: string, boundary = '80.3-review') => ({ runId: 'run-80', sessionId: 's-builder', id, kind: 'round' as const, boundary })
 
+  it('shows the recorded budget on the card and grants only the approved temporary extras', () => {
+    const input = { kind: 'rounds' as const, proposed: 2, reason: 'An additional review may be needed' }
+    const budget = { base: 6, used: { '80.3-review': 4 } }
+    const parsed = card({ terms: [{ ...input, budget: { base: 999, used: {} } }] })
+    expect(parsed.terms).toEqual([{ ...input, id: 'rounds' }])
+    const term = { ...input, id: 'rounds' as const, budget }
+    const ask = askGrant(leaving(), {
+      runId: 'run-80', sessionId: 's-builder', agentCli: 'claude', card: { ...parsed, terms: [term] }
+    }, T0)
+    let record = granted(away(ask.record), { rounds: 2 })
+    expect(readGrantRecord(JSON.stringify(record))).toEqual(read(record))
+    expect(grantTermLabel(term)).toContain('6 base · 8 total if approved with 2 extra · 4 remaining at 80.3-review')
+    for (const id of ['extra-1', 'extra-2']) {
+      const use = useGrant(read(record), AWAY, round(id), T1)
+      expect(use.outcome).toBe('recorded')
+      record = use.record
+    }
+    expect(useGrant(read(record), AWAY, round('extra-3'), T1)).toMatchObject({ outcome: 'refused', reason: 'none left' })
+    expect(useGrant(read(record), BACK, round('extra-4'), T2).outcome).toBe('refused')
+  })
+
   it('records rounds per boundary up to the grant, and refuses past it, keeping the refusal', () => {
     let record = granted(away(asked()), all)
     for (const [index, id] of ['u1', 'u2', 'u3'].entries()) {

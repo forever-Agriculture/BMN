@@ -105,6 +105,8 @@ export function withCompletedAsks(activity: AwayPeriodActivity, asks: readonly T
 /** What the host returns for one period (`away.summary`); the renderer adds the live requests, asks and dev-auto runs. */
 export interface AwaySummaryPayload {
   away: OwnerAwayView
+  epicActions?: import('./epic-actions').EpicActionAudit[] | null
+  epicBindings?: ({ epic: number } & Pick<import('./epic-actions').EpicRunBinding, 'id' | 'sessionId' | 'go' | 'at'>)[] | null
   /** Every session the summary may name, archived ones included. */
   sessions: AwaySummarySession[]
   /** Session ids in sidebar order. */

@@ -179,6 +179,9 @@ Commands:
                                             rows, check the plan's structure, change one row safely, record
                                             the owner's go in the plan's history; not the subscription's Plan
                                             use (bmn plan --help)
+  run bind --epic N | run status           Bind a live Claude Code or Codex conversation to the epic's go.
+  run reserve|dispatch --action I --use-id U --command TEXT
+                                            Use the exact repository write approved for the bound epic.
   policy [--repo OWNER/NAME]                The owner's push and merge policy: whether it authorizes anything,
                                             the repository's level and what still asks (bmn policy --help)
   grant [--run ID] | grant ask | grant use  The Away grant: a run's one card before the owner leaves, what he

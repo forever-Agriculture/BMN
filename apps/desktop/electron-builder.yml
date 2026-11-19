@@ -207,6 +207,8 @@ extraResources:
     to: bin/grant-cli.mjs
   - from: bin/grant-command.mjs
     to: bin/grant-command.mjs
+  - from: bin/plan-actions.mjs
+    to: bin/plan-actions.mjs
   # Epic 69: which hook events mark a turn's start and end; `bmn hook` and `bmn hooks check` load it.
   - from: bin/turn-marks.mjs
     to: bin/turn-marks.mjs
@@ -304,6 +306,14 @@ extraResources:
       - plan-publish.mjs
       - plan-reconciliation.mjs
       - plan-allowances.mjs
+      # Epic 132: plan-allowances reads the epic's actions and plan-cli asks BMN; these are what those imports need.
+      - plan-actions.mjs
+      - command-guard.mjs
+      - grant-command.mjs
+      - secret-list.mjs
+      - bmn-commands.mjs
+      - bmn-words.mjs
+      - safe-config-write.mjs
       - plan-statuses.mjs
       - shared-helpers.mjs
   # Story 77.4: BMN's own skills and the module that installs them into the skills folder at start.

@@ -1,9 +1,14 @@
 // MODULE: push-policy-health.tsx - Health › Pushes and merges (Story 83.3): allow or deny each owner, and each repository's level
 import { useEffect, useRef, useState } from 'react'
-import { PUSH_LEVELS, PUSH_LEVEL_WORDS, type PushLevel, type PushPolicyChange, type PushPolicyOwnerView, type PushPolicyView } from '@bmn/protocol'
+import { DEPLOY_EVENTS, DEPLOY_EVENT_WORDS, PUSH_LEVELS, PUSH_LEVEL_WORDS, type DeployEvent, type PushLevel, type PushPolicyChange, type PushPolicyOwnerView, type PushPolicyView } from '@bmn/protocol'
 import { Segmented } from './history-preferences'
 import { Switch } from './team-preferences'
 import { Dot } from './roster-marks'
+
+/** Epic 132 D3: what he says deploys in a repository. Not set keeps every held action there held. */
+type DeployChoice = 'unset' | 'none' | 'some'
+const DEPLOY_CHOICES: readonly DeployChoice[] = ['unset', 'none', 'some']
+const DEPLOY_CHOICE_WORDS: Record<DeployChoice, string> = { unset: 'Not set', none: 'Nothing deploys', some: 'These deploy' }
 
 const KIND_WORDS: Record<PushPolicyOwnerView['kind'], string> = { account: 'Account', organisation: 'Org', unknown: 'Owner' }
 
@@ -31,13 +36,15 @@ export function PushPolicyHealth(): React.JSX.Element {
     return () => { live = false }
   }, [])
   type Change = { kind: 'owner'; login: string; allowed: boolean } | { kind: 'level'; repository: string; level: PushLevel }
+    | { kind: 'deploys'; repository: string; events: DeployEvent[] | null }
   // The row shows the change at once, so the arrow keys keep the focus on the step they chose; the store's answer replaces it.
   const change = (next: Change): void => {
     if (view === null || view.state !== 'read') return
     setError(null)
     setView((shown) => shown === null ? shown : { ...shown, owners: shown.owners.map((owner) => next.kind === 'owner'
       ? owner.login === next.login ? { ...owner, allowed: next.allowed } : owner
-      : { ...owner, repositories: owner.repositories.map((repository) => repository.repository === next.repository ? { ...repository, level: next.level } : repository) }) })
+      : { ...owner, repositories: owner.repositories.map((repository) => repository.repository !== next.repository ? repository
+        : next.kind === 'level' ? { ...repository, level: next.level } : { ...repository, deploys: next.events }) }) })
     queue.current = queue.current.then(async () => {
       const current = stored.current
       if (current === null || current.state !== 'read') return
@@ -72,10 +79,14 @@ export function PushPolicyHealth(): React.JSX.Element {
               <Switch label={`Allow ${owner.login}`} on={owner.allowed} disabled={view.state !== 'read'}
                 onChange={(allowed) => change({ kind: 'owner', login: owner.login, allowed })} />
             </div>
-            {denied ? null : owner.repositories.map((repository) => {
+            {owner.repositories.map((repository) => {
               const id = `policy-${repository.repository.replace(/[^a-z0-9-]/g, '-')}`
+              const deploys = repository.deploys
+              const choice: DeployChoice = deploys === null ? 'unset' : deploys.length === 0 ? 'none' : 'some'
               return (
-                <div key={repository.repository} className="health-row policy-repository">
+                <div key={repository.repository} className="policy-repository-block">
+                {/* Fable's approved design keeps a denied owner's repositories out of the level rows; what deploys there is still his to say. */}
+                {denied ? null : <div className="health-row policy-repository">
                   <span className="health-state">
                     <span id={id} className="mono">{repository.name}</span>
                     {repository.unread === null ? null : <span className="faint"><Dot label="Not read" />{sentence(repository.unread)}</span>}
@@ -87,13 +98,38 @@ export function PushPolicyHealth(): React.JSX.Element {
                       optionLabel={(level) => PUSH_LEVEL_WORDS[level]}
                       onChange={(level) => change({ kind: 'level', repository: repository.repository, level })} />
                   )}
+                </div>}
+                <div className="health-row policy-deploys">
+                  <span id={`${id}-deploys`} className="faint">{denied ? <><span className="mono">{repository.name}</span> · </> : null}What deploys</span>
+                  {view.state === 'unknown' ? <span className="faint">unknown</span> : (
+                    <Segmented<DeployChoice> labelledBy={`${id}-deploys`} options={DEPLOY_CHOICES} value={choice} fit
+                      optionLabel={(option) => DEPLOY_CHOICE_WORDS[option]}
+                      onChange={(option) => change({ kind: 'deploys', repository: repository.repository,
+                        // "These deploy" starts from the safest reading: everything deploys until he switches one off.
+                        events: option === 'unset' ? null : option === 'none' ? [] : [...DEPLOY_EVENTS] })} />
+                  )}
+                </div>
+                {view.state === 'read' && deploys !== null && deploys.length > 0 ? (
+                  <div className="policy-deploy-events" role="group" aria-label={`What deploys in ${repository.name}`}>
+                    {DEPLOY_EVENTS.map((event) => (
+                      <span key={event} className="policy-deploy-event">
+                        <span>{DEPLOY_EVENT_WORDS[event]}</span>
+                        <Switch label={`${DEPLOY_EVENT_WORDS[event]} deploy in ${repository.name}`} on={deploys.includes(event)}
+                          // Switching the last one off would say "nothing deploys"; that is its own choice above.
+                          disabled={deploys.length === 1 && deploys.includes(event)}
+                          onChange={(on) => change({ kind: 'deploys', repository: repository.repository,
+                            events: DEPLOY_EVENTS.filter((other) => other === event ? on : deploys.includes(other)) })} />
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 </div>
               )
             })}
           </div>
         )
       })}
-      <p className="preferences-help">The list is the owners and repositories your sessions work in. Owners start denied; repositories start at PRs only.</p>
+      <p className="preferences-help">The list is the owners and repositories your sessions work in. Owners start denied; repositories start at PRs only. An action you approve for an epic is let through only where “What deploys” says it deploys nothing; not set keeps it held.</p>
     </>
   )
 }

@@ -826,6 +826,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   getGrant(): Promise<OwnerGrantView> {
     return invokeBridge('aiterm:grant:get', {})
   },
+  epicActions(): Promise<import('@bmn/protocol').EpicActionCard[]> {
+    return invokeBridge('aiterm:epic-actions:list', {})
+  },
+  answerEpicAction(answer: import('@bmn/protocol').EpicActionAnswer): Promise<void> {
+    return invokeBridge('aiterm:epic-actions:answer', answer)
+  },
+  unbindEpicAction(project: string, epic: number, binding: string): Promise<boolean> {
+    return invokeBridge('aiterm:epic-actions:unbind', { project, epic, binding })
+  },
   departurePresentation(input: DeparturePresentationInput): Promise<DeparturePresentationReply> {
     return invokeBridge('aiterm:grant:presentation', input)
   },

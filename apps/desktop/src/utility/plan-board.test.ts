@@ -672,7 +672,7 @@ release()
     // Where the old lookup from resources/bin pointed, three levels up: outside the package.
     file(root, 'scripts/plan/migrate-bmad-plan.mjs', '')
     for (const at of ['app/resources/bin', 'app/resources/apps/desktop/bin']) {
-      for (const name of ['plan-board.mjs', 'shared-helpers.mjs', 'plan-allowances.mjs']) file(root, `${at}/${name}`, readFileSync(resolve(__dirname, '../../bin', name), 'utf8'))
+      for (const name of ['plan-board.mjs', 'shared-helpers.mjs', 'plan-allowances.mjs', 'plan-actions.mjs', 'command-guard.mjs', 'grant-command.mjs', 'secret-list.mjs']) file(root, `${at}/${name}`, readFileSync(resolve(__dirname, '../../bin', name), 'utf8'))
       const printed = execFileSync(process.execPath, ['--input-type=module', '-e', `import { needsMove } from ${JSON.stringify(join(root, at, 'plan-board.mjs'))}; process.stdout.write(needsMove('B'))`], { encoding: 'utf8' })
       expect(/node (\S+) stage/u.exec(printed)?.[1], at).toBe(tool)
     }

@@ -5,6 +5,7 @@
 // renamed or transferred repository counts as its real owner's. Nothing here allows anything by itself: the agents follow what it prints (Epic 83, R83-FR1).
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { planActionWords } from './plan-actions.mjs'
 
 const execFileAsync = promisify(execFile)
 const TIMEOUT_MS = 8_000
@@ -115,25 +116,64 @@ function grantedHere(status, verdict) {
   return status.granted.filter((entry) => entry.repository === verdict.repository || entry.repository === null)
 }
 
-function describePolicy(status, verdict) {
+function epicHere(status, verdict, asked) {
+  if (!status.epic) return null
+  if (!status.epic.binding) return { binding: null, actions: [] }
+  const { binding } = status.epic
+  const actions = status.epic.actions.filter(action => action.repository === asked).map(action => {
+    const reason = verdict?.defaultBranch === null || !verdict ? 'GitHub could not confirm the repository'
+      : verdict.repository !== asked ? 'GitHub names a different repository'
+        : action.kind === 'push-default' && action.branch !== verdict.defaultBranch ? 'The approved branch is no longer the default'
+          : null
+    return { ...action, ...(reason === null ? {} : { unavailable: reason }) }
+  })
+  return { binding, actions }
+}
+
+function describePolicy(status, verdict, asked) {
   const lines = []
   lines.push(status.standing.authorizes ? `Push policy: in force (revision ${status.revision}).` : `Push policy: authorizes nothing: ${status.standing.why}.`)
   if (status.state === 'read') {
     lines.push(`Allowed owners: ${status.allowed.length === 0 ? 'none' : status.allowed.join(', ')}`)
     if (status.levels.length > 0) lines.push(`Raised repositories: ${status.levels.map((entry) => `${entry.repository} ${LEVEL_WORDS[entry.level]}`).join('; ')}`)
   }
+  if (status.state === 'read' && asked) {
+    // Epic 132 D3: an approved epic or night action is let through only where his rule says it deploys nothing.
+    const rule = (status.deploys ?? []).find((entry) => entry.repository === (verdict?.repository ?? asked))
+    lines.push(`Deploy rule for ${verdict?.repository ?? asked}: ${rule === undefined ? 'not set in Health, so every action BMN holds there stays held'
+      : rule.events.length === 0 ? 'nothing deploys' : `deploys on ${rule.events.join(', ')}; an action that sets one of these off stays held`}.`)
+  }
+  const epic = epicHere(status, verdict, asked)
+  if (epic?.binding) {
+    lines.push(`Bound to Epic ${epic.binding.epic}, go ${epic.binding.go.slice(0, 12)}.`)
+    if (epic.actions.length > 0) {
+      lines.push(`Allowed for Epic ${epic.binding.epic}:`)
+      for (const action of epic.actions) {
+        const reason = action.unavailable ? ` · unavailable: ${action.unavailable}` : ''
+        lines.push(`- ${action.id}: ${planActionWords(action)} · ${action.remaining} left${reason}`)
+      }
+      lines.push('- Reserve the exact operation with bmn run reserve, then pass the same action, use id and command to bmn run dispatch.')
+    }
+  } else if (epic) lines.push('This session has no epic binding.')
   if (verdict !== null) {
     const branch = verdict.defaultBranch === null ? '' : ` (default branch ${verdict.defaultBranch})`
     lines.push(`Repository ${verdict.repository}: ${LEVEL_WORDS[verdict.level]}${branch}${verdict.note ? `, ${verdict.note}` : ''}.`)
     if (verdict.authorizes) {
       lines.push('Without asking you may:', ...mayWords(verdict.level, verdict.defaultBranch).map((line) => `- ${line}`))
     } else {
-      lines.push(`Not authorized here: ${verdict.why}. Every push, merge and pull-request write asks the owner.`)
+      if (epic?.actions.some(action => !action.unavailable && action.remaining > 0)) {
+        lines.push(`Standing policy does not authorize this repository: ${verdict.why}. Other pushes, merges and pull-request writes ask the owner.`)
+      } else {
+        lines.push(`Not authorized here: ${verdict.why}. Every push, merge and pull-request write asks the owner.`)
+      }
     }
     const granted = grantedHere(status, verdict)
     if (granted.length > 0) {
       lines.push(`Granted by the owner for the night, on his card in BMN (until he is back; for that run and target only; it raises no level):`)
-      for (const entry of granted) lines.push(`- run ${entry.runId} (${entry.title}), item ${entry.item}: ${entry.words}; ${entry.left} of ${entry.count} left`)
+      for (const entry of granted) {
+        const night = entry.night ? `; Epic ${entry.night.epic}, answered ${entry.night.source === 'app' ? 'in BMN' : 'on Telegram'} at ${entry.night.at}, expires on Back` : ''
+        lines.push(`- run ${entry.runId} (${entry.title}), item ${entry.item}: ${entry.words}; ${entry.left} of ${entry.count} left${night}`)
+      }
       lines.push('- for each: read bmn grant --run <run> and record the use first; no admin bypass; a PR that changes CI or workflows, or deploys, still asks')
     }
   }
@@ -178,9 +218,11 @@ export async function runPolicyCommand(argv, { readCredentials, call }) {
   // Without a grant here the output is as before Story 84.9: the night's list joins only when it names this repository.
   const policy = { ...status }
   delete policy.granted
+  delete policy.epic
   const granted = grantedHere(status, verdict)
-  const json = { ...policy, repository: verdict, ...(granted.length > 0 ? { granted } : {}) }
-  process.stdout.write(`${options.json ? JSON.stringify(json, null, 2) : describePolicy(status, verdict)}\n`)
+  const epic = epicHere(status, verdict, asked)
+  const json = { ...policy, repository: verdict, ...(granted.length > 0 ? { granted } : {}), ...(epic ? { epic } : {}) }
+  process.stdout.write(`${options.json ? JSON.stringify(json, null, 2) : describePolicy(status, verdict, asked)}\n`)
   return 0
 }
 

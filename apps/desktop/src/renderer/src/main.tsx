@@ -45,6 +45,7 @@ import './styles.css'
 import { checkSixelRenderer } from './terminal-images'
 import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
+import { EpicActionsDialog } from './epic-actions-dialog'
 import { AwayCheck, awaySourceWords } from './away-check'
 import { AwaySummaryDialog } from './away-summary-dialog'
 import { BeforeYouGoDialog } from './before-you-go-dialog'
@@ -251,6 +252,17 @@ function App(): React.JSX.Element {
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
+  const [epicActionCards, setEpicActionCards] = useState<import('@bmn/protocol').EpicActionCard[] | null>([])
+  const seenEpicActionCards = useRef(new Set<string>())
+  const refreshEpicActionCards = async (present = false): Promise<void> => {
+    try {
+      const cards = await window.aiTerminal.epicActions()
+      const pending = cards.some(card => !seenEpicActionCards.current.has(card.id) && card.actions.some(action => !card.answers[action.id]))
+      seenEpicActionCards.current = new Set(cards.map(card => card.id))
+      setEpicActionCards(cards)
+      if (present && pending) setDialog(previous => previous ?? { kind: 'epic-actions' })
+    } catch { setEpicActionCards(null) }
+  }
   useEffect(()=>{if(dialog?.kind==='palette')void window.aiTerminal.brainSwitch('status').then(s=>{setBrainSwitchAvailable(s.available);setBrainSwitched(s.complete)}).catch(()=>undefined)},[dialog?.kind])
   /** Story 110.9: the row, scroll and open rows the Now sheet comes back on, and its last read of the runs. */
   const nowMemory = useRef(createNowMemory())
@@ -765,6 +777,7 @@ function App(): React.JSX.Element {
     },
     away: () => window.aiTerminal.getAway().then(setAwayView),
     grant: refreshGrantView,
+    'epic-actions': () => refreshEpicActionCards(true),
     // A phone channel that stopped delivering must not sit unseen behind the gear either.
     telegram: async () => {
       const status = await window.aiTerminal.getTelegramStatus().catch(() => null)
@@ -1900,6 +1913,10 @@ function App(): React.JSX.Element {
         })
       ] : []),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
+      command('epic-actions', 'Epic actions…', () => {
+        setDialog({ kind: 'epic-actions' })
+        void refreshEpicActionCards()
+      }),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
       command('pane-other', 'Switch to other pane', focusOtherPane, { shortcut: SHORTCUT_LABELS['pane-other'], disabled: (layout?.split.panes.length ?? 0) < 2 }),
@@ -2896,6 +2913,9 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
+      {dialog?.kind === 'epic-actions' ? <EpicActionsDialog cards={epicActionCards}
+        sessionName={id => sessions.find(session => session.sessionId === id)?.name ?? null}
+        onClose={() => setDialog(null)} reload={refreshEpicActionCards} /> : null}
       {dialog?.kind === 'before-you-go' && !dialog.pending && grantView !== null && dialog.periodId === periodId ? (
         <BeforeYouGoDialog
           key={dialog.periodId ?? 'no-period'}

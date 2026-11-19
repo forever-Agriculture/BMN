@@ -106,7 +106,10 @@ export const METHOD_REGISTRY = Object.freeze({
   policySet: 'policy.set',
   grantGet: 'grant.get',
   grantAnswer: 'grant.answer',
-  grantDeparture: 'grant.departure'
+  grantDeparture: 'grant.departure',
+  epicActionsList: 'epic.actions.list',
+  epicActionsAnswer: 'epic.actions.answer',
+  epicRunUnbind: 'epic.run.unbind'
 } as const)
 
 export type ProtocolMethod = (typeof METHOD_REGISTRY)[keyof typeof METHOD_REGISTRY]

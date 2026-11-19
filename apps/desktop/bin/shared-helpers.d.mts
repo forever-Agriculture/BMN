@@ -16,3 +16,7 @@ export declare function realOrNull(path: string): string | null
 export declare function spellings(folder: string): string[]
 export declare function ensurePrivateDirectory(path: string): void
 export declare function insideDirectory(root: string, path: string): boolean
+/** What a native Bash result says about its exit; `unknown` when it names no exit code. */
+export function bashExit(response: unknown): 'ok' | 'failed' | 'unknown'
+/** Whether the process listening on this control socket is an ancestor of the caller, by the kernel's word (Linux). */
+export function launchedByListener(socketPath: string): boolean

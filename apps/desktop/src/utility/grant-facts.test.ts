@@ -71,7 +71,7 @@ esac
     const check = (level: 'prs-only' | 'merge-when-green') => grantFacts({
       cwd: root, project: root, runId: 'run', epic: undefined,
       policy: { state: 'read', revision: 1, standing: { authorizes: true, why: null },
-        allowed: ['example', 'upstream'], denied: [], stillAsks: [], levels: [{ repository: 'upstream/app', level }] }
+        allowed: ['example', 'upstream'], denied: [], stillAsks: [], levels: [{ repository: 'upstream/app', level }], deploys: [] }
     })
     const permissive = await check('merge-when-green')
     expect(permissive.pullRequests).toMatchObject({ state: 'read', items: [{ repository: 'upstream/app', number: 42, headSha: head, checks: 'pending', mayMerge: false }] })

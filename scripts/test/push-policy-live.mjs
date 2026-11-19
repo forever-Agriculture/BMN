@@ -157,8 +157,9 @@ esac`)
   const note = async (main) => (await main.locator('#health-push-policy ~ .page-note').first().innerText().catch(() => '')).trim()
 
   let application = await launch()
+  let page = null
   try {
-    let page = await ready(application)
+    page = await ready(application)
     await page.evaluate((folder) => window.aiTerminal.createWorkspace({ name: 'api', defaultCwd: folder }), api)
 
     phase('a fresh profile')
@@ -178,10 +179,11 @@ esac`)
     phase('allow an owner, raise a repository with the keyboard')
     await owner(main, 'octo-probe').getByRole('switch', { name: 'Allow octo-probe' }).click()
     await until(async () => (await ownerText(main, 'octo-probe')) === 'octo-probe Account Allowed', 'the owner allowed')
-    await until(async () => (await note(main)).includes('pointer'), 'the store\'s answer')
+    // Since d96b3601 the policy reads the installed rules; this fresh profile has none installed yet.
+    await until(async () => / installed rules /.test(await note(main)), 'the store\'s answer')
     const listed = await repositories(main)
     check('allowing an owner stores it and lists its repository at PRs only; the policy is not in force without the master\'s pointer (AC2, AC5)',
-      JSON.stringify(listed) === JSON.stringify([{ name: 'widgets', level: 'PRs only' }]) && await note(main) === 'Not in force yet: the rules master does not carry the policy pointer.',
+      JSON.stringify(listed) === JSON.stringify([{ name: 'widgets', level: 'PRs only' }]) && /^Not in force yet: the installed rules (could not be read|do not carry the policy pointer)\.$/.test(await note(main)),
       { listed, note: await note(main) })
     await main.locator('.policy-repository [role="radio"][aria-checked="true"]').focus()
     await page.keyboard.press('ArrowRight')
@@ -192,11 +194,34 @@ esac`)
     const raised = policy('--repo', 'octo-probe/widgets')
     check('the arrow keys move the level and the focus together; `bmn policy --repo` prints the stored level (AC5)',
       focused === 'Merge and push main' && raised.includes('Repository octo-probe/widgets: Merge and push main (default branch main).')
-        && raised.includes('Not authorized here: the rules master does not carry the policy pointer.'), { focused, raised })
+        && raised.includes('Not authorized here: the installed rules '), { focused, raised })
     const unlisted = policy('--repo', 'octo-probe/elsewhere')
     check('a repository GitHub cannot read prints PRs only with the reason (AC5)', unlisted.includes('Repository octo-probe/elsewhere: PRs only.')
       && unlisted.includes('GitHub could not be read for this repository with your gh'), { unlisted })
     await shot(page, 'health-policy-allowed-1280.png')
+
+    // Epic 132 D3 (before the Save phase, whose in-force wait is stale since d96b3601): what he says deploys in a repository, under its level; a denied owner's repository has that row alone.
+    phase('what deploys')
+    main = await openHealth(page)
+    const block = (name) => main.locator('.policy-repository-block', { has: page.locator('.mono', { hasText: new RegExp(`^${name}$`) }) })
+    const rule = async (name) => block(name).locator('.policy-deploys [role="radio"][aria-checked="true"]').innerText()
+    await block('widgets').locator('.policy-deploys').waitFor()
+    const unset = policy('--repo', 'octo-probe/widgets')
+    const start = await rule('widgets')
+    await block('widgets').locator('.policy-deploys [role="radio"]', { hasText: /^Nothing deploys$/ }).click()
+    await until(async () => policy('--repo', 'octo-probe/widgets').includes('Deploy rule for octo-probe/widgets: nothing deploys.'), 'nothing deploys stored')
+    await block('widgets').locator('.policy-deploys [role="radio"]', { hasText: /^These deploy$/ }).click()
+    const switches = block('widgets').locator('.policy-deploy-events [role="switch"]')
+    await until(async () => await switches.count() === 5, 'the five events')
+    const allOn = await switches.evaluateAll((all) => all.every((one) => one.getAttribute('aria-checked') === 'true'))
+    await block('widgets').getByRole('switch', { name: 'Other branches deploy in widgets' }).click()
+    await until(async () => policy('--repo', 'octo-probe/widgets').includes('Deploy rule for octo-probe/widgets: deploys on default-branch, tags, releases, pull-requests;'), 'the events stored')
+    const deniedRow = (await block('api').innerText()).replace(/\s+/g, ' ').trim()
+    const deniedLevels = await block('api').locator('.policy-repository').count()
+    check('What deploys starts not set and holds; he sets nothing deploys, or the events that deploy, and `bmn policy` prints the rule; a denied owner\'s repository shows that row alone (132 D3)',
+      start === 'Not set' && unset.includes('Deploy rule for octo-probe/widgets: not set in Health, so every action BMN holds there stays held.') && allOn
+        && deniedRow.startsWith('api · What deploys') && deniedLevels === 0, { start, unset, allOn, deniedRow, deniedLevels })
+    await shot(page, 'health-policy-deploys-1280.png')
 
     phase('Save the pointer, then Undo')
     let editor = (await openEditor(page)).locator('.rules-editor textarea')
@@ -275,9 +300,18 @@ esac`)
 
 
     const undone = policy('--repo', 'octo-probe/widgets')
-    check('after Rules Undo the next read authorizes nothing (Decisions, Undo)', undone.includes('authorizes nothing: the rules master does not carry the policy pointer'), { undone })
+    check('after Rules Undo the next read authorizes nothing (Decisions, Undo)', undone.includes('authorizes nothing: the installed rules do not carry the policy pointer'), { undone })
+
   } catch (error) {
-    check('the first start completed', false, { error: error instanceof Error ? error.message : String(error) })
+    // What Health showed when it stopped: its note and any error line.
+    const shown = page === null ? null : await page.evaluate(() => {
+      const head = document.querySelector('#health-push-policy')
+      const parts = []
+      for (let node = head; node && (node === head || node.tagName !== 'H4'); node = node.nextElementSibling) parts.push(node.innerText)
+      return parts.join(' | ')
+    }).catch(() => null)
+    check('the first start completed', false, { error: error instanceof Error ? error.message : String(error),
+      health: shown === null ? null : shown.replace(/\s+/g, ' ').trim().slice(0, 3000) })
   } finally {
     await close(application)
   }

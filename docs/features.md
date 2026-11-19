@@ -556,6 +556,18 @@ master carries the pointer, so Rules › Undo of that save turns it off, and so 
 releases, CI changes, secrets, force pushes and deletions always ask you, and BMN's hook holds the clearly
 critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).
 
+**Epic actions** (Epic 132) shows the typed actions a plan requested for your answer. Each line
+shows the complete action and target. Yes or No saves that line. Reopen **Epic actions…** in the
+command palette to see the choices and the bound session. **Unbind** ends that session's permission
+for the go and keeps that conversation from binding to it again, in any process. A new conversation can
+bind a go nobody holds; what it gets is still only what you approved for the epic.
+Each line also shows the repository's **deploy rule**. You set it in Health › Pushes and merges, under the
+repository's level: **What deploys** is **Not set**, **Nothing deploys** or **These deploy** with a switch
+for the default branch, other branches, tags, releases and pull requests. BMN lets an approved action
+through only where your rule says it deploys nothing. With no rule the line is held and has no Yes. If you
+change the rule later, your earlier Yes no longer counts and the card asks again. Your answer belongs to
+one go: a new go asks again.
+
 **Before you go** (Epics 84, 130, 131): ticking Away, sending `/away` or saying you are leaving starts
 **getting ready**, with the box still unticked. The list opens by itself in the focused window and arrives on
 Telegram. Recent Claude Code and Codex sessions are selected (up to 32; sessions beyond the list's 64 rows are

@@ -141,6 +141,7 @@ export async function pushPolicyView(read: PushPolicyRead, directories: readonly
   for (const login of signedIn) ownerRow(login).kind = 'account'
   const listed = new Set<string>()
   const storedLevel = (repository: string) => record?.levels.find((entry) => entry.repository === repository)?.level ?? 'prs-only'
+  const storedDeploys = (repository: string) => record?.deploys.find((entry) => entry.repository === repository)?.events ?? null
   for (const { repository, facts: found } of facts) {
     // A repository GitHub could not confirm is listed under the owner its remote names, with the reason; it keeps its stored
     // level, so a raised one can still be lowered.
@@ -152,7 +153,7 @@ export async function pushPolicyView(read: PushPolicyRead, directories: readonly
     const row = ownerRow(owner)
     if (!('unread' in found)) row.kind = found.organisation ? 'organisation' : 'account'
     row.repositories.push({
-      repository: confirmed, name: confirmed.split('/')[1]!, level: storedLevel(confirmed),
+      repository: confirmed, name: confirmed.split('/')[1]!, level: storedLevel(confirmed), deploys: storedDeploys(confirmed),
       defaultBranch: 'unread' in found ? null : found.defaultBranch,
       unread: 'unread' in found ? found.unread : null
     })
@@ -163,10 +164,19 @@ export async function pushPolicyView(read: PushPolicyRead, directories: readonly
     if (entry.level === 'prs-only' || listed.has(entry.repository)) continue
     listed.add(entry.repository)
     const kept: PushPolicyRepositoryView = {
-      repository: entry.repository, name: entry.repository.split('/')[1]!, level: entry.level, defaultBranch: null, unread: null,
+      repository: entry.repository, name: entry.repository.split('/')[1]!, level: entry.level, deploys: storedDeploys(entry.repository), defaultBranch: null, unread: null,
       note: 'no session works in it now'
     }
     ownerRow(entry.repository.split('/')[0]!).repositories.push(kept)
+  }
+  // A repository he gave a deploy rule stays listed too, so the rule can always be seen and changed (Epic 132 D3).
+  for (const entry of record?.deploys ?? []) {
+    if (listed.has(entry.repository)) continue
+    listed.add(entry.repository)
+    ownerRow(entry.repository.split('/')[0]!).repositories.push({
+      repository: entry.repository, name: entry.repository.split('/')[1]!, level: storedLevel(entry.repository), deploys: entry.events,
+      defaultBranch: null, unread: null, note: 'no session works in it now'
+    })
   }
   const list = [...owners.values()].sort((a, b) => Number(b.signedIn) - Number(a.signedIn) || a.login.localeCompare(b.login))
   for (const row of list) row.repositories.sort((a, b) => a.name.localeCompare(b.name))

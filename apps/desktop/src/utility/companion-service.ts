@@ -15,6 +15,7 @@ import {
   type AgentTeamBlock,
   type AwayNight,
   awayNightLines,
+  type DeployEvent,
   type PushLevel,
   type PushPolicyChange,
   type PushPolicyView,
@@ -187,7 +188,9 @@ import { TurnRecorder, turnPausesFile } from './turn-changes-recorder'
 import { readAppVersion } from './turn-changes-version'
 import { turnFileView, turnSummary, turnUnavailable } from './turn-changes-view'
 import { commandPinSha } from '../../bin/grant-command.mjs'
-import { grantFacts as readGrantFacts, pinGrantLimit, resolveGrantLimitPlan, sameGrantCheckout } from '../../bin/grant-facts.mjs'
+import { EpicActionsService } from './epic-actions-service'
+import { EPIC_ACTION_TAP, TelegramEpicActions } from './telegram-epic-actions'
+import { grantFacts as readGrantFacts, pinGrantLimit, readGrantRoundBudget, resolveGrantLimitPlan, sameGrantCheckout } from '../../bin/grant-facts.mjs'
 import { findNightAllowance, withNightAllowanceLock, writeNightAllowance } from '../../bin/plan-allowances.mjs'
 import { grantChoice, grantLimitWords, GRANT_ACCESS_TIMEOUT_MS, GRANT_LIMITS, type GrantAccessClaim, type GrantLimitApply, type GrantLimitRequest } from '@bmn/protocol'
 import { maskSecrets } from './secret-mask'
@@ -608,12 +611,26 @@ export class CompanionService {
   private refusalWrites: Promise<void> = Promise.resolve()
   private awayWakeWrites: Promise<void> = Promise.resolve()
   private telegramDeliveryWrites: Promise<void> = Promise.resolve()
+  private readonly epicActions: EpicActionsService
+  private readonly epicActionPhone: TelegramEpicActions
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.policyReader = options.policyReader ?? systemPolicyReader(options.policyPointer ?? (async () => null))
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
+    this.epicActions = new EpicActionsService({
+      database: options.database,
+      liveIncarnation: sessionId => options.manager.liveIncarnationId(sessionId),
+      foreground: (sessionId, agent) => this.agentProcess(sessionId, agent),
+      now: () => this.iso(),
+      changed: () => this.epicActionsChanged(),
+      grantChanged: read => this.grantChanged(read)
+    })
+    this.epicActionPhone = new TelegramEpicActions(
+      () => this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
+      () => this.epicActions.list(), answer => this.epicActions.answer(answer, 'telegram')
+    )
     // An agent typed into a shell has no binding of BMN's; its conversation is the one its own hooks reported for the live process.
     const typedConversation = (sessionId: string): string | null => {
       const typed = this.typedAgents.get(sessionId)
@@ -1142,10 +1159,13 @@ export class CompanionService {
           const names = await this.options.database.companion('awaySessionNames').catch(() => ({}))
           return { ...night, ongoing: record.state === 'away', text: awayNightLines(night, names).join('\n') }
         },
-        policyStatus: async () => ({
-          ...pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
-          granted: await this.grantedActions()
-        }),
+        policyStatus: async (scope) => {
+          const epic = scope?.kind === 'session' ? await this.epicActions.policy(scope) : null
+          return {
+            ...pushPolicyStatus(await this.options.database.companion('getPushPolicy'), await this.policyReader.masterHasPointer()),
+            granted: await this.grantedActions(epic?.binding ?? undefined), ...(epic !== null ? { epic } : {})
+          }
+        },
         restartPrinted: (p) => this.updateRestart.serial(async () => ({ recorded: this.updateRestart.printed(p.sessionId, p.incarnationId, p.claimId) })),
         awayPrinted: async (p) => ({ recorded: await (p.channel === 'team' ? this.teamNotices : this.awayNotices).printed(p.sessionId, p.agent, p.conversation, p.claimId) }),
         // Story 76.5: BMN binds the decision to this process's conversation, as its own hook reported it, never the caller's word.
@@ -1190,6 +1210,14 @@ export class CompanionService {
           return this.leaveAway(p.scope.kind === 'owner' ? 'cli' : 'agent', p.scope.kind === 'session' ? p.scope.sessionId : null)
         }),
         grantFacts: (p) => this.controlCall(async () => this.readNightFacts(p.scope, p.runId, p.callerCwd, p.project, p.epic)),
+        epicActions: async (scope, method, p) => {
+          try { return await this.epicActions.control(scope, method, p) }
+          catch (error) {
+            const detail = error instanceof Error ? maskSecrets(error.message) : 'Epic action could not be confirmed'
+            this.logRefusal(method, scope.kind === 'session' ? scope.sessionId : null, detail)
+            throw new ControlError(ERROR_CODES.invalidArgument, detail)
+          }
+        },
         askGrant: (p) => this.controlCall(async () => {
           const read = this.grantRead
           const origin = { generation: read.generation ?? 0,
@@ -1197,10 +1225,16 @@ export class CompanionService {
           const sessionId = p.scope.kind === 'session' ? p.scope.sessionId : null
           const producer = p.scope.kind === 'session' ? this.producers.stamp(p.scope.sessionId, p.scope.incarnationId) : null
           const bound = sessionId === null ? undefined : this.options.manager.liveLaunchDirectory(sessionId) ?? this.knownSessions.get(sessionId)?.cwd
-          let card = p.card
-          if (card.terms.some(term => term.kind === 'limit')) {
+          // A held command is stamped with the epic and go of the bound run that asked for it.
+          let card = { ...p.card, terms: await this.epicActions.checkNightCard(p.scope, p.card.terms) }
+          if (card.terms.some(term => term.kind === 'limit' || term.kind === 'rounds')) {
             try {
-              const terms = await Promise.all(card.terms.map(async term => term.kind === 'limit' ? { ...term, pin: await pinGrantLimit(bound, term, p.runId) } : term))
+              const terms = await Promise.all(card.terms.map(async term => {
+                if (term.kind === 'limit') return { ...term, pin: await pinGrantLimit(bound, term, p.runId) }
+                if (term.kind !== 'rounds') return term
+                const budget = await readGrantRoundBudget(bound, p.runId)
+                return budget === null ? term : { ...term, budget }
+              }))
               card = { ...card, terms }
             } catch (error) {
               throw new HostControlError(ERROR_CODES.invalidArgument, error instanceof Error ? maskSecrets(error.message) : 'The requested allowance could not be confirmed')
@@ -1233,9 +1267,19 @@ export class CompanionService {
         grantStatus: (p) => this.controlCall(async () => this.grantStatusFor(p.scope, p.runId)),
         applyGrantLimit: (p) => this.controlCall(async () => this.applyGrantLimit(p)),
         useGrant: (p) => this.controlCall(async () => {
+          // Read the active answer once here. The worker rechecks it when it records the use.
+          const { read, away } = p.item === undefined ? { read: null, away: null } : await this.options.database.companion('getGrants')
+          if (p.item !== undefined && read !== null && away !== null) {
+            const night = await this.epicActions.reserveNight({ kind: 'session', sessionId: p.sessionId, incarnationId: p.incarnationId },
+              { runId: p.runId, useId: p.useId, item: p.item }, read, away, p.peer)
+            if (night !== null) {
+              if (night.outcome !== 'repeated') this.grantChanged(night.read)
+              if (night.outcome === 'refused') return { outcome: night.outcome, reason: night.reason }
+              return { outcome: night.outcome, left: night.left, periodId: night.periodId, exact: night.exact }
+            }
+          }
           // Story 103.3 AC3: a file the card pins is hashed here, right before the use is recorded. The store decides, in its
           // own transaction, against the answer in force then: another card may come between this read and that write.
-          const { read, away } = p.item === undefined ? { read: null, away: null } : await this.options.database.companion('getGrants')
           const pinned = read === null || away === null || p.item === undefined ? null : grantPinnedFile(read, away, p.runId, p.item)
           const use = p.boundary !== undefined
             ? { runId: p.runId, sessionId: p.sessionId, id: p.useId, kind: 'round' as const, boundary: p.boundary }
@@ -1259,7 +1303,10 @@ export class CompanionService {
           if (result.outcome === 'refused') throw new HostControlError(ERROR_CODES.invalidArgument, `Not kept: ${result.reason}`)
           return { outcome: result.outcome }
         }),
-        observeConversation: (p) => this.controlCall(async () => {
+        observeConversation: (p, peer) => this.controlCall(async () => {
+          const native = p.agentCli === 'claude' || p.agentCli === 'codex'
+          const peerIdentity = native && p.incarnationId !== null && p.incarnationId === options.manager.liveIncarnationId(p.sessionId) &&
+            this.agentProcess(p.sessionId, p.agentCli as 'claude' | 'codex') !== null ? peer?.() : undefined
           if (p.incarnationId === options.manager.liveIncarnationId(p.sessionId)) {
             // Epic 125.5: the agent typed into this session, its conversation and its own process, as its start reported them.
             if (p.incarnationId && (p.agentCli === 'claude' || p.agentCli === 'codex')) {
@@ -1291,6 +1338,13 @@ export class CompanionService {
             this.emit('attention', p.sessionId)
           }
           const result = await options.manager.observeConversation(p)
+          // Epic 132: what a run may bind is the live Claude Code or Codex conversation in this terminal, whether BMN started
+          // the agent or the owner typed it into a shell (the manager's own conversation binding refuses the second). Every
+          // report replaces the earlier one: a new conversation, or one BMN cannot confirm, ends what the old one was bound to.
+          if (p.agentCli === 'claude' || p.agentCli === 'codex') {
+            const reason = this.epicActions.observe(p.sessionId, p.incarnationId, p.agentCli, p.conversationReference, await peerIdentity)
+            if (reason !== null) this.logRefusal('epic.run.observe', p.sessionId, reason)
+          }
           if (!result.accepted) this.logRefusal('conversation.observe', p.sessionId, result.detail)
           // The window loads a binding when the selection changes; a hook changes it at any time.
           else this.emit('conversations', p.sessionId)
@@ -1314,7 +1368,21 @@ export class CompanionService {
           if (!waiting) this.answers.hookEnded(p.sessionId, p.incarnationId, p.requestRef)
           return { answers, waiting }
         }),
-        observeHookEvent: (p) => this.controlCall(async () => {
+        observeHookEvent: (p, peer) => this.controlCall(async () => {
+          if (p.event === 'SessionEnd' && p.caller && p.turn && !p.turn.nested &&
+            (p.agent === 'claude' || p.agent === 'codex')) {
+            this.epicActions.end(p.sessionId, p.incarnationId, p.agent, p.turn.conversation, p.caller)
+          }
+          if (p.epicActionCall && p.turn && (p.agent === 'claude' || p.agent === 'codex')) {
+            // Claude Code reports a failed call as its own event; Codex only in the result. A result that names no exit
+            // code from Codex records nothing: the use stays "outcome unreported", never a pass.
+            const outcome = p.event === 'PostToolUseFailure' || p.epicActionExit === 'failed' ? 'failed'
+              : p.agent === 'claude' || p.epicActionExit === 'ok' ? 'returned' : null
+            if (outcome !== null) {
+              await this.epicActions.reportGuardOutcome(p.sessionId, p.incarnationId, p.agent, p.turn.conversation,
+                p.epicActionCall, outcome, peer).catch(() => undefined)
+            }
+          }
           const recorded = await this.observeHookEvent(p)
           const restart = await this.updateRestart.serial(() => this.updateRestart.hook(p))
           // Story 113.5 AC3: a hook run's card calls, ids and outcomes only; a failed write never fails the hook's event.
@@ -1844,6 +1912,22 @@ export class CompanionService {
         })
         return { outcome: result.outcome, ...(result.outcome === 'refused' ? { reason: result.reason, detail: result.detail } : {}), view: this.grantForOwner() }
       }
+      case METHOD_REGISTRY.epicActionsList:
+        return this.epicActions.list()
+      case METHOD_REGISTRY.epicActionsAnswer: {
+        const { card, action, choice, revision } = params
+        if (typeof card !== 'string' || typeof action !== 'string' || (choice !== 'yes' && choice !== 'no') ||
+          typeof revision !== 'number' || !Number.isSafeInteger(revision)) return invalid('Name the card, action, choice and visible revision')
+        await this.epicActions.answer({ card, action, choice, revision }, 'app')
+        return null
+      }
+      case METHOD_REGISTRY.epicRunUnbind: {
+        const { project, epic, binding } = params
+        if (typeof project !== 'string' || typeof epic !== 'number' || !Number.isSafeInteger(epic) || typeof binding !== 'string') {
+          return invalid('Name the project, epic and shown binding')
+        }
+        return this.epicActions.unbind(project, epic, binding)
+      }
       case METHOD_REGISTRY.awaySet: {
         const to = params.to
         if (awayNoteProblem(params.note) !== null) invalid(awayNoteProblem(params.note)!)
@@ -1876,11 +1960,15 @@ export class CompanionService {
           ? { kind: 'owner', login: params.login as string, allowed: params.allowed as boolean, expectedRevision }
           : params.kind === 'level'
             ? { kind: 'level', repository: params.repository as string, level: params.level as PushLevel, expectedRevision }
-            : invalid('kind must be owner or level')
+            : params.kind === 'deploys'
+              ? { kind: 'deploys', repository: params.repository as string, events: params.events as DeployEvent[] | null, expectedRevision }
+              : invalid('kind must be owner, level or deploys')
         const result = await this.options.database.companion('changePushPolicy', change, this.iso())
         if (result.outcome === 'invalid') invalid(result.reason)
         if (result.outcome === 'stale') throw new HostControlError(ERROR_CODES.revisionConflict, 'The policy changed since Health read it; read it again')
         if (result.outcome === 'unknown') throw new HostControlError(ERROR_CODES.revisionConflict, `The policy could not be read (${result.reason}); it is left as it is`)
+        // An open actions card shows each repository's deploy rule; a changed rule redraws it.
+        if (change.kind === 'deploys') this.epicActionsChanged()
         return this.pushPolicyForOwner()
       }
       case METHOD_REGISTRY.awaySummary: {
@@ -1901,7 +1989,12 @@ export class CompanionService {
         }).catch(() => null)
         // Story 113.6: the wake's account of the period, up to its end or now while away.
         const night = await this.awayNight(record.periodId, record.since, until ?? now).catch(() => null)
-        return { away: ownerAwayView(record), ...data, wentOn, answeredWaits, night }
+        const [epicActions, epicBindings] = await Promise.all([
+          this.options.database.companion('epicActionsDuring', record.since, until ?? now).catch(() => null),
+          this.epicActions.list().then(cards => cards.flatMap(card =>
+            card.binding === null ? [] : [{ epic: card.epic, ...card.binding }])).catch(() => null)
+        ])
+        return { away: ownerAwayView(record), ...data, wentOn, answeredWaits, night, epicActions, epicBindings }
       }
       case METHOD_REGISTRY.awaySummaryShown: {
         const periodId = params.periodId
@@ -1925,6 +2018,11 @@ export class CompanionService {
 
   private iso(): string {
     return this.now().toISOString()
+  }
+
+  private epicActionsChanged(): void {
+    this.emit('epic-actions', null)
+    this.epicActionPhone.reconcile()
   }
 
   /** Story 113.6: the Away wake's account of one period from its kept ticks. */
@@ -2357,10 +2455,10 @@ export class CompanionService {
    * Story 84.9: the night's granted merges and pushes, for `bmn policy`, where an agent app's own reviewer reads what the owner
    * granted. A record BMN cannot read grants nothing, so it lists none.
    */
-  private async grantedActions(): Promise<GrantedRepositoryAction[]> {
+  private async grantedActions(binding?: { epic: number; go: string; sessionId: string }): Promise<GrantedRepositoryAction[]> {
     try {
       const { read, away } = await this.options.database.companion('getGrants')
-      return grantedRepositoryActions(read, away)
+      return grantedRepositoryActions(read, away, binding)
     } catch {
       return []
     }
@@ -4376,7 +4474,9 @@ export class CompanionService {
           set: (next) => this.options.database.companion('putRawSetting', TELEGRAM_OFFSET_KEY, next, this.iso())
         },
         onReply: (reply) => this.handleTelegramReply(reply),
-        onTap: (tap) => tap.data.startsWith(DEPARTURE_TOKEN_PREFIX) ? this.departureHead.tap(tap) : tap.data.startsWith(GRANT_TOKEN_PREFIX) ? this.grantCards.tap(tap) : this.cards.tap(tap),
+        onTap: (tap) => tap.data.startsWith(EPIC_ACTION_TAP) ? this.epicActionPhone.tap(tap)
+          : tap.data.startsWith(DEPARTURE_TOKEN_PREFIX) ? this.departureHead.tap(tap)
+            : tap.data.startsWith(GRANT_TOKEN_PREFIX) ? this.grantCards.tap(tap) : this.cards.tap(tap),
         onHealth: (health) => {
           if (this.telegram !== connector) return
           const entered = health.state !== this.telegramHealth?.state
@@ -4390,6 +4490,7 @@ export class CompanionService {
               // Story 84.3: an open departure card is redrawn on its own message with fresh buttons after a restart.
               if (this.telegramHealth?.state === 'polling') {
                 void this.grantCards.reconcile()
+                this.epicActionPhone.reconcile()
                 void this.departureHead.reconcile()
               }
               if (ready && this.telegramHealth?.state === 'polling') {

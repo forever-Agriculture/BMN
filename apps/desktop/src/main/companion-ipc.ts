@@ -86,7 +86,10 @@ const ROUTES = {
   'aiterm:away:summary': METHOD_REGISTRY.awaySummary,
   'aiterm:policy:get': METHOD_REGISTRY.policyGet,
   'aiterm:policy:set': METHOD_REGISTRY.policySet,
-  'aiterm:grant:answer': METHOD_REGISTRY.grantAnswer
+  'aiterm:grant:answer': METHOD_REGISTRY.grantAnswer,
+  'aiterm:epic-actions:list': METHOD_REGISTRY.epicActionsList,
+  'aiterm:epic-actions:answer': METHOD_REGISTRY.epicActionsAnswer,
+  'aiterm:epic-actions:unbind': METHOD_REGISTRY.epicRunUnbind
 } as const
 
 const PASTE_IMAGE_TYPES = new Map([['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp'], ['image/gif', 'gif']])

@@ -6,6 +6,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
+import { parsePlanAction } from './plan-actions.mjs'
 
 /** What a run has with a file that names no repair_rounds (D13). */
 export const DEFAULT_ROUNDS = 4
@@ -13,8 +14,8 @@ export const SOURCE_TIME = /\b(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}/u
 export const SOURCE_QUOTE = /["'“‘«][^"'”’»]+["'”’»]/u
 export const DECISION_REFERENCE = /\bbmn: ?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/\S+/u
 
-const TOP_KEYS = ['schema', 'epic', 'limits', 'may', 'stays_out', 'deferrable', 'messages', 'prepared']
-const LIST_KEYS = ['may', 'stays_out', 'deferrable', 'messages', 'prepared']
+const LIST_KEYS = ['actions', 'may', 'stays_out', 'deferrable', 'messages', 'prepared']
+const TOP_KEYS = ['schema', 'epic', 'limits', ...LIST_KEYS]
 const LIMIT_FIELDS = ['limit', 'ceiling', 'per', 'unit']
 const PERS = ['boundary', 'epic']
 const UNITS = ['count', 'hours', 'usd']
@@ -124,7 +125,7 @@ function realDate(text) {
 export function parseAllowances(text, expectedEpic = null) {
   const problems = []
   const add = (line, reason) => problems.push({ line, reason })
-  const data = { schema: null, epic: null, limits: {}, may: [], stays_out: [], deferrable: [], messages: [], prepared: [] }
+  const data = { schema: null, epic: null, limits: {}, actions: [], may: [], stays_out: [], deferrable: [], messages: [], prepared: [] }
   const where = { top: {}, limits: {}, items: {} }
   const lines = String(text).replace(/\r\n?/gu, '\n').split('\n')
   const seen = new Set()
@@ -229,6 +230,13 @@ function readList(key, inline, block, lineNumber, data, where, add) {
   where.items[key] = items.map((item) => item.line - 1)
   const fields = ITEM_FIELDS[key]
   for (const { value, line } of items) {
+    if (key === 'actions') {
+      const parsed = parsePlanAction(value)
+      if ('problem' in parsed) add(line, `actions: ${parsed.problem}`)
+      else if (data.actions.some(action => action.id === parsed.action.id)) add(line, `actions: id ${parsed.action.id} is given twice`)
+      else data.actions.push(parsed.action)
+      continue
+    }
     if (!fields) {
       if (typeof value !== 'string' || value === '') add(line, `${key} holds plain text items`)
       else data[key].push(value)
@@ -264,7 +272,8 @@ export function fieldsFrom(data) {
     messages: data.messages.map((one) => ({ people: [one.person], destination: one.destination, purpose: one.purpose })),
     limits: data.limits,
     may: data.may,
-    stays_out: data.stays_out
+    stays_out: data.stays_out,
+    ...(data.actions.length === 0 ? {} : { actions: data.actions })
   }
 }
 
@@ -397,9 +406,10 @@ export async function readAllowances(plan, epic, { at = null, head = 'HEAD' } = 
   if (trailer(goMessage, 'Go-Epic') !== String(epic)) return { ...base, state: 'not_recorded', go_commit: go, reason: `commit ${go.slice(0, 12)} is no go bmn plan go recorded for epic ${epic}; it grants nothing` }
   const goPath = pathAt(repo, folder, go, epic)
   const headPath = pathAt(repo, folder, head, epic)
+  const approvedText = trailer(goMessage, 'Approved-Text')
   if (goPath === null) {
     const stray = working !== null || headPath !== null
-    return { ...base, state: 'none', go_commit: go, reason: 'the go\'s commit holds no allowances file; its Run needs hold', hand_edit: stray ? 'a file exists that the go\'s commit does not hold: it grants nothing until a new go records it' : null }
+    return { ...base, state: 'none', go_commit: go, approved_text: approvedText, reason: 'the go\'s commit holds no allowances file; its Run needs hold', hand_edit: stray ? 'a file exists that the go\'s commit does not hold: it grants nothing until a new go records it' : null }
   }
   const goText = showFile(repo, go, goPath)
   const goParsed = parseAllowances(goText, epic)
@@ -409,7 +419,7 @@ export async function readAllowances(plan, epic, { at = null, head = 'HEAD' } = 
   const parsed = parseAllowances(text, epic)
   const recordedName = goPath.slice(goPath.lastIndexOf('/') + 1)
   const result = {
-    ...base, file: `allowances/${recordedName}`, state: 'recorded', go_commit: go,
+    ...base, file: `allowances/${recordedName}`, state: 'recorded', go_commit: go, approved_text: approvedText,
     token: createHash('sha256').update(`${go}\n${textSha(text)}`).digest('hex').slice(0, 16),
     at_go: { commit: go, sha256: textSha(goText), text: goText, fields: fieldsFrom(goParsed.data) },
     current: { commit, source: commit === go ? 'go' : 'allow', sha256: textSha(text), text, fields: fieldsFrom(parsed.data) },
@@ -432,6 +442,12 @@ export async function readAllowances(plan, epic, { at = null, head = 'HEAD' } = 
     if (publication.conflicts?.includes(epic)) return { ...result, state: 'conflict', reason: 'local and upstream plan values conflict for this epic; this grants nothing until it is settled' }
   }
   return result
+}
+
+/** The previous recorded go for one epic, before the go whose authority is being checked. */
+export function precedingEpicGo(plan, epic, go) {
+  const { repo } = historyOf(plan)
+  return gitRun(repo, ['log', '-1', '--format=%H', '-E', `--grep=^Go-Epic: 0*${epic}[[:space:]]*$`, `${go}^`]).trim() || null
 }
 
 /** What `bmn plan check` reports about the files (110.4 AC1, AC5; a missing file from rules_from_allowances on). */
@@ -637,10 +653,11 @@ export function compareVersions(before, after, uses = () => false) {
  * stays frozen.
  */
 /** Already-settled and outstanding use of this plan's limits, from the same ledgers as the charged-use guard. */
-export function ledgerLimitUsage(plan, epic, environment = process.env) {
+export function ledgerLimitUsage(plan, epic, environment = process.env, go = null) {
   const folder = ledgerFolder(environment)
   const used = new Map()
   let unreadable = false
+  let roundCap = null
   let names
   try { names = readdirSync(folder) } catch (error) {
     return { used, unreadable: error?.code !== 'ENOENT' }
@@ -668,6 +685,11 @@ export function ledgerLimitUsage(plan, epic, environment = process.env) {
     }
     // Its id, or the folder recorded in it exactly (a ledger opened by an older dev-auto).
     if (!ids.has(id) && !(typeof data.plan_root === 'string' && realPath(data.plan_root) === root)) continue
+    if (go !== null && data.round_limit?.go === go) {
+      const cap = data.round_limit.rounds
+      if (!Number.isSafeInteger(cap) || cap < 0) unreadable = true
+      else roundCap = roundCap === null ? cap : Math.min(roundCap, cap)
+    }
     for (const use of Object.values(data.uses ?? {})) {
       if (use?.answer === 'TAKEN' && typeof use.limit === 'string') add(use.limit, use.boundary, use.amount)
     }
@@ -679,7 +701,7 @@ export function ledgerLimitUsage(plan, epic, environment = process.env) {
       add('money_usd', 'epic', job.state === 'settled' ? job.spent : job.max)
     }
   }
-  return { used, unreadable }
+  return { used, unreadable, roundCap }
 }
 
 export function ledgerUses(plan, epic, environment = process.env) {

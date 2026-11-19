@@ -116,6 +116,17 @@ Works with BMN closed, on either format. Exit 0 done or clean, 1 findings or a r
 
 ### One file of what a run may use
 
+Use `actions` for an exception that BMN must enforce. Give each action an ID, repository and count.
+A `merge` names the PR, full `headSha` or `whenGreen: true`, and `changesCI`. A `push-default`
+names the default branch. A `pr-elsewhere` names a PR or branch. A `command` names the full command,
+absolute folder, repository and ref, plus a path and SHA-256 for a pinned file. Run
+`bmn plan actions ask N` in the readiness batch and record the go on the matching proposal.
+It refuses, by name, an action the repository's deploy rule does not cover (Health › Pushes and merges ›
+What deploys; no rule is a refusal), so set that rule with him before the batch.
+A held `gh` write must include `--repo github.com/OWNER/NAME`. The
+owner's Yes or No is kept by BMN with the proposal. `bmn plan allowances N` shows the recorded answer
+and any remaining uses. Ordinary directions stay in `may`.
+
 `plan/allowances/NNN.yaml` beside the epic holds every limit and permission of its runs, so `## Run needs` can be one line pointing to it and a raise changes no epic text ([template](../skills/plan/templates/allowances.yaml)). `limits` may use any name, each with `limit`, `per` (`boundary` or `epic`), an optional `ceiling` a lead may reach alone, and `unit` (`count`, `hours`, `usd`); no ceiling means the lead cannot raise it. `may` lists named actions and targets read as his approval, `stays_out` what no run asks to cross, and `deferrable`, `messages` and `prepared` are Run needs' lists. A go on an epic with the file adds its text to the approval hash; an epic without one reads and hashes as before.
 
 The template's `senior_consults: {limit: 1, ceiling: 2, per: epic}` counts one collected
