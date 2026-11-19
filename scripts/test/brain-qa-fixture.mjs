@@ -1,11 +1,10 @@
 // MODULE: brain-qa-fixture.mjs - Reserved synthetic brain data for lead-run bench QA
-import {Worker} from 'node:worker_threads'
 import {createHash} from 'node:crypto'
 import {chmodSync,closeSync,constants,existsSync,fchmodSync,fstatSync,lstatSync,mkdirSync,openSync,readFileSync,realpathSync} from 'node:fs'
 import {join,resolve,dirname} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {atomicJson} from '../qa/bench-lib.mjs'
-import {linkedNotes,seedSwitchedBrain} from './brain-page-fixture.mjs'
+import {brainWorkerRequests,linkedNotes,seedSwitchedBrain} from './brain-page-fixture.mjs'
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../..')
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 /** The reserved adapter: this file and the Brain page fixture it seeds with (Epic 128). */
@@ -43,16 +42,7 @@ export async function prepareBrainQaFixture(config){
  }
  mkdirSync(attachments,{recursive:true,mode:0o700})
  const entry=join(repo,'apps/desktop/out/main/brain-worker.js');if(!lstatSync(entry).isFile())throw new Error('The reserved built brain worker is missing')
- const worker=new Worker(entry,{workerData:{databasePath,attachmentsRoot:attachments}})
- const pending=new Map();let sequence=0,failure=null,closing=false
- worker.on('message',value=>{const request=pending.get(value.id);if(!request)return;pending.delete(value.id);clearTimeout(request.timer);if(value.error)request.reject(new Error(value.error.message));else request.resolve(value.result)})
- const failed=error=>{failure=error;for(const request of pending.values()){clearTimeout(request.timer);request.reject(error)}pending.clear()}
- worker.on('error',failed)
- worker.on('exit',code=>{if(!closing)failed(new Error('Brain QA worker exited '+code))})
- const request=(operation,args=[])=>failure?Promise.reject(failure):new Promise((resolveRequest,reject)=>{
-  const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(new Error('Brain QA worker timed out'))},10_000)
-  pending.set(id,{resolve:resolveRequest,reject,timer});worker.postMessage({id,operation,args})
- })
+ const worker=brainWorkerRequests(entry,{databasePath,attachmentsRoot:attachments},{label:'Brain QA worker'}),request=worker.request
  try{
   await request('initialize')
   const markdown='# Synthetic preference\n\nUse short, concrete explanations.\n\n## Example\nAn example for the isolated bench.\n'
@@ -68,7 +58,7 @@ export async function prepareBrainQaFixture(config){
   if(JSON.stringify(JSON.parse(readFileSync(join(config.run,'bench/brain-seed-install.json'),'utf8')))!==JSON.stringify(installed))throw new Error('Brain QA seed read-back failed')
   if(seed.backupFailure!==false)chmodSync(backup,0o500)
   return installed
- }finally{closing=true;try{if(!failure)await request('close')}finally{await worker.terminate()}}
+ }finally{await worker.close()}
 }
 /** Restore only this fixture's owned directory so the normal bench root cleanup can remove it. */
 export function releaseBrainQaFixture(config){

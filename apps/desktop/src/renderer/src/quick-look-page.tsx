@@ -143,11 +143,14 @@ function Inlines(props: { inlines: readonly MarkdownInline[]; draw: Draw }): Rea
           case 'break': return <br key={index} />
           case 'link': {
             const label = targetLabel(inline.target, '', { text: inline.address, from: inline.addressFrom }, draw.ranges)
+            // Where a name leads nowhere and the page says so (the Brain page), it is plain muted text: no link, no stop for Tab.
+            if (inline.target.kind === 'none' && draw.unresolvedTitle) {
+              return <span key={index} className="ql-md-a" data-target="none" title={draw.unresolvedTitle}><Inlines inlines={inline.children} draw={draw} /></span>
+            }
             const activate = (): void => draw.onTarget(inline.target, maskedSource(inline.address, inline.addressFrom, draw.ranges, draw.revealed))
             // No href: nothing on the page can make the window go anywhere; Quick look handles every activation.
             return (
               <a key={index} className="ql-md-a" role="link" tabIndex={0} data-target={inline.target.kind}
-                title={inline.target.kind === 'none' ? draw.unresolvedTitle : undefined}
                 onClick={activate}
                 onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); activate() } }}
                 onFocus={() => draw.onStatus(label)} onMouseEnter={() => draw.onStatus(label)}>

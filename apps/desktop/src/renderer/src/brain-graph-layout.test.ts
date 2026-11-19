@@ -90,6 +90,18 @@ describe('labels never touch (G3)', () => {
     expect(labels.map((label) => label.id)).toEqual(['n0'])
   })
 
+  it('always names the focus, even in a crowded narrow pane with another note selected (review)', () => {
+    for (const [width, height] of [[256, 420], [300, 360], [690, 600]] as const) {
+      const layout = layoutGraph(graph(150), width, height)
+      const labels = placeLabels(layout, { selected: layout.nodes.at(-1)!.id, hovered: null, measure })
+      const focus = labels.find((label) => label.id === 'n0')
+      expect(focus).toBeDefined()
+      expect(focus!.x - focus!.width / 2).toBeGreaterThanOrEqual(0)
+      expect(focus!.x + focus!.width / 2).toBeLessThanOrEqual(width)
+      for (const other of labels.filter((label) => label.id !== 'n0')) expect(touch(focus!, other)).toBe(false)
+    }
+  })
+
   it('cuts a long title at 24 characters', () => {
     expect(labelText('Short')).toBe('Short')
     expect([...labelText(LONG)]).toHaveLength(24)

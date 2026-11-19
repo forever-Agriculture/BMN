@@ -29,6 +29,7 @@ export class BrainWorkerClient {
   startupContext(project: string) { return this.request('startup-context', [project]) as Promise<string | null> }
   list() {return this.request('list') as Promise<BrainNote[]>}
   history(name:string) {return this.request('history',[name]) as Promise<BrainNote[]>}
+  pageStatus() {return this.request('page-status') as Promise<{state:'ready'|'not-switched'}>}
   pageList(options:{archived?:boolean;withdrawn?:boolean;offset?:number}) {return this.request('page-list',[options]) as Promise<BrainPageList>}
   pageSearch(query:string,archived:boolean) {return this.request('page-search',[query,archived]) as Promise<BrainPageSearch>}
   pageRead(id:string) {return this.request('page-read',[id]) as Promise<BrainPageNote>}

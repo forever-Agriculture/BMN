@@ -57,7 +57,7 @@ describe('Brain page window channel', () => {
 describe('Brain page route on the private parent port', () => {
   const calls: string[] = []
   const reads: BrainPageReads = {
-    admission: async () => { calls.push('admission'); return { storeId: 's', committed: true, open: true, receipt: null } },
+    pageStatus: async () => { calls.push('status'); return { state: 'ready' } },
     pageList: async (options) => { calls.push('list ' + JSON.stringify(options)); return { notes: [], total: 0, withdrawn: 0, offset: 0 } },
     pageSearch: async (query, archived) => { calls.push(`search ${query} ${archived}`); return { notes: [], limited: false } },
     pageRead: async (id) => { calls.push('read ' + id); return {} as never },
@@ -83,11 +83,11 @@ describe('Brain page route on the private parent port', () => {
     await brainPageRequest(reads, { command: 'read', id: 'n1' })
     await brainPageRequest(reads, { command: 'history', id: 'n1' })
     await brainPageRequest(reads, { command: 'graph', id: 'n1', depth: 2, archived: true })
-    expect(calls).toEqual(['admission', 'list {"archived":true,"withdrawn":false,"offset":0}', 'search QA backup false', 'read n1', 'history n1', 'graph n1 {"depth":2,"archived":true}'])
+    expect(calls).toEqual(['status', 'list {"archived":true,"withdrawn":false,"offset":0}', 'search QA backup false', 'read n1', 'history n1', 'graph n1 {"depth":2,"archived":true}'])
   })
 
-  it('says the brain has not switched when the commit receipt is missing', async () => {
-    const before: BrainPageReads = { ...reads, admission: async () => ({ storeId: 's', committed: false, open: false, receipt: null }) }
+  it('passes on the worker answer that the switch is not complete', async () => {
+    const before: BrainPageReads = { ...reads, pageStatus: async () => ({ state: 'not-switched' }) }
     await expect(brainPageRequest(before, { command: 'status' })).resolves.toEqual({ state: 'not-switched' })
   })
 

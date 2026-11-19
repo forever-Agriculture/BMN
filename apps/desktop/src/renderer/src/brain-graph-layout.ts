@@ -95,7 +95,7 @@ export function layoutGraph(graph: BrainGraph, width: number, height: number): G
   for (const list of byRing.values()) {
     list.sort((p, q) => (angle.get(p.id) ?? 0) - (angle.get(q.id) ?? 0))
     // Alternation only spreads a crowded ring; a ring of one or two keeps its ellipse.
-    list.forEach((node, index) => factor.set(node.id, list.length > 2 ? (index % 2 === 0 ? 0.93 : 1.07) : 1))
+    list.forEach((node, index) => factor.set(node.id, index % 2 === 0 ? 0.93 : 1.07))
   }
   const nodes = graph.nodes.map((node): PlacedNode => {
     const r = radii[Math.min(3, node.depth)]!
@@ -119,7 +119,8 @@ const touches = (p: Box, q: Box): boolean => p.left < q.right && q.left < p.righ
 /**
  * Labels in order: focus, selected, hovered, depth 1, then by links. Each sits centred under its node at r + 15, else
  * above at r + 7, else is not drawn; boxes pad 4 px and never touch another label or a node (G3). Above 15 nodes,
- * notes deeper than depth 1 are labelled only when hovered or selected.
+ * notes deeper than depth 1 are labelled only when hovered or selected. The focus is always named (D7): it goes first,
+ * and where neither place is clear of nodes it takes the place under its node, moved inside the pane.
  */
 export function placeLabels(layout: GraphLayout, options: { selected: string | null; hovered: string | null; measure(text: string): number }): PlacedLabel[] {
   const small = layout.nodes.length <= SMALL_GRAPH
@@ -143,6 +144,15 @@ export function placeLabels(layout: GraphLayout, options: { selected: string | n
       taken.push(box)
       placed.push({ id: node.id, text, x: node.x, y, width, below })
       break
+    }
+    if (node.depth === 0 && !placed.length) {
+      // The reserved focus label: under the node, kept inside the pane; later labels keep clear of it.
+      const half = width / 2 + PAD
+      const x = Math.min(Math.max(node.x, half), layout.width - half)
+      const below = node.y + node.r + 15 + 3 + PAD <= layout.height
+      const y = below ? node.y + node.r + 15 : Math.max(LABEL_SIZE + PAD, node.y - node.r - 7)
+      taken.push({ left: x - half, right: x + half, top: y - LABEL_SIZE + 1 - PAD, bottom: y + 3 + PAD })
+      placed.push({ id: node.id, text, x, y, width, below })
     }
   }
   return placed

@@ -814,7 +814,8 @@ he changes a note by telling an agent.
   the first 10. `bmn brain search` for agents still matches the typed text as one phrase.
 - **A note** reads as a page with its kind, status, origin, scope, last change and version, the
   notes it links to and the notes that link to it. A link opens its note; a name that is no note
-  in the brain is muted text. **H** shows History, every earlier version read-only.
+  in the brain is plain muted text. A hidden value shows for ten seconds when he asks, as in Quick
+look. **H** shows History, every earlier version read-only.
 - **The graph** (**G**) draws a note's neighbourhood on fixed rings: depth **1 2 3**, opening at
   the least depth that shows 8 notes. It walks links only between visible notes (archived ones
   when **Archived** is on, withdrawn ones never), draws at most 150 notes and counts the rest as

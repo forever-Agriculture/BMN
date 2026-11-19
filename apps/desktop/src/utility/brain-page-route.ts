@@ -12,7 +12,7 @@ export const BRAIN_PAGE_COMMANDS: Readonly<Record<string, readonly string[]>> = 
   graph: ['id', 'depth', 'archived']
 })
 
-export type BrainPageReads = Pick<BrainWorkerClient, 'admission' | 'pageList' | 'pageSearch' | 'pageRead' | 'pageHistory' | 'pageGraph'>
+export type BrainPageReads = Pick<BrainWorkerClient, 'pageStatus' | 'pageList' | 'pageSearch' | 'pageRead' | 'pageHistory' | 'pageGraph'>
 export type BrainPageState = 'ready' | 'not-switched'
 
 function invalid(message: string): never { throw new BrainError('INVALID_ARGUMENT', message) }
@@ -33,11 +33,8 @@ export async function brainPageRequest(client: BrainPageReads, params: Record<st
     return params[key] === true
   }
   switch (command) {
-    case 'status': {
-      // The page reads his notes only after the switch: before it, the store may hold an unfinished import.
-      const admission = await client.admission()
-      return { state: (admission.committed ? 'ready' : 'not-switched') satisfies BrainPageState }
-    }
+    // The page reads his notes only after a completed switch (receipt and journal); the worker checks it on every read.
+    case 'status': return { state: (await client.pageStatus()).state satisfies BrainPageState }
     case 'list': {
       const offset = params.offset ?? 0
       if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) invalid('Brain page offset must be a whole number')

@@ -1,7 +1,7 @@
 // MODULE: brain-qa-fixture.test.mjs - Guarded fixture setup and actual worker backup failure
 import {Worker} from 'node:worker_threads'
 import {createHash} from 'node:crypto'
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,lstatSync,statSync,rmSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,readdirSync,existsSync,lstatSync,statSync,rmSync} from 'node:fs'
 import {join,resolve} from 'node:path'
 import {tmpdir} from 'node:os'
 import {it,expect} from 'vitest'
@@ -75,3 +75,28 @@ it('refuses the owner real roots through a symbolic link or .. as well (pre-revi
   expect(existsSync(join(homedir(),'.local/share/bmn-never'))).toBe(false)
  }finally{rmSync(parent,{recursive:true,force:true})}
 })
+it('needs fresh fixture destinations: an existing journal or a redirected folder is refused before any write (review)',async()=>{
+ const {seedSwitchedBrain}=await import('../test/brain-page-fixture.mjs')
+ const {symlinkSync}=await import('node:fs')
+ const parent=mkdtempSync(join(tmpdir(),'bmn-brain-dest-'))
+ try{
+  mkdirSync(join(parent,'state/brain-cutover'),{recursive:true});writeFileSync(join(parent,'state/brain-cutover/journal.json'),'{"state":"keep"}')
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data'),stateRoot:join(parent,'state'),notes:[]})).rejects.toThrow(/fresh destination/)
+  expect(readFileSync(join(parent,'state/brain-cutover/journal.json'),'utf8')).toBe('{"state":"keep"}')
+  expect(existsSync(join(parent,'data'))).toBe(false)
+  mkdirSync(join(parent,'elsewhere'));mkdirSync(join(parent,'state2'));symlinkSync(join(parent,'elsewhere'),join(parent,'state2/brain-cutover'))
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data2'),stateRoot:join(parent,'state2'),notes:[]})).rejects.toThrow(/fresh destination|redirected/)
+  expect(readdirSync(join(parent,'elsewhere'))).toEqual([])
+ }finally{rmSync(parent,{recursive:true,force:true})}
+})
+it('seeds the dense brain with 1,000 notes and 3,000 distinct stored links (review)',async()=>{
+ const {seedSwitchedBrain,denseNotes}=await import('../test/brain-page-fixture.mjs')
+ const {createRequire}=await import('node:module')
+ const parent=mkdtempSync(join(tmpdir(),'bmn-brain-dense-')),stat=lstatSync(parent)
+ try{
+  const seeded=await seedSwitchedBrain({dataRoot:join(parent,'data'),stateRoot:join(parent,'state'),notes:denseNotes(),withdraw:[]})
+  expect(seeded.notes).toBe(1000)
+  const SQLite=createRequire(resolve('apps/desktop/package.json'))('better-sqlite3'),db=new SQLite(seeded.databasePath,{readonly:true})
+  try{expect(db.prepare("SELECT count(*) n FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").get().n).toBe(3000)}finally{db.close()}
+ }finally{makeOwnedDirectoriesWritable(parent,{device:stat.dev,inode:stat.ino});rmSync(parent,{recursive:true,force:true})}
+},60_000)

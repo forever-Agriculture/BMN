@@ -5,7 +5,7 @@ import { Dialog } from './dialog'
 import { Segmented } from './history-preferences'
 import { markdownPage } from './quick-look-markdown'
 import { MarkdownPageView } from './quick-look-page'
-import { quickLookSecretRanges } from './quick-look-secrets'
+import { quickLookSecretRanges, reveal, revealSecondsLeft, viewText, type Reveal } from './quick-look-secrets'
 import { BrainGraphView } from './brain-graph'
 import { kindColour } from './brain-graph-layout'
 import './brain-page.css'
@@ -138,18 +138,30 @@ function NoteLinks(props: { note: BrainPageNote; archived: boolean; onOpen(id: s
 function NoteText(props: { note: BrainPageNote; onOpen(id: string): void; focus?: boolean }): React.JSX.Element {
   const { note } = props
   const path = `/brain/${note.id}.md`
+  // One text for the page and its hidden values: line endings made `\n` as Quick look's view does (viewText).
+  const text = useMemo(() => viewText(note.markdown), [note.markdown])
   const page = useMemo(() => {
     const targets: Record<string, string> = {}
     for (const [name, id] of Object.entries(note.targets)) if (id) { targets[`wiki:${name}`] = `/brain-note/${id}` }
-    return markdownPage(note.markdown.replace(/\r\n?/gu, '\n'), targets)
-  }, [note])
-  const ranges = useMemo(() => quickLookSecretRanges(path, path, note.markdown), [path, note.markdown])
+    return markdownPage(text, targets)
+  }, [text, note.targets])
+  const ranges = useMemo(() => quickLookSecretRanges(path, path, text), [path, text])
   const [status, setStatus] = useState('')
-  const [revealed, setRevealed] = useState<number | null>(null)
+  // A value is shown one at a time for ten seconds, as in Quick look; another note or version starts hidden.
+  const [held, setShown] = useState<(Reveal & { of: string }) | null>(null)
+  const shown = held && held.of === path + '\n' + text ? held : null
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!shown) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => { const at = Date.now(); setNow(at); if (at >= shown.until) setShown(null) }, 250)
+    return () => window.clearInterval(timer)
+  }, [shown])
+  const revealed = shown && shown.index < ranges.length ? shown.index : null
   return (
-    <MarkdownPageView page={page} path={path} ranges={ranges} revealed={revealed} secondsLeft={0} matches={[]} current={-1}
+    <MarkdownPageView page={page} path={path} ranges={ranges} revealed={revealed} secondsLeft={revealSecondsLeft(shown, now)} matches={[]} current={-1}
       line={null} heading={null} topLine={null} focus={props.focus === true} status={status} onStatus={setStatus} unresolvedTitle="No note with this name"
-      onReveal={setRevealed} onTop={() => undefined} onFocus={() => undefined}
+      onReveal={(index) => setShown(shown?.index === index ? null : { ...reveal(index, Date.now()), of: path + '\n' + text })} onTop={() => undefined} onFocus={() => undefined}
       onAddress={(address) => setStatus(`${address} · not opened from the brain`)}
       onOpenFile={(target) => { const id = /^\/brain-note\/([^/]+)$/u.exec(target)?.[1]; if (id) props.onOpen(id) }} />
   )
@@ -185,6 +197,9 @@ function HistorySheet(props: { note: BrainPageNote; versions: BrainPageVersion[]
   )
 }
 
+/** The search shows at most this many notes; at that many the count reads "First 10" (design.md). */
+const BRAIN_PAGE_SEARCH_SHOWN = 10
+
 export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClose(): void; reducedMotion?: boolean }): React.JSX.Element {
   const read = useMemo<BrainRead>(() => props.read ?? (<Result,>(request: BrainPageRequest) => window.aiTerminal.brainPage<Result>(request)), [props.read])
   const memory = props.memory
@@ -194,7 +209,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const [listError, setListError] = useState<string | null>(null)
   const [withdrawn, setWithdrawn] = useState<BrainPageList | null>(null)
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<{ query: string; found: BrainPageSearch } | null>(null)
+  const [results, setResults] = useState<{ query: string; archived: boolean; found: BrainPageSearch } | null>(null)
   const [cursor, setCursor] = useState(0)
   const [note, setNote] = useState<BrainPageNote | null>(null)
   const [noteError, setNoteError] = useState<string | null>(null)
@@ -214,6 +229,10 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const searchSeq = useRef(0)
   const noteSeq = useRef(0)
   const graphSeq = useRef(0)
+  const historySeq = useRef(0)
+  const listSeq = useRef(0)
+  const paging = useRef(new Set<string>())
+  const focusGraph = useRef(false)
   const shownNote = useRef<BrainPageNote | null>(null)
 
   const setArchived = (value: boolean): void => { memory.archived = value; setArchivedState(value) }
@@ -227,8 +246,9 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     return () => observer.disconnect()
   }, [])
 
-  const openNote = useCallback((id: string, how: 'push' | 'back' | 'forward' | 'start' = 'push'): void => {
+  const openNote = useCallback((id: string, how: 'push' | 'back' | 'forward' | 'start' = 'push', keepGraph = false): void => {
     const seq = ++noteSeq.current
+    historySeq.current += 1
     setNoteError(null)
     setHistory(null)
     read<BrainPageNote>({ command: 'read', id }).then((next) => {
@@ -239,18 +259,21 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
         if (how === 'back') setForward((stack) => [current.id, ...stack].slice(0, 100))
         if (how === 'forward') setBack((stack) => [...stack, current.id].slice(-100))
       }
+      // Another note opens at its own depth (D7); a refocus keeps the graph showing, at any width.
+      if (current?.id !== next.id) setDepth(null)
       shownNote.current = next
       setNote(next)
       memory.noteId = next.id
-      // The link or row that opened it is gone: keep the keys on the page, never on the window behind it.
+      // The link or row that opened it is gone, or the search field held the keys: keep them on the page (G, H).
       requestAnimationFrame(() => {
         const element = box.current
-        if (!element || element.contains(document.activeElement) && document.activeElement !== element) return
+        const active = document.activeElement
+        if (!element || keepGraph || element.contains(active) && active !== element && active !== search.current) return
         (element.querySelector<HTMLElement>('.b-text .ql-page') ?? element).focus()
       })
       setQuery('')
       setResults(null)
-      setPane('text')
+      if (!keepGraph) setPane('text')
       setSelected(next.id)
     }).catch((error: unknown) => {
       if (seq !== noteSeq.current) return
@@ -277,12 +300,28 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (!box.current?.contains(document.activeElement)) search.current?.focus()
   }, [status.kind, memory])
 
+  // A first page starts a new list (a new filter); a later page is asked once and joins only the list it was asked for, at its offset.
   const loadList = useCallback((offset: number): void => {
+    if (offset === 0) { listSeq.current += 1; paging.current.clear() }
+    const seq = listSeq.current
+    const key = `list:${offset}`
+    if (offset > 0) { if (paging.current.has(key)) return; paging.current.add(key) }
     read<BrainPageList>({ command: 'list', archived, offset }).then((page) => {
+      if (seq !== listSeq.current) return
       setListError(null)
-      setList((current) => (offset > 0 && current ? { ...page, notes: [...current.notes, ...page.notes] } : page))
-    }).catch((error: unknown) => setListError(errorText(error)))
+      setList((current) => (offset === 0 ? page : current && page.offset === current.notes.length ? { ...page, notes: [...current.notes, ...page.notes] } : current))
+    }).catch((error: unknown) => { if (seq === listSeq.current) setListError(errorText(error)) }).finally(() => paging.current.delete(key))
   }, [read, archived])
+  const loadWithdrawn = (offset: number): void => {
+    const seq = listSeq.current
+    const key = `withdrawn:${offset}`
+    if (paging.current.has(key)) return
+    paging.current.add(key)
+    read<BrainPageList>({ command: 'list', withdrawn: true, offset }).then((next) => {
+      if (seq !== listSeq.current) return
+      setWithdrawn((current) => (offset === 0 ? next : current && next.offset === current.notes.length ? { ...next, notes: [...current.notes, ...next.notes] } : current))
+    }).catch((error: unknown) => { if (seq === listSeq.current) setListError(errorText(error)) }).finally(() => paging.current.delete(key))
+  }
   useEffect(() => { if (status.kind === 'ready') loadList(0) }, [status.kind, loadList])
   useEffect(() => { setWithdrawn(null) }, [archived])
 
@@ -293,10 +332,10 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     const seq = ++searchSeq.current
     if (!typed) { setResults(null); return }
     read<BrainPageSearch>({ command: 'search', query: typed, archived }).then((found) => {
-      if (seq === searchSeq.current) { setResults({ query: typed, found }); setCursor(0) }
+      if (seq === searchSeq.current) { setResults({ query: typed, archived, found }); setCursor(0) }
     }).catch((error: unknown) => {
       if (seq !== searchSeq.current) return
-      setResults({ query: typed, found: { notes: [], limited: false } })
+      setResults({ query: typed, archived, found: { notes: [], limited: false } })
       setListError(errorText(error))
     })
   }, [query, archived, status.kind, read])
@@ -310,11 +349,22 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     const seq = ++graphSeq.current
     setGraphError(null)
     read<BrainGraph>({ command: 'graph', id: note.id, archived, ...(depth === null ? {} : { depth }) }).then((next) => {
-      if (seq !== graphSeq.current) return
+      // Only the graph of the note now shown counts: an answer for the centre he just left is dropped.
+      if (seq !== graphSeq.current || next.focus !== shownNote.current?.id) return
       setGraph(next)
       setSelected((current) => (current && next.nodes.some((node) => node.id === current) ? current : next.focus))
-    }).catch((error: unknown) => { if (seq === graphSeq.current) setGraphError(errorText(error)) })
+    }).catch((error: unknown) => {
+      // A graph that can no longer be shown as asked (a note withdrawn, Archived turned off) is not left on screen.
+      if (seq === graphSeq.current) { setGraph(null); setGraphError(errorText(error)) }
+    })
   }, [showGraph, note, archived, depth, read])
+
+  // G (or the Graph choice) gives the keys to the graph once it is drawn, so arrows and Enter act on it.
+  useEffect(() => {
+    if (!showGraph || !graph || !focusGraph.current) return
+    focusGraph.current = false
+    box.current?.querySelector<SVGElement>('svg.b-graph')?.focus()
+  }, [showGraph, graph])
 
   // The note shown beside the graph.
   useEffect(() => {
@@ -325,23 +375,29 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     return () => { live = false }
   }, [showGraph, selected, note, read])
 
+  // A History answer counts only for the note and the opening it was asked for; closing it first drops the answer.
   const openHistory = (): void => {
     if (!note) return
+    const seq = ++historySeq.current
     setHistory({ versions: null, error: null })
-    read<BrainPageVersion[]>({ command: 'history', id: note.id }).then((versions) => setHistory({ versions, error: null }))
-      .catch((error: unknown) => setHistory({ versions: [], error: errorText(error) }))
+    read<BrainPageVersion[]>({ command: 'history', id: note.id }).then((versions) => { if (seq === historySeq.current) setHistory({ versions, error: null }) })
+      .catch((error: unknown) => { if (seq === historySeq.current) setHistory({ versions: [], error: errorText(error) }) })
   }
+  const closeHistory = (): void => { historySeq.current += 1; setHistory(null) }
   const goBack = (): void => { const id = back.at(-1); if (id) { setBack(back.slice(0, -1)); openNote(id, 'back') } }
   const goForward = (): void => { const id = forward[0]; if (id) { setForward(forward.slice(1)); openNote(id, 'forward') } }
-  const refocus = (id: string): void => { setDepth(null); openNote(id) }
+  // The new centre opens at its own depth (openNote resets it with the note), never by asking again for the old centre.
+  const refocus = (id: string): void => { openNote(id, 'push', true) }
   const toList = (): void => { noteSeq.current += 1; shownNote.current = null; setNote(null); memory.noteId = null; setView('note'); setGraph(null) }
 
-  const rows = results ? results.found.notes : list?.notes ?? []
   const typed = query.trim()
+  // Only results for the words now typed, under the Archived setting now on, can be moved through or opened.
+  const searched = results && results.query === typed && results.archived === archived ? results : null
+  const rows = typed ? searched?.found.notes ?? [] : list?.notes ?? []
 
   /** Esc steps back (history, graph, search text, the open note), then closes. */
   const stepBack = (): boolean => {
-    if (history) { setHistory(null); return true }
+    if (history) { closeHistory(); return true }
     if (typed) { setQuery(''); return true }
     if (note && (narrow ? pane !== 'text' : view === 'graph')) { setView('note'); setPane('text'); return true }
     return false
@@ -379,8 +435,15 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
     if (!note && !typed && event.key === 'Enter' && rows[cursor] && !(event.target instanceof HTMLButtonElement)) { event.preventDefault(); openNote(rows[cursor]!.id); return }
     if (!note) return
     const key = event.key.toLowerCase()
-    if (key === 'g') { event.preventDefault(); if (!graphable) return; if (narrow) setPane(pane === 'graph' ? 'text' : 'graph'); else setView(view === 'graph' ? 'note' : 'graph'); return }
-    if (key === 'h') { event.preventDefault(); if (history) setHistory(null); else openHistory(); return }
+    if (key === 'g') {
+      event.preventDefault()
+      if (!graphable) return
+      const opening = narrow ? pane !== 'graph' : view !== 'graph'
+      focusGraph.current = opening
+      if (narrow) setPane(opening ? 'graph' : 'text'); else setView(opening ? 'graph' : 'note')
+      return
+    }
+    if (key === 'h') { event.preventDefault(); if (history) closeHistory(); else openHistory(); return }
     if (showGraph && (event.key === '1' || event.key === '2' || event.key === '3')) { event.preventDefault(); setDepth(Number(event.key) as Depth); return }
   }
 
@@ -411,13 +474,13 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
 
   const listBody = (): ReactNode => {
     if (listError && !rows.length) return <div className="b-empty"><p role="alert" className="b-alert">{listError}</p></div>
-    if (typed && results && results.query === typed && !rows.length) return <div className="b-empty"><p className="b-strong">{noResultWords(typed)}</p></div>
+    if (typed && searched && !rows.length) return <div className="b-empty"><p className="b-strong">{noResultWords(typed)}</p></div>
     if (!typed && list && list.total === 0 && list.withdrawn === 0) return <div className="b-empty"><p className="b-strong">The brain is empty.</p></div>
     const words = typed ? typed.split(/\s+/u) : []
     return (
       <div className="b-list-wrap">
         <div className="b-list-head">
-          <span>{typed ? (results?.found.limited ? 'First 10' : `${rows.length} ${rows.length === 1 ? 'note' : 'notes'}`) : `${list?.total ?? 0} ${list?.total === 1 ? 'note' : 'notes'}`}</span>
+          <span>{typed ? (rows.length >= BRAIN_PAGE_SEARCH_SHOWN ? 'First 10' : `${rows.length} ${rows.length === 1 ? 'note' : 'notes'}`) : `${list?.total ?? 0} ${list?.total === 1 ? 'note' : 'notes'}`}</span>
           <span className="b-keys"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>Enter</kbd> open</span>
         </div>
         <ul className="b-list" aria-label={typed ? 'Search results' : 'Notes, newest change first'}>
@@ -428,14 +491,10 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
           <div className="b-withdrawn">
             <button type="button" className="b-fold" aria-expanded={withdrawn !== null} onClick={() => {
               if (withdrawn) { setWithdrawn(null); return }
-              read<BrainPageList>({ command: 'list', withdrawn: true }).then(setWithdrawn).catch((error: unknown) => setListError(errorText(error)))
+              loadWithdrawn(0)
             }}>Withdrawn <span className="b-count">{list.withdrawn}</span></button>
             {withdrawn ? <ul className="b-list">{withdrawn.notes.map((row) => <NoteRow key={row.id} note={row} current={false} onOpen={() => openNote(row.id)} onPoint={() => undefined} />)}</ul> : null}
-            {withdrawn && withdrawn.notes.length < withdrawn.total ? <button type="button" className="b-plate b-more" onClick={() => {
-              read<BrainPageList>({ command: 'list', withdrawn: true, offset: withdrawn.notes.length })
-                .then((next) => setWithdrawn((current) => (current ? { ...next, notes: [...current.notes, ...next.notes], offset: 0 } : next)))
-                .catch((error: unknown) => setListError(errorText(error)))
-            }}>Show more</button> : null}
+            {withdrawn && withdrawn.notes.length < withdrawn.total ? <button type="button" className="b-plate b-more" onClick={() => loadWithdrawn(withdrawn.notes.length)}>Show more</button> : null}
           </div>
         ) : null}
       </div>
@@ -486,7 +545,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   }
 
   const noteBody = (current: BrainPageNote): ReactNode => {
-    if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={() => setHistory(null)} />
+    if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={closeHistory} />
     const panel = (
       <aside className="b-side" aria-label="About this note">
         <h3 className="b-side-head">Note</h3>
@@ -501,7 +560,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
           {noteHead(current)}
           <div className="b-panes"><span id="b-pane" hidden>Show</span>
             <Segmented labelledBy="b-pane" fit options={graphable ? ['text', 'links', 'graph'] as const : ['text', 'links'] as const} value={pane}
-              optionLabel={(value) => (value === 'text' ? 'Text' : value === 'links' ? `Links ${links}` : 'Graph')} onChange={(value) => setPane(value)} />
+              optionLabel={(value) => (value === 'text' ? 'Text' : value === 'links' ? `Links ${links}` : 'Graph')} onChange={(value) => { focusGraph.current = value === 'graph'; setPane(value) }} />
           </div>
           {pane === 'text' ? <div className="b-text"><NoteText note={current} onOpen={(id) => openNote(id)} /></div> : null}
           {pane === 'links' ? panel : null}
@@ -537,7 +596,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
             {note && graphable && !typed && !narrow ? (
               <><span id="b-view" hidden>View</span>
                 <Segmented labelledBy="b-view" fit options={['note', 'graph'] as const} value={view}
-                  optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => setView(value)} /></>
+                  optionLabel={(value) => (value === 'note' ? 'Note' : 'Graph')} onChange={(value) => { focusGraph.current = value === 'graph'; setView(value) }} /></>
             ) : null}
             {note && !typed ? <button type="button" className="b-quiet" onClick={toList}>All notes</button> : null}
             <button type="button" className="b-toggle" aria-pressed={archived} onClick={() => setArchived(!archived)}>Archived</button>

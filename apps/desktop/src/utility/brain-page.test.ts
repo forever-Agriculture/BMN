@@ -50,12 +50,20 @@ describe('Brain page list and search', () => {
       expect(b.store.search('decision backup').map((n) => n.title)).toEqual([])
       expect(b.store.search('backup decision').map((n) => n.title)).toEqual(['Phrase note'])
       expect(b.page.search('BACKUP').notes).toHaveLength(2)
-      // Every typed word counts, the thirteenth too, and a long word is never cut short.
-      const many = 'the nightly backup runs at three a later paragraph names the decision'
-      expect(b.page.search(`${many} plus thirteenth`).notes).toEqual([])
-      expect(b.page.search(many).notes.map((n) => n.title)).toEqual(['Backup plan'])
-      expect(b.page.search(`${'x'.repeat(100)}y`).notes).toEqual([])
       expect(b.page.search('backup').notes.find((n) => n.title === 'Backup plan')!.summary).toContain('nightly backup')
+    } finally { b.close() }
+  })
+
+  it('counts every typed word, the thirteenth too, and never cuts a long word short (pre-review 2)', () => {
+    // Twelve distinct words the note holds, then a thirteenth it lacks; and a stored 100-letter word asked with one more letter.
+    const twelve = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima'
+    const long = 'q'.repeat(100)
+    const b = brain([note('Twelve', `${twelve} and ${long}.`)])
+    try {
+      expect(b.page.search(twelve).notes.map((n) => n.title)).toEqual(['Twelve'])
+      expect(b.page.search(`${twelve} mike`).notes).toEqual([])
+      expect(b.page.search(long).notes.map((n) => n.title)).toEqual(['Twelve'])
+      expect(b.page.search(`${long}z`).notes).toEqual([])
     } finally { b.close() }
   })
 

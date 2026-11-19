@@ -1,7 +1,7 @@
 // MODULE: brain-page-fixture.mjs - A switched synthetic brain for the Brain page's checks (Epic 128): linked notes, every status, and a dense 1,000-note brain
 import { Worker } from 'node:worker_threads'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, renameSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -29,26 +29,37 @@ export function linkedNotes() {
   ]
 }
 
-/** A dense synthetic brain: 1,000 notes, each linking to three others by a fixed pseudo-random sequence (3,000 links). */
+/** A dense synthetic brain: 1,000 notes, each linking to three distinct others by a fixed pseudo-random sequence (3,000 links). */
 export function denseNotes(count = 1000) {
   let seed = 128
   const next = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % count }
   const kinds = ['fact', 'project', 'map', 'reference', 'lesson', 'preference', 'feedback', 'user', 'check']
   const titles = Array.from({ length: count }, (_, i) => `Synthetic note ${String(i).padStart(4, '0')} about topic ${i % 37}`)
-  return titles.map((title, i) => ({
-    source: `dense/${i}.md`, title, kind: kinds[i % kinds.length], origin: 'import', scope: 'all', status: 'active', source_time: at(1 + (i % 28)),
-    markdown: `Synthetic dense note ${i}.\n\n` + [0, 1, 2].map(() => { let to = next(); if (to === i) to = (to + 1) % count; return `- [[${titles[to]}]]` }).join('\n') + '\n'
-  }))
+  return titles.map((title, i) => {
+    const targets = new Set()
+    while (targets.size < 3) { const to = next(); if (to !== i) targets.add(to) }
+    return { source: `dense/${i}.md`, title, kind: kinds[i % kinds.length], origin: 'import', scope: 'all', status: 'active', source_time: at(1 + (i % 28)),
+      markdown: `Synthetic dense note ${i}.\n\n` + [...targets].map(to => `- [[${titles[to]}]]`).join('\n') + '\n' }
+  })
 }
 
-function workerRequests(entry, workerData) {
+/**
+ * One bounded way to ask a built brain worker (the Brain page fixture and the bench's brain fixture share it): each
+ * request times out, a worker that exits or fails rejects every request, and close asks the worker only when it lives.
+ */
+export function brainWorkerRequests(entry, workerData, { label = 'Brain fixture worker', timeoutMs = 10_000 } = {}) {
   const worker = new Worker(entry, { workerData })
   const pending = new Map()
-  let sequence = 0
-  worker.on('message', value => { const request = pending.get(value.id); if (!request) return; pending.delete(value.id); if (value.error) request.reject(new Error(value.error.message)); else request.resolve(value.result) })
-  worker.on('error', error => { for (const request of pending.values()) request.reject(error); pending.clear() })
-  const request = (operation, args = []) => new Promise((resolveRequest, reject) => { const id = ++sequence; pending.set(id, { resolve: resolveRequest, reject }); worker.postMessage({ id, operation, args }) })
-  return { request, close: async () => { try { await request('close') } finally { await worker.terminate() } } }
+  let sequence = 0, failure = null, closing = false
+  worker.on('message', value => { const request = pending.get(value.id); if (!request) return; pending.delete(value.id); clearTimeout(request.timer); if (value.error) request.reject(new Error(value.error.message)); else request.resolve(value.result) })
+  const failed = error => { failure = error; for (const request of pending.values()) { clearTimeout(request.timer); request.reject(error) } pending.clear() }
+  worker.on('error', failed)
+  worker.on('exit', code => { if (!closing) failed(new Error(`${label} exited ${code}`)) })
+  const request = (operation, args = []) => failure ? Promise.reject(failure) : new Promise((resolveRequest, reject) => {
+    const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(new Error(`${label} timed out`)) }, timeoutMs)
+    pending.set(id, { resolve: resolveRequest, reject, timer }); worker.postMessage({ id, operation, args })
+  })
+  return { request, get failure() { return failure }, close: async () => { closing = true; try { if (!failure) await request('close') } finally { await worker.terminate() } } }
 }
 
 /**
@@ -70,12 +81,16 @@ export async function seedSwitchedBrain({ dataRoot, stateRoot, notes, withdraw =
     if (!root.startsWith('/') || real.some(path => actual === path || actual.startsWith(path + '/'))) throw new Error(`Refusing a non-test root: ${root}`)
   }
   const databasePath = join(dataRoot, 'brain.sqlite3')
-  if (existsSync(databasePath)) throw new Error('The Brain page fixture needs a fresh synthetic database')
-  mkdirSync(dataRoot, { recursive: true, mode: 0o700 })
   const journal = join(stateRoot, 'brain-cutover', 'journal.json')
+  // Fresh destinations only: an existing database or journal, or a folder redirected elsewhere, is refused before any write.
+  for (const path of [databasePath, journal, dirname(journal)]) if (existsSync(path)) throw new Error(`The Brain page fixture needs a fresh destination: ${path}`)
+  mkdirSync(dataRoot, { recursive: true, mode: 0o700 })
   mkdirSync(dirname(journal), { recursive: true, mode: 0o700 })
+  for (const [made, root] of [[dataRoot, dataRoot], [dirname(journal), stateRoot]]) {
+    if (lstatSync(made).isSymbolicLink() || !realpathSync(made).startsWith(resolved(root))) throw new Error(`Refusing a redirected fixture folder: ${made}`)
+  }
   const entry = join(repo, 'apps/desktop/out/main/brain-worker.js')
-  const brain = workerRequests(entry, { databasePath, attachmentsRoot: join(dataRoot, 'files'), cutoverJournal: journal })
+  const brain = brainWorkerRequests(entry, { databasePath, attachmentsRoot: join(dataRoot, 'files'), cutoverJournal: journal })
   try {
     await brain.request('initialize')
     await brain.request('import', [notes])

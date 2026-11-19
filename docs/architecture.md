@@ -335,7 +335,9 @@ The Brain page (Epic 128) reads through its own narrow route: renderer → `aite
 main (the brain switch's sender, main-frame, application-window and packaged-page checks) →
 `app.brainPage` on the PTY host's inherited private parent port → the worker's `page-*` reads. The
 route offers `status`, `list`, `search`, `read`, `history` and `graph` only, with checked keys; it
-has no write operation, and the control socket gains no method. Its search needs every typed word
+has no write operation, and the control socket gains no method. The worker answers each read only
+after a completed switch (its matching receipt and the journal state `complete`), so a page left
+open never reads past a rollback or a return. Its search needs every typed word
 in any order (the store's trigram index for words of three letters or more, a text check for
 shorter ones); the agents' `brain` search is unchanged. The neighbourhood is computed in the worker
 and capped at 150 notes ring by ring; the window lays it out on fixed orbits in plain SVG.

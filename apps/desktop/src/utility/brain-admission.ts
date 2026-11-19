@@ -33,6 +33,8 @@ export class BrainAdmission {
   const raw=this.meta('cutover_receipt'),receiptState=raw===undefined?'absent':receipt&&receipt.version===2?'present':'invalid'
   return {storeId:this.storeId,committed,receiptState,open:committed&&complete&&this.recovered&&this.store.isOpen(),receipt,...(retired?{retired}:{}),...(returnAuthorized?{returnAuthorized}:{})}
  }
+ /** The switch is complete: the matching receipt and the journal state `complete` (the Brain page reads only then, Epic 128). */
+ switched():boolean {const status=this.status();if(!status.committed)return false;try{return this.saved().state==='complete'}catch{return false}}
  assert():void {if(!this.status().open)throw new BrainError('CUTOVER_PENDING','The brain is read-only: its matching commit receipt and trusted recovery are required')}
  /** This inherited-port operation publishes a decision already made by the live main process. */
  commit(expectedHash:string):BrainAdmissionStatus {

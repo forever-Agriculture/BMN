@@ -25,6 +25,8 @@
 
 /* The sheet's own key target draws no ring; its rows, fields and the graph keep F1. */
 .shell-window .brain-dialog .b-box:focus-visible { outline: none; }
+/* The note text takes the keys when a note opens; it reads on the calm sheet with no frame around it (bench F2). */
+.shell-window .brain-dialog .ql-page:focus-visible { outline: none; }
 
 .brain-dialog .b-box {
   outline: none;

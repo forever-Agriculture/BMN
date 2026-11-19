@@ -26,6 +26,7 @@ export function BrainGraphView(props: {
   onMore(): void
 }): React.JSX.Element {
   const well = useRef<HTMLDivElement>(null)
+  const key = useRef<HTMLUListElement>(null)
   const [size, setSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 })
   const [hovered, setHovered] = useState<string | null>(null)
   const [cursor, setCursor] = useState<string | null>(null)
@@ -35,11 +36,16 @@ export function BrainGraphView(props: {
   useLayoutEffect(() => {
     const element = well.current
     if (!element) return
-    const measure = (): void => setSize({ width: Math.max(160, Math.floor(element.clientWidth)), height: Math.max(160, Math.floor(element.clientHeight)) })
+    // The kind key sits under the drawing: the rings and labels keep above it, however many lines the key wraps to.
+    const measure = (): void => {
+      const below = key.current ? key.current.offsetHeight + 16 : 0
+      setSize({ width: Math.max(160, Math.floor(element.clientWidth)), height: Math.max(160, Math.floor(element.clientHeight - below)) })
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(measure)
     observer.observe(element)
+    if (key.current) observer.observe(key.current)
     return () => observer.disconnect()
   }, [])
 
@@ -119,8 +125,8 @@ export function BrainGraphView(props: {
             const up = lifted(edge.from) || lifted(edge.to)
             const archived = child?.status === 'archived' || props.graph.nodes.find((node) => node.id === edge.from)?.status === 'archived'
             return edge.tree && !archived
-              ? <line key={`${edge.from}-${edge.to}`} className="b-edge tree" x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={kindColour(child?.kind ?? '', child?.status ?? 'active')} strokeOpacity={up ? 0.9 : 0.45} />
-              : <line key={`${edge.from}-${edge.to}`} className="b-edge other" x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeOpacity={up ? 0.9 : 1} data-lifted={up ? 'yes' : undefined} />
+              ? <line key={`${edge.from}-${edge.to}`} className="b-edge tree" x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={kindColour(child?.kind ?? '', child?.status ?? 'active')} strokeOpacity={up ? 0.9 : 0.45} data-from={edge.from} data-to={edge.to} data-lifted={up ? 'yes' : undefined} />
+              : <line key={`${edge.from}-${edge.to}`} className="b-edge other" x1={from.x} y1={from.y} x2={to.x} y2={to.y} strokeOpacity={up ? 0.9 : 1} data-from={edge.from} data-to={edge.to} data-lifted={up ? 'yes' : undefined} />
           })}
         </g>
         <g className="b-nodes">
@@ -143,9 +149,10 @@ export function BrainGraphView(props: {
           {labels.map((label) => {
             const point = at(label.id)
             const node = layout.nodes.find((each) => each.id === label.id)!
+            const dx = label.x - node.x
             const dy = label.y - node.y
             return (
-              <text key={label.id} x={point.x} y={point.y + dy} textAnchor="middle"
+              <text key={label.id} x={point.x + dx} y={point.y + dy} textAnchor="middle" data-label={label.id}
                 className={`b-node-label${label.id === props.selected ? ' selected' : ''}${node.status === 'archived' ? ' archived' : ''}`}>{label.text}</text>
             )
           })}
@@ -158,7 +165,7 @@ export function BrainGraphView(props: {
         ))}
       </svg>
       {props.graph.nodes.length === 1 ? <p className="b-graph-alone">No linked notes yet</p> : null}
-      <ul className="b-kinds" aria-label="Kinds">
+      <ul className="b-kinds" aria-label="Kinds" ref={key}>
         {kinds.map((entry) => (
           <li key={entry.kind}><span className="b-mark" style={{ background: kindColour(entry.kind, entry.status) }} aria-hidden="true" />{entry.kind} <span className="b-count">{entry.count}</span></li>
         ))}

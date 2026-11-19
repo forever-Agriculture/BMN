@@ -11,7 +11,7 @@ import type {BrainHealth} from './brain-health'
 import { BrainAdmission } from './brain-admission'
 import { restoreBrainCheck } from './brain-restore'
 import type { DatabaseConnection } from './database-initialization'
-import { BrainStore, type BrainContent, type BrainImport } from './brain-store'
+import { BrainError, BrainStore, type BrainContent, type BrainImport } from './brain-store'
 import { BrainPageReader } from './brain-page'
 
 const port = parentPort
@@ -24,6 +24,7 @@ const SQLite = require('better-sqlite3') as new (path: string) => DatabaseConnec
 const store = new BrainStore(new SQLite(databasePath))
 const page = new BrainPageReader(store.database)
 const admission=cutoverJournal?new BrainAdmission(store,cutoverJournal):undefined
+const switchedForPage = (): void => { if (!admission?.switched()) throw new BrainError('NOT_SWITCHED', 'The Brain page opens after the switch to the BMN brain') }
 const files = new BrainFiles(store, dirname(databasePath), attachmentsRoot ?? join(homedir(),'brain','files'))
 const healthPath=join(dirname(databasePath),'brain-health.json')
 const health:BrainHealth={backup:'unverified',export:'unverified',checkedAt:''}
@@ -64,11 +65,13 @@ port.on('message', (request: { id: number; operation: string; args: unknown[] })
       case 'list': result = store.list(); break
       case 'history': result = store.history(args[0] as string); break
       // The Brain page's reads (Epic 128): the window reaches them only through the private parent port.
-      case 'page-list': result = page.list(args[0] as Parameters<BrainPageReader['list']>[0]); break
-      case 'page-search': result = page.search(args[0] as string, args[1] as boolean); break
-      case 'page-read': result = page.read(args[0] as string); break
-      case 'page-history': result = page.history(args[0] as string); break
-      case 'page-graph': result = page.graph(args[0] as string, args[1] as Parameters<BrainPageReader['graph']>[1]); break
+      // Each read checks the completed switch again, so a page left open never reads past a rollback or a return.
+      case 'page-status': result = { state: admission?.switched() ? 'ready' : 'not-switched' }; break
+      case 'page-list': switchedForPage(); result = page.list(args[0] as Parameters<BrainPageReader['list']>[0]); break
+      case 'page-search': switchedForPage(); result = page.search(args[0] as string, args[1] as boolean); break
+      case 'page-read': switchedForPage(); result = page.read(args[0] as string); break
+      case 'page-history': switchedForPage(); result = page.history(args[0] as string); break
+      case 'page-graph': switchedForPage(); result = page.graph(args[0] as string, args[1] as Parameters<BrainPageReader['graph']>[1]); break
       case 'create': result = store.create(args[0] as BrainContent, args[1] as string); break
       case 'edit': result = store.edit(args[0] as string, args[1] as number, args[2] as BrainContent, args[3] as string); break
       case 'withdraw': result = store.withdraw(args[0] as string, args[1] as number, args[2] as string); break

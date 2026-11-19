@@ -49,10 +49,19 @@ describe('brain worker and authenticated write door',()=>{
    await expect(call(f.socket,f.token,'brain',{command:'write',revision:0,...content,session:'forged'})).rejects.toThrow(/Unknown parameter|Unexpected|not allowed/)
   }finally{await f.close()}
  })
- it('answers the Brain page reads through the real worker, and the control socket offers none of them (Epic 128 D5)',async()=>{
-  const f=await fixture();try {
+ it('answers the Brain page reads through the real worker only after a completed switch, and the control socket offers none of them (Epic 128 D5)',async()=>{
+  const f=await fixture(()=>true,{version:1,state:'running'});try {
    await f.client.importNotes([{source:'synthetic/a.md',title:'Alpha',kind:'fact',origin:'import',scope:'all',markdown:'Alpha links [[Beta]] about backup decision.',status:'active'},
     {source:'synthetic/b.md',title:'Beta',kind:'map',origin:'import',scope:'all',markdown:'Beta decision and a backup.',status:'active'}])
+   // Before the switch, and with a matching receipt while the journal is still running, every page read is refused.
+   await expect(f.client.pageList({})).rejects.toThrow(/after the switch/)
+   const journal=await stagedCommit(f)
+   expect(await f.client.commitCutover(journal.commit.payloadHash)).toMatchObject({committed:true})
+   expect(await f.client.pageStatus()).toEqual({state:'not-switched'})
+   await expect(f.client.pageRead('anything')).rejects.toThrow(/after the switch/)
+   for(const state of ['rolling-back','rolled-back']){writeFileSync(f.journal,JSON.stringify({...journal,state}));await expect(f.client.pageList({})).rejects.toThrow(/after the switch/)}
+   writeFileSync(f.journal,JSON.stringify({...journal,state:'complete'}))
+   expect(await f.client.pageStatus()).toEqual({state:'ready'})
    expect((await f.client.pageList({})).notes.map(n=>n.title).sort()).toEqual(['Alpha','Beta'])
    const found=await f.client.pageSearch('decision backup',false)
    expect(found.notes.map(n=>n.title).sort()).toEqual(['Alpha','Beta'])

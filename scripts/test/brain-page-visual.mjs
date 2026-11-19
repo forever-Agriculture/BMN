@@ -1,4 +1,4 @@
-/* global window, document, requestAnimationFrame, KeyboardEvent, PointerEvent */
+/* global window, document, requestAnimationFrame, KeyboardEvent, PointerEvent, CSS */
 // MODULE: brain-page-visual.mjs - Epic 128: drive the Brain page on the isolated build with a synthetic switched brain; screenshots, label and timing checks
 // Usage: node scripts/test/brain-page-visual.mjs [--dense] [--out DIR]   (after `pnpm run build`)
 import { createRequire } from 'node:module'
@@ -25,10 +25,13 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   console.log(`seeded ${seeded.notes} synthetic notes`)
   const env = { ...process.env }
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
+  // A disposable home: the brain worker's attachment folder (~/brain/files) and anything else under HOME stay in the test root.
+  const home = join(root, 'home')
+  mkdirSync(join(home, 'brain', 'files'), { recursive: true, mode: 0o700 })
   const application = await _electron.launch({
     executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
     args: [join(repo, 'apps/desktop'), ...(!wayland && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
-    env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data,
+    env: { ...env, HOME: home, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data,
       XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
       BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'), BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
@@ -83,6 +86,14 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
         await page.keyboard.press('Enter')
         await page.waitForSelector('.brain-dialog .b-title:text-is("Backup plan")')
         await shot(`${tag}-04-note`)
+        // Straight on from Enter in search, with no click: G opens the graph and the graph takes the keys (review).
+        await page.waitForFunction(() => document.activeElement !== document.querySelector('.brain-dialog .b-search input'))
+        await page.keyboard.press('g')
+        await page.waitForSelector('.brain-dialog svg.b-graph')
+        await page.waitForFunction(() => document.activeElement === document.querySelector('.brain-dialog svg.b-graph'))
+        check(`${tag}: Search, Enter, then G opens the graph with the keys on it`, true)
+        await page.keyboard.press('Escape')
+        await page.waitForSelector('.brain-dialog svg.b-graph', { state: 'detached' })
         if (tag === 'wide') {
           const side = await page.locator('.brain-dialog .b-side').innerText()
           check('note side panel names links, back links and missing', /LINKS TO/i.test(side) && /LINKED FROM/i.test(side), side.split('\n').slice(0, 3).join(' / '))
@@ -99,8 +110,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
           check('a link opens its note; Alt ← and → go back and forward', true)
           await page.locator('.brain-dialog .b-ref', { hasText: 'Backup decision' }).first().click()
           await page.waitForSelector('.brain-dialog .b-title:text-is("Backup decision")')
-          const missing = await page.locator('.brain-dialog .ql-md-a[data-target="none"]').allTextContents()
-          check('an unresolved link is muted text', missing.includes('Missing design note'), missing.join(', '))
+          const missing = await page.locator('.brain-dialog .ql-md-a[data-target="none"]').evaluateAll(each => each.map(e => ({ text: e.textContent, tag: e.tagName, tab: e.getAttribute('tabindex') })))
+          check('an unresolved name is plain muted text with no Tab stop', missing.some(m => m.text === 'Missing design note' && m.tag === 'SPAN' && m.tab === null), JSON.stringify(missing))
           await page.locator('.brain-dialog .b-text').click()
           await page.keyboard.press('h')
           await page.waitForSelector('.brain-dialog .b-history .b-versions .b-row')
@@ -143,8 +154,11 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
           const start = performance.now()
           node.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }))
           node.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
+          // The hovered note's own visible change: an edge of that note lifted (none is lifted before the hover).
+          const own = () => document.querySelector('.brain-dialog .b-edge[data-lifted="yes"][data-to="' + CSS.escape(id) + '"], .brain-dialog .b-edge[data-lifted="yes"][data-from="' + CSS.escape(id) + '"]')
+          if (own()) return done({ id, first: null, stale: true })
           const poll = () => {
-            const lifted = document.querySelector('.brain-dialog .b-edge[data-lifted="yes"]') || document.querySelectorAll('.brain-dialog .b-node-label').length
+            const lifted = own()
             if (lifted) return done({ id, first: performance.now() - start })
             if (performance.now() - start > 3000) return done({ id, first: null })
             requestAnimationFrame(poll)
@@ -208,6 +222,21 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
           check(`${tag}: depth ${depth} labels never touch`, t.touching.length === 0, `${t.labels} labels on ${t.nodes} nodes`)
         }
         await shot(`${tag}-07-graph-depth3`)
+        // The focus stays named when another note is selected, and a refocus keeps the graph, at every width (review).
+        const others = page.locator('.brain-dialog .b-node:not(.focus)')
+        await others.last().click()
+        await atRest()
+        const focusId = await page.locator('.brain-dialog svg.b-graph').getAttribute('data-focus')
+        check(`${tag}: the focus stays named with another note selected`, await page.locator(`.brain-dialog .b-node-label[data-label="${focusId}"]`).count() === 1)
+        await shot(`${tag}-07b-selected`)
+        await page.locator('.brain-dialog svg.b-graph').focus()
+        await page.keyboard.press('Shift+Enter')
+        await page.waitForFunction(before => { const svg = document.querySelector('.brain-dialog svg.b-graph'); return svg && svg.getAttribute('data-focus') !== before }, focusId)
+        await atRest()
+        check(`${tag}: Shift Enter refocuses and the graph stays`, await page.locator('.brain-dialog svg.b-graph').count() === 1)
+        const after = await page.evaluate(() => ({ focus: document.querySelector('.brain-dialog svg.b-graph')?.getAttribute('data-focus'), selected: document.querySelector('.brain-dialog .b-node.selected')?.getAttribute('data-node'), active: document.activeElement?.tagName + '.' + (document.activeElement?.getAttribute('class') ?? '') }))
+        check(`${tag}: after a refocus the new centre is the selected note`, after.focus === after.selected, JSON.stringify(after))
+        await shot(`${tag}-07c-refocused`)
         if (tag === 'wide') {
           await page.locator('.brain-dialog .b-toggle').click()
           await atRest()
@@ -239,6 +268,14 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     }
     // The palette entry and the top bar word.
     await page.setViewportSize({ width: 1280, height: 800 })
+    await page.getByRole('button', { name: 'Command palette', exact: true }).click()
+    await page.keyboard.type('Brain')
+    await page.waitForSelector('[role="option"]:has-text("Brain…")')
+    await page.locator('[role="option"]:has-text("Brain…")').first().click()
+    await page.waitForSelector('dialog.brain-dialog[open]')
+    check('the palette entry Brain… opens the page', true)
+    await page.keyboard.press('Control+Shift+B')
+    await page.waitForSelector('dialog.brain-dialog[open]', { state: 'detached' })
     await page.getByRole('button', { name: 'Brain', exact: true }).click()
     await page.waitForSelector('dialog.brain-dialog[open]')
     await shot('top-bar-open')
