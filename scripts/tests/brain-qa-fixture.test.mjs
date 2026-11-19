@@ -100,3 +100,16 @@ it('seeds the dense brain with 1,000 notes and 3,000 distinct stored links (revi
   try{expect(db.prepare("SELECT count(*) n FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").get().n).toBe(3000)}finally{db.close()}
  }finally{makeOwnedDirectoriesWritable(parent,{device:stat.dev,inode:stat.ino});rmSync(parent,{recursive:true,force:true})}
 },60_000)
+it('refuses a redirected root and a dangling link at the database before making anything (recheck 8)',async()=>{
+ const {seedSwitchedBrain}=await import('../test/brain-page-fixture.mjs')
+ const {symlinkSync}=await import('node:fs')
+ const parent=mkdtempSync(join(tmpdir(),'bmn-brain-root-'))
+ try{
+  mkdirSync(join(parent,'elsewhere'));symlinkSync(join(parent,'elsewhere'),join(parent,'state'))
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data'),stateRoot:join(parent,'state'),notes:[]})).rejects.toThrow(/redirected/)
+  expect(readdirSync(join(parent,'elsewhere'))).toEqual([]);expect(existsSync(join(parent,'data'))).toBe(false)
+  mkdirSync(join(parent,'data2'));symlinkSync(join(parent,'nowhere'),join(parent,'data2/brain.sqlite3'))
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data2'),stateRoot:join(parent,'state2'),notes:[]})).rejects.toThrow(/fresh destination/)
+  expect(existsSync(join(parent,'state2'))).toBe(false);expect(existsSync(join(parent,'nowhere'))).toBe(false)
+ }finally{rmSync(parent,{recursive:true,force:true})}
+})

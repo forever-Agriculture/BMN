@@ -149,7 +149,7 @@ function NoteText(props: { note: BrainPageNote; onOpen(id: string): void; focus?
   const [status, setStatus] = useState('')
   // A value is shown one at a time for ten seconds, as in Quick look; another note or version starts hidden.
   const [held, setShown] = useState<(Reveal & { of: string }) | null>(null)
-  const shown = held && held.of === path + '\n' + text ? held : null
+  const shown = held && held.of === path + '\n' + text && Date.now() < held.until ? held : null
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!shown) return
@@ -304,7 +304,8 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const loadList = useCallback((offset: number): void => {
     if (offset === 0) { listSeq.current += 1; paging.current.clear() }
     const seq = listSeq.current
-    const key = `list:${offset}`
+    // A pending page belongs to its own list: an answer for an earlier filter never frees the key of a later one.
+    const key = `${seq}:list:${offset}`
     if (offset > 0) { if (paging.current.has(key)) return; paging.current.add(key) }
     read<BrainPageList>({ command: 'list', archived, offset }).then((page) => {
       if (seq !== listSeq.current) return
@@ -314,7 +315,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   }, [read, archived])
   const loadWithdrawn = (offset: number): void => {
     const seq = listSeq.current
-    const key = `withdrawn:${offset}`
+    const key = `${seq}:withdrawn:${offset}`
     if (paging.current.has(key)) return
     paging.current.add(key)
     read<BrainPageList>({ command: 'list', withdrawn: true, offset }).then((next) => {
@@ -562,7 +563,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
             <Segmented labelledBy="b-pane" fit options={graphable ? ['text', 'links', 'graph'] as const : ['text', 'links'] as const} value={pane}
               optionLabel={(value) => (value === 'text' ? 'Text' : value === 'links' ? `Links ${links}` : 'Graph')} onChange={(value) => { focusGraph.current = value === 'graph'; setPane(value) }} />
           </div>
-          {pane === 'text' ? <div className="b-text"><NoteText note={current} onOpen={(id) => openNote(id)} /></div> : null}
+          {pane === 'text' ? <div className="b-text"><NoteText key={`${current.id}:${current.revision}`} note={current} onOpen={(id) => openNote(id)} /></div> : null}
           {pane === 'links' ? panel : null}
           {pane === 'graph' && graphable ? <>{graphPane()}{besidePanel()}</> : null}
         </div>
@@ -573,7 +574,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
       <div className="b-note">
         <div className="b-text">
           {noteHead(current)}
-          <NoteText note={current} onOpen={(id) => openNote(id)} />
+          <NoteText key={`${current.id}:${current.revision}`} note={current} onOpen={(id) => openNote(id)} />
         </div>
         {panel}
       </div>

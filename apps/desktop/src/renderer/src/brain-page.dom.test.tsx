@@ -325,6 +325,35 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(container!.querySelector('.b-graph-pane [role="alert"]')!.textContent).toContain('not shown in the graph')
   })
 
+  it('keeps each list its own pages across an Archived change, for the withdrawn fold too (recheck 3)', async () => {
+    LIST = Array.from({ length: 250 }, (_, i) => summary(`l${i}`, `Listed ${i}`))
+    await mount()
+    held = (r) => r.command === 'list' && (r.offset ?? 0) > 0 && r.archived !== true
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-list-wrap > .b-more')!.click() })
+    // Archived on while the old page is held: the new list asks its own page once, however the old answer lands.
+    held = (r) => r.command === 'list' && (r.offset ?? 0) > 0 && r.archived === true
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-toggle')!.click() })
+    await flush()
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-list-wrap > .b-more')!.click() })
+    const first = release.shift()!
+    await act(async () => { first() })
+    await flush()
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-list-wrap > .b-more')!.click() })
+    expect(requests.filter((r) => r.command === 'list' && r.archived === true && r.offset === 100)).toHaveLength(1)
+    held = null
+    await releaseAll()
+    // The withdrawn fold: two clicks while its page is held ask it once.
+    await act(async () => { container!.querySelector<HTMLButtonElement>('.b-withdrawn .b-fold')!.click() })
+    await flush()
+    held = (r) => r.command === 'list' && r.withdrawn === true && (r.offset ?? 0) > 0
+    const more = (): HTMLButtonElement => container!.querySelector<HTMLButtonElement>('.b-withdrawn .b-more')!
+    await act(async () => { more().click(); more().click() })
+    expect(requests.filter((r) => r.command === 'list' && r.withdrawn === true && r.offset === 100)).toHaveLength(1)
+    held = null
+    await releaseAll()
+    expect(container!.querySelectorAll('.b-withdrawn .b-row')).toHaveLength(101)
+  })
+
   it('opens another note at its own depth', async () => {
     await mount({ noteId: 'n1', archived: false })
     const box = container!.querySelector('.b-box')!
@@ -360,6 +389,17 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
       await act(async () => { container!.querySelector<HTMLElement>('.ql-md-a[data-target="file"]')!.click() })
       await flush()
       expect(container!.querySelector('.b-title')!.textContent).toBe('Other')
+      expect(page()).not.toContain('AKIA')
+      // Back to the first note within the ten seconds, and again after them: hidden both times (recheck 6).
+      await press(container!.querySelector('.b-box')!, 'ArrowLeft', { altKey: true })
+      expect(container!.querySelector('.b-title')!.textContent).toBe('Keys')
+      expect(page()).not.toContain('AKIA')
+      await act(async () => { container!.querySelector<HTMLButtonElement>('.ql-eye')!.click() })
+      await act(async () => { container!.querySelector<HTMLElement>('.ql-md-a[data-target="file"]')!.click() })
+      await flush()
+      await act(async () => { vi.advanceTimersByTime(10_300) })
+      await press(container!.querySelector('.b-box')!, 'ArrowLeft', { altKey: true })
+      expect(container!.querySelector('.b-title')!.textContent).toBe('Keys')
       expect(page()).not.toContain('AKIA')
     } finally { vi.useRealTimers() }
   })

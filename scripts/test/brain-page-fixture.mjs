@@ -82,13 +82,14 @@ export async function seedSwitchedBrain({ dataRoot, stateRoot, notes, withdraw =
   }
   const databasePath = join(dataRoot, 'brain.sqlite3')
   const journal = join(stateRoot, 'brain-cutover', 'journal.json')
-  // Fresh destinations only: an existing database or journal, or a folder redirected elsewhere, is refused before any write.
-  for (const path of [databasePath, journal, dirname(journal)]) if (existsSync(path)) throw new Error(`The Brain page fixture needs a fresh destination: ${path}`)
+  // Before anything is made: no link anywhere on either root's existing path (it resolves to itself), and fresh
+  // destinations, where any directory entry, a dangling link too, counts as taken.
+  for (const root of [dataRoot, stateRoot]) if (resolved(root) !== resolve(root)) throw new Error(`Refusing a redirected fixture folder: ${root}`)
+  const taken = path => { try { lstatSync(path); return true } catch { return false } }
+  for (const path of [databasePath, journal, dirname(journal)]) if (taken(path)) throw new Error(`The Brain page fixture needs a fresh destination: ${path}`)
   mkdirSync(dataRoot, { recursive: true, mode: 0o700 })
   mkdirSync(dirname(journal), { recursive: true, mode: 0o700 })
-  for (const [made, root] of [[dataRoot, dataRoot], [dirname(journal), stateRoot]]) {
-    if (lstatSync(made).isSymbolicLink() || !realpathSync(made).startsWith(resolved(root))) throw new Error(`Refusing a redirected fixture folder: ${made}`)
-  }
+  for (const made of [dataRoot, dirname(journal)]) if (realpathSync(made) !== resolve(made)) throw new Error(`Refusing a redirected fixture folder: ${made}`)
   const entry = join(repo, 'apps/desktop/out/main/brain-worker.js')
   const brain = brainWorkerRequests(entry, { databasePath, attachmentsRoot: join(dataRoot, 'files'), cutoverJournal: journal })
   try {

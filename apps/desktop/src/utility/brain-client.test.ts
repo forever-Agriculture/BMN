@@ -60,6 +60,9 @@ describe('brain worker and authenticated write door',()=>{
    expect(await f.client.pageStatus()).toEqual({state:'not-switched'})
    await expect(f.client.pageRead('anything')).rejects.toThrow(/after the switch/)
    for(const state of ['rolling-back','rolled-back']){writeFileSync(f.journal,JSON.stringify({...journal,state}));await expect(f.client.pageList({})).rejects.toThrow(/after the switch/)}
+   // A complete journal of another switch never pairs with this receipt (one reading decides both facts).
+   const other={...journal,state:'complete',cutoverId:'22222222-2222-4222-8222-222222222222'};other.commit=brainJournalCommit(other,(await f.client.admission()).storeId)
+   writeFileSync(f.journal,JSON.stringify(other));expect(await f.client.pageStatus()).toEqual({state:'not-switched'})
    writeFileSync(f.journal,JSON.stringify({...journal,state:'complete'}))
    expect(await f.client.pageStatus()).toEqual({state:'ready'})
    expect((await f.client.pageList({})).notes.map(n=>n.title).sort()).toEqual(['Alpha','Beta'])
