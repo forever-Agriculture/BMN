@@ -74,6 +74,10 @@ export async function runAwaySelfTest(host: SelfTestHost, client: PtyHostClient,
     assert.equal(phoneAway.note, 'train to Kyiv')
     await until(async () => sent(from).some(text => /^(Away since .*Note kept on the laptop\.|Getting ready since )/.test(text)) ? true : undefined, '/away reply')
     assert.ok(!sent(from).some(text => text.includes('train to Kyiv')), 'the reply never echoes the note')
+    // He sends /back once the Go has settled everywhere, the departure list included; sent within 0.1 s of the Go tap it
+    // could still read as getting ready and get no "Back." reply (source self-test of 2026-11-19).
+    await until(async () => (await renderer<OwnerGrantView>('window.aiTerminal.getGrant()')).period?.state === 'away' ? true : undefined,
+      'the Go settled in the departure list').catch(async error => { await phoneDiag(); throw error })
     bot.say('/back')
     await until(async () => (await shown()).state === 'back' ? true : undefined, '/back from Telegram').catch(async error => { await phoneDiag(); throw error })
     const backReply = await until(async () => sent(from).find(text => text.startsWith('Back. Away ')), '/back reply').catch(async error => { await phoneDiag(); throw error })

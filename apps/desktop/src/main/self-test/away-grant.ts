@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import type { DatabaseConnection } from '../../utility/database-initialization'
-import { GRANT_RECORD_KEY, METHOD_REGISTRY, type AppSettings, type ControlInfo, type OwnerAwayView, type OwnerDepartureReply, type OwnerGrantView, type TelegramStatus } from '@bmn/protocol'
+import { GRANT_RECORD_KEY, METHOD_REGISTRY, type AppSettings, type ControlInfo, type OwnerAwayView, type OwnerDepartureReply, type OwnerGrantView, type PushPolicyView, type TelegramStatus } from '@bmn/protocol'
 import type { SelfTestHost } from '../index'
 import type { PtyHostClient } from '../pty-host-client'
 import { SELF_TEST_TELEGRAM_CHAT_ID, type SelfTestRecorder } from './taps'
@@ -39,6 +39,13 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
   const ask = (runId: string, title: string, terms: unknown[] = TERMS): void => {
     cli(['grant', 'ask', '--run', runId, '--card-file', '-'], JSON.stringify({ title, scope: 'Stories 80.2-80.6', terms }))
   }
+  const setDeployRules = async (events: [] | null): Promise<void> => {
+    for (const repository of ['octo/widgets', 'octo/tools']) {
+      const policy = await client.request<PushPolicyView>(METHOD_REGISTRY.policyGet, {})
+      if (policy.state !== 'read') throw new Error(`Away grant self-test: the push policy is unreadable (${policy.reason})`)
+      await client.request(METHOD_REGISTRY.policySet, { kind: 'deploys', repository, events, expectedRevision: policy.revision })
+    }
+  }
   const grant = (): Promise<OwnerGrantView> => renderer<OwnerGrantView>('window.aiTerminal.getGrant()')
   const run = async (runId: string) => (await grant()).period?.runs.find(other => other.runId === runId)
   const bot = await taps.telegram()
@@ -54,6 +61,9 @@ export async function runAwayGrantSelfTest(host: SelfTestHost, client: PtyHostCl
     await client.request(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SELFTEST_fake_bot_token_not_real' })
     await until(async () => (await client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {})).state === 'polling' ? true : undefined, 'fake connector')
     await client.request(METHOD_REGISTRY.presenceSet, { away: false })
+    // Epic 132 (S1): a night merge or default-branch push stays held where Health has no deploy rule. He says nothing deploys
+    // in the two fixture repositories, through Health's own route, so the cards' merge and push can be granted.
+    await setDeployRules([])
 
     phase('one actual presentation across a focus handoff')
     const channel = new MessageChannelMain()
@@ -220,6 +230,7 @@ touch apply-finished
   } finally {
     second?.destroy()
     phase('cleanup')
+    await setDeployRules(null).catch(() => undefined)
     await client.request(METHOD_REGISTRY.presenceSet, { away: null }).catch(() => undefined)
     await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: original })
   }

@@ -1840,10 +1840,13 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         (await wait(() => document.querySelector('[aria-label="Actions for ${sessionName}"]'), 'session menu')).click();
         (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
           .find(row => row.textContent.trim() === 'Session details'), 'details action')).click();
+        // A timeout names what the panel showed instead, so a failed update says why without a rerun.
         const view = await wait(() => {
           const current = document.querySelector('.session-inspector .hook-observation');
           return current?.textContent.includes('Observed by BMN') ? current : null;
-        }, 'observed summary');
+        }, 'observed summary').catch((error) => { throw new Error(error.message + '; the panel showed: ' +
+          JSON.stringify((document.querySelector('.session-inspector .hook-observation')?.textContent ??
+            'no Harness section; inspector=' + (document.querySelector('.session-inspector')?.textContent ?? 'closed')).slice(0, 400))) });
         const observed = view.textContent.includes(${JSON.stringify(agentName)}) &&
           view.textContent.includes(${JSON.stringify(eventName)}) &&
           view.textContent.includes(${JSON.stringify(sessionName)}) && view.textContent.includes('run ');

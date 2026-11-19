@@ -15,10 +15,14 @@ if uid == os.getuid() and pid > 1:
 /** No process id in a request can substitute for the identity on the accepted socket. */
 export async function controlPeer(socket: Socket | undefined): Promise<ForegroundCaller | undefined> {
   if (process.platform !== 'linux' || !socket || socket.destroyed) return undefined
+  // The probe gets the bare descriptor, never the Socket: handing Node the Socket stops it reading the connection, so a
+  // hook's next request on it (its SessionStart after its conversation) was never read (update of 2026-11-19).
+  const descriptor = (socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd
+  if (typeof descriptor !== 'number' || !Number.isSafeInteger(descriptor) || descriptor < 0) return undefined
   return new Promise(resolve => {
     try {
       const probe = spawn('/usr/bin/python3', ['-I', '-S', '-c', PEER_CREDENTIAL], {
-        stdio: ['ignore', 'pipe', 'ignore', socket], timeout: 500
+        stdio: ['ignore', 'pipe', 'ignore', descriptor], timeout: 500
       })
       let output = ''
       probe.stdout?.setEncoding('utf8').on('data', (chunk: string) => { output += chunk })
