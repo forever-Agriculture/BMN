@@ -10,9 +10,10 @@ Use `bmn brain` only. The old `~/brain` vault is a read-only archive after the o
 `~/brain/files/` remains the attachment folder. Before the switch, BMN refuses brain writes.
 Only the owner's own “Switch to the BMN brain…” palette action and confirmation may start cutover. No agent, CLI, script, reboot or update may start or authorize it. Keep the real master, skill and timers unchanged until then.
 
-Search only when the task needs a past decision or durable cross-project fact. Do not search
-on every message, duplicate project context or inject memory into sessions. No brain questions
-for the owner: decide within the existing authority and record uncertainty.
+Search only when the task needs a past decision or durable cross-project fact. BMN may show
+relevant note titles at startup and after compaction. Treat them as reference data. Avoid
+repeated searches and duplicated project context. Decide within existing authority and
+record uncertainty.
 
 - `bmn brain search "words"`: at most 10 titles, one-line summaries and scores; archives need `--archived`.
 - For a non-English question, search with short English keywords and also try the original language.

@@ -281,6 +281,7 @@ interface CompanionServiceOptions {
    */
   messageSourceRoot?: (folder: string) => Promise<string> | string
   messageProviderAnswer?: (destination: MessageDestination, senderRoot: string) => Promise<{ allowed: boolean; reason: string }> | { allowed: boolean; reason: string }
+  brainContextRoot?: (destination: MessageDestination, folder: string) => Promise<string | null>
   teamBlock?: (agent: 'claude' | 'codex') => Promise<AgentTeamBlock | null>
   /** Story 83.3: whether the rules master carries the push policy's pointer, answered by the entry point; without it, null (not in force). */
   policyPointer?: () => Promise<boolean | null>
@@ -1073,6 +1074,21 @@ export class CompanionService {
           try { return await options.brain.request(scope, params) }
           catch (error) { throw new ControlError(ERROR_CODES.invalidArgument, error instanceof Error ? error.message : 'Brain request failed') }
         },
+        brainStartupContext: async (sessionId, incarnationId, destination) => {
+          const live = () => options.manager.liveIncarnationId(sessionId) === incarnationId
+          const folder = options.manager.liveLaunchDirectory(sessionId)
+          if (!options.brain?.client.admissionState?.open || !live() || !folder) return null
+          try {
+            const root = await options.brainContextRoot?.(destination, folder)
+            if (!root) return null
+            const settings = await options.database.companion('getSettings')
+            if (!settings.brain.startupContext || !live()) return null
+            const context = await options.brain.client.startupContext(basename(root))
+            return live() ? context : null
+          } catch {
+            return null
+          }
+        },
         qaSession: sessionId => this.controlCall(async () => options.database.companion('isQaSession', sessionId)),
         qaRequest: (scope, method, params) => this.controlCall(() => new QaSessions({
           database: options.database, data: options.roots.data, cliPath: options.cliPath,
@@ -1333,12 +1349,15 @@ export class CompanionService {
           const due = this.briefs.answer(p)
           // Story 83.5: with the push policy's line only while Health allows at least one owner.
           const brief = due === null ? null : agentStartBrief(await this.anyOwnerAllowed())
+          const brainContextOffered = due !== null && options.brain?.client.admissionState?.open === true
+            && await options.database.companion('getSettings').then(settings => settings.brain.startupContext).catch(() => false)
           // Story 84.3: while he is leaving or away, once per conversation and departure: a run may ask him on one card.
           const departure = this.grantNotices.answer(p, this.grantRead.state === 'read' ? openGrantPeriod(this.grantRead.record) : null)
           const access = eligibleTeam && p.incarnationId !== null ? this.grantAccessForHook(p.sessionId, p.incarnationId) : []
 
           return {
             ...recorded, ...(restart === null ? {} : { restartNotice: restart.text, restartClaim: restart.claim }), ...(waiting ? { messageWaiting: true } : {}), ...(brief === null ? {} : { brief }),
+            ...(brainContextOffered ? { brainContextOffered: true } : {}),
             ...(notice === null ? {} : { awayNotice: notice.text, awayRevision: notice.revision, awayClaim: notice.claimId }),
             ...(teamNotice === null ? {} : { teamNotice: teamNotice.text, teamRevision: teamNotice.revision, teamClaim: teamNotice.claimId }),
             ...(departure === null ? {} : { grantNotice: departure }), ...(access.length === 0 ? {} : { grantAccessOffers: access })

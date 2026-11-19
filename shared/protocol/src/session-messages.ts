@@ -156,6 +156,7 @@ export type MessageTeamQuestion =
   | { kind: 'source-root'; folder: string }
   /** May the provider behind this destination see private work under this root, by the approved team now? */
   | { kind: 'provider'; destination: MessageDestination; senderRoot: string }
+  | { kind: 'brain-context'; destination: MessageDestination; folder: string }
   /** Story 83.3: does the owner's rules master carry the push policy's pointer? Null when it cannot be read. */
   | { kind: 'policy-pointer' }
   | { kind: 'team-block'; agent: 'claude' | 'codex' }
@@ -175,7 +176,8 @@ export function isMessageTeamQuestion(value: unknown): value is MessageTeamQuest
   if (question.kind === 'source-root') return Object.keys(question).length === 2 && text(question.folder, 4096)
   if (question.kind === 'policy-pointer') return Object.keys(question).length === 1
   if (question.kind === 'team-block') return Object.keys(question).length === 2 && (question.agent === 'claude' || question.agent === 'codex')
-  if (question.kind !== 'provider' || Object.keys(question).length !== 3 || !text(question.senderRoot, 4096)) return false
+  if (Object.keys(question).length !== 3 || !(question.kind === 'provider' && text(question.senderRoot, 4096)
+    || question.kind === 'brain-context' && text(question.folder, 4096))) return false
   const destination = question.destination as Record<string, unknown> | null
   return typeof destination === 'object' && destination !== null && Object.keys(destination).length === 4 &&
     text(destination.provider, 200) && text(destination.host, 400) && text(destination.basis, 40) && typeof destination.default === 'boolean'

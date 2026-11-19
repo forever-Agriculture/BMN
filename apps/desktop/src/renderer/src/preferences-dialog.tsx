@@ -344,6 +344,21 @@ export function PreferencesDialog(props: {
     }
   }
 
+  const [brainContextBusy, setBrainContextBusy] = useState(false)
+  const [brainContextError, setBrainContextError] = useState<string | null>(null)
+
+  async function saveBrainContext(startupContext: boolean): Promise<void> {
+    setBrainContextBusy(true)
+    setBrainContextError(null)
+    try {
+      onSettings.current(await window.aiTerminal.putSettings('brain', { startupContext }))
+    } catch (error) {
+      setBrainContextError(failureDetail(error, 'Could not save brain context'))
+    } finally {
+      setBrainContextBusy(false)
+    }
+  }
+
   // --- Telegram: status ------------------------------------------------
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [telegramStatusBusy, setTelegramStatusBusy] = useState(false)
@@ -780,6 +795,25 @@ export function PreferencesDialog(props: {
             {terminalError}
           </p>
         )}
+      </section>
+      <section className="preferences-section">
+        <h4 className="group-head">Brain</h4>
+        <div className="preferences-row">
+          <div className="preferences-row-label">
+            <label htmlFor="preferences-brain-context">Session context</label>
+          </div>
+          <div className="preferences-row-control">
+            <input
+              id="preferences-brain-context"
+              type="checkbox"
+              checked={props.settings.brain.startupContext}
+              disabled={brainContextBusy}
+              onChange={(event) => void saveBrainContext(event.target.checked)}
+            />
+            <p className="preferences-help">Give Claude Code and Codex relevant note titles at startup and after compaction.</p>
+          </div>
+        </div>
+        {brainContextError && <p className="preferences-error" role="alert">{brainContextError}</p>}
       </section>
       </>)}
 

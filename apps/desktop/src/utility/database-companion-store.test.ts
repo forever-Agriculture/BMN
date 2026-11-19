@@ -1,3 +1,4 @@
+// MODULE: database-companion-store.test.ts - Companion records and settings on SQLite
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -601,6 +602,13 @@ describe('companion store', () => {
     expect(() => putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, enabled: true }, now))
       .toThrow(/allowed chat/)
     expect(getSettings(database).appearance).toEqual({ identity: 'boss', colorMode: 'dark', terminalFontSize: 16 })
+  })
+
+  it('defaults brain context on and preserves the saved off switch', () => {
+    expect(getSettings(database).brain.startupContext).toBe(true)
+    expect(putSettingsSection(database, 'brain', { startupContext: false }, now).brain.startupContext).toBe(false)
+    expect(() => putSettingsSection(database, 'brain', { startupContext: 'yes' }, now)).toThrow(/on or off/)
+    expect(getSettings(database).brain.startupContext).toBe(false)
   })
 
   it('reads a Telegram section saved before Epic 30 with permission answers off, and stores the choice', () => {

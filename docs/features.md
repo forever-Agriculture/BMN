@@ -773,8 +773,11 @@ watcher; contents are searched only in Quick look.
 Claude Code and Codex can use lasting cross-project memory through `bmn brain`. Project facts stay
 in their repository's plan, rules and docs; the brain's project map points to those homes. It keeps
 personal preferences, durable cross-project decisions and lessons, and ideas with no project home.
-It does not store handoffs, transcripts, progress or daily logs, and this feature injects nothing
-into sessions or calls a model to save, search, import, export or back up notes.
+The brain keeps handoffs, transcripts, progress and daily logs out of its store. Saving,
+searching, importing, exporting and backing up notes call no model.
+
+After the brain switch, BMN can give Claude Code and Codex a short list of relevant note
+titles and IDs at startup and after compaction. **Preferences → General → Brain** controls it.
 
 Search returns at most ten titles with short summaries. Whole-note reads include the revision,
 origin, date and scope; a heading can select one section, and links/backlinks are optional. Search

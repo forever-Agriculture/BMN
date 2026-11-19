@@ -63,6 +63,36 @@ describe('independent brain store',()=>{
     expect(store.search('same',true).filter(n=>n.title==='same')).toHaveLength(2)
     db.close()
   })
+  it('bounds startup context to active titles and IDs in newest-first scope order', () => {
+    const { store, db } = fixture(false)
+    try {
+      const notes = [
+        { ...content('Global'), source: 'global', scope: 'all', source_time: '2026-01-02T00:00:00Z' },
+        { ...content('Group\nTitle\u202e'), source: 'group', scope: 'group:one, two', source_time: '2026-01-04T00:00:00Z' },
+        { ...content('Exact project'), source: 'exact', scope: 'project:two', source_time: '2026-01-03T00:00:00Z' },
+        { ...content('Other project'), source: 'other', scope: 'group:two-more,three', source_time: '2026-01-05T00:00:00Z' },
+        { ...content(`sk-${'A'.repeat(32)}`), source: 'secret-shape', source_time: '2026-01-06T00:00:00Z' },
+        ...Array.from({ length: 20 }, (_, i) => ({
+          ...content(`${i} ${'ї'.repeat(180)}`), source: `long-${i}`, source_time: '2026-01-01T00:00:00Z'
+        }))
+      ]
+      store.importNotes([
+        ...notes.map(note => ({ ...note, status: 'active' as const })),
+        { ...content('Archived'), source: 'archived', status: 'archived' }
+      ])
+      const result = store.startupContext('two')!
+      const lines = result.split('\n')
+      expect(lines[0]).toContain('bmn brain read ID')
+      expect(lines[1]).toMatch(/^[a-f0-9-]+ "Group Title"$/)
+      expect(lines[2]).toContain('"Exact project"')
+      expect(lines[3]).toContain('"Global"')
+      expect(result).not.toMatch(/Other project|Archived|Use on demand|sk-A+/)
+      expect(Buffer.byteLength(result)).toBeLessThanOrEqual(1500)
+      expect(store.startupContext('TWO')).not.toContain('Group Title')
+    } finally {
+      db.close()
+    }
+  })
   it('returns one section with its children and limits search to ten',()=>{
     const {store,db}=fixture(); const n=store.create(content(),'session-a')
     expect(store.read(n.id,{section:'Choice'}).markdown).toBe('# Choice\nUse on demand.\n## Reason\nA synthetic reason.')

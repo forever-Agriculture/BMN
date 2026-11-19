@@ -109,6 +109,7 @@ async function cliFixture() {
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),
     observeHookEvent: vi.fn<ControlHandlers['observeHookEvent']>(async () => ({ recorded: true })),
+    brainStartupContext: vi.fn<NonNullable<ControlHandlers['brainStartupContext']>>(async () => null),
     reportUsage: vi.fn<ControlHandlers['reportUsage']>(async () => ({ recorded: true })),
     reportGuard: vi.fn<ControlHandlers['reportGuard']>(async () => ({ recorded: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined),
@@ -1895,6 +1896,28 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
         fixture.handlers.observeHookEvent.mockResolvedValueOnce(answer)
         expect(await runCli(['hook', 'claude'], { env, input: start(session, 'resume') })).toEqual(QUIET)
       }
+    })
+
+    it.each(['claude', 'codex'] as const)('adds brain context to the same %s answer after proving its destination', async app => {
+      const fixture = await cliFixture()
+      const session = app === 'codex' ? await codexSession(fixture.root) : await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF, brainContextOffered: true })
+      fixture.handlers.brainStartupContext.mockResolvedValue('Synthetic note titles')
+      const result = await runCli(['hook', app], { env, input: start(session, 'compact') })
+      expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toBe(`${BRIEF}\n\nSynthetic note titles`)
+      expect(fixture.handlers.brainStartupContext).toHaveBeenCalledWith('session-1', 'incarnation-1', app === 'codex' ? OPENAI : ANTHROPIC)
+    })
+
+    it('preserves the ordinary brief when the Claude hook has no proven transcript', async () => {
+      const fixture = await cliFixture()
+      const session = await claudeSession(fixture.root)
+      const env = { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }
+      const missing = { ...session, record: join(session.home, 'missing.jsonl') }
+      fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, brief: BRIEF, brainContextOffered: true })
+      const result = await runCli(['hook', 'claude'], { env, input: start(missing) })
+      expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toBe(BRIEF)
+      expect(fixture.handlers.brainStartupContext).not.toHaveBeenCalled()
     })
 
     it.each(['codex', 'claude'] as const)('puts the brief and a waiting message in one %s answer after a tool call, the brief first', async (app) => {

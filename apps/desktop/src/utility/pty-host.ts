@@ -452,6 +452,10 @@ async function start(): Promise<void> {
       if (!('allowed' in answer)) throw new Error('The app did not answer for the approved team')
       return answer
     },
+    brainContextRoot: async (destination, folder) => {
+      const answer = await askTeam({ kind: 'brain-context', destination, folder })
+      return 'root' in answer ? answer.root : null
+    },
     teamBlock: async (agent) => {
       const answer = await askTeam({ kind: 'team-block', agent })
       return 'team' in answer ? answer.team : null

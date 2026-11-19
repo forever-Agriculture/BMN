@@ -72,6 +72,7 @@ import { readDoctorView } from '../../bin/doctor.mjs'
 import { HARNESSES, RosterError, agentsDirectory, parseRoster, proseOf, readOnlyProposal, rewriteProse, rewriteRoster, rosterPath, sha256, starterRoster, type RosterData } from '../../bin/agents-roster.mjs'
 import { approvedIfAny, listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { TESTED_HARNESS_VERSIONS, consequences, contextTestSources, harnessVersion, inspectRoute, fenceTests, limitStanding, privateWorkAnswer, versionStanding, workspaceRoot, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { canonicalProject } from '../../bin/agents-team-inputs.mjs'
 import {
   applyTeamUpdate, installedPolicyPointer, lastProbes, listTransactions, masterHistory, masterPath, parseMaster, planSave, planTeamUpdate, planView, probeAutoPlan, probeInspector, render, routeFor, saveRules, type RulesHarness, type SavePlan, type SaveResult
 } from '../../bin/agents-rules.mjs'
@@ -959,7 +960,10 @@ export function messageTeamAnswer(question: MessageTeamQuestion): MessageTeamAns
   }
   const answer = privateWorkAnswer(data, {
     known: true, default: destination.default, provider: destination.provider, host: destination.host, basis
-  }, question.senderRoot)
+  }, question.kind === 'brain-context' ? null : question.senderRoot)
+  if (question.kind === 'brain-context' && answer.allowed) {
+    return { root: canonicalProject(workspaceRoot(question.folder)) }
+  }
   return { allowed: answer.allowed, reason: answer.reason }
 }
 

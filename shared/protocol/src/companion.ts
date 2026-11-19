@@ -678,6 +678,7 @@ export interface AppSettings {
   archive: ArchiveSettings
   agentHistory: AgentHistorySettings
   terminal: TerminalSettings
+  brain: { startupContext: boolean }
 }
 
 /** One Claude-family config folder in Preferences → History. */
@@ -748,7 +749,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
   voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
   archive: Object.freeze({ deleteAfterDays: null }),
   agentHistory: Object.freeze({ keepDays: 30, claudeConfigDirs: Object.freeze([]) as unknown as string[] }),
-  terminal: Object.freeze({ programClipboard: true })
+  terminal: Object.freeze({ programClipboard: true }),
+  brain: Object.freeze({ startupContext: true })
 }) as AppSettings
 
 export type TelegramConnectorState =

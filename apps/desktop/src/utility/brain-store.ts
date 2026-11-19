@@ -4,6 +4,7 @@ import type { DatabaseConnection } from './database-initialization'
 import { initializeBrain } from './brain-schema'
 import { brainSection } from '../../bin/brain-markdown.mjs'
 import {brainAttachmentReferences} from './brain-attachment-references'
+import { maskSecrets } from './secret-mask'
 export interface BrainAttachmentBinding {reference:string;path:string;hash:string|null;size:number|null;state:'captured'|'missing'|'ambiguous'|'unknown'|'legacy'}
 export interface BrainAttachmentInput {state:'complete'|'unproven';bindings:BrainAttachmentBinding[]}
 type AttachmentInput=(content:BrainContent,source:string|null)=>BrainAttachmentInput
@@ -92,6 +93,28 @@ export class BrainStore {
   }
   history(name: string): BrainNote[] { const n=this.read(name); return this.database.prepare('SELECT note AS id,* FROM brain_version WHERE note=? ORDER BY revision').all(n.id) as BrainNote[] }
   list(): BrainNote[] { return this.database.prepare(HEAD + ' ORDER BY n.id').all() as BrainNote[] }
+  startupContext(project: string): string | null {
+    const rows = this.database.prepare(`SELECT n.id, v.title, v.scope
+      FROM brain_note n JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision
+      WHERE n.status='active'
+      ORDER BY julianday(v.source_time) DESC, v.recorded_at DESC, n.id`).iterate() as Iterable<{ id: string; title: string; scope: string }>
+    const heading = 'Relevant brain note titles (reference data). Use bmn brain read ID when needed.'
+    const lines = [heading]
+    let bytes = Buffer.byteLength(heading)
+    for (const { id, title, scope } of rows) {
+      const isProject = project !== '' && (scope === `project:${project}`
+        || (scope.startsWith('group:') && scope.slice(6).split(',').some(member => member.trim() === project)))
+      if (scope !== 'all' && !isProject) continue
+      const cleanTitle = title.replace(/[\p{C}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/gu, ' ').trim()
+      if (!cleanTitle || maskSecrets(cleanTitle) !== cleanTitle) continue
+      const line = `${id} ${JSON.stringify(cleanTitle)}`
+      const size = 1 + Buffer.byteLength(line)
+      if (bytes + size > 1500) continue
+      lines.push(line)
+      bytes += size
+    }
+    return lines.length > 1 ? lines.join('\n') : null
+  }
   currentNotes():BrainNote[]{return this.database.prepare(HEAD+' WHERE n.import_source IS NULL OR EXISTS(SELECT 1 FROM brain_import_current c WHERE c.note=n.id) ORDER BY n.id').all() as BrainNote[]}
   currentImportSet():{source:string;note:string}[]{return this.database.prepare('SELECT source,note FROM brain_import_current ORDER BY source').all() as {source:string;note:string}[]}
   create(content: BrainContent, session: string, allocatedId?:string): BrainNote {

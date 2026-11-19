@@ -89,6 +89,7 @@ type ConversationAgentCli = LiveAgentCli
 
 export interface ControlHandlers {
   brainRequest?(scope: ControlScope, params: Record<string, unknown>): Promise<unknown>
+  brainStartupContext?(sessionId: string, incarnationId: string, destination: ReturnType<typeof messageDestination>): Promise<string | null>
   qaSession?(sessionId: string, incarnationId: string): Promise<boolean>
   qaRequest?(scope: ControlScope, method: string, params: Record<string, unknown>): Promise<unknown>
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
@@ -1087,6 +1088,11 @@ export class ControlServer {
         if (!handlers.brainRequest) throw invalidError('Brain is unavailable in this build')
         const params = closedParams(rawParams, ['command','query','archived','name','section','links','title','kind','origin','scope','markdown','source_time','superseded_by','revision'])
         return handlers.brainRequest(scope, params)
+      }
+      case 'brain.startup-context': {
+        if (scope.kind !== 'session') throw unauthorized('Only a live session may request its brain context')
+        const params = closedParams(rawParams, ['destination'])
+        return handlers.brainStartupContext?.(scope.sessionId, scope.incarnationId, messageDestination(params)) ?? null
       }
       case 'qa.grant.ask': {
         const params = closedParams(rawParams, ['id', 'key', 'accountId', 'origin', 'limits', 'expiresAt'])

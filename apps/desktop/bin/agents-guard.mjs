@@ -303,7 +303,7 @@ export const MESSAGE_HANDOVER = {
 export const MESSAGE_LIMIT_MS = 300
 
 /**
- * Where the owner's agent sends work, for an event after a tool call: the prompt guard's own decision for
+ * Where the owner's agent sends work, for a message or brain context: the prompt guard's own decision for
  * that event, and the destination its resolver found. null when no team is approved, when the guard would
  * stop this event for any reason, when it found no destination, and when a Claude Code event does not name
  * that process's own record of the conversation: then nothing is asked of BMN and no message is handed over. Whether that provider may see the *sender's* work is BMN's question, asked with

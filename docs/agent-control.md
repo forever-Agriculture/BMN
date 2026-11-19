@@ -1354,7 +1354,14 @@ count as woken or missed. The account shows as "The wake" in "While you were awa
 ## Lasting memory: `bmn brain`
 
 The brain is an extra shared store for Claude Code and Codex. It does not replace project records,
-handoffs or dev-auto state. Commands call no model and inject no session text.
+handoffs or dev-auto state. Brain commands call no model.
+
+On the switched brain, BMN can add up to 1,500 UTF-8 bytes to the usual startup and
+post-compaction brief in Claude Code and Codex. It lists active note titles and IDs, newest
+first, for scope `all` or a group naming the project. BMN requires a verified, approved
+default provider that may receive private work. Turn it off under **Preferences → General →
+Brain → Session context**. If the note store or destination check is unavailable, the usual
+brief still appears.
 
 ```sh
 bmn brain search "cross-project preference"

@@ -1,3 +1,4 @@
+// MODULE: database-initialization.ts - Local SQLite connection and startup migrations
 import { configureDatabase } from './database-config'
 import { DATABASE_MIGRATIONS } from './store-schema'
 
@@ -7,6 +8,7 @@ interface DatabaseStatement {
   run(...values: SqlValue[]): { changes: number | bigint }
   get(...values: SqlValue[]): unknown
   all(...values: SqlValue[]): unknown[]
+  iterate(...values: SqlValue[]): Iterable<unknown>
 }
 
 export interface DatabaseConnection {

@@ -169,7 +169,25 @@ async function sayDestination(agent, event, agentPid, procRoot, socketPath, toke
   await callEach(socketPath, token, [{ method: 'message.destination', params: { destination } }], Math.max(1, left())).catch(() => undefined)
 }
 
-/** The one answer that puts text in front of the agent: BMN's brief, the away state, the departure and a message, in that order. */
+/** An optional brain slice shares the existing context answer and leaves the normal brief alone on failure. */
+async function brainContextForHook(agent, event, agentPid, procRoot, socketPath, token, reported) {
+  if (!agentPid || event.hook_event_name !== 'SessionStart') return null
+  const provider = agent === 'claude' ? 'anthropic' : agent === 'codex' ? 'openai' : null
+  if (provider === null) return null
+  const guard = await import('./agents-guard.mjs')
+  const left = () => guard.MESSAGE_LIMIT_MS - (Date.now() - reported)
+  if (left() <= 0) return null
+  const destination = await guard.messageDestinationWithin({
+    agent, pid: agentPid, procRoot,
+    event: { cwd: event.cwd, session_id: event.session_id, transcript_path: event.transcript_path }
+  }, left())
+  if (destination?.provider !== provider || !destination.default || destination.basis !== 'observed-default' || left() <= 0) return null
+  const [answer] = await callEach(socketPath, token, [{ method: 'brain.startup-context', params: { destination } }], left())
+  const context = answer?.result
+  return typeof context === 'string' && context !== '' && Buffer.byteLength(context) <= 1500 ? context : null
+}
+
+/** The one answer that puts text in front of the agent. */
 function contextAnswer(event, parts) {
   return JSON.stringify({
     hookSpecificOutput: { hookEventName: event.hook_event_name, additionalContext: parts.filter((part) => part !== null).join('\n\n') }
@@ -325,6 +343,8 @@ async function runHook(args) {
   }
   const answer = outcomes[requests.length]?.result
   const brief = typeof answer?.brief === 'string' && answer.brief !== '' ? answer.brief : null
+  const brainContext = brief !== null && answer?.brainContextOffered === true
+    ? await brainContextForHook(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => null) : null
   const notice = awayLock && typeof answer?.awayNotice === 'string' && answer.awayNotice !== '' && Number.isSafeInteger(answer.awayRevision) &&
     typeof answer.awayClaim === 'string' ? answer.awayNotice : null
   const team = awayLock && typeof answer?.teamNotice === 'string' && answer.teamNotice !== '' && Number.isSafeInteger(answer.teamRevision) &&
@@ -339,13 +359,14 @@ async function runHook(args) {
   const restart = typeof answer?.restartNotice === 'string' && typeof answer?.restartClaim === 'string' ? answer.restartNotice : null
   const said = { printed: false }
   await sayDestination(agent, event, agentPid, procRoot, socketPath, token, reported).catch(() => undefined)
+  const before = [brief, brainContext, team, notice, departure, restart]
   if (answer?.messageWaiting === true) {
     // Should one event ever carry both a turn's start and a message, they share the one allowance (R69-NFR5).
-    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, [brief, team, notice, departure, restart], said)
+    await handMessage(agent, event, agentPid, procRoot, socketPath, token, mark?.edge === 'start' ? marked : reported, before, said)
       .catch(() => undefined)
   }
-  if (!said.printed && (brief !== null || team !== null || notice !== null || departure !== null || restart !== null)) {
-    writeSync(1, contextAnswer(event, [brief, team, notice, departure, restart]))
+  if (!said.printed && before.some(part => part !== null)) {
+    writeSync(1, contextAnswer(event, before))
     said.printed = true
   }
   if (restart !== null && said.printed) {

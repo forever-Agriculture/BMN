@@ -602,6 +602,15 @@ describe('whether a receiving agent\'s provider may see the sender\'s work (Epic
     expect(messageProviderAnswer(OPENAI, '/synthetic/another/root')).toMatchObject({ allowed: true })
   })
 
+  it('requires provider-wide permission before providing brain context', () => {
+    approve(team(exception(workspace)))
+    expect(messageProviderAnswer(MOONSHOT, workspace)).toMatchObject({ allowed: true })
+    expect(messageTeamAnswer({ kind: 'brain-context', destination: MOONSHOT, folder: workspace }))
+      .toMatchObject({ allowed: false })
+    expect(messageTeamAnswer({ kind: 'brain-context', destination: OPENAI, folder: join(workspace, 'src') }))
+      .toEqual({ root: workspace })
+  })
+
   it('refuses a provider that may see public work only, until "Allow here" names the root the message came from', () => {
     const other = join(home, 'code/other')
     repository(other)

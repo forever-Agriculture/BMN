@@ -67,6 +67,7 @@ port.on('message', (request: { id: number; operation: string; args: unknown[] })
       case 'restore': result = store.restore(args[0] as string, args[1] as number, args[2] as string); break
       case 'delete': result = store.delete(); break
       // Only the trusted parent can send these operations. They are absent from the control socket.
+      case 'startup-context': result = admission?.status().open ? store.startupContext(args[0] as string) : null; break
       case 'import': {phase='backup';const checkpoint=files.snapshot('before-import');validateBrainSnapshot(checkpoint);phase='operation';result={...store.importNotes(args[0] as BrainImport[]),checkpoint};break}
       case 'write-door': if(args[0])store.setWriteDoor(true);else if(admission)admission.revoke();else store.setWriteDoor(false); result=true; break
       case 'admission-status': result=admission?.status()??{storeId:'',committed:false,open:false,receipt:null}; break
