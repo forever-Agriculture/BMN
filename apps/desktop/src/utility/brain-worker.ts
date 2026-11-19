@@ -13,8 +13,6 @@ import { restoreBrainCheck } from './brain-restore'
 import type { DatabaseConnection } from './database-initialization'
 import { BrainStore, type BrainContent, type BrainImport } from './brain-store'
 
-/** Epic 127.3: the sha256 of the one manifest of 48 memory keepers the owner allowed past the three-notes limit. */
-const KEEPERS_127_SHA256 = 'a5206c73b62011e054ddfcfed9c0795606b27d2c2f760f904330511a98e5ccb0'
 const port = parentPort
 if (!port) throw new Error('Brain worker needs a parent port')
 const { databasePath, attachmentsRoot, cutoverJournal } = workerData as { databasePath: string; attachmentsRoot?: string; cutoverJournal?:string }
@@ -70,15 +68,6 @@ port.on('message', (request: { id: number; operation: string; args: unknown[] })
       case 'delete': result = store.delete(); break
       // Only the trusted parent can send these operations. They are absent from the control socket.
       case 'startup-context': result = admission?.status().open ? store.startupContext(args[0] as string) : null; break
-      case 'file-keepers': {
-        // Epic 127.3: exactly the one approved manifest, by its hash; anything else is refused.
-        const text = args[0]
-        if (typeof text !== 'string' || createHash('sha256').update(text).digest('hex') !== KEEPERS_127_SHA256) throw new Error('Not the approved keeper manifest')
-        admission?.assert()
-        phase='backup';validateBrainSnapshot(files.snapshot('before-keepers'));phase='operation'
-        result = store.fileKeepers(JSON.parse(text) as BrainContent[], 'epic-127-keepers')
-        break
-      }
       case 'import': {phase='backup';const checkpoint=files.snapshot('before-import');validateBrainSnapshot(checkpoint);phase='operation';result={...store.importNotes(args[0] as BrainImport[]),checkpoint};break}
       case 'write-door': if(args[0])store.setWriteDoor(true);else if(admission)admission.revoke();else store.setWriteDoor(false); result=true; break
       case 'admission-status': result=admission?.status()??{storeId:'',committed:false,open:false,receipt:null}; break
@@ -129,12 +118,12 @@ port.on('message', (request: { id: number; operation: string; args: unknown[] })
       case 'close': store.database.close(); result = true; break
       default: throw new Error('Unknown brain worker operation')
     }
-    if (['create','edit','withdraw','restore','import','file-keepers','create-check','withdraw-check','recover-check'].includes(operation)) { phase='export'; files.export(operation!=='recover-check'); health.export='ok'; recordHealth() }
+    if (['create','edit','withdraw','restore','import','create-check','withdraw-check','recover-check'].includes(operation)) { phase='export'; files.export(operation!=='recover-check'); health.export='ok'; recordHealth() }
     port.postMessage({ id, result,...(admission&&operation!=='close'?{admission:admission.status()}:{}) })
   } catch (error) {
     if(phase==='backup'){health.backup='failed';health.backupFailureAt=new Date().toISOString();health.backupFailureId=randomUUID()}
     if(phase==='export')health.export='failed'
     if(phase!=='operation')try {recordHealth()}catch { /* The caller still receives the original I/O failure. */ }
-    port.postMessage({id,...(admission&&operation!=='close'?{admission:admission.status()}:{}),error:{message:phase==='export' && ['create','edit','withdraw','restore','import','file-keepers','create-check','withdraw-check','recover-check'].includes(operation)?'Brain change saved, but export failed; read the current revision before retrying':error instanceof Error ? error.message : 'Brain operation failed',code:phase==='export' && ['create','edit','withdraw','restore','import','file-keepers','create-check','withdraw-check','recover-check'].includes(operation)?'EXPORT_AFTER_COMMIT':(error as {code?:string}).code ?? 'IO_ERROR'}})
+    port.postMessage({id,...(admission&&operation!=='close'?{admission:admission.status()}:{}),error:{message:phase==='export' && ['create','edit','withdraw','restore','import','create-check','withdraw-check','recover-check'].includes(operation)?'Brain change saved, but export failed; read the current revision before retrying':error instanceof Error ? error.message : 'Brain operation failed',code:phase==='export' && ['create','edit','withdraw','restore','import','create-check','withdraw-check','recover-check'].includes(operation)?'EXPORT_AFTER_COMMIT':(error as {code?:string}).code ?? 'IO_ERROR'}})
   }
 })

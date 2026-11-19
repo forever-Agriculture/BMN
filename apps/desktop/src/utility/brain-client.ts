@@ -33,7 +33,6 @@ export class BrainWorkerClient {
   withdraw(name:string,revision:number,session:string) {return this.request('withdraw',[name,revision,session]) as Promise<BrainNote>}
   restore(name:string,revision:number,session:string) {return this.request('restore',[name,revision,session]) as Promise<BrainNote>}
   delete() {return this.request('delete')}
-  fileKeepers(manifest: string) { return this.request('file-keepers', [manifest]) as Promise<{ created: number; existing: number }> }
   importNotes(notes:BrainImport[]) {return this.request('import',[notes]) as Promise<{imported:number;unchanged:number;withdrawn:number;checkpoint:string}>}
   admission() {return this.request('admission-status') as Promise<BrainAdmissionStatus>}
   commitCutover(payloadHash:string) {return this.request('commit-cutover',[payloadHash]) as Promise<BrainAdmissionStatus>}

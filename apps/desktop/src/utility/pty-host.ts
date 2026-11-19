@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { appendFileSync, closeSync, constants, existsSync, openSync, readFileSync, rmSync, writeFileSync, renameSync } from 'node:fs'
+import { appendFileSync, closeSync, constants, existsSync, openSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { benchProcReader, benchScopeRequest } from './bench-proc-reader'
 import { QUIET_LEDGER_KEY } from './quiet-hours-delivery'
 import {
@@ -307,20 +307,6 @@ async function start(): Promise<void> {
   // Brain exports and attachment I/O run independently of terminal/state readiness.
   const brainInitialization=recordBrainInitialization(roots.data).catch(()=>undefined).then(()=>brainClient.initialize())
     .catch(()=>recordBrainInitialization(roots.data,true).catch(()=>undefined))
-  // Epic 127.3, once: file the approved keeper manifest if it waits in the state folder; the worker checks its hash.
-  // The write door reopens only when the app resumes the cutover after a start, so this runs again right after that.
-  const fileKeepersOnce = async (): Promise<void> => {
-    const manifest = join(brainCutoverStateRoot(), 'brain-keepers-127.json')
-    if (!existsSync(manifest)) return
-    const outcome = (name: string, value: object): void => writeFileSync(join(brainCutoverStateRoot(), name), `${JSON.stringify({ ...value, at: new Date().toISOString() })}\n`, { mode: 0o600 })
-    try {
-      outcome('brain-keepers-127.done.json', await brainClient.fileKeepers(readFileSync(manifest, 'utf8')))
-      rmSync(manifest)
-    } catch (error) {
-      outcome('brain-keepers-127.failed.json', { error: error instanceof Error ? error.message : 'unknown' })
-    }
-  }
-  void brainInitialization.then(fileKeepersOnce).catch(() => undefined)
   configureBrainReceiptReader(state=>state===brainCutoverStateRoot()&&brainClient.admissionState?.receipt?{...brainClient.admissionState.receipt,open:brainClient.admissionState.open}:null)
   const brain = new BrainService(brainClient,async()=>(await brainClient.admission()).open)
   const brainChecks=new BrainCheckCapabilities(brainClient,join(roots.runtime,'control','control.sock'),roots.data)
@@ -782,7 +768,7 @@ async function start(): Promise<void> {
           case 'data-root': return roots.data
           case 'admission-status': return brainClient.admission()
           case 'commit-cutover': return brainClient.commitCutover(stringValue(params,'payloadHash'))
-          case 'resume-cutover': return brainClient.resumeCutover().then((resumed) => { void fileKeepersOnce().catch(() => undefined); return resumed })
+          case 'resume-cutover': return brainClient.resumeCutover()
           case 'authorize-return': return brainClient.authorizeReturn()
           case 'return-capture': return brainClient.returnCapture()
           case 'close-door': brainChecks.revokeAll();return brainClient.setWriteDoor(false)

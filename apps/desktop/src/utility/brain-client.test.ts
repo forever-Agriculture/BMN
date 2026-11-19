@@ -119,16 +119,6 @@ it('retains an outstanding scheduled failure through a checkpoint, skipped tick 
  }finally{await restarted?.close();await f.close()}
 })
 
-it('refuses any keeper manifest but the one approved by its hash, and writes nothing (Epic 127.3)',async()=>{
- const f=await fixture(()=>false)
- try {
-  const before=(await f.client.list()).length
-  await expect(f.client.fileKeepers(JSON.stringify([{...content,title:'Synthetic keeper'}]))).rejects.toThrow(/approved keeper manifest/)
-  await expect(f.client.fileKeepers('[]')).rejects.toThrow(/approved keeper manifest/)
-  expect((await f.client.list()).length).toBe(before)
- } finally { await f.close() }
-})
-
 it('looks up the published export without refreshing DB attachments from a held session and refuses public backup',async()=>{
  const f=await fixture(()=>false)
  try {
