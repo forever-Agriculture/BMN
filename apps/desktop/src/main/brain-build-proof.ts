@@ -5,7 +5,7 @@ import {readFileSync,readlinkSync,readdirSync} from 'node:fs'
 import {join,resolve} from 'node:path'
 export interface BrainPreparationSnapshot {readonly text:string;readonly sha256:string;readonly value?:unknown}
 export interface CompletedBrainBuild {phase:'complete';commit:string;brainDeliveryCommit:string;binary:string;archive:string;binaryHash:string;archiveHash:string;resourcesHash?:string;preparedHash?:string|null;brainVersion:126;preparation?:BrainPreparationSnapshot}
-const hash=(path:string):string=>createHash('sha256').update(readFileSync(path)).digest('hex')
+const hash=(path:string,read=readFileSync):string=>createHash('sha256').update(read(path)).digest('hex')
 /** Completed records persist separately from latest.json; later queued/failed updates cannot hide them. */
 export function proveBrainBuild(options:{stateDirectory:string;pid:number;archive:string;contains:(commit:string,delivery:string)=>boolean;procRoot?:string;resources?:string;preparedPath?:string}):CompletedBrainBuild {
  const delivery=JSON.parse(readFileSync(join(options.stateDirectory,'brain-delivery.json'),'utf8')) as {version:number;epic:number;commit:string}
@@ -16,7 +16,9 @@ export function proveBrainBuild(options:{stateDirectory:string;pid:number;archiv
  try{records.push(...readdirSync(join(options.stateDirectory,'completed')).filter(n=>/^[a-f0-9]{40,64}\.json$/.test(n)).map(n=>join(options.stateDirectory,'completed',n)))}catch{/* No historical completed install. */}
  const preparedBytes=options.preparedPath?readFileSync(options.preparedPath):undefined
  const preparation=preparedBytes?Object.freeze({text:preparedBytes.toString('utf8'),sha256:createHash('sha256').update(preparedBytes).digest('hex')}):undefined
- const binaryHash=hash(executable),archiveHash=hash(options.archive)
+ // Electron exposes app.asar as a virtual directory. Provenance hashes the file on disk.
+ const rawFs=process.getBuiltinModule('original-fs') as Pick<typeof import('node:fs'),'readFileSync'>|undefined
+ const binaryHash=hash(executable),archiveHash=hash(options.archive,rawFs?.readFileSync)
  for(const path of records){
   let record:CompletedBrainBuild
   try{record=JSON.parse(readFileSync(path,'utf8')) as CompletedBrainBuild}catch{continue}

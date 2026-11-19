@@ -3,7 +3,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,symlinkSync,rmSync} from 'node:fs'
 import {createHash} from 'node:crypto'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {it,expect} from 'vitest'
+import {it,expect,vi} from 'vitest'
 import {proveBrainBuild} from './brain-build-proof'
 import {brainFileHash,brainResourcesHash} from '../../../../scripts/lib/brain-provenance.mjs'
 it('requires running binary plus app resources, while retaining earlier completed installs',()=>{
@@ -42,4 +42,28 @@ it('refuses changed helper, skill or prepared-config bytes before issuing author
   writeFileSync(config,'replaced after proof');expect(verified.preparation?.text).toBe('original');writeFileSync(config,'original')
   for(const path of [helper,skill,config]){writeFileSync(path,'changed');expect(prove).toThrow(/no completed/);writeFileSync(path,'original')}
  }finally{rmSync(root,{recursive:true,force:true})}
+})
+
+
+it('hashes the raw archive bytes when Electron presents a virtual filesystem',()=>{
+ const root=mkdtempSync(join(tmpdir(),'brain-raw-archive-'))
+ const builtin=process.getBuiltinModule.bind(process)
+ const originalBytes=Buffer.from('raw archive')
+ let archiveBytes=originalBytes
+ const filesystem=vi.spyOn(process,'getBuiltinModule').mockImplementation(id=>
+  id==='original-fs'?{readFileSync:()=>archiveBytes}:builtin(id))
+ try {
+  mkdirSync(join(root,'proc','42'),{recursive:true})
+  const binary=join(root,'bmn'),archive=join(root,'app.asar'),commit='a'.repeat(40)
+  writeFileSync(binary,'binary');writeFileSync(archive,'virtual contents');symlinkSync(binary,join(root,'proc','42','exe'))
+  writeFileSync(join(root,'brain-delivery.json'),JSON.stringify({version:1,epic:126,commit}))
+  const archiveHash=createHash('sha256').update(originalBytes).digest('hex')
+  writeFileSync(join(root,'latest.json'),JSON.stringify({phase:'complete',commit,brainDeliveryCommit:commit,binary,archive,
+   binaryHash:brainFileHash(binary),archiveHash,brainVersion:126}))
+  const prove=()=>proveBrainBuild({stateDirectory:root,pid:42,archive,procRoot:join(root,'proc'),contains:()=>true})
+  expect(prove().commit).toBe(commit)
+  archiveBytes=Buffer.from('replaced archive')
+  writeFileSync(archive,originalBytes)
+  expect(prove).toThrow(/no completed/)
+ }finally{filesystem.mockRestore();rmSync(root,{recursive:true,force:true})}
 })
