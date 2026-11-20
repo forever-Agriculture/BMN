@@ -113,6 +113,7 @@ beforeEach(() => {
   release = []
   READ_FAILS = new Set()
   HISTORY_TEXT = 'Second.'
+  HISTORY_TARGETS = {}
   LIST = [summary('n1', 'Backup plan'), summary('n2', 'Other')]
   FOUND = null
   PAIRED = false
@@ -655,14 +656,43 @@ describe('Brain page after the post-delivery review (2026-11-20)', () => {
     expect(readingText('a\n# MODULE: x.md - header\nb\n# MODULE: y.md - kept')).toBe('a\nb\n# MODULE: y.md - kept')
     expect(readingText('# Module of x\ntext')).toBe('# Module of x\ntext')
     // In a code block it is an example and stays.
-    const example = 'Intro\n```\n# MODULE: example.md - sample\n<!-- kept -->\n```\nEnd'
+    const example = 'Intro\n```\n# MODULE: example.md - sample\n```\nEnd'
     expect(readingText(example)).toBe(example)
-    expect(readingText('Use `<!-- x -->` here')).toBe('Use `<!-- x -->` here')
-    // Every HTML comment goes: a header, an agent's note, one over several lines, one inside a line.
-    expect(readingText('Summary: s\n\n<!-- MODULE: x_y.md - header -->\n\nBody')).toBe('Summary: s\n\n\nBody')
-    expect(readingText('a\n\n<!-- note: an agent left this -->\n\nb')).toBe('a\n\n\nb')
-    expect(readingText('a\n\n<!-- one\ntwo -->\nb')).toBe('a\n\nb')
-    expect(readingText('Keep this <!-- not this --> and this')).toBe('Keep this  and this')
+  })
+
+  it('a link beside the graph to a note not drawn on it opens that note as a page', async () => {
+    PAIRED = true
+    const saved = NOTES.n2!
+    // n2's text links Hidden link (h1), which the n1 graph (n1, n2) does not draw.
+    NOTES.n2 = { ...saved, markdown: 'See [[Hidden link]].', targets: { 'Hidden link': 'h1' } }
+    try {
+      await mount({ noteId: 'n1', archived: false })
+      await press(container!.querySelector('.b-box')!, 'g')
+      await flush()
+      await act(async () => { container!.querySelector<SVGGElement>('.b-node[data-node="n2"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+      await flush()
+      expect(container!.querySelector('.b-side-title')!.textContent).toBe('Other')
+      await act(async () => { container!.querySelector<HTMLElement>('.b-side .ql-md-a[data-target="file"]')!.click() })
+      await flush()
+      expect(container!.querySelector('svg.b-graph')).toBeNull()
+      expect(container!.querySelector('.b-title')!.textContent).toBe('Hidden link')
+    } finally { NOTES.n2 = saved }
+  })
+
+  it('a link in History opens the note page even from the graph, and a spaced [[ name ]] is a link', async () => {
+    PAIRED = true
+    HISTORY_TEXT = 'Second. See [[ Other ]].'
+    HISTORY_TARGETS = { Other: 'n2' }
+    await mount({ noteId: 'n1', archived: false })
+    await press(container!.querySelector('.b-box')!, 'g')
+    await flush()
+    await press(container!.querySelector('.b-box')!, 'h')
+    await flush()
+    await act(async () => { container!.querySelector<HTMLElement>('.b-history .ql-md-a[data-target="file"]')!.click() })
+    await flush()
+    expect(container!.querySelector('.b-history')).toBeNull()
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Other')
+    expect(container!.querySelector('svg.b-graph')).toBeNull()
   })
 })
 
@@ -675,5 +705,7 @@ describe('Brain page words', () => {
     expect(startsWithTitle({ title: 'Backup plan', markdown: '# Backup plan\n\ntext' })).toBe(true)
     expect(startsWithTitle({ title: 'Backup plan', markdown: 'text\n# Backup plan' })).toBe(false)
     expect(startsWithTitle({ title: 'Backup plan', markdown: '# MODULE: backup.md - header\n\n# Backup plan\n\ntext' })).toBe(true)
+    // A heading spelled otherwise than the readable title leaves the title drawn (review 2026-11-20).
+    expect(startsWithTitle({ title: 'AI direction', markdown: '# AI-direction\n\ntext' })).toBe(false)
   })
 })

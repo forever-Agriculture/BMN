@@ -242,7 +242,9 @@ class Reader {
     const clean=address.replace(/^<|>$/g,''),original=markdownTarget(clean)
     if(!wiki&&(original.kind==='outside'||original.kind==='heading'))return original
     const fragment=clean.indexOf('#'),base=fragment===-1?clean:clean.slice(0,fragment),prefix=wiki?'wiki:':'markdown:'
-    const mapped=this.targets[prefix+clean]??this.targets[prefix+base]
+    // A wiki name is looked up trimmed, as the brain stores `[[ Name ]]` (Epic 128 review); own keys only.
+    const own=(key:string):string|undefined=>Object.hasOwn(this.targets!,key)?this.targets![key]:undefined
+    const mapped=own(prefix+clean)??own(prefix+base)??(wiki?own(prefix+base.trim()):undefined)
     if(!mapped)return {kind:'none'}
     return markdownTarget(mapped+(fragment===-1?'':clean.slice(fragment)))
   }

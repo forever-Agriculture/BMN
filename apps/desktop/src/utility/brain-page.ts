@@ -2,6 +2,7 @@
 import type { DatabaseConnection } from './database-initialization'
 import type { BrainGraph, BrainGraphNode, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
 import { SECRET_MASK, secretRanges } from '@bmn/protocol'
+import { GFM, parser as markdownParser } from '@lezer/markdown'
 import { BrainError, brainLinkResolver } from './brain-store'
 export type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
 
@@ -14,10 +15,6 @@ export const BRAIN_PAGE_SEARCH_LIMIT = 10
 export const BRAIN_MAP_CAP = 3000
 
 const HEAD = `FROM brain_note n JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision`
-/** The text only where a file-name title needs it to read as words (readableTitle), so wide reads stay small. */
-const MARKDOWN_IF_SLUG = "CASE WHEN v.title GLOB '*-*' AND v.title NOT GLOB '* *' THEN v.markdown ELSE '' END AS markdown"
-type RefRow = BrainPageNoteRef & { markdown: string }
-const readable = ({ markdown, ...note }: RefRow): BrainPageNoteRef => ({ ...note, title: readableTitle(note.title, markdown) })
 const NEWEST = 'ORDER BY julianday(v.source_time) DESC, v.recorded_at DESC, n.id'
 
 /** A filed note's provenance line ("Source: Claude memory …, sha256 …"): it says where a note came from, not what it says. */
@@ -25,58 +22,111 @@ const PROVENANCE = /^Source:\s/u
 /** A filed note's own summary line ("Summary: …", Epic 127): the best one line of what it says. */
 const SUMMARY = /^Summary:\s*/u
 
-/** An HTML comment (`<!-- … -->`): Markdown never shows it, so neither does a list line. */
+/** An HTML comment (`<!-- … -->`), or one left open to the end of its block. */
 const COMMENT = /<!--[\s\S]*?(?:-->|$)/gu
+const markdown = markdownParser.configure(GFM)
+
+/**
+ * The text without its HTML comments, as Markdown never shows one (owner, 2026-11-20). Only the `<!-- … -->` goes, so
+ * words after it on its line stay; a line a comment block leaves blank goes with it. The parser finds them, so one
+ * written inside code stays, and one inside a raw HTML block goes too. The page and the list both read this text.
+ */
+export function withoutComments(text: string): string {
+  if (!text.includes('<!--')) return text
+  const cuts: [number, number][] = []
+  markdown.parse(text).iterate({
+    enter(node) {
+      if (node.name === 'FencedCode' || node.name === 'CodeBlock' || node.name === 'InlineCode') return false
+      if (node.name === 'Comment') { cuts.push([node.from, node.to]); return false }
+      if (node.name !== 'CommentBlock' && node.name !== 'HTMLBlock') return undefined
+      const block = text.slice(node.from, node.to)
+      const spans = [...block.matchAll(COMMENT)].map((match): [number, number] => [node.from + match.index, node.from + match.index + match[0].length])
+      if (spans.length && !block.replace(COMMENT, '').trim()) {
+        // The whole line or lines, with the line break after them.
+        cuts.push([text.lastIndexOf('\n', node.from - 1) + 1, text[node.to] === '\n' ? node.to + 1 : node.to])
+      } else cuts.push(...spans)
+      return false
+    }
+  })
+  let out = ''
+  let at = 0
+  for (const [from, to] of cuts.sort((a, b) => a[0] - b[0])) { if (from >= at) { out += text.slice(at, from); at = to } }
+  return out + text.slice(at)
+}
 
 /** A title written as a file name ("ai-direction"): lower-case words and digits joined by hyphens. */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)+$/u
 /** A word standing alone in the text: not part of a file name, path, link name or hyphenated word. */
 const LONE_WORD = /(?<![\p{L}\p{N}_\-/.\\])[\p{L}\p{N}]+(?![\p{L}\p{N}_\-/\\]|\.[\p{L}\p{N}])/gu
 
-/**
- * The title the page shows. A file-name title reads as words: "ai-direction" -> "AI direction". Each word takes the
- * spelling the note's own text always gives it (AI, BMN, GitHub, iPhone); a word the text also writes in lower case,
- * or only capitalises at a sentence start, stays lower case, and a lower-case first word gets a capital. Digits next
- * to digits keep their hyphen, so a date stays a date ("2026-10-08 historical …"). A title the text itself uses as a
- * hyphenated word ("dev-auto runs") is a name and stays. Any other title is unchanged.
- */
-export function readableTitle(title: string, markdown: string): string {
-  if (!SLUG.test(title)) return title
-  const prose = markdown.replace(COMMENT, ' ')
-  const escaped = title.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  if (new RegExp(`(?<![\\p{L}\\p{N}_\\-/.\\[\\\\])${escaped}(?![\\p{L}\\p{N}_\\-/\\]\\\\]|\\.[\\p{L}\\p{N}])`, 'u').test(prose)) return title
+/** A title-shaped word in the text: a lower-case hyphenated word standing alone (not a file name, path or link). */
+const HYPHENATED = /(?<![\p{L}\p{N}_\-/.[\\])[a-z0-9]+(?:-[a-z0-9]+)+(?![\p{L}\p{N}_\-/\]\\]|\.[\p{L}\p{N}])/gu
+/** What may stand before a word that opens a line, list item, heading or quote. */
+const LINE_OPENING = /^[\s#>*+\-\d.)[\]`_|"'(“‘]*$/u
+/** What may stand before a word that opens a sentence, quoted or not. */
+const SENTENCE_OPENING = /[.!?:]["')\]*_”’]*\s+["'([*_“‘]*$/u
+
+/** How the text spells each word of a file-name title: its own spelling when the text never writes it in lower case. */
+function spellings(title: string, prose: string): string[] {
+  const wanted = new Set(title.split('-'))
   const forms = new Map<string, Map<string, number>>()
   const lower = new Set<string>()
   for (const line of prose.split('\n')) {
     for (const match of line.matchAll(LONE_WORD)) {
       const word = match[0]
       const key = word.toLowerCase()
+      if (!wanted.has(key)) continue
       if (word === key) { lower.add(key); continue }
       const before = line.slice(0, match.index)
       // "Direction" opening a line, list item, heading or sentence says nothing about how the word is spelled.
-      if (word === key[0]!.toUpperCase() + key.slice(1) && (/^[\s#>*+\-\d.)[\]`_|]*$/u.test(before) || /[.!?:]["')\]*_]*\s+$/u.test(before))) continue
+      if (word === key[0]!.toUpperCase() + key.slice(1) && (LINE_OPENING.test(before) || SENTENCE_OPENING.test(before))) continue
       const counts = forms.get(key) ?? new Map<string, number>()
       counts.set(word, (counts.get(word) ?? 0) + 1)
       forms.set(key, counts)
     }
   }
-  const words = title.split('-').map((word) => {
+  return title.split('-').map((word) => {
     if (lower.has(word)) return word
     const counts = [...(forms.get(word) ?? new Map<string, number>()).entries()]
     return counts.length ? counts.reduce((best, each) => (each[1] > best[1] ? each : best))[0] : word
   })
-  const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
-  return words[0] === title.split('-')[0] ? text[0]!.toUpperCase() + text.slice(1) : text
 }
 
 /**
- * One line of a note for the list, at most 180 characters: with search words, the first line holding one (a line
- * that says what the note says before its provenance line); else its `Summary:` line; else the first line that is not
- * a heading, rule, blank or provenance line. Hidden values read "[secret hidden]" as on the note page (Quick look's
- * rules), so a value the page masks never shows in a row or its tooltip.
+ * The title the page shows. A file-name title reads as words: "ai-direction" -> "AI direction". Each word takes the
+ * spelling the note's own text always gives it (AI, BMN, GitHub, iPhone); a word the text also writes in lower case,
+ * or only capitalises at a line, sentence or quote start, stays lower case, and a lower-case first word gets a
+ * capital. A hidden value never lends a spelling. Digits next to digits keep their hyphen, so a date stays a date
+ * ("2026-10-08 historical …"). A title the text itself uses as a hyphenated word ("dev-auto runs") is a name and
+ * stays. Any other title is unchanged. Selection and order use the stored title; only what is drawn reads this.
+ */
+export function readableTitle(title: string, markdown: string): string {
+  if (!SLUG.test(title)) return title
+  let prose = markdown.replace(COMMENT, ' ')
+  if (prose.includes(title) && [...prose.matchAll(HYPHENATED)].some((match) => match[0] === title)) return title
+  const plain = title.split('-')
+  let words = spellings(title, prose)
+  if (words.some((word, at) => word !== plain[at])) {
+    // Learned from the text: learn again with hidden values blanked, so none lends its spelling (review 2026-11-20).
+    let blanked = ''
+    let at = 0
+    for (const [start, end] of secretRanges('/brain/note.md', prose)) { blanked += prose.slice(at, Math.max(at, start)) + ' '.repeat(Math.max(0, end - Math.max(at, start))); at = Math.max(at, end) }
+    prose = blanked + prose.slice(at)
+    words = spellings(title, prose)
+  }
+  const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
+  return words[0] === plain[0] ? text[0]!.toUpperCase() + text.slice(1) : text
+}
+
+/**
+ * One line of a note for the list, at most 180 characters: with search words, the first line holding one, never its
+ * provenance line (design.md); else its `Summary:` line; else the first line that is not
+ * a heading, rule, blank or provenance line. It reads the text the page draws (withoutComments), and hidden values
+ * read "[secret hidden]" as on the note page (Quick look's rules), so a value the page masks never shows in a row or
+ * its tooltip.
  */
 export function summaryLine(markdown: string, words: readonly string[] = []): string {
-  const text = (markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown).replace(COMMENT, '')
+  const text = withoutComments(markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown)
   let masked = ''
   let at = 0
   for (const [start, end] of secretRanges('/brain/note.md', text)) { masked += text.slice(at, Math.max(at, start)) + SECRET_MASK; at = Math.max(at, end) }
@@ -85,7 +135,7 @@ export function summaryLine(markdown: string, words: readonly string[] = []): st
   const said = lines.filter((line) => !PROVENANCE.test(line))
   const lower = words.map((word) => word.toLocaleLowerCase('und'))
   const holds = (line: string): boolean => lower.some((word) => line.toLocaleLowerCase('und').includes(word))
-  const hit = lower.length ? said.find(holds) ?? lines.find(holds) : undefined
+  const hit = lower.length ? said.find(holds) : undefined
   // A quoted summary loses its quotes and reads its escaped quotes plain: Summary: "says \"no\"" -> says "no".
   const summary = said.find((line) => SUMMARY.test(line))?.replace(SUMMARY, '').replace(/^"(.*)"$/u, (_, inner: string) => inner.replaceAll('\\"', '"'))
   // A link reads as its words: [[Name|label]] shows "label", [[Name]] shows "Name".
@@ -100,11 +150,42 @@ export function queryWords(query: string): string[] {
 
 function statusesFor(archived: boolean): readonly BrainStatus[] { return archived ? ['active', 'archived'] : ['active'] }
 
+/** Readable titles kept by stored title and text checksum; past this many the cache starts again. */
+const TITLE_CACHE = 20_000
+
 export class BrainPageReader {
+  private readonly titles = new Map<string, string>()
   constructor(private readonly database: DatabaseConnection) {}
 
-  private summary(row: { id: string; title: string; kind: string; status: BrainStatus; source_time: string; markdown: string }, words: readonly string[] = []): BrainPageSummary {
-    return { id: row.id, title: readableTitle(row.title, row.markdown), kind: row.kind, status: row.status, changed: row.source_time, summary: summaryLine(row.markdown, words) }
+  /** A stored title as the page shows it, worked out once per title and text (readableTitle). */
+  private titleOf(title: string, checksum: string, markdown: () => string): string {
+    if (!SLUG.test(title)) return title
+    const key = checksum + '\n' + title
+    let shown = this.titles.get(key)
+    if (shown === undefined) {
+      if (this.titles.size >= TITLE_CACHE) this.titles.clear()
+      shown = readableTitle(title, markdown())
+      this.titles.set(key, shown)
+    }
+    return shown
+  }
+
+  /** Notes chosen by their stored titles, given the titles the page shows; only file-name titles read their text. */
+  private shown<Note extends { id: string; title: string }>(notes: Note[]): Note[] {
+    const slugs = notes.filter((note) => SLUG.test(note.title)).map((note) => note.id)
+    if (!slugs.length) return notes
+    const titles = new Map<string, string>()
+    const text = this.database.prepare(`SELECT v.markdown ${HEAD} WHERE n.id=?`)
+    for (let at = 0; at < slugs.length; at += 500) {
+      const chunk = slugs.slice(at, at + 500)
+      const rows = this.database.prepare(`SELECT n.id, v.title, v.checksum ${HEAD} WHERE n.id IN (${chunk.map(() => '?').join(',')})`).all(...chunk) as { id: string; title: string; checksum: string }[]
+      for (const row of rows) titles.set(row.id, this.titleOf(row.title, row.checksum, () => (text.get(row.id) as { markdown: string }).markdown))
+    }
+    return notes.map((note) => (titles.has(note.id) ? { ...note, title: titles.get(note.id)! } : note))
+  }
+
+  private summary(row: { id: string; title: string; kind: string; status: BrainStatus; source_time: string; markdown: string; checksum: string }, words: readonly string[] = []): BrainPageSummary {
+    return { id: row.id, title: this.titleOf(row.title, row.checksum, () => row.markdown), kind: row.kind, status: row.status, changed: row.source_time, summary: summaryLine(row.markdown, words) }
   }
 
   /** A page of notes, newest change first: visible ones, or with `withdrawn` only the withdrawn ones. */
@@ -113,7 +194,7 @@ export class BrainPageReader {
     const offset = Math.max(0, Math.trunc(options.offset ?? 0))
     const limit = Math.min(BRAIN_PAGE_LIST_LIMIT, Math.max(1, Math.trunc(options.limit ?? BRAIN_PAGE_LIST_LIMIT)))
     const marks = statuses.map(() => '?').join(',')
-    const rows = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.source_time, v.markdown ${HEAD}
+    const rows = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.source_time, v.markdown, v.checksum ${HEAD}
       WHERE n.status IN (${marks}) ${NEWEST} LIMIT ? OFFSET ?`).all(...statuses, limit, offset) as Parameters<BrainPageReader['summary']>[0][]
     const total = (this.database.prepare(`SELECT count(*) AS c FROM brain_note WHERE status IN (${marks})`).get(...statuses) as { c: number }).c
     const withdrawn = (this.database.prepare("SELECT count(*) AS c FROM brain_note WHERE status='withdrawn'").get() as { c: number }).c
@@ -138,12 +219,12 @@ export class BrainPageReader {
     }
     type Row = Parameters<BrainPageReader['summary']>[0]
     const rows: Iterable<Row> = long.length
-      ? this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.source_time, v.markdown, bm25(brain_search,0,5,1) AS score
+      ? this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.source_time, v.markdown, v.checksum, bm25(brain_search,0,5,1) AS score
           FROM brain_search JOIN brain_note n ON n.id=brain_search.note
           JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision
           WHERE brain_search MATCH ? AND n.status IN (${marks}) ORDER BY score, n.id`)
         .iterate(long.map((word) => '"' + word.replaceAll('"', '""') + '"').join(' AND '), ...statuses) as Iterable<Row>
-      : this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.source_time, v.markdown ${HEAD}
+      : this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.source_time, v.markdown, v.checksum ${HEAD}
           WHERE n.status IN (${marks}) ${NEWEST}`).iterate(...statuses) as Iterable<Row>
     const notes: BrainPageSummary[] = []
     let limited = false
@@ -156,14 +237,14 @@ export class BrainPageReader {
   }
 
   private ref(id: string): BrainPageNoteRef | undefined {
-    const row = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, ${MARKDOWN_IF_SLUG} ${HEAD} WHERE n.id=?`).get(id) as RefRow | undefined
-    return row ? readable(row) : undefined
+    const row = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.id=?`).get(id) as BrainPageNoteRef | undefined
+    return row ? this.shown([row])[0] : undefined
   }
 
   /** A note by its id, any status, with what it links to and what links to it; withdrawn notes are never listed as links. */
   read(id: string): BrainPageNote {
-    const row = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.origin, v.scope, v.source_time, v.recorded_at, v.revision, v.markdown ${HEAD} WHERE n.id=?`)
-      .get(id) as { id: string; status: BrainStatus; title: string; kind: string; origin: string; scope: string; source_time: string; recorded_at: string; revision: number; markdown: string } | undefined
+    const row = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, v.origin, v.scope, v.source_time, v.recorded_at, v.revision, v.markdown, v.checksum ${HEAD} WHERE n.id=?`)
+      .get(id) as { id: string; status: BrainStatus; title: string; kind: string; origin: string; scope: string; source_time: string; recorded_at: string; revision: number; markdown: string; checksum: string } | undefined
     if (!row) throw new BrainError('NOT_FOUND', 'Brain note not found')
     const links = this.database.prepare('SELECT kind, target, resolved FROM brain_link WHERE note=? ORDER BY rowid').all(id) as { kind: 'note' | 'project'; target: string; resolved: string | null }[]
     const order = new Map<string, number>()
@@ -180,13 +261,13 @@ export class BrainPageReader {
       if (!reachable) missing.push(link.target)
       else if (!linksTo.some((each) => each.id === reachable.id)) linksTo.push(reachable)
     }
-    const linkedFrom = (this.database.prepare(`SELECT DISTINCT n.id, n.status, v.title, v.kind, ${MARKDOWN_IF_SLUG} FROM brain_link l
+    const linkedFrom = this.shown(this.database.prepare(`SELECT DISTINCT n.id, n.status, v.title, v.kind FROM brain_link l
       JOIN brain_note n ON n.id=l.note JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision
-      WHERE l.resolved=? AND l.kind='note' AND n.status!='withdrawn' AND n.id<>?`).all(id, id) as RefRow[]).map(readable)
+      WHERE l.resolved=? AND l.kind='note' AND n.status!='withdrawn' AND n.id<>?`).all(id, id) as BrainPageNoteRef[])
       .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id))
     return {
-      id: row.id, title: readableTitle(row.title, row.markdown), name: row.title, kind: row.kind, status: row.status, origin: row.origin, scope: row.scope,
-      changed: row.source_time, recorded: row.recorded_at, revision: row.revision, markdown: row.markdown,
+      id: row.id, title: this.titleOf(row.title, row.checksum, () => row.markdown), name: row.title, kind: row.kind, status: row.status, origin: row.origin, scope: row.scope,
+      changed: row.source_time, recorded: row.recorded_at, revision: row.revision, markdown: withoutComments(row.markdown),
       linksTo, linkedFrom, projects: links.filter((link) => link.kind === 'project').map((link) => link.target), missing, targets
     }
   }
@@ -197,18 +278,19 @@ export class BrainPageReader {
    */
   history(id: string): BrainPageVersion[] {
     if (!this.ref(id)) throw new BrainError('NOT_FOUND', 'Brain note not found')
-    const versions = this.database.prepare(`SELECT revision, action, title, kind, origin, status, recorded_at AS recorded, source_time AS changed, markdown
-      FROM brain_version WHERE note=? ORDER BY revision DESC`).all(id) as Omit<BrainPageVersion, 'name' | 'targets'>[]
+    const versions = this.database.prepare(`SELECT revision, action, title, kind, origin, status, recorded_at AS recorded, source_time AS changed, markdown, checksum
+      FROM brain_version WHERE note=? ORDER BY revision DESC`).all(id) as (Omit<BrainPageVersion, 'name' | 'targets'> & { checksum: string })[]
     const resolve = brainLinkResolver(this.database)
     const reachable = new Map<string, string | null>()
     const target = (name: string): string | null => {
       if (!reachable.has(name)) { const found = resolve(name); reachable.set(name, found && this.ref(found)?.status !== 'withdrawn' ? found : null) }
       return reachable.get(name)!
     }
-    return versions.map((version) => {
+    return versions.map(({ checksum, ...version }) => {
+      // Own keys only: a link named `constructor` is a name like any other (review 2026-11-20).
       const targets: Record<string, string | null> = {}
-      for (const match of version.markdown.matchAll(/\[\[([^\]|#]+)/gu)) { const name = match[1]!.trim(); targets[name] ??= target(name) }
-      return { ...version, title: readableTitle(version.title, version.markdown), name: version.title, targets }
+      for (const match of version.markdown.matchAll(/\[\[([^\]|#]+)/gu)) { const name = match[1]!.trim(); if (!Object.hasOwn(targets, name)) targets[name] = target(name) }
+      return { ...version, title: this.titleOf(version.title, checksum, () => version.markdown), name: version.title, markdown: withoutComments(version.markdown), targets }
     })
   }
 
@@ -216,8 +298,9 @@ export class BrainPageReader {
   private visibleLinks(archived: boolean): { visible: Map<string, BrainPageNoteRef>; near: Map<string, Set<string>> } {
     const statuses = statusesFor(archived)
     const marks = statuses.map(() => '?').join(',')
-    const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, ${MARKDOWN_IF_SLUG} ${HEAD} WHERE n.status IN (${marks})`)
-      .all(...statuses) as RefRow[]).map((row) => [row.id, readable(row)]))
+    // Stored titles: selection and order never depend on how a title reads (review 2026-11-20).
+    const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.status IN (${marks})`)
+      .all(...statuses) as BrainPageNoteRef[]).map((note) => [note.id, note]))
     const near = new Map<string, Set<string>>()
     const join = (a: string, b: string): void => { const set = near.get(a) ?? new Set<string>(); set.add(b); near.set(a, set) }
     for (const link of this.database.prepare("SELECT note, resolved FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").iterate() as Iterable<{ note: string; resolved: string }>) {
@@ -240,7 +323,7 @@ export class BrainPageReader {
     const edges: BrainMap['edges'] = []
     for (const note of kept) for (const to of near.get(note.id) ?? []) if (note.id < to && ids.has(to)) edges.push({ from: note.id, to })
     edges.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to))
-    return { nodes: kept.map((note) => ({ id: note.id, title: note.title, kind: note.kind, status: note.status, links: degree(note.id) })), edges, total: visible.size }
+    return { nodes: this.shown(kept.map((note) => ({ id: note.id, title: note.title, kind: note.kind, status: note.status, links: degree(note.id) }))), edges, total: visible.size }
   }
 
   /**
@@ -308,6 +391,6 @@ export class BrainPageReader {
       }
     }
     for (let ring = depth; ring < 3; ring += 1) result.more[ring as 0 | 1 | 2] = 0
-    return { focus: id, depth, nodes, edges, more: result.more }
+    return { focus: id, depth, nodes: this.shown(nodes), edges, more: result.more }
   }
 }

@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { describe, it, expect } from 'vitest'
 import type { DatabaseConnection } from './database-initialization'
 import { BrainStore, type BrainImport } from './brain-store'
-import { BrainPageReader, GRAPH_RING_PLACES, queryWords, readableTitle, summaryLine } from './brain-page'
+import { BrainPageReader, GRAPH_RING_PLACES, queryWords, readableTitle, summaryLine, withoutComments } from './brain-page'
 const SQLite = createRequire(import.meta.url)('better-sqlite3') as new (path: string) => DatabaseConnection
 
 const note = (title: string, markdown: string, extra: Partial<BrainImport> = {}): BrainImport =>
@@ -102,6 +102,21 @@ describe('Brain page list and search', () => {
   it("never takes an HTML comment for a note's line", () => {
     expect(summaryLine('<!-- MODULE: x.md - header -->\n\nThe rule itself.')).toBe('The rule itself.')
     expect(summaryLine('<!-- an agent\nleft this -->\nReal <!-- not this --> text.')).toBe('Real text.')
+    // Words after a comment on its line stay; `<!--` inside code is text and cuts nothing short (review 2026-11-20).
+    expect(summaryLine('<!-- editorial -->Keep this instruction.')).toBe('Keep this instruction.')
+    expect(summaryLine('Write `<!--` to open a comment, then more.')).toBe('Write `<!--` to open a comment, then more.')
+  })
+
+  it('drops only HTML comments from the text the page draws, never code or the words beside them (review 2026-11-20)', () => {
+    expect(withoutComments('a\n\n<!-- MODULE: x_y.md - header -->\n\nb')).toBe('a\n\n\nb')
+    expect(withoutComments('a\n\n<!-- one\ntwo -->\nb')).toBe('a\n\nb')
+    expect(withoutComments('<!-- editorial -->Keep this instruction.')).toBe('Keep this instruction.')
+    expect(withoutComments('Keep this <!-- not this --> and this')).toBe('Keep this  and this')
+    expect(withoutComments('<div>\n<!-- inside html -->\nshown\n</div>')).not.toContain('inside html')
+    expect(withoutComments('<div>\n<!-- inside html -->\nshown\n</div>')).toContain('shown')
+    const code = 'Intro\n```\n<!-- kept -->\n```\nUse `<!-- x -->` here\n\n    <!-- indented code -->\n'
+    expect(withoutComments(code)).toBe(code)
+    expect(withoutComments('No comment here.')).toBe('No comment here.')
   })
 
   it('summarises a filed note by its Summary line, never its provenance line, and masks hidden values (review 2026-11-20)', () => {
@@ -111,12 +126,15 @@ describe('Brain page list and search', () => {
     expect(summaryLine('Source: Claude memory `synthetic/a.md`.\n\nFirst real line.')).toBe('First real line.')
     // A search word in both: the line that says something wins over the provenance line.
     expect(summaryLine(filed, ['prune'])).toBe('Summary: "Never prune the volumes."')
-    expect(summaryLine(filed, ['sha256'])).toContain('Source: Claude memory')
+    // A word only in the provenance line still finds the note, but its row shows the Summary line (design.md).
+    expect(summaryLine(filed, ['sha256'])).toBe('Never prune the volumes.')
     // A value the note page hides is hidden in the row too.
     const key = 'AKIA' + 'ABCDEFGHIJKLMNOP'
     expect(summaryLine(`The key is ${key}.`)).toBe('The key is [secret hidden].')
     expect(summaryLine(`Summary: "uses ${key}"`)).not.toContain(key)
     expect(summaryLine(`intro\r\nkey ${key} here`, ['key'])).toBe('key [secret hidden] here')
+    // A fenced HTML example cannot shift what is hidden.
+    expect(summaryLine('```html\n<!-- x\n```\npassword = Hunter2Hunter2Secret')).not.toContain('Hunter2')
   })
 })
 
@@ -166,6 +184,17 @@ describe('Brain page note, links and history', () => {
     } finally { b.close() }
   })
 
+  it("finds an older version's links named like object keys or written with spaces (review 2026-11-20)", () => {
+    const b = brain([note('Changing', 'See [[constructor]], [[ Kept ]] and [[toString]].'), note('constructor', 'A note.'), note('Kept', 'Kept text.')])
+    try {
+      b.store.setWriteDoor(true)
+      b.store.edit(b.id('Changing'), 1, { title: 'Changing', kind: 'fact', origin: 'agent', scope: 'all', markdown: 'No links now.' }, 'synthetic-session')
+      const first = b.page.history(b.id('Changing'))[1]!
+      expect(first.targets).toEqual({ constructor: b.id('constructor'), Kept: b.id('Kept'), toString: null })
+      expect(Object.keys(first.targets)).toEqual(['constructor', 'Kept', 'toString'])
+    } finally { b.close() }
+  })
+
   it('shows a file-name title as words spelled as the note spells them, and keeps the stored name', () => {
     expect(readableTitle('ai-direction', '# MODULE: ai-direction.md - standing direction\n\nAI is the primary goal. The direction holds.')).toBe('AI direction')
     expect(readableTitle('bmn-no-pr-push-main-directly', 'BMN pushes main directly, no PR. Never open a PR.')).toBe('BMN no PR push main directly')
@@ -182,6 +211,10 @@ describe('Brain page note, links and history', () => {
     expect(readableTitle('iphone-transfer', 'Copy from the iPhone with ifuse.')).toBe('iPhone transfer')
     expect(readableTitle('dev-auto', 'A dev-auto run delivers. See [[dev-auto]].')).toBe('dev-auto')
     expect(readableTitle('dev-auto', 'See [[dev-auto]] and `dev-auto.md`.')).toBe('Dev auto')
+    // A word capitalised only at a quoted sentence start stays lower case; a hidden value lends no spelling.
+    expect(readableTitle('project-tool', 'Summary: "Tool for the project."')).toBe('Project tool')
+    expect(readableTitle('hunter-notes', 'password = HuNtEr\nThe hunter notes.')).toBe('Hunter notes')
+    expect(readableTitle('zebra-notes', 'token: zEbRa9xQ2mPfK7wLr4TnVb8Y\nnotes about ZEBRA')).toBe('ZEBRA notes')
     const b = brain([note('ai-direction', 'AI comes first.\n\nSee [[Plain]].'), note('Plain', 'Back to [[ai-direction]].')])
     try {
       const read = b.page.read(b.id('ai-direction'))
@@ -194,6 +227,42 @@ describe('Brain page note, links and history', () => {
       expect(b.page.search('comes first').notes.map((n) => n.title)).toEqual(['AI direction'])
     } finally { b.close() }
   })
+
+  it('chooses and orders notes by their stored titles, so readable titles change no selection (review 2026-11-20)', () => {
+    // Equal link counts: the one-note map keeps the first stored title, "AI strategy" before "ai-direction".
+    const b = brain([note('ai-direction', 'AI first. [[Hub]]'), note('AI strategy', 'Plan. [[Hub]]'), note('Hub', 'centre')])
+    try {
+      expect(b.page.map({ limit: 1 }).nodes.map((n) => n.title)).toEqual(['Hub'])
+      const two = b.page.map({ limit: 2 }).nodes.map((n) => n.title)
+      expect(two).toEqual(['Hub', 'AI strategy'])
+    } finally { b.close() }
+  })
+
+  it('opens a graph and the map quickly on 1,000 file-name titles with real-sized text, first read included', () => {
+    const words = ['backup', 'restore', 'agent', 'plan', 'night', 'keys', 'review', 'graph', 'calm', 'budget', 'stay', 'epic']
+    const titles = Array.from({ length: 1000 }, (_, i) => `${words[i % 12]}-${words[(i * 7) % 12]}-${words[(i * 5 + 3) % 12]}-${i}`)
+    const body = 'Standing rule about BMN and AI agents. The plan keeps backups calm; review the graph at night.\n'.repeat(11)
+    let seed = 1285
+    const next = (): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % 1000 }
+    const b = brain(titles.map((title, i) => note(title, body + [0, 1, 2].map(() => { let to = next(); if (to === i) to = (to + 1) % 1000; return `[[${titles[to]}]]` }).join(' '))))
+    try {
+      const start = performance.now()
+      const graph = b.page.graph(b.id(titles[0]!))
+      const graphMs = performance.now() - start
+      expect(graph.nodes.find((n) => n.id === b.id(titles[0]!))!.title).toBe('Backup backup plan 0')
+      const mapStart = performance.now()
+      const map = b.page.map()
+      const mapMs = performance.now() - mapStart
+      expect(map.nodes).toHaveLength(1000)
+      const againStart = performance.now()
+      b.page.map()
+      const againMs = performance.now() - againStart
+      process.stderr.write(JSON.stringify({ slugTitles: true, graphMs: Math.round(graphMs), mapMs: Math.round(mapMs), mapAgainMs: Math.round(againMs) }) + '\n')
+      expect(graphMs).toBeLessThan(100)
+      expect(mapMs).toBeLessThan(600)
+      expect(againMs).toBeLessThan(200)
+    } finally { b.close() }
+  }, 30_000)
 })
 
 describe('Brain page neighbourhood (D7)', () => {

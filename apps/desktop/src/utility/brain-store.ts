@@ -46,7 +46,9 @@ const HEAD = `SELECT n.id, n.import_source, v.* FROM brain_note n JOIN brain_ver
  */
 export function brainLinkResolver(database: DatabaseConnection): (name: string) => string | null {
   const titles=new Map<string,Set<string>>()
-  for (const n of database.prepare(HEAD).all() as {id:string;title:string;import_source:string|null}[]) {
+  // Names only, never note text: the page asks for this on every History open (review 2026-11-20).
+  for (const n of database.prepare(`SELECT n.id, n.import_source, v.title FROM brain_note n JOIN brain_version v
+    ON v.note=n.id AND v.revision=n.head_revision`).all() as {id:string;title:string;import_source:string|null}[]) {
     const source=n.import_source?.replace(/^vault:/,'').replace(/\.md$/i,'')
     for (const title of new Set([n.title, n.title.split('/').at(-1) ?? n.title, ...(source?[source]:[])])) {
       const key=normalizeBrainTitle(title.replace(/\.md$/i,''));const ids=titles.get(key) ?? new Set<string>();ids.add(n.id);titles.set(key,ids)

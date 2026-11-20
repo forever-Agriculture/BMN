@@ -111,15 +111,16 @@ export async function seedSwitchedBrain({ dataRoot, stateRoot, notes, withdraw =
   // Before anything is made: no link anywhere on either root's existing path (it resolves to itself), and fresh
   // destinations, where any directory entry, a dangling link too, counts as taken.
   // Every part of both roots that exists is looked at with lstat (only ENOENT means absent), before either is made.
-  const linkOnPath = path => {
+  // Each part that exists must be a real folder: a link redirects, and a file there would fail half way (review).
+  const unsafeOnPath = path => {
     let at = '/'
     for (const part of resolve(path).split('/').filter(Boolean)) {
       at = join(at, part)
-      try { if (lstatSync(at).isSymbolicLink()) return true } catch (error) { if (error?.code === 'ENOENT') return false; throw error }
+      try { const entry = lstatSync(at); if (entry.isSymbolicLink() || !entry.isDirectory()) return true } catch (error) { if (error?.code === 'ENOENT') return false; throw error }
     }
     return false
   }
-  for (const root of [dataRoot, stateRoot]) if (linkOnPath(root) || resolved(root) !== resolve(root)) throw new Error(`Refusing a redirected fixture folder: ${root}`)
+  for (const root of [dataRoot, stateRoot]) if (unsafeOnPath(root) || resolved(root) !== resolve(root)) throw new Error(`Refusing a redirected or blocked fixture folder: ${root}`)
   const taken = path => { try { lstatSync(path); return true } catch { return false } }
   for (const path of [databasePath, journal, dirname(journal)]) if (taken(path)) throw new Error(`The Brain page fixture needs a fresh destination: ${path}`)
   mkdirSync(dataRoot, { recursive: true, mode: 0o700 })

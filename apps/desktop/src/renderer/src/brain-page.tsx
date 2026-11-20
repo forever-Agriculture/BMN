@@ -38,41 +38,29 @@ function brainTime(iso: string): string {
 const markdown = markdownParser.configure(GFM)
 
 /**
- * The note's text as the page draws it. Its first `# MODULE: name.md - …` heading goes: a file header that Epic 127
- * carried over from agent memory files, repeating the note's name, which the title already says. Every HTML comment
- * (`<!-- … -->`) goes too, as Markdown never shows one; the parser finds them, so a comment inside code stays.
+ * The note's text as the page draws it (the reader has already left out HTML comments): without its first
+ * `# MODULE: name.md - …` heading, a file header that Epic 127 carried over from agent memory files. It repeats the
+ * note's name, which the title already says. The parser finds it, so the same line inside code stays.
  */
 export function readingText(text: string): string {
-  const cuts: [number, number][] = []
-  let heading = false
+  let cut: [number, number] | null = null
   markdown.parse(text).iterate({
     enter(node) {
-      if (node.name === 'CommentBlock') {
-        // The whole line or lines, with the line break after them.
-        const start = text.lastIndexOf('\n', node.from - 1) + 1
-        cuts.push([start, text[node.to] === '\n' ? node.to + 1 : node.to])
-        return false
-      }
-      if (node.name === 'Comment') { cuts.push([node.from, node.to]); return false }
-      if (!heading && node.name === 'ATXHeading1' && /^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(text.slice(node.from, node.to))) {
-        heading = true
-        cuts.push([node.from, text[node.to] === '\n' ? node.to + 1 : node.to])
+      if (cut) return false
+      if (node.name === 'ATXHeading1' && /^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(text.slice(node.from, node.to))) {
+        cut = [node.from, text[node.to] === '\n' ? node.to + 1 : node.to]
         return false
       }
       return undefined
     }
   })
-  let out = ''
-  let at = 0
-  for (const [from, to] of cuts.sort((a, b) => a[0] - b[0])) { if (from >= at) { out += text.slice(at, from); at = to } }
-  return out + text.slice(at)
+  return cut ? text.slice(0, cut[0]) + text.slice(cut[1]) : text
 }
 
 /** True when the note's text opens with a level-1 heading of its own title. */
-export function startsWithTitle(note: { title: string; name?: string; markdown: string }): boolean {
+export function startsWithTitle(note: { title: string; markdown: string }): boolean {
   const first = /^\s*#\s+(.+?)\s*#*\s*$/mu.exec(readingText(note.markdown).replace(/^---\n[\s\S]*?\n---\n/u, '').split('\n').find((line) => line.trim()) ?? '')
-  const same = (title: string | undefined): boolean => !!title && first![1]!.trim().toLocaleLowerCase('und') === title.trim().toLocaleLowerCase('und')
-  return !!first && (same(note.title) || same(note.name))
+  return !!first && first[1]!.trim().toLocaleLowerCase('und') === note.title.trim().toLocaleLowerCase('und')
 }
 
 /** The words a nothing-found search shows (design.md frame 2). */
@@ -662,7 +650,11 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
           {shown.id !== note?.id ? <button type="button" className="b-plate" onClick={() => refocus(shown.id)} title="Shift Enter">Refocus</button> : null}
         </div>
         {graph && graph.nodes.length === 1 ? <p className="b-muted">No linked notes yet</p> : null}
-        <div className="b-side-text"><NoteText key={shown.id} note={shown} onOpen={(id) => setSelected(id)} /></div>
+        <div className="b-side-text"><NoteText key={shown.id} note={shown} onOpen={(id) => {
+          // Only a note drawn on this graph can be selected on it; any other link opens that note as a page (review).
+          if (graph?.nodes.some((node) => node.id === id)) setSelected(id)
+          else { setView('note'); setPane('text'); openNote(id) }
+        }} /></div>
       </aside>
     )
   }
@@ -697,7 +689,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   }
 
   const noteBody = (current: BrainPageNote): ReactNode => {
-    if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={closeHistory} onOpen={(id) => { closeHistory(); openNote(id) }} />
+    if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={closeHistory} onOpen={(id) => { closeHistory(); setView('note'); setPane('text'); openNote(id) }} />
     const panel = (
       <aside className="b-side" aria-label="About this note">
         <h3 className="b-side-head">Note</h3>

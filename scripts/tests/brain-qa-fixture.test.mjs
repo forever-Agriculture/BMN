@@ -124,3 +124,14 @@ it('refuses a dangling link at the state root before making the data root (reche
   expect(readdirSync(parent).sort()).toEqual(['state'])
  }finally{rmSync(parent,{recursive:true,force:true})}
 })
+
+it('refuses a file where a root folder should be before making the data root (review 2026-11-20)',async()=>{
+ const {seedSwitchedBrain}=await import('../test/brain-page-fixture.mjs')
+ const parent=mkdtempSync(join(tmpdir(),'bmn-brain-file-root-'))
+ try{
+  writeFileSync(join(parent,'state'),'not a folder')
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data'),stateRoot:join(parent,'state'),notes:[]})).rejects.toThrow(/blocked/)
+  await expect(seedSwitchedBrain({dataRoot:join(parent,'data'),stateRoot:join(parent,'state','inner'),notes:[]})).rejects.toThrow(/blocked/)
+  expect(readdirSync(parent).sort()).toEqual(['state'])
+ }finally{rmSync(parent,{recursive:true,force:true})}
+})
