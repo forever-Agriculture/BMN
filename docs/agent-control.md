@@ -1154,6 +1154,14 @@ What it holds, in the shell commands of the text:
 - a reader or sender (`cat head tail less more base64 xxd od strings cp mv scp rsync curl wget nc tar zip gpg`) naming a
   file of BMN's secret list (`bin/secret-list.mjs`) as an argument, and any program reading one through a redirect, whichever
   descriptor it opens (a `.pub` is left only in `~/.ssh`);
+- BMN's own owner keys (Epic 137): the same readers and redirects naming `owner.token` (beside the control socket, outside
+  the home folder) or `telegram-bot.token` by file name wherever they sit, a wildcard in their own folder (`…/control/*`,
+  `~/.config/bmn/*.token`), and those folders whole for `cp tar zip` and the like; and a `bmn` call with `--owner`,
+  `--token-file X` or `--token-file=X` before any `--`, as `bmn`, a full path or `node …/bmn`. The owner token can answer
+  for him, so an agent's own use waits for him, a test instance's `--owner` too. This is a tripwire, not a wall: a read
+  through another program (`grep`, `python3`, `node -e`), a copied token or an environment variable already set passes, and
+  a broken guard holds nothing (it fails open by his choice, Epic 102 D3). Other programs' `--owner` (`gh search prs
+  --owner X`) stay free. The apps' own rules do not list these keys;
 - `terraform`, `pulumi` or `terragrunt` `destroy`, `gcloud run deploy`, `gcloud app deploy`, `gh secret` and `gh variable`
   `set` or `delete`.
 

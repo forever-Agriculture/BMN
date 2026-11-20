@@ -459,6 +459,18 @@ function secretHold(name, args, reads) {
   return named ? 'reading or sending a credential file' : null
 }
 
+/**
+ * Epic 137: a `bmn` call with BMN's owner credential (`--owner`, or `--token-file` in either form) before any `--`, run as
+ * `bmn` or through Node. The owner token can answer for him, so an agent's own use waits for him.
+ */
+function ownerCredentialHold(words) {
+  const script = nameOf(words[0]) === 'node' ? words.findIndex((word, index) => index > 0 && !word.startsWith('-')) : 0
+  if (script === -1 || nameOf(words[script]) !== 'bmn') return null
+  const after = words.slice(script + 1)
+  const options = after.includes('--') ? after.slice(0, after.indexOf('--')) : after
+  return options.some((word) => /^--(owner|token-file)(=|$)/.test(word)) ? 'a bmn call with the owner credential (--owner or --token-file)' : null
+}
+
 /** Whether an `iommu=soft` this command names, or the text piped or redirected into it, goes into a file: never `echo` or `grep` by themselves. */
 function iommuHold({ words, input, pipe, writes }, name, args) {
   const writer = /^(tee|grubby|kernelstub)$/.test(name) || (name === 'sed' && args.some((word) => /^--in-place(=|$)/.test(word) || shortFlags(word, 'i'))) ||
@@ -512,7 +524,7 @@ export function heldCommand(command, depth = 0, inheritedSelector = false, cwd =
     if (/^(docker|podman|docker-compose)$/.test(name)) { const held = dockerHold(name, words); if (held !== null) return held }
     if (name === 'prime-select' && args.includes('nvidia')) return 'prime-select nvidia, which must stay on-demand on this laptop'
     if (name === 'rm') { const held = removeHold(args); if (held !== null) return held }
-    const held = secretHold(name, args, reads) ?? iommuHold(entry, name, args) ?? cloudHold(name, args)
+    const held = secretHold(name, args, reads) ?? ownerCredentialHold(words) ?? iommuHold(entry, name, args) ?? cloudHold(name, args)
     if (held !== null) return held
     if (['npm', 'pnpm', 'yarn'].includes(name)) {
       const [verb, action] = subcommand(words, PACKAGE_VALUES)

@@ -46,14 +46,36 @@ export function underHome(word) {
 const wildcardMatchesSecret = (relative) => /[*?]/.test(relative) && !relative.endsWith('.pub') &&
   EXAMPLES.some((example) => wildcard(relative).test(example))
 
+/**
+ * Epic 137: BMN's own owner keys, by file name wherever they sit: `owner.token` beside the control socket (under the
+ * runtime folder, outside the home folder) and the Telegram bot's token in BMN's config folder. Only the guard holds them;
+ * the apps' own rules do not list them.
+ */
+export const BMN_KEY_NAMES = ['owner.token', 'telegram-bot.token']
+
+/** The folders that hold a key: the control folder and BMN's config folder, current or legacy. */
+const KEY_FOLDER = /(^|\/)((bmn|ai-terminal)\/control|\.config\/(bmn|ai-terminal))$/
+
+/** Whether a word names one of BMN's owner keys: by its name, or a wildcard in the key's own folder (or none) that takes it. */
+export function namesBmnKey(word) {
+  const path = tidy(word)
+  const slash = path.lastIndexOf('/')
+  const name = path.slice(slash + 1)
+  if (BMN_KEY_NAMES.includes(name)) return true
+  if (!/[*?]/.test(name) || (slash !== -1 && !KEY_FOLDER.test(path.slice(0, slash)))) return false
+  return BMN_KEY_NAMES.some((key) => wildcard(name).test(key))
+}
+
 /** Whether a word of a command names a listed file: under the home folder or, as a whole word, relative to where it runs. */
 export function namesSecretFile(word) {
+  if (namesBmnKey(word)) return true
   const relative = underHome(word) ?? (word.startsWith('/') ? null : tidy(word))
   return relative !== null && (isSecretFile(relative) || wildcardMatchesSecret(relative))
 }
 
-/** Whether a word names a folder under the home folder, or the home folder, that holds a listed file. */
+/** Whether a word names a folder that holds a listed file or a BMN key: under the home folder, the home folder, or BMN's runtime or control folder. */
 export function namesFolderOfSecret(word) {
+  if (KEY_FOLDER.test(tidy(word)) || /(^|\/)run\/user\/\d+\/(bmn|ai-terminal)$/.test(tidy(word))) return true
   const relative = underHome(word)
   if (relative === null) return false
   if (relative === '') return true
