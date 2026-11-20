@@ -308,7 +308,8 @@ export const NAMED = {
       'docs/survival-matrix.md': measured,
       'docs/turn-changes.md': measured,
       'docs/usage-sources.md': measured,
-      'scripts/test/cursor-screens-visual.mjs': { class: EVIDENCE, reason: 'Epic 71\'s before-and-after screens, made with a team file that named it' }
+      'scripts/test/cursor-screens-visual.mjs': { class: EVIDENCE, reason: 'Epic 71\'s before-and-after screens, made with a team file that named it' },
+      [`scripts/test/${oc}-screens-visual.mjs`]: { class: EVIDENCE, reason: `Epic 123's before-and-after screens (123.2), made on a team file and records from before the retirement` }
     }
   }
 }
