@@ -98,6 +98,21 @@ describe('Brain page list and search', () => {
     expect(summaryLine('# T\nalpha\nbeta gamma', ['GAMMA'])).toBe('beta gamma')
     expect(summaryLine('Part of [[Backup plan]] and [[Store schema|the schema]].')).toBe('Part of Backup plan and the schema.')
   })
+
+  it('summarises a filed note by its Summary line, never its provenance line, and masks hidden values (review 2026-11-20)', () => {
+    const filed = 'Source: Claude memory `synthetic/keeper.md`, sha256 0123456789ab, filed by Epic 127.3.\n\nSummary: "Never prune the volumes."\n\n# MODULE: keeper.md - header\n\nBody line.'
+    expect(summaryLine(filed)).toBe('Never prune the volumes.')
+    expect(summaryLine('Summary: "A call can say \\"rejected\\" after it ran."')).toBe('A call can say "rejected" after it ran.')
+    expect(summaryLine('Source: Claude memory `synthetic/a.md`.\n\nFirst real line.')).toBe('First real line.')
+    // A search word in both: the line that says something wins over the provenance line.
+    expect(summaryLine(filed, ['prune'])).toBe('Summary: "Never prune the volumes."')
+    expect(summaryLine(filed, ['sha256'])).toContain('Source: Claude memory')
+    // A value the note page hides is hidden in the row too.
+    const key = 'AKIA' + 'ABCDEFGHIJKLMNOP'
+    expect(summaryLine(`The key is ${key}.`)).toBe('The key is [secret hidden].')
+    expect(summaryLine(`Summary: "uses ${key}"`)).not.toContain(key)
+    expect(summaryLine(`intro\r\nkey ${key} here`, ['key'])).toBe('key [secret hidden] here')
+  })
 })
 
 describe('Brain page note, links and history', () => {

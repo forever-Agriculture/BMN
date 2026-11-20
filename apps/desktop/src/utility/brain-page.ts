@@ -1,6 +1,7 @@
 // MODULE: brain-page.ts - The Brain page's read-only view of the store: paged summaries, every-word search, a note with its links, history, a capped neighbourhood and the whole-brain map (Epic 128)
 import type { DatabaseConnection } from './database-initialization'
 import type { BrainGraph, BrainGraphNode, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
+import { SECRET_MASK, secretRanges } from '@bmn/protocol'
 import { BrainError } from './brain-store'
 export type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
 
@@ -15,13 +16,32 @@ export const BRAIN_MAP_CAP = 3000
 const HEAD = `FROM brain_note n JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision`
 const NEWEST = 'ORDER BY julianday(v.source_time) DESC, v.recorded_at DESC, n.id'
 
-/** The first line of a note that is not a heading, rule or blank, as one line of at most 180 characters. */
+/** A filed note's provenance line ("Source: Claude memory …, sha256 …"): it says where a note came from, not what it says. */
+const PROVENANCE = /^Source:\s/u
+/** A filed note's own summary line ("Summary: …", Epic 127): the best one line of what it says. */
+const SUMMARY = /^Summary:\s*/u
+
+/**
+ * One line of a note for the list, at most 180 characters: with search words, the first line holding one (a line
+ * that says what the note says before its provenance line); else its `Summary:` line; else the first line that is not
+ * a heading, rule, blank or provenance line. Hidden values read "[secret hidden]" as on the note page (Quick look's
+ * rules), so a value the page masks never shows in a row or its tooltip.
+ */
 export function summaryLine(markdown: string, words: readonly string[] = []): string {
-  const lines = markdown.split('\n').map((line) => line.trim()).filter((line) => line && !/^(?:#{1,6}\s|---+$|```)/u.test(line))
+  const text = markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown
+  let masked = ''
+  let at = 0
+  for (const [start, end] of secretRanges('/brain/note.md', text)) { masked += text.slice(at, Math.max(at, start)) + SECRET_MASK; at = Math.max(at, end) }
+  masked += text.slice(at)
+  const lines = masked.split('\n').map((line) => line.trim()).filter((line) => line && !/^(?:#{1,6}\s|---+$|```)/u.test(line))
+  const said = lines.filter((line) => !PROVENANCE.test(line))
   const lower = words.map((word) => word.toLocaleLowerCase('und'))
-  const hit = lower.length ? lines.find((line) => lower.some((word) => line.toLocaleLowerCase('und').includes(word))) : undefined
+  const holds = (line: string): boolean => lower.some((word) => line.toLocaleLowerCase('und').includes(word))
+  const hit = lower.length ? said.find(holds) ?? lines.find(holds) : undefined
+  // A quoted summary loses its quotes and reads its escaped quotes plain: Summary: "says \"no\"" -> says "no".
+  const summary = said.find((line) => SUMMARY.test(line))?.replace(SUMMARY, '').replace(/^"(.*)"$/u, (_, inner: string) => inner.replaceAll('\\"', '"'))
   // A link reads as its words: [[Name|label]] shows "label", [[Name]] shows "Name".
-  return (hit ?? lines[0] ?? '').replace(/!?\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/gu, (_, name: string, label?: string) => (label ?? name).trim())
+  return (hit ?? (summary || undefined) ?? said[0] ?? lines[0] ?? '').replace(/!?\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/gu, (_, name: string, label?: string) => (label ?? name).trim())
     .replace(/\s+/gu, ' ').slice(0, 180)
 }
 

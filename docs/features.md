@@ -811,11 +811,14 @@ he changes a note by telling an agent.
 
 - **Search** replaces the list as he types and finds notes that hold every typed word, in any
   order, not only the exact phrase; words under three letters are checked in the text. It shows
-  the first 10. `bmn brain search` for agents still matches the typed text as one phrase.
+  the first 10. `bmn brain search` for agents still matches the typed text as one phrase. Each row
+  shows one line of the note: a filed note's `Summary:` line rather than its `Source:` line, with
+  hidden values masked.
 - **A note** reads as a page with its kind, status, origin, scope, last change and version, the
   notes it links to and the notes that link to it. A link opens its note; a name that is no note
   in the brain is plain muted text. A hidden value shows for ten seconds when he asks, as in Quick
-look. **H** shows History, every earlier version read-only.
+look. A `# MODULE: name.md` file header carried over from agent memory files is not drawn. **H**
+  shows History, every earlier version read-only; a link in it opens that note.
 - **The graph** (**G**) draws a note's neighbourhood on fixed rings: depth **1 2 3**, opening at
   the least depth that shows 8 notes. It walks links only between visible notes (archived ones
   when **Archived** is on, withdrawn ones never), draws at most 150 notes and counts the rest as

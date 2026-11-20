@@ -266,7 +266,8 @@ From `plan/references/128/design.md` revision 2 (Fable-2, 2026-11-19; the owner 
 - **Sheet.** An L4 dialog, the window less 24 px, at most 1280x800. Bar: back and forward, the search
   field with its `/` cap, then Note | Graph (B6), All notes and the Archived toggle (B4). The graph is a
   `--ground` well (L3). The note's text uses Quick Look's Markdown page, 680 px at most, on the sheet.
-- **List and search.** Rows parted by hairlines (L2, B7): marker, title, kind, date, one summary line;
+- **List and search.** Rows parted by hairlines (L2, B7): marker, title, kind, date, one summary line
+  (a filed note's `Summary:` line, never its `Source:` provenance line; hidden values masked as on the page);
   the current row has the F2 bar; matched words take the `--selection` fill with the gold bar under them.
   At 10 results the count reads "First 10". Nothing found: "No note has these words. Try one word.",
   with a Cyrillic letter "… The notes are in English, so try English words." Empty: "The brain is

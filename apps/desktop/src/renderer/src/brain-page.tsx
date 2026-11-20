@@ -34,6 +34,14 @@ function brainTime(iso: string): string {
   return Number.isNaN(date.getTime()) ? '' : `${brainDate(iso)}, ${date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
 }
 
+/**
+ * The note's text without its first `# MODULE: name.md - …` heading: a file header that Epic 127 carried over from
+ * agent memory files. It repeats the note's name as the page's largest heading; the note's title already says it.
+ */
+export function withoutModuleHeading(markdown: string): string {
+  return markdown.replace(/^#[ \t]+MODULE:[ \t]+\S+\.md\b[^\n]*(?:\r?\n)?/mu, '')
+}
+
 /** True when the note's text opens with a level-1 heading of its own title. */
 export function startsWithTitle(note: { title: string; markdown: string }): boolean {
   const first = /^\s*#\s+(.+?)\s*#*\s*$/mu.exec(note.markdown.replace(/^---\n[\s\S]*?\n---\n/u, '').split('\n').find((line) => line.trim()) ?? '')
@@ -140,7 +148,7 @@ function NoteText(props: { note: BrainPageNote; onOpen(id: string): void; focus?
   const { note } = props
   const path = `/brain/${note.id}.md`
   // One text for the page and its hidden values: line endings made `\n` as Quick look's view does (viewText).
-  const text = useMemo(() => viewText(note.markdown), [note.markdown])
+  const text = useMemo(() => viewText(withoutModuleHeading(note.markdown)), [note.markdown])
   const page = useMemo(() => {
     const targets: Record<string, string> = {}
     for (const [name, id] of Object.entries(note.targets)) if (id) { targets[`wiki:${name}`] = `/brain-note/${id}` }
@@ -168,7 +176,7 @@ function NoteText(props: { note: BrainPageNote; onOpen(id: string): void; focus?
   )
 }
 
-function HistorySheet(props: { note: BrainPageNote; versions: BrainPageVersion[] | null; error: string | null; onClose(): void }): React.JSX.Element {
+function HistorySheet(props: { note: BrainPageNote; versions: BrainPageVersion[] | null; error: string | null; onClose(): void; onOpen(id: string): void }): React.JSX.Element {
   const [pick, setPick] = useState<number | null>(null)
   const chosen = props.versions?.find((version) => version.revision === pick) ?? props.versions?.[0] ?? null
   const shown = useMemo(() => (chosen ? { ...props.note, markdown: chosen.markdown, targets: props.note.targets } : null), [chosen, props.note])
@@ -192,7 +200,7 @@ function HistorySheet(props: { note: BrainPageNote; versions: BrainPageVersion[]
             </li>
           ))}
         </ul>
-        <div className="b-history-text">{shown ? <NoteText key={chosen!.revision} note={shown} onOpen={() => undefined} /> : null}</div>
+        <div className="b-history-text">{shown ? <NoteText key={chosen!.revision} note={shown} onOpen={props.onOpen} /> : null}</div>
       </div>
     </div>
   )
@@ -224,6 +232,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   const [depth, setDepth] = useState<Depth | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [beside, setBeside] = useState<BrainPageNote | null>(null)
+  const [besideError, setBesideError] = useState<string | null>(null)
   const [narrow, setNarrow] = useState(false)
   // The whole-brain map (Epic 128.5): open from a note or the list; its own selection and side panel.
   const [mapOpen, setMapOpen] = useState(false)
@@ -279,7 +288,8 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
         const element = box.current
         const active = document.activeElement
         if (!element || keepGraph || element.contains(active) && active !== element && active !== search.current) return
-        (element.querySelector<HTMLElement>('.b-text .ql-page') ?? element).focus()
+        // preventScroll: in the narrow layout the whole note scrolls as one, and focusing its text would hide the head.
+        (element.querySelector<HTMLElement>('.b-text .ql-page') ?? element).focus({ preventScroll: true })
       })
       setQuery('')
       setResults(null)
@@ -379,10 +389,12 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
 
   // The note shown beside the graph.
   useEffect(() => {
+    setBesideError(null)
     if (!showGraph || !selected) return
     if (note && selected === note.id) { setBeside(note); return }
     let live = true
-    read<BrainPageNote>({ command: 'read', id: selected }).then((next) => { if (live) setBeside(next) }).catch(() => { if (live) setBeside(null) })
+    read<BrainPageNote>({ command: 'read', id: selected }).then((next) => { if (live) setBeside(next) })
+      .catch((error: unknown) => { if (live) { setBeside(null); setBesideError(errorText(error)) } })
     return () => { live = false }
   }, [showGraph, selected, note, read])
 
@@ -602,8 +614,16 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   )
 
   const besidePanel = (): ReactNode => {
-    const shown = beside ?? note
-    if (!shown) return null
+    // Only the note now selected is shown beside, so its buttons never act on the one before (as on the map).
+    const wanted = selected ?? note?.id ?? null
+    const shown = beside && beside.id === wanted ? beside : note && note.id === wanted ? note : null
+    if (!shown) {
+      return (
+        <aside className="b-side" aria-label="Selected note" aria-busy={besideError ? undefined : true}>
+          {besideError ? <p className="b-alert" role="alert">This note could not be read: {besideError}</p> : null}
+        </aside>
+      )
+    }
     return (
       <aside className="b-side" aria-label="Selected note">
         <span className="b-eyebrow"><KindMark kind={shown.kind} status={shown.status} />{shown.kind}</span>
@@ -649,7 +669,7 @@ export function BrainSheet(props: { memory: BrainMemory; read?: BrainRead; onClo
   }
 
   const noteBody = (current: BrainPageNote): ReactNode => {
-    if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={closeHistory} />
+    if (history) return <HistorySheet note={current} versions={history.versions} error={history.error} onClose={closeHistory} onOpen={(id) => { closeHistory(); openNote(id) }} />
     const panel = (
       <aside className="b-side" aria-label="About this note">
         <h3 className="b-side-head">Note</h3>

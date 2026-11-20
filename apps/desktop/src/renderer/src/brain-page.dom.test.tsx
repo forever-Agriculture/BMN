@@ -4,7 +4,7 @@ import type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageReque
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BrainSheet, brainDate, createBrainMemory, noResultWords, startsWithTitle, type BrainMemory } from './brain-page'
+import { BrainSheet, brainDate, createBrainMemory, noResultWords, startsWithTitle, withoutModuleHeading, type BrainMemory } from './brain-page'
 
 let root: Root | undefined
 let container: HTMLDivElement | undefined
@@ -25,6 +25,8 @@ const NOTES: Record<string, BrainPageNote> = {
     markdown: 'The key is AKIAABCDEFGHIJKLMNOP.\r\nSee [[Other]].' }),
   o2: note('o2', 'Other', { linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Another key AKIAZYXWVUTSRQPONMLK here.' }),
   h1: note('h1', 'Hidden link', { linksTo: [], linkedFrom: [], missing: [], targets: { Old: 'n4' }, markdown: 'See [[Old]].' }),
+  m1: note('m1', 'keeper-note', { linksTo: [], linkedFrom: [], missing: [], targets: {},
+    markdown: 'Source: Claude memory `synthetic/keeper-note.md`.\n\nSummary: "Short rule."\n\n# MODULE: keeper-note.md - a file header\n\nThe rule itself.' }),
   w1: note('w1', 'Mistake', { status: 'withdrawn', linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Withdrawn text.' })
 }
 const WITHDRAWN = Array.from({ length: 101 }, (_, i) => summary(i ? `w${i + 1}` : 'w1', i ? `Withdrawn ${i}` : 'Mistake', { status: 'withdrawn' }))
@@ -37,6 +39,7 @@ let FOUND: BrainPageSummary[] | null = null
 let PAIRED = false
 let GRAPH_FAILS = false
 let READ_FAILS = new Set<string>()
+let HISTORY_TEXT = 'Second.'
 function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainPageSummary[]) {
   return async <Result,>(request: BrainPageRequest): Promise<Result> => {
     requests.push(request)
@@ -58,7 +61,7 @@ function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainP
         if (!found) throw new Error('Brain note not found')
         return found as Result
       }
-      case 'history': return [{ revision: 2, action: 'edit', title: 'Backup plan', kind: 'project', origin: 'agent', status: 'active', recorded: AT, changed: AT, markdown: 'Second.' },
+      case 'history': return [{ revision: 2, action: 'edit', title: 'Backup plan', kind: 'project', origin: 'agent', status: 'active', recorded: AT, changed: AT, markdown: HISTORY_TEXT },
         { revision: 1, action: 'import', title: 'Backup plan', kind: 'project', origin: 'import', status: 'active', recorded: AT, changed: AT, markdown: 'First.' }] satisfies BrainPageVersion[] as Result
       case 'graph': {
         if (GRAPH_FAILS) throw new Error('This note is not shown in the graph')
@@ -108,6 +111,7 @@ beforeEach(() => {
   held = null
   release = []
   READ_FAILS = new Set()
+  HISTORY_TEXT = 'Second.'
   LIST = [summary('n1', 'Backup plan'), summary('n2', 'Other')]
   FOUND = null
   PAIRED = false
@@ -462,6 +466,7 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
     expect(container!.querySelector('.b-side .b-alert')!.textContent).toContain('could not be read')
     expect(container!.querySelector('.b-side [aria-busy="true"]')).toBeNull()
     READ_FAILS = new Set()
+  HISTORY_TEXT = 'Second.'
     await clickDot('h1')
     expect(container!.querySelector('.b-side-title')!.textContent).toBe('Hidden link')
   })
@@ -572,6 +577,65 @@ describe('Brain page after review (Astra 20261119T191003-e9cb0226)', () => {
       expect(container!.querySelector('.b-title')!.textContent).toBe('Keys')
       expect(page()).not.toContain('AKIA')
     } finally { vi.useRealTimers() }
+  })
+})
+
+describe('Brain page after the post-delivery review (2026-11-20)', () => {
+  it('opening a note gives its text the keys without scrolling, so the narrow sheet keeps the note head in view', async () => {
+    // A frame is a plain timeout here: an earlier fake-timer case can leave jsdom's own frames stalled.
+    vi.stubGlobal('requestAnimationFrame', (run: FrameRequestCallback) => setTimeout(() => run(0), 0))
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    await mount()
+    await type('backup')
+    await press(container!.querySelector('.b-search input')!, 'Enter')
+    await flush()
+    const page = container!.querySelector('.b-text .ql-page')
+    const calls = focus.mock.contexts.map((context, at) => [context, focus.mock.calls[at]![0]] as const).filter(([context]) => context === page)
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.every(([, options]) => (options as FocusOptions | undefined)?.preventScroll === true)).toBe(true)
+    focus.mockRestore()
+  })
+
+  it('beside the graph shows only the note now selected: nothing of the one before while it loads, and a failed read says so', async () => {
+    PAIRED = true
+    await mount({ noteId: 'n1', archived: false })
+    await press(container!.querySelector('.b-box')!, 'g')
+    expect(container!.querySelector('.b-side-title')!.textContent).toBe('Backup plan')
+    held = (request) => request.command === 'read'
+    await act(async () => { container!.querySelector<SVGGElement>('.b-node[data-node="n2"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await flush()
+    expect(container!.querySelector('.b-node.selected')!.getAttribute('data-node')).toBe('n2')
+    expect(container!.querySelector('.b-side-title')).toBeNull()
+    expect([...container!.querySelectorAll('.b-side button')].map((b) => b.textContent)).toEqual([])
+    held = null
+    await releaseAll()
+    expect(container!.querySelector('.b-side-title')!.textContent).toBe('Other')
+    // A read that fails: no panel for the centre note, and the reason shown.
+    await act(async () => { container!.querySelector<SVGGElement>('.b-node[data-node="n1"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await flush()
+    READ_FAILS.add('n2')
+    await act(async () => { container!.querySelector<SVGGElement>('.b-node[data-node="n2"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await flush()
+    expect(container!.querySelector('.b-side-title')).toBeNull()
+    expect(container!.querySelector('.b-side .b-alert')!.textContent).toContain('could not be read')
+  })
+
+  it('a link in History opens its note and closes History', async () => {
+    HISTORY_TEXT = 'Second. See [[Other]].'
+    await mount({ noteId: 'n1', archived: false })
+    await press(container!.querySelector('.b-box')!, 'h')
+    await act(async () => { container!.querySelector<HTMLElement>('.b-history .ql-md-a[data-target="file"]')!.click() })
+    await flush()
+    expect(container!.querySelector('.b-history')).toBeNull()
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Other')
+  })
+
+  it('draws a filed note without its MODULE file header', async () => {
+    await mount({ noteId: 'm1', archived: false })
+    expect(container!.querySelector('.b-text')!.textContent).toContain('The rule itself.')
+    expect(container!.querySelector('.b-text')!.textContent).not.toContain('MODULE')
+    expect(withoutModuleHeading('a\n# MODULE: x.md - header\nb\n# MODULE: y.md - kept')).toBe('a\nb\n# MODULE: y.md - kept')
+    expect(withoutModuleHeading('# Module of x\ntext')).toBe('# Module of x\ntext')
   })
 })
 
