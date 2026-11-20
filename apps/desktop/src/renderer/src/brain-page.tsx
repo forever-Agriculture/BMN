@@ -35,8 +35,9 @@ function brainTime(iso: string): string {
 }
 
 /**
- * The note's text without its first `# MODULE: name.md - …` heading: a file header that Epic 127 carried over from
- * agent memory files. It repeats the note's name as the page's largest heading; the note's title already says it.
+ * The note's text without its first `# MODULE: name.md - …` heading, or the same header written as an HTML comment
+ * (`<!-- MODULE: name.md - … -->`, which the page would draw as a code line): a file header that Epic 127 carried over
+ * from agent memory files. It repeats the note's name; the note's title already says it.
  */
 export function withoutModuleHeading(markdown: string): string {
   const lines = markdown.split('\n')
@@ -44,7 +45,7 @@ export function withoutModuleHeading(markdown: string): string {
   for (const [at, line] of lines.entries()) {
     // A line inside a ``` or ~~~ code block is an example, not the note's header (pre-review).
     if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced
-    else if (!fenced && /^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(line)) return [...lines.slice(0, at), ...lines.slice(at + 1)].join('\n')
+    else if (!fenced && (/^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(line) || /^<!--[ \t]*MODULE:[ \t]+\S+\.md\b.*-->[ \t]*\r?$/u.test(line))) return [...lines.slice(0, at), ...lines.slice(at + 1)].join('\n')
   }
   return markdown
 }
