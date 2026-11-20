@@ -543,7 +543,7 @@ repository owner: each account or organisation your sessions work in, or that `g
 and gets a switch, and an owner you allowed or a repository you raised stays listed after its last session closes; under an allowed owner each repository has three steps, **PRs only** (push other branches and
 write pull requests, with no label or comment that triggers a deployment or a bot), **Merge when green** (also merge a pull request whose required checks are all green) and
 **Merge and push main** (also push the default branch, never forced, once the work passed its acceptance).
-Agents read it with `bmn policy --repo` before each push, merge or pull-request write, as your rules master tells them; it is in force only while that
+Agents read it with `bmn policy --repo OWNER/NAME` before each push, merge or pull-request write, as your rules master tells them; it is in force only while that
 master carries the pointer, so Rules › Undo of that save turns it off, and so does denying every owner. Deploys,
 releases, CI changes, secrets, force pushes and deletions always ask you, and BMN's hook holds the clearly
 critical commands itself ([agent-control.md](agent-control.md#the-push-policy)).

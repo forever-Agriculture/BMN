@@ -28,8 +28,8 @@ on it if it fits your task. Retry only with the same --key. More: bmn help agent
  * The push policy's line (Story 83.5, the owner's text card of 2026-10-18), in the brief only while Health allows at least
  * one owner: without one, `bmn policy` authorizes nothing and the line would only send agents to read that.
  */
-export const AGENT_BRIEF_POLICY_LINE = `Pushes and merges: read bmn policy --repo before each push, merge or PR write; push main or
-merge only at the level it prints; run git push and gh pr as commands of their own.`
+export const AGENT_BRIEF_POLICY_LINE = `Pushes and merges: read bmn policy --repo OWNER/NAME before each push, merge or PR write;
+push main or merge only at the level it prints; run git push and gh pr as commands of their own.`
 
 /** The brief as handed over: with the policy's line before Away while an owner is allowed. */
 export function agentStartBrief(policy: boolean): string {

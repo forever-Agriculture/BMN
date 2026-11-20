@@ -33,7 +33,7 @@ export const PUSH_POLICY_STILL_ASKS: readonly string[] = Object.freeze([
 ])
 
 /** The text his rules master carries while the policy is in force (Story 83.5); without it nothing is authorized. */
-export const PUSH_POLICY_POINTER = 'bmn policy --repo'
+export const PUSH_POLICY_POINTER = 'bmn policy --repo OWNER/NAME'
 
 /** A GitHub login or organisation name, and an `owner/name` repository, compared lower-cased. */
 const LOGIN = /^[a-z0-9](?:[a-z0-9-]{0,38})$/

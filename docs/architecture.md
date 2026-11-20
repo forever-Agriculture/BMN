@@ -220,7 +220,7 @@ adds no agent-control socket method.
 `app_setting` row, `push-policy-v1`, through preload, main and the utility, one owner or one repository at a time
 against the revision it showed; a stale change is refused and reread. A missing row reads as no owner allowed; a row
 that cannot be read is *unknown*, counts as denied and is never written over. The policy authorizes anything only
-while every team app's installed rules carry its pointer (`bmn policy --repo`, from BMN's own rules block): the
+while every team app's installed rules carry its pointer (`bmn policy --repo OWNER/NAME`, from BMN's own rules block): the
 utility asks main, the one process that reads the rules (R60-NFR3), with a `policy-pointer` question, and a file it
 cannot read counts as no pointer. Agents read
 it with `bmn policy` over the socket (`policy.status`, a read any session token may make; `policy.set` refuses every

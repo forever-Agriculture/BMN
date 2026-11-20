@@ -1,13 +1,13 @@
 // MODULE: plan-bmad-sync.test.mjs - Epic108 D25 two-way board sync with full-note preservation and approval holds
 import { execFileSync, spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { resolvePlan, rowToken } from '../../apps/desktop/bin/plan-board.mjs'
 import * as copy from '../../apps/desktop/bin/plan-bmad-copy.mjs'
 import { publishPlan, publicationState } from '../../apps/desktop/bin/plan-publish.mjs'
-import { approvalText, recordGo } from '../../apps/desktop/bin/plan-cli.mjs'
+import { approvalText, lockBoard, recordGo } from '../../apps/desktop/bin/plan-cli.mjs'
 import { stagePlan } from '../plan/migrate-bmad-plan.mjs'
 
 const roots = []
@@ -28,6 +28,44 @@ async function fixture(note = 'original') {
   return { root, board, target, record, plan: await resolvePlan(root), git, environment: { XDG_STATE_HOME: join(root, 'state') } }
 }
 const replace = (path, before, after) => writeFileSync(path, readFileSync(path, 'utf8').replace(before, after))
+
+/** Every file under a folder with its bytes and modification time, so a test sees any write, however small. */
+function snapshot(root) {
+  const files = {}
+  const walk = folder => { for (const entry of readdirSync(folder, { withFileTypes: true })) { const path = join(folder, entry.name); if (entry.isDirectory()) walk(path); else files[path] = [readFileSync(path, 'base64'), statSync(path).mtimeMs] } }
+  walk(root)
+  return files
+}
+
+it('plan check only reads a board with a pending sync: no write, no lock, and `bmn plan sync` named as the fix (Story 136.1 AC2)', async () => {
+  const f = await fixture(), bmn = new URL('../../apps/desktop/bin/bmn', import.meta.url).pathname
+  replace(f.target, 'epic-7: backlog', 'epic-7: ready-for-dev')
+  writeFileSync(f.board, readFileSync(f.board, 'utf8') + '  7-2-new: backlog\n')
+  // Held for the whole check: a check that tried to lock either board or the record would wait, then fail LOCKED.
+  const releases = [await lockBoard(f.board), await lockBoard(f.target), await lockBoard(f.record)]
+  try {
+    const before = snapshot(f.root)
+    const p = spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env: { ...process.env, ...f.environment }, timeout: 20_000 })
+    // The bare fixture lacks VISION.md and epic sections, so check has structural findings; none is the copy's.
+    const value = JSON.parse(p.stdout)
+    expect(value.error, p.stderr).toBeUndefined()
+    expect(value.findings.filter(finding => finding.code?.startsWith('COPY_'))).toEqual([])
+    expect(value.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'COPY_SYNC_PENDING', key: 'epic-7', reason: expect.stringContaining('run `bmn plan sync`') }),
+      expect.objectContaining({ code: 'COPY_SYNC_PENDING', key: '7-2-new', reason: expect.stringContaining('run `bmn plan sync`') })
+    ]))
+    expect(snapshot(f.root)).toEqual(before)
+    const text = spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root], { encoding: 'utf8', env: { ...process.env, ...f.environment }, timeout: 20_000 })
+    expect(text.stderr).toBe('')
+    expect(text.stdout).toMatch(/^warning: .*epic-7 changed on one board since the last sync; run `bmn plan sync`$/mu)
+    expect(snapshot(f.root)).toEqual(before)
+  } finally { for (const release of releases.reverse()) release() }
+  // The fix it names brings the boards together, and check then has nothing to report.
+  const sync = spawnSync(process.execPath, [bmn, 'plan', 'sync', '--project', f.root, '--json'], { encoding: 'utf8', env: { ...process.env, ...f.environment } })
+  expect(sync.status, sync.stdout).toBe(0)
+  const after = JSON.parse(spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env: { ...process.env, ...f.environment } }).stdout)
+  expect(after.warnings.filter(warning => warning.code === 'COPY_SYNC_PENDING')).toEqual([])
+}, 60_000)
 
 it('maintains the ready and finished queue through CLI sync and recovered journals', async () => {
   const f = await fixture(), bmn = new URL('../../apps/desktop/bin/bmn', import.meta.url).pathname

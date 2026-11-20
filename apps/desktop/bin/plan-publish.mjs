@@ -238,7 +238,7 @@ export async function publishPlan(plan, { readPolicy = policyFor, pullRequest, d
   let state = load(path)
   try {
     if (reconciliationMigration !== null && isCopiedPlan(plan)) throw new PlanError('INVALID_RECONCILIATION', 'receipt migration requires a canonical plan without a retained board copy')
-    const unresolved = (await copyFindings(plan, { recover: true })).filter(finding => finding.code !== 'COPY_CONFLICT')
+    const unresolved = (await copyFindings(plan)).filter(finding => finding.code !== 'COPY_CONFLICT')
     if (unresolved.length) throw new PlanError(unresolved[0].code, unresolved[0].reason)
     if (!isCopiedPlan(plan)) releaseAuthority = await lockBoard(plan.boardPath)
     if (reconciliationMigration !== null && (!reconciliationExpect ||

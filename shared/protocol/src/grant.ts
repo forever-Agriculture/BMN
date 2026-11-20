@@ -1562,7 +1562,7 @@ export function nightTermHold(read: PushPolicyRead, term: GrantTerm): string | n
   return null
 }
 
-/** A merge, push, command or message granted to one run, in force now, as `bmn policy --repo` lists it after the level's lines (84.9 AC1, 103.3 AC4). */
+/** A merge, push, command or message granted to one run, in force now, as `bmn policy --repo OWNER/NAME` lists it after the level's lines (84.9 AC1, 103.3 AC4). */
 export interface GrantedRepositoryAction {
   runId: string
   title: string

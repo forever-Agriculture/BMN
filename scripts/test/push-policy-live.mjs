@@ -27,7 +27,7 @@ const phase = (label) => console.error(`[BMN push policy] ${label}`)
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 const MASTER = '# Global rules\n\nPlain rule for everyone.\n'
 // The pointer line the owner approved for his master (Story 83.5's text card, 2026-10-18), here in a made-up master.
-const POINTER = 'Pushes, merges and pull requests follow BMN\'s policy: before each push, merge or PR write, read `bmn policy --repo` and act only within what it authorizes.\n'
+const POINTER = 'Pushes, merges and pull requests follow BMN\'s policy: before each push, merge or PR write, read `bmn policy --repo OWNER/NAME` and act only within what it authorizes.\n'
 
 const originalRuntime = process.env.XDG_RUNTIME_DIR
 const originalWaylandDisplay = process.env.WAYLAND_DISPLAY
@@ -191,7 +191,7 @@ esac`)
     await until(async () => (await repositories(main))[0]?.level === 'Merge and push main', 'Merge and push main')
     const focused = await page.evaluate(() => document.activeElement?.textContent)
     const raised = policy('--repo', 'octo-probe/widgets')
-    check('the arrow keys move the level and the focus together; `bmn policy --repo` prints the stored level (AC5)',
+    check('the arrow keys move the level and the focus together; `bmn policy --repo OWNER/NAME` prints the stored level (AC5)',
       focused === 'Merge and push main' && raised.includes('Repository octo-probe/widgets: Merge and push main (default branch main).')
         && raised.includes('Not authorized here: the installed rules '), { focused, raised })
     const unlisted = policy('--repo', 'octo-probe/elsewhere')

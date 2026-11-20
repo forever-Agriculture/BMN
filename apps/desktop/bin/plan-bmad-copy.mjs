@@ -298,7 +298,13 @@ async function syncLocked(plan, loc, { environment = process.env, seam = async (
 }
 export async function syncPlan(plan, options = {}) {
   if (!isCopiedPlan(plan)) return { outcome: 'not-copied', rows: [], findings: [] }
-  return await locked(plan, loc => syncLocked(plan, loc, options))
+  return await locked(plan, async loc => {
+    const meta = metadata(loc)
+    if (meta.version === 2 || meta.active === false) return await syncLocked(plan, loc, options)
+    // A one-way copy has no two-way sync; sync finishes its interrupted copies, which check did before Story 136.1.
+    const findings = await recoverOneWay(plan, loc, options)
+    return { outcome: findings.length ? 'held' : 'synced', rows: [], findings }
+  })
 }
 export async function setWithCopy(plan, { key, status, note, expect, environment = process.env, seam = async () => {} }) {
   return await locked(plan, async loc => {
@@ -387,27 +393,67 @@ export async function copyRow(plan, { key, expect, environment = process.env, se
     return await prepare(plan, loc, { key, sourceBefore: source, sourceAfter: source, sourceAlreadyWritten: true, explicit: true, environment, seam })
   })
 }
-export async function copyFindings(plan, { recover = false, environment = process.env } = {}) {
+/** Recovers unfinished copies and synchronizes a two-way copy, for `bmn plan publish`; `bmn plan check` reads with copyCheck instead. */
+export async function copyFindings(plan, { environment = process.env } = {}) {
   if (!isCopiedPlan(plan)) return []
   // A staged plan is structurally checkable before the original target is installed beside it.
   if (readMetadata(join(plan.planRoot, 'bmad-copy.json'), sourceBoard(plan)).active === false) return []
   return await locked(plan, async loc => {
-    if (metadata(loc).version === 2) {
-      if (recover) return (await syncLocked(plan, loc, { environment })).findings
-      return Object.values(syncHolds(loc, metadata(loc))).map(hold => ({ code: hold.code, key: hold.key, where: loc.record, reason: hold.reason }))
-    }
-    const findings = []
-    for (const file of existsSync(loc.folder) ? readdirSync(loc.folder).filter(name => /^[0-9a-f]{64}\.json$/u.test(name)) : []) {
-      const state = load(join(loc.folder, file))
-      try {
-        if (recover) await finish(plan, loc, state, { environment })
-        else failure(state.phase === 'go-waiting' ? 'COPY_GO_PENDING' : 'COPY_PENDING', `copy journal for ${state.key} awaits recovery`, state.key)
-      } catch (error) { findings.push({ code: error.code ?? 'COPY_UNREADABLE', key: state.key, where: loc.source, reason: error.message }) }
-    }
-    const meta = metadata(loc), targets = rows(loc.target), source = rows(loc.source)
-    if (meta.active === false) return findings
-    for (const [key, entry] of Object.entries(meta.rows)) if (!same(targets.get(key), entry.last_copied)) findings.push({ code: 'COPY_CONFLICT', key, where: loc.target, reason: `COPY_CONFLICT ${key}: canonical ${JSON.stringify(source.get(key) ?? null)}, target ${JSON.stringify(targets.get(key) ?? null)}; explicit copy requires its fresh token`, canonical: source.get(key) ?? null, target: targets.get(key) ?? null, token: combinedToken(loc, key, meta) })
-    for (const key of Object.keys(meta.unresolved)) findings.push({ code: 'COPY_PROVENANCE_REQUIRED', key, where: loc.record, reason: `${key} has unresolved move-time writer provenance` })
-    return findings
+    if (metadata(loc).version === 2) return (await syncLocked(plan, loc, { environment })).findings
+    return await recoverOneWay(plan, loc, { environment })
   })
+}
+async function recoverOneWay(plan, loc, { environment = process.env } = {}) {
+  const findings = []
+  for (const file of journalFiles(loc)) {
+    const state = load(join(loc.folder, file))
+    try { await finish(plan, loc, state, { environment }) } catch (error) { findings.push({ code: error.code ?? 'COPY_UNREADABLE', key: state.key, where: loc.source, reason: error.message }) }
+  }
+  return [...findings, ...copyStateFindings(loc, metadata(loc))]
+}
+const journalFiles = loc => existsSync(loc.folder) ? readdirSync(loc.folder).filter(name => /^[0-9a-f]{64}\.json$/u.test(name)) : []
+function copyStateFindings(loc, meta) {
+  const findings = [], targets = rows(loc.target), source = rows(loc.source)
+  if (meta.active === false) return findings
+  for (const [key, entry] of Object.entries(meta.rows)) if (!same(targets.get(key), entry.last_copied)) findings.push({ code: 'COPY_CONFLICT', key, where: loc.target, reason: `COPY_CONFLICT ${key}: canonical ${JSON.stringify(source.get(key) ?? null)}, target ${JSON.stringify(targets.get(key) ?? null)}; explicit copy requires its fresh token`, canonical: source.get(key) ?? null, target: targets.get(key) ?? null, token: combinedToken(loc, key, meta) })
+  for (const key of Object.keys(meta.unresolved)) findings.push({ code: 'COPY_PROVENANCE_REQUIRED', key, where: loc.record, reason: `${key} has unresolved move-time writer provenance` })
+  return findings
+}
+
+/**
+ * What `bmn plan check` reports for a copied plan (Story 136.1 AC2): it reads only, takes no lock and finishes nothing.
+ * Holds, a Go still waiting and conflicts are findings; work a sync would do is a warning naming `bmn plan sync`.
+ */
+export function copyCheck(plan) {
+  const none = { findings: [], warnings: [] }
+  if (!isCopiedPlan(plan)) return none
+  // A staged plan is structurally checkable before the original target is installed beside it.
+  if (readMetadata(join(plan.planRoot, 'bmad-copy.json'), sourceBoard(plan)).active === false) return none
+  const loc = locations(plan), meta = metadata(loc), findings = [], warnings = []
+  const pending = (key, reason) => warnings.push({ code: 'COPY_SYNC_PENDING', key, where: loc.record, reason: `${reason}; run \`bmn plan sync\`` })
+  if (meta.version !== 2) {
+    for (const file of journalFiles(loc)) {
+      const state = load(join(loc.folder, file))
+      if (state.phase === 'go-waiting') findings.push({ code: 'COPY_GO_PENDING', key: state.key, where: loc.source, reason: `retry the original Go for ${state.key}; copy recovery never creates or completes a Go` })
+      else pending(state.key, `an unfinished copy of ${state.key} awaits recovery`)
+    }
+    return { findings: [...findings, ...copyStateFindings(loc, meta)], warnings }
+  }
+  const holds = syncHolds(loc, meta), blocked = new Set(Object.keys(holds)), journalled = new Set()
+  for (const hold of Object.values(holds)) findings.push({ code: hold.code, key: hold.key, where: loc.record, reason: hold.reason })
+  for (const file of journalFiles(loc)) {
+    const state = load(join(loc.folder, file))
+    journalled.add(state.key)
+    if (blocked.has(epicOf(state.key))) continue
+    if (state.phase === 'go-waiting') findings.push({ code: 'COPY_GO_PENDING', key: state.key, where: loc.record, reason: `retry the original Go for ${state.key}; copy recovery never creates or completes a Go` })
+    else pending(state.key, `an unfinished copy of ${state.key} awaits recovery`)
+  }
+  const source = rows(loc.source), targets = rows(loc.target)
+  for (const key of [...new Set([...source.keys(), ...targets.keys(), ...Object.keys(meta.rows)])].sort()) {
+    if (blocked.has(epicOf(key)) || journalled.has(key)) continue
+    const previous = meta.rows[key], mine = source.get(key) ?? null, theirs = targets.get(key) ?? null
+    // The same comparison syncOne makes before it writes.
+    if (token(key, mine) !== (previous?.source_token ?? null) || !same(theirs, previous?.last_copied ?? null)) pending(key, `${key} changed on one board since the last sync`)
+  }
+  return { findings, warnings }
 }

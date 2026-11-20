@@ -83,7 +83,7 @@ describe('push policy store (Story 83.3)', () => {
     // Denying every owner is the off switch.
     changePushPolicy(database, { kind: 'owner', login: 'octo', allowed: false, expectedRevision: 1 }, T1)
     expect(pushPolicyStanding(getPushPolicy(database), true).authorizes).toBe(false)
-    expect(PUSH_POLICY_POINTER).toBe('bmn policy --repo')
+    expect(PUSH_POLICY_POINTER).toBe('bmn policy --repo OWNER/NAME')
   })
 
   it('reads a GitHub remote the same way in the app and in `bmn policy`, and keeps the level words the same', () => {

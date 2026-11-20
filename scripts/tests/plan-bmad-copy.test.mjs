@@ -108,7 +108,11 @@ await setWithCopy(await resolvePlan(${JSON.stringify(f.root)}),{key:'7-1-one',st
       const exited = once(child, 'exit')
       execFileSync('python3', ['-c', "import os,sys,signal; from pathlib import Path; pid=int(sys.argv[1]); fd=os.pidfd_open(pid); observed=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()[19]; assert observed==sys.argv[2]; signal.pidfd_send_signal(fd,signal.SIGKILL); os.close(fd)", String(identity.pid), identity.start_ticks])
       await exited
-      const result = spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env: { ...process.env, XDG_STATE_HOME: join(f.root, 'state') } })
+      // Check only reports the unfinished copy (Story 136.1 AC2); the sync it names recovers it.
+      const env = { ...process.env, XDG_STATE_HOME: join(f.root, 'state') }
+      const check = JSON.parse(spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env }).stdout)
+      if (boundary !== 'complete') expect(check.warnings, boundary).toContainEqual(expect.objectContaining({ code: 'COPY_SYNC_PENDING', key: '7-1-one' }))
+      const result = spawnSync(process.execPath, [bmn, 'plan', 'sync', '--project', f.root, '--json'], { encoding: 'utf8', env })
       const findings = JSON.parse(result.stdout).findings.filter(one => one.code?.startsWith('COPY_'))
       if (['plan-writing', 'target-writing', 'record-writing'].includes(boundary)) expect(findings, boundary).toContainEqual(expect.objectContaining({ code: 'COPY_UNCERTAIN' }))
       else {

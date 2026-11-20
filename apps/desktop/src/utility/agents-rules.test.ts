@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { PUSH_POLICY_POINTER as PROTOCOL_POINTER } from '@bmn/protocol'
+import { PUSH_POLICY_POINTER as PROTOCOL_POINTER, agentStartBrief } from '@bmn/protocol'
 import { BMN_RULES, PUSH_POLICY_POINTER } from '../../bin/agents-bmn-rules.mjs'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
@@ -161,6 +161,20 @@ describe('the master (60.4 AC1)', () => {
     expect(BMN_RULES).toContain(PUSH_POLICY_POINTER)
     // The bin copy and the protocol's constant are one text.
     expect(PUSH_POLICY_POINTER).toBe(PROTOCOL_POINTER)
+  })
+
+  it('shows every `bmn policy` command agents read with the repository to fill in, never `--repo` without a value (Story 136.1 AC1)', () => {
+    const repo = fileURLToPath(new URL('../../../../', import.meta.url))
+    const docs = ['docs/agent-control.md', 'docs/features.md', 'docs/architecture.md']
+    const texts: Array<[string, string]> = [
+      ['AGENTS.md', readFileSync(join(repo, 'AGENTS.md'), 'utf8')], ['BMN_RULES', BMN_RULES], ['the start brief', agentStartBrief(true)],
+      ['the pointer', PUSH_POLICY_POINTER], ...docs.map((path): [string, string] => [path, readFileSync(join(repo, path), 'utf8')])
+    ]
+    for (const [where, text] of texts) {
+      expect(text.replace(/\n/g, ' ').match(/bmn policy --repo(?! OWNER\/NAME)(?! [\w.-]+\/[\w.-]+)/gu), where).toBeNull()
+    }
+    for (const where of ['AGENTS.md', 'BMN_RULES', 'the start brief']) expect(texts.find(([name]) => name === where)?.[1].replace(/\n/g, ' '), where).toContain('bmn policy --repo OWNER/NAME')
+    expect(PUSH_POLICY_POINTER).toBe('bmn policy --repo OWNER/NAME')
   })
 
   it('reads the push-policy pointer from every team app installed rules, never from whichever files exist (Story 83.3)', () => {

@@ -1019,7 +1019,7 @@ with each account signed in to `gh` in turn, as Health does, so a repository onl
 read.
 
 - **In force** only while at least one owner is allowed and every team app's installed rules carry the pointer
-  `bmn policy --repo` (BMN's own rules block writes it; restoring a file without it takes it away). Otherwise, and when BMN is closed or its store cannot be read, it prints why and authorizes nothing:
+  `bmn policy --repo OWNER/NAME` (BMN's own rules block writes it; restoring a file without it takes it away). Otherwise, and when BMN is closed or its store cannot be read, it prints why and authorizes nothing:
   every push, merge and pull-request write asks the owner.
 - **PRs only**, a repository's level until he raises it, and the level of a repository the agent's `gh` cannot
   read: push branches other than the default one (never forced, never deleting) and create, edit, mark ready and
@@ -1032,7 +1032,7 @@ read.
   push of the default branch before the work passed its acceptance, anything in a repository of a denied or
   unknown owner, and more). The policy removes the ask; it never makes work ready.
 - **Allowed for Epic N** shows the exact approved operations for the live session bound to that go,
-  including their remaining uses. A read takes no use. Read `bmn policy --repo` before each write.
+  including their remaining uses. A read takes no use. Read `bmn policy --repo OWNER/NAME` before each write.
   Run `bmn run reserve` with the action id, use id and exact command. Run `bmn run dispatch`
   with those same arguments. BMN rechecks the target and current go and claims the use before
   launching the command. Right before it answers, it reads once more that the binding, the go, his Yes under
@@ -1298,7 +1298,7 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   script, a writable interpreter by its path, `make` or `just` with any option but its file, folder and a few plain
   flags, or with a variable (`make SHELL=./x`). npm, pnpm and yarn read only as `NAME run SCRIPT -- ARGS`, from one
   folder, for a script their package.json has. A refusal costs little: the step goes in a pinned script or waits. A program found on the PATH is taken as installed, even in a folder he can write to. For each
-  use `grant use` prints the exact text to run or send; anything else waits. `bmn policy --repo` lists both for
+  use `grant use` prints the exact text to run or send; anything else waits. `bmn policy --repo OWNER/NAME` lists both for
   every repository, because they belong to none, which is what Codex's Auto Review reads
   (measured in the local plan, not in this repository).
   The limits: this is authority, not a lock. BMN answers no native prompt (D4), so an app that prompts on a granted
@@ -1342,7 +1342,7 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
 
 A granted merge or push is a named one-night action above the repository's level in `bmn policy`; the standing
 levels do not change, every merge still has no admin bypass, and GitHub's rules and the command guard still hold.
-`bmn policy --repo` lists each one in force in that repository after the level's lines (run, item, target and
+`bmn policy --repo OWNER/NAME` lists each one in force in that repository after the level's lines (run, item, target and
 condition, what is left, until he is back), so an agent app's own approval reviewer, which reads the policy, sees
 what he granted; without a grant there the output, `--json` included, is as before.
 
@@ -1584,7 +1584,7 @@ by app (at most 400 bytes). An app whose approved destination may not receive pr
 sections (owner decision 2026-10-10, see below). A section marked for a retired app only reaches no app; the parser
 still accepts its marker. Each rendering starts with a
 line naming the master and its hash and ends with BMN's own rules (`apps/desktop/bin/agents-bmn-rules.mjs`): the
-`bmn policy --repo` pointer and the standing dev-auto dispatch and session-to-session consents, so an app's approval
+`bmn policy --repo OWNER/NAME` pointer and the standing dev-auto dispatch and session-to-session consents, so an app's approval
 reviewer, which reads only its global file, sees them while the master keeps his general rules only (owner,
 2026-11-08). A BMN update that changes them makes every file stale until **Save…** or `bmn rules install`. **Integrations › Rules** edits it; rules that would not render are not saved, and
 a save keeps the text it replaces and refuses a change or swapped link made meanwhile. **Save…** shows the rules'
@@ -3334,8 +3334,8 @@ before Away; with no owner allowed `bmn policy` authorizes nothing, and the line
 brief stays within 1,500 characters. The line, which a unit test also compares:
 
 ```text
-Pushes and merges: read bmn policy --repo before each push, merge or PR write; push main or
-merge only at the level it prints; run git push and gh pr as commands of their own.
+Pushes and merges: read bmn policy --repo OWNER/NAME before each push, merge or PR write;
+push main or merge only at the level it prints; run git push and gh pr as commands of their own.
 ```
 
 ### Current team context (Epic 115)

@@ -39,7 +39,8 @@ check   structural validation, one finding per line: duplicate keys, malformed r
         ceiling, and from Epic 90 on a missing Run needs section or Owner line, or an owner step
         between unattended stories, and a missing/stale/repeated suggested-lead hint on an unfinished epic.
         It also warns, still passing (exit 0, ok true; --json lists them under warnings), about an
-        unfinished non-legacy epic whose ## Why has no **Serves:** line (Epic 112).
+        unfinished non-legacy epic whose ## Why has no **Serves:** line (Epic 112), and about a copied
+        plan's pending sync, naming bmn plan sync as the fix. check only reads: no lock, no write.
         A BMAD board is checked for duplicate keys and row grammar only. Whether the plan says
         the right thing is the readiness method's and review's, not this command's.
 set     changes one row's status (and note with --note; without it the note is kept) after checking that
@@ -224,7 +225,10 @@ async function check(argv) {
   try {
     plan = await resolvePlan(options.project ?? process.cwd())
     result = await checkPlan(plan)
-    result.findings.push(...await (await import('./plan-bmad-copy.mjs')).copyFindings(plan, { recover: true }))
+    // Reads only (Story 136.1 AC2): a pending sync is reported with `bmn plan sync` as its fix, never done here.
+    const copy = (await import('./plan-bmad-copy.mjs')).copyCheck(plan)
+    result.findings.push(...copy.findings)
+    result.warnings = [...(result.warnings ?? []), ...copy.warnings]
   } catch (error) { return failure(error, json) }
   // Warnings never change the result (Epic 112, D3): listed after it, under their own key in --json.
   const warnings = result.warnings ?? []
@@ -1098,7 +1102,8 @@ export async function runPlanCommand(argv, migrationLocked = false) {
     return action === undefined ? EXIT.unable : EXIT.ok
   }
   if (rest.includes('--help') || rest.includes('-h')) { out(PLAN_USAGE); return EXIT.ok }
-  if (!migrationLocked && ['set', 'go', 'publish', 'copy', 'sync', 'check', 'allow'].includes(action)) {
+  // Writers only: `check` reads like `status` and takes no lease (Story 136.1 AC2).
+  if (!migrationLocked && ['set', 'go', 'publish', 'copy', 'sync', 'allow'].includes(action)) {
     const at = rest.indexOf('--project'), inline = rest.find(value => value.startsWith('--project='))
     const project = inline?.slice('--project='.length) ?? (at >= 0 ? rest[at + 1] : null) ?? process.cwd()
     try { return await (await import('./plan-migration-lock.mjs')).withMigrationWriter(project, () => runPlanCommand(argv, true)) }

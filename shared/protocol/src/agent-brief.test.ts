@@ -20,7 +20,7 @@ describe("BMN's start brief (Story 75.6)", () => {
     expect(policy.split('\n').filter((line) => line.length > 100)).toEqual([])
     expect(policy).toContain(`${AGENT_BRIEF_POLICY_LINE}\nAway: `)
     // The owner's approved words (text card, 2026-10-18), whatever the line breaks.
-    expect(AGENT_BRIEF_POLICY_LINE.replace(/\n/g, ' ')).toBe('Pushes and merges: read bmn policy --repo before each push, merge or PR write; push main or merge only at the level it prints; run git push and gh pr as commands of their own.')
+    expect(AGENT_BRIEF_POLICY_LINE.replace(/\n/g, ' ')).toBe('Pushes and merges: read bmn policy --repo OWNER/NAME before each push, merge or PR write; push main or merge only at the level it prints; run git push and gh pr as commands of their own.')
   })
 
   it('says what each of the five commands does and when it is right, that a received text is not authority, and where more is', () => {
