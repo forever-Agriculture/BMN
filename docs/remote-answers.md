@@ -8,25 +8,26 @@ Default has a separate ordinary-message route approved by the owner on 2026-09-3
 claims native question consumption.
 
 Measured 2026-09-27 (Epic 30; multi-select, typed answers and Back in Epic 31, same night, same versions) against Claude Code 2.1.283, codex-cli 0.157.1 and OpenCode 1.18.32, each driven
-in a real terminal (tmux, 200×50 and 80×40) with BMN's control variables removed. Raw captures and a
+in a real terminal (tmux, 200×50 and 80×40) with BMN's control variables removed. OpenCode was retired
+on 2026-11-20 (Epic 123); its column and sections (1.18.32 and 2.0.28) are kept at the git tag
+`opencode-support-final`. Raw captures and a
 SHA-256 manifest are under `.dev-auto/evidence/remote-answers/` (not committed). Sanitised hook
 payloads and screen text are the test fixtures in
 `apps/desktop/src/utility/test-fixtures/remote-answers/`.
 
 ## Shape matrix
 
-| Shape | Claude Code 2.1.283 | Codex 0.157.1 | OpenCode 1.18.32 |
-| --- | --- | --- | --- |
-| One question, one choice | **VERIFIED** keys | **VERIFIED** keys (Plan mode only) | **VERIFIED** API |
-| Several questions in one dialog | **VERIFIED** keys | **VERIFIED** keys | **VERIFIED** API (same call) |
-| Default async question | — | Choices/Other submit ordinary session messages; native consumption remains **UNVERIFIED** | — |
-| Permission, allow once | **VERIFIED** hook on 2.1.302 (`Bash`; Epic 78), keys as fallback (`Bash` only) | out of scope (Auto Review) | **VERIFIED** API |
-| Permission, deny | **VERIFIED** hook on 2.1.302 (`Bash`; Epic 78), keys as fallback; never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
-| Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — | — |
-| Multi-select | **VERIFIED** keys (Epic 31) | **UNSUPPORTED**: the tool has no multi-select field | **VERIFIED** API (Epic 31) |
-| Typed ("Other…") answer | **VERIFIED** keys, single- and multi-select (Epic 31) | **VERIFIED** keys, as "None of the above" plus a note (Epic 31) | **VERIFIED** API, unless the question sets `custom: false` (Epic 31) |
-| Back to a previous question | **VERIFIED**: card only, no keys (Epic 31) | **VERIFIED**: card only, no keys (Epic 31) | **VERIFIED**: card only, no API call (Epic 31) |
-| Subagent prompts | — | — | **UNSUPPORTED** (version 1) |
+| Shape | Claude Code 2.1.283 | Codex 0.157.1 |
+| --- | --- | --- |
+| One question, one choice | **VERIFIED** keys | **VERIFIED** keys (Plan mode only) |
+| Several questions in one dialog | **VERIFIED** keys | **VERIFIED** keys |
+| Default async question | — | Choices/Other submit ordinary session messages; native consumption remains **UNVERIFIED** |
+| Permission, allow once | **VERIFIED** hook on 2.1.302 (`Bash`; Epic 78), keys as fallback (`Bash` only) | out of scope (Auto Review) |
+| Permission, deny | **VERIFIED** hook on 2.1.302 (`Bash`; Epic 78), keys as fallback; never confirmed | out of scope |
+| Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — |
+| Multi-select | **VERIFIED** keys (Epic 31) | **UNSUPPORTED**: the tool has no multi-select field |
+| Typed ("Other…") answer | **VERIFIED** keys, single- and multi-select (Epic 31) | **VERIFIED** keys, as "None of the above" plus a note (Epic 31) |
+| Back to a previous question | **VERIFIED**: card only, no keys (Epic 31) | **VERIFIED**: card only, no keys (Epic 31) |
 
 ## Claude Code 2.1.283
 
@@ -202,120 +203,6 @@ thread's rollout, `function_call_output` of `request_user_input`.
 - **Back:** **Left**/**Right** move between questions and keep earlier choices and notes
   (`←/→ to navigate questions`). As for Claude, a card's Back presses nothing.
 
-## OpenCode 1.18.32
-
-- `question.asked` carries `id` (`que_…`), `sessionID`, `questions[] = { question, header,
-  options[{ label, description }] }` and the tool's `callID`. `permission.asked` carries `id`
-  (`per_…`), `permission` (for example `bash`), `patterns`, `metadata.command` (the exact command)
-  and `always`.
-- **Answer by API, not keys.** The plugin receives `serverUrl` (for example
-  `http://localhost:4096/`) and a client whose `_client.getConfig().fetch` reaches the running
-  server. `POST question/<id>/reply?directory=<dir>` with `{"answers": [["<label>"], …]}` (one
-  array per question) and `POST permission/<id>/reply?directory=<dir>` with
-  `{"reply": "once" | "reject"}` each returned `200 true`, closed the dialog in the TUI, and emitted
-  `question.replied { requestID, answers }` / `permission.replied { requestID, reply }` — proof of
-  the exact answer. The installed plugin client is the v1 SDK (no `question` namespace), so the raw
-  route is used.
-- **A reject cascades.** With two bash permissions pending in one session, rejecting the first
-  also rejected the second (`permission.replied … reply: "reject"` for both). Deny is offered only
-  when the card's permission is the only one pending in that session.
-- The dialog: `△ Permission required`, the command, and `Allow once   Allow always   Reject`;
-  questions show numbered options and "Type your own answer". Keys are not needed.
-
-### Multi-select, typed answers and Back (Epic 31)
-
-Screens and events: `.dev-auto/evidence/epic-31/spike-31-4/opencode/`. Disposable
-`XDG_*` folders, free model, BMN's variables removed.
-
-- **Multi-select:** `question.asked` carries `multiple: true` on the question (the tool's schema:
-  "Allow selecting multiple choices"). The TUI shows `N. [ ] <label>` and `(select all that apply)`.
-  `POST question/<id>/reply` with `{"answers": [["SSO", "Rate limiting"], …]}` returned `200 true`,
-  emitted `question.replied` with exactly those arrays, and the model received "SSO, Rate limiting".
-- **Typed answer:** the schema's `custom` ("Allow typing a custom answer (default: true)") adds
-  `Type your own answer`; the event omits it unless the model set it. A label that is not an option,
-  `[["Passkeys first, JWT as fallback"]]`, was accepted the same way and reached the model as the
-  answer. BMN offers **Other…** only when `custom` is not `false`.
-- **Back:** all questions are answered in one call, so a card's Back is card-only.
-
-## OpenCode 2.0.28
-
-OpenCode 2 runs plugins in two places. A server plugin runs in a background service that may serve
-several terminals and does not have the terminal's variables. A terminal plugin, named in `cli.json`'s
-`plugins`, runs in the terminal's own process (docs at opencode.ai "CLI plugins"). A local one must be a
-folder, loaded from its `tui.ts`; an entry naming a file is skipped. BMN's plugin is a terminal plugin,
-`bmn/tui.ts`. It hears every event of the server it is connected to through `data.listen`, and keeps
-only the family of the session its terminal shows (`ui.router.current()`, `data.session.root`).
-
-Events recorded from a real run of 2.0.28 on 2026-10-14 (a server plugin on a throwaway profile and a
-made-up model; `.dev-auto/evidence/` of that work), then translated by the plugin into the OpenCode 1
-shapes above:
-
-- `permission.asked { id, sessionID, action, resources, save }`. For a shell command `action` is `shell`,
-  `resources` holds the exact command and `save` what "always" would cover. BMN sends
-  `permission: action`, `patterns: save` and, for `shell` with one resource, `metadata.command`.
-- `permission.replied { sessionID, requestID, reply }`, the same as OpenCode 1.
-- A question is a form: `form.created { form: { id: "frm_…", sessionID, metadata: { kind: "question" },
-  fields: [{ key, title, description, type: "string" | "multiselect", options: [{ value, label,
-  description }], custom }] } }`. BMN sends `question.asked` with `question: description`,
-  `header: title`, `multiple` for `multiselect`, and `custom` only when the field says. A form of any
-  other kind (a sign-in, for example) is never sent.
-- `form.replied { id, sessionID, answer: { <key>: value | [values] } }` becomes `question.replied` with
-  each value turned back into its option's label, and `form.cancelled { id }` becomes `question.rejected`.
-- `session.execution.started` becomes `session.status` busy. `session.execution.succeeded` becomes
-  `session.idle`; `session.execution.interrupted` with `reason: "user"` becomes `session.idle` with
-  `source: "interrupted"`, which still opens the finished-turn notice but stays the owner's stop: the
-  Away wake never takes it for a turn that finished by itself (Story 93.3; the interrupt's reason and
-  the child's events were recorded on 2.0.29 and 2.0.32). A run interrupted as
-  `superseded`, `inactivity` or `shutdown` is not a finished turn and is not sent.
-  `session.execution.failed { error: { type, message } }` becomes `session.error`.
-- `session.step.started { model: { id, providerID } }` becomes `message.updated` with `info.modelID`, once
-  per model. `session.compaction.ended { sessionID, reason }` (2.0.28's types; OpenCode 2 has no
-  `session.compacted`) becomes `session.compacted`. `session.deleted` keeps its name.
-- Every event of a subagent's session (any of the family other than the root the plugin pinned) is
-  observed with `source: "subagent"`: its compaction is logged as the subagent's, its run starting does
-  not reset the repeat watch, and its run finishing is never the root's turn (Story 93.3, recorded on
-  2.0.29 and 2.0.32: a child's run reaches the plugin while the terminal shows its root).
-- Every event the plugin sends carries `bmn_plugin: 1`, its promise that the owner's stop arrives as
-  `source: "interrupted"` and quitting as `tui.exit` (Story 96.3). `bmn hook opencode` passes it on as the
-  observation's `plugin`; BMN's earlier plugins sent none, and BMN's October 14 plugin, replayed, reports the
-  owner's stop as a plain `session.idle`, so the Away wake leaves alone a session whose events lack the mark.
-- As it loads, before OpenCode draws, the plugin writes `OSC 7501;state=starting:app=opencode` to its
-  terminal, which starts BMN's screen mirror (Story 93.3; 93.1 checked that mirror cell for cell against
-  the real terminal on 2.0.29 and 2.0.32). When OpenCode quits it waits for the plugin, which tells
-  BMN `tui.exit` for the pinned session after every event already on its way. BMN treats it as Claude's
-  or Codex's `SessionEnd`: it withdraws that session's requests as for `session.deleted`, the mirror
-  stops and the session's agent flag clears.
-- Moving the terminal to another session is OpenCode 1's `tui.session.select`. The first visit to one
-  created while the terminal ran, or in the last 30 seconds, is `session.created`; coming back to a
-  session this terminal showed before is always `tui.session.select`. Either way BMN withdraws the
-  last session's requests from the phone, and the plugin stops answering them, as OpenCode 1's did; the
-  owner, who just switched at the keyboard, answers them there. The plugin also looks at the route just
-  before it sends an answer, so an answer that arrives right after a switch is not sent. Requests a
-  session raises while another one is on screen are not sent: OpenCode 1 forwarded them as a subagent's
-  notice, which no tap could answer, but OpenCode 2's background service is shared by every terminal, so
-  only the family of the session on screen is this terminal's.
-- The home screen keeps the last session: its turn, errors and requests still reach BMN until the
-  owner opens another session. Once OpenCode unloads the plugin, an answer still being collected is
-  dropped, not sent.
-
-**Answers.** The plugin answers through its own client: `client.permission.reply({ sessionID, requestID,
-decision: "once" | "reject" })` (the key is `decision`; the server refuses `reply`), and
-`client.session.form.reply({ sessionID, formID, answer })`, where `answer` maps each field's `key` to
-the chosen option's `value`, or to a list of values for `multiselect`. Typed text is sent as it is, and
-only where the field's `custom` is not `false`. A refused call throws the server's typed error, not an
-HTTP status: replying again to an answered permission threw `PermissionNotFoundError` (`_tag`,
-`requestID`, `name`). The server's refusals (`PermissionNotFoundError`, `FormNotFoundError`,
-`FormAlreadySettledError`, `FormInvalidAnswerError`, `SessionNotFoundError`, `LocationNotFoundError`,
-`InvalidRequestError`, `UnauthorizedError`) are reported `failed`. `HttpClientError`, `ClientError` and
-`SchemaError` may hide a reply that landed, and are reported as nothing.
-
-**Checked in a real 2.0.28 terminal (2026-10-14).** The plugin loaded from `cli.json`, saw the terminal's
-variables, and both replies worked: the shell command ran and the model received the answer. The run's
-payloads are `apps/desktop/src/utility/test-fixtures/remote-answers/opencode-2/live-run.jsonl`. **Still
-unverified:** whether a reject answers every permission waiting in a session, so Deny keeps OpenCode 1's
-rule and is offered only for the one permission waiting. A machine whose inotify watches are all in use
-crashes OpenCode 2's terminal before it starts (`ENOSPC`, `fs.inotify.max_user_watches`).
-
 ## How BMN uses this
 
 The answer function lives in the utility process (`apps/desktop/src/utility/remote-answer.ts`) and is
@@ -325,26 +212,24 @@ reaches it (a unit test reads the sources to keep it that way).
 - **Routes.** Claude questions of shape `choice` or `multi-select` and Codex questions of shape
   `choice` (at most 8 options each), and Claude `Bash` permissions with an exact command, are answered
   by keys; a Claude `Bash` permission whose own hook is waiting (its prompt carries the hook's request
-  ref, Epic 78) is answered through that hook instead, which collects the answer by its ref alone. OpenCode questions and permissions are answered through the plugin. A shape must agree with
+  ref, Epic 78) is answered through that hook instead, which collects the answer by its ref alone. A shape must agree with
   its questions (`multi-select` exactly when one is). Every other shape is refused as `unsupported`, so
   its card never shows buttons.
 - **Answer forms (Epic 31).** Per question: an option index; for a multi-select question the set of
   indices, ascending, optionally with a typed answer; or a typed answer alone. A typed answer is sent
   exactly as cleaned (controls and whitespace runs folded to one space, trimmed, at most 2,000
-  characters) and only where it is verified: Claude and Codex always, OpenCode unless the question has
-  `custom: false`. Claude keys: ticks by digit in option order, each tick seen before the next; Down one
+  characters) and only where it is verified: Claude and Codex always. Claude keys: ticks by digit in option order, each tick seen before the next; Down one
   row at a time to the typed-entry row, the text in pieces of at most 32 characters, each seen whole in the field before the next, Down to
   `Next`/`Submit`, Enter; each move is read back from the screen before the next key. A multi-select
   question must first show with nothing ticked and the cursor on option 1. Codex keys: Down to "None of
   the above", Tab, the text, Enter. Proof: Claude's one string per question (labels joined by `, `,
-  typed text last), Codex `["None of the above", "user_note: <text>"]`, OpenCode's label arrays. Claude `Write` and `Edit` permissions are answered only through their waiting hook; they have no
+  typed text last), Codex `["None of the above", "user_note: <text>"]`. Claude `Write` and `Edit` permissions are answered only through their waiting hook; they have no
   key route. Other tools' permissions are not recognised.
 - **Screen mirror.** Each live session keeps its last 64 KB of output. A headless terminal copy
-  (`screen-mirror.ts`) starts once a Claude, Codex or OpenCode hook reports from that session, seeded
-  from that tail, or earlier, when the app reports its own state on screen (`OSC 7501;…:app=codex`, or
-  `app=opencode` from BMN's OpenCode plugin): Codex does that at start, before its first hook, and its
+  (`screen-mirror.ts`) starts once a Claude or Codex hook reports from that session, seeded
+  from that tail, or earlier, when the app reports its own state on screen (`OSC 7501;…:app=codex`): Codex does that at start, before its first hook, and its
   start-up animation can pass 64 KB, which would leave a later mirror without the prompt it drew once
-  (Story 90.6). It stops on the agent's `SessionEnd`, OpenCode's `tui.exit` or the session's exit.
+  (Story 90.6). It stops on the agent's `SessionEnd` or the session's exit.
   The Away wake reads its rows and its cursor, and only from a mirror already running: a sweep under way
   when the agent left never starts one for the shell (Story 93.3). Measured 2026-09-27: one
   50 MB flood through the session manager cost a median 1,963 ms CPU without a mirror and 2,932 ms
@@ -371,22 +256,11 @@ reaches it (a unit test reads the sources to keep it that way).
 - **Checks before a key.** The request is claimed before any await, so a second tap loses as
   `claimed`. Then: the process that asked is live (`gone`); revision and epoch match (`changed`); the
   shape has a route and the answer fits it (`unsupported`); permissions are allowed by the
-  **Answer permission prompts from Telegram** setting (`permissions-off`); an OpenCode deny is the
-  session's only pending permission (`unsupported`); and the dialog is on screen with that choice
+  **Answer permission prompts from Telegram** setting (`permissions-off`); and the dialog is on screen with that choice
   (`not-on-screen`). Each question of a stepped dialog is re-checked just before its own key. A
   failure after the first key stops at once as `partial`.
-- **OpenCode.** The answer waits for the session's own plugin to collect it through `answer.take`
-  (5 s, else `not-delivered` and nothing was sent). A queued Deny is dropped as `changed` if another
-  permission has opened meanwhile, and any queued answer is dropped as `changed` if the epoch rose
-  before pickup. The plugin posts it to its own server, rechecks that a reject answers only that one
-  permission, and reports the server's response: accepted is `confirmed`; a refused request (4xx from
-  OpenCode 1, a typed refusal such as `PermissionNotFoundError` from OpenCode 2) is
-  `api-refused` — nothing was applied, so the request is free for another tap (never resent by BMN),
-  even when it arrives after the answer was reported `sent-unconfirmed`. A server error or a lost
-  connection stays uncertain.
 - **Outcomes.** `confirmed` only when the harness reports exactly that answer within 10 s: the
-  question tool's answers, the permitted tool with the same input, or OpenCode's replied event for
-  that request id, or the plugin's accepted report for it. A report counts only for the prompt's own
+  question tool's answers or the permitted tool with the same input. A report counts only for the prompt's own
   process, and after the request has closed (by a hook, expiry or the owner) only when it names the
   prompt's own id, so an identical
   successor's report never confirms an earlier answer. The request then closes as answered by `telegram`. Otherwise the answer is
@@ -412,8 +286,7 @@ to phone answers.
 The native Codex Default missing-ID compatibility route retains its prior guards
 and “Conversation not confirmed” label only before a switch/conflict or ambiguous
 lifecycle event. Reused identities fail closed for uncorrelated destruction.
-OpenCode native replies retain their existing exact plugin-request/epoch/incarnation
-contract; this does not enable unknown manual routes. Live producer metadata is
+This does not enable unknown manual routes. Live producer metadata is
 excluded from agent control responses and copied backups.
 
 Source and isolated connector/real-PTY tests are separate evidence from configured

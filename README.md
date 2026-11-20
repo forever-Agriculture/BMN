@@ -4,7 +4,7 @@
 *Use a proper terminal.*
 
 A Linux desktop terminal for running a team of coding agents. It runs your shells and your
-installed agent CLIs (Claude Code, Codex, OpenCode, or any other command) in real terminals and
+installed agent CLIs (Claude Code, Codex, or any other command) in real terminals and
 keeps them organized in workspaces. Each session gets the `bmn` command, so its agent can share
 files, report progress, ask you a question, message another session, read the project's plan and
 get a read-only second opinion from a teammate on the team you approved.
@@ -28,7 +28,7 @@ feature stops. This page sums up the product and how to install it.
 ## What it does
 
 - **Workspaces and sessions.** Named workspaces hold independent sessions. A session is a shell,
-  Claude Code, Codex, OpenCode, or any command, with its own working directory. Rename, archive
+  Claude Code, Codex, or any command, with its own working directory. Rename, archive
   and edit launch settings. The New session form shows the directory's repository identity before
   it starts anything. Session details also shows the saved directory's read-only Git identity. Layout, order and selection survive a restart, but
   nothing starts automatically. After Quit, BMN offers to resume what it stopped in one dialog
@@ -43,14 +43,14 @@ feature stops. This page sums up the product and how to install it.
   inside tmux or Zellij may still reject it.
   ([The terminal and panes](docs/features.md#the-terminal-and-panes))
 - **Process control and resume.** Stop a process and keep its last screen as saved output. Start it
-  again, or resume the stored Claude Code / Codex / OpenCode conversation through the CLI's own
+  again, or resume the stored Claude Code / Codex conversation through the CLI's own
   resume. When you close the window, BMN asks about sessions set to **Ask** and applies saved
   keep-running or stop choices for the others.
   [What survives](docs/architecture.md#what-survives) says what each ending keeps.
   ([Process lifecycle and resume](docs/features.md#process-lifecycle-and-resume))
 - **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
   publish a file, report progress, ask you a question, hand a longer package to a working Claude Code
-  or Codex session in any unarchived workspace (BMN delivers it itself; OpenCode, shell, stopped and
+  or Codex session in any unarchived workspace (BMN delivers it itself; shell, stopped and
   archived destinations are refused), leave a peer a short message, or send text to its own session. Each session gets a token scoped to that session. `bmn hooks check` says
   which of BMN's hook entries each harness's own settings file carries, and
   `bmn hooks install <agent>` adds the missing ones without touching anything else.
@@ -75,7 +75,7 @@ feature stops. This page sums up the product and how to install it.
   answers a request or resumes a session you stopped.
 - **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. Session and workspace dots, plus
   `Ctrl+Shift+U`, take you to the right one. Going to a session clears its notices; blocking
-  requests stay until answered or explicitly dismissed. Its status button opens the request card. OpenCode subagent requests appear here too. Repeated
+  requests stay until answered or explicitly dismissed. Its status button opens the request card. Repeated
   Claude Code or Codex tool calls can open one informational notice; BMN never stops the agent.
   Progress reports are shown as the agent's claims, with any files it published as evidence.
   A workspace's **Review results…** view groups those reports; Session
@@ -187,7 +187,7 @@ pnpm --filter @bmn/desktop run dev
 
 ## Your first session
 
-1. On a fresh profile, **Setup** finds Claude Code, Codex and OpenCode. **Install…** and
+1. On a fresh profile, **Setup** finds Claude Code and Codex. **Install…** and
    **Sign in…** show the exact command, then run the app's own flow in a visible session.
    Setup sessions keep no saved output. You can skip setup and use ordinary sessions at any time.
 2. **Review team…** proposes the ready apps and their roles. **Choose settings…** asks for a

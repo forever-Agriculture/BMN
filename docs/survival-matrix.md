@@ -215,8 +215,8 @@ The following is the retained earlier audit and its original trial limits:
   and choose Stop (records *interrupted · last window close*), or Keep running (updater still
   waits). Live screen: ends with BMN, or stays in the minimized window when kept. Saved output:
   Quit and close-stop take a final capture; the updater takes none; setup sessions have none. Session record and layout:
-  unchanged. Conversation resume: individual Resume reopens a bound Claude/Codex conversation or
-  OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not.
+  unchanged. Conversation resume: individual Resume reopens a bound Claude/Codex conversation (OpenCode, retired in
+  Epic 123, is never resumed); Quit offers resume-all on the next start, while close-stop does not.
   Open requests: stay open unless their harness sends `SessionEnd`.
 - Original promise discrepancy: the previous table said an update installed while BMN ran
   stopped sessions as *interrupted · update restart* and offered resume-all. The source updater
@@ -246,6 +246,8 @@ The following is the retained earlier audit and its original trial limits:
 ## Beyond the table: the other promises this epic exercises
 
 ### OpenCode support (real harness)
+
+OpenCode was retired on 2026-11-20 (Epic 123); this promise no longer applies, and its record stays as it was.
 
 - Promise: one real interactive OpenCode session exercises hook delivery, capture and Resume via
   `opencode --session <id>` (Epic 18; shipped on synthetic receipts only).

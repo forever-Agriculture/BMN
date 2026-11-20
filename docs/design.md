@@ -182,8 +182,7 @@ Approved by the owner on 2026-10-26 (card in run `dev-auto/epic-96-20261026`: �
   rule's limit, then “· N need you: Hooks, Tools”. Tests and Doctor runs say their state on their own rows; Doctor's
   line says “Doctor ran 13:31” or “Doctor running · results below are from 13:31”. Only the head is a live status.
 - **Exact scope.** Rules files say “Rules test …”; Agent apps say “routing-tested”; context says “Not yet proven on X”
-  with the scheduler's actual state; tools say “N tool connections available · no approved destination recorded”;
-  OpenCode's earlier plugin says “Older plugin · stopped turns cannot be distinguished…” and needs the owner. Older
+  with the scheduler's actual state; tools say “N tool connections available · no approved destination recorded”. Older
   wording stays faint only where it does the same.
 - **Coverage.** How fully leftovers were read is shown on the Leftovers line, never counted, and blocks All well;
   an item that could not be read counts. All well needs every check passed and current and no section needing him.

@@ -2,8 +2,8 @@
 // MODULE: start-installs-live.mjs - Story 75.9: what BMN installs by itself. At its start it adds the hook entries each app set up here lacks and leaves a changed or foreign one, which Integrations › Health lists; a skill reaches an app once BMN's own test of it passed; Save writes the rules and every app's file at once and Undo puts both back; a second start changes nothing
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end), on the unit-test roster, a
 // synthetic rules master, a Claude Code settings file holding a gated BMN entry, a foreign one and a setting of its own,
-// an empty Codex folder, an empty OpenCode folder, two synthetic skills (one of which Codex already holds a folder of its
-// own for) and stand-in `claude`, `codex` and `opencode` programs. The run names what BMN may install by itself at
+// an empty Codex folder, an empty OpenCode folder (OpenCode was retired in Epic 123: BMN must write nothing there), two
+// synthetic skills (one of which Codex already holds a folder of its own for) and stand-in `claude`, `codex` and `opencode` programs. The run names what BMN may install by itself at
 // start (BMN_START_INSTALLS) and the one test it may run (BMN_AUTO_TESTS=skills). No agent runs, nothing leaves the
 // machine and no file of the owner's is read. Prints one JSON report, PASS or FAIL per check.
 // Usage: node scripts/test/start-installs-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
@@ -65,8 +65,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const agentsDir = join(home, '.config/bmn/agents')
   const stateDir = join(agentsDir, 'state')
   for (const folder of [agentsDir, stateDir, work, stubs]) mkdirSync(folder, { recursive: true, mode: 0o700 })
-  writeFileSync(join(agentsDir, 'roster.md'), readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8')
-    .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}'))
+  writeFileSync(join(agentsDir, 'roster.md'), readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8'))
   writeFileSync(join(agentsDir, 'global-rules.md'), MASTER)
   writeFileSync(join(home, '.bashrc'), `export PATH="${stubs}:$PATH"\n`)
   // Claude Code: a setting of its own, BMN's entry inside a matcher, and an entry naming the hook that BMN did not write.
@@ -75,7 +74,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const claudeSettings = join(home, '.claude/settings.json')
   mkdirSync(dirname(claudeSettings), { recursive: true })
   writeFileSync(claudeSettings, `${JSON.stringify({ model: 'synthetic-kept', hooks: { PostToolUse: [gated], Stop: [foreign] } }, null, 2)}\n`)
-  // Codex and OpenCode were set up here but hold no hook file yet.
+  // Codex was set up here but holds no hook file yet; so was OpenCode, which BMN retired and leaves alone.
   mkdirSync(join(home, '.codex'))
   const openCodeConfig = join(roots.config, 'opencode')
   mkdirSync(openCodeConfig, { recursive: true })
@@ -107,7 +106,7 @@ esac`)
   }
   const state = () => ({
     files: Object.fromEntries(Object.entries(files).map(([name, path]) => [name, hash(path)])),
-    backups: backups(claudeSettings) + backups(files.codex) + backups(files.cli),
+    backups: backups(claudeSettings) + backups(files.codex),
     skills: readdirSync(codexSkills).sort().map((name) => `${name}:${lstatSync(join(codexSkills, name)).isSymbolicLink() ? 'link' : 'folder'}`),
     transactions: transactions()
   })
@@ -168,15 +167,14 @@ esac`)
 
     // ---- The first start: hooks at once, skills once BMN's own test of Codex passed --------------------------------
     phase('first start')
-    await until(() => existsSync(files.codex) && existsSync(files.cli), 'the hook entries BMN installs at start')
+    await until(() => existsSync(files.codex), 'the hook entries BMN installs at start')
     const claude = JSON.parse(readFileSync(claudeSettings, 'utf8'))
     const codex = JSON.parse(readFileSync(files.codex, 'utf8'))
     const added = CLAUDE_EVENTS.filter((event) => !['PostToolUse', 'Stop'].includes(event))
-    check('at start BMN adds every hook entry an app set up here lacks, beside what the file held (AC3)',
+    check('at start BMN adds every hook entry an app set up here lacks, beside what the file held, and nothing for the retired OpenCode (AC3; Epic 123)',
       added.every((event) => JSON.stringify(claude.hooks[event]).includes('bmn hook claude')) && claude.model === 'synthetic-kept'
-        && JSON.stringify(Object.keys(codex.hooks)) === JSON.stringify(CODEX_EVENTS) && readFileSync(files.plugin, 'utf8').includes('// Shipped by BMN')
-        && JSON.parse(readFileSync(files.cli, 'utf8')).plugins.includes(dirname(files.plugin)),
-      { claudeEvents: Object.keys(claude.hooks), codexEvents: Object.keys(codex.hooks), cli: JSON.parse(readFileSync(files.cli, 'utf8')) })
+        && JSON.stringify(Object.keys(codex.hooks)) === JSON.stringify(CODEX_EVENTS) && !existsSync(files.plugin) && !existsSync(files.cli),
+      { claudeEvents: Object.keys(claude.hooks), codexEvents: Object.keys(codex.hooks), openCode: readdirSync(openCodeConfig) })
     check('a gated and a foreign entry are left exactly as they were, with nothing added beside them (AC3)',
       JSON.stringify(claude.hooks.PostToolUse) === JSON.stringify([gated]) && JSON.stringify(claude.hooks.Stop) === JSON.stringify([foreign]),
       { PostToolUse: claude.hooks.PostToolUse, Stop: claude.hooks.Stop })
@@ -201,12 +199,12 @@ esac`)
     const order = await main.locator('.health-row[data-hooks] > span:first-child').allTextContents()
     const claudeRow = await rowText(hookRow(main, 'Claude Code'))
     const codexRow = await rowText(hookRow(main, 'Codex'))
-    const openCodeRow = await rowText(hookRow(main, 'OpenCode'))
+    const openCodeRows = await hookRow(main, 'OpenCode').count()
     check('Health lists each app\'s hooks, the one left first, what was left and why, and Codex\'s own question (fable notes 75.9)',
       order[0] === 'Claude Code' && claudeRow[0] === '7 entries in place · 2 left as they are' && claudeRow.includes('PostToolUse · inside a matcher') && claudeRow.includes('Stop · not BMN\'s')
-        && codexRow[0] === '7 entries in place' && codexRow.some((line) => line.endsWith('· Codex asks you once, in /hooks, before it runs them')) && openCodeRow[0] === '2 entries in place'
+        && codexRow[0] === '7 entries in place' && codexRow.some((line) => line.endsWith('· Codex asks you once, in /hooks, before it runs them')) && openCodeRows === 0
         && await hookRow(main, 'Claude Code').getAttribute('data-hooks') === 'left',
-      { order, claudeRow, codexRow, openCodeRow })
+      { order, claudeRow, codexRow, openCodeRows })
     const checkedLine = await main.getByText(/^Checked at start, \d\d:\d\d\./).count()
     const hookButtons = await main.locator('.health-row[data-hooks] button').count()
     const anyHookButton = await main.getByRole('button', { name: /hook/i }).count()
@@ -220,7 +218,7 @@ esac`)
     const editor = main.locator('.rules-editor textarea')
     await editor.waitFor()
     const head = main.locator('.preferences-page:not([hidden]) .page-head')
-    await head.getByText(/^Saved \w+ \d+, \d\d:\d\d · Claude Code, Codex and OpenCode not written$/).waitFor()
+    await head.getByText(/^Saved \w+ \d+, \d\d:\d\d · Claude Code and Codex not written$/).waitFor()
     const headText = (await head.innerText()).replace(/\s+/g, ' ')
     check('the head says which apps the saved rules are not written to, with the dot', await head.locator('.needs-dot').count() === 1, { headText })
     const next = `${MASTER}A rule added live.\n`
@@ -232,10 +230,10 @@ esac`)
     await shot(page, 'rules-save-sheet-1280.png')
     await sheet.getByRole('button', { name: 'Save', exact: true }).click()
     const notice = main.locator('.preferences-success')
-    await notice.getByText(/^Saved and installed to Claude Code, Codex and OpenCode/).waitFor()
+    await notice.getByText(/^Saved and installed to Claude Code and Codex/).waitFor()
     const written = ['.claude/CLAUDE.md', '.codex/AGENTS.md'].every((path) => readFileSync(join(home, path), 'utf8').includes('A rule added live.'))
     await head.getByText(/^Saved and installed \w+ \d+, \d\d:\d\d$/).waitFor()
-    check('Save lists each app\'s file, then writes the rules and every file at once (AC1)', written && targets.join(',') === 'Claude Code,Codex,OpenCode'
+    check('Save lists each app\'s file, then writes the rules and every file at once (AC1)', written && targets.join(',') === 'Claude Code,Codex'
       && readFileSync(join(agentsDir, 'global-rules.md'), 'utf8') === next && await head.locator('.needs-dot').count() === 0, { targets, notice: await notice.innerText() })
     await shot(page, 'rules-saved-1280.png')
     await notice.getByRole('button', { name: 'Undo', exact: true }).click()
@@ -243,7 +241,7 @@ esac`)
     await shot(page, 'rules-undo-sheet-1280.png')
     const transactionsBefore = transactions()
     await sheet.getByRole('button', { name: 'Undo', exact: true }).click()
-    await notice.getByText(/^Put back the rules and their files in Claude Code, Codex and OpenCode/).waitFor()
+    await notice.getByText(/^Put back the rules and their files in Claude Code and Codex/).waitFor()
     await until(async () => (await editor.inputValue()) === MASTER, 'the rules put back')
     check('Undo puts the rules and every file back together and installs nothing again (AC2)',
       readFileSync(join(agentsDir, 'global-rules.md'), 'utf8') === MASTER && !existsSync(join(home, '.codex/AGENTS.md')) && !existsSync(join(home, '.claude/CLAUDE.md'))

@@ -18,7 +18,6 @@ raw records are kept under `plan/references/reference-66-session-messages/`
 | --- | --- | --- |
 | Codex | **PASS**: five of five runs, the whole stamped text once, read before the next action | codex-cli 0.162.1 |
 | Claude Code | **PASS**: five of five runs, the whole stamped text once, read before the next action | Claude Code 2.1.296 |
-| OpenCode | no hand-over: BMN cannot tell where they send work | does not apply |
 
 A PASS needs five runs with no doubled, cut or lost text. An agent of an app without PASS can
 send; since Story 75.4 a message to it is refused to its sender with the reason, as one to a plain
@@ -32,7 +31,7 @@ app's agent and handed to the other's on an installed build is not in these reco
 
 Unlike `bmn tell`, `bmn handoff <destination-id> --text ...` or `--text-file -` can cross workspaces and
 carry up to ten published files. BMN stores it and hands the receiving Claude Code or Codex agent a
-bounded, stamped pointer through its `PostToolUse` hook; OpenCode, shells and stopped receivers are
+bounded, stamped pointer through its `PostToolUse` hook; shells and stopped receivers are
 refused.
 
 ## Codex 0.162.1
@@ -358,8 +357,8 @@ refused compound command. The away text is for the owner's working models, as me
 
 ### Excluded processes (AC5)
 
-Automatic hand-over covers interactive primary conversations of Claude Code and Codex only. An
-OpenCode session, a plain shell, a sub-agent and a dispatched teammate are handed nothing; they read
+Automatic hand-over covers interactive primary conversations of Claude Code and Codex only. A
+plain shell, a sub-agent and a dispatched teammate are handed nothing; they read
 the state with `bmn away --status`.
 
 ### The live run of 76.4 and 76.5

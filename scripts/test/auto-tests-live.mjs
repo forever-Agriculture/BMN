@@ -1,7 +1,7 @@
 /* global window */
 // MODULE: auto-tests-live.mjs - Story 75.8: BMN tests each app by itself on a first install and after a version change, at most three times per test on disk, ten minutes apart, tells a stop once, and offers Test again only then
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end), on the unit-test roster, a
-// synthetic rules master and stand-in `claude`, `codex` and `opencode` programs whose version is read from a file the
+// synthetic rules master and stand-in `claude` and `codex` programs whose version is read from a file the
 // script changes. The run names the tests BMN may start by itself (BMN_AUTO_TESTS); the fence test, whose stand-in is a
 // provider of its own, is left to its unit and IPC tests. Time is moved by setting back when each try began in BMN's own
 // file of tries, as ten minutes passing would. No agent runs, nothing leaves the machine, no file of the owner's is read,
@@ -28,9 +28,9 @@ const phase = (label) => console.error(`[BMN auto-tests] ${label}`)
 const sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))
 const KINDS = 'skills,tools,rules,context'
 const MASTER = '# Global rules\n\nPlain rule for everyone.\n'
-const APPS = ['claude', 'codex', 'opencode']
-const FIRST = { claude: '2.1.296', codex: '0.162.1', opencode: '2.0.29' }
-const NEXT = { claude: '2.1.297', codex: '0.162.2', opencode: '2.0.30' }
+const APPS = ['claude', 'codex']
+const FIRST = { claude: '2.1.296', codex: '0.162.1' }
+const NEXT = { claude: '2.1.297', codex: '0.162.2' }
 
 const originalRuntime = process.env.XDG_RUNTIME_DIR
 const originalWaylandDisplay = process.env.WAYLAND_DISPLAY
@@ -67,9 +67,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const agentsDir = join(home, '.config/bmn/agents')
   const stateDir = join(agentsDir, 'state')
   for (const folder of [agentsDir, stateDir, work, stubs, versions]) mkdirSync(folder, { recursive: true, mode: 0o700 })
-  // The unit tests' made-up team; this home holds no OpenCode settings, so OpenCode's destination is the owner's word here.
-  writeFileSync(join(agentsDir, 'roster.md'), readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8')
-    .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}'))
+  // The unit tests' made-up team.
+  writeFileSync(join(agentsDir, 'roster.md'), readFileSync(join(fixtures, 'agents/roster-example.md'), 'utf8'))
   writeFileSync(join(agentsDir, 'global-rules.md'), MASTER)
   writeFileSync(join(home, '.bashrc'), `export PATH="${stubs}:$PATH"\n`)
   mkdirSync(join(home, '.claude/skills/evidence-first'), { recursive: true })
@@ -96,8 +95,6 @@ case "$1" in
     fi;;
   *) exit 4;;
 esac`)
-  stub('opencode', `echo "opencode $*" >> '${starts}'
-case "$1" in --version) echo "$v";; *) exit 1;; esac`)
   const startLines = () => (existsSync(starts) ? readFileSync(starts, 'utf8').trim().split('\n') : [])
   const contextRuns = () => startLines().filter((line) => line.startsWith('codex exec') && line.includes('model_context_window=')).length
   const triesPath = join(stateDir, 'auto-tests.json')

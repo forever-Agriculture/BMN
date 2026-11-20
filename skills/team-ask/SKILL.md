@@ -39,12 +39,11 @@ with `--interact` its browser scripts run as your user, and can read and write f
   credential stores (SSH private keys, GnuPG private keys, the Codex and Claude Code sign-ins, the
   KeePass stores and the `gh`, AWS, Git and `.netrc` credential files; `--features` gives each path);
   Claude Code reads only its working folder (from a linked worktree that leaves out the main folder and an
-  ignored `plan/` there: attach the plan files your question rests on with `--file`); OpenCode reads the project (and where its tracked links
-  lead) for a private project ask, and nothing beyond your text otherwise. `bmn team ask --features`
+  ignored `plan/` there: attach the plan files your question rests on with `--file`). `bmn team ask --features`
   says what each app is asked with here, and the record says what the teammate's mode could read.
 - **`--file PATH`** puts a file's whole text into the prompt (up to 64, 1 MiB each, UTF-8): right for
   a file outside the project, or to make sure it is read. A question that names a file outside the one
-  folder a Claude Code or OpenCode teammate reads is refused before anything is sent (`FILES_OUTSIDE`):
+  folder a Claude Code teammate reads is refused before anything is sent (`FILES_OUTSIDE`):
   add the `--file` options the refusal gives and ask again with the same key, or add `--outside-unread`
   only when the teammate should answer without that file. A folder cannot be given: name the files in it
   that matter, or ask in that folder with `--project`.

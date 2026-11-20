@@ -478,7 +478,7 @@ hook entries: BMN's plugin is handed events after they happened.
 ### What follows for recording
 
 - Claude Code 2.1.296 and Codex 0.162.1 hold PASS for waiting, so both are recorded. OpenCode
-  is not. A turn's totals are shown as complete only when BMN read that the app runs
+  was not, and was retired on 2026-11-20 (Epic 123); its rows here are the record of that measurement. A turn's totals are shown as complete only when BMN read that the app runs
   the measured version, which it can for Claude Code and not for Codex: see
   [The app's version](#the-apps-version).
 - Both apps name the turn. A prompt event that carries the open turn's id was typed into that

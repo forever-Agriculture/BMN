@@ -1,7 +1,7 @@
 /* global document, getComputedStyle, window */
 // MODULE: away-grant-live.mjs - Stories 84.3 and 84.7 on the running build: a departure said with `bmn away --leaving`, two runs' cards and one "needs nothing", the gold count in the head, Before you go at both widths, an answer with the keyboard, a re-ask while open, Not leaving withdrawing the rest; then a night whose session records uses and reports, and the morning's Granted section at both widths; Story 103.3: a card with a stub command and a stub message, shown whole, used exactly, a changed script refused
-// The app runs in test mode with a temporary HOME and XDG folders (removed at the end) and stand-in `claude`, `codex` and
-// `opencode` programs. The cards are asked with the owner's CLI token over the app's own socket; no agent runs, nothing leaves
+// The app runs in test mode with a temporary HOME and XDG folders (removed at the end) and stand-in `claude` and `codex`
+// programs. The cards are asked with the owner's CLI token over the app's own socket; no agent runs, nothing leaves
 // the machine, Telegram is off and no file of the owner's is read. Prints one JSON report, PASS or FAIL per check.
 // Usage: node scripts/test/away-grant-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
@@ -85,7 +85,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const stub = (name, body) => { writeFileSync(join(stubs, name), `#!/bin/sh\n${body}\n`); chmodSync(join(stubs, name), 0o755) }
   stub('claude', 'case "$1" in --version) echo "2.1.302 (Claude Code)";; *) exit 1;; esac')
   stub('codex', 'case "$1" in --version) echo "codex-cli 0.162.1";; *) exit 4;; esac')
-  stub('opencode', 'case "$1" in --version) echo "2.0.29";; *) exit 1;; esac')
   const socket = join(roots.runtime, 'bmn/control/control.sock')
   const environment = {
     ...callerEnvironment, HOME: home, SHELL: '/bin/bash', PATH: `${stubs}:/usr/bin:/bin`,

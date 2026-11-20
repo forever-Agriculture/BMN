@@ -76,7 +76,7 @@ describe('BMN CPU script (Story 91.1 AC1)', () => {
     expect(electronType(['bmn', '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])).toBe('utility:network.mojom.NetworkService')
     expect(electronType(['bmn'])).toBeNull()
     expect(agentOf({ exe: '/usr/bin/node', argv: ['node', '/home/x/.nvm/bin/codex', '--no-daemon'] })).toBe('codex')
-    expect(agentOf({ exe: '/home/x/.opencode/bin/opencode', argv: ['opencode'] })).toBe('opencode')
+    expect(agentOf({ exe: '/home/x/.opencode/bin/opencode', argv: ['opencode'] })).toBeNull()
     expect(agentOf({ exe: '/usr/bin/git', argv: ['git'] })).toBeNull()
   })
 

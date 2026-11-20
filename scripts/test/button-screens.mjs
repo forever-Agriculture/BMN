@@ -101,7 +101,6 @@ function prepareFixture({ base, appDirectory, fixtureFolder }) {
   mkdirSync(join(agentsDirectory, 'state'), { recursive: true, mode: 0o700 })
   // The team file comes after the first Team capture (no team yet), as a link to a file kept elsewhere.
   const roster = readFileSync(join(appDirectory, 'src/utility/test-fixtures/agents/roster-example.md'), 'utf8')
-    .replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}')
   writeFileSync(join(agentsDirectory, 'global-rules.md'), '# Global rules\n\nPlain rule for everyone.\n\n## Team\nThe team: <!-- bmn:team -->.\n')
   const stub = (name, body) => {
     writeFileSync(join(roots.stubs, name), `#!/bin/sh\n${body}\n`)

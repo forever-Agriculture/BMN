@@ -1,8 +1,8 @@
 # Agent history
 
-One BMN setting, **Preferences → Data → Keep agent history** (10, 30 or 90 days, or Never; default 30), decides how long every agent keeps a session nobody has touched. Each agent deletes by its own mechanism: Claude Code (and `claude glm`) through its own `cleanupPeriodDays` setting, Codex and OpenCode through their own delete commands, run by BMN. "Untouched" always means **last activity**, never creation time.
+One BMN setting, **Preferences → Data → Keep agent history** (10, 30 or 90 days, or Never; default 30), decides how long every agent keeps a session nobody has touched. Each agent deletes by its own mechanism: Claude Code (and `claude glm`) through its own `cleanupPeriodDays` setting, Codex through its own delete command, run by BMN. OpenCode was retired on 2026-11-20 (Epic 123): BMN no longer reads or deletes its sessions; its rows and spike results below are kept at the git tag `opencode-support-final`. "Untouched" always means **last activity**, never creation time.
 
-Nothing is written or deleted until the owner presses **Start cleanup** once. That press writes every Claude folder that differs and starts the first Codex/OpenCode run. Later, a longer limit or Never applies at once; a shorter one asks again with new counts. A Claude folder learned since, or one whose value was edited by hand, is never rewritten silently: it shows `now → next` and waits for the next Start cleanup. A learned folder that already holds the limit is listed as pending too, and follows later changes only once the owner has confirmed it. While anything waits, the Preferences button carries the one attention dot.
+Nothing is written or deleted until the owner presses **Start cleanup** once. That press writes every Claude folder that differs and starts the first Codex run. Later, a longer limit or Never applies at once; a shorter one asks again with new counts. A Claude folder learned since, or one whose value was edited by hand, is never rewritten silently: it shows `now → next` and waits for the next Start cleanup. A learned folder that already holds the limit is listed as pending too, and follows later changes only once the owner has confirmed it. While anything waits, the Preferences button carries the one attention dot.
 
 BMN's own **Delete archived sessions and workspaces** keeps its meaning and sits in the same section.
 
@@ -20,25 +20,21 @@ What the value means, from Claude Code 2.1.283's own settings schema (`strings ~
 
 Claude deletes at its own next start. BMN claims only that the setting is written; Claude's deletion is the agent's behaviour and stays UNVERIFIED here.
 
-## Codex and OpenCode
+## Codex
 
 A run starts 30 s after BMN starts (after the archive purge, in the background; no launch waits for it) and every 24 hours while BMN runs, only with a confirmed limit. Per agent it deletes candidates oldest first, one command at a time, at most 200 per run (the rest next run). A failed delete is recorded on the agent's row and not retried that run. Quitting BMN stops between deletions; the next run finds what is left. One summary line goes to the host log: `[BMN] agent history (30 days): codex deleted 200, 0 failed, 212 next run`.
 
-A session is never deleted when it is bound to a running BMN session or to a Resume or start BMN has under way, was active within the last 24 hours, or its id appears on any running process's command line (the spike below shows OpenCode does not refuse deleting a live session). These are checked again just before each delete (BMN's live sessions and running command lines first, the agent's store last), so a session resumed, used or started during a long batch is kept; while BMN checks and deletes a session, its own Resume of that conversation, or a new session started on it (`codex resume <id>`), is refused ("try again in a moment"). A Resume or start holds its conversation before it looks for that mark, and cleanup marks a session before it reads what BMN holds, so whichever comes first, the other stands back. What remains is a process outside BMN opening a session untouched for longer than the limit within the moment of its delete: Codex's own lock refuses that delete, OpenCode's does not. BMN opens agent databases read-only and never writes them or removes a transcript file.
+A session is never deleted when it is bound to a running BMN session or to a Resume or start BMN has under way, was active within the last 24 hours, or its id appears on any running process's command line. These are checked again just before each delete (BMN's live sessions and running command lines first, the agent's store last), so a session resumed, used or started during a long batch is kept; while BMN checks and deletes a session, its own Resume of that conversation, or a new session started on it (`codex resume <id>`), is refused ("try again in a moment"). A Resume or start holds its conversation before it looks for that mark, and cleanup marks a session before it reads what BMN holds, so whichever comes first, the other stands back. What remains is a process outside BMN opening a session untouched for longer than the limit within the moment of its delete: Codex's own lock refuses that delete. BMN opens agent databases read-only and never writes them or removes a transcript file.
 
 | Agent | Reads (read-only) | Last activity | Deletes with |
 | --- | --- | --- | --- |
 | Codex | `$CODEX_HOME/state_5.sqlite` (default `~/.codex`), `threads.id` | `threads.updated_at` (epoch s), archived or not | `codex delete --force <uuid>` |
-| OpenCode 1 | `$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share`), `session.id`, every project | `session.time_updated` (epoch ms) | `opencode session delete <id> --pure` |
-| OpenCode 2 | the same file, `session_v2.id` of top-level sessions (`parent_id` empty), every project | the newest `session_v2.time_updated` (epoch ms) of the session and every session below it | `opencode session delete <id> --standalone`, which takes the session's children with it |
-
-`opencode --version` at the start of each run decides which row applies; one that cannot be read counts as OpenCode 1. The Preferences view reuses the last answer while the `opencode` on PATH is the same unchanged file; a run always asks again, because a launcher can start another version from the same file. Because a delete on OpenCode 2 takes the subagent sessions below it, a session is offered only with its whole family: the family's newest activity decides its age, and the session is kept while any member is bound to a live BMN session, named on a running command line or was active within the last day. OpenCode 2 copies 1's sessions into `session_v2` and writes only there, and has no `--pure`; `--standalone` runs the delete on a private server instead of OpenCode's shared background service, and no terminal plugin (BMN's included) loads for it.
 
 A missing binary or store hides the agent's row (BMN has never seen it). A table without the expected columns reads "not recognised: reason" and deletes nothing.
 
 ## Spike (Story 31.2 AC1), 2026-09-27
 
-Disposable stores only: a scratch `CODEX_HOME`, and scratch `XDG_DATA_HOME`/`XDG_CONFIG_HOME`/`XDG_STATE_HOME`/`XDG_CACHE_HOME` for OpenCode, with `BMN_*`/`AITERM_*` unset. No authentication file was read or copied: Codex threads were created by unauthenticated `codex exec` runs (each records a thread and then fails with 401); OpenCode ran its free model. Receipts: `.dev-auto/log.md`, entries of 2026-09-27 ~22:50–23:00 EEST.
+Disposable stores only: a scratch `CODEX_HOME`, with `BMN_*`/`AITERM_*` unset. No authentication file was read or copied: Codex threads were created by unauthenticated `codex exec` runs (each records a thread and then fails with 401). Receipts: `.dev-auto/log.md`, entries of 2026-09-27 ~22:50–23:00 EEST.
 
 | Question | Result | Evidence |
 | --- | --- | --- |
@@ -48,12 +44,4 @@ Disposable stores only: a scratch `CODEX_HOME`, and scratch `XDG_DATA_HOME`/`XDG
 | Deleting it again / an unknown uuid | VERIFIED | rc 1 "failed to delete session" / rc 1 "No active or archived session found matching …" |
 | `codex delete` while an idle `codex app-server` runs on the same home | VERIFIED: works | rc 0 |
 | `codex delete` of a thread a live process outside BMN holds | VERIFIED: refused | while `codex exec resume <id>` ran (`thread-writer-locks/<id>.lock`): rc 1 "failed to delete session", row and file kept; after the process exited, rc 0 |
-| `opencode session delete <id>` from outside the session's project | VERIFIED: works | from a non-project directory: rc 0 "Session … deleted", 1.32 s; `session` row gone |
-| `opencode session delete <id> --pure` | VERIFIED: works | rc 0; `--pure` keeps the owner's plugins (BMN's included) out of the delete |
-| OpenCode 2.0.28 `opencode session delete <id> --pure` | VERIFIED: refused | 2026-10-14: "Unrecognized flag: --pure in command opencode session delete", rc 1 |
-| OpenCode 2.0.28 `opencode session delete <id> --standalone` | VERIFIED: works | 2026-10-14, scratch profile: rc 0 "Session … deleted"; its `session_v2` and `session_message` rows gone |
-| `opencode session delete` of a session a live process holds | VERIFIED: **not refused** | during `opencode run --session <id>`: delete rc 0; the live process then failed (rc 1, UnknownError after an insert into `part` for the deleted session); a next `opencode run --session <id>` → "Session not found". Hence the 24 h and command-line skips. |
-| OpenCode `time_updated` advances on a turn | VERIFIED | …488439 → …708088 during the live turn |
 | Reading a store the agent is writing (WAL) | VERIFIED: `mode=ro` | `file:…?mode=ro` read the current rows; `immutable=1` answered "no such table: threads" because the rows were still in the WAL. BMN opens with better-sqlite3 `readonly: true` (the same SQLite read-only mode). |
-
-The OpenCode "live process" case covers `opencode run --session`; an OpenCode TUI left open on a session older than the limit, started without the id on its command line, is not detected. The 24-hour skip does not help there, because such a session is older than 10 days by definition. Residual risk, stated rather than hidden.

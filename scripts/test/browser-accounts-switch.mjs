@@ -32,18 +32,17 @@ writeFileSync(join(state, '../roster.md'), roster)
 const generation = buildGeneration({ number: 1, parent: null, data: parsed.data, rosterFileHash: sha256(roster) })
 atomicJson(join(state, 'generations/000001.json'), generation)
 atomicJson(join(state, 'current'), { generation: 1, hash: generation.hash })
-const versions = { claude: '2.1.295', codex: '0.161.0', opencode: '2.0.29' }
+const versions = { claude: '2.1.295', codex: '0.161.0' }
 for (const [app, version] of Object.entries(versions)) {
   const file = join(stubs, app)
   writeFileSync(file, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${app} ${version}'; else exit 1; fi\n`); chmodSync(file, 0o755)
 }
 writeFileSync(join(state, 'tools-tests.jsonl'), Object.entries(versions).map(([harness, version]) => JSON.stringify({
-  harness, version, at: '2026-10-28T00:00:00.000Z', detail: 'synthetic capability fixture', outcome: 'pass', variable: 'pass', argument: 'pass', own_command: 'pass',
-  ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {})
+  harness, version, at: '2026-10-28T00:00:00.000Z', detail: 'synthetic capability fixture', outcome: 'pass', variable: 'pass', argument: 'pass', own_command: 'pass'
 })).join('\n') + '\n')
-const paths = [join(home, '.claude.json'), join(home, '.codex/config.toml'), join(home, '.config/opencode/opencode.jsonc')]
+const paths = [join(home, '.claude.json'), join(home, '.codex/config.toml')]
 const originals = ['{"mcpServers":{"playwright":{"command":"owner-browser"},"notes":{"command":"owner-notes"}},"tips":{}}\n',
-  '# owner\n[mcp_servers.playwright]\ncommand = "owner-browser"\n', '{"mcp":{"servers":{"playwright":{"type":"local","command":["owner-browser"],"enabled":true}}}}\n']
+  '# owner\n[mcp_servers.playwright]\ncommand = "owner-browser"\n']
 paths.forEach((path, i) => { mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, originals[i]) })
 const unchanged = () => paths.forEach((path, i) => assert.equal(readFileSync(path, 'utf8'), originals[i], 'an unconfirmed or undone switch changed settings'))
 const require = createRequire(resolve('apps/desktop/package.json'))
@@ -71,22 +70,21 @@ try {
     assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width, 'browser action outside viewport')
   }
   await apply.click()
-  const sheet = main.getByRole('group', { name: 'Change 3 tool entries', exact: true })
+  const sheet = main.getByRole('group', { name: 'Change 2 tool entries', exact: true })
   await sheet.waitFor()
-  assert.equal(await sheet.locator('details.target').count(), 3)
+  assert.equal(await sheet.locator('details.target').count(), 2)
   assert(!(await sheet.textContent()).includes('notes'), 'the browser confirmation includes an unrelated tool')
   await sheet.screenshot({ path: join(out, 'confirmation.png') })
   await sheet.getByRole('button', { name: 'Cancel', exact: true }).click()
   unchanged()
-  checks.push('approved browser takeover is visible at 1440/900 with no unlisted entries; exact three-entry preview; Cancel changes nothing')
+  checks.push('approved browser takeover is visible at 1440/900 with no unlisted entries; exact two-entry preview; Cancel changes nothing')
   await apply.click()
   await sheet.getByRole('button', { name: 'Change', exact: true }).click()
   await apply.waitFor({ state: 'detached' })
   for (const harness of ['claude', 'codex']) assert.deepEqual(readAppTools(harness, environment).entries.get('playwright').value.args, ['browser', 'server', harness])
   assert.equal(readAppTools('codex', environment).entries.get('playwright').value.required, true)
   assert.equal(readAppTools('claude', environment).entries.get('notes').value.command, 'owner-notes')
-  assert.equal(readAppTools('opencode', environment).entries.get('playwright').value.command[0], 'npx')
-  checks.push('actual renderer/preload/IPC/CLI install scopes only Playwright; private Claude/Codex entries and anonymous public OpenCode; unrelated approved unmanaged Notes untouched')
+  checks.push('actual renderer/preload/IPC/CLI install scopes only Playwright; private Claude/Codex entries; unrelated approved unmanaged Notes untouched')
   await main.getByText('Earlier installs', { exact: true }).click()
   await main.getByRole('button', { name: /^Undo the tools install/ }).click()
   const undo = main.getByRole('group', { name: 'Undo this install', exact: true })
@@ -96,7 +94,7 @@ try {
   await undo.getByRole('button', { name: 'Undo', exact: true }).click()
   await apply.waitFor()
   unchanged()
-  checks.push('actual Tools Undo restores all three original files byte for byte and offers the browser switch again')
+  checks.push('actual Tools Undo restores both original files byte for byte and offers the browser switch again')
   result(out, 'browser-switch', checks, ['synthetic version/capability fixtures; native client contract covered separately; installed owner Save still required'])
 } catch (error) {
   atomicJson(join(out, 'result.json'), { result: 'FAIL', checks, name: error.name, message: error.message })

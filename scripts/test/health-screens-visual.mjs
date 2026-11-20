@@ -2,8 +2,8 @@
 // MODULE: health-screens-visual.mjs - Story 96.6: Integrations › Health on the audit fixture, in the real renderer, at 889×768 and 640×720, with keyboard, focus, overflow and redaction checks
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end), as the other Preferences screens
 // do: the unit-test roster, a synthetic rules master and stand-ins for claude and codex. Once Health has read that home,
-// the main process's rules snapshot answer is replaced by the audit fixture built from it: OpenCode with three tool
-// connections and an earlier plugin BMN could not replace, a Codex limit not applied whose test failed with a
+// the main process's rules snapshot answer is replaced by the audit fixture built from it: Codex with three tool
+// connections it holds outside the list (OpenCode, which carried them before, was retired in Epic 123), a Codex limit not applied whose test failed with a
 // 4,000-character detail, long paths, and Doctor's view of the same, built by BMN's own doctor-state projection from a
 // synthetic state with 335 leftovers (and names planted where the trust boundary must drop them). Every reload of Health
 // then reads the fixture through the real IPC path. Nothing leaves the machine and no file of the owner's is read.
@@ -50,11 +50,11 @@ function auditDoctor(now, { passed = false } = {}) {
   const result = (state, problems, extra = {}) => ({ state, problems, checkedAt: at, version: digest, ...extra })
   const state = validateDoctorState({
     schemaVersion: 1, profileKey: null, profileIdentity: null, availabilityFailure: null, cycleStartedAt: at, versions: digest, cycleStartupId: null,
-    appVersions: { claude: null, codex: null, opencode: null }, retryUsed: false, attempt: null, qualifications: {}, continuity: null,
+    appVersions: { claude: null, codex: null }, retryUsed: false, attempt: null, qualifications: {}, continuity: null,
     results: passed ? Object.fromEntries(['hooks', 'skills', 'tools', 'rules', 'claude', 'codex', 'leftovers'].map((check) => [check, result('passed', [])])) : {
-      hooks: result('problems', [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }]),
+      hooks: result('problems', [{ code: 'hook-check', item: 1, app: 'codex', cause: 'missing:Stop' }]),
       skills: result('passed', []),
-      tools: result('problems', [1, 2, 3].map((item) => ({ code: 'tool-check', item, app: 'opencode', cause: 'unlisted-exposed' }))),
+      tools: result('problems', [1, 2, 3].map((item) => ({ code: 'tool-check', item, app: 'codex', cause: 'unlisted-exposed' }))),
       rules: result('passed', []),
       claude: result('problems', [{ code: 'auth-check', item: 1, app: 'claude' }]),
       codex: result('passed', []),
@@ -67,7 +67,7 @@ function auditDoctor(now, { passed = false } = {}) {
 
 /** The audit, laid over what Health read from the temporary home: the parts 96.6 is about, everything else as read. */
 function auditSnapshot(real, now, { dropGroup = null, codexHooksLeft = false, doctorRunning = false } = {}) {
-  const long = `/synthetic/${'a-rather-long-folder-name-for-the-wrapping-check/'.repeat(6)}opencode.jsonc`
+  const long = `/synthetic/${'a-rather-long-folder-name-for-the-wrapping-check/'.repeat(6)}config.toml`
   const doctor = { ...auditDoctor(now), running: doctorRunning }
   if (dropGroup !== null) doctor.rows = doctor.rows.map((row) => ({ ...row, leftovers: row.leftovers.filter((item) => `${item.app ?? 'shared'}:${item.kind}:${item.reason}` !== dropGroup) }))
   const detail = `The synthetic context test failed: ${'the setting the owner keeps outranks the agent limit, '.repeat(80)}`.slice(0, 4000)
@@ -82,11 +82,9 @@ function auditSnapshot(real, now, { dropGroup = null, codexHooksLeft = false, do
         left: codexHooksLeft ? [{ event: 'SessionEnd', why: 'changed' }] : [],
         // Story 102.4: the row in its Needs you state, a guard that does not answer and the app's own rules missing.
         ...(codexHooksLeft ? { reworded: ['PreToolUse'], commandGuard: { state: 'does-not-answer', reason: 'command guard cannot load' }, approval: { state: 'not-approved', entries: 8, events: ['PreToolUse', 'Stop'] }, nativeRules: 'missing' } : { commandGuard: { state: 'holds' }, nativeRules: 'present' }) },
-      codexHooksLeft ? { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'checked', placed: ['plugin', 'cli.json'], older: [], installed: [], left: [] }
-        : { harness: 'opencode', file: long.replace('opencode.jsonc', 'bmn/tui.ts'), state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
     ] },
-    tools: { ...real.tools, exposed: 3, apps: real.tools.apps.map((app) => app.harness === 'opencode'
-      ? { ...app, version: app.version ?? '2.0.29', supported: true, readable: true, kind: 'public', state: 'Exposed', path: long,
+    tools: { ...real.tools, exposed: 3, apps: real.tools.apps.map((app) => app.harness === 'codex'
+      ? { ...app, version: app.version ?? '0.162.1', supported: true, readable: true, kind: 'public', state: 'Exposed', path: long,
         unlisted: ['search', 'browser', 'notes'].map((id) => ({ id, state: 'exposed', managed: false })) }
       : { ...app, unlisted: [] }) },
     context: real.context.map((row) => row.harness === 'codex'
@@ -328,10 +326,10 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await sleep(1500)
     const away = await hookOrder()
-    check('a refresh moves no row under the pointer, and orders needs first once it has left', JSON.stringify(under) === JSON.stringify(before) && away[0] === 'Codex' && before[0] === 'OpenCode', { before, under, away })
+    check('a refresh moves no row under the pointer, and orders needs first once it has left', JSON.stringify(under) === JSON.stringify(before) && away[0] === 'Codex' && before[0] === 'Claude Code', { before, under, away })
     await serve(auditSnapshot(real, Date.now()))
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-    await page.waitForFunction(() => document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Older plugin · stopped turns cannot be distinguished'))
+    await page.waitForFunction(() => !document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Command guard does not answer'))
 
     // While Doctor runs, Health reads every 5 s: those reads never flip the head, the page's only live status (96 review).
     await serve(auditSnapshot(real, Date.now(), { doctorRunning: true }), 1200)
@@ -373,20 +371,19 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     contextOnly.tools = { ...contextOnly.tools, exposed: 0, apps: real.tools.apps.map((app) => ({ ...app, unlisted: [] })) }
     await serve(contextOnly)
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
-    await page.waitForFunction(() => !document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Older plugin'))
+    await page.waitForFunction(() => !document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('tool connections available'))
     await sleep(600)
     const only = await main.evaluate((element) => ({ head: element.querySelector('.page-head [role="status"]')?.textContent ?? null, allWell: element.innerText.includes('All well') }))
     check('a failed context limit with Doctor all passed: the head counts it and Doctor says no All well', /Context limits/u.test(only.head ?? '') && !only.allWell, only)
     await shot('health-889x768-context-only.png')
     await serve(auditSnapshot(real, Date.now()))
     await reload()
-    await page.waitForFunction(() => document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('Older plugin · stopped turns cannot be distinguished'))
+    await page.waitForFunction(() => document.querySelector('.preferences-page:not([hidden])')?.innerText.includes('tool connections available'))
 
     // Redaction: the names planted in the synthetic doctor state reach neither the text nor any title.
     const leaked = await main.evaluate((element, secret) => element.innerText.includes(secret) || [...element.querySelectorAll('[title]')].some((node) => node.getAttribute('title').includes(secret)), SECRET)
     check('no planted leftover name reaches the page, its titles included', !leaked)
     check('tools say what is available, never a transfer', /3 tool connections available · no approved destination recorded/u.test(await text()))
-    check('the earlier OpenCode plugin is said as a missing capability that needs the owner', /Older plugin · stopped turns cannot be distinguished/u.test(await text()))
 
     // The neighbouring views still open and come back.
     const views = []

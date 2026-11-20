@@ -34,8 +34,8 @@ flowchart LR
 | Brain worker | Its own SQLite connection, schema, history, search, export and backups | `apps/desktop/src/utility/brain-worker.ts` |
 | Quick look search worker | A contents search's reads, masking and matching, apart from the thread that keeps terminals flowing; a stop is read inside each file | `apps/desktop/src/utility/quick-look-search-worker.ts` |
 
-A fresh profile with no rules master or approved team enters Setup, which checks Claude Code, Codex
-and OpenCode and guides the owner through visible install and sign-in sessions.
+A fresh profile with no rules master or approved team enters Setup, which checks Claude Code and Codex
+and guides the owner through visible install and sign-in sessions.
 
 Messages between processes are defined once in `shared/protocol` (`@bmn/protocol`) and
 validated on arrival.
@@ -141,7 +141,7 @@ unverified; these tables alone enable no account.
 bounded MessagePort. There is no tmux and no replay of old bytes into a live terminal, because a
 second emulator tracking the same state drifts. The screen mirror that remote answers and the Away
 wake read (`screen-mirror.ts`, [remote answers](remote-answers.md)) is a headless copy in the utility
-host, kept only for sessions running Claude Code, Codex or OpenCode, that is parsed and never shown. Each view loads bounded Sixel decoding; the addon is disposed with
+host, kept only for sessions running Claude Code or Codex, that is parsed and never shown. Each view loads bounded Sixel decoding; the addon is disposed with
 the view. xterm draws with its DOM renderer. The end of a synchronized update (DECRST 2026, which
 Codex wraps around each frame) draws only the rows written during it (`terminal-sync-update.ts`):
 xterm 6.0.0 would redraw every row. Each row is a paint layer of its own (`session-panes.css`), so
@@ -174,7 +174,7 @@ running minimizes the window. Quit lists the running sessions and asks first. A 
 is unknown keeps the process listed as *exit unconfirmed* until the host reports the exit.
 Launching the app again brings the existing window forward. After a crash or reboot, earlier
 processes are marked interrupted and nothing restarts on its own; Resume reopens a known Claude
-Code, Codex or OpenCode conversation through its CLI.
+Code or Codex conversation through its CLI.
 
 **A narrow local control boundary.** Agents use JSON-RPC over a Unix socket in an owner-only
 runtime folder. There is no TCP listener. Each session receives a token that only works for that
@@ -384,9 +384,9 @@ agent has to guess.
 Ordinary saved output is a plain-text snapshot of the live screen, taken periodically, on stop and
 on quit; it is never replayed into a terminal. Setup sessions have no saved output in any row above,
 including a crash; their install and sign-in commands are never restarted automatically. *Resume* reopens the stored Claude Code or Codex conversation
-through each CLI's own resume, or an OpenCode conversation with `opencode --session <id>`, and only
+through each CLI's own resume, and only
 for a session whose conversation BMN knows: one it pinned at launch, one you located by hand, or one
-the harness reported through its `SessionStart` hook or OpenCode plugin. A
+the harness reported through its `SessionStart` hook. A
 session without that stays honest about it and offers **Start again** instead.
 
 A rebuilt view is brought to the mode state the program was already in. The host reads the private
@@ -440,7 +440,7 @@ historical failed promise are told apart in the [survival matrix](survival-matri
 ```text
 apps/desktop/
   bin/bmn                command-line client for the control socket
-  bin/bmn-*.mjs          its parts: words, commands, results, hooks, hook runtime, status line, OpenCode plugin
+  bin/bmn-*.mjs          its parts: words, commands, results, hooks, hook runtime, status line
   src/main/              Electron main process
   src/preload/           the renderer's API
   src/renderer/          React interface

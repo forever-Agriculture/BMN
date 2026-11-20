@@ -162,7 +162,7 @@ true or useful: reread it once as a stranger would.
   `sed '1,6{/^<!doctype html>$/d;/^<html lang="en">$/d;/^<meta charset="utf-8">$/d}' page.html > page.artifact.html`.
   An update republishes that copy's path to the same URL. The publish opens the new page for the
   owner by itself; do not open its link again, which only adds a second tab of the same page.
-- **Codex, OpenCode or anything else in a BMN session**: `bmn publish page.html --key
+- **Codex or anything else in a BMN session**: `bmn publish page.html --key
   <work>-<first12 of the page's sha256>` and give the reader the id it prints; changed bytes need a
   new key, a retry of the same bytes keeps its key. Then open the **checked local page** in the
   owner's default browser: BMN's stored copy has no web link and its Open action refuses HTML.

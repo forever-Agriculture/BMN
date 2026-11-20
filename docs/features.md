@@ -22,7 +22,7 @@ owner's existing profile does not open it automatically. **Skip for now** and **
 independently of sessions. Setup remains available in its workspace afterwards. Ordinary workspaces
 and sessions can be used throughout; readiness never prevents an ordinary session from starting.
 
-**Agent apps** shows Claude Code, Codex and OpenCode, with each installed version and executable path.
+**Agent apps** shows Claude Code and Codex, with each installed version and executable path.
 Its states are checking, not installed, installing, install failed, root command required,
 unsupported, installed and signed out, signing in, sign-in unknown and ready. The same readiness
 appears under Health's existing Agent apps rows, alongside their current destinations and controls.
@@ -81,10 +81,10 @@ The workspace row shows an attention dot when any session in it, even an archive
 request or update. Finished session names read more quietly; row action buttons appear on hover or
 keyboard focus and remain available to the keyboard and screen readers.
 
-A session is one command in one working directory: a shell, Claude Code, Codex, OpenCode, or
+A session is one command in one working directory: a shell, Claude Code, Codex, or
 anything else installed. **New session…** opens the launcher beside the terminal:
 
-- **Terminal, Claude Code, Codex, OpenCode** — one click picks what runs. An agent starts inside an
+- **Terminal, Claude Code, Codex** — one click picks what runs. An agent starts inside an
   interactive bash (`bash -ic 'claude; exec bash -i'`), so your shell stays open when the agent
   exits.
 - **Name, Directory** — the name follows the pick until you type your own.
@@ -114,12 +114,13 @@ Sessions are independent: each has its own process, its own terminal, and a toke
 itself. A session launched from inside an agent does not inherit that agent's session identity
 either: BMN strips agent session variables such as `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID`
 from the environment the command runs in, so the new session starts clean. BMN tags common
-commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
-integration (attention hooks and conversation resume) is built for Claude Code, Codex and OpenCode.
+commands — Claude, Codex, OpenCode (retired), Gemini, Aider, Shell — but the deeper
+integration (attention hooks and conversation resume) is built for Claude Code and Codex.
 Any other CLI still runs as a normal terminal session, without those. Cursor was retired on
-2026-10-14 ([Agent control](agent-control.md#cursor-retired)).
+2026-10-14 ([Agent control](agent-control.md#cursor-retired)) and OpenCode on 2026-11-20
+([Agent control](agent-control.md#opencode-retired)).
 
-**Model origin flag.** While a Claude Code, Codex or OpenCode run reports through its own hooks,
+**Model origin flag.** While a Claude Code or Codex run reports through its own hooks,
 its sidebar row, pane heading and Session details show the agent it really is (not "Shell") and
 a small flag for the country of the company that made its model — 🇺🇸 for Anthropic, OpenAI and
 other US labs, 🇨🇳 for GLM, Kimi, Qwen, DeepSeek, MiniMax or Xiaomi MiMo, and the flag of the main
@@ -130,8 +131,8 @@ unrecognised model shows no flag rather than a guess. How it is decided:
 
 **Agent history.** Preferences → Data → Keep agent history (10, 30 or 90 days, or Never; default
 30) is one limit for every agent: Claude Code and `claude glm` get it as their own
-`cleanupPeriodDays`, and BMN deletes Codex and OpenCode sessions untouched for longer through their
-own delete commands, at most 200 per agent per daily run. Nothing is written or deleted until you
+`cleanupPeriodDays`, and BMN deletes Codex sessions untouched for longer through its
+own delete command, at most 200 per agent per daily run. Nothing is written or deleted until you
 press Start cleanup once; the Preferences button shows the attention dot while it waits. Sessions in
 use are never deleted. See [Agent history](agent-history.md).
 
@@ -149,7 +150,7 @@ reach the program unchanged, and your CLIs keep their own configuration, authent
 permissions.
 
 Live panes display Sixel images. Every session has **Terminal images (Sixel)** on by default,
-whether it runs a shell, Codex, Claude Code, OpenCode or another agent, so Codex can use `/pets`
+whether it runs a shell, Codex, Claude Code or another agent, so Codex can use `/pets`
 in a direct BMN terminal. **Off** in the New session form opts a session out and keeps
 `TERM=xterm-256color`. Graphics sessions use BMN's `xterm-sixel-256color` terminfo entry. On SSH
 hosts, under `sudo`, or inside containers without that entry, run the remote or privileged command
@@ -220,7 +221,7 @@ never replayed into a terminal. **Start again** runs the stored command fresh. O
 before a crash, after the last snapshot, can be lost; BMN says so when it recovers.
 
 **Resume** reopens the conversation a stopped agent was in. For Claude Code and Codex it goes
-through each CLI's own resume; for OpenCode through `opencode --session <id>`. It works only for a
+through each CLI's own resume. It works only for a
 session whose conversation BMN knows: one pinned at launch, one you located by hand, or one the
 harness reported. Any other program can report its own resume command with `bmn resume-command`
 ([agent-control.md](agent-control.md#resume-for-any-program)); where BMN has no conversation of its
@@ -350,8 +351,8 @@ reads the work tree ends the pause, and each try that fails waits twice as long,
 How turns are recorded, the limits and each wording: [turn-changes.md](turn-changes.md).
 
 **Handoffs.** An agent can hand a longer text, with up to ten of its published files, to the working
-Claude Code or Codex agent of another session, in this workspace or another (`bmn handoff`); OpenCode,
-shell, stopped and archived destinations are refused. BMN delivers it by itself, as
+Claude Code or Codex agent of another session, in this workspace or another (`bmn handoff`); a
+shell, stopped or archived destination is refused. BMN delivers it by itself, as
 it delivers a message: it stores the whole text and the list of files in one file, and the
 receiving agent's own hook hands that agent a short pointer to it after its next tool call. You do
 nothing; nothing is typed into a terminal. Before anything is handed over, BMN checks the folder the
@@ -375,7 +376,7 @@ Claude Code or Codex agent gets a waiting message from its own hook after its ne
 when its provider may see the sender's folder ([measured per app](session-messages.md)). A resting
 one is told by one fixed line, typed once per message and only into a session proven idle, to make a
 tool call; the sender's `bmn tell status` says when it was woken or why not. A message
-for a session where no such agent is in front now (OpenCode, a plain shell, an agent that has
+for a session where no such agent is in front now (a plain shell, an agent that has
 exited into its shell, a stopped session) is refused to its sender with the reason, so nothing
 waits where nothing would take it. **Messages…** in the command palette
 lists the latest 200 of the active workspace, read-only.
@@ -401,7 +402,7 @@ Integrations › Health › **Doctor** runs automatically when due at startup. I
 failed, timed out, are stale, or could not be qualified for the installed version, each with its own time.
 Earlier results stay while checking. **All well** appears only when every applicable check passed fresh.
 BMN reads its hooks, skills, tools and rules checks and runs the qualified Claude/Codex doctors read-only.
-Each new doctor version is tried on a disposable profile first; OpenCode has no qualified doctor.
+Each new doctor version is tried on a disposable profile first.
 Leftover memory, skills, plugins and MCP entries are show-only, with a reason; they do not count as Needs-you.
 Names stay withheld. Each item has structural source coordinates and a checked revision; the existing disclosure
 explains manual resolution. Changed or unverifiable sources become stale. Selected custom profiles are kept apart.
@@ -409,12 +410,12 @@ There is no cleanup control or switch. The **What is checked** disclosure explai
 Agents see the same projected results with [`bmn doctor --json`](agent-control.md#read-only-app-health-bmn-doctor); plain `bmn doctor` names
 each problem and what to do on one screen, and `--details` adds the identities and routes.
 
-BMN wires its hooks itself: at every start it adds, for Claude Code, Codex and OpenCode where each
+BMN wires its hooks itself: at every start it adds, for Claude Code and Codex where each
 is set up, the entries an event has none of, after backing the file up, and leaves an entry it did
 not write, one changed outside it or one inside a matcher as it is. Integrations › Health › **Hooks** says
 what it found, with no button; an entry in a file does not prove a hook fired, and Codex asks once
 in `/hooks` before it runs new ones. `bmn hooks check` reports which of BMN's entries each
-harness's own settings file carries, and `bmn hooks install claude` (or `codex`, `opencode`) adds
+harness's own settings file carries, and `bmn hooks install claude` (or `codex`) adds
 the missing ones by hand after backing the file up. A harness with no hook can still page you by writing
 the terminal's own OSC 9, 777 or 99 notification. OSC 9's leading `4` parameter (`4` or `4;…`)
 is reserved for progress and ignored, including malformed forms or prose using that parameter.
@@ -431,13 +432,12 @@ It retains no prompts, answers, payloads, tool input/output, model/API-host deta
 History never recreates requests or current observations. There is no age expiry; deleted sessions
 lose their rows, retained archives keep theirs. Coalesced events can be lost before the next atomic
 save, including on crash. Unavailable history is explained in the dialog, and backups exclude it.
-OpenCode subagent permissions and questions use their own requests, so they do not replace the
-main session's prompt. For Claude Code and Codex, eight identical tool calls (failed ones count too) among the
+For Claude Code and Codex, eight identical tool calls (failed ones count too) among the
 last 20 since your last message open one notice; the hook event list shows the repeat count. BMN
 only tells you and leaves the agent running.
 
 BMN installs deny rules for Docker and Podman prune commands and `prime-select nvidia`, including their
-`sudo` forms, in Claude Code, Codex and OpenCode. Claude Code and Codex hooks also hold a broader set of
+`sudo` forms, in Claude Code and Codex. Their hooks also hold a broader set of
 critical shell commands for your review. This guard is not a general sandbox.
 
 **Away.** Set Away from the header checkbox, `bmn away` and `bmn back`, or Telegram's `/away` and `/back`.
@@ -456,7 +456,7 @@ Preferences → **Agents** keeps the agents you work with in one file you own: e
 (knight, queen, rook, bishop or pawn), app, model and provider, which roles it may take and in what
 order, and whether its provider may see private work. Nothing in that file takes effect until you
 approve it there; every approval is a numbered version you can open or restore. What BMN itself
-proposes (a judge, who researches, read-only reviewers, Luna on OpenCode Go, removing a retired app)
+proposes (a judge, who researches, read-only reviewers, removing a retired app)
 waits in one card at the top of Agents › Team, with one **Approve…** for all of it. Agents read the
 approved team with `bmn team`, and a lead runs `bmn roster check` before it hands work to another
 agent.
@@ -474,15 +474,14 @@ A lead you start yourself is checked too, at each prompt: when its app sends wor
 that may not see private work, BMN tells the app to stop the prompt before it leaves and the
 session shows a card with **Allow here** (that provider, that workspace only) and **Keep
 blocked**. Claude Code and Codex take that answer through their prompt hook; that your installed
-versions obey has not been tested live yet, and the card says so. OpenCode is not covered.
+versions obey has not been tested live yet, and the card says so.
 
 Codex teammates use a read-only permission profile that denies the listed credential stores to Codex,
 its shell and its subagents; other files your user can read remain in scope. `bmn team ask --origin
 http://127.0.0.1:PORT --disposable` gives a Claude Code or Codex teammate a Playwright browser for a
 loopback app. It only looks by default; `--interact` adds clicks, typing and page evaluation. The origin
 list does not stop redirects or requests the page makes itself, and interactive scripts run as your user
-with file, network and socket access, so use it only on a disposable app with synthetic data. OpenCode
-asks get no browser.
+with file, network and socket access, so use it only on a disposable app with synthetic data.
 
 Integrations → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
 where the app does not follow links, which BMN installs by itself after an approval, after its own
@@ -527,18 +526,11 @@ published prices and context windows, in an empty folder, sent nothing but the m
 source list. A Claude Code researcher runs with web tools only. A Codex researcher runs with a
 Codex folder of its own that holds nothing of yours, and is offered only where BMN's fence test
 (`bmn roster fence`, which BMN runs by itself for each new version and researcher model) passed for exactly the installed Codex version;
-Models names the tools Codex keeps offering there. An OpenCode researcher runs from BMN's own
-OpenCode folder with web search only (its searches go to the TinyFish search service), on the same
-terms: a fence test of exactly the installed OpenCode. BMN reads each cited page itself and marks what
+Models names the tools Codex keeps offering there. BMN reads each cited page itself and marks what
 it cannot confirm there. **Apply prices…**
 stages the verified prices that differ from your team's, **Add to team…** and **Look up** fill a
 new agent with them, and the Model field offers the names research found. Nothing changes until
 you approve it.
-
-Where OpenCode lists Luna's model on your OpenCode Go plan, Team proposes **Luna (Go)**, an OpenCode
-helper and researcher; once you approve her, BMN copies your OpenCode Go sign-in into its own
-OpenCode folder (OpenCode's `auth export` and `auth import`, the Go entry alone), so her runs never
-touch your own OpenCode folders or history.
 
 An agent's context limit, set on its page, is added to each run BMN or dev-auto starts with it
 and checked before the run leaves. Integrations → **Health** also shows each app's default limit for the
@@ -596,9 +588,9 @@ step with no outcome, each line marked
 "BMN's record" or "the agent's report".
 
 Preferences → Integrations › **Rules** keeps one rules text and writes it into each agent app's own rules file
-(Claude Code, Codex and OpenCode), shows each file's difference before it writes, and can
+(Claude Code and Codex), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you
-marked public, and so does OpenCode, whose own configuration BMN does not read in full. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
+marked public. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
 
 ## Files and file references
 
@@ -902,9 +894,9 @@ delivers itself to its agent, so Telegram gets no handoff page. Anything that is
 never lands in whichever session happens to be focused.
 
 Pages are cards with buttons: tap an option to answer an agent's question (Claude Code, Codex in Plan
-mode, OpenCode; several questions one at a time, with **‹ Back**; multi-select as toggles; **Other…** to
-reply in your own words), or **Allow once** / **Deny** a Claude `Bash` or
-OpenCode permission once you turn on **Answer permission prompts from Telegram** (never "always
+mode; several questions one at a time, with **‹ Back**; multi-select as toggles; **Other…** to
+reply in your own words), or **Allow once** / **Deny** a Claude `Bash`
+permission once you turn on **Answer permission prompts from Telegram** (never "always
 allow"). Claude Code `Write` and `Edit` requests can be answered too while their hook is waiting; the card
 shows the full path and change. The card then says what happened: ✓ only when the agent confirmed the answer, ⚠ when it was
 sent but not confirmed, or why nothing was sent. Codex permissions, subagent and sandbox prompts still

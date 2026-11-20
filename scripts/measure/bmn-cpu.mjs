@@ -104,9 +104,9 @@ export function classify(processes, main, { binDirs = [], sessionStarts = null }
   return result
 }
 
-const AGENTS = ['claude', 'codex', 'opencode']
+const AGENTS = ['claude', 'codex']
 
-/** The agent a process runs, by its binary or, for a Node or shell wrapper, its script: claude, codex, opencode or null. */
+/** The agent a process runs, by its binary or, for a Node or shell wrapper, its script: claude, codex or null. */
 export function agentOf(entry) {
   const base = (path) => path?.split('/').at(-1) ?? ''
   if (entry.exe?.includes('/claude/versions/')) return 'claude'

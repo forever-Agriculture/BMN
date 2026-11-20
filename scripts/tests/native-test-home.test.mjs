@@ -197,7 +197,7 @@ describe('the native drivers', () => {
       if (!/\.(mjs|py|sh)$/u.test(name) || name === 'native-test-home.mjs') continue
       const lines = readFileSync(join(repo, 'scripts/test', name), 'utf8').split('\n')
       lines.forEach((line, index) => {
-        if (/\.credentials\.json|['"/]auth\.json/u.test(line) && /symlinkSync|linkSync|copyFileSync|cpSync|\bln\b|\bcp\b/u.test(line) && !/opencode/iu.test(line)) offenders.push(`${name}:${index + 1}`)
+        if (/\.credentials\.json|['"/]auth\.json/u.test(line) && /symlinkSync|linkSync|copyFileSync|cpSync|\bln\b|\bcp\b/u.test(line)) offenders.push(`${name}:${index + 1}`)
       })
     }
     expect(offenders).toEqual([])

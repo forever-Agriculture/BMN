@@ -69,7 +69,7 @@ session. It uses a bot you create and own. It is off by default.
   A question from a Claude session connected to Remote Control is left to the Claude app; a permission
   is sent anyway (Epic 78), and whichever answer comes first, the app's, the card's or the desk's, wins. Optionally it also tells you when a session's process exits while you
   are away. See
-  [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-codex-and-opencode).
+  [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-and-codex).
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
   session, and you send it from the Files panel. If you turn on **Type replies into the session and
   press Enter**, text replies to current-process cards are submitted to their exact session, including
@@ -91,7 +91,7 @@ session. It uses a bot you create and own. It is off by default.
   **Stuck** (each dev-auto run blocked now, one row titled by its epics and a short name), **Finished** (runs whose handoff
   changed to COMPLETE during the period; older finished runs are left out) and **Granted** when a run held a grant, and
   before **Decided for you** and **Activity**; a run's row opens its brief, status, next step and decisions in place.
-- Away wake: while you are Away, BMN checks every two hours for running Claude Code, Codex or OpenCode sessions with a
+- Away wake: while you are Away, BMN checks every two hours for running Claude Code or Codex sessions with a
   finished-turn notice at least 15 minutes old, no other open request and a provably empty idle prompt. It types one
   fixed line into each, telling the agent to continue only work that is still allowed or stop. It grants nothing and
   never resumes a session you stopped.
@@ -154,8 +154,7 @@ edits the same card to say what happened:
 - **⚠ Sent — not confirmed, check the laptop.** when it was sent but nothing confirmed it; BMN never
   sends it twice. A late confirmation still turns it into ✓.
 - **Nothing was sent: …** with the reason (the dialog changed, it is not on the screen, …) and fresh
-  buttons while the question is still open. **OpenCode rejected the answer; nothing was applied.**
-  does the same, even after the card first said not confirmed.
+  buttons while the question is still open.
 - **Answered at the laptop.** or **No longer open.** when it ended some other way; the buttons go.
 
 Several questions in one dialog are shown one at a time on the same card, earlier answers quoted
@@ -184,15 +183,15 @@ tap.
 
 What can be tapped (see [remote-answers.md](remote-answers.md) for how each is verified):
 
-| Shape | Claude Code | Codex | OpenCode |
-| --- | --- | --- | --- |
-| One question, one choice | buttons | buttons (Plan mode) | buttons |
-| Several questions | buttons | buttons | buttons |
-| Permission | **Allow once** / **Deny** for `Bash`, `Write` and `Edit` (Epic 78) | answer at the laptop | **Allow once** / **Deny** (Deny only when it is the only permission waiting) |
-| Multi-select | toggles | — (Codex has none) | toggles |
-| Other… (your own words) | on every question | on every question, sent as "None of the above" with your text as its note | unless the question turned it off |
-| Back | buttons | buttons | buttons |
-| Subagent and sandbox prompts | answer at the laptop | answer at the laptop | answer at the laptop |
+| Shape | Claude Code | Codex |
+| --- | --- | --- |
+| One question, one choice | buttons | buttons (Plan mode) |
+| Several questions | buttons | buttons |
+| Permission | **Allow once** / **Deny** for `Bash`, `Write` and `Edit` (Epic 78) | answer at the laptop |
+| Multi-select | toggles | — (Codex has none) |
+| Other… (your own words) | on every question | on every question, sent as "None of the above" with your text as its note |
+| Back | buttons | buttons |
+| Subagent and sandbox prompts | answer at the laptop | answer at the laptop |
 
 Permission buttons appear only after you tick **Answer permission prompts from Telegram** in
 Preferences → Notifications → Telegram (off by default). They answer the exact prompt, once; there is no
@@ -228,7 +227,7 @@ typed line cannot pick an option. If Telegram refuses a card's formatting, it is
    - tick **Enabled** and save.
 4. Check the status line shows it polling, then press **Send test message**.
 5. For buttons, the agents must report their dialogs to BMN. Run `bmn hooks check`; if any entry
-   says `missing`, run `bmn hooks install claude` (and `codex`, `opencode`); Codex must then trust
+   says `missing`, run `bmn hooks install claude` (and `codex`); Codex must then trust
    the new entries once with `/hooks`. Without them a question never reaches your phone as a card,
    and a permission arrives only as a plain "needs your permission" message.
 

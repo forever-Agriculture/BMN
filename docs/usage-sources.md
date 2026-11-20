@@ -7,20 +7,21 @@ and units, how fresh it is, and what reading it costs. Code follows this table: 
 **VERIFIED** plan source reads "not reported" in BMN.
 
 Measured 2026-09-28 (Story 37.1) against Claude Code 2.1.283 (the owner's Max plan, and `claude glm`
-with Z.ai), codex-cli 0.157.1 and OpenCode 1.18.32. Only
+with Z.ai), codex-cli 0.157.1 and OpenCode 1.18.32 (retired 2026-11-20, Epic 123: it reported no plan
+windows; its column is kept at the git tag `opencode-support-final`). Only
 structure, units and timing were kept, never the owner's values. Raw receipts are under
 `.dev-auto/evidence/epic-37/` (not committed). The file names are given below.
 
 ## Source matrix
 
-| | Claude Code 2.1.283 | `claude glm` | Codex 0.157.1 | OpenCode 1.18.32 |
-| --- | --- | --- | --- | --- |
-| Plan windows | **VERIFIED** status-line input | **UNSUPPORTED**: no `rate_limits` | **VERIFIED** session file `token_count` lines | **UNSUPPORTED**: no local field |
-| Context use | **VERIFIED** status-line input | **VERIFIED** status-line input | **UNSUPPORTED** (not in the approved fields) | **UNSUPPORTED** |
-| Needs transcript content | no | no | the `token_count` lines only | — |
-| Needs a network call | no | no | no | — |
-| Needs a configuration change | yes: `bmn statusline install` | the same line | no | — |
-| **Chosen source** | status line | context use only; plan not reported | session file | not reported | not reported |
+| | Claude Code 2.1.283 | `claude glm` | Codex 0.157.1 |
+| --- | --- | --- | --- |
+| Plan windows | **VERIFIED** status-line input | **UNSUPPORTED**: no `rate_limits` | **VERIFIED** session file `token_count` lines |
+| Context use | **VERIFIED** status-line input | **VERIFIED** status-line input | **UNSUPPORTED** (not in the approved fields) |
+| Needs transcript content | no | no | the `token_count` lines only |
+| Needs a network call | no | no | no |
+| Needs a configuration change | yes: `bmn statusline install` | the same line | no |
+| **Chosen source** | status line | context use only; plan not reported | session file |
 
 ## Claude Code 2.1.283
 
@@ -96,12 +97,6 @@ and never lets such a reading replace Claude's plan reading.
   `codex-reader/reader-timing.timing.ts`; the file
   counts are in `.dev-auto/log.md`, 2026-09-28.
 
-## OpenCode 1.18.32
-
-No plan-window fields: the binary has no `five_hour`, `seven_day`, `used_percent`, `window_minutes` or
-`resets_at` strings. Only provider rate-limit headers, retry errors and a "Go limit reached" message
-appear. Receipt: `other-agents/opencode-1.18.32-strings.txt`. **Not reported.**
-
 ## How BMN uses this
 
 - **Session details → Plan use.** Each window of the session's latest reading shows its used share
@@ -109,7 +104,7 @@ appear. Receipt: `other-agents/opencode-1.18.32-strings.txt`. **Not reported.**
   reset is marked stale with the reading's time. Readings live in memory only, so after a restart
   the row says "No reading yet" until the agent reports again.
 - **Palette → Plan use….** A read-only dialog with the latest plan reading per agent across all
-  sessions, because a plan belongs to the account. `claude glm` and OpenCode read "Not reported
+  sessions, because a plan belongs to the account. `claude glm` reads "Not reported
   by …".
 - **Notice at 90%.** When a window reaches 90% (the whole percent shown), BMN opens one **Needs you**
   notice for that agent and window, for example "Codex weekly limit at 91% · resets Fri 09:00". It

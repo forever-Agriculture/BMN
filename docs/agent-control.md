@@ -683,7 +683,7 @@ recorded payloads) is kept at the local git tag `opencode-support-final`; nothin
   dispatch of `opencode` is refused with the retirement line. The one proposals card on Agents ›
   Team names removing those lines; nothing changes until you approve it.
 - The judge stays. Jev is called by BMN itself through OpenCode Zen ([the judge](#the-judge)); its
-  key is read from OpenCode's own sign-in file at each call by the judge's module and kept nowhere.
+  key is read through `opencode auth export` at each call by the judge's own module and kept nowhere.
   Without that sign-in `bmn judge ask` answers `NO_KEY`. The `opencode` program and its sign-in are
   yours and stay.
 - Old records load as they were saved and are read only, named "OpenCode (retired)": a conversation
@@ -1500,12 +1500,12 @@ the approved team can no longer be read the page names the last version that sti
 team file to keep or revert; a version written but never put into effect is listed as such.
 
 <a id="bmns-proposals-one-card"></a>**BMN's proposals: one card.** What BMN proposes waits in one card at the top of
-Agents › Team, with one Needs-you dot: removing an app BMN retired, the judge Jev, who researches, Luna (Go) where
-OpenCode lists her model, and holding the reviewer roles and the consultant to read-only, one clause each ("BMN proposes
+Agents › Team, with one Needs-you dot: removing an app BMN retired (Luna (Go) and the OpenCode route since Epic 123),
+the judge Jev, who researches, and holding the reviewer roles and the consultant to read-only, one clause each ("BMN proposes
 3 changes to your team: … Nothing changes until you approve it."). **Approve…** stages them all and opens the approval
 sheet; **Cancel** there takes them all out and restores what you had staged. To take only some, approve and change the
 one you do not want, or make the change yourself (a role's **Read-only** switch, an agent's **Researcher** switch).
-With nothing approved yet the card is the first approval as well. **Copy sign-in** for OpenCode Go stays a note apart.
+With nothing approved yet the card is the first approval as well.
 
 **Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered chain with each
 candidate's eligibility. Neither prints your notes or prices.
@@ -1533,8 +1533,8 @@ and asks there are refused with the reason, never sent to someone else; a choice
 
 **The check.** Immediately before work leaves for another agent, `bmn roster check` takes the agent, role, workspace,
 private or public data and the exact dispatch command, and answers PASS with a receipt or the first refusal in a fixed
-order (exit 10). It parses `codex exec [resume <id>]` and `claude -p` (optionally under `env -i`), and `opencode run` in
-the one form under [Checking an OpenCode helper run](#checking-an-opencode-helper-run).
+order (exit 10). It parses `codex exec [resume <id>]` and `claude -p` (optionally under `env -i`); `opencode run` and
+`cursor-agent` are refused with their retirement lines.
 
 - *Destination*, from named, non-secret settings only: Codex `config.toml` model and provider keys and
   `OPENAI_BASE_URL`; Claude's `ANTHROPIC_BASE_URL` from the environment and settings files (unknown when they disagree),
@@ -1563,17 +1563,17 @@ the one form under [Checking an OpenCode helper run](#checking-an-opencode-helpe
   and `Glob` (or `''`), `--strict-mcp-config` and `--mcp-config '{"mcpServers":{}}'`, never `--permission-mode
   bypassPermissions`; that is the form a write-attempt test showed writing nothing on 2.1.296 (`--tools` alone still
   offered your MCP tools), `scripts/test/claude-write-attempt.sh` runs it again, and an agent whose approved tools
-  include an MCP server cannot take a read-only role through Claude Code. OpenCode's one form is read-only already
-  (`bmn-helper` from BMN's folder, both checked whole). A PASS records what it saw in the receipt's `sandbox` (with
+  include an MCP server cannot take a read-only role through Claude Code. A PASS records what it saw in the receipt's `sandbox` (with
   `form_tested_on`) beside `effort`; `bmn roster role <role>` says a role is read-only, and `--json` gives each
   candidate the items its command must carry (`read_only.argv`). Which roles are read-only is yours to approve: BMN
   proposes every role ending in `reviewer`, and `consultant`; until one is held, **Integrations › Health** says so.
 
-**Rules.** The master is ordinary Markdown. Untagged text reaches every agent app; `<!-- bmn:apps codex opencode -->` …
+**Rules.** The master is ordinary Markdown. Untagged text reaches every agent app; `<!-- bmn:apps codex -->` …
 `<!-- /bmn:apps -->` limits a section to those apps; `<!-- bmn:public -->` … `<!-- /bmn:public -->` marks a section a
 public-only destination may receive; one `<!-- bmn:team -->`, even inside a sentence, becomes the approved team's names
 by app (at most 400 bytes). An app whose approved destination may not receive private work gets only the public
-sections, and OpenCode always does (owner decisions 2026-10-10 and 2026-10-14, see below). Each rendering starts with a
+sections (owner decision 2026-10-10, see below). A section marked for a retired app only reaches no app; the parser
+still accepts its marker. Each rendering starts with a
 line naming the master and its hash and ends with BMN's own rules (`apps/desktop/bin/agents-bmn-rules.mjs`): the
 `bmn policy --repo` pointer and the standing dev-auto dispatch and session-to-session consents, so an app's approval
 reviewer, which reads only its global file, sees them while the master keeps his general rules only (owner,
@@ -1602,11 +1602,8 @@ credential file, never its contents). Tests that send no prompt run first, one a
 Codex context test send one synthetic prompt each ("one prompt sent"). Each starts at most three times per version and
 binding, ten minutes apart, counted in `state/auto-tests.json` before each start; a pass or a failure settles it. A
 failure, or three tries that showed nothing, is told once; the row keeps the Needs-you dot and says why in the last
-answering try's words ("BMN stopped after 3 tries on 2.0.29: opencode did not answer in a home folder without its
-sign-in"), and a failed context test names its reason the same way (a size in your own `~/.claude/settings.json`, for
-one, outranks an agent's own limit); both offer **Test again…**, your own run. Planning these tests reads BMN's
-OpenCode reader plugin from the packaged `bin` folder, since the main process bundles its module without the plugin
-beside it. BMN runs your commands with `--auto`, recorded with `"by": "bmn"`. A
+answering try's words ("BMN stopped after 3 tries on 0.161.0: codex did not answer"), and a failed context test names its reason the same way (a size in your own `~/.claude/settings.json`, for
+one, outranks an agent's own limit); both offer **Test again…**, your own run. BMN runs your commands with `--auto`, recorded with `"by": "bmn"`. A
 test run of BMN (test mode or the self-test) starts none unless `BMN_AUTO_TESTS` names them: `all`, or a comma-separated
 list of `rules`, `skills`, `skills-loading`, `tools`, `context` and `fence`.
 
@@ -1623,7 +1620,6 @@ is where the app starts summarising. BMN uses an app's setting only on a version
 | --- | --- | --- | --- |
 | Codex | `model_context_window`: a `-c` item on a run, a top-level key of `config.toml` for your sessions | `model_auto_compact_token_limit`, the same way | not yet |
 | Claude Code | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100 000 to 1 000 000): on a run, one `--settings` text that names it in `env` and as `autoCompactWindow`; an `env` entry of `settings.json` for your sessions | no setting | 2.1.310 (2026-10-26): `--settings` with 137 000 reported 137 000 over `settings.json`'s 450 000; the run's environment had lost to that file |
-| OpenCode | no setting | no setting | does not apply |
 
 Claude Code 2.1.296 reads `CLAUDE_CODE_MAX_CONTEXT_TOKENS` only for a model it does not know or with compaction off, so
 BMN does not use it. Its run's environment loses to an `env` entry in your `settings.json`, while `--settings` outranks
@@ -1711,7 +1707,6 @@ version (`--auto`); the row says "BMN is testing …" meanwhile.
 | --- | --- | --- | --- |
 | Claude Code | the start-up message of `claude -p`, given `/context` | `~/.claude/skills` | 2.1.300, 2026-10-14 |
 | Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | 0.162.1, 2026-10-11 |
-| OpenCode | its own server's skill list: `opencode serve --port 0` on loopback with a password made for the run, then `opencode api --server <url> skill.list` until two answers agree | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` (one skill of a name, `~/.agents/skills` first, on 2.0.29) | 2.0.29, 2026-10-14 |
 
 **Whether a model gets a skill** is a second test, `bmn skills test <app> --prompt`, which BMN runs once the skills test
 passed and whenever the skills change. It sends one prompt to the app's provider, so it runs only where the app may
@@ -1723,7 +1718,6 @@ the token comes back and no tool can have read the file:
 | --- | --- | --- | --- |
 | Claude Code | `claude -p --tools "" --strict-mcp-config`, asked `/<skill>` | the run reports that it had no tools, reports no tool used, and its answer holds the token | not yet |
 | Codex | `codex exec --sandbox read-only`, asked to use `$<skill>` | the run's saved record shows the token in the words of a message Codex gave the model (`input_text`) before any tool, and that the run came to its end | not yet |
-| OpenCode | none | never yet: BMN cannot tell the app handing over a skill from the model reading the file | does not apply |
 
 It **fails** when a run read to its end, with an answer and no tool, came back without the token. It is
 **inconclusive** when the run errored or took too long, its report cannot be read or stops early, the token shows only
@@ -1830,17 +1824,12 @@ name; Claude Code prints whether each tool connected): one run with nothing shut
 one told to take none. A place counts as shut out only once a tool from there was seen active; a record made before
 both signs were used grants nothing. The line's form was read on Claude Code 2.1.296; the test has not yet run on a live
 app. A Codex run reports nothing of its tools and also takes tools from its apps and plug-ins, which no test can stage,
-so Codex, like OpenCode, is never recorded as keeping a run to its own tools.
+so Codex is never recorded as keeping a run to its own tools.
 
 | App | Settings file | Entries under | A variable is written as | Tested on a live app |
 | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude.json` | `mcpServers` | `${NAME}` | not yet |
 | Codex | `~/.codex/config.toml` | `[mcp_servers.<id>]` | `env_vars = ["NAME"]`, `env_http_headers` | not yet |
-| OpenCode | `~/.config/opencode/opencode.json`, or the existing `.jsonc` | writes `mcp.servers`; reads that and legacy `mcp` | `{env:NAME}` | not yet |
-
-OpenCode's root `mcp.timeout` is metadata. A name in both server layouts, or both config filenames present, makes the
-file unreadable for changes. Existing entries keep their layout and disabled state; a new entry uses `mcp.servers`.
-Capability records from before this layout do not authorize writes; BMN schedules the tools test again.
 
 Codex passes a variable only under its own name and has none for an argument, so a tool that needs either reads
 `blocked` for Codex. A variable, or an argument from one, is written only where the test saw that app version pass it.
@@ -1874,31 +1863,9 @@ write, so **Undo…** (or `bmn rules restore --transaction <id>`) knows every en
 and puts one back only while it still reads exactly as the install left it, else stops and names it. An entry that
 holds a value inline is never replaced or removed: move the value into an environment variable first.
 
-For OpenCode, the transaction keeps admitted entry tokens and the punctuation they need. Comments stay in the live
-file, including comments inside an old entry; unknown literal settings are left in place when BMN cannot safely keep
-them for undo. A checked inverse restores an unchanged file's exact text. A config BMN created from an absent path
-is removed only after an exact inverse and fresh file and parent checks; a preexisting empty file stays. If unrelated
-bytes changed, undo changes
-only the guarded entry and keeps those edits and any new siblings. Layout, filename and ownership changes are checked
-again at publication and readback; an interrupted undo records its progress before restoring ownership metadata.
-An interrupted removal also keeps a typed file and parent metadata witness. Before retrying a pending removal,
-BMN requires the same file revision; a recreated path or uncertain witness is left for you to review.
-
-Setup's OpenCode tools install also records this checked inverse before publication. Undo restores exact
-unchanged bytes or original absence; removal retains the installed file in the transaction's holding area.
-Completed physical undo can resume only its metadata work after a fresh readback. An interrupted or uncertain
-physical operation needs inspection. Older Setup transactions without an inverse remove only their owned entry
-and never infer that the original file was absent. Setup's opt-out survives either outcome.
-
 There is still a final-write window, as with BMN's existing config writer: another program's write between the
-last check and the final rename or removal can be lost while BMN reports success. Keep OpenCode from rewriting
-its settings, including through `opencode mcp add`, while install or undo runs. These checks do not provide a lock.
-
-OpenCode's tools test starts a private loopback server on a free port, with a temporary password, and asks only
-that server through `api --server <its URL> mcp.list`. Polling and teardown share a time limit. A pass requires the
-stand-in to confirm its argument and environment value, and the test's server process group to be gone. There is
-no fallback to the owner's background service or `opencode mcp list`. The new method has its own bounded automatic
-retry record; earlier results and exhausted retries are retained.
+last check and the final rename or removal can be lost while BMN reports success. Keep the app from rewriting
+its settings while install or undo runs. These checks do not provide a lock.
 
 **Import.** `bmn tools import` proposes the apps' entries as tools: one where the apps agree on what it runs and the
 variables it names, separate ones where they differ, each kept to the apps that hold it and none Public. A value held
@@ -1993,11 +1960,8 @@ candidate a `tools` entry with the items for exactly that set, also when it is e
   roster role` gives a Codex candidate no items (`not-supported-yet`), a tool kept to a Codex agent is not handed out,
   and whoever starts the run decides its tools (dev-auto: `-c 'mcp_servers={}'`). Once your team lists a tool, a Codex
   run checked with `--packet` is refused (`ROUTE_UNSUPPORTED`): nothing shows it carries none.
-- **OpenCode.** A checked `opencode run` starts from BMN's folder, which names no MCP server, with the repository's
-  configuration off and BMN's agent only reading; it is `tools: not checked` as for Codex, and no tool on your list is
-  handed to an OpenCode helper.
-- **Cursor (retired).** A `cursor-agent` dispatch, or an agent a team file still names on Cursor, is refused with the
-  retirement line ([Cursor, retired](#cursor-retired)).
+- **Cursor and OpenCode (retired).** A `cursor-agent` or `opencode` dispatch, or an agent a team file still names on
+  either, is refused with the retirement line ([Cursor](#cursor-retired), [OpenCode](#opencode-retired)).
 
 ### Models: what research found
 
@@ -2014,8 +1978,8 @@ research, and BMN's proposal (the active knights and pawns on Claude Code and Co
 the first of each model) waits in the [one proposals card](#bmns-proposals-one-card). A picked researcher your team no
 longer names falls back to none, and **Research now** waits until you pick again.
 
-Research runs in Claude Code, Codex and OpenCode, with a command that names its limits (below), checked before it starts.
-For Claude Code no live run has yet measured that the app keeps to them; Codex and OpenCode must pass a fence test per
+Research runs in Claude Code and Codex, with a command that names its limits (below), checked before it starts.
+For Claude Code no live run has yet measured that the app keeps to them; Codex must pass a fence test per
 version (below). An agent whose provider gets public work only researches only on an app version whose limits were
 tested. When no agent can research the page says so; a price can still be written in the team file.
 
@@ -2029,7 +1993,6 @@ lowest effort:
 | --- | --- |
 | Claude Code | `claude -p --safe-mode --tools WebSearch,WebFetch`, no MCP servers, no saved session |
 | Codex | `codex exec --ephemeral --sandbox read-only --strict-config` with a Codex folder of its own (`CODEX_HOME`), web search on, no MCP servers, and every switch of the fence below |
-| OpenCode | `opencode run --standalone --format json --agent bmn-researcher -m <provider>/<model>#<effort> --title "BMN research"`, started like a helper run from BMN's own OpenCode folder; the agent allows web search and nothing else |
 
 The page shows progress ("3 of 9 models") and **Stop**. Stop, or the 20-minute limit, ends the run with everything it
 started and the reading of cited pages; finished providers' answers are kept and the research is marked not finished. A
@@ -2107,135 +2070,6 @@ run under way is ended, none starts after, nothing of it is recorded and no rese
 tools switched on for your account between the comparison and the run; the web (BMN reads each cited page itself); the
 sign-in, which the run can use as Codex does; and Claude Code researchers, checked in the command but not yet tested on
 a live run.
-
-#### Checking an OpenCode helper run
-
-`bmn roster check` reads one OpenCode command and refuses every other (Story 70.2). `bmn roster role <role> --json`
-hands a lead its parts for each OpenCode candidate (`opencode`: `env`, `argv`, then `-m` and `--title`, the prompt on
-standard input) and, for a role with one, puts BMN's folder in order first. The command, with the lead's model, effort
-and title:
-
-```
-env -i HOME=<f>/home XDG_CONFIG_HOME=<f>/config XDG_DATA_HOME=<f>/data XDG_STATE_HOME=<f>/state
-  XDG_CACHE_HOME=<f>/cache OPENCODE_DISABLE_PROJECT_CONFIG=1 OPENCODE_DISABLE_AUTOUPDATE=1
-  OPENCODE_DISABLE_MODELS_FETCH=1 PATH=<your PATH>
-  opencode run --standalone --format json --agent bmn-helper -m <provider>/<model>#<effort>
-  --title <title> < <prompt file>
-```
-
-`<f>` is BMN's folder for OpenCode runs, `~/.config/bmn/agents/state/opencode`, never your own OpenCode folders. Its
-configuration holds exactly `opencode.json` (no update, sharing or snapshots; no provider, model or MCP server) and
-`agents/bmn-helper.md` (every action denied, then reading inside the project allowed); its home folder is empty. A run is
-refused while the configuration holds anything else at any depth, a link or a changed byte, or the home folder holds
-anything; `bmn roster role` puts the folder back.
-
-- **The form.** `env -i` with exactly these names and values (only `PATH` is yours), `run`, `--standalone`, `--format
-  json` and `--agent bmn-helper`. Refused, with the reason: no `env -i`, a missing or different name (another
-  `OPENCODE_CONFIG…` is "another OpenCode configuration"; without `OPENCODE_DISABLE_PROJECT_CONFIG=1` the repository's
-  configuration replaces BMN's agent), `--auto`, `--session`, `--continue`, `--fork`, `--server`, `--file`, any other
-  flag, a prompt on the command line, any other subcommand.
-- **Model and effort**, from `-m provider/model#variant`: an agent's model is `provider/model` (`opencode-go/kimi-k3` for
-  model `kimi-k3` and provider `opencode-go`), another is `MODEL_MISMATCH`; no `#variant`, or one outside the agent's
-  (and role's) efforts, is `EFFORT_UNSUPPORTED`. The variants a model takes are OpenCode's (on 2.0.29
-  `opencode-go/gpt-6-luna` none to max, `opencode-go/kimi-k3` only max); an agent's efforts should name those.
-- **The destination** is the provider of `-m` at its default address and must be the agent's (`HOST_MISMATCH`): BMN's
-  folder names no provider and the run takes OpenCode's built-in model list (with `OPENCODE_DISABLE_MODELS_FETCH=1`, no
-  call to `models.opencode.ai`; a newer model waits for an OpenCode update; a model list planted in the run's cache did
-  not move OpenCode Go's address, `plan/references/reference-70-opencode-helpers/RESULT.md`), so `-m` alone decides,
-  and a team whose own OpenCode is unrecorded or unknown in `## harness-routes` can still hold an OpenCode helper.
-  Without `--title` it is unknown (`HOST_UNKNOWN`): OpenCode would title the session with a model the command does not
-  name. Private work follows that provider's answer.
-- **Binding.** The first JSON event of a run names its session (`ses_` and 26 characters); `bmn roster bind --receipt
-  <file> --session <ses_…>` takes that shape for an OpenCode receipt, inside the same ten minutes as for Codex, and no
-  other. A research run on OpenCode binds the one session id its events name to its question (`session`), so its usage
-  can be read by it; where it cannot, the answer stands and its note says why.
-
-Tested by `apps/desktop/src/utility/agents-check.test.ts` and, with `BMN_OPENCODE_REAL=1`, a run of the installed
-OpenCode through the checked command: only reading tools were offered, a read outside the project was refused, nothing
-was written or started and no outside address asked for.
-
-**Limits.** *Sign-in:* BMN's folder holds the OpenCode Go sign-in it copied when you approved an agent on OpenCode Go
-([Luna through OpenCode Go](#luna-through-opencode-go)); helper sessions stay out of your history. *Time:* a provider's
-server error is retried without end or event, so the lead gives a dispatch its own time limit. *Usage:* tokens and cost
-are not printed; `opencode session export <id> --standalone` with the same environment gives them. *Versions:* measured
-on 2.0.29; on another the check says so in its steps. *BMN's terminal plugin:* `opencode run` does not load it, so a
-helper run never reaches `bmn hook` as your session. *Your own OpenCode* still gets the public rules only.
-
-#### Luna through OpenCode Go
-
-The first OpenCode agent is BMN's to propose and yours to approve (Story 70.4; your card "Luna via
-Go", 2026-10-14). While your team holds no OpenCode agent on her model and OpenCode lists it, the
-[one proposals card](#bmns-proposals-one-card) on Agents › Team names her: the agent Luna (Go), a pawn running
-`opencode-go/gpt-6-luna` in OpenCode at the efforts your Codex Luna holds (xhigh, max), last in the
-role helper, named a researcher where your team names its researchers. OpenCode Go joins as a new
-provider does, with public work only until you allow it. Its **Approve…** stages her with BMN's other
-proposals and opens the approval; until you approve nothing changes.
-
-**Whether OpenCode lists her.** OpenCode lists a provider's models only where a key for it is
-named, and `opencode models` (like `opencode auth list`) run in your own OpenCode folders loads
-your plugins and starts your MCP servers (the 70.4 probe). So BMN asks in an empty folder of its
-own, under the system's temporary folder: the provider is named with a key that is not one,
-`OPENCODE_DISABLE_MODELS_FETCH=1` keeps the list the one built into OpenCode, every request goes
-to a closed port on this computer, and the folder is removed after. Nothing of yours is read.
-
-**The sign-in.** When you approve a team that names an agent on OpenCode Go and BMN's folder holds
-no Go sign-in yet, BMN copies yours there once, and says so beside the approval. OpenCode's own
-`auth export` runs in your OpenCode folders (it loaded no plugin and started no MCP server in the
-probe, unlike `models`), from BMN's empty home folder, and prints every sign-in you hold; BMN keeps
-only OpenCode Go's, in memory, and hands it to `auth import` in its folder on standard input.
-Nothing OpenCode prints is written, logged or shown, and your own OpenCode data is not changed.
-Where the copy could not be made (OpenCode holds no Go sign-in: `opencode auth login` first),
-Team says why and offers **Copy sign-in**. Tested: the cases in
-`apps/desktop/src/utility/agents-opencode-go.test.ts` against a stand-in OpenCode and, with
-`BMN_OPENCODE_REAL=1`, the installed OpenCode on throwaway folders with a plugin and an MCP server
-that note when they run: Luna was listed, only the Go sign-in was copied, neither marker ran, the
-owner-like database kept every byte, and BMN's folder stayed exactly BMN's.
-
-**A lead dispatches her** like any helper: `bmn roster role helper --json` names her with the
-OpenCode form (see [Checking an OpenCode helper run](#checking-an-opencode-helper-run)), and
-`bmn research` offers her once the OpenCode fence test passed for her model.
-
-#### OpenCode behind its fence
-
-An OpenCode agent researches only where a fence test of exactly the installed OpenCode passed for
-its model (Story 70.3), as a Codex agent does. `bmn roster fence` runs it, after Codex's, where
-your team has an agent on OpenCode, and BMN runs it by itself the same way.
-
-**The run.** A research run starts from BMN's own OpenCode folder (see
-[Checking an OpenCode helper run](#checking-an-opencode-helper-run)) with BMN's research agent
-`bmn-researcher`: every action denied but web search. On OpenCode 2.0.29 and 2.0.32 the only tool it is
-offered is `websearch`. A search sends its text to the search service the folder names, TinyFish,
-which answers without an account; it is not sent to the model's provider. BMN reads each cited
-page itself, as for every research.
-
-**The test.** It builds a throwaway home folder with a marker in every place OpenCode could pick
-one up: OpenCode's rules file and a rules file its settings name, its settings, an agent and a
-skill in its folder, Claude Code's rules file and a skill in its folder, a skill in the home
-folder's `.agents`, a file and a rules file in the home folder and beside the run, a plugin and an
-MCP server that note when they start, an earlier session in BMN's folder, and a page on this
-computer. The owner-like settings point at a stand-in for the provider on this computer. It then
-runs the very research command against that stand-in, adding only the stand-in's address for the
-provider and the stand-in as the proxy, so no search or page leaves this computer. The stand-in
-calls every tool OpenCode offers (the search with a planted file's path and the local page's
-address) and every tool a research run must not have (reading, listing and searching files, the
-shell, writing, editing, fetching a page, Code Mode, a sub-agent, a skill, the MCP tool, a
-question). The test passes only when no marker but the prompt's reached the stand-in, no picture
-was sent, nothing was written in the home folder, BMN's folder is still exactly BMN's, no plugin
-loaded and no MCP server started, no tool fetched the local page, every offered tool was called
-and gave back no marker, and every offered tool is one BMN has looked at
-(`OPENCODE_RESEARCH_TOOLS_SEEN` in `apps/desktop/bin/agents-check-evaluate.mjs`: only `websearch`). A run
-that asked to reach any other host than the search service showed nothing. Each test is appended
-to `state/fence-tests.jsonl` with the OpenCode version, the model and a mark of the research form,
-which takes in BMN's whole OpenCode folder: a change to the folder's files starts closed.
-
-**Under another model list.** OpenCode's research run takes its models from the list built into
-OpenCode (`OPENCODE_DISABLE_MODELS_FETCH=1`), the one the test used, so there is no other list to
-compare under and `--live` does not apply. A record that the same version offers a model other
-tools closes its research as it does for Codex.
-
-**What it showed** (2026-10-14, OpenCode 2.0.29, Luna through OpenCode Go): passed, with only
-`websearch` offered. The same run pointed at an owner-like OpenCode folder instead of BMN's failed:
-the owner's plugin loaded and his MCP server started.
 
 #### Asking the web a question
 
@@ -2342,7 +2176,7 @@ printf '%s\n' 'All 12 tests passed.' | bmn judge ask --state-file - --questions-
 - **The key** is OpenCode's own, read with `opencode auth export --standalone` for that one request. BMN chooses one
   active API-key sign-in, `opencode-go` before `opencode`; multiple eligible keys in the winning integration are refused.
   The judge preserves the selected `OPENCODE_DB` verbatim, including a relative path interpreted by OpenCode;
-  an empty selected database does not fall back to another sign-in. The separate Go sign-in import is unchanged.
+  an empty selected database does not fall back to another sign-in.
   The export is bounded by the request's deadline (at most five seconds); a failed, malformed or unmatched export is refused
   without reading an old `auth.json`. Only the chosen key is retained in memory, written nowhere: in no output, record or error,
   also when a server sends it back, as BMN
@@ -2428,7 +2262,6 @@ session send work, and may that provider see private work in this workspace?
 | --- | --- | --- |
 | Claude Code | The hook answers `{"decision":"block","reason":…}`, which tells the app not to send the prompt and to show the line | 2.1.296 (2026-10-11) |
 | Codex | The same answer | 0.162.0 and 0.162.1 (2026-10-11) |
-| OpenCode | Not covered: its plugin reports events after the fact and has no prompt event to answer | does not apply |
 
 The measurement is a live test in an empty folder with the app pointed at an address on this
 computer that must receive nothing: the app showed the line and sent no prompt. BMN does not know
@@ -2474,23 +2307,10 @@ session's first prompt was not stopped for want of its saved record in that test
   skills and hooks out of the call; BMN does not test that, so run one packet with a marker line in your rules before you
   turn on a public-only agent. `accepted_versions` in a team file written under the earlier rule is still valid and
   decides nothing; Integrations › Health removes it with its ×.
-- **Where an app sends data** was tested against Claude Code 2.1.295, Codex 0.161.0 and OpenCode 2.0.28. BMN reads the
+- **Where an app sends data** was tested against Claude Code 2.1.295 and Codex 0.161.0. BMN reads the
   same named settings on every later version and refuses a changed or unknown destination, but a version that takes its
   destination from a setting BMN does not read would not be noticed. Tools receive text the model writes and are outside
-  this reading in every app: OpenCode's web search providers and MCP servers can see private material whatever its
-  destination reads. For OpenCode, BMN reads only its own configuration folder, and only where it understands all of it:
-
-| OpenCode | What BMN does |
-| --- | --- |
-| Reads | `opencode.json` or `opencode.jsonc` as JSON with comments and trailing commas outside strings (a `//` comment ends at a line feed or carriage return); front matter opening with `---`, `---yaml` or `---yml` and closing on the next line starting `---`, in the team file's YAML (no anchors, aliases, tags, block scalars, complex keys, directives, repeated keys, or escapes other than `\"`, `\\`, `\n`, `\t` and `\/`), with `model` only at its top |
-| Must name the same provider | every model the configuration names, as each gets the conversation: the title model (`small_model`) and each agent's, mode's or command's (`agent`, `agents`, `mode`, `command`, `commands`, and `model` in the front matter of files at any depth in `agent/`, `agents/`, `mode/`, `modes/`, `command/` and `commands/`), each as `<provider>/<model>` read as OpenCode reads it (the model up to the first `#`, a variant neither empty nor holding `#`) |
-| Unknown destination | models naming more than one provider; `OPENCODE_CONFIG` or `OPENCODE_CONFIG_CONTENT` set where BMN runs; `opencode.json` beside `opencode.jsonc`; a front matter in JSON or JavaScript, never closing or closing on another `---` line, holding a lone carriage return or a space YAML does not count (a no-break space), or an unquoted value holding `:` (quote it); a key written twice or named `__proto__`; a map of another shape; a file or folder BMN cannot read; a provider, model or variant entry (under `provider` or `providers`) carrying its own runtime (`api`, `npm`, `package`, `canonical`), `variants` other than a map, or `settings` (OpenCode 2) or `options` (OpenCode 1) beyond those that cannot move a request: for a provider `compaction`, `transport`, `encoding`, `timeout`, `headerTimeout`, `chunkTimeout`, `reasoningEffort` and OpenCode 1's `apiKey`; for a model or variant `compaction` and `reasoningEffort`, each with its documented values (so `baseURL`, Azure's `resourceName`, a region or an unknown field count as an address) |
-| Not read | a project's `opencode.json`; the `.opencode`, `.claude` and `.agents` folders in and above the project (your home's included); `/etc/opencode`; plugins; the environment of the shell you start OpenCode in |
-
-That reading names OpenCode's destination on Health and in the team file; it never earns OpenCode the full rules,
-because OpenCode 2 also converts older configuration shapes the reading does not follow (a model entry's own `provider`,
-a variant's settings written directly in it, a provider renamed on loading such as `azure-cognitive-services`), any of
-which can send the conversation elsewhere (owner decision 2026-10-14).
+  this reading in every app.
 
 ## Asking a teammate: `bmn team ask`
 
@@ -2498,7 +2318,7 @@ A teammate answers in its own app's read-only mode with that mode's tools, the w
 the owner's own home and sign-in; BMN only coordinates. It picks the teammate, checks the ask,
 launches it, supervises it in a systemd user scope of its own and keeps its record. It builds no
 container, frozen copy, run home or sign-in of its own. Measured on this computer (Codex 0.162.1, Claude
-Code 2.1.300, OpenCode 2.0.29, Linux 7.0, the owner's systemd user manager). The scripts and raw
+Code 2.1.300, Linux 7.0, the owner's systemd user manager). The scripts and raw
 records are in `plan/references/reference-72-team-ask/`: `RESULT-v8.md` holds 72.9's
 measurements.
 
@@ -2771,41 +2591,24 @@ options, every shell redirection, a background shell) and every tool not given. 
 | --- | --- | --- | --- |
 | Codex | `codex-read-only` | dev-auto's command: `codex exec --skip-git-repo-check -C <folder> -m <model> -c model_reasoning_effort=<effort> -c features.plugins=false -c features.apps=false -c mcp_servers=<isolated-map> -c approval_policy="never" -c default_permissions="bmn_ask" -c permissions.bmn_ask=... [-i <picture>]... --json -o <run>/codex-answer.md -`, with `RUST_LOG` for its turn span and the owner's `CODEX_HOME` when set | any file the owner's user can read except the listed credential stores (`native-rules.mjs` `codexDeniedPaths`), with its shell, Git, web search and sub-agents; its profile extends `:read-only`, writes nothing and keeps the shell off the network. Codex's profiles are beta: a Codex that refuses this one fails the ask with a reason naming it and `--features` says so; BMN never runs it without the profile (Epic 102 D8) |
 | Claude Code | `claude-read-tools` | `claude -p --model <model> --effort <effort> --restricted --tools Read,Grep,Glob,Bash,WebSearch,Agent --allowedTools 'Bash(git log:*)' 'Bash(git show:*)' 'Bash(git diff:*)' 'Bash(git blame:*)' 'Bash(git ls-tree:*)' 'Bash(git ls-files:*)' WebSearch Agent --permission-mode dontAsk --strict-mcp-config --mcp-config '{"mcpServers":{}}' --output-format stream-json --verbose`, BMN's `git` first on `PATH` | its working folder only (`--restricted`), with Read, Grep, Glob, Git history and listings, web search and sub-agents. From a linked worktree that leaves out the main folder and an ignored `plan/` there: the asker attaches those files with `--file`, and the prompt tells the teammate to name what it could not read |
-| OpenCode, a private project ask to a teammate whose provider takes private work | `opencode-reader` | `opencode run --standalone --format json --agent bmn-ask-reader -m <provider>/<model>#<effort> --title 'BMN ask'` in BMN's own OpenCode folder (its Go sign-in, 70.4), the agents given in `OPENCODE_CONFIG_CONTENT`, BMN's `git` first on `PATH` | the project folder only, through BMN's read/glob/grep/Git broker, with web search and one bounded read-only sub-agent `bmn-reader`; outside and symlink escapes are refused |
-| OpenCode, any other ask | `opencode-asker` | the same with `--agent bmn-ask-asker`, every action denied (`"*": "deny"`) | nothing beyond the asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public work only, where the owner's folder exceptions can cover the question and files but never the project reader |
 
-OpenCode's agents use V2 `agents` and ordered `permissions` keys. Its native filesystem, shell and delegation tools
-are denied; the installed BMN enforcement plugin supplies confined equivalents and fails closed if unavailable.
-Reads hold verified descriptors. Each search shares one five-second budget across traversal and matching;
-cancellation waits for its matcher to exit before releasing those descriptors. Git runs in a read-only namespace with project-scoped paths, immutable commit IDs,
-empty configuration and no external diff, pager, hooks or object alternates. The one child's durable creation intent,
-identity and confirmed termination survive cancellation and resumed asks; uncertain discovery leaves usage incomplete.
-The child keeps its parent's model and effort and cannot delegate. Project skills remain disabled.
-
-On the measured Linux OpenCode 2.0.29 and 2.0.32 paths, dispatch also checks the fixed managed root
-`/etc/opencode`, even for public asks and research. A missing root or stable empty real directory is admitted;
-a populated, linked, unreadable or changing root is refused before dispatch. Native OpenCode can load managed
-plugins and provider settings outside BMN's folder, so BMN cannot offer its confined form with that configuration.
-
-- **BMN's `git`** (`bin/ask-git.sh`, shipped with 72.3) is the `git` the Claude Code reader finds; the OpenCode broker uses its same argument validator. It allows only `log`, `show`, `diff` and `blame`, and for Claude Code the listings `ls-tree` and `ls-files` (2026-11-18: teammates asked for them and were refused; OpenCode's broker keeps its own gate at the four), and takes an option only when it is
+- **BMN's `git`** (`bin/ask-git.sh`, shipped with 72.3) is the `git` the Claude Code reader finds. It allows only `log`, `show`, `diff` and `blame`, and for Claude Code the listings `ls-tree` and `ls-files` (2026-11-18: teammates asked for them and were refused), and takes an option only when it is
   spelled whole as one of its read-only options (Git takes any unique beginning of a long option, so
   `--cont=` would be `--contents=`). It takes no option that names a file, runs no external diff, text
   conversion, pager or hook, and, for Claude Code, reads no configuration but the project's own. The listings
   take only options that print what a tree or the index holds: none that lists untracked or ignored files, reads
   an ignore file or a working-tree file (`ls-files --format`), enters a submodule or fetches a missing object, and
   no pathspec magic. Claude Code's
-  prefix rules alone let `git blame --contents` or `--output` read or write any file (72.1). OpenCode
-  uses brokered Git operations without a shell; redirections are refused.
+  prefix rules alone let `git blame --contents` or `--output` read or write any file (72.1).
 - **What is not offered, said plainly:** Claude Code's `WebFetch` and every Bash command but those
   six Git reads and what its own mode takes as a plain read inside the folder. Measured on the 2,541 shell calls of
   362 asks, Claude Code 2.1.316 to 2.1.327 (2026-11-01 to 2026-11-18): plain reads (`ls`, `cat`, `head`, `sed -n`,
   `grep`, `wc`, `find`), piped or chained, answered 9 times in 10; every call that named a path outside the folder
   (65), used `git -C` (50), a variable (27) or a here-document (15), or ran `python3` (46) or `awk` (10) was refused
   whole, as were 77 of 80 with a loop, 34 of 35 with `$(...)`, 8 of 9 that wrote a file and 4 in 10 with `cd`. The
-  prompt says this once to the Claude Code form as what its shell does; BMN forbids nothing of its own there; OpenCode's `webfetch`, `execute`, `patch`, `question`, `skill`, its own sub-agents and
-  its shell beyond the four Git reads. Codex's `request_user_input` is refused by Codex in an exec run.
+  prompt says this once to the Claude Code form as what its shell does; BMN forbids nothing of its own there. Codex's `request_user_input` is refused by Codex in an exec run.
 - **What a question names outside the folder** (owner 2026-11-18). A teammate whose mode reads one folder (Claude
-  Code, OpenCode's reader) cannot open a file the question names outside it, and in the same 362 asks 43 questions
+  Code) cannot open a file the question names outside it, and in the same 362 asks 43 questions
   named one: the teammate went for it in 36 and was refused each time. So before anything is written BMN reads the
   question for paths (absolute with two parts or more, or under `~`; never part of a URL or a revision), keeps those
   that exist under the home folder or the temporary folder, lie outside the project by their real path and were not
@@ -2818,17 +2621,16 @@ plugins and provider settings outside BMN's folder, so BMN cannot offer its conf
   asks, and in 13 of them the teammate had gone for the named file. A Codex teammate reads the computer and a QA
   ask's inputs are its curated brief alone, so neither is judged.
 - **The owner's rules.** Codex and Claude Code read his global rules from their own homes, as in his
-  own sessions. OpenCode, which runs in BMN's folder, gets them in the prompt for a private ask, and
-  only the part of the master marked public (`<!-- bmn:public -->`) as OpenCode's publication allows.
+  own sessions.
 - **App versions are not a gate.** Each form names the app version it was last checked on
   (`--features`). A newer app still runs, and its record names the version it ran.
 - **What it read is recorded.** The receipt, `bmn team asks show` and Agents › Asks say what the
   teammate's mode could read. A private ask's consent is judged for it (R72-NFR6): a form that reads
   beyond the asker's text joins the request's inputs as its mode, its root the project for Claude
-  Code and OpenCode's reader, and none for Codex (no folder exception covers the whole computer).
-- **Public asks** (`--data public`) go only to a form that reads nothing beyond the asker's text:
-  OpenCode's asker. Codex and Claude Code read with their own tools beyond what was handed over, so an
-  ask to them is private (`PUBLIC_NOT_VERIFIED`).
+  Code, and none for Codex (no folder exception covers the whole computer).
+- **Public asks** (`--data public`) go only to a form that reads nothing beyond the asker's text; since OpenCode's
+  asker was retired (Epic 123) no form left does. Codex and Claude Code read with their own tools beyond what was
+  handed over, so an ask to them is private (`PUBLIC_NOT_VERIFIED`).
 - **Credentials.** A credential in the question or a named file is refused before anything is sent
   (`CREDENTIAL_FOUND`, naming the file and pattern, never the value). A credential the answer or the
   app's output carries is masked as `[credential masked by BMN: <name>]` in `answer.md`, the record,
@@ -2895,8 +2697,7 @@ are a file of the verified public commit of its project, so one BMN changed is p
 JPEG, RGBA and palette PNG, lossy and lossless WebP with alpha) decodes to the same pixels,
 orientation, colour profile and transparency, with nothing planted left (Story 72.8's decoder
 check). Codex gets each picture with `-i`, Claude Code as image blocks in one stream-json user message
-(`inputs/message.jsonl`, its standard input). OpenCode is not asked about pictures (never measured);
-such an ask is refused saying so.
+(`inputs/message.jsonl`, its standard input).
 
 ### A browser for your local app (Stories 74.3, 74.5)
 
@@ -2910,7 +2711,6 @@ else of MCP:
 - **Claude Code:** the server alone in `--strict-mcp-config --mcp-config`, its tools added to
   `--allowedTools` by their MCP names (`mcp__playwright__browser_navigate`, …); under `dontAsk` every
   other tool of the server is refused.
-- **OpenCode:** not offered; such an ask is refused saying so.
 
 A look may navigate, go back, read the page (snapshot), wait, take screenshots, read the console and
 the network requests, use tabs, resize and close. `--interact` adds click, type, fill in a form,
@@ -2964,23 +2764,22 @@ the app's text in them stays plain text.
 ### Sign-in
 
 Codex and Claude Code use the owner's own sign-in in their own homes, exactly as his sessions do,
-and renew it as they always do: BMN never reads, copies or names a sign-in file. OpenCode uses BMN's
-own OpenCode folder, where his Go key was copied when he approved an OpenCode teammate (70.4). No key
+and renew it as they always do: BMN never reads, copies or names a sign-in file. No key
 or sign-in value is ever in a command line, a recorded environment value or the record: the launch
 names environment variables, and the export replaces every value with `(not exported)`.
 
 ### Session, model, effort, usage and sub-agents
 
-| | Codex | Claude Code | OpenCode |
-| --- | --- | --- | --- |
-| Session named | first event `thread.started.thread_id` (before the answer) | first event `system`/`init` `session_id` | every event's `sessionID` (`ses_…`) |
-| Answer | `-o <run>/codex-answer.md`, else the last `item.completed` agent message | `result.result` | the last `text` event |
-| Model | the turn span on standard error, `turn{… model=…}` | `init.model` and each assistant message's `model` | the session export (`opencode session export <id>` after it ends; its info alone kept as `session-info.json`, never its messages) |
-| Effort | the same span, `codex.turn.reasoning_effort=…` | not reported: verified from the pinned command (`--effort`) | the session export |
-| Sub-agents | each sub-agent's own session record, whose parent is the teammate's thread (`source.subagent.thread_spawn.parent_thread_id`), with its nickname, model and effort | `system/task_started` and `task_notification` (its type, description and own token count) | each `subagent` tool event's child session, whose export names the teammate's session as its parent |
-| Usage, and how it is counted | the teammate's `turn.completed` plus each sub-agent rollout's last `token_count`, summed: a parent's figure does not include its sub-agents' | `result.modelUsage` and `total_cost_usd`: Claude Code's own total for the whole run, sub-agents and web search included; each sub-agent's own count is shown, never added | each session's own export, summed: the teammate's and each sub-agent's |
-| Cost | not reported (subscription) | `result.total_cost_usd` as reported | the session export |
-| Quota | not reported | `rate_limit_event` (status, utilization per window) | not reported |
+| | Codex | Claude Code |
+| --- | --- | --- |
+| Session named | first event `thread.started.thread_id` (before the answer) | first event `system`/`init` `session_id` |
+| Answer | `-o <run>/codex-answer.md`, else the last `item.completed` agent message | `result.result` |
+| Model | the turn span on standard error, `turn{… model=…}` | `init.model` and each assistant message's `model` |
+| Effort | the same span, `codex.turn.reasoning_effort=…` | not reported: verified from the pinned command (`--effort`) |
+| Sub-agents | each sub-agent's own session record, whose parent is the teammate's thread (`source.subagent.thread_spawn.parent_thread_id`), with its nickname, model and effort | `system/task_started` and `task_notification` (its type, description and own token count) |
+| Usage, and how it is counted | the teammate's `turn.completed` plus each sub-agent rollout's last `token_count`, summed: a parent's figure does not include its sub-agents' | `result.modelUsage` and `total_cost_usd`: Claude Code's own total for the whole run, sub-agents and web search included; each sub-agent's own count is shown, never added |
+| Cost | not reported (subscription) | `result.total_cost_usd` as reported |
+| Quota | not reported | `rate_limit_event` (status, utilization per window) |
 
 Measured live with each app's own home and sign-in, a sub-agent forced to read a file, history read
 from Git and one web search: every answer right, and each sub-agent's session and usage found where
@@ -2992,15 +2791,14 @@ The answer is the teammate's. Each sub-agent is named in the record, in `asks sh
 Agents › Asks, and counted once by its app's basis above. The usage names that basis
 (`usage.aggregation`) and says whether every record was read (`usage.complete`). A sub-agent
 whose usage could not be read leaves the total marked incomplete, with the reason, never a number
-passed off as whole. A session BMN cannot identify, as the teammate or as one of its sub-agents (for OpenCode, a child
-whose own export names another parent or none), makes the ask "not attributed" (exit 17); a child
-whose export cannot be read stands, its usage incomplete. A sub-agent named by several events is one
+passed off as whole. A session BMN cannot identify, as the teammate or as one of its sub-agents, makes the ask "not attributed"
+(exit 17). A sub-agent named by several events is one
 sub-agent, counted once. Usage reads as observed tokens, reported cost and billing
 basis (subscription, key), each "unknown" where the app does not record it, never zero. A per-ask
 token ceiling (`token_ceiling` in `team/asks-settings.json`, below) applies to Claude Code only, the
 one app that reports usage while a run goes on: its supervisor counts each model call's input, cache
 and output tokens at that call's last report, about once a second, and over the ceiling the run is
-stopped (exit 16) with the count and the ceiling as its reason. For Codex and OpenCode time and
+stopped (exit 16) with the count and the ceiling as its reason. For Codex time and
 capacity are the only bounds.
 
 ### Exit codes
@@ -3013,7 +2811,7 @@ capacity are the only bounds.
 | 3–7 | team state, as for every team command: 3 team file missing, 4 invalid, 5 not approved, 6 state corrupt, 7 revision conflict |
 | 10 | refused, with the refusal code and its words (below) |
 | 14 | busy (`BUSY`): the capacity limit is reached; nothing is queued |
-| 15 | out of time: the run's time limit ended it; for OpenCode, which retries a provider error without end and says nothing, the reason says it was still waiting on its provider |
+| 15 | out of time: the run's time limit ended it |
 | 16 | stopped: Stop, its supervisor ended, or the token ceiling |
 | 17 | answer not attributed: no session, a session BMN cannot identify as the teammate's or one of its sub-agents', nothing in the run naming its model, or a model or effort that contradicts the request; the answer is kept only as diagnostic evidence |
 
@@ -3186,13 +2984,12 @@ with it (above), and the run is recorded `interrupted`.
 | --- | --- | --- |
 | `request.json` | the request as given, its hash, the key, the asking session, the resolver's rule | yes |
 | `question.md` | the question alone, as the asker wrote it; the prompt in `inputs/` is what was sent | yes |
-| `inputs/` | the prompt, the instruction snapshot (the owner's rules for an OpenCode private ask), file copies, `pictures/<n>.<ext>` as sent, and for a Claude Code picture ask `message.jsonl`, its standard input | yes |
+| `inputs/` | the prompt, file copies, `pictures/<n>.<ext>` as sent, and for a Claude Code picture ask `message.jsonl`, its standard input | yes |
 | `inputs/manifest.json` | every input with its source path, source root, consent basis and sha256, the form and what it reads; each picture's hashes before and after and the fields taken out and kept, by name | yes |
 | `snapshots/` | the app's effective configuration, executable identity (launcher and payload hashes), environment names | yes, values never |
 | `receipt.json` | `evaluate`'s verdict, the form, what it reads, the folder it works in, the argv's hash, every snapshot's hash | yes |
 | `launch.json`, `state.json`, `exit.json` | the supervisor's input (environment values replaced by `(not exported)` in an export), its state and the app's end | yes |
 | `events.jsonl` | the app's own output events, credentials masked | yes |
-| `session-info.json` | OpenCode only: the session exports' info (id, agent, model and variant, tokens, cost, title, parent) for the teammate and each sub-agent, never their messages | yes |
 | `project-start.json` | a project ask: the project's commit and clean state immediately before the app started | yes |
 | `browser/` | a browser ask: the server's folder; once the run has ended, only the screenshots `browser.json` names | the named screenshots only |
 | `browser.json` | a browser ask: the pages it visited and its screenshots, from the server's session log | yes |
@@ -3267,9 +3064,8 @@ version/executable changes. A failed or partial cycle counts. Failed and problem
 next distinct BMN startup; ordinary CLI calls do not consume it. Retry does not move the full-cycle clock.
 Concurrent callers join one run under `doctor.lock`; an interrupted attempt is named when ownership is released.
 Earlier results remain visible while checking. Each result has its own timestamp, version identity and freshness.
-Selected HOME, supported XDG roots, Claude/Codex profile selectors and both OpenCode selectors retain their
-existing precedence, including an unset selector. Inline OpenCode configuration is uninspected scope; its value
-is never passed to an app. A private keyed profile fingerprint binds cadence, results and joined views in the
+Selected HOME, supported XDG roots and Claude/Codex profile selectors retain their
+existing precedence, including an unset selector; OpenCode's selectors are no longer read (Epic 123). A private keyed profile fingerprint binds cadence, results and joined views in the
 existing state. Switching profiles starts a fresh cycle; a caller joining a different profile gets
 `profile-changed`, stale rows and exit 3. Executable/version qualification is independent of this fingerprint.
 An empty or invalid HOME never falls back to the owner's cache. An explicitly selected missing, unreadable
@@ -3283,22 +3079,15 @@ Scope and access are checked before and after awaited checks and before publicat
 
 Each new doctor version first runs on a disposable profile with planted problems. Real-profile runs use bwrap:
 read-only host and home, private scratch, empty working directory, closed stdin, fixed environment, 60 seconds
-and 1 MiB total output. Unsupported versions have no unsandboxed fallback. OpenCode has no qualified doctor.
+and 1 MiB total output. Unsupported versions have no unsandboxed fallback.
 Real checks retain absolute selected paths, including temporary roots and their symlink targets, read-only.
 Qualification masks owner/default/selected profiles, even through absolute and symlink paths, and exposes only
 the approved executable and its runtime dependencies beneath those masks. No owner profile is used to qualify.
 The bounded raw streams remain transient; allowlisted facts and BMN-authored reasons/fixes are the only output.
 Unknown diagnostics make a check partial. Arbitrary names, paths, messages and credential fragments are withheld.
 
-The OpenCode version check accepts its `v2.x` spelling. Its sandbox supplies missing runtime folders in a private
-view, preserving existing files and symlink targets read-only; only the log folder is writable on tmpfs. It writes
-no folders into the selected home. Leftovers keeps the original filesystem view for its location checks and reads
-both `plugin`/`plugins` and MCP layouts; entries from fixed `/etc/opencode`
-sources carry the fixed managed-origin label. Managed precedence that BMN cannot establish is reported unknown.
-Identical complete MCP definitions across managed and user sources produce one managed-labelled diagnostic.
-Conflicting definitions, or an unreadable definition of the same entry, produce one partial diagnostic;
-the managed label does not claim that BMN established which definition wins. Every observed source is still
-checked for changes, including sources whose duplicate diagnostic was suppressed.
+OpenCode was retired (Epic 123): the doctor checks no OpenCode version, plugin, MCP layout or managed root. A result
+saved before still reads, naming it "OpenCode (retired)".
 
 The startup Codex check uses the default session terminal policy: `xterm-sixel-256color` only when
 the same stable terminfo asset used by sessions validates against the bundle; otherwise `xterm-256color`.
@@ -3496,7 +3285,7 @@ reach the agent in Codex 0.162.1 and Claude Code 2.1.301, five of five each
   briefs nothing again: the typed agent's process ends with BMN, and the conversation goes on only as a
   resumed or a new one.
 - Only the agent the owner typed into the session, in its main conversation; never an agent another
-  agent started, and never OpenCode, which has no measured path.
+  agent started.
 - It travels in BMN's answer to the hook's own report of the start, so it adds no call and spends none
   of the hook's time of its own (the brain titles above are the one further call). A message travels after a tool call and the prompt guard answers a
   prompt, so neither shares this answer; should BMN ever answer a brief and a message for one event,
@@ -3563,17 +3352,15 @@ printing and resend after lost context. Two approvals between hooks coalesce to 
 confirmed duplicate hooks print nothing. Printed never means read. Team receipts are stored
 separately from Away state and never change owner presence. The global rules' team phrase points
 to this block and `bmn roster` as the current source. The route line informs; it does not refuse
-native sub-agent calls. OpenCode receives no block or notice: its plugin does not deliver returned
-hook context, so that route remains out of scope.
+native sub-agent calls.
 
 ## What the app enforces
 
 - Nothing on the socket can answer an agent's prompt, for any token: the owner token is a file every
   process of the owner's user can read, agents included. Answers from the phone are decided inside
-  the app from a Telegram tap (Epic 30). `answer.take` only hands a session's own OpenCode plugin
+  the app from a Telegram tap (Epic 30). `answer.take` only hands a session's own hook
   the answers already decided for that session's open requests, consuming them, and it refuses the
-  owner token. Its `reported` outcome settles only an answer that same process was handed, for that
-  request id. Hook **evidence** on a resolve or withdraw (`toolUseId`, `requestRef`, `answers`,
+  owner token. Hook **evidence** on a resolve or withdraw (`toolUseId`, `requestRef`, `answers`,
   `permission`, `tool`, `command`, all bounded and validated) can only mark an answer BMN sent as
   confirmed; it never makes one.
 - Requests are validated for schema and size before anything runs.
@@ -3629,7 +3416,8 @@ hook context, so that route remains out of scope.
   plan-use watch opens those notices.
 - A conversation reported by `SessionStart` is accepted only from the session's own live process,
   only when the agent it names matches the command the session was launched with, and only as a
-  UUID for Claude Code and Codex or the `ses_` ID OpenCode 1.18.31 uses. Two live sessions can never
+  UUID for Claude Code and Codex (a `ses_` ID OpenCode reported before it was retired still reads, never resumed).
+  Two live sessions can never
   bind one conversation: the second report is refused and the
   first session keeps it. The owner token cannot report a conversation. A hook prints only BMN's
   answers to its own agent (Agent hooks, above) and throws away what the app answers, so every refusal is written with its reason to

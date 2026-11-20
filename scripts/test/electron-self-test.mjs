@@ -26,7 +26,7 @@ const requiredPhases = [
   'modelOrigin', 'remoteAnswers', 'telegramCards', 'quietHours', 'morningDigest', 'healthAlerts', 'brainSchedule', 'away', 'awayGrant', 'fullerAnswers', 'telegramCue', 'resetModes', 'cspProbe',
   'graphicsTerminfo', 'workspaceResults', 'crossWorkspaceResults', 'hookIntegration', 'harnessObservations',
   'repositoryLaunch', 'checkoutPeers', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
-  'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeAcceptance',
+  'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeRetired',
   'hiddenPaneSize', 'inactiveFollowingOutputLayoutPuts', 'inactiveFollowingOutputCaptured',
   'stoppedStaleProgress', 'attentionTriage', 'filesWithoutHandoffs', 'fileReferenceFlow', 'quickLookFlow', 'fileReferenceWire', 'selectMenus',
   'voiceFlow', 'launchBackgroundChoiceRecorded', 'registeredInvokeChannels', 'formCreatedSession',

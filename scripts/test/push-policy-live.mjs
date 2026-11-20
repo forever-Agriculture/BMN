@@ -1,8 +1,8 @@
 /* global window, document, getComputedStyle */
 // MODULE: push-policy-live.mjs - Story 83.3 (and 83.5's Save and Undo): Health › Pushes and merges on the running build. A fresh profile starts with no owner allowed; the owner allows an account with its switch and raises a repository with the keyboard; `bmn policy` reads what Health stored, through the app's own socket; the rules Save that adds the policy pointer puts it in force and Undo takes it out; a restart keeps the rows; denying every owner is the off switch; a store that cannot be read shows as unknown, denied, and is not written over
 // The app runs in test mode with a temporary HOME and XDG folders (removed at the end), on the unit-test roster, a synthetic
-// rules master, two made-up Git folders whose origin names a made-up GitHub repository, and stand-in `claude`, `codex`,
-// `opencode` and `gh` programs (the `gh` stand-in answers for the two made-up repositories and nothing else). No agent runs,
+// rules master, two made-up Git folders whose origin names a made-up GitHub repository, and stand-in `claude`, `codex`
+// and `gh` programs (the `gh` stand-in answers for the two made-up repositories and nothing else). No agent runs,
 // nothing leaves the machine and no file of the owner's is read. Prints one JSON report, PASS or FAIL per check.
 // Usage: node scripts/test/push-policy-live.mjs [report.json] [shots-folder]   (needs `pnpm --filter @bmn/desktop build` first)
 import { execFileSync } from 'node:child_process'
@@ -79,7 +79,6 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const stub = (name, body) => { writeFileSync(join(stubs, name), `#!/bin/sh\n${body}\n`); chmodSync(join(stubs, name), 0o755) }
   stub('claude', 'case "$1" in --version) echo "2.1.302 (Claude Code)";; *) exit 1;; esac')
   stub('codex', 'case "$1" in --version) echo "codex-cli 0.162.1";; *) exit 4;; esac')
-  stub('opencode', 'case "$1" in --version) echo "2.0.29";; *) exit 1;; esac')
   stub('gh', `case "$1 $2" in
   "auth status") echo "  ✓ Logged in to github.com account octo-probe (keyring)" >&2;;
   "repo view") case "$3" in

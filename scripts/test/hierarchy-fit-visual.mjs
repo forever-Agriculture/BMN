@@ -1,7 +1,7 @@
 /* global window, document, HTMLElement, getComputedStyle */
 // MODULE: hierarchy-fit-visual.mjs - Epic 40: the sidebar row, the Needs you card and every select fit the plate standard
-// The app runs in test mode with scratch XDG folders. Synthetic agent stand-ins are shells named claude, codex and
-// opencode, so each of their rows carries its agent chip; the Claude one reports a z.ai origin and a permission request
+// The app runs in test mode with scratch XDG folders. Synthetic agent stand-ins are shells named claude and codex,
+// so each of their rows carries its agent chip; the Claude one reports a z.ai origin and a permission request
 // through `bmn hook claude`. No agent runs and nothing leaves the machine. Each colour mode asserts the layout facts
 // below; screenshots land in .dev-auto/evidence/epic-40/shots/ (ignored).
 import { sessionRequestControl } from './session-request-helpers.mjs'
@@ -65,7 +65,7 @@ function writeAgents(directory) {
     'exec bash --noprofile --norc'
   ].join('\n')
   const plain = '#!/bin/bash\nexec bash --noprofile --norc'
-  for (const [name, text] of Object.entries({ claude, codex: plain, opencode: plain })) {
+  for (const [name, text] of Object.entries({ claude, codex: plain })) {
     writeFileSync(join(directory, name), `${text}\n`)
     chmodSync(join(directory, name), 0o755)
   }
@@ -205,7 +205,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     }, { specs: [
       ['Claude — renderer hierarchy review', join(agents, 'claude')],
       ['Codex — cross-epic architecture alignment', join(agents, 'codex')],
-      ['OpenCode — a deliberately long session name for truncation', join(agents, 'opencode')],
+      ['Codex — a deliberately long session name for truncation', join(agents, 'codex')],
       ['Shell — sidebar layout', '/bin/bash'],
       ['Build watcher', '/bin/bash']
     ], cwd })
