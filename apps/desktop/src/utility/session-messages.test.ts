@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ERROR_CODES,
-  SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS,
+  SESSION_MESSAGE_MAX_WAITING,
   SESSION_MESSAGE_NOT_A_PEER,
   SESSION_MESSAGE_WAITING_CHECK_MS,
   SESSION_MESSAGES_OFF,
@@ -1169,19 +1169,25 @@ describe('one woken call takes every waiting message (136.2 AC2, Epic 111 F21)',
     expect((await shown(held.messageId))!.detail).toBe('Not handed over by the hook: Moonshot AI gets public work only.')
   })
 
-  it('stops at the handover size, the first always going, and the rest follow at the next call in order', async () => {
+  it('takes a full queue of the longest messages in one call, and a large held one stops none after it', async () => {
+    const second = repository(join(root, 'code/second'))
+    allowed = (_destination, senderRoot) => senderRoot === repo
+      ? { allowed: false, reason: 'Moonshot AI gets public work only' }
+      : { allowed: true, reason: 'Moonshot AI is allowed in this workspace' }
     const long = (word: string): string => `${word} `.repeat(2000).slice(0, 2000)
-    const sent = [await tell('a', 'b', long('one')), await tell('c', 'b', long('two'))]
+    const sent: Array<{ messageId: string }> = []
+    // Five waiting is the receiver's bound: the held one from a folder this provider may not see, then four it may.
+    sent.push(await tell('a', 'b', long('held'), repo))
+    sent.push(await tell('c', 'b', long('one'), second))
     clock += 31 * SECOND
-    sent.push(await tell('a', 'b', long('three')))
-    const size = (messageId: string): number => stored(messageId).stamp.length + stored(messageId).text.length
-    expect(size(sent[0]!.messageId) + size(sent[1]!.messageId) + size(sent[2]!.messageId)).toBeGreaterThan(SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS)
+    sent.push(await tell('a', 'b', long('two'), second))
+    sent.push(await tell('c', 'b', long('three'), second))
+    clock += 31 * SECOND
+    sent.push(await tell('a', 'b', long('four'), second))
+    expect(sent).toHaveLength(SESSION_MESSAGE_MAX_WAITING)
 
-    const first = (await takeAll('b')).messages!.map((message) => message.messageId)
-    const second = (await takeAll('b')).messages!.map((message) => message.messageId)
-
-    expect(first).toEqual(sent.slice(0, 2).map((message) => message.messageId))
-    expect(second).toEqual([sent[2]!.messageId])
+    expect((await takeAll('b')).messages!.map((message) => message.messageId)).toEqual(sent.slice(1).map((message) => message.messageId))
+    expect(stored(sent[0]!.messageId).state).toBe('waiting')
   })
 
   it('hands nothing, and gives every claim back, when the terminal is given another process partway through a batch', async () => {

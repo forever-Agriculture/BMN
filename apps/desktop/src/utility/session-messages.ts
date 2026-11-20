@@ -6,7 +6,6 @@ import {
   ERROR_CODES,
   ROSTER_APP_NAMES,
   SESSION_MESSAGE_HANDOVER,
-  SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS,
   SESSION_MESSAGE_MAX_WAITING,
   SESSION_MESSAGE_PAIR_HOURLY,
   SESSION_MESSAGE_WAITING_CHECK_MS,
@@ -342,8 +341,8 @@ export class SessionMessages {
    * work in the root stored with that message, and for a handoff in the root of every attached file's folder too
    * (Story 75.5). A message refused for its provider stays waiting and the list says why for as long as this run
    * lasts; a later one from another folder is not held up behind it. With `many` (Story 136.2 AC2) one call claims every
-   * message it may, oldest first, each with its own claim and provider answer, up to SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS
-   * (the first always), so one woken turn takes them all; without it, one, as a hook before 136.2 asks. Beside them goes
+   * message it may, oldest first, each with its own claim and provider answer, up to the receiver's queue bound
+   * (SESSION_MESSAGE_MAX_WAITING), so one woken turn takes them all; without it, one, as a hook before 136.2 asks. Beside them goes
    * the one line for the oldest message this session sent that expired and it was not told of (Story 110.2 AC3), once.
    */
   async take(p: {
@@ -366,7 +365,6 @@ export class SessionMessages {
     const expired = told === null ? {} : { expired: sessionMessageExpiredLine({ ...told, text: quoted ? told.text : null }) }
     const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
     const taken: SessionMessageTaken[] = []
-    let characters = 0
     const answer = (): { message: SessionMessageTaken | null; messages?: SessionMessageTaken[]; expired?: string } =>
       ({ message: taken[0] ?? null, ...(p.many === true ? { messages: taken } : {}), ...expired })
     // A process this terminal no longer runs is handed nothing: what was claimed for it is given back, best effort, so
@@ -378,9 +376,8 @@ export class SessionMessages {
       return answer()
     }
     for (const candidate of candidates) {
-      // Oldest first and in order: a message past the batch's size waits, and nothing later goes ahead of it.
-      if (taken.length > 0 && (p.many !== true || taken.length >= SESSION_MESSAGE_MAX_WAITING ||
-        characters + candidate.characters > SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS)) break
+      // Oldest first; one call takes at most the queue's bound, and a hook without `many` one.
+      if (taken.length > 0 && (p.many !== true || taken.length >= SESSION_MESSAGE_MAX_WAITING)) break
       const refusal = await this.providerRefusal(candidate, ask)
       if (refusal !== null) {
         const detail = `Not handed over by the hook: ${stripFormatCharacters(refusal)}.`.slice(0, 400)
@@ -405,7 +402,6 @@ export class SessionMessages {
       this.options.changed()
       const stamp = sessionMessageStampAtDelivery(claim.record.stamp, claim.record.sentAt, this.options.now().getTime())
       taken.push({ messageId: claim.record.messageId, claimId, stamp, text: claim.record.text })
-      characters += candidate.characters
     }
     return answer()
   }

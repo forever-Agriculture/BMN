@@ -391,8 +391,7 @@ text is 1 to 2,000 characters after invisible and direction-changing characters 
 newline and tab as the only control characters. `--key` makes a retry safe: the same key with the
 same message returns the first result. Several messages may wait from one sender to one receiver
 (Story 110.2): up to the receiver's 5 waiting, 30 seconds apart and inside the hourly limits. Each
-event hands over every one that may go, oldest first (Story 136.2), while their stamps and texts stay
-within 6,000 characters together (the first always goes); the rest follow at the next event. A receiver's full queue refuses the send, naming who may
+event hands over every one that may go, oldest first (Story 136.2). A receiver's full queue refuses the send, naming who may
 free it: the sender itself and other senders in its workspace; when only senders it may not see wait
 (another workspace's handoffs), it says to try again later. `bmn tell cancel <id>` withdraws the
 sender's own message while it waits: a claim already made stays as it is, and an expired message or
@@ -3402,7 +3401,7 @@ native sub-agent calls.
   from a session token, for its own live process, with the agent's process id and the whole
   destination its hook resolved; it claims at most one message per call, for that session only, unless
   the hook says `many: true` (Story 136.2), which claims each message that may go, oldest first, up
-  to 5 and 6,000 characters together, each with its own claim id,
+  to the receiver's 5, each with its own claim id,
   and BMN decides from the approved team whether the stated destination may see the sender's
   folder. The process that holds the database reads nothing of the team for this: it asks the
   app's own process, which answers yes or no with a reason, and neither the team nor that reason
