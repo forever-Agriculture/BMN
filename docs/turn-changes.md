@@ -532,7 +532,10 @@ started, or a stopped prompt. `hook.observe` carries the conversation, the turn'
 the event is a sub-agent's, so that BMN can tell a tool event of the turn from any other.
 
 - **At a prompt** the hook sends `start` with the time until which it will wait: 300 ms from the
-  moment it began, the same allowance a message's hand-over shares. BMN scans ("before") and
+  moment it began, the same allowance a message's hand-over shares. BMN's own self-test alone gives
+  its stand-in agent 5 s (`SELF_TEST_TURN_MARK_LIMIT_MS`, in its hook and its `--self-test-host`
+  host), so a busy computer never fails the packaged smoke of an update; every other host bounds a
+  scan by 300 ms whatever a hook asks. BMN scans ("before") and
   answers. After `captured` or `incomplete` the hook sends `confirm` on the same connection,
   before it lets the app go on. Until then the scan is tentative: when the time passes, the
   connection drops, no confirmation comes, or a tool event of that agent arrives first (the app

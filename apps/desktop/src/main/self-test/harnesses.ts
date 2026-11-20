@@ -11,6 +11,7 @@ import {
 import {
   join
 } from 'node:path'
+import { SELF_TEST_TURN_MARK_LIMIT_MS } from '@bmn/protocol'
 
 /** Resume checks that a Codex rollout exists, so the self-test gives the host its own CODEX_HOME. */
 export function selfTestCodexHome(): string {
@@ -119,8 +120,9 @@ export function writeTurnHarness(directory: string): string {
     "  const step = JSON.parse(fs.readFileSync(file('fire-' + n), 'utf8'))",
     "  for (const [name, content] of Object.entries(step.write || {})) fs.writeFileSync(process.cwd() + '/' + name, content)",
     // The prompt guard reads the approved team under HOME. This stand-in gets a HOME of its own, where there is
-    // none, so the guard has nothing to say on any computer and the owner's team is not read.
-    "  const sent = step.event ? spawnSync('bmn', ['hook', 'codex'], { input: JSON.stringify(step.event), encoding: 'utf8', env: { ...process.env, HOME: directory } }) : { status: 0, stdout: '' }",
+    // none, so the guard has nothing to say on any computer and the owner's team is not read. Its marks get the
+    // self-test's time, which the self-test host gives them too: a busy computer never empties the first "before".
+    `  const sent = step.event ? spawnSync('bmn', ['hook', 'codex'], { input: JSON.stringify(step.event), encoding: 'utf8', env: { ...process.env, HOME: directory, BMN_SELF_TEST_TURN_MARK_LIMIT_MS: '${SELF_TEST_TURN_MARK_LIMIT_MS}' } }) : { status: 0, stdout: '' }`,
     "  writeFileSync(file('done-' + n), JSON.stringify({ status: sent.status, stdout: sent.stdout }))",
     "}"
   ])

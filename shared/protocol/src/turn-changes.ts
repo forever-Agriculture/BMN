@@ -27,6 +27,14 @@ export const TURN_SWITCH_FOLDER = 'turn-marks'
 /** How long everything a mark adds to a prompt may take: waiting for an earlier capture, listing, reading, the answer and its confirmation (R69-NFR5). */
 export const TURN_MARK_LIMIT_MS = 300
 
+/**
+ * BMN's own self-test only: the time its stand-in agent's marks get, in its hook and in the host that runs with
+ * `--self-test-host`. The self-test checks what a turn changed, not how fast a cold work tree is scanned; with 300 ms
+ * its first turn read "Before snapshot unavailable" whenever the computer was busy (Story 134.2, 2026-11-20: three
+ * update attempts in a row at load 23-28). Every other host keeps `TURN_MARK_LIMIT_MS`.
+ */
+export const SELF_TEST_TURN_MARK_LIMIT_MS = 5_000
+
 export const TURN_MARK_EDGES = ['start', 'confirm', 'end'] as const
 export type TurnMarkEdge = (typeof TURN_MARK_EDGES)[number]
 

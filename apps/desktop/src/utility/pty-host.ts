@@ -56,7 +56,7 @@ import { saveQuickLookFile } from './quick-look-save'
 import { searchFileReferences } from './file-reference-search'
 import { inspectRepositoryIdentity } from './repository-identity'
 import { readDevAutoRuns } from './dev-auto-runs'
-import { isDevAutoRunsParams } from '@bmn/protocol'
+import { SELF_TEST_TURN_MARK_LIMIT_MS, isDevAutoRunsParams } from '@bmn/protocol'
 import {
   isMessageTeamAnswerMessage, type MessageTeamAnswer, type MessageTeamQuestion, type MessageTeamQuestionMessage
 } from '@bmn/protocol'
@@ -413,6 +413,8 @@ async function start(): Promise<void> {
       return { proc: reader }
     })(),
     ...(process.argv.includes('--self-test-host') ? { now: () => selfTestClock ?? new Date() } : {}),
+    // Electron self-test only (Story 134.2): its stand-in's marks get the time its hook asks for, however busy the computer.
+    ...(process.argv.includes('--self-test-host') ? { turnMarkLimitMs: SELF_TEST_TURN_MARK_LIMIT_MS } : {}),
     // Electron self-test only (Story 30.3): Telegram talks to the main process's local fake Bot API.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }

@@ -206,11 +206,12 @@ function contextAnswer(event, parts) {
  */
 async function markTurnStart(marks, mark, socketPath, token) {
   const requestId = randomUUID()
-  const start = { method: 'turn.mark', params: { requestId, until: Date.now() + marks.TURN_MARK_LIMIT_MS, ...mark } }
+  const limit = marks.turnMarkLimitMs()
+  const start = { method: 'turn.mark', params: { requestId, until: Date.now() + limit, ...mark } }
   const confirm = (outcomes) => (marks.TURN_MARK_CONFIRMED.includes(outcomes[0]?.result?.status)
     ? { method: 'turn.mark', params: { requestId, edge: 'confirm', app: mark.app, conversation: mark.conversation, ...(mark.turn === undefined ? {} : { turn: mark.turn }) } }
     : undefined)
-  await callEach(socketPath, token, [start, confirm], marks.TURN_MARK_LIMIT_MS).catch(() => undefined)
+  await callEach(socketPath, token, [start, confirm], limit).catch(() => undefined)
 }
 
 /**
