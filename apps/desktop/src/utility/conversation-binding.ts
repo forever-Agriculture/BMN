@@ -267,7 +267,7 @@ export function agentCli(executable: string): AgentCli {
  */
 function storedAgentCli(executable: string): AgentCli {
   const live = agentCli(executable)
-  return live === 'other' ? retiredAppProgram(basename(executable).toLowerCase()) ?? live : live
+  return live === 'other' ? retiredAppProgram(basename(executable).toLowerCase().replace(/\.exe$/, '')) ?? live : live
 }
 
 export function conversationIdentity(binding: PersistedConversationBinding): string | undefined {

@@ -64,6 +64,13 @@ describe('visible conversation resume decisions', () => {
     const reported = { reportedResume: { argv: ['cursor-agent', '--resume=c741bb07-352f-457b-8e7c-ee00517cd9ff'], reportedAt: '2026-09-28T10:05:00.000Z' }, lastProcess: null }
     expect(resumeAvailable(binding, reported, undefined)).toBe(false)
   })
+
+  it('names an OpenCode binding saved before the retirement as the retired app, in every state (Epic 123, 123.1 AC3)', () => {
+    const launchContext = { cwd: '/workspace', executable: '/usr/bin/opencode', argv: [], environment: {} }
+    const unsupported: ConversationBindingState = { sessionId: 'session-1', agentCli: 'opencode', status: 'unsupported', captureRoute: 'unsupported', launchContext, detail: 'no session yet', capturedAt: '2026-11-01T10:00:00.000Z' }
+    expect(conversationBindingPresentation(unsupported).label).toMatch(/^OpenCode \(retired\) /u)
+    expect(conversationBindingPresentation(unsupported)).toMatchObject({ canResume: false })
+  })
 })
 
 describe('the confirmation shown before Resume starts anything', () => {

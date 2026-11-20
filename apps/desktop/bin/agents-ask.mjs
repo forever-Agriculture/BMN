@@ -4,7 +4,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rea
 import { userInfo } from 'node:os'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RosterError, appName, namedResearchers } from './agents-roster.mjs'
+import { RosterError, appName, isRetired, namedResearchers, retiredAppClause } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, evaluateResearch, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import {
@@ -606,6 +606,8 @@ export async function runAsk({
       return refused(verdict.code ?? 'UNKNOWN_AGENT', verdict.message ?? `no agent ${wanted} on the approved team`, verdict.next)
     }
   }
+  // An agent on a retired app is refused before anything is prepared or its program asked for its version (Epic 123).
+  if (isRetired(agent.harness)) return refused('APP_RETIRED', `${agent.id} runs in ${retiredAppClause(agent.harness)}`)
   record.researcher = agent.id
   record.researcher_name = agent.name
 

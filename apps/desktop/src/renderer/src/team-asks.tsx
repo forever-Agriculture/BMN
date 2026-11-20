@@ -1,7 +1,7 @@
 // MODULE: team-asks.tsx - Story 73.1: Preferences › Agents › Asks: a read-only record of every ask his agents made on this computer, newest first, with what was readable and what the teammate's mode could read (72.9), who answered and its sub-agents, the answer as the teammate's own words, the usage, Stop, Copy, Export and Remove
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { TeamAskDetail, TeamAskLine, TeamAskProjectState, TeamAskState, TeamAskSubagentView, TeamAskUsageView, TeamAsksSnapshot } from '@bmn/protocol'
-import { plural, thousandsWithCommas } from '@bmn/protocol'
+import { RETIRED_APP_LABELS, isRetiredApp, plural, thousandsWithCommas } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { roleName } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -311,7 +311,9 @@ function AskBody(props: {
   const going = line.state === 'running'
   const took = elapsedMs(line)
   const teammate = detail.teammate
-  const appWords = [teammate.appName === null ? null : `${teammate.appName}${teammate.appVersion ? ` ${teammate.appVersion}` : ''}`, teammate.model, line.effort].filter((part) => part !== null).join(' · ')
+  // A teammate on an app BMN retired is named as the retired app it ran in (Epic 123).
+  const appName = teammate.appName ?? (isRetiredApp(teammate.app) ? RETIRED_APP_LABELS[teammate.app] : null)
+  const appWords = [appName === null ? null : `${appName}${teammate.appVersion ? ` ${teammate.appVersion}` : ''}`, teammate.model, line.effort].filter((part) => part !== null).join(' · ')
   const session = teammate.session === null ? null : `session ${teammate.session}${teammate.sessionSource ? ` from ${teammate.sessionSource}` : ''}`
   return (
     <div className="question-body" id={props.id}>

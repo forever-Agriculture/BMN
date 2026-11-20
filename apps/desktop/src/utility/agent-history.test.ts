@@ -11,6 +11,7 @@ import {
   emptyHistoryState,
   isShorterLimit,
   readHistoryState,
+  storedHistoryState,
   runningCommandLines,
   type AgentHistoryAdapter,
   type AgentHistoryState,
@@ -64,6 +65,7 @@ async function fixture(options: {
   live?: string[]
   commandLines?: string | (() => string)
   claudeSettings?: string | null
+  state?: AgentHistoryState
 } = {}) {
   const home = await mkdtemp(join(tmpdir(), 'bmn-history-'))
   roots.push(home)
@@ -72,7 +74,7 @@ async function fixture(options: {
     await writeFile(join(home, '.claude', 'settings.json'), options.claudeSettings ?? '{ "model": "opus" }')
   }
   let settings: AgentHistorySettings = { ...DEFAULT_APP_SETTINGS.agentHistory, claudeConfigDirs: [], ...options.settings }
-  let state: AgentHistoryState = emptyHistoryState()
+  let state: AgentHistoryState = options.state ?? emptyHistoryState()
   const logs: string[] = []
   const changed = vi.fn()
   const history = new AgentHistory({
@@ -514,17 +516,34 @@ describe('agent history limit', () => {
 })
 
 describe('a history state saved while OpenCode was supported (Epic 123, 123.1 AC3)', () => {
-  it('loads, and keeps no run of the retired app', () => {
+  const saved = { at: '2026-11-01T00:00:00.000Z', deleted: 1, remaining: 0, failures: [{ id: 'ses_1', reason: 'x' }] }
+
+  it('loads, shows and runs nothing for the retired app, and keeps its saved run as it was', () => {
     const run = { at: '2026-11-01T00:00:00.000Z', deleted: 2, remaining: 5, failures: [] }
-    const state = readHistoryState({ applied: { '/a': { days: 30, at: 'x' } }, runs: { codex: run, opencode: { at: '2026-11-01T00:00:00.000Z', deleted: 1, remaining: 0, failures: [{ id: 'ses_1', reason: 'x' }] } } })
-    expect(state).toEqual({ applied: { '/a': { days: 30, at: 'x' } }, failures: {}, runs: { codex: run } })
+    const state = readHistoryState({ applied: { '/a': { days: 30, at: 'x' } }, runs: { codex: run, opencode: saved } })
+    expect(state.runs).toEqual({ codex: run })
+    expect(storedHistoryState(state)).toEqual({ applied: { '/a': { days: 30, at: 'x' } }, failures: {}, runs: { codex: run, opencode: saved } })
+  })
+
+  it('a Codex cleanup and the next read leave the saved OpenCode run in place, with no row for it', async () => {
+    const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])
+    const f = await fixture({ adapters: [codex], state: readHistoryState({ applied: {}, runs: { opencode: saved } }) })
+    await f.history.confirm()
+    await f.history.run()
+    expect(codex.removed).toEqual(['old'])
+    const stored = storedHistoryState(f.state())
+    expect(stored.runs).toMatchObject({ opencode: saved, codex: expect.objectContaining({ deleted: 1 }) })
+    expect(storedHistoryState(readHistoryState(stored)).runs).toEqual(stored.runs)
+    expect((await f.history.status()).agents.map((row) => row.agent)).toEqual(['codex'])
   })
 })
 
 describe('a history state saved while Cursor was supported (Epic 71)', () => {
   it('loads, and keeps no run of the retired app', () => {
     const run = { at: '2026-10-01T00:00:00.000Z', deleted: 1, remaining: 2, failures: [] }
-    expect(readHistoryState({ applied: {}, runs: { codex: run, cursor: { at: '2026-10-01T00:00:00.000Z', deleted: 0, remaining: 0, failures: [] } } }))
-      .toEqual({ applied: {}, failures: {}, runs: { codex: run } })
+    const cursor = { at: '2026-10-01T00:00:00.000Z', deleted: 0, remaining: 0, failures: [] }
+    // Kept as saved since Epic 123, so a later write does not erase it; nothing reads it.
+    expect(readHistoryState({ applied: {}, runs: { codex: run, cursor } }))
+      .toEqual({ applied: {}, failures: {}, runs: { codex: run }, retired: { cursor } })
   })
 })

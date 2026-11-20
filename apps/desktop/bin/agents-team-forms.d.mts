@@ -2,7 +2,6 @@
 export type AskFormName = 'codex-read-only' | 'codex-qa' | 'claude-qa' | 'claude-read-tools'
 export declare const ASK_APPS: readonly string[]
 export declare const ASK_FORMS_CHECKED: Readonly<Record<string, { version: string; on: string }>>
-export declare const ASK_UNSUPPORTED: Readonly<Record<string, Record<string, string>>>
 export declare const ASK_RUN_FILES: Readonly<{ request: string; manifest: string; prompt: string; rules: string; files: string; pictures: string; message: string; inputs: string; snapshots: string; receipt: string; answer: string; outcome: string; question: string; work: string; bin: string; codexAnswer: string; projectStart: string; browser: string; browserRecord: string }>
 export declare const ASK_READS: Readonly<Record<AskFormName, { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }>>
 export declare function askReads(form: AskFormName, browser?: { interact: boolean; qa?: boolean } | null): { scope: 'computer' | 'folder' | 'text'; reach: string; words: string }

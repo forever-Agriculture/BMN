@@ -1079,6 +1079,8 @@ function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): bool
     return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null
   }
   const harness = prompt.harness
+  // A stored OpenCode prompt is never answered, so its dialog is never looked for (Epic 123).
+  if (harness === 'opencode') return false
   // Any state of an answer being entered is still this dialog: ticks, the cursor, or text being typed.
   if (prompt.questions.some((question) => questionOnScreen(lines, harness, question) ||
     (harness === 'claude' ? claudeQuestionState(lines, question) : codexQuestionState(lines, question)) !== null)) return true

@@ -3,8 +3,11 @@ import { hasExactKeys } from './closed-shape'
 import { stripFormatCharacters } from './file-reference'
 import { isRecord } from './shared-helpers'
 
-/** The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). */
-type AttentionPromptHarness = 'claude' | 'codex'
+/**
+ * The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). `opencode` only in a
+ * prompt stored before OpenCode was retired (Epic 123): it is shown, never answered.
+ */
+type AttentionPromptHarness = 'claude' | 'codex' | 'opencode'
 
 /**
  * Which row of the remote-answer shape matrix this prompt is. `choice` covers one or several
@@ -83,6 +86,8 @@ export const ATTENTION_PROMPT_LIMITS = Object.freeze({
 })
 
 const HARNESSES: readonly AttentionPromptHarness[] = ['claude', 'codex']
+/** A stored prompt may also be one OpenCode asked before it was retired. */
+const STORED_HARNESSES: readonly AttentionPromptHarness[] = [...HARNESSES, 'opencode']
 const QUESTION_SHAPES: readonly AttentionQuestionsPrompt['shape'][] = ['choice', 'async-choice', 'multi-select', 'subagent']
 const PERMISSION_SHAPES: readonly AttentionPermissionPrompt['shape'][] = ['permission', 'sandbox-network', 'subagent']
 
@@ -146,8 +151,9 @@ function option(value: unknown): AttentionPromptOption {
   }
 }
 
-function question(value: unknown, typedOnly = false): AttentionPromptQuestion {
-  if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'])) {
+function question(value: unknown, typedOnly = false, stored = false): AttentionPromptQuestion {
+  // A stored OpenCode question may carry its `custom` flag, which nothing reads any more.
+  if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'], stored ? ['custom'] : [])) {
     throw new PromptError('prompt question has the wrong shape')
   }
   if (typeof value.multiSelect !== 'boolean') throw new PromptError('prompt question multiSelect must be true or false')
@@ -161,7 +167,8 @@ function question(value: unknown, typedOnly = false): AttentionPromptQuestion {
 }
 
 /** Validates a prompt a hook sent: closed keys, closed vocabularies, bounded sizes. Never trusts the harness. */
-export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
+export function parseAttentionPrompt(value: unknown, { stored = false }: { stored?: boolean } = {}): Parsed<AttentionPrompt> {
+  const harnesses = stored ? STORED_HARNESSES : HARNESSES
   try {
     if (!isRecord(value)) throw new PromptError('prompt must be an object')
     if (value.type === 'questions') {
@@ -172,12 +179,12 @@ export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
         ok: true,
         value: {
           type: 'questions',
-          harness: oneOf(value.harness, 'harness', HARNESSES),
+          harness: oneOf(value.harness, 'harness', harnesses),
           shape: oneOf(value.shape, 'shape', QUESTION_SHAPES),
           requestRef: nullableText(value.requestRef, 'requestRef', ATTENTION_PROMPT_LIMITS.identifier),
           toolUseId: nullableText(value.toolUseId, 'toolUseId', ATTENTION_PROMPT_LIMITS.identifier),
           questions: list(value.questions, 'questions', ATTENTION_PROMPT_LIMITS.questions)
-            .map((item) => question(item, value.harness === 'codex' && value.shape === 'async-choice'))
+            .map((item) => question(item, value.harness === 'codex' && value.shape === 'async-choice', stored))
         }
       }
     }
@@ -191,7 +198,7 @@ export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
         ok: true,
         value: {
           type: 'permission',
-          harness: oneOf(value.harness, 'harness', HARNESSES),
+          harness: oneOf(value.harness, 'harness', harnesses),
           shape: oneOf(value.shape, 'shape', PERMISSION_SHAPES),
           requestRef: nullableText(value.requestRef, 'requestRef', ATTENTION_PROMPT_LIMITS.identifier),
           toolUseId: nullableText(value.toolUseId, 'toolUseId', ATTENTION_PROMPT_LIMITS.identifier),
@@ -215,7 +222,7 @@ export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
 export function readStoredPrompt(json: string | null): AttentionPrompt | null {
   if (json === null) return null
   try {
-    const parsed = parseAttentionPrompt(JSON.parse(json))
+    const parsed = parseAttentionPrompt(JSON.parse(json), { stored: true })
     return parsed.ok ? parsed.value : null
   } catch {
     return null

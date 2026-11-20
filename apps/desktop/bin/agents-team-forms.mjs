@@ -25,8 +25,6 @@ export const ASK_FORMS_CHECKED = Object.freeze({
   claude: { version: '2.1.300', on: '2026-10-15' }
 })
 
-/** What an app's form does not offer, and why, in the words a refusal gives (R72-NFR12): today every app's form offers all. */
-export const ASK_UNSUPPORTED = Object.freeze({})
 
 /** The parts of one ask's folder under BMN's state (`team/runs/<id>/`), as the contract's record table names them. */
 export const ASK_RUN_FILES = Object.freeze({

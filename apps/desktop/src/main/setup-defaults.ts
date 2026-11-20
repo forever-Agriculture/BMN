@@ -1,7 +1,7 @@
 // MODULE: setup-defaults.ts - Serialize automatic defaults reads with durable profile and creation authority
 import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
-import { SETUP_APPS, type FirstRunSetupRecord, type SetupAppsSnapshot, type SetupDefaultsClaim, type SetupDefaultsReport } from '@bmn/protocol'
+import { SETUP_APPS, isRetiredApp, type FirstRunSetupRecord, type SetupAppsSnapshot, type SetupDefaultsClaim, type SetupDefaultsReport } from '@bmn/protocol'
 
 interface DefaultsRequest {
   mode: 'prepare' | 'apply'
@@ -79,7 +79,8 @@ export function parseSetupDefaultsReport(value: unknown): SetupDefaultsReport | 
     !Array.isArray(value.names) || !value.names.every(name => typeof name === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) ||
     !Array.isArray(value.rows) || value.rows.length > 4096 || !value.rows.every(row => object(row) && keys(row, ['kind', 'app', 'code', 'state', 'transaction', 'paths', 'recoveryPaths']) &&
       ['master', 'own-skills', 'rules', 'skills', 'hooks', 'tools'].includes(row.kind as string) &&
-      (row.app === null || SETUP_APPS.includes(row.app as typeof SETUP_APPS[number])) && word(row.code) &&
+      // An old setup's recovery row may name a retired app; the rest of the report still reads (Epic 123).
+      (row.app === null || SETUP_APPS.includes(row.app as typeof SETUP_APPS[number]) || row.state === 'recovery' && isRetiredApp(row.app)) && word(row.code) &&
       typeof row.state === 'string' && /^[a-z][a-z-]{0,39}$/.test(row.state) &&
       (row.transaction === null || typeof row.transaction === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(row.transaction)) &&
       paths(row.paths) && paths(row.recoveryPaths))) return null

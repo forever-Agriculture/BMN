@@ -680,6 +680,9 @@ describe('a conversation bound before OpenCode was retired (Epic 123, 123.1 AC3)
     expect(parseBoundBinding({ ...bound, conversationReference: reference.slice(0, -1) }).status).toBe('unsupported')
     const unsupported = { ...bound, status: 'unsupported', captureRoute: 'unsupported', conversationReference: undefined, detail: 'no session yet' }
     expect(parseBoundBinding(unsupported)).toMatchObject({ agentCli: 'opencode', status: 'unsupported' })
+    // Its program as the earlier build accepted it, `opencode.exe` included.
+    const exe = { ...bound, launchContext: { ...context, executable: '/opt/opencode.exe' } }
+    expect(parseBoundBinding(exe)).toEqual(exe)
   })
 
   it('is never resumed, and its session is never looked for', async () => {

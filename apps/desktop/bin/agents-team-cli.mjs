@@ -10,7 +10,7 @@ import { APP_NAMES, DESIGNER_ROLE, RosterError } from './agents-roster.mjs'
 import { AgentsUsageError, EXIT, err, failWith, out, usage } from './agents-cli.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { harnessVersion, teamRunsDirectory } from './agents-check.mjs'
-import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askFormName, askProgram } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, appSearchPath, askFormName, askProgram } from './agents-team-forms.mjs'
 import { InputRefusal, LIMITS, askProject } from './agents-team-inputs.mjs'
 import { AskRefusal } from './agents-team-resolve.mjs'
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, askRunId, prepareAsk } from './agents-team-ask.mjs'
@@ -355,8 +355,7 @@ export function askFeatures(environment = process.env) {
       app: harness, installed: program !== null, version, form_checked_on: ASK_FORMS_CHECKED[harness],
       ...(harness === 'codex' && program !== null ? { read_limit: codexLimitStanding(program.launcher, environment) } : {}),
       forms: { project: form(), 'no-project': form(), public: { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' } },
-      pictures: ASK_UNSUPPORTED[harness]?.pictures === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].pictures}`,
-      browser: ASK_UNSUPPORTED[harness]?.browser === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].browser}`, usage_while_running: harness === 'claude'
+      pictures: 'offered', browser: 'offered', usage_while_running: harness === 'claude'
     }
   })
   return { version: 2, platform: process.platform, scope: scope.ok ? { ok: true } : { ok: false, reason: scope.reason }, apps }

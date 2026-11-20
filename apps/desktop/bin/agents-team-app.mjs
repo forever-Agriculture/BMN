@@ -69,6 +69,12 @@ function usageView(usage, billing) {
   }
 }
 
+/** The forms OpenCode was asked in before it was retired (Epic 123): an old run reads as it was, nothing is asked in them. */
+const RETIRED_FORMS = Object.freeze({
+  'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
+  'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
+})
+
 /** A run made before 72.9 read the question and its files, or a copy of the project (`request.access`). */
 const BEFORE_FORMS = Object.freeze({ project: { scope: 'folder', reach: 'a copy of the project as it was' } })
 
@@ -78,6 +84,13 @@ function readsView(request, manifest) {
   const pictures = Array.isArray(manifest?.pictures) ? manifest.pictures.length : 0
   const origin = text(request.browser?.origin, 64)
   const browser = origin === null ? {} : { browser: { origin, interact: request.browser.interact === true } }
+  if (typeof manifest?.form === 'string' && Object.hasOwn(RETIRED_FORMS, manifest.form)) {
+    const reads = RETIRED_FORMS[manifest.form]
+    return {
+      form: manifest.form, scope: reads.scope, reach: reads.scope === 'text' ? null : reads.reach, words: text(manifest.reads?.words, 1000) ?? reads.words,
+      folder: reads.scope === 'text' ? null : text(manifest.reads?.folder, 4096), files, pictures, ...browser
+    }
+  }
   const form = typeof manifest?.form === 'string' && Object.hasOwn(ASK_READS, manifest.form) ? manifest.form : null
   if (form === null) {
     const before = BEFORE_FORMS[request.access]

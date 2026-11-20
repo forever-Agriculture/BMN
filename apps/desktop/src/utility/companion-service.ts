@@ -168,7 +168,7 @@ import { pushPolicyView, systemPolicyReader, type PolicyReader } from './push-po
 import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
-import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
+import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, storedHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, TelegramConnectorError, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 import { TELEGRAM_HELP_TEXT, awayReplyText, backReplyText, telegramAwayCommand, telegramOtherCommand, type TelegramAwayCommand } from './telegram-away'
 import { SessionMessages, type MessageDestination } from './session-messages'
@@ -912,7 +912,7 @@ export class CompanionService {
         await options.database.companion('putSettingsSection', 'agentHistory', next, this.iso())
       },
       readState: async () => readHistoryState(await options.database.companion('getRawSetting', AGENT_HISTORY_STATE_KEY)),
-      writeState: (next) => options.database.companion('putRawSetting', AGENT_HISTORY_STATE_KEY, next, this.iso()),
+      writeState: (next) => options.database.companion('putRawSetting', AGENT_HISTORY_STATE_KEY, storedHistoryState(next), this.iso()),
       liveConversationIds: () => this.liveConversationIds(),
       now: () => this.now(),
       log: (line) => process.stderr.write(line),

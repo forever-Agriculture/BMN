@@ -17,6 +17,8 @@ import {
   type AttentionRecord,
   type ConversationBindingState,
   isReportedResumePreview,
+  retiredAppCommand,
+  retiredAppLine,
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type HookOriginRecord,
@@ -1142,6 +1144,9 @@ function App(): React.JSX.Element {
     const workspace = workspaces.find(item => item.workspaceId === session.workspaceId)
     if (!workspace) return 'The workspace is unavailable.'
     if (workspace.archivedAt !== null) return 'Restore this workspace before starting.'
+    // A session that ran a retired app is shown, never started again (Epic 123).
+    const retired = retiredAppCommand(session.executable, session.argv)
+    if (retired !== null) return retiredAppLine(retired)
     return session.launchDisabledReason
   }
   const place = (sessionId: string): { workspace: string; session: string } => {

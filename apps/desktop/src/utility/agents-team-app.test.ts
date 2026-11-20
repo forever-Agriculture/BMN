@@ -178,6 +178,22 @@ describe.skipIf(!SCOPES)('Agents › Asks reads his agents\' asks (73.1)', { tim
   })
 })
 
+describe('an ask made before OpenCode was retired (Epic 123, 123.1 AC3)', () => {
+  it('opens with what its OpenCode form could read, the project folder or only the text, and names the app', () => {
+    for (const [id, form] of [['20261101T090000-0000000a', 'opencode-reader'], ['20261101T090000-0000000b', 'opencode-asker']] as const) {
+      const folder = record(id, { asked_by: SESSION, asked_at: '2026-11-01T09:00:00.000Z', agent: 'luna-go', role: 'helper' },
+        { state: 'answered', exit: 0, ended_at: '2026-11-01T09:01:00.000Z' })
+      writeFileSync(join(folder, 'inputs/manifest.json'), JSON.stringify({ version: 2, form, inputs: [], files: [], pictures: [], ...(form === 'opencode-reader' ? { reads: { folder: '/home/owner/code/shop' } } : {}) }))
+      writeFileSync(join(folder, 'receipt.json'), JSON.stringify({ harness: 'opencode', harness_version: { version: '2.0.29' } }))
+    }
+    const reader = appAskDetail('20261101T090000-0000000a')
+    expect(reader.line.reads).toMatchObject({ form: 'opencode-reader', scope: 'folder', reach: 'the project folder', folder: '/home/owner/code/shop' })
+    expect(reader.line.reads.words).toContain('OpenCode with BMN\'s read-only broker')
+    expect(reader.teammate).toMatchObject({ app: 'opencode', appName: null, appVersion: '2.0.29' })
+    expect(appAskDetail('20261101T090000-0000000b').line.reads).toMatchObject({ form: 'opencode-asker', scope: 'text', reach: null, folder: null })
+  })
+})
+
 describe('what an ended run\'s record says (73.1 AC2)', () => {
   it('a refused ask says why on its line, in the refusal\'s own words', () => {
     record('20261015T090000-0000000a', { asked_by: SESSION, asked_at: '2026-10-15T09:00:00.000Z' },

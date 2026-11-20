@@ -6,7 +6,7 @@ import { basename, dirname, join, relative } from 'node:path'
 import { APP_NAMES, agentState, collisionWords, isRetired, projectChoiceFor, publicOnlyReasons, retiredAppClause } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, modeInput, teamRunsDirectory, workspaceRoot } from './agents-check.mjs'
-import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, codexMcpServers, executableIdentity } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_READS, ASK_RUN_FILES, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, codexMcpServers, executableIdentity } from './agents-team-forms.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, outsidePaths, sha256Of, textFile } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
@@ -194,9 +194,6 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     const installed = versionOf(agent.harness)
     if (installed === null) return `runs on ${APP_NAMES[agent.harness]}, which is not installed where BMN looks`
     if (installed.version === null) return `runs on ${APP_NAMES[agent.harness]}, whose version BMN cannot read`
-    // What an app's form does not offer stays unavailable and says why (R72-NFR12).
-    if (pictures.length > 0 && ASK_UNSUPPORTED[agent.harness]?.pictures !== undefined) return `cannot answer here: ${ASK_UNSUPPORTED[agent.harness].pictures}`
-    if (browser !== null && ASK_UNSUPPORTED[agent.harness]?.browser !== undefined) return `cannot answer here: ${ASK_UNSUPPORTED[agent.harness].browser}`
     return 'proven'
   }
   const allowed = (agent) => {

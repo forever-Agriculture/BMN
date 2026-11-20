@@ -122,6 +122,9 @@ describe('Agents › Asks', () => {
     expect(text).toContain('Does the invoice total round the same way in the PDF and the API? Orders with a coupon differ by one cent.')
     expect(text).toContain('Readable the question and 2 files · ~/code/shop/src/invoice/total.ts 4.1 KB · ~/code/shop/src/api/invoice.ts 6.8 KB')
     expect(text).toContain('Teammate Astra · Codex 0.162.1 · gpt-6-astra · medium · session 01a13c80-made-up from thread.started')
+    // An ask answered in OpenCode before it was retired names the app as retired (Epic 123).
+    const retired = words(render({ initiallyOpen: ANSWERED.id, initialDetail: detail({ teammate: { app: 'opencode', appName: null, appVersion: '2.0.29', model: 'kimi-k3', session: null, sessionSource: null } }) }))
+    expect(retired).toContain('OpenCode (retired) 2.0.29 · kimi-k3')
     expect(text).toContain('Answer · Astra\'s words, shown as plain text')
     expect(text).toContain('Usage 7,817 in · 2,816 cached · 33 out · 20 reasoning · cost unknown · subscription')
     expect(text).toMatch(/Took 2 minutes 4 seconds of 30 minutes · kept until \S+ \S+ 2026 · run 20261015T034100-7c2e91ab/u)

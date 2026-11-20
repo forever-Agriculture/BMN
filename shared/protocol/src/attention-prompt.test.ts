@@ -55,10 +55,12 @@ describe('parseAttentionPrompt', () => {
     expect(readStoredPrompt(JSON.stringify({ ...question, harness: 'cursor' }))).toBeNull()
   })
 
-  it('takes no new OpenCode prompt, and reads one saved before OpenCode was retired as no prompt (Epic 123, 123.1 AC3)', () => {
+  it('takes no new OpenCode prompt, and reads one saved before OpenCode was retired as it was, its command shown (Epic 123, 123.1 AC3)', () => {
     expect(parseAttentionPrompt({ ...question, harness: 'opencode' }).ok).toBe(false)
-    expect(readStoredPrompt(JSON.stringify({ ...question, harness: 'opencode', questions: [{ ...question.questions[0]!, custom: false }] }))).toBeNull()
-    expect(readStoredPrompt(JSON.stringify({ ...permission, harness: 'opencode' }))).toBeNull()
+    expect(parseAttentionPrompt({ ...question, questions: [{ ...question.questions[0]!, custom: false }] }).ok).toBe(false)
+    expect(readStoredPrompt(JSON.stringify({ ...question, harness: 'opencode', questions: [{ ...question.questions[0]!, custom: false }] })))
+      .toEqual({ ...question, harness: 'opencode' })
+    expect(readStoredPrompt(JSON.stringify({ ...permission, harness: 'opencode' }))).toEqual({ ...permission, harness: 'opencode' })
   })
 
   it('keeps line breaks in question text and descriptions but no other control', () => {

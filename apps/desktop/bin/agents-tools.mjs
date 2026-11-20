@@ -874,7 +874,11 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
  * entry the install wrote without getting to record it as done is undone too, known by that same
  * note; one it never began, or began and did not change, is left out.
  */
-export async function restoreToolsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash, leftWords = [], beforeCommit, afterEntry } = {}) {
+/**
+ * `journal` is the whole manifest when `manifest` leaves out targets an undo does not touch (a retired app's, Epic 123):
+ * progress is saved into it, so the left-out targets stay in the transaction.
+ */
+export async function restoreToolsTransaction(manifest, folder, { yes = false, asJson = false, planOnly = false, expectedPlanHash, leftWords = [], beforeCommit, afterEntry, journal = manifest } = {}) {
   const { confirm, writePrivate } = await import('./agents-rules.mjs')
   const observe = (target) => {
     const file = readAppTools(target.harness, undefined, { path: target.path }), found = file.entries.get(target.tool)
@@ -904,7 +908,7 @@ export async function restoreToolsTransaction(manifest, folder, { yes = false, a
   if (!await confirm(`Restore transaction ${manifest.id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
   return withDefaultsAdmission(async () => {
     const save = () => {
-      writePrivate(join(folder, 'manifest.json'), JSON.stringify(manifest, null, 2), { guard: assertDefaultsAdmission })
+      writePrivate(join(folder, 'manifest.json'), JSON.stringify(journal, null, 2), { guard: assertDefaultsAdmission })
       const fd = openSync(folder, constants.O_RDONLY | constants.O_DIRECTORY)
       try { fsyncSync(fd) } finally { closeSync(fd) }
     }

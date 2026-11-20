@@ -192,6 +192,23 @@ describe('what leaves (64.1 AC1, AC2)', () => {
   })
 })
 
+describe('a researcher on OpenCode, retired (Epic 123, 123.1 AC3)', () => {
+  it('is refused before anything is made or its program asked for its version', async () => {
+    const kimi = '## kimi\n\n```yaml\nname: Kimi\nclass: pawn\nharness: opencode\nmodel: kimi-k3\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: [helper]\n```\n\n## roles'
+    approve(naming(EXAMPLE.replace('## roles', kimi).replace('zai: {name: Z.ai', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\nzai: {name: Z.ai'), 'opus', 'kimi'))
+    answered()
+    const started = join(home, 'opencode-starts.log')
+    writeFileSync(join(stubs, 'opencode'), `#!/bin/sh\necho "$*" >> ${started}\necho 2.0.29\n`)
+    chmodSync(join(stubs, 'opencode'), 0o755)
+    const result = await ask({ agent: 'kimi' })
+    expect(result).toMatchObject({ ok: false, outcome: 'refused', code: 'APP_RETIRED', message: "kimi runs in OpenCode, which was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final" })
+    expect(calls()).toEqual([])
+    expect(existsSync(started)).toBe(false)
+    expect(existsSync(join(home, '.config/bmn/agents/state/research/runs')) ? readdirSync(join(home, '.config/bmn/agents/state/research/runs')) : []).toEqual([])
+    expect(readQuestions().map((entry) => [entry.outcome, entry.code])).toEqual([['refused', 'APP_RETIRED']])
+  })
+})
+
 describe('the answer and its marks (64.1 AC3)', () => {
   it('reads each cited page itself and marks every claim', async () => {
     answered()

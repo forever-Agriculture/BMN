@@ -30,9 +30,11 @@ export function conversationBindingPresentation(
       canStartNew: false
     }
   }
+  // A retired app is named by its label in every state, "OpenCode (retired)" (Epic 123).
   const cli = binding.agentCli === 'other'
     ? 'CLI'
-    : `${binding.agentCli[0]!.toUpperCase()}${binding.agentCli.slice(1)}`
+    : isRetiredApp(binding.agentCli) ? RETIRED_APP_LABELS[binding.agentCli]
+      : `${binding.agentCli[0]!.toUpperCase()}${binding.agentCli.slice(1)}`
   // Epic 71: a conversation BMN bound before its app was retired is named, never resumed.
   if (binding.status === 'bound' && isRetiredApp(binding.agentCli)) {
     return {

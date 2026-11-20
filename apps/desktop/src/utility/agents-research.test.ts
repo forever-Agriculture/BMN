@@ -298,11 +298,17 @@ describe('who researches is part of the approved team (63.3 AC7, AC8)', () => {
     const kimi = '## kimi\n\n```yaml\nname: Kimi\nclass: pawn\nharness: opencode\nmodel: kimi-k3\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: [helper]\n```\n\n## roles'
     approve(naming(TWO_OPUS.replace('## roles', kimi).replace('zai: {name: Z.ai', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\nzai: {name: Z.ai'), 'opus', 'kimi'))
     plan(FULL)
+    // An opencode program still installed, logging every start, its version asked for included.
+    const started = join(home, 'opencode-starts.log')
+    writeFileSync(join(stubs, 'opencode'), `#!/bin/sh\necho "$*" >> ${started}\necho 2.0.29\n`)
+    chmodSync(join(stubs, 'opencode'), 0o755)
     expect(researchers({ environment: env, now: NOW }).map((entry) => entry.id)).not.toContain('kimi')
     const result = await research({ researcher: 'kimi' })
-    expect(result.run).toMatchObject({ state: 'failed', models: 0, note: expect.stringContaining('OpenCode, which was retired on 2026-11-20') })
+    expect(result.run).toMatchObject({ state: 'failed', models: 0, note: "BMN did not start the run: kimi runs in OpenCode, which was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final" })
     expect((await research({ researcher: 'kimi', only: { provider: 'anthropic', model: 'claude-fable-5-1' } })).run).toMatchObject({ state: 'failed', models: 0 })
     expect(calls()).toEqual([])
+    expect(existsSync(started)).toBe(false)
+    expect(existsSync(researchRunsDirectory()) ? readdirSync(researchRunsDirectory()) : []).toEqual([])
     expect(readResearch()).toEqual({ version: 1, runs: [], models: [] })
   })
 

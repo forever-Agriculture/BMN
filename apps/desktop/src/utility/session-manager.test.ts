@@ -1267,6 +1267,38 @@ describe('shell session lifecycle', () => {
     }
   })
 
+  it('never starts again, nor offers after an update, a session saved to run OpenCode, retired (Epic 123, 123.1 AC3)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-relaunch-retired-'))
+    createdRoots.add(cwd)
+    const direct = join(cwd, 'opencode')
+    await writeFile(direct, '#!/bin/sh\n')
+    await chmod(direct, 0o700)
+    const database = new BetterSqlite3(':memory:') as DatabaseConnection
+    try {
+      initializeDatabase(database, '2026-11-20T09:00:00.000Z')
+      const spawns: string[] = []
+      const manager = new SessionManager({
+        store: sqliteSessionStore(database),
+        spawnPty: (executable, argv) => { spawns.push([executable, ...argv].join(' ')); return new SignalExitFakePty() },
+        processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+        sendTerminalMessage: () => undefined
+      })
+      // The old picker's form and the program itself, both saved before the retirement.
+      const picker = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'OpenCode', cwd, executable: '/bin/bash', argv: ['-ic', 'opencode; exec bash -i'], cols: 80, rows: 24 })
+      const program = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'OpenCode 2', cwd, executable: direct, argv: ['--model', 'x/y'], cols: 80, rows: 24 })
+      await manager.stop(picker, 'update-restart')
+      await manager.stop(program, 'update-restart')
+      spawns.length = 0
+      expect(await manager.interruptedCohort()).toBeNull()
+      for (const created of [picker, program]) {
+        await expect(manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })).rejects.toThrow('OpenCode was retired on 20 Nov 2026.')
+      }
+      expect(spawns).toEqual([])
+    } finally {
+      database.close()
+    }
+  })
+
   it('starts a stopped session again with its saved launch settings and refuses while it runs', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'bmn-relaunch-test-'))
     createdRoots.add(cwd)

@@ -1,6 +1,7 @@
 // MODULE: first-run-setup.ts - Durable first-run progress and its owner-window commands
 import { hasExactKeys } from './closed-shape'
 import { isRecord } from './shared-helpers'
+import type { RosterRetiredHarness } from './agents-roster'
 
 export const SETUP_APPS = ['claude', 'codex'] as const
 export type SetupApp = typeof SETUP_APPS[number]
@@ -61,7 +62,8 @@ export interface SetupDefaultsClaim {
 
 export interface SetupDefaultsRow {
   kind: 'master' | 'own-skills' | 'rules' | 'skills' | 'hooks' | 'tools'
-  app: SetupApp | null
+  /** A retired app only on a recovery row of a setup made before its retirement (Epic 123). */
+  app: SetupApp | RosterRetiredHarness | null
   code: string
   state: string
   transaction: string | null

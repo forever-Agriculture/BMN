@@ -5,7 +5,7 @@ import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, read
 import { basename, dirname } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
-import { EFFORTS, RESEARCH_APPS, agentState, appName, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
+import { EFFORTS, RESEARCH_APPS, agentState, appName, isCalled, isRetired, namedResearchers, researcherProposal, retiredAppClause } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, researchContextProven } from './agents-context.mjs'
@@ -1164,6 +1164,8 @@ export async function runResearch({
     return { run, found }
   }
   if (agent === undefined) return finish('failed', `no agent ${researcher} on the approved team`, [])
+  // An agent on a retired app is refused before anything is prepared or its program asked for its version (Epic 123).
+  if (isRetired(agent.harness)) return finish('failed', `BMN did not start the run: ${agent.id} runs in ${retiredAppClause(agent.harness)}`, [])
   let batches
   if (only === null) batches = researchBatches(data)
   else {

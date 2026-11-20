@@ -25,6 +25,8 @@ describe('before the press (125.4 AC1)', () => {
     expect(html).toContain('Update 02c0120 is waiting. 3 sessions are running.')
     expect(html).toContain('claude · working'); expect(html).toContain('codex · state not known'); expect(html).toContain('claude · idle')
     expect(updateRestartWords(member('a', { agent: 'other', atPress: 'working' }), 'offer')).toBe('shell · working')
+    // A session still running OpenCode at the update that retires it is named as the retired app (Epic 123, D8).
+    expect(updateRestartWords(member('a', { agent: 'opencode', atPress: 'ended' }), 'offer')).toBe('OpenCode (retired) · idle')
     expect(html).toContain('>Cancel</button>'); expect(html).toContain('>Restart</button>')
   })
   it.each(['cancelled', 'complete'] as const)('offers the next update after a dismissed %s result', phase => {

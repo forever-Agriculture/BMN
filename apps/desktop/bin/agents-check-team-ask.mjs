@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { RosterError, appName, canonicalJson, classRefusal, isRetired, retiredWords, sha256 } from './agents-roster.mjs'
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { checkContext, contextItems, provenControls, provenPrecedence } from './agents-context.mjs'
-import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, checkCodexMcp, claudePictureMessage, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
+import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, appSearchPath, askCommand, askFormName, askProgram, askReads, checkCodexMcp, claudePictureMessage, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
 import { BROWSER_STATEMENT, browserOrigin } from './agents-team-browser.mjs'
 import { NEXT_STEP, Refusal, TESTED_HARNESS_VERSIONS, readText, refuse } from './agents-check-base.mjs'
 import { dispatchEnvironment, parseDispatch } from './agents-check-argv.mjs'
@@ -189,11 +189,9 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     const tested = versionStanding(agent.harness, version, testedVersions)
     const checked = ASK_FORMS_CHECKED[agent.harness]
     note(`${agent.harness} ${version}: ${tested.state}; its ask form was last checked on ${checked.version} (${checked.on})`)
-    if (manifest.pictures.length > 0 && ASK_UNSUPPORTED[agent.harness]?.pictures !== undefined) refuse('ACCESS_UNAVAILABLE', ASK_UNSUPPORTED[agent.harness].pictures)
     // A browser ask (74.3): the asker's loopback origin, stated disposable, on an app that takes the browser's server.
     const browser = manifest.browser ?? null
     if (browser !== null) {
-      if (ASK_UNSUPPORTED[agent.harness]?.browser !== undefined) refuse('ACCESS_UNAVAILABLE', ASK_UNSUPPORTED[agent.harness].browser)
       if (browserOrigin(browser.origin).origin !== browser.origin || typeof browser.interact !== 'boolean') refuse('WORKSPACE_MISMATCH', 'the ask\'s browser is not a loopback origin BMN wrote')
       if (browser.statement !== BROWSER_STATEMENT) refuse('WORKSPACE_MISMATCH', 'a browser ask needs the asker\'s statement that the app is a disposable test instance')
       if ((browser.qa === true) !== (inputs.role === 'qa')) refuse('WORKSPACE_MISMATCH', 'the QA browser mode does not match the checked role')

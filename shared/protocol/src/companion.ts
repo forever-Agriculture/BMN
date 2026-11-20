@@ -262,6 +262,8 @@ export function isCompactionEvent(record: Pick<HookEventRecord, 'agent' | 'event
     case 'claude': return record.event === 'SessionStart' && record.source === 'compact'
     case 'codex': return (record.event === 'SessionStart' && record.source === 'compact') ||
       (record.event === 'PostCompact' && record.source === 'manual')
+    // Only in a row saved before OpenCode was retired (Epic 123): read as it was, never a subagent's.
+    case 'opencode': return record.event === 'session.compacted' && record.source !== 'subagent'
     default: return false
   }
 }

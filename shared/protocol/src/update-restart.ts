@@ -1,4 +1,5 @@
 // MODULE: update-restart.ts - Epic 125: the restart-for-the-update record, its fixed lines and notices, and the window's states
+import { RETIRED_APP_LABELS, isRetiredApp } from './agents-roster'
 export const UPDATE_RESTART_LIMIT_MS = 5 * 60_000
 export const UPDATE_RESTART_SHUTDOWN_MS = 8000
 /** How long BMN tries to type its one line into a session before it says the session was not told. */
@@ -107,8 +108,11 @@ export function updateRestartCancelListed(m: UpdateRestartMember): boolean {
  * observe is never shown as `Ready`, `Reaching a safe point` or told.
  */
 export function updateRestartWords(m: UpdateRestartMember, stage: UpdateRestartStage): string {
-  // A session that runs no agent BMN knows is named for what it is, a shell.
-  if (stage === 'offer') return `${['claude', 'codex'].includes(m.agent) ? m.agent : 'shell'} · ${m.atPress === 'ended' ? 'idle' : m.atPress === 'working' ? 'working' : 'state not known'}`
+  // A session that runs no agent BMN knows is named for what it is, a shell; one still running a retired app, by its label (Epic 123).
+  if (stage === 'offer') {
+    const app = ['claude', 'codex'].includes(m.agent) ? m.agent : isRetiredApp(m.agent) ? RETIRED_APP_LABELS[m.agent] : 'shell'
+    return `${app} · ${m.atPress === 'ended' ? 'idle' : m.atPress === 'working' ? 'working' : 'state not known'}`
+  }
   if (stage === 'waiting') return m.ready ? 'Ready' : m.notice === 'printed' ? 'Reaching a safe point' : 'Not told yet'
   if (stage === 'cancelled') {
     // "Stopped for the restart" only where BMN observed the turn end after the printed notice.

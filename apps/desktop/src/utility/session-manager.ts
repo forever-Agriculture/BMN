@@ -13,6 +13,7 @@ import {
   type SessionActivityObservation,
   MAX_TERMINAL_CHUNK_BYTES,
   isRetiredApp,
+  retiredAppCommand,
   retiredAppLine,
   TERMINAL_UNDELIVERED_OUTPUT_BYTES,
   TERMINAL_SAVED_OUTPUT_BYTES,
@@ -1195,6 +1196,8 @@ export class SessionManager {
       // The host still holding the session means it was resumed by hand, or its stop never
       // confirmed an exit. Neither can be started from here, so neither is offered.
       if (this.liveIncarnationId(member.sessionId)) continue
+      // One that ran a retired app could only be started again, which BMN refuses: it is not offered (Epic 123).
+      if (retiredAppCommand(member.executable, member.argv) !== null) continue
       entries.push(await this.interruptedEntry(member))
     }
     if (entries.length === 0) return null
@@ -1382,6 +1385,9 @@ export class SessionManager {
     if (stored.archivedAt !== null) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
     }
+    // A session saved to run an app BMN retired is shown, never run again (Epic 123, 123.1 AC3).
+    const retired = retiredAppCommand(stored.executable, stored.argv)
+    if (retired !== null) throw new HostControlError(ERROR_CODES.invalidArgument, retiredAppLine(retired))
     requireConfirmedCommand(params.expectedCommand, shownCommand(stored.executable,
       codexSessionArgv(stored.executable, stored.argv, this.environment)))
     const releaseLaunch = this.claimSessionLaunch(params.sessionId)

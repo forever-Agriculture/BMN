@@ -89,6 +89,15 @@ it('accepts only the fixed report vocabulary and rejects additional raw fields a
     { ...value, rows: [{ ...value.rows[0], recoveryPaths: ['relative-path'] }] }]) expect(parseSetupDefaultsReport(bad)).toBeNull()
 })
 
+it('reads a report whose old recovery row names OpenCode, retired, with the other apps\' rows (Epic 123, D8)', () => {
+  const codex = { kind: 'hooks' as const, app: 'codex' as const, code: 'OK', state: 'installed', transaction: null, paths: ['/synthetic/hooks.json'], recoveryPaths: [] }
+  const old = { kind: 'hooks' as const, app: 'opencode' as const, code: 'OK', state: 'recovery', transaction: 'synthetic-old', paths: [], recoveryPaths: ['/synthetic/.holding/old'] }
+  const value: SetupDefaultsReport = { ...report(), rows: [codex, old] }
+  expect(parseSetupDefaultsReport(value)).toEqual(value)
+  // Only an old recovery row may name it: a live install row for OpenCode is no report BMN writes.
+  expect(parseSetupDefaultsReport({ ...value, rows: [codex, { ...old, state: 'installed' }] })).toBeNull()
+})
+
 it('runs the actual defaults child with isolated roots and no approval assets or credential output', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bmn-setup-child-'))
   try {

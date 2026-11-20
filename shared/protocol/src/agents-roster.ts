@@ -48,6 +48,21 @@ export function retiredAppProgram(program: string): RosterRetiredHarness | null 
   return Object.hasOwn(RETIRED_APP_PROGRAMS, name) ? RETIRED_APP_PROGRAMS[name]! : null
 }
 
+/** The shells an old picker wrapped an app in (`bash -ic 'opencode; exec bash -i'`). */
+const COMMAND_SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'dash', 'zsh', 'fish'])
+
+/**
+ * The retired app a saved command starts, or null: its program, or a shell's `-c` command whose first word is one
+ * (123.1 AC3). Such a command is shown, never run again.
+ */
+export function retiredAppCommand(executable: string, argv: readonly string[]): RosterRetiredHarness | null {
+  const direct = retiredAppProgram(executable)
+  if (direct !== null) return direct
+  if (!COMMAND_SHELLS.has(executable.slice(executable.lastIndexOf('/') + 1)) || !/^-[a-z]*c$/.test(argv[0] ?? '')) return null
+  const first = /^\s*([^\s;&|]+)/.exec(argv[1] ?? '')?.[1]
+  return first === undefined ? null : retiredAppProgram(first)
+}
+
 export const ROSTER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type RosterEffort = (typeof ROSTER_EFFORTS)[number]
 export const ROSTER_THEN = ['lead', 'skip', 'blocked', 'owner-chooses'] as const

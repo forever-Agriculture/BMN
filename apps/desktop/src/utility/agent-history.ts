@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import {
   MAX_CLAUDE_CONFIG_DIRS,
   MAX_DELETIONS_PER_RUN,
+  isRetiredApp,
   type AgentHistoryAgent,
   type AgentHistoryAgentRow,
   type AgentHistoryClaudeFolder,
@@ -56,6 +57,11 @@ export interface AgentHistoryState {
   applied: Record<string, { days: number; at: string }>
   failures: Record<string, string>
   runs: Partial<Record<AgentHistoryAgent, AgentHistoryRun>>
+  /**
+   * The last run saved for an app BMN retired (Cursor, Epic 71; OpenCode, Epic 123), kept as it was saved so a later
+   * write does not erase it. Nothing reads, shows or runs it: BMN no longer manages that app's history.
+   */
+  retired?: Record<string, unknown>
 }
 
 export const AGENT_HISTORY_STATE_KEY = 'agentHistoryState'
@@ -65,6 +71,11 @@ const HISTORY_AGENTS: readonly AgentHistoryAgent[] = ['codex']
 
 export function emptyHistoryState(): AgentHistoryState {
   return { applied: {}, failures: {}, runs: {} }
+}
+
+/** The state as it is stored: a retired app's run goes back under `runs`, where it was saved (Epic 123). */
+export function storedHistoryState(state: AgentHistoryState): Omit<AgentHistoryState, 'retired'> {
+  return { applied: state.applied, failures: state.failures, runs: { ...state.retired, ...state.runs } as AgentHistoryState['runs'] }
 }
 
 /** A stored state that does not have this shape is treated as empty; it only feeds the status rows. */
@@ -81,7 +92,11 @@ export function readHistoryState(value: unknown): AgentHistoryState {
     if (typeof failure === 'string') state.failures[path] = failure
   }
   for (const [agent, entry] of Object.entries(record(raw.runs))) {
-    // A run saved for an app BMN no longer manages (Cursor, retired in Epic 71; OpenCode, Epic 123) is left behind.
+    // A run saved for an app BMN retired is kept as saved, never acted on; one for an app it never knew is dropped.
+    if (isRetiredApp(agent)) {
+      state.retired = { ...state.retired, [agent]: entry }
+      continue
+    }
     if (!HISTORY_AGENTS.includes(agent as AgentHistoryAgent)) continue
     const { at, deleted, remaining, failures } = record(entry)
     if (typeof at === 'string' && typeof deleted === 'number' && typeof remaining === 'number' && Array.isArray(failures)) {

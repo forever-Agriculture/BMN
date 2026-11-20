@@ -668,6 +668,14 @@ describe('install and undo (60.12 AC4)', () => {
     expect(await restoreTransaction(result.transaction!, { yes: true, expectedPlanHash: shown.plan_hash! })).toMatchObject({ code: 'OK', kind: 'tools', left: shown.left })
     expect(readAppTools('codex', env).entries.size).toBe(0)
     expect(readFileSync(openCodeFile, 'utf8')).toBe(held)
+    // The undo saved its progress without losing the OpenCode target: the transaction still names it, and a second undo
+    // changes nothing and still leaves it, named.
+    expect(listTransactions().find((entry) => entry.id === result.transaction)?.targets).toEqual(['codex', 'opencode'])
+    expect(JSON.parse(readFileSync(manifestPath, 'utf8')).targets.map((target: { harness: string; undone?: boolean }) => [target.harness, target.undone === true]))
+      .toEqual(manifest.targets.map((target: { harness: string }) => [target.harness, target.harness !== 'opencode']))
+    const again = await restoreTransaction(result.transaction!, { yes: true })
+    expect(again).toMatchObject({ code: 'OK', left: shown.left })
+    expect(readFileSync(openCodeFile, 'utf8')).toBe(held)
   })
 
   it('installs for the named apps only, and for a tool kept to some apps only there', async () => {
