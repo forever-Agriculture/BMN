@@ -66,6 +66,10 @@ does not recognize squash merges. Active, dirty, unmerged or unknown runs are ma
 **keep**. Finished, clean, merged runs can be offered on one card, and only the exact
 worktrees the owner names are removed. Uncommitted files never get a forced removal
 without his explicit approval for that worktree; needed evidence is preserved first.
+When a go allows a run to remove its own worktrees, `scripts/cleanup_worktrees.py` archives
+`.dev-auto/`, keeping a symlink (such as the QA bench's) as a link and never following it,
+verifies the archive and removes a worktree only when every guard passes. It archives every
+listed worktree before removing any, and removes the owning checkout last (Epic 138).
 
 ## Runs on the plan's decisions
 
