@@ -461,14 +461,18 @@ function secretHold(name, args, reads) {
 
 /**
  * Epic 137: a `bmn` call with BMN's owner credential (`--owner`, or `--token-file` in either form) before any `--`, run as
- * `bmn` or through Node. The owner token can answer for him, so an agent's own use waits for him.
+ * `bmn` or through Node, and `bmn publish` of a listed file or key. The owner token can answer for him, so an agent's own use
+ * waits for him.
  */
 function ownerCredentialHold(words) {
   const script = nameOf(words[0]) === 'node' ? words.findIndex((word, index) => index > 0 && !word.startsWith('-')) : 0
   if (script === -1 || nameOf(words[script]) !== 'bmn') return null
   const after = words.slice(script + 1)
   const options = after.includes('--') ? after.slice(0, after.indexOf('--')) : after
-  return options.some((word) => /^--(owner|token-file)(=|$)/.test(word)) ? 'a bmn call with the owner credential (--owner or --token-file)' : null
+  if (options.some((word) => /^--(owner|token-file)(=|$)/.test(word))) return 'a bmn call with the owner credential (--owner or --token-file)'
+  // BMN itself reads the file `bmn publish` names, outside any sandbox, and keeps a copy the owner's surfaces show.
+  if (after[0] === 'publish' && after.slice(1).some((word) => namesSecretFile(word))) return 'reading or sending a credential file'
+  return null
 }
 
 /** Whether an `iommu=soft` this command names, or the text piped or redirected into it, goes into a file: never `echo` or `grep` by themselves. */

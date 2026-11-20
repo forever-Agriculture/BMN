@@ -94,6 +94,12 @@ describe('Codex\'s rules (Story 102.3)', () => {
     }
   }, 60_000)
 
+  it('allows exactly the inventory docs/agent-control.md lists (Story 137.2)', () => {
+    expect(CODEX_ALLOWED_BMN).toEqual(['tell', 'peers', 'handoff', 'publish', 'progress', 'ask', 'withdraw', 'resolve', 'resume-command', 'now',
+      'policy', 'grant', 'away', 'back', 'decision', 'help'])
+    expect(CODEX_RULES).toContain('prefix_rule(pattern=["bmn", "plan", ["status", "check"]], decision="allow")')
+  })
+
   it('keeps bmn team, send and bmn as a whole out of the allow rows (the allowance\'s stays_out)', () => {
     for (const verb of ['team', 'send', 'research', 'judge', 'run', 'hooks', 'hook', 'brain', 'roster']) expect(CODEX_ALLOWED_BMN).not.toContain(verb)
     expect(CODEX_ALLOWED_BMN_PLAN).toEqual(['status', 'check'])

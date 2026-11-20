@@ -1157,7 +1157,8 @@ What it holds, in the shell commands of the text:
 - BMN's own owner keys (Epic 137): the same readers and redirects naming `owner.token` (beside the control socket, outside
   the home folder) or `telegram-bot.token` by file name wherever they sit, a wildcard in their own folder (`…/control/*`,
   `~/.config/bmn/*.token`), and those folders whole for `cp tar zip` and the like; and a `bmn` call with `--owner`,
-  `--token-file X` or `--token-file=X` before any `--`, as `bmn`, a full path or `node …/bmn`. The owner token can answer
+  `--token-file X` or `--token-file=X` before any `--`, as `bmn`, a full path or `node …/bmn`, and `bmn publish` naming a
+  file of the secret list or a key (BMN reads that file itself, outside any sandbox). The owner token can answer
   for him, so an agent's own use waits for him, a test instance's `--owner` too. This is a tripwire, not a wall: a read
   through another program (`grep`, `python3`, `node -e`), a copied token or an environment variable already set passes, and
   a broken guard holds nothing (it fails open by his choice, Epic 102 D3). Other programs' `--owner` (`gh search prs

@@ -30,7 +30,10 @@ const HELD: Array<[string, string]> = [
   ['env FOO=1 bmn now --owner', 'owner credential'],
   ['pnpm exec bmn --owner now', 'owner credential'],
   ['bash -c "bmn --owner now"', 'owner credential'],
-  ['echo x | bmn tell s --text-file - --owner', 'owner credential']
+  ['echo x | bmn tell s --text-file - --owner', 'owner credential'],
+  ['bmn publish /run/user/1000/bmn/control/owner.token --key k', 'credential'],
+  ['bmn publish ~/.codex/auth.json', 'credential'],
+  ['bmn publish --key k ~/.ssh/id_ed25519', 'credential']
 ]
 
 /** Neighbours that stay free: other programs' --owner, bmn without the owner credential, and other token files. */
@@ -48,7 +51,9 @@ const FREE = [
   'ls /run/user/1000/bmn/control',
   'cat ~/.config/bmn/settings.json',
   'cat ~/code/BMN/README.md',
-  'cp -r ~/code/BMN-137 /tmp/x'
+  'cp -r ~/code/BMN-137 /tmp/x',
+  'bmn publish report.html --key k',
+  'bmn tell s --text "owner.token is held" --key k'
 ]
 
 describe('BMN\'s own owner keys are held (Story 137.1)', () => {
