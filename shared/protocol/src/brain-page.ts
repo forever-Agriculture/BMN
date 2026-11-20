@@ -15,7 +15,10 @@ export interface BrainPageSearch { notes: BrainPageSummary[]; limited: boolean }
 export interface BrainPageNoteRef { id: string; title: string; kind: string; status: BrainPageStatus }
 export interface BrainPageNote {
   id: string
+  /** The title as the page shows it: a file-name title ("ai-direction") reads as words ("AI direction"). */
   title: string
+  /** The title as stored: the name `[[links]]` use. */
+  name: string
   kind: string
   status: BrainPageStatus
   origin: string
@@ -36,7 +39,11 @@ export interface BrainPageNote {
 export interface BrainPageVersion {
   revision: number
   action: string
+  /** Shown as BrainPageNote.title; `name` is the title as stored in that version. */
   title: string
+  name: string
+  /** Every link name this version uses, with the note it reaches today (null when none). */
+  targets: Record<string, string | null>
   kind: string
   origin: string
   status: BrainPageStatus

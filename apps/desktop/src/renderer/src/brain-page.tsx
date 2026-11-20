@@ -1,5 +1,6 @@
 // MODULE: brain-page.tsx - The Brain page (Epic 128): search, read and follow his notes, and a note's neighbourhood graph; it only reads
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { GFM, parser as markdownParser } from '@lezer/markdown'
 import type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageRequest, BrainPageSearch, BrainPageSummary, BrainPageVersion } from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { Segmented } from './history-preferences'
@@ -34,26 +35,44 @@ function brainTime(iso: string): string {
   return Number.isNaN(date.getTime()) ? '' : `${brainDate(iso)}, ${date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
 }
 
+const markdown = markdownParser.configure(GFM)
+
 /**
- * The note's text without its first `# MODULE: name.md - …` heading, or the same header written as an HTML comment
- * (`<!-- MODULE: name.md - … -->`, which the page would draw as a code line): a file header that Epic 127 carried over
- * from agent memory files. It repeats the note's name; the note's title already says it.
+ * The note's text as the page draws it. Its first `# MODULE: name.md - …` heading goes: a file header that Epic 127
+ * carried over from agent memory files, repeating the note's name, which the title already says. Every HTML comment
+ * (`<!-- … -->`) goes too, as Markdown never shows one; the parser finds them, so a comment inside code stays.
  */
-export function withoutModuleHeading(markdown: string): string {
-  const lines = markdown.split('\n')
-  let fenced = false
-  for (const [at, line] of lines.entries()) {
-    // A line inside a ``` or ~~~ code block is an example, not the note's header (pre-review).
-    if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced
-    else if (!fenced && (/^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(line) || /^<!--[ \t]*MODULE:[ \t]+\S+\.md\b.*-->[ \t]*\r?$/u.test(line))) return [...lines.slice(0, at), ...lines.slice(at + 1)].join('\n')
-  }
-  return markdown
+export function readingText(text: string): string {
+  const cuts: [number, number][] = []
+  let heading = false
+  markdown.parse(text).iterate({
+    enter(node) {
+      if (node.name === 'CommentBlock') {
+        // The whole line or lines, with the line break after them.
+        const start = text.lastIndexOf('\n', node.from - 1) + 1
+        cuts.push([start, text[node.to] === '\n' ? node.to + 1 : node.to])
+        return false
+      }
+      if (node.name === 'Comment') { cuts.push([node.from, node.to]); return false }
+      if (!heading && node.name === 'ATXHeading1' && /^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(text.slice(node.from, node.to))) {
+        heading = true
+        cuts.push([node.from, text[node.to] === '\n' ? node.to + 1 : node.to])
+        return false
+      }
+      return undefined
+    }
+  })
+  let out = ''
+  let at = 0
+  for (const [from, to] of cuts.sort((a, b) => a[0] - b[0])) { if (from >= at) { out += text.slice(at, from); at = to } }
+  return out + text.slice(at)
 }
 
 /** True when the note's text opens with a level-1 heading of its own title. */
-export function startsWithTitle(note: { title: string; markdown: string }): boolean {
-  const first = /^\s*#\s+(.+?)\s*#*\s*$/mu.exec(note.markdown.replace(/^---\n[\s\S]*?\n---\n/u, '').split('\n').find((line) => line.trim()) ?? '')
-  return !!first && first[1]!.trim().toLocaleLowerCase('und') === note.title.trim().toLocaleLowerCase('und')
+export function startsWithTitle(note: { title: string; name?: string; markdown: string }): boolean {
+  const first = /^\s*#\s+(.+?)\s*#*\s*$/mu.exec(readingText(note.markdown).replace(/^---\n[\s\S]*?\n---\n/u, '').split('\n').find((line) => line.trim()) ?? '')
+  const same = (title: string | undefined): boolean => !!title && first![1]!.trim().toLocaleLowerCase('und') === title.trim().toLocaleLowerCase('und')
+  return !!first && (same(note.title) || same(note.name))
 }
 
 /** The words a nothing-found search shows (design.md frame 2). */
@@ -116,6 +135,7 @@ function NoteFacts(props: { note: BrainPageNote; onHistory(): void }): React.JSX
   const { note } = props
   return (
     <dl className="kv b-kv">
+      {note.name !== note.title ? <><dt>Name</dt><dd title="The name links use">{note.name}</dd></> : null}
       <dt>Kind</dt><dd><KindMark kind={note.kind} status={note.status} /> {note.kind}</dd>
       <dt>Status</dt><dd>{note.status}</dd>
       <dt>Origin</dt><dd title={note.origin}>{note.origin}</dd>
@@ -156,7 +176,7 @@ function NoteText(props: { note: BrainPageNote; onOpen(id: string): void; focus?
   const { note } = props
   const path = `/brain/${note.id}.md`
   // One text for the page and its hidden values: line endings made `\n` as Quick look's view does (viewText).
-  const text = useMemo(() => viewText(withoutModuleHeading(note.markdown)), [note.markdown])
+  const text = useMemo(() => readingText(viewText(note.markdown)), [note.markdown])
   const page = useMemo(() => {
     const targets: Record<string, string> = {}
     for (const [name, id] of Object.entries(note.targets)) if (id) { targets[`wiki:${name}`] = `/brain-note/${id}` }
@@ -187,7 +207,7 @@ function NoteText(props: { note: BrainPageNote; onOpen(id: string): void; focus?
 function HistorySheet(props: { note: BrainPageNote; versions: BrainPageVersion[] | null; error: string | null; onClose(): void; onOpen(id: string): void }): React.JSX.Element {
   const [pick, setPick] = useState<number | null>(null)
   const chosen = props.versions?.find((version) => version.revision === pick) ?? props.versions?.[0] ?? null
-  const shown = useMemo(() => (chosen ? { ...props.note, markdown: chosen.markdown, targets: props.note.targets } : null), [chosen, props.note])
+  const shown = useMemo(() => (chosen ? { ...props.note, markdown: chosen.markdown, targets: chosen.targets } : null), [chosen, props.note])
   return (
     <div className="b-history" role="region" aria-label={`History of ${props.note.title}`}>
       <div className="b-history-head">
@@ -203,7 +223,7 @@ function HistorySheet(props: { note: BrainPageNote; versions: BrainPageVersion[]
               <button type="button" className={`b-row${version.revision === chosen?.revision ? ' current' : ''}`} onClick={() => setPick(version.revision)}>
                 <span className="b-row-head"><span className="b-row-title">Version {version.revision}</span><span className="b-row-kind">{version.action}</span>
                   <span className="b-row-date">{brainDate(version.recorded)}</span></span>
-                <span className="b-row-summary">{version.origin}{version.title !== props.note.title ? ` · ${version.title}` : ''}</span>
+                <span className="b-row-summary">{version.origin}{version.name !== props.note.name ? ` · ${version.title}` : ''}</span>
               </button>
             </li>
           ))}

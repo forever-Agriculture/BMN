@@ -39,6 +39,21 @@ export const brainHash = (text: string): string => createHash('sha256').update(t
 export const normalizeBrainTitle = (title: string): string => title.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('und')
 const HEAD = `SELECT n.id, n.import_source, v.* FROM brain_note n JOIN brain_version v
   ON v.note=n.id AND v.revision=n.head_revision`
+/**
+ * How a `[[name]]` finds its note now: by any note's title, the title's last `/` part or its import file name, without
+ * `.md`; a name two notes share reaches neither (null). The store resolves links with it; the Brain page uses it for
+ * links in older versions (Epic 128).
+ */
+export function brainLinkResolver(database: DatabaseConnection): (name: string) => string | null {
+  const titles=new Map<string,Set<string>>()
+  for (const n of database.prepare(HEAD).all() as {id:string;title:string;import_source:string|null}[]) {
+    const source=n.import_source?.replace(/^vault:/,'').replace(/\.md$/i,'')
+    for (const title of new Set([n.title, n.title.split('/').at(-1) ?? n.title, ...(source?[source]:[])])) {
+      const key=normalizeBrainTitle(title.replace(/\.md$/i,''));const ids=titles.get(key) ?? new Set<string>();ids.add(n.id);titles.set(key,ids)
+    }
+  }
+  return (name) => { const ids=titles.get(normalizeBrainTitle(name.replace(/\.md$/i,''))); return ids?.size===1?[...ids][0]!:null }
+}
 function fail(code: string, message: string): never { throw new BrainError(code, message) }
 function validateContent(content: BrainContent, imported = false): void {
   for (const key of ['title','kind','origin','scope','markdown'] as const) {
@@ -191,17 +206,9 @@ export class BrainStore {
     if (status!=='withdrawn') this.database.prepare('INSERT INTO brain_search VALUES (?,?,?)').run(id,content.title,content.markdown)
   }
   private resolveLinks(): void {
-    const notes=this.list();const titles=new Map<string,Set<string>>()
-    const sources=new Map((this.database.prepare('SELECT id,import_source FROM brain_note').all() as {id:string;import_source:string|null}[]).map(n=>[n.id,n.import_source]))
-    for (const n of notes) {
-      const source=sources.get(n.id)?.replace(/^vault:/,'').replace(/\.md$/i,'')
-      for (const title of new Set([n.title, n.title.split('/').at(-1) ?? n.title, ...(source?[source]:[])])) {
-        const key=normalizeBrainTitle(title.replace(/\.md$/i,''));const ids=titles.get(key) ?? new Set<string>();ids.add(n.id);titles.set(key,ids)
-      }
-    }
+    const resolve=brainLinkResolver(this.database)
     for (const link of this.database.prepare("SELECT note,target FROM brain_link WHERE kind='note'").all() as {note:string;target:string}[]) {
-      const ids=titles.get(normalizeBrainTitle(link.target.replace(/\.md$/i,''))) ?? new Set<string>()
-      this.database.prepare("UPDATE brain_link SET resolved=? WHERE note=? AND kind='note' AND target=?").run(ids.size===1?[...ids][0]!:null,link.note,link.target)
+      this.database.prepare("UPDATE brain_link SET resolved=? WHERE note=? AND kind='note' AND target=?").run(resolve(link.target),link.note,link.target)
     }
   }
   /** Only the trusted import operation calls this; origin text never grants import privileges. */

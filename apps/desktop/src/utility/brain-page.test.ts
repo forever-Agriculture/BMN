@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import { describe, it, expect } from 'vitest'
 import type { DatabaseConnection } from './database-initialization'
 import { BrainStore, type BrainImport } from './brain-store'
-import { BrainPageReader, GRAPH_RING_PLACES, queryWords, summaryLine } from './brain-page'
+import { BrainPageReader, GRAPH_RING_PLACES, queryWords, readableTitle, summaryLine } from './brain-page'
 const SQLite = createRequire(import.meta.url)('better-sqlite3') as new (path: string) => DatabaseConnection
 
 const note = (title: string, markdown: string, extra: Partial<BrainImport> = {}): BrainImport =>
@@ -99,6 +99,11 @@ describe('Brain page list and search', () => {
     expect(summaryLine('Part of [[Backup plan]] and [[Store schema|the schema]].')).toBe('Part of Backup plan and the schema.')
   })
 
+  it("never takes an HTML comment for a note's line", () => {
+    expect(summaryLine('<!-- MODULE: x.md - header -->\n\nThe rule itself.')).toBe('The rule itself.')
+    expect(summaryLine('<!-- an agent\nleft this -->\nReal <!-- not this --> text.')).toBe('Real text.')
+  })
+
   it('summarises a filed note by its Summary line, never its provenance line, and masks hidden values (review 2026-11-20)', () => {
     const filed = 'Source: Claude memory `synthetic/keeper.md`, sha256 0123456789ab, filed by Epic 127.3.\n\nSummary: "Never prune the volumes."\n\n# MODULE: keeper.md - header\n\nBody line.'
     expect(summaryLine(filed)).toBe('Never prune the volumes.')
@@ -144,6 +149,49 @@ describe('Brain page note, links and history', () => {
       b.store.setWriteDoor(true)
       b.store.edit(b.id('Changing'), 1, { title: 'Changing', kind: 'fact', origin: 'agent', scope: 'all', markdown: 'Second.' }, 'synthetic-session')
       expect(b.page.history(b.id('Changing')).map((v) => [v.revision, v.action, v.markdown])).toEqual([[2, 'edit', 'Second.'], [1, 'import', 'First.']])
+    } finally { b.close() }
+  })
+
+  it("finds the notes an older version links to by that version's own names, never a withdrawn one", () => {
+    const b = brain([note('Changing', 'See [[Kept]], [[Gone]], [[nowhere]] and [[kept-file]].'), note('Kept', 'Kept text.', { source: 'vault:kept-file.md' }), note('Gone', 'Gone text.')])
+    try {
+      b.store.setWriteDoor(true)
+      b.store.edit(b.id('Changing'), 1, { title: 'Changing', kind: 'fact', origin: 'agent', scope: 'all', markdown: 'No links now.' }, 'synthetic-session')
+      b.store.withdraw(b.id('Gone'), 1, 'synthetic-session')
+      // The current text names no link, so the note itself reaches none; version 1 still finds Kept by title and file name.
+      expect(b.page.read(b.id('Changing')).targets).toEqual({})
+      const [now, first] = b.page.history(b.id('Changing'))
+      expect(now!.targets).toEqual({})
+      expect(first!.targets).toEqual({ Kept: b.id('Kept'), Gone: null, nowhere: null, 'kept-file': b.id('Kept') })
+    } finally { b.close() }
+  })
+
+  it('shows a file-name title as words spelled as the note spells them, and keeps the stored name', () => {
+    expect(readableTitle('ai-direction', '# MODULE: ai-direction.md - standing direction\n\nAI is the primary goal. The direction holds.')).toBe('AI direction')
+    expect(readableTitle('bmn-no-pr-push-main-directly', 'BMN pushes main directly, no PR. Never open a PR.')).toBe('BMN no PR push main directly')
+    // A capital only at a line or sentence start is no spelling: "Gaming" opens the text, "Setup" opens a sentence.
+    expect(readableTitle('gaming-setup', 'Gaming laptop. Setup is done.')).toBe('Gaming setup')
+    expect(readableTitle('github-push-account-switch', 'Push to GitHub over SSH; GitHub needs the account switch.')).toBe('GitHub push account switch')
+    // Words in file names, links and comments say nothing; other titles stay as they are.
+    expect(readableTitle('opus-notes', 'See [[opus-notes]] in `Opus-notes.md` <!-- OPUS --> and use Opus daily.')).toBe('Opus notes')
+    expect(readableTitle('Backup plan', 'BACKUP')).toBe('Backup plan')
+    expect(readableTitle('plan-2026', '')).toBe('Plan 2026')
+    // A date stays a date; a word spelled with a small first letter keeps it; a name the text writes hyphenated stays.
+    expect(readableTitle('2026-11-19', '')).toBe('2026-11-19')
+    expect(readableTitle('2026-10-08-historical-evidence', 'Evidence kept.')).toBe('2026-10-08 historical evidence')
+    expect(readableTitle('iphone-transfer', 'Copy from the iPhone with ifuse.')).toBe('iPhone transfer')
+    expect(readableTitle('dev-auto', 'A dev-auto run delivers. See [[dev-auto]].')).toBe('dev-auto')
+    expect(readableTitle('dev-auto', 'See [[dev-auto]] and `dev-auto.md`.')).toBe('Dev auto')
+    const b = brain([note('ai-direction', 'AI comes first.\n\nSee [[Plain]].'), note('Plain', 'Back to [[ai-direction]].')])
+    try {
+      const read = b.page.read(b.id('ai-direction'))
+      expect([read.title, read.name]).toEqual(['AI direction', 'ai-direction'])
+      expect(b.page.list().notes.map((n) => n.title).sort()).toEqual(['AI direction', 'Plain'])
+      expect(b.page.read(b.id('Plain')).linksTo.map((n) => n.title)).toEqual(['AI direction'])
+      expect(b.page.graph(b.id('Plain')).nodes.map((n) => n.title).sort()).toEqual(['AI direction', 'Plain'])
+      expect(b.page.map().nodes.map((n) => n.title).sort()).toEqual(['AI direction', 'Plain'])
+      expect(b.page.history(b.id('ai-direction')).map((v) => [v.title, v.name])).toEqual([['AI direction', 'ai-direction']])
+      expect(b.page.search('comes first').notes.map((n) => n.title)).toEqual(['AI direction'])
     } finally { b.close() }
   })
 })

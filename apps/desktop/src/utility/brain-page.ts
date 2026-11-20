@@ -2,7 +2,7 @@
 import type { DatabaseConnection } from './database-initialization'
 import type { BrainGraph, BrainGraphNode, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
 import { SECRET_MASK, secretRanges } from '@bmn/protocol'
-import { BrainError } from './brain-store'
+import { BrainError, brainLinkResolver } from './brain-store'
 export type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
 
 /** The 150-node cap after the focus: 36, 60 and 53 by ring; a ring's unused places pass to the next (Epic 128 D7). */
@@ -14,12 +14,60 @@ export const BRAIN_PAGE_SEARCH_LIMIT = 10
 export const BRAIN_MAP_CAP = 3000
 
 const HEAD = `FROM brain_note n JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision`
+/** The text only where a file-name title needs it to read as words (readableTitle), so wide reads stay small. */
+const MARKDOWN_IF_SLUG = "CASE WHEN v.title GLOB '*-*' AND v.title NOT GLOB '* *' THEN v.markdown ELSE '' END AS markdown"
+type RefRow = BrainPageNoteRef & { markdown: string }
+const readable = ({ markdown, ...note }: RefRow): BrainPageNoteRef => ({ ...note, title: readableTitle(note.title, markdown) })
 const NEWEST = 'ORDER BY julianday(v.source_time) DESC, v.recorded_at DESC, n.id'
 
 /** A filed note's provenance line ("Source: Claude memory …, sha256 …"): it says where a note came from, not what it says. */
 const PROVENANCE = /^Source:\s/u
 /** A filed note's own summary line ("Summary: …", Epic 127): the best one line of what it says. */
 const SUMMARY = /^Summary:\s*/u
+
+/** An HTML comment (`<!-- … -->`): Markdown never shows it, so neither does a list line. */
+const COMMENT = /<!--[\s\S]*?(?:-->|$)/gu
+
+/** A title written as a file name ("ai-direction"): lower-case words and digits joined by hyphens. */
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)+$/u
+/** A word standing alone in the text: not part of a file name, path, link name or hyphenated word. */
+const LONE_WORD = /(?<![\p{L}\p{N}_\-/.\\])[\p{L}\p{N}]+(?![\p{L}\p{N}_\-/\\]|\.[\p{L}\p{N}])/gu
+
+/**
+ * The title the page shows. A file-name title reads as words: "ai-direction" -> "AI direction". Each word takes the
+ * spelling the note's own text always gives it (AI, BMN, GitHub, iPhone); a word the text also writes in lower case,
+ * or only capitalises at a sentence start, stays lower case, and a lower-case first word gets a capital. Digits next
+ * to digits keep their hyphen, so a date stays a date ("2026-10-08 historical …"). A title the text itself uses as a
+ * hyphenated word ("dev-auto runs") is a name and stays. Any other title is unchanged.
+ */
+export function readableTitle(title: string, markdown: string): string {
+  if (!SLUG.test(title)) return title
+  const prose = markdown.replace(COMMENT, ' ')
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  if (new RegExp(`(?<![\\p{L}\\p{N}_\\-/.\\[\\\\])${escaped}(?![\\p{L}\\p{N}_\\-/\\]\\\\]|\\.[\\p{L}\\p{N}])`, 'u').test(prose)) return title
+  const forms = new Map<string, Map<string, number>>()
+  const lower = new Set<string>()
+  for (const line of prose.split('\n')) {
+    for (const match of line.matchAll(LONE_WORD)) {
+      const word = match[0]
+      const key = word.toLowerCase()
+      if (word === key) { lower.add(key); continue }
+      const before = line.slice(0, match.index)
+      // "Direction" opening a line, list item, heading or sentence says nothing about how the word is spelled.
+      if (word === key[0]!.toUpperCase() + key.slice(1) && (/^[\s#>*+\-\d.)[\]`_|]*$/u.test(before) || /[.!?:]["')\]*_]*\s+$/u.test(before))) continue
+      const counts = forms.get(key) ?? new Map<string, number>()
+      counts.set(word, (counts.get(word) ?? 0) + 1)
+      forms.set(key, counts)
+    }
+  }
+  const words = title.split('-').map((word) => {
+    if (lower.has(word)) return word
+    const counts = [...(forms.get(word) ?? new Map<string, number>()).entries()]
+    return counts.length ? counts.reduce((best, each) => (each[1] > best[1] ? each : best))[0] : word
+  })
+  const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
+  return words[0] === title.split('-')[0] ? text[0]!.toUpperCase() + text.slice(1) : text
+}
 
 /**
  * One line of a note for the list, at most 180 characters: with search words, the first line holding one (a line
@@ -28,7 +76,7 @@ const SUMMARY = /^Summary:\s*/u
  * rules), so a value the page masks never shows in a row or its tooltip.
  */
 export function summaryLine(markdown: string, words: readonly string[] = []): string {
-  const text = markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown
+  const text = (markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown).replace(COMMENT, '')
   let masked = ''
   let at = 0
   for (const [start, end] of secretRanges('/brain/note.md', text)) { masked += text.slice(at, Math.max(at, start)) + SECRET_MASK; at = Math.max(at, end) }
@@ -56,7 +104,7 @@ export class BrainPageReader {
   constructor(private readonly database: DatabaseConnection) {}
 
   private summary(row: { id: string; title: string; kind: string; status: BrainStatus; source_time: string; markdown: string }, words: readonly string[] = []): BrainPageSummary {
-    return { id: row.id, title: row.title, kind: row.kind, status: row.status, changed: row.source_time, summary: summaryLine(row.markdown, words) }
+    return { id: row.id, title: readableTitle(row.title, row.markdown), kind: row.kind, status: row.status, changed: row.source_time, summary: summaryLine(row.markdown, words) }
   }
 
   /** A page of notes, newest change first: visible ones, or with `withdrawn` only the withdrawn ones. */
@@ -108,7 +156,8 @@ export class BrainPageReader {
   }
 
   private ref(id: string): BrainPageNoteRef | undefined {
-    return this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.id=?`).get(id) as BrainPageNoteRef | undefined
+    const row = this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, ${MARKDOWN_IF_SLUG} ${HEAD} WHERE n.id=?`).get(id) as RefRow | undefined
+    return row ? readable(row) : undefined
   }
 
   /** A note by its id, any status, with what it links to and what links to it; withdrawn notes are never listed as links. */
@@ -131,29 +180,44 @@ export class BrainPageReader {
       if (!reachable) missing.push(link.target)
       else if (!linksTo.some((each) => each.id === reachable.id)) linksTo.push(reachable)
     }
-    const linkedFrom = (this.database.prepare(`SELECT DISTINCT n.id, n.status, v.title, v.kind FROM brain_link l
+    const linkedFrom = (this.database.prepare(`SELECT DISTINCT n.id, n.status, v.title, v.kind, ${MARKDOWN_IF_SLUG} FROM brain_link l
       JOIN brain_note n ON n.id=l.note JOIN brain_version v ON v.note=n.id AND v.revision=n.head_revision
-      WHERE l.resolved=? AND l.kind='note' AND n.status!='withdrawn' AND n.id<>? ORDER BY v.title, n.id`).all(id, id) as BrainPageNoteRef[])
+      WHERE l.resolved=? AND l.kind='note' AND n.status!='withdrawn' AND n.id<>?`).all(id, id) as RefRow[]).map(readable)
+      .sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id))
     return {
-      id: row.id, title: row.title, kind: row.kind, status: row.status, origin: row.origin, scope: row.scope,
+      id: row.id, title: readableTitle(row.title, row.markdown), name: row.title, kind: row.kind, status: row.status, origin: row.origin, scope: row.scope,
       changed: row.source_time, recorded: row.recorded_at, revision: row.revision, markdown: row.markdown,
       linksTo, linkedFrom, projects: links.filter((link) => link.kind === 'project').map((link) => link.target), missing, targets
     }
   }
 
-  /** Every version of a note, newest first; read-only (Epic 128: History restores nothing). */
+  /**
+   * Every version of a note, newest first; read-only (Epic 128: History restores nothing). Each version's links are
+   * looked up by the names it uses, as the store finds a link's note today; a withdrawn note is no link target.
+   */
   history(id: string): BrainPageVersion[] {
     if (!this.ref(id)) throw new BrainError('NOT_FOUND', 'Brain note not found')
-    return (this.database.prepare(`SELECT revision, action, title, kind, origin, status, recorded_at AS recorded, source_time AS changed, markdown
-      FROM brain_version WHERE note=? ORDER BY revision DESC`).all(id) as BrainPageVersion[])
+    const versions = this.database.prepare(`SELECT revision, action, title, kind, origin, status, recorded_at AS recorded, source_time AS changed, markdown
+      FROM brain_version WHERE note=? ORDER BY revision DESC`).all(id) as Omit<BrainPageVersion, 'name' | 'targets'>[]
+    const resolve = brainLinkResolver(this.database)
+    const reachable = new Map<string, string | null>()
+    const target = (name: string): string | null => {
+      if (!reachable.has(name)) { const found = resolve(name); reachable.set(name, found && this.ref(found)?.status !== 'withdrawn' ? found : null) }
+      return reachable.get(name)!
+    }
+    return versions.map((version) => {
+      const targets: Record<string, string | null> = {}
+      for (const match of version.markdown.matchAll(/\[\[([^\]|#]+)/gu)) { const name = match[1]!.trim(); targets[name] ??= target(name) }
+      return { ...version, title: readableTitle(version.title, version.markdown), name: version.title, targets }
+    })
   }
 
   /** Visible notes (active, plus archived when shown, never withdrawn) and the links between them, both ways (D7). */
   private visibleLinks(archived: boolean): { visible: Map<string, BrainPageNoteRef>; near: Map<string, Set<string>> } {
     const statuses = statusesFor(archived)
     const marks = statuses.map(() => '?').join(',')
-    const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind ${HEAD} WHERE n.status IN (${marks})`)
-      .all(...statuses) as BrainPageNoteRef[]).map((note) => [note.id, note]))
+    const visible = new Map((this.database.prepare(`SELECT n.id, n.status, v.title, v.kind, ${MARKDOWN_IF_SLUG} ${HEAD} WHERE n.status IN (${marks})`)
+      .all(...statuses) as RefRow[]).map((row) => [row.id, readable(row)]))
     const near = new Map<string, Set<string>>()
     const join = (a: string, b: string): void => { const set = near.get(a) ?? new Set<string>(); set.add(b); near.set(a, set) }
     for (const link of this.database.prepare("SELECT note, resolved FROM brain_link WHERE kind='note' AND resolved IS NOT NULL").iterate() as Iterable<{ note: string; resolved: string }>) {

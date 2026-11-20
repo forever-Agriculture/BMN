@@ -4,7 +4,7 @@ import type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageReque
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BrainSheet, brainDate, createBrainMemory, noResultWords, startsWithTitle, withoutModuleHeading, type BrainMemory } from './brain-page'
+import { BrainSheet, brainDate, createBrainMemory, noResultWords, readingText, startsWithTitle, type BrainMemory } from './brain-page'
 
 let root: Root | undefined
 let container: HTMLDivElement | undefined
@@ -14,7 +14,7 @@ let closed = 0
 const AT = '2026-11-16T09:30:00.000Z'
 const summary = (id: string, title: string, over: Partial<BrainPageSummary> = {}): BrainPageSummary => ({ id, title, kind: 'fact', status: 'active', changed: AT, summary: `About ${title}.`, ...over })
 const note = (id: string, title: string, over: Partial<BrainPageNote> = {}): BrainPageNote => ({
-  id, title, kind: 'project', status: 'active', origin: 'import', scope: 'all', changed: AT, recorded: AT, revision: 3,
+  id, title, name: title, kind: 'project', status: 'active', origin: 'import', scope: 'all', changed: AT, recorded: AT, revision: 3,
   markdown: `Text of ${title}. See [[Other]] and [[Nowhere]].`, linksTo: [{ id: 'n2', title: 'Other', kind: 'fact', status: 'active' }],
   linkedFrom: [{ id: 'n3', title: 'Back', kind: 'map', status: 'active' }, { id: 'n4', title: 'Old', kind: 'fact', status: 'archived' }],
   projects: ['~/code/synthetic'], missing: ['Nowhere'], targets: { Other: 'n2', Nowhere: null }, ...over
@@ -25,7 +25,7 @@ const NOTES: Record<string, BrainPageNote> = {
     markdown: 'The key is AKIAABCDEFGHIJKLMNOP.\r\nSee [[Other]].' }),
   o2: note('o2', 'Other', { linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Another key AKIAZYXWVUTSRQPONMLK here.' }),
   h1: note('h1', 'Hidden link', { linksTo: [], linkedFrom: [], missing: [], targets: { Old: 'n4' }, markdown: 'See [[Old]].' }),
-  m1: note('m1', 'keeper-note', { linksTo: [], linkedFrom: [], missing: [], targets: {},
+  m1: note('m1', 'Keeper note', { name: 'keeper-note', linksTo: [], linkedFrom: [], missing: [], targets: {},
     markdown: 'Source: Claude memory `synthetic/keeper-note.md`.\n\nSummary: "Short rule."\n\n# MODULE: keeper-note.md - a file header\n\nThe rule itself.' }),
   w1: note('w1', 'Mistake', { status: 'withdrawn', linksTo: [], linkedFrom: [], missing: [], targets: {}, markdown: 'Withdrawn text.' })
 }
@@ -40,6 +40,7 @@ let PAIRED = false
 let GRAPH_FAILS = false
 let READ_FAILS = new Set<string>()
 let HISTORY_TEXT = 'Second.'
+let HISTORY_TARGETS: Record<string, string | null> = {}
 function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainPageSummary[]) {
   return async <Result,>(request: BrainPageRequest): Promise<Result> => {
     requests.push(request)
@@ -61,8 +62,8 @@ function route(state: 'ready' | 'not-switched' | 'fail' = 'ready', list?: BrainP
         if (!found) throw new Error('Brain note not found')
         return found as Result
       }
-      case 'history': return [{ revision: 2, action: 'edit', title: 'Backup plan', kind: 'project', origin: 'agent', status: 'active', recorded: AT, changed: AT, markdown: HISTORY_TEXT },
-        { revision: 1, action: 'import', title: 'Backup plan', kind: 'project', origin: 'import', status: 'active', recorded: AT, changed: AT, markdown: 'First.' }] satisfies BrainPageVersion[] as Result
+      case 'history': return [{ revision: 2, action: 'edit', title: 'Backup plan', name: 'Backup plan', kind: 'project', origin: 'agent', status: 'active', recorded: AT, changed: AT, markdown: HISTORY_TEXT, targets: HISTORY_TARGETS },
+        { revision: 1, action: 'import', title: 'Backup plan', name: 'Backup plan', kind: 'project', origin: 'import', status: 'active', recorded: AT, changed: AT, markdown: 'First.', targets: {} }] satisfies BrainPageVersion[] as Result
       case 'graph': {
         if (GRAPH_FAILS) throw new Error('This note is not shown in the graph')
         if (!PAIRED) return { focus: request.id, depth: 1, nodes: [{ id: request.id, title: 'Backup plan', kind: 'project', status: 'active', depth: 0, parent: null, links: 0 }], edges: [], more: [0, 0, 0] } satisfies BrainGraph as Result
@@ -622,6 +623,7 @@ describe('Brain page after the post-delivery review (2026-11-20)', () => {
 
   it('a link in History opens its note and closes History', async () => {
     HISTORY_TEXT = 'Second. See [[Other]].'
+    HISTORY_TARGETS = { Other: 'n2' }
     await mount({ noteId: 'n1', archived: false })
     await press(container!.querySelector('.b-box')!, 'h')
     await act(async () => { container!.querySelector<HTMLElement>('.b-history .ql-md-a[data-target="file"]')!.click() })
@@ -630,22 +632,37 @@ describe('Brain page after the post-delivery review (2026-11-20)', () => {
     expect(container!.querySelector('.b-title')!.textContent).toBe('Other')
   })
 
-  it('draws a filed note without its MODULE file header', async () => {
+  it('a link in an older version opens the note that version names, not one the current text names', async () => {
+    // The current note links [[Other]] and [[Nowhere]]; version 2 links [[Old name]], which reaches n2 by its own lookup.
+    HISTORY_TEXT = 'Second. See [[Old name]].'
+    HISTORY_TARGETS = { 'Old name': 'n2' }
+    await mount({ noteId: 'n1', archived: false })
+    await press(container!.querySelector('.b-box')!, 'h')
+    const link = container!.querySelector<HTMLElement>('.b-history .ql-md-a[data-target="file"]')
+    expect(link!.textContent).toBe('Old name')
+    await act(async () => { link!.click() })
+    await flush()
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Other')
+  })
+
+  it('draws a filed note without its MODULE file header or any HTML comment, and names it as links do', async () => {
     await mount({ noteId: 'm1', archived: false })
     expect(container!.querySelector('.b-text')!.textContent).toContain('The rule itself.')
     expect(container!.querySelector('.b-text')!.textContent).not.toContain('MODULE')
-    expect(withoutModuleHeading('a\n# MODULE: x.md - header\nb\n# MODULE: y.md - kept')).toBe('a\nb\n# MODULE: y.md - kept')
-    expect(withoutModuleHeading('# Module of x\ntext')).toBe('# Module of x\ntext')
+    expect(container!.querySelector('.b-title')!.textContent).toBe('Keeper note')
+    const facts = [...container!.querySelectorAll('.b-kv dt')].map((dt) => [dt.textContent, dt.nextElementSibling!.textContent])
+    expect(facts).toContainEqual(['Name', 'keeper-note'])
+    expect(readingText('a\n# MODULE: x.md - header\nb\n# MODULE: y.md - kept')).toBe('a\nb\n# MODULE: y.md - kept')
+    expect(readingText('# Module of x\ntext')).toBe('# Module of x\ntext')
     // In a code block it is an example and stays.
-    const example = 'Intro\n```\n# MODULE: example.md - sample\n```\nEnd'
-    expect(withoutModuleHeading(example)).toBe(example)
-    expect(withoutModuleHeading('a\r\n# MODULE: x.md - header\r\nb')).toBe('a\r\nb')
-    // The same header written as an HTML comment goes too; any other comment stays.
-    expect(withoutModuleHeading('Summary: s\n\n<!-- MODULE: x_y.md - header -->\n\nBody')).toBe('Summary: s\n\n\nBody')
-    expect(withoutModuleHeading('a\r\n<!-- MODULE: x.md - header -->\r\nb')).toBe('a\r\nb')
-    expect(withoutModuleHeading('a\n<!-- note: keep this -->\nb')).toBe('a\n<!-- note: keep this -->\nb')
-    const commented = 'Intro\n```\n<!-- MODULE: example.md - sample -->\n```\nEnd'
-    expect(withoutModuleHeading(commented)).toBe(commented)
+    const example = 'Intro\n```\n# MODULE: example.md - sample\n<!-- kept -->\n```\nEnd'
+    expect(readingText(example)).toBe(example)
+    expect(readingText('Use `<!-- x -->` here')).toBe('Use `<!-- x -->` here')
+    // Every HTML comment goes: a header, an agent's note, one over several lines, one inside a line.
+    expect(readingText('Summary: s\n\n<!-- MODULE: x_y.md - header -->\n\nBody')).toBe('Summary: s\n\n\nBody')
+    expect(readingText('a\n\n<!-- note: an agent left this -->\n\nb')).toBe('a\n\n\nb')
+    expect(readingText('a\n\n<!-- one\ntwo -->\nb')).toBe('a\n\nb')
+    expect(readingText('Keep this <!-- not this --> and this')).toBe('Keep this  and this')
   })
 })
 
@@ -657,5 +674,6 @@ describe('Brain page words', () => {
     expect(noResultWords('бекап')).toContain('in English')
     expect(startsWithTitle({ title: 'Backup plan', markdown: '# Backup plan\n\ntext' })).toBe(true)
     expect(startsWithTitle({ title: 'Backup plan', markdown: 'text\n# Backup plan' })).toBe(false)
+    expect(startsWithTitle({ title: 'Backup plan', markdown: '# MODULE: backup.md - header\n\n# Backup plan\n\ntext' })).toBe(true)
   })
 })
