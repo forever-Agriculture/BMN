@@ -1,10 +1,10 @@
 // MODULE: update-processes.test.mjs - Story 134.2 review F3: a stopped or finished update step leaves none of its processes running
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { restoreFiles, saveFiles, settleProcessGroup } from '../install/update-desktop.mjs'
+import { saveFiles, settleProcessGroup } from '../install/update-desktop.mjs'
 import { runSelfTest } from '../smoke/packaged.mjs'
 
 const groupAlive = (group) => { try { process.kill(-group, 0); return true } catch { return false } }
@@ -70,11 +70,14 @@ describe('the launch path a failed install restores (recheck F2)', () => {
       writeFileSync(entry, 'Exec=old launcher\n', { mode: 0o644 })
       writeFileSync(launcher, '#!/bin/sh\nold\n', { mode: 0o755 })
       const saved = saveFiles([entry, launcher, absent])
-      const mask = process.umask(0o077)
       writeFileSync(entry, 'Exec=incompatible\n')
       writeFileSync(launcher, 'broken')
       writeFileSync(absent, 'left by the installer')
-      try { restoreFiles(saved) } finally { process.umask(mask) }
+      // The restore runs under a strict umask in a process of its own: umask is process-wide (recheck 2).
+      const restore = `import('${new URL('../install/update-desktop.mjs', import.meta.url).href}').then(({ restoreFiles }) => restoreFiles(JSON.parse(process.argv[1]).map((file) => ({ ...file, bytes: file.bytes === null ? null : Buffer.from(file.bytes, 'base64') }))))`
+      const shown = JSON.stringify(saved.map((file) => ({ ...file, bytes: file.bytes === null ? null : file.bytes.toString('base64') })))
+      const restored = spawnSync('/bin/sh', ['-c', 'umask 077; exec "$0" -e "$1" "$2"', process.execPath, restore, shown], { encoding: 'utf8', timeout: 60_000 })
+      expect(restored.status, restored.stderr).toBe(0)
       expect(readFileSync(entry, 'utf8')).toBe('Exec=old launcher\n')
       expect(readFileSync(launcher, 'utf8')).toBe('#!/bin/sh\nold\n')
       expect(statSync(launcher).mode & 0o777).toBe(0o755)
