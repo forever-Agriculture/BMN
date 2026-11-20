@@ -176,6 +176,27 @@ describe('a queued update while BMN stays open (Story 134.2)', { timeout: 30_000
     expect(run.live()).toBe(`build of ${b}`)
   })
 
+  it('while BMN stays closed after A went live, B goes live once it passed, never before (pre-review 20261120T183246)', async () => {
+    const repo = repository()
+    const a = repo.push('A')
+    const run = harness(repo)
+    run.open(a)
+    const done = superviseUpdate(run.io)
+    await until(() => run.offered().includes(a), 'A to be offered')
+    const b = repo.push('B')
+    await until(() => run.phase()?.commit === b, 'B to build')
+    run.app.open = false
+    await until(() => run.statuses.some((value) => value.phase === 'complete' && value.commit === a), 'A to go live')
+    await until(() => run.built.filter((commit) => commit === b).length === 2, 'B to build again')
+    // BMN is still closed: nothing is swapped while B is untested, and the launcher opens A if he starts it now.
+    expect(run.phase()).toMatchObject({ phase: 'preparing', commit: b, staged: null, installed: a })
+    expect(run.live()).toBe(`build of ${a}`)
+    run.open(b)
+    expect(await done).toEqual({ installed: b })
+    expect(run.live()).toBe(`build of ${b}`)
+    expect(run.offered()).toEqual([a, b])
+  })
+
   it('a failed B keeps its log and never goes live; A is offered again and goes live at exit', async () => {
     const repo = repository()
     const a = repo.push('A')

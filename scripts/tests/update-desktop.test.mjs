@@ -12,7 +12,7 @@ import {
   runningAppPids,
   workerUnitArguments
 } from '../install/update-desktop.mjs'
-import { assertHomeUntouched, homeBmnFolders, isolatedEnvironment } from '../smoke/packaged.mjs'
+import { assertHomeUntouched, copyOwnerShellFiles, homeBmnFolders, isolatedEnvironment, selfTestError, stopSmokeLeftovers } from '../smoke/packaged.mjs'
 import { temporaryRootContracts } from '../lib/temporary-root.mjs'
 import { KEPT_ATTEMPTS, attemptLogs, startAttempt } from '../lib/update-attempts.mjs'
 
@@ -215,6 +215,47 @@ describe('desktop source update', () => {
       expect(environment).toMatchObject({ HOME: '/t/home', XDG_CONFIG_HOME: '/t/config', XDG_DATA_HOME: '/t/data', XDG_STATE_HOME: '/t/state', XDG_CACHE_HOME: '/t/cache', XDG_RUNTIME_DIR: '/t/runtime', PATH: '/usr/bin' })
       for (const name of ['BMN_SESSION_ID', 'BMN_TOKEN', 'BMN_CONTROL_SOCKET', 'BMN_CLI_BIN_DIR']) expect(environment).not.toHaveProperty(name)
       for (const xdg of [roots.config, roots.data, roots.state, roots.cache, roots.runtime]) expect(xdg.startsWith(roots.home)).toBe(false)
+    })
+
+    it('copies the owner shell files the own-shell self-test check needs into the smoke HOME, nothing else', () => {
+      // 2026-11-20: with an empty HOME the self-test's owner-sixel shell found no .bashrc and its prompt went plain.
+      const owner = mkdtempSync(join(tmpdir(), 'bmn-smoke-owner-')), home = mkdtempSync(join(tmpdir(), 'bmn-smoke-home-'))
+      try {
+        writeFileSync(join(owner, '.bashrc'), 'PS1=synthetic\n')
+        writeFileSync(join(owner, '.profile'), '. ~/.bashrc\n')
+        mkdirSync(join(owner, '.config/bmn'), { recursive: true })
+        writeFileSync(join(owner, '.ssh-like-secret'), 'never copied\n')
+        expect(copyOwnerShellFiles(home, owner)).toEqual(['.bashrc', '.profile'])
+        expect(readFileSync(join(home, '.bashrc'), 'utf8')).toBe('PS1=synthetic\n')
+        expect(readdirSync(home).sort()).toEqual(['.bashrc', '.profile'])
+        expect(() => assertHomeUntouched(home)).not.toThrow()
+      } finally {
+        rmSync(owner, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true })
+      }
+    })
+
+    it('stops only the processes that carry this smoke root, never others or itself', () => {
+      // 2026-11-20: a timed-out self-test left its GPU, network and audio helpers and its Xvfb running for 35 minutes.
+      const proc = mkdtempSync(join(tmpdir(), 'bmn-smoke-proc-'))
+      try {
+        const own = '/tmp/bmn-packaged-smoke-abc/config'
+        const environ = { 41: `HOME=/x\0XDG_CONFIG_HOME=${own}\0`, 42: `XDG_CONFIG_HOME=${own}\0PATH=/bin`, 43: `XDG_CONFIG_HOME=${own}-other\0`, 44: 'XDG_CONFIG_HOME=/home/owner/.config\0', 45: `XDG_CONFIG_HOME=${own}\0` }
+        for (const [pid, text] of Object.entries(environ)) { mkdirSync(join(proc, pid)); writeFileSync(join(proc, pid, 'environ'), text) }
+        mkdirSync(join(proc, 'self'))
+        const killed = []
+        expect(stopSmokeLeftovers(own, { procRoot: proc, self: 45, kill: (pid, name) => killed.push([pid, name]) })).toEqual([41, 42])
+        expect(killed).toEqual(expect.arrayContaining([[41, 'SIGKILL'], [42, 'SIGKILL']]))
+        expect(killed).toHaveLength(2)
+      } finally {
+        rmSync(proc, { recursive: true, force: true })
+      }
+    })
+
+    it('names the self-test failure in its own words, not the display noise before it', () => {
+      // 2026-11-20: the smoke kept only the last 1,000 characters, which held cleanup lines, never the failure.
+      const stderr = "(bmn:1): dbind-WARNING **: Couldn't connect to accessibility bus: failed\nALSA lib pcm.c: [error.pcm] unable to open slave\n[BMN] session self-test failed: prompt, write and stop did not give a turn\n[BMN] self-test phase: exiting application\n"
+      expect(selfTestError(stderr)).toBe('; [BMN] session self-test failed: prompt, write and stop did not give a turn')
+      expect(selfTestError('[BMN] self-test phase: exiting application\n')).toBe('')
     })
 
     it("fails the smoke when the candidate wrote into its HOME's BMN folders instead of its XDG roots (D2)", () => {

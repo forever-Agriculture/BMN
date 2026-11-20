@@ -1,7 +1,7 @@
 // MODULE: packaged.mjs - smoke-tests the packaged BMN build with its own HOME and XDG roots, so it runs while the owner's BMN is open
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cliModules } from '../lib/cli-modules.mjs'
@@ -31,6 +31,51 @@ export function assertHomeUntouched(home, exists = existsSync) {
 
 /** The live BMN session's own variables; a candidate under test must never reach the BMN the owner is using. */
 const LIVE_SESSION_VARIABLES = ['BMN_SESSION_ID', 'BMN_TOKEN', 'BMN_CONTROL_SOCKET', 'BMN_CLI_BIN_DIR']
+
+/**
+ * The owner's shell startup files. The self-test's "owner-sixel" shell runs `bash -i` on his own `.bashrc` to prove his
+ * prompt still works under BMN's terminal entry; the smoke's HOME gets copies, so his files are read, never written.
+ */
+export const OWNER_SHELL_FILES = ['.bashrc', '.bash_aliases', '.profile', '.inputrc']
+
+export function copyOwnerShellFiles(home, ownerHome = homedir()) {
+  const copied = []
+  for (const name of OWNER_SHELL_FILES) {
+    if (!existsSync(join(ownerHome, name))) continue
+    copyFileSync(join(ownerHome, name), join(home, name))
+    copied.push(name)
+  }
+  return copied
+}
+
+/**
+ * Stops every process still carrying this smoke's own config root in its environment: a timed-out self-test leaves
+ * Electron's helpers and its display running when only `xvfb-run` is killed (2026-11-20: they held memory for 35
+ * minutes). The root is a fresh temporary folder, so nothing else carries it. Returns the stopped process ids.
+ */
+export function stopSmokeLeftovers(configRoot, { procRoot = '/proc', kill = process.kill.bind(process), self = process.pid } = {}) {
+  const marker = `\0XDG_CONFIG_HOME=${configRoot}\0`
+  const stopped = []
+  let entries
+  try { entries = readdirSync(procRoot) } catch { return stopped }
+  for (const name of entries) {
+    if (!/^\d+$/u.test(name) || Number(name) === self) continue
+    try {
+      if (!`\0${readFileSync(join(procRoot, name, 'environ'), 'latin1')}`.includes(marker)) continue
+      kill(Number(name), 'SIGKILL')
+      stopped.push(Number(name))
+    } catch {
+      // Gone already, or not ours to read.
+    }
+  }
+  return stopped.sort((left, right) => left - right)
+}
+
+/** The first failure BMN's self-test reported in its own words, never the display or audio noise around it. */
+export function selfTestError(stderr = '') {
+  const line = stderr.split('\n').find((text) => /^\[BMN\] .*self-test failed/u.test(text))
+  return line ? `; ${line.slice(0, 500)}` : ''
+}
 
 /** The environment every candidate process gets: its own HOME and XDG roots, synthetic agent config folders. */
 export function isolatedEnvironment(roots, environment = process.env) {
@@ -123,6 +168,7 @@ async function smoke() {
       : originalWaylandDisplay
 
   await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) => {
+    copyOwnerShellFiles(roots.home)
     const cliLoad = spawnSync(packagedBinary, [
       '-e', 'Promise.all(process.argv.slice(1).map(file => import(file))).catch(error => { console.error(error.message); process.exit(1) })',
       ...packagedCli
@@ -136,11 +182,14 @@ async function smoke() {
     const selfTest = privateDisplay
       ? ['xvfb-run', '-a', '-s', '-screen 0 1920x1080x24', packagedBinary, '--ozone-platform=x11', '--self-test']
       : [packagedBinary, ...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test']
-    const result = spawnSync(selfTest[0], selfTest.slice(1), {
+    let result
+    try {
+    result = spawnSync(selfTest[0], selfTest.slice(1), {
       encoding: 'utf8',
-      // The self-test covers renderer and host restarts, remote answers and agent history; it took
-      // about two minutes by Epic 31, so the bound leaves room for slower machines and later phases.
-      timeout: 300_000,
+      // The self-test covers renderer and host restarts, remote answers and agent history; it took about two
+      // minutes by Epic 31 and nearly five on a loaded machine (load 44 on 12 cores, 2026-11-20). The update runs
+      // it while BMN stays open (Story 134.2), so a generous bound costs the owner no waiting.
+      timeout: 900_000,
       env: {
         ...isolatedEnvironment(roots),
         // The synthetic session fixtures run on this Node, as in the source self-test.
@@ -148,16 +197,16 @@ async function smoke() {
         ...(privateDisplay ? { WAYLAND_DISPLAY: '' } : waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
       }
     })
-    // A timeout keeps the output so far; the self-test prints its phases on stderr, so its last lines
-    // name the phase it was in.
-    if (result.error) {
-      throw new Error(`packaged self-test failed: ${result.error.message}; last stderr=${JSON.stringify(result.stderr?.slice(-2_000) ?? '')}`)
+    } finally {
+      const stopped = stopSmokeLeftovers(roots.config)
+      if (stopped.length > 0) console.error(`stopped ${stopped.length} process(es) the self-test left running: ${stopped.join(', ')}`)
     }
-    if (result.signal) throw new Error(`packaged self-test terminated by ${result.signal}`)
-    if (result.status !== 0) {
-      throw new Error(
-        `packaged self-test exited ${result.status}; stderr=${JSON.stringify(result.stderr.slice(-1_000))}`
-      )
+    // A failure prints the self-test's whole output, which lands in the update attempt's log: its phases and the
+    // error a failing phase reports come long before its last lines (Story 134.2: a failure says its real cause).
+    const failed = result.error ? `failed: ${result.error.message}` : result.signal ? `terminated by ${result.signal}` : result.status !== 0 ? `exited ${result.status}` : null
+    if (failed !== null) {
+      process.stderr.write(`--- packaged self-test stdout ---\n${result.stdout ?? ''}\n--- packaged self-test stderr ---\n${result.stderr ?? ''}\n--- end of packaged self-test output ---\n`)
+      throw new Error(`packaged self-test ${failed}${selfTestError(result.stderr)}; its whole output is above`)
     }
     const receipt = parseReceipt(result.stdout)
     if (
