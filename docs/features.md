@@ -809,8 +809,11 @@ he changes a note by telling an agent.
 - **A note** reads as a page with its kind, status, origin, scope, last change and version, the
   notes it links to and the notes that link to it. A link opens its note; a name that is no note
   in the brain is plain muted text. A hidden value shows for ten seconds when he asks, as in Quick
-look. A `# MODULE: name.md` file header carried over from agent memory files is not drawn. **H**
-  shows History, every earlier version read-only; a link in it opens that note.
+look. A `# MODULE: name.md` file header carried over from agent memory files is not drawn, nor
+  is any HTML comment (`<!-- … -->`), as Markdown never shows one. A title written as a file name
+  (`ai-direction`) reads as words spelled as the note spells them (**AI direction**), everywhere
+  on the page; the stored name, which links use, shows as **Name**. **H** shows History, every
+  earlier version read-only; a link in a version opens the note that version's link name finds.
 - **The graph** (**G**) draws a note's neighbourhood on fixed rings: depth **1 2 3**, opening at
   the least depth that shows 8 notes. It walks links only between visible notes (archived ones
   when **Archived** is on, withdrawn ones never), draws at most 150 notes and counts the rest as
