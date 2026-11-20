@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
+  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -300,6 +301,8 @@ export function restoreFiles(saved) {
     if (bytes === null) { rmSync(path, { force: true }); continue }
     const temporary = `${path}.tmp-${process.pid}`
     writeFileSync(temporary, bytes, { mode })
+    // The worker's umask may strip the saved mode when the file is created (recheck 2).
+    chmodSync(temporary, mode)
     renameSync(temporary, path)
   }
 }

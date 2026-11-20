@@ -1,5 +1,5 @@
 // MODULE: update-processes.test.mjs - Story 134.2 review F3: a stopped or finished update step leaves none of its processes running
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -44,11 +44,21 @@ describe('update step processes (review F3)', { timeout: 30_000 }, () => {
   it('keeps its bound when a helper that left the group holds the output open (recheck F3)', async () => {
     const started = Date.now()
     // The helper gets a session of its own, so it leaves the self-test's group, and keeps its stdout open for 20 s.
-    const helper = `require('node:child_process').spawn('sleep', ['20'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }).unref()`
-    const result = await runSelfTest(process.execPath, ['-e', helper], { env: process.env, timeoutMs: 500 })
-    expect(Date.now() - started).toBeLessThan(5_000)
-    expect(result.error?.message).toBe('timed out after 0.5 s')
-    spawnSync('pkill', ['-x', '-f', 'sleep 20'])
+    const helper = `const c = require('node:child_process').spawn('sleep', ['20'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] }); process.stderr.write('HELPER ' + c.pid + '\\n'); c.unref()`
+    const unrelated = spawn('sleep', ['20'], { stdio: 'ignore' })
+    let helperPid = null
+    try {
+      const result = await runSelfTest(process.execPath, ['-e', helper], { env: process.env, timeoutMs: 500 })
+      helperPid = Number(/HELPER (\d+)/u.exec(result.stderr)?.[1]) || null
+      expect(Date.now() - started).toBeLessThan(5_000)
+      expect(result.error?.message).toBe('timed out after 0.5 s')
+      expect(helperPid).not.toBeNull()
+    } finally {
+      // Only this test's own helper is stopped; any other process stays (recheck 2).
+      if (helperPid) { try { process.kill(helperPid, 'SIGKILL') } catch { /* gone */ } }
+      expect(alive(unrelated.pid)).toBe(true)
+      unrelated.kill('SIGKILL')
+    }
   })
 })
 
@@ -60,10 +70,11 @@ describe('the launch path a failed install restores (recheck F2)', () => {
       writeFileSync(entry, 'Exec=old launcher\n', { mode: 0o644 })
       writeFileSync(launcher, '#!/bin/sh\nold\n', { mode: 0o755 })
       const saved = saveFiles([entry, launcher, absent])
+      const mask = process.umask(0o077)
       writeFileSync(entry, 'Exec=incompatible\n')
       writeFileSync(launcher, 'broken')
       writeFileSync(absent, 'left by the installer')
-      restoreFiles(saved)
+      try { restoreFiles(saved) } finally { process.umask(mask) }
       expect(readFileSync(entry, 'utf8')).toBe('Exec=old launcher\n')
       expect(readFileSync(launcher, 'utf8')).toBe('#!/bin/sh\nold\n')
       expect(statSync(launcher).mode & 0o777).toBe(0o755)
