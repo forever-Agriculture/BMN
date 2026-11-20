@@ -6,6 +6,8 @@ import {
   ERROR_CODES,
   ROSTER_APP_NAMES,
   SESSION_MESSAGE_HANDOVER,
+  SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS,
+  SESSION_MESSAGE_MAX_WAITING,
   SESSION_MESSAGE_PAIR_HOURLY,
   SESSION_MESSAGE_WAITING_CHECK_MS,
   SESSION_MESSAGE_WORKSPACE_HOURLY,
@@ -339,8 +341,10 @@ export class SessionMessages {
    * the hourly limit's pauses; this asks, per message, whether the provider the hook resolved may see private
    * work in the root stored with that message, and for a handoff in the root of every attached file's folder too
    * (Story 75.5). A message refused for its provider stays waiting and the list says why for as long as this run
-   * lasts; a later one from another folder is not held up behind it. One message per event. Beside it goes the one line
-   * for the oldest message this session sent that expired and it was not told of (Story 110.2 AC3), once.
+   * lasts; a later one from another folder is not held up behind it. With `many` (Story 136.2 AC2) one call claims every
+   * message it may, oldest first, each with its own claim and provider answer, up to SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS
+   * (the first always), so one woken turn takes them all; without it, one, as a hook before 136.2 asks. Beside them goes
+   * the one line for the oldest message this session sent that expired and it was not told of (Story 110.2 AC3), once.
    */
   async take(p: {
     sessionId: string
@@ -348,7 +352,8 @@ export class SessionMessages {
     pid: number
     app: string
     destination: MessageDestination
-  }): Promise<{ message: SessionMessageTaken | null; expired?: string }> {
+    many?: boolean
+  }): Promise<{ message: SessionMessageTaken | null; messages?: SessionMessageTaken[]; expired?: string }> {
     if (SESSION_MESSAGE_HANDOVER[p.app] === undefined) return { message: null }
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
     this.destinations.set(p.sessionId, { incarnationId: p.incarnationId, destination: p.destination })
@@ -360,39 +365,49 @@ export class SessionMessages {
     const quoted = told === null ? null : (await this.providerRefusal({ attachments: [], senderRoot: told.senderRoot }, ask)) === null
     const expired = told === null ? {} : { expired: sessionMessageExpiredLine({ ...told, text: quoted ? told.text : null }) }
     const candidates = await database.companion('messageTakeCandidates', p.sessionId, this.iso())
+    const taken: SessionMessageTaken[] = []
+    let characters = 0
+    const answer = (): { message: SessionMessageTaken | null; messages?: SessionMessageTaken[]; expired?: string } =>
+      ({ message: taken[0] ?? null, ...(p.many === true ? { messages: taken } : {}), ...expired })
+    // A process this terminal no longer runs is handed nothing: what was claimed for it is given back, best effort, so
+    // the terminal's next process may have it; a claim not given back stays "taken, not confirmed", which the owner reads.
+    const gone = async (claims: ReadonlyArray<{ messageId: string; claimId: string }>): Promise<ReturnType<typeof answer>> => {
+      for (const claim of claims) await database.companion('releaseMessageClaim', claim).catch(() => undefined)
+      if (claims.length > 0) this.options.changed()
+      taken.length = 0
+      return answer()
+    }
     for (const candidate of candidates) {
+      // Oldest first and in order: a message past the batch's size waits, and nothing later goes ahead of it.
+      if (taken.length > 0 && (p.many !== true || taken.length >= SESSION_MESSAGE_MAX_WAITING ||
+        characters + candidate.characters > SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS)) break
       const refusal = await this.providerRefusal(candidate, ask)
       if (refusal !== null) {
         const detail = `Not handed over by the hook: ${stripFormatCharacters(refusal)}.`.slice(0, 400)
         if (this.hold(candidate.messageId, detail)) this.options.changed()
         continue
       }
-      // The answers above took time: a hook of a process this terminal no longer runs is handed nothing.
-      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null, ...expired }
+      // The answers above took time.
+      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return await gone(taken)
       const claimId = randomUUID()
       const claim = await database.companion('claimMessageForHook', {
         messageId: candidate.messageId, receiverSessionId: p.sessionId, incarnationId: p.incarnationId,
         pid: p.pid, app: p.app, claimId
       }, this.iso())
       // Lost to another claim, or a condition ended between the two reads: nothing more on this event.
-      if (!claim.claimed || claim.record === null) return { message: null, ...expired }
-      // The store answers later than it was asked. A claim that landed for a process the terminal stopped running
-      // meanwhile is never answered with the text; it is given back so the terminal's next process may have the
-      // message. Giving back is best effort: if it fails, the message stays "taken, not confirmed", which the
-      // owner reads and no route offers again.
-      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) {
-        await database.companion('releaseMessageClaim', { messageId: candidate.messageId, claimId }).catch(() => undefined)
-        this.options.changed()
-        return { message: null, ...expired }
-      }
+      if (!claim.claimed || claim.record === null) break
+      // The store answers later than it was asked: a claim that landed for a process the terminal stopped running
+      // meanwhile is never answered with the text.
+      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return await gone([...taken, { messageId: candidate.messageId, claimId }])
       this.held.delete(candidate.messageId)
       this.wakeNotes.delete(candidate.messageId)
       this.raiseDepth(p.sessionId, p.incarnationId, candidate.wakeDepth)
       this.options.changed()
       const stamp = sessionMessageStampAtDelivery(claim.record.stamp, claim.record.sentAt, this.options.now().getTime())
-      return { message: { messageId: claim.record.messageId, claimId, stamp, text: claim.record.text }, ...expired }
+      taken.push({ messageId: claim.record.messageId, claimId, stamp, text: claim.record.text })
+      characters += candidate.characters
     }
-    return { message: null, ...expired }
+    return answer()
   }
 
   /** One provider question per folder for one destination, answered at most once; an unreadable team refuses. */

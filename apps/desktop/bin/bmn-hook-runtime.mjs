@@ -103,7 +103,8 @@ function guardReport(agent, event, verdict) {
 }
 
 /**
- * Epic 66.4: hands the agent one message a peer session left for it. Only for the agent the owner typed into
+ * Epic 66.4: hands the agent the messages peer sessions left for it (one per event before Story 136.2; now every one
+ * BMN hands over at once, so a woken turn's one call takes them all). Only for the agent the owner typed into
  * the session (`agentPid` is its process), on an event of its main conversation, in an app whose answer after a
  * tool call was measured to reach the agent (docs/session-messages.md), and only when BMN said, in its answer
  * to this event's report, that something waits. The hook resolves where its agent sends work with the prompt
@@ -134,19 +135,27 @@ async function handMessage(agent, event, agentPid, procRoot, socketPath, token, 
     event: { cwd: event.cwd, session_id: event.session_id, transcript_path: event.transcript_path }
   }, left()).catch(() => null)
   if (destination === null || left() <= 0) return
-  const take = { method: 'message.take', params: { agent, pid: agentPid, destination } }
-  const report = (outcomes) => {
-    const result = outcomes[0]?.result
-    const message = result?.message
-    // Story 110.2: the one line about a message this session sent that expired, told once, with or without a message.
-    const expired = typeof result?.expired === 'string' && result.expired !== '' ? result.expired : null
-    const whole = isObject(message) && typeof message.stamp === 'string' && typeof message.text === 'string'
-    if (!whole && expired === null) return undefined
-    writeSync(1, contextAnswer(event, [...before, expired, whole ? `${message.stamp}\n${message.text}` : null]))
-    said.printed = true
-    return whole ? { method: 'message.report', params: { messageId: message.messageId, claimId: message.claimId, pid: agentPid } } : undefined
+  const take = { method: 'message.take', params: { agent, pid: agentPid, destination, many: true } }
+  // Each message BMN handed is printed once, all in the event's one answer, oldest first, and then reported one by one.
+  let printed = null
+  const reportAt = (index) => (outcomes) => {
+    if (printed === null) {
+      const result = outcomes[0]?.result
+      const handed = Array.isArray(result?.messages) ? result.messages : [result?.message]
+      const messages = handed.filter((message) => isObject(message) && typeof message.stamp === 'string' && typeof message.text === 'string' &&
+        typeof message.messageId === 'string' && typeof message.claimId === 'string')
+      // Story 110.2: the one line about a message this session sent that expired, told once, with or without a message.
+      const expired = typeof result?.expired === 'string' && result.expired !== '' ? result.expired : null
+      printed = messages
+      if (messages.length === 0 && expired === null) return undefined
+      writeSync(1, contextAnswer(event, [...before, expired, ...messages.map((message) => `${message.stamp}\n${message.text}`)]))
+      said.printed = true
+    }
+    const message = printed[index]
+    return message === undefined ? undefined : { method: 'message.report', params: { messageId: message.messageId, claimId: message.claimId, pid: agentPid } }
   }
-  await callEach(socketPath, token, [take, report], Math.max(1, left())).catch(() => undefined)
+  const reports = Array.from({ length: guard.MESSAGE_MAX_WAITING }, (_, index) => reportAt(index))
+  await callEach(socketPath, token, [take, ...reports], Math.max(1, left())).catch(() => undefined)
 }
 
 /**

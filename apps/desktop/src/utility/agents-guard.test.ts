@@ -7,8 +7,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { timedBesideControl } from './test-fixtures/load-clock'
-import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED, SESSION_MESSAGE_HANDOVER } from '@bmn/protocol'
-import { GUARD_APPS, GUARD_MEASURED, MESSAGE_HANDOVER, MESSAGE_LIMIT_MS, decide, decideWithin, guardStanding, guardState, messageDestination, messageDestinationWithin, messageStanding, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
+import { GUARD_MEASURED as PROTOCOL_GUARD_MEASURED, SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_MAX_WAITING } from '@bmn/protocol'
+import { GUARD_APPS, GUARD_MEASURED, MESSAGE_HANDOVER, MESSAGE_LIMIT_MS, MESSAGE_MAX_WAITING, decide, decideWithin, guardStanding, guardState, messageDestination, messageDestinationWithin, messageStanding, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
 import type { MessageDestination } from '@bmn/protocol'
 import { messageTeamAnswer } from '../main/agents-ipc'
 import { visibilityPath } from '../../bin/agents-check.mjs'
@@ -526,6 +526,8 @@ describe('where a receiving agent sends work, for a message (Epic 66.4)', () => 
     // The two apps docs/session-messages.md holds a PASS for, each on the event after a tool call.
     expect(MESSAGE_HANDOVER).toEqual({ claude: { event: 'PostToolUse', version: '2.1.318' }, codex: { event: 'PostToolUse', version: '0.166.0' } })
     expect(MESSAGE_LIMIT_MS).toBe(300)
+    // Story 136.2: the hook reports as many messages as one call may be handed.
+    expect(MESSAGE_MAX_WAITING).toBe(SESSION_MESSAGE_MAX_WAITING)
   })
 
   it('gives the whole destination the resolver found when the guard would let this event pass', () => {

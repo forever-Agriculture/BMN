@@ -188,6 +188,8 @@ interface TerminalNoticeProbe {
 interface HookProvenanceProbe {
   answeredByTypingResolvedBy: string | null
   answeredByTypingState: string
+  /** The waiting permission's state after one stray key (Story 136.2 AC1): still open. */
+  strayKeyState: string
   rows: string[]
   events: { event: string; effects: string[]; toolName: string | null }[]
   /** The other live session's own log, read with the same bridge call: each session sees only its own events. */
@@ -3933,17 +3935,22 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         const openRequestsBefore = (await window.aiTerminal.listAttention()).length;
         // The pane only answers for the owner once the window itself knows the request is open.
         await wait(() => pane.querySelector('.pane-heading .status-dot.needs-you'), 'the pane to need the owner');
-        // Typing into a pane that needs the owner answers its open requests, and records that it did.
         // xterm reads the legacy keyCode, so a synthetic event without one produces no key at all.
-        const typeOneKey = () => textarea.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'y', code: 'KeyY', keyCode: 89, which: 89, bubbles: true, cancelable: true
+        const typeKey = (key, code, keyCode) => textarea.dispatchEvent(new KeyboardEvent('keydown', {
+          key, code, keyCode, which: keyCode, bubbles: true, cancelable: true
         }));
-        typeOneKey();
+        const reopened = async () => (await window.aiTerminal.listAttention())
+          .find((request) => request.requestId === ${JSON.stringify(reopenedByHook.requestId)});
+        // Story 136.2 AC1: a stray key leaves the permission its agent waits on open, card and all.
+        typeKey('y', 'KeyY', 89);
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        const strayKeyState = (await reopened())?.state ?? 'missing';
+        // Enter answers it in the terminal, and records that it did.
+        typeKey('Enter', 'Enter', 13);
         const answeredByTyping = await wait(async () => {
-          const found = (await window.aiTerminal.listAttention())
-            .find((request) => request.requestId === ${JSON.stringify(reopenedByHook.requestId)});
+          const found = await reopened();
           if (found && found.state !== 'open') return found;
-          typeOneKey();
+          typeKey('Enter', 'Enter', 13);
           return undefined;
         }, 'the typed answer');
         const beforeList = hook.snapshot(sessionId).inputEvents;
@@ -3970,6 +3977,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         return {
           answeredByTypingResolvedBy: answeredByTyping.resolvedBy,
           answeredByTypingState: answeredByTyping.state,
+          strayKeyState,
           rows,
           events: events.map((event) => ({ event: event.event, effects: event.effects, toolName: event.toolName })),
           otherSessionEvents: (await window.aiTerminal.listHookEvents(otherSessionId))
@@ -4082,6 +4090,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       resolvedBy: resolvedByHook.resolvedBy,
       typedState: hookProvenance.answeredByTypingState,
       typedResolvedBy: hookProvenance.answeredByTypingResolvedBy,
+      strayKeyState: hookProvenance.strayKeyState,
       hookEvents: hookProvenance.events,
       listedRows: hookProvenance.rows,
       otherSessionEvents: hookProvenance.otherSessionEvents,
@@ -4100,8 +4109,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       requestProvenance.resolvedBy !== 'hook:claude:PostToolUse') {
       throw new Error(`the tool run did not record what resolved the request: ${JSON.stringify(requestProvenance)}`)
     }
+    if (requestProvenance.strayKeyState !== 'open') {
+      throw new Error(`a stray key closed the permission its agent still waits on: ${JSON.stringify(requestProvenance)}`)
+    }
     if (requestProvenance.typedState === 'open' || requestProvenance.typedResolvedBy !== 'input') {
-      throw new Error(`typing did not record that it answered: ${JSON.stringify(requestProvenance)}`)
+      throw new Error(`Enter did not record that it answered: ${JSON.stringify(requestProvenance)}`)
     }
     const listedEvents = requestProvenance.hookEvents.map((event) => event.event)
     if (JSON.stringify(listedEvents) !== JSON.stringify(['Notification', 'PostToolUse', 'Notification'])) {

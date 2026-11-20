@@ -512,6 +512,8 @@ export interface MessageTakeCandidate {
   wokenAt: string | null
   /** Story 75.5: a handoff's attached files, each of whose folders the provider must be allowed to see too. */
   attachments: HandoffAttachmentSource[]
+  /** Story 136.2: its stamp's and text's characters, which a batch of messages handed over at once counts. */
+  characters: number
 }
 
 /** Sessions with a waiting message no wake was typed for (Story 110.3). */
@@ -556,8 +558,9 @@ function messageTakeCandidates(
 ): MessageTakeCandidate[] {
   liftReceiverPauses(database, receiverSessionId, now)
   const rows = database.prepare(
-    `SELECT m.message_id, m.sender_root, m.wake_depth, m.woken_at FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.rowid`
-  ).all(now, receiverSessionId) as Array<{ message_id: string; sender_root: string; wake_depth: number | null; woken_at: string | null }>
+    `SELECT m.message_id, m.sender_root, m.wake_depth, m.woken_at, length(m.stamp) + length(m.text) AS characters
+     FROM ${HOOK_FROM} WHERE ${HOOK_ELIGIBLE} ORDER BY m.sent_at, m.rowid`
+  ).all(now, receiverSessionId) as Array<{ message_id: string; sender_root: string; wake_depth: number | null; woken_at: string | null; characters: number }>
   const attached = database.prepare(
     `SELECT e.value AS artifact_id, a.original_name, a.source_path
      FROM input_draft d, json_each(d.artifact_ids_json) e LEFT JOIN artifact a ON a.artifact_id = e.value
@@ -568,6 +571,7 @@ function messageTakeCandidates(
     senderRoot: row.sender_root,
     wakeDepth: row.wake_depth,
     wokenAt: row.woken_at,
+    characters: row.characters,
     attachments: (attached.all(`${HANDOFF_MESSAGE_KEY}${row.message_id}`) as Array<{
       artifact_id: string; original_name: string | null; source_path: string | null
     }>).map((file) => ({ artifactId: file.artifact_id, name: file.original_name ?? file.artifact_id, sourcePath: file.source_path }))

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ERROR_CODES,
+  SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS,
   SESSION_MESSAGE_NOT_A_PEER,
   SESSION_MESSAGE_WAITING_CHECK_MS,
   SESSION_MESSAGES_OFF,
@@ -1116,6 +1117,85 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect(await ask({ incarnationId: 'run-earlier' })).toBe(false)
     expect(await ask({ incarnationId: null })).toBe(false)
     expect(await ask({ sessionId: 'a', incarnationId: 'run-a' })).toBe(false)
+  })
+})
+
+describe('one woken call takes every waiting message (136.2 AC2, Epic 111 F21)', () => {
+  const takeAll = (sessionId: string, overrides: { incarnationId?: string } = {}) => messages.take({
+    sessionId, incarnationId: overrides.incarnationId ?? live.get(sessionId)!, pid: 4242, app: 'codex', destination: OPENAI, many: true
+  })
+
+  it('hands over every waiting message in one call, oldest first, each with its own claim and report', async () => {
+    const sent = [await tell('a', 'b', 'first'), await tell('c', 'b', 'second')]
+    clock += 31 * SECOND
+    sent.push(await tell('a', 'b', 'third'))
+
+    const taken = await takeAll('b')
+
+    expect(taken.messages!.map((message) => message.messageId)).toEqual(sent.map((message) => message.messageId))
+    expect(taken.messages!.map((message) => message.text)).toEqual(['first', 'second', 'third'])
+    expect(new Set(taken.messages!.map((message) => message.claimId)).size).toBe(3)
+    // The first is also where a hook from before 136.2 reads it.
+    expect(taken.message).toEqual(taken.messages![0])
+    for (const message of taken.messages!) {
+      expect(stored(message.messageId)).toMatchObject({ state: 'taken', claimedApp: 'codex' })
+      expect(await messages.report({ sessionId: 'b', incarnationId: 'run-b', pid: 4242, messageId: message.messageId, claimId: message.claimId }))
+        .toEqual({ recorded: true })
+    }
+    expect((await messages.status('a', null)).messages.map((message) => message.state)).toEqual(['printed for the agent', 'printed for the agent'])
+    expect(await takeAll('b')).toEqual({ message: null, messages: [] })
+  })
+
+  it('still hands one per call to a hook that does not ask for many', async () => {
+    const first = await tell('a', 'b')
+    await tell('c', 'b')
+    const taken = await take('b')
+    expect(taken.message!.messageId).toBe(first.messageId)
+    expect(taken).not.toHaveProperty('messages')
+  })
+
+  it('keeps one held for its provider waiting without holding up the rest, in order', async () => {
+    const second = repository(join(root, 'code/second'))
+    allowed = (_destination, senderRoot) => senderRoot === repo
+      ? { allowed: false, reason: 'Moonshot AI gets public work only' }
+      : { allowed: true, reason: 'Moonshot AI is allowed in this workspace' }
+    const free = await tell('c', 'b', 'from a folder it may see', second)
+    const held = await tell('a', 'b', 'from a folder this provider may not see')
+    clock += 31 * SECOND
+    const later = await tell('c', 'b', 'a later one it may see', second)
+
+    expect((await takeAll('b')).messages!.map((message) => message.messageId)).toEqual([free.messageId, later.messageId])
+    expect(stored(held.messageId).state).toBe('waiting')
+    expect((await shown(held.messageId))!.detail).toBe('Not handed over by the hook: Moonshot AI gets public work only.')
+  })
+
+  it('stops at the handover size, the first always going, and the rest follow at the next call in order', async () => {
+    const long = (word: string): string => `${word} `.repeat(2000).slice(0, 2000)
+    const sent = [await tell('a', 'b', long('one')), await tell('c', 'b', long('two'))]
+    clock += 31 * SECOND
+    sent.push(await tell('a', 'b', long('three')))
+    const size = (messageId: string): number => stored(messageId).stamp.length + stored(messageId).text.length
+    expect(size(sent[0]!.messageId) + size(sent[1]!.messageId) + size(sent[2]!.messageId)).toBeGreaterThan(SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS)
+
+    const first = (await takeAll('b')).messages!.map((message) => message.messageId)
+    const second = (await takeAll('b')).messages!.map((message) => message.messageId)
+
+    expect(first).toEqual(sent.slice(0, 2).map((message) => message.messageId))
+    expect(second).toEqual([sent[2]!.messageId])
+  })
+
+  it('hands nothing, and gives every claim back, when the terminal is given another process partway through a batch', async () => {
+    const second = repository(join(root, 'code/second'))
+    const sent = [await tell('a', 'b', 'from this folder'), await tell('c', 'b', 'from the second folder', second)]
+    // The provider's answer for the second folder comes after the first message was claimed; meanwhile the terminal moved on.
+    allowed = (_destination, senderRoot) => {
+      if (senderRoot === second) live.set('b', 'run-b-next')
+      return { allowed: true, reason: 'OpenAI is allowed in this workspace' }
+    }
+
+    expect(await takeAll('b', { incarnationId: 'run-b' })).toEqual({ message: null, messages: [] })
+    for (const message of sent) expect(stored(message.messageId)).toMatchObject({ state: 'waiting', claimedApp: null })
+    expect((await takeAll('b')).messages!.map((message) => message.messageId)).toEqual(sent.map((message) => message.messageId))
   })
 })
 

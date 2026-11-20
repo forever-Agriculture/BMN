@@ -1694,8 +1694,8 @@ function App(): React.JSX.Element {
     void window.aiTerminal.putSettings('appearance', appearance).then(setSettings).catch(fail(failure))
   }
 
-  const answerByTyping = (sessionId: string): void => {
-    for (const request of requestsAnsweredByTyping(attention, sessionId)) {
+  const answerByTyping = (sessionId: string, enter: boolean): void => {
+    for (const request of requestsAnsweredByTyping(attention, sessionId, enter)) {
       if (answering.current.has(request.requestId)) continue
       answering.current.add(request.requestId)
       // The agent's own hook may close the request first, which leaves nothing to do.
@@ -2409,7 +2409,7 @@ function App(): React.JSX.Element {
                 ports={portsFor(ports, terminalStartup.sessionId)}
                 onOpenPort={(port) => openPort(terminalStartup.sessionId, port)}
                 onTitle={(title) => noteTitle(terminalStartup.sessionId, title)}
-                onAnswer={() => answerByTyping(terminalStartup.sessionId)}
+                onAnswer={(enter) => answerByTyping(terminalStartup.sessionId, enter)}
                 armed={armed}
                 progress={progressPresentation(progress, terminalStartup.sessionId, now, terminalStartup.incarnationId)}
                 turns={turnRecording.find((view) => view.sessionId === terminalStartup.sessionId) ?? null}

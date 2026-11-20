@@ -573,8 +573,19 @@ describe('session presentation', () => {
       request('other', 's2', '2026-09-14T11:00:00.000Z'),
       request('closed', 's1', '2026-09-14T11:00:00.000Z', 'answered')
     ]
-    expect(requestsAnsweredByTyping(records, 's1').map((record) => record.requestId)).toEqual(['question', 'turn'])
-    expect(requestsAnsweredByTyping(records, 's3')).toEqual([])
+    expect(requestsAnsweredByTyping(records, 's1', true).map((record) => record.requestId)).toEqual(['question', 'turn'])
+    expect(requestsAnsweredByTyping(records, 's3', true)).toEqual([])
+  })
+
+  it('keeps a question or permission the agent waits on open on a key other than Enter, and closes it on Enter (136.2 AC1)', () => {
+    // Epic 111 F16: an `x` and Backspace at Claude Code's question closed its card while the agent still waited.
+    const records = [
+      request('question', 's1', '2026-09-14T11:10:00.000Z'),
+      { ...request('permission', 's1', '2026-09-14T11:05:00.000Z'), kind: 'permission' as const, openedBy: 'hook:claude:PermissionRequest' as const },
+      { ...request('turn', 's1', '2026-09-14T11:20:00.000Z'), kind: 'notice' as const }
+    ]
+    expect(requestsAnsweredByTyping(records, 's1', false).map((record) => record.requestId)).toEqual(['turn'])
+    expect(requestsAnsweredByTyping(records, 's1', true).map((record) => record.requestId)).toEqual(['permission', 'question', 'turn'])
   })
 
   it('keeps an agent\'s bmn ask card open when the owner types into its session', () => {
@@ -586,7 +597,7 @@ describe('session presentation', () => {
       { ...request('ask-notice', 's1', '2026-09-14T11:10:00.000Z'), kind: 'notice' as const, openedBy: 'cli' as const },
       { ...request('native', 's1', '2026-09-14T11:00:00.000Z'), openedBy: 'hook:claude:PermissionRequest' as const }
     ]
-    expect(requestsAnsweredByTyping(records, 's1').map((record) => record.requestId)).toEqual(['native'])
+    expect(requestsAnsweredByTyping(records, 's1', true).map((record) => record.requestId)).toEqual(['native'])
   })
 
   it('clears only notice reminders on explicit navigation (59.1)', () => {
@@ -674,7 +685,7 @@ describe('a handoff request stored before Story 75.5', () => {
   it('waits for Dismiss, not for typing, and keeps its provenance', () => {
     expect(openAttentionGroups([petition]).responses).toEqual([petition])
     expect(attentionActionWhenOpened(petition)).toBeNull()
-    expect(requestsAnsweredByTyping([petition], 'source')).toEqual([])
+    expect(requestsAnsweredByTyping([petition], 'source', true)).toEqual([])
     expect(attentionProvenance(petition)).toBe('from bmn handoff')
   })
 

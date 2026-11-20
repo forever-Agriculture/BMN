@@ -177,6 +177,8 @@ export interface ControlHandlers {
     pid: number
     app: string
     destination: { provider: string; host: string; basis: string; default: boolean }
+    /** Story 136.2: the hook prints every message it is handed; without it, one at most, as before. */
+    many?: boolean
   }): Promise<unknown>
   /** The hook's word that it printed what it took. */
   reportMessage(p: { sessionId: string; incarnationId: string; pid: number; messageId: string; claimId: string }): Promise<unknown>
@@ -1269,12 +1271,13 @@ export class ControlServer {
       }
       case 'message.take': {
         // Read-and-consume only, for the session's own hook: nothing here can write to a terminal or name another session.
-        const params = closedParams(rawParams, ['agent', 'pid', 'destination'])
+        const params = closedParams(rawParams, ['agent', 'pid', 'destination', 'many'])
         if (scope.kind !== 'session') throw unauthorized('Only a session may collect its own messages')
         const app = requireEnum(params, 'agent', Object.keys(SESSION_MESSAGE_HANDOVER))
         const pid = requirePid(params)
         return handlers.takeMessage({
-          sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid, app, destination: messageDestination(params)
+          sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid, app, destination: messageDestination(params),
+          many: readBoolean(params, 'many') === true
         })
       }
       case 'message.destination': {

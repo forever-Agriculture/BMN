@@ -767,8 +767,14 @@ describe('messages between sessions over the socket (Epic 66)', () => {
     expect((await agent.request('message.take', take)).result).toEqual({ message: null })
 
     expect(fixture.handlers.takeMessage).toHaveBeenLastCalledWith({
-      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination
+      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination, many: false
     })
+    // Story 136.2: a hook that prints every message it is handed says so; anything but a boolean is refused.
+    await agent.request('message.take', { ...take, many: true })
+    expect(fixture.handlers.takeMessage).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination, many: true
+    })
+    expectError(await agent.request('message.take', { ...take, many: 'yes' }), ERROR_CODES.invalidArgument)
   })
 
   it.each([

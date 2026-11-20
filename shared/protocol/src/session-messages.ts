@@ -13,6 +13,12 @@ export const SESSION_HANDOFF_EXPIRY_MS = 2 * 60 * 60 * 1000
 export const SESSION_MESSAGE_SEND_GAP_MS = 30_000
 /** How many messages may wait for one receiver at once. */
 export const SESSION_MESSAGE_MAX_WAITING = 5
+/**
+ * Story 136.2 AC2: one hook call hands over every waiting message it may, oldest first, while their stamps and texts
+ * together stay within this many characters; the first always goes, and the rest wait for the next call in order.
+ * It keeps what one event adds to the agent's context bounded: at most three full messages with their stamps.
+ */
+export const SESSION_MESSAGE_HANDOVER_MAX_CHARACTERS = 6000
 /** How many of a workspace's latest messages the owner's list shows. */
 export const SESSION_MESSAGE_LIST_LIMIT = 200
 /** The window the two hourly limits count in, from the stored messages' times. */

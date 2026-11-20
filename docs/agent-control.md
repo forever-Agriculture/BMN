@@ -390,8 +390,9 @@ that has not yet been given a prompt is one BMN has not heard from (measured 202
 text is 1 to 2,000 characters after invisible and direction-changing characters are removed, with
 newline and tab as the only control characters. `--key` makes a retry safe: the same key with the
 same message returns the first result. Several messages may wait from one sender to one receiver
-(Story 110.2): up to the receiver's 5 waiting, 30 seconds apart and inside the hourly limits, and
-each event hands over one, oldest first. A receiver's full queue refuses the send, naming who may
+(Story 110.2): up to the receiver's 5 waiting, 30 seconds apart and inside the hourly limits. Each
+event hands over every one that may go, oldest first (Story 136.2), while their stamps and texts stay
+within 6,000 characters together (the first always goes); the rest follow at the next event. A receiver's full queue refuses the send, naming who may
 free it: the sender itself and other senders in its workspace; when only senders it may not see wait
 (another workspace's handoffs), it says to try again later. `bmn tell cancel <id>` withdraws the
 sender's own message while it waits: a claim already made stays as it is, and an expired message or
@@ -481,7 +482,9 @@ its stamp, the sender's folder and where it stands. It has no Paste, Pause or Re
 After the hook took a message it reads *taken, not confirmed* until the hook reports that it
 printed it, then *printed for the agent*. Printed means printed, never read. A lost answer or
 report leaves it *taken, not confirmed*, and the hook does not offer it again by itself; you still
-read it in Messages. One message is handed over per event, and everything the hook adds to an event for a
+read it in Messages. Every waiting message that may go is handed over in one event (Story 136.2: one woken
+call takes them all; before, one per event), each with its own claim, provider answer and report, and
+everything the hook adds to an event for a
 message is bounded to 300 ms, counted from the moment the hook reports the event: BMN's word that
 a message waits (150 ms at most; no word in time means nothing on this event), resolving where the
 agent sends work, taking and reporting. A resting agent reads a message at the first tool call of its next
@@ -3397,7 +3400,9 @@ native sub-agent calls.
 - A message is never written to a terminal, and never opens
   a request. `message.status` shows a sender its own messages only. `message.take` is accepted only
   from a session token, for its own live process, with the agent's process id and the whole
-  destination its hook resolved; it claims at most one message per call, for that session only,
+  destination its hook resolved; it claims at most one message per call, for that session only, unless
+  the hook says `many: true` (Story 136.2), which claims each message that may go, oldest first, up
+  to 5 and 6,000 characters together, each with its own claim id,
   and BMN decides from the approved team whether the stated destination may see the sender's
   folder. The process that holds the database reads nothing of the team for this: it asks the
   app's own process, which answers yes or no with a reason, and neither the team nor that reason

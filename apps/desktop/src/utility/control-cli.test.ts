@@ -1604,10 +1604,29 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     })
     // One take, with the whole destination the guard's resolver found and the agent's own process.
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
-    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'codex', destination: OPENAI })
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'codex', destination: OPENAI, many: true })
     expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, messageId: 'message-1', claimId: 'claim-1' })
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('prints every message one call is handed in that one answer, oldest first, and reports each (136.2 AC2)', async () => {
+    const fixture = await cliFixture()
+    const session = await codexSession(fixture.root)
+    const second = { messageId: 'message-2', claimId: 'claim-2', stamp: '[BMN: from Synthetic B]', text: 'second note' }
+    fixture.handlers.observeHookEvent.mockResolvedValue({ recorded: true, messageWaiting: true })
+    // A malformed entry is never printed or reported.
+    fixture.handlers.takeMessage.mockResolvedValue({ message: MESSAGE, messages: [MESSAGE, { messageId: 'message-x' }, second] })
+
+    const result = await runCli(['hook', 'codex'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: afterTool(session) })
+
+    expect(result).toEqual({
+      code: 0, stderr: '',
+      stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${STAMP}\nhold any commit on local main\nI am about to merge\n\n[BMN: from Synthetic B]\nsecond note` } })
+    })
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.reportMessage.mock.calls.map(([call]) => call.messageId)).toEqual(['message-1', 'message-2'])
+    expect(fixture.handlers.reportMessage).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, messageId: 'message-2', claimId: 'claim-2' })
   })
 
   /** A Claude Code agent the owner typed into the session; its events name the conversation and the record Claude Code keeps of it. */
@@ -1632,7 +1651,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${STAMP}\nhold any commit on local main\nI am about to merge` } })
     })
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
-    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'claude', destination: ANTHROPIC })
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'claude', destination: ANTHROPIC, many: true })
     expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, messageId: 'message-1', claimId: 'claim-1' })
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)

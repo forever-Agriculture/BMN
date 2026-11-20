@@ -110,8 +110,8 @@ export function SessionTerminal(props: {
   /** The ports this session's programs listen on, from the last scan (Story 41.2). */
   ports: SessionPorts | null
   onOpenPort(port: ListeningPort): void
-  /** The owner typed, pasted or dictated into the pane while it needs them. */
-  onAnswer(): void
+  /** The owner typed, pasted or dictated into the pane while it needs them; `enter` when the key was Enter. */
+  onAnswer(enter: boolean): void
   armed: boolean
   progress: ProgressPresentation | null
   /** Epic 69: where recording of turn changes stands for this session, with its latest kept turn; null when it has neither. */
@@ -301,10 +301,11 @@ export function SessionTerminal(props: {
       if (!focusReports.isFocusReport(data)) send(data)
     })
     // onKey fires only for the owner's own keys, not for the replies xterm sends to terminal queries.
-    const answered = (): void => {
-      if (needsYou.current) onAnswer.current()
+    // A question or permission the agent waits on is answered by Enter, never by a stray key (Story 136.2 AC1).
+    const answered = (enter: boolean): void => {
+      if (needsYou.current) onAnswer.current(enter)
     }
-    const keys = terminal.onKey(answered)
+    const keys = terminal.onKey(({ domEvent }) => answered(domEvent.key === 'Enter'))
     // A title is read and shown, never obeyed: it cannot make a session working, and it opens nothing.
     const titles = terminal.onTitleChange((title) => onTitle.current(capTitle(title)))
     /**
@@ -436,12 +437,12 @@ export function SessionTerminal(props: {
       selection: () => copyableText(terminal.getSelection()),
       paste: (text) => {
         terminal.paste(text)
-        answered()
+        answered(/[\r\n]/u.test(text))
         terminal.focus()
       },
       type: (text) => {
         terminal.input(text, true)
-        answered()
+        answered(/[\r\n]/u.test(text))
       },
       selectAll: () => terminal.selectAll(),
       openSearch: () => {

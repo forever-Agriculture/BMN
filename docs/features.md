@@ -287,7 +287,9 @@ keeps.
 or *notice*; a *handoff* request stored before Story 75.5 still shows, with **Dismiss** only. Each row says what opened it and what closed it — "from Claude Notification",
 "withdrawn by Claude Stop", "resolved by typing", "expired". Going to a session clears its notices, retaining their details in that session’s request card until you navigate elsewhere.
 Blocking requests stay open until answered, explicitly dismissed, withdrawn by the agent or expired. Typing, pasting or dictating into a session also resolves
-its open prompts and notices, the way answering in the terminal does. Typing does not close review
+its open notices, the way answering in the terminal does. A question or permission its agent waits on
+closes on Enter or on the agent's own answer, never on another key, so a stray key leaves its card open
+(Story 136.2). Typing does not close review
 requests. Click the session’s status word to open its request card, including for stopped or archived sessions.
 **Dismiss** clears the card. **Mark answered** is available on requests you handle in the terminal.
 

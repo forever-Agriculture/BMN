@@ -302,6 +302,9 @@ export const MESSAGE_HANDOVER = {
 /** How long everything a hook adds to an event for a message may take, resolving the destination included. */
 export const MESSAGE_LIMIT_MS = 300
 
+/** The most messages one hook call is handed and reports (Story 136.2): `SESSION_MESSAGE_MAX_WAITING`; a test holds the two together. */
+export const MESSAGE_MAX_WAITING = 5
+
 /**
  * How long a session start or compaction may wait for its brain slice (Epic 127.2), counted from when the hook asks for it.
  * Its own clock: measured live on 2026-11-19, the start brief's round trip alone used up the 300 ms message limit while

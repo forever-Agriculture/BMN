@@ -41,6 +41,7 @@ export declare function guardStanding(agent: string): string
 export interface MessageDestination { provider: string; host: string; basis: string; default: boolean }
 export declare const MESSAGE_HANDOVER: Record<string, { event: string; version: string } | undefined>
 export declare const MESSAGE_LIMIT_MS: number
+export declare const MESSAGE_MAX_WAITING: number
 export declare function messageDestination(input: GuardInput): MessageDestination | null
 export declare function messageDestinationWithin(input: GuardInput, limitMs?: number, seams?: { startThread?: (data: { bmnMessageDestination: GuardInput }) => { once(event: string, listener: (...values: unknown[]) => void): unknown; terminate(): unknown } }): Promise<MessageDestination | null>
 export declare function messageStanding(agent: string): string
