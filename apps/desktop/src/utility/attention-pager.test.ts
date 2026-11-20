@@ -68,6 +68,22 @@ function pagerFixture(holdQuiet?: (record: AttentionRecord) => Promise<boolean>,
 }
 
 describe('attention pager', () => {
+  it('never pages a request OpenCode opened before its retirement, while a Claude question beside it pages (Epic 123, recheck A7)', async () => {
+    const f = pagerFixture()
+    const prompt = { type: 'questions', harness: 'opencode', shape: 'choice', requestRef: 'que_1', toolUseId: null,
+      questions: [{ id: null, header: null, text: 'Which auth method?', multiSelect: false, options: [{ label: 'JWT', description: null }] }] } as unknown as AttentionRecord['prompt']
+    const retired = [
+      record({ requestId: 'oc-question', kind: 'question', incarnationId: 'inc-1', requestKey: 'opencode:question', prompt }),
+      record({ requestId: 'oc-plain', kind: 'permission', openedBy: 'hook:opencode:permission.asked' })
+    ]
+    const claude = record({ requestId: 'claude', kind: 'question' })
+    for (const row of [...retired, claude]) { f.stored.set(row.requestId, row); f.pager.opened(row) }
+    await f.elapse()
+    f.pager.retryUnsent(); await f.settle()
+    f.presence.now += 60 * 60_000; f.pager.ownerLeft(); await f.settle()
+    expect(f.sent.map((row) => row.requestId)).toEqual(['claude'])
+  })
+
   it.each([true, false])('navigation-withdrawn notices never page, while selected questions still page (away=%s)', async initiallyAway => {
     const f = pagerFixture()
     f.presence.away = initiallyAway

@@ -6,6 +6,7 @@ import {
   PROGRESS_STALE_AFTER_MS,
   progressShowsStopped,
   RETIRED_APP_LABELS,
+  retiredAppCommand,
   RETIRED_APP_NAMES,
   USAGE_NOTICE_PERCENT,
   usageClock,
@@ -95,6 +96,9 @@ const AGENT_TAGS: Readonly<Record<string, string>> = Object.freeze({
 
 /** A shell started as `bash -ic 'claude; exec bash -i'` is tagged by the agent it runs. */
 export function agentTag(executable: string, argv: readonly string[] = []): string {
+  // A saved command that starts a retired app is named by the same rule that refuses to start it again (123.1 AC3).
+  const retired = retiredAppCommand(executable, argv)
+  if (retired !== null) return RETIRED_APP_LABELS[retired]
   const base = executable.split('/').pop() ?? executable
   const tag = AGENT_TAGS[base] ?? base
   if (tag !== 'Shell' || !/^-[a-z]*c$/.test(argv[0] ?? '')) return tag

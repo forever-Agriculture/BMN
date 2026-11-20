@@ -98,9 +98,17 @@ export interface AttentionRecord {
   qaGrantId?: string
 }
 
+/**
+ * A request OpenCode opened before it was retired (Epic 123): its stored prompt names OpenCode, or an OpenCode hook
+ * opened it. It is shown with its words and its retired label; nothing answers it, types into its session or pages it.
+ */
+export function retiredAttention(record: Pick<AttentionRecord, 'prompt' | 'openedBy'>): boolean {
+  return record.prompt?.harness === 'opencode' || (record.openedBy ?? '').startsWith('hook:opencode:')
+}
+
 /** Decisions that are offered on both surfaces, even after the desktop opens the card. */
 export function hasAttentionChoices(record: AttentionRecord): boolean {
-  return !record.qaGrantId && (Boolean(record.manualChoices) || record.prompt?.type === 'questions')
+  return !record.qaGrantId && !retiredAttention(record) && (Boolean(record.manualChoices) || record.prompt?.type === 'questions')
 }
 
 export type QuestionChoice = number | { set: number[]; typed?: string } | { typed: string }

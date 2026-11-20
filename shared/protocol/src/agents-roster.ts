@@ -48,19 +48,99 @@ export function retiredAppProgram(program: string): RosterRetiredHarness | null 
   return Object.hasOwn(RETIRED_APP_PROGRAMS, name) ? RETIRED_APP_PROGRAMS[name]! : null
 }
 
-/** The shells an old picker wrapped an app in (`bash -ic 'opencode; exec bash -i'`). */
+/** The shells a saved command may wrap an app in (the old picker saved `bash -ic 'opencode; exec bash -i'`). */
 const COMMAND_SHELLS: ReadonlySet<string> = new Set(['sh', 'bash', 'dash', 'zsh', 'fish'])
+/**
+ * The retired apps whose saved launch is never started again (123.1 AC3). A saved Cursor launch still runs as any other
+ * program, as Epic 71 left it.
+ */
+const NEVER_RESTARTED: ReadonlySet<RosterRetiredHarness> = new Set(['opencode'])
+/** Words that run the command after them; a variable assignment before a command is skipped the same way. */
+const COMMAND_PREFIXES: ReadonlySet<string> = new Set(['exec', 'command', 'nohup', 'env', 'time', 'then', 'do', 'else', '{', '!'])
+
+/** The text a shell runs with `-c`, from combined (`-ic`) or split (`-i -c`) flags; null when it runs none. */
+function shellScript(argv: readonly string[]): string | null {
+  let runs = false
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index]!
+    if (arg === '--') return runs ? argv[index + 1] ?? null : null
+    if (/^[-+][A-Za-z]+$/.test(arg)) {
+      if (arg.startsWith('-') && arg.includes('c')) runs = true
+      // `-o name` and `+o name` take the next word as the option's name.
+      if (arg.endsWith('o')) index++
+      continue
+    }
+    if (arg.startsWith('--')) continue
+    return runs ? arg : null
+  }
+  return null
+}
 
 /**
- * The retired app a saved command starts, or null: its program, or a shell's `-c` command whose first word is one
- * (123.1 AC3). Such a command is shown, never run again.
+ * The literal words in command position in a shell's command text: the first word of each simple command, after
+ * `;`, `&`, `|`, `&&`, `||`, a parenthesis or a newline, with quotes removed. A word with an expansion is not literal.
+ */
+function commandWords(script: string): string[] {
+  const words: string[] = []
+  let word = '', quoted = false, literal = true, started = false, atCommand = true
+  const end = (): void => {
+    if (!started) return
+    if (atCommand) {
+      if (literal && !quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) { /* an assignment: the command follows */ }
+      else if (literal && COMMAND_PREFIXES.has(word) && !quoted) { /* runs the next word */ }
+      else {
+        if (literal) words.push(word)
+        atCommand = false
+      }
+    }
+    word = ''; quoted = false; literal = true; started = false
+  }
+  for (let index = 0; index < script.length; index++) {
+    const char = script[index]!
+    if (char === "'") {
+      const close = script.indexOf("'", index + 1)
+      const stop = close === -1 ? script.length : close
+      word += script.slice(index + 1, stop); quoted = true; started = true; index = stop
+    } else if (char === '"') {
+      let inner = index + 1
+      while (inner < script.length && script[inner] !== '"') {
+        if (script[inner] === '\\' && inner + 1 < script.length) { word += script[inner + 1]; inner += 2; continue }
+        if (script[inner] === '$' || script[inner] === '`') literal = false
+        word += script[inner]; inner++
+      }
+      quoted = true; started = true; index = inner
+    } else if (char === '\\') {
+      if (index + 1 < script.length && script[index + 1] !== '\n') word += script[index + 1]
+      started = true; index++
+    } else if (char === ' ' || char === '\t') {
+      end()
+    } else if (char === ';' || char === '&' || char === '|' || char === '(' || char === ')' || char === '\n') {
+      end(); atCommand = true
+    } else {
+      if (char === '$' || char === '`') literal = false
+      word += char; started = true
+    }
+  }
+  end()
+  return words
+}
+
+/**
+ * The retired app a saved command starts, or null: its program, or a program in command position in a shell's `-c`
+ * text (123.1 AC3). Such a command is shown, never run again. A plain shell is a plain shell, whatever was typed into it.
  */
 export function retiredAppCommand(executable: string, argv: readonly string[]): RosterRetiredHarness | null {
-  const direct = retiredAppProgram(executable)
+  const never = (app: RosterRetiredHarness | null): RosterRetiredHarness | null => app !== null && NEVER_RESTARTED.has(app) ? app : null
+  const direct = never(retiredAppProgram(executable))
   if (direct !== null) return direct
-  if (!COMMAND_SHELLS.has(executable.slice(executable.lastIndexOf('/') + 1)) || !/^-[a-z]*c$/.test(argv[0] ?? '')) return null
-  const first = /^\s*([^\s;&|]+)/.exec(argv[1] ?? '')?.[1]
-  return first === undefined ? null : retiredAppProgram(first)
+  if (!COMMAND_SHELLS.has(executable.slice(executable.lastIndexOf('/') + 1))) return null
+  const script = shellScript(argv)
+  if (script === null) return null
+  for (const word of commandWords(script)) {
+    const app = never(retiredAppProgram(word))
+    if (app !== null) return app
+  }
+  return null
 }
 
 export const ROSTER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const

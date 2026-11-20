@@ -43,6 +43,27 @@ const MODELS: ResearchModelView[] = [
 ]
 
 describe('the Models page lists (60.10 AC4, first release)', () => {
+  it('lists no teammate on a retired app, its model or its price before he approves the removal (Epic 123, 123.2 AC1)', () => {
+    // A synthetic approved team that still names Luna (Go) on OpenCode Go, and saved research that priced its model.
+    const data = {
+      ...DATA,
+      providers: [...DATA.providers, { id: 'opencode-go', name: 'OpenCode Go', hosts: ['opencode.ai'], private_work: 'allowed' }],
+      agents: [...DATA.agents, agent('luna-go', { name: 'Luna (Go)', harness: 'opencode', provider: 'opencode-go', model: 'go-model-a', price: { input: 9, output: 9 } })],
+      harness_routes: [...DATA.harness_routes, { harness: 'opencode', provider: 'opencode-go', basis: 'inspected' }]
+    } as unknown as RosterDataShape
+    const models = [...MODELS, found('go-model-a', 'opencode-go', { price: price(1, 2) }), found('go-model-b', 'opencode-go', { fresh: true, price: price(1, 2) })]
+    const groups = researchGroups(models, data)
+    const shown = [...groups.team.map((row) => row.model), ...groups.fresh.map((model) => model.id), ...groups.earlier.map((model) => model.id)]
+    expect(shown).not.toContain('go-model-a')
+    expect(shown).not.toContain('go-model-b')
+    expect(groups.team.flatMap((row) => [...row.agents, row.provider])).not.toContain('Luna (Go)')
+    expect(groups.team.map((row) => row.provider)).not.toContain('OpenCode Go')
+    expect(priceChanges(models, data).map((change) => change.agent)).not.toContain('luna-go')
+    // The supported rows stay as they were.
+    expect(groups).toEqual(researchGroups(MODELS, DATA))
+    expect(priceChanges(models, data)).toEqual(priceChanges(MODELS, DATA))
+  })
+
   it('groups what research found against the team as drafted', () => {
     const groups = researchGroups(MODELS, DATA)
     expect(groups.fresh.map((model) => model.id)).toEqual(['claude-opus-5-6', 'gpt-6.1-astra'])

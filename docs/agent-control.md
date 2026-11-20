@@ -681,17 +681,22 @@ recorded payloads) is kept at the local git tag `opencode-support-final`; nothin
   OpenCode takes no work: `bmn roster check` refuses it with `APP_RETIRED`, `bmn team ask` refuses it
   with "<id> runs in" and the retirement line (a role's next candidate answers in its place), and a
   dispatch of `opencode` is refused with the retirement line. The one proposals card on Agents ›
-  Team names removing those lines; nothing changes until you approve it.
+  Team names removing those lines; nothing changes until you approve it. Until then Models lists
+  no agent on OpenCode, no model only it reaches and no price for it.
 - The judge stays. Jev is called by BMN itself through OpenCode Zen ([the judge](#the-judge)); its
   key is read through `opencode auth export` at each call by the judge's own module and kept nowhere.
   Without that sign-in `bmn judge ask` answers `NO_KEY`. The `opencode` program and its sign-in are
   yours and stay.
 - Old records load as they were saved and are read only, named "OpenCode (retired)": a conversation
   bound before is never resumed or looked for; a session saved to run OpenCode is never started
-  again (Start again is off, and the update's resume offer leaves it out); saved hook log rows read
-  as they did; a saved question or permission from OpenCode shows its words and command with no
-  answer; an old team ask shows what its OpenCode form could read; its Telegram card and turn
-  changes name it so. An OpenCode researcher is refused before anything is made or run. BMN's last
+  again (Start again is off, and the update's resume offer leaves it out). That is a saved command
+  whose program is `opencode`, or a shell's `-c` text that runs it as a command (`bash -ic 'opencode;
+  exec bash -i'`, `bash -i -c opencode`, `bash -c 'cd app && opencode'`, a quoted name); a plain
+  shell stays a shell whatever was typed into it, and a saved Cursor command still runs as Epic 71
+  left it. Saved hook log rows read as they did. A saved question or permission from OpenCode shows
+  its words and command, labelled, with Dismiss only: no choice, no Mark answered, no answer typed
+  into the session, no Telegram page (also after quiet hours) and no line in the quiet-hours
+  summary. An old team ask shows what its OpenCode form could read; its turn changes name it so. An OpenCode researcher is refused before anything is made or run. BMN's last
   OpenCode history cleanup result is kept as saved and shown nowhere. No OpenCode history is read
   and no OpenCode hook, plugin, rules file, skill or tool is written.
 - A setup default, rules, skills or tools install made before still lists OpenCode under Earlier

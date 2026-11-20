@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { timedBesideControl } from './test-fixtures/load-clock'
-import { type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
+import { hasAttentionChoices, retiredAttention, type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
+import { phoneCardOpen } from './attention-pager'
 import { RemoteAnswers, claudeCountdownMs, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
 const SCREENS = join(__dirname, 'test-fixtures', 'remote-answers', 'screens')
@@ -177,6 +178,30 @@ describe('which shapes have a route (decision 7)', () => {
       await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
       expect(h.writes).toEqual([])
     }
+  })
+
+  it('never follows, offers or pages a request OpenCode opened, beside a Claude permission in the same session (recheck A7)', () => {
+    const h = harness()
+    const claude = record(CLAUDE_BASH, { requestId: 'claude-bash', requestKey: 'claude:permission' })
+    const stored = [
+      record(OPENCODE_QUESTION, { requestId: 'oc-question' }),
+      record(OPENCODE_PERMISSION, { requestId: 'oc-permission', requestKey: 'opencode:permission' }),
+      // A row whose prompt no longer reads still came from an OpenCode hook.
+      { ...record(CLAUDE_BASH, { requestId: 'oc-plain' }), prompt: null, openedBy: 'hook:opencode:permission.asked' }
+    ]
+    for (const row of [claude, ...stored]) h.engine.track(row)
+    expect(h.engine.epochOf('claude-bash')).not.toBeNull()
+    for (const row of stored) {
+      expect(retiredAttention(row)).toBe(true)
+      expect(hasAttentionChoices(row)).toBe(false)
+      expect(phoneCardOpen(row)).toBe(false)
+      expect(h.engine.epochOf(row.requestId)).toBeNull()
+    }
+    // The supported prompts are unchanged: a Claude question offers its choices, and both still page.
+    expect(retiredAttention(claude)).toBe(false)
+    expect(hasAttentionChoices(record(CLAUDE_SINGLE))).toBe(true)
+    expect(phoneCardOpen(claude)).toBe(true)
+    expect(h.writes).toEqual([])
   })
 
   it('confirms only a report naming exactly the answer sent', () => {

@@ -1,7 +1,7 @@
 // MODULE: session-request-card.tsx - request details and owner actions over the pane
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  stripFormatCharacters, manualChoiceQuestion, hasAttentionChoices,
+  stripFormatCharacters, manualChoiceQuestion, hasAttentionChoices, retiredAttention, RETIRED_APP_LABELS,
   type AnswerOutcome, type AttentionRecord, type QuestionChoice, type TelegramStatus
 } from '@bmn/protocol'
 import { AttentionChoices } from './attention-choices'
@@ -81,7 +81,9 @@ export function SessionRequestCard(props: {
     const actionable = isActionableAttention(request)
     const answer = props.onAnswer
     const interactive = !!answer && !cleared && request.incarnationId !== null && hasAttentionChoices(request)
-    const answerable = actionable && request.kind !== 'handoff' && !request.qaGrantId && !interactive
+    // A request a retired app opened is shown with its words, never marked answered: only Dismiss clears it (Epic 123).
+    const retired = retiredAttention(request)
+    const answerable = actionable && request.kind !== 'handoff' && !request.qaGrantId && !interactive && !retired
     const place = props.place(request.sessionId)
     const age = relativeAge(request.openedAt, props.now)
     const expiry = expiryText(request.expiresAt, props.now)
@@ -96,7 +98,7 @@ export function SessionRequestCard(props: {
       <div className="where">
         {!cleared ? <span className={`status-dot ${actionable ? 'needs-you' : ''}`} aria-hidden="true" /> : null}
         <span>{place.workspace}</span><span className="separator">›</span><span className="name" title={place.session}>{place.session}</span>
-        <span className="attention-kind">{cleared ? 'Cleared update' : kind}</span>
+        <span className="attention-kind">{cleared ? 'Cleared update' : kind}{retired && !(request.openedBy ?? '').startsWith('hook:opencode:') ? ` · ${RETIRED_APP_LABELS.opencode}` : ''}</span>
         <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
       </div>
       {!(request.manualChoices || questions?.length === 1 && questions[0]?.text === request.title) ? <h3>{request.title}</h3> : null}

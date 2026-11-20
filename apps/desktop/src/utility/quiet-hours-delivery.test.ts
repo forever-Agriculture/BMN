@@ -82,6 +82,20 @@ function fixture() {
 }
 
 describe('quiet delivery authority', () => {
+  it('never pages a held request OpenCode opened when the window ends, and still sends the one beside it (Epic 123, recheck A7)', async () => {
+    const f = fixture(), retired = f.add(1), question = f.add(2), plain = f.add(3)
+    // Held before the upgrade: an eligible backlog row whose stored prompt names OpenCode, and one an OpenCode hook opened.
+    retired.prompt = { type: 'questions', harness: 'opencode', shape: 'choice', requestRef: 'que_1', toolUseId: null,
+      questions: [{ id: null, header: null, text: 'Which auth method?', multiSelect: false, options: [{ label: 'JWT', description: null }] }] } as unknown as AttentionRecord['prompt']
+    plain.openedBy = 'hook:opencode:permission.asked'
+    for (const row of [retired, question, plain]) await f.coordinator.hold(row)
+    f.time('2026-10-08T07:00:00Z'); await f.coordinator.sweep(true)
+    expect(f.sent).toEqual([question.requestId])
+    // The window's summary names only what it may still send.
+    expect(f.summaries.join('\n')).toContain('Question 2')
+    expect(f.summaries.join('\n')).not.toMatch(/Question [13]\b/)
+  })
+
   it('counts a navigation-withdrawn held notice as closed and releases the unanswered question', async () => {
     const f = fixture(), notice = f.add(1), question = f.add(2)
     notice.kind = 'notice'

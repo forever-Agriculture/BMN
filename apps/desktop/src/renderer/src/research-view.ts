@@ -42,6 +42,24 @@ function samePrice(recorded: RosterPriceShape | undefined, researched: ResearchP
     && (researched.cached_input === undefined || recorded.cached_input === researched.cached_input)
 }
 
+/** The agents Models lists: an agent on a retired app stays in the team file until he approves its removal, unlisted here (Epic 123, 123.2 AC1). */
+function listedAgents(data: RosterDataShape): RosterDataShape['agents'] {
+  return data.agents.filter((agent) => !isRetiredApp(agent.harness))
+}
+
+/**
+ * A researched model only a retired app reaches: one a retired agent uses, or whose provider only a retired app's
+ * route serves, with no listed agent and no other app's route for it. Models leaves it out (123.2 AC1).
+ */
+function retiredOnly(model: ResearchModelView, data: RosterDataShape): boolean {
+  const routes = data.harness_routes.filter((route) => route.provider === model.providerId)
+  const retiredUse = data.agents.some((agent) => isRetiredApp(agent.harness) && agent.provider === model.providerId && agent.model === model.id)
+    || routes.some((route) => isRetiredApp(route.harness))
+  const liveUse = listedAgents(data).some((agent) => agent.provider === model.providerId && agent.model === model.id)
+    || routes.some((route) => !isRetiredApp(route.harness))
+  return retiredUse && !liveUse
+}
+
 /** The price a team file takes from a researched one: the numbers, the page and the date; never BMN's own marks. */
 export function recordedPrice(price: ResearchPrice): RosterPriceShape {
   return { input: price.input, output: price.output, ...(price.cached_input === undefined ? {} : { cached_input: price.cached_input }), source: price.source, as_of: price.as_of }
@@ -53,7 +71,7 @@ export function recordedPrice(price: ResearchPrice): RosterPriceShape {
  */
 export function priceChanges(models: readonly ResearchModelView[], data: RosterDataShape): PriceChange[] {
   const changes: PriceChange[] = []
-  for (const agent of data.agents) {
+  for (const agent of listedAgents(data)) {
     const price = found(models, agent)?.price
     if (!price || !price.verified || samePrice(agent.price, price)) continue
     changes.push({ agent: agent.id, name: agent.name, model: agent.model, before: agent.price ?? null, after: recordedPrice(price) })
@@ -68,10 +86,11 @@ export function applyPrices(data: RosterDataShape, changes: readonly PriceChange
 
 /** The page's three lists, against the team as it is drafted. */
 export function researchGroups(models: readonly ResearchModelView[], data: RosterDataShape): ResearchGroups {
-  const onTeam = (model: ResearchModelView): boolean => data.agents.some((agent) => agent.provider === model.providerId && agent.model === model.id)
-  const others = models.filter((model) => !onTeam(model))
+  const agents = listedAgents(data)
+  const onTeam = (model: ResearchModelView): boolean => agents.some((agent) => agent.provider === model.providerId && agent.model === model.id)
+  const others = models.filter((model) => !onTeam(model) && !retiredOnly(model, data))
   const team: TeamModelRow[] = []
-  for (const agent of data.agents) {
+  for (const agent of agents) {
     let row = team.find((entry) => entry.model === agent.model && entry.providerId === agent.provider)
     if (!row) {
       row = { model: agent.model, providerId: agent.provider, provider: data.providers.find((provider) => provider.id === agent.provider)?.name ?? agent.provider,

@@ -1283,17 +1283,29 @@ describe('shell session lifecycle', () => {
         processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
         sendTerminalMessage: () => undefined
       })
-      // The old picker's form and the program itself, both saved before the retirement.
-      const picker = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'OpenCode', cwd, executable: '/bin/bash', argv: ['-ic', 'opencode; exec bash -i'], cols: 80, rows: 24 })
-      const program = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'OpenCode 2', cwd, executable: direct, argv: ['--model', 'x/y'], cols: 80, rows: 24 })
-      await manager.stop(picker, 'update-restart')
-      await manager.stop(program, 'update-restart')
+      // The old picker's form and the program itself, both saved before the retirement, and the hand-edited forms a
+      // shell starts it with: a quoted name, split flags, a later command in a list (recheck 20261120T140645-9ab28cd3).
+      const launches: Array<[string, string, string[]]> = [
+        ['OpenCode', '/bin/bash', ['-ic', 'opencode; exec bash -i']],
+        ['OpenCode 2', direct, ['--model', 'x/y']],
+        ['Quoted', '/bin/bash', ['-ic', "'opencode' --help"]],
+        ['Split flags', '/bin/bash', ['-i', '-c', 'opencode']],
+        ['In a list', '/bin/bash', ['-c', `cd ${cwd} && opencode`]]
+      ]
+      const retired = []
+      for (const [name, executable, argv] of launches) retired.push(await manager.create({ ...DEFAULT_SESSION_CREATION, name, cwd, executable, argv, cols: 80, rows: 24 }))
+      // A plain shell, and one that only names OpenCode, are still started and offered.
+      const plain = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Shell', cwd, executable: '/bin/bash', argv: ['-i'], cols: 80, rows: 24 })
+      const names = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Echo', cwd, executable: '/bin/bash', argv: ['-c', 'echo opencode'], cols: 80, rows: 24 })
+      for (const created of [...retired, plain, names]) await manager.stop(created, 'update-restart')
       spawns.length = 0
-      expect(await manager.interruptedCohort()).toBeNull()
-      for (const created of [picker, program]) {
+      expect((await manager.interruptedCohort())?.entries.map(entry => entry.sessionId).sort()).toEqual([plain.sessionId, names.sessionId].sort())
+      for (const created of retired) {
         await expect(manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })).rejects.toThrow('OpenCode was retired on 20 Nov 2026.')
       }
       expect(spawns).toEqual([])
+      await manager.relaunch({ sessionId: plain.sessionId, cols: 80, rows: 24 })
+      expect(spawns).toEqual(['/bin/bash -i'])
     } finally {
       database.close()
     }

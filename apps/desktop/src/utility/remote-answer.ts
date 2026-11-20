@@ -2,6 +2,7 @@
 import type { AttentionEvidence, AttentionPrompt, AttentionPromptQuestion, AttentionQuestionsPrompt, AttentionRecord } from '@bmn/protocol'
 import type { AnswerOutcome, AnswerRefusal, QuestionChoice } from '@bmn/protocol'
 export type { AnswerOutcome, AnswerRefusal, QuestionChoice } from '@bmn/protocol'
+import { retiredAttention } from '@bmn/protocol'
 import {
   claudePermissionOnScreen,
   claudeQuestionState,
@@ -363,7 +364,8 @@ export class RemoteAnswers {
 
   /** Starts following an open request that carries a prompt: its epoch, and for keys, its dialog on screen. */
   track(record: AttentionRecord): void {
-    if (record.state !== 'open' || !record.prompt) return
+    // A request a retired app opened is never answered, so it is not followed (Epic 123).
+    if (record.state !== 'open' || !record.prompt || retiredAttention(record)) return
     const prompt = record.prompt
     const current = this.tracked.get(record.requestId)
     if (current) {
@@ -644,6 +646,8 @@ export class RemoteAnswers {
     const refused = (reason: AnswerRefusal): AnswerOutcome => ({ state: 'refused', reason })
     const record = await this.deps.getAttention(request.requestId)
     if (!record || record.state !== 'open') return refused('gone')
+    // A request a retired app opened is never answered, whatever else holds (Epic 123).
+    if (retiredAttention(record)) return refused('unsupported')
     if (this.deps.producerCurrent && !this.deps.producerCurrent(record)) return refused('changed')
     if (record.incarnationId !== request.incarnationId ||
       this.deps.liveIncarnationId(record.sessionId) !== request.incarnationId) return refused('gone')
@@ -1075,12 +1079,12 @@ export class RemoteAnswers {
 
 /** Whether the dialog of a keystroke-answered prompt is on screen, at any of its steps. */
 function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): boolean {
+  // A stored OpenCode prompt is never answered, so its dialog is never looked for, by any harness's matcher (Epic 123).
+  if (prompt.harness === 'opencode') return false
   if (prompt.type === 'permission') {
     return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null
   }
   const harness = prompt.harness
-  // A stored OpenCode prompt is never answered, so its dialog is never looked for (Epic 123).
-  if (harness === 'opencode') return false
   // Any state of an answer being entered is still this dialog: ticks, the cursor, or text being typed.
   if (prompt.questions.some((question) => questionOnScreen(lines, harness, question) ||
     (harness === 'claude' ? claudeQuestionState(lines, question) : codexQuestionState(lines, question)) !== null)) return true

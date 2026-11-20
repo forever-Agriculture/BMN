@@ -1,5 +1,5 @@
 // MODULE: attention-pager.ts - delivers open choice cards and pages unseen reminders when the owner is away
-import { hasAttentionChoices, type AttentionKind, type AttentionRecord } from '@bmn/protocol'
+import { hasAttentionChoices, retiredAttention, type AttentionKind, type AttentionRecord } from '@bmn/protocol'
 import { observeTelegramDelivery, type TelegramDeliveryObserver } from './telegram-delivery'
 
 /** How long a request may wait for the owner in the app before it is also sent away from the desk. */
@@ -15,7 +15,8 @@ export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.fre
 export const LEFT_WITHIN_MS = 10 * 60_000
 
 export function phoneCardOpen(record: AttentionRecord): boolean {
-  return record.state === 'open' && (record.seenAt === null || hasAttentionChoices(record))
+  // A request a retired app opened is shown on the desktop only (Epic 123).
+  return record.state === 'open' && !retiredAttention(record) && (record.seenAt === null || hasAttentionChoices(record))
 }
 
 /** How far apart an agent's own question and its `bmn ask` card may open and still be one decision. */
