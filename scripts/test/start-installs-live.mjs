@@ -173,7 +173,7 @@ esac`)
     const added = CLAUDE_EVENTS.filter((event) => !['PostToolUse', 'Stop'].includes(event))
     check('at start BMN adds every hook entry an app set up here lacks, beside what the file held, and nothing for the retired OpenCode (AC3; Epic 123)',
       added.every((event) => JSON.stringify(claude.hooks[event]).includes('bmn hook claude')) && claude.model === 'synthetic-kept'
-        && JSON.stringify(Object.keys(codex.hooks)) === JSON.stringify(CODEX_EVENTS) && !existsSync(files.plugin) && !existsSync(files.cli),
+        && JSON.stringify(Object.keys(codex.hooks)) === JSON.stringify(CODEX_EVENTS) && readdirSync(openCodeConfig).length === 0,
       { claudeEvents: Object.keys(claude.hooks), codexEvents: Object.keys(codex.hooks), openCode: readdirSync(openCodeConfig) })
     check('a gated and a foreign entry are left exactly as they were, with nothing added beside them (AC3)',
       JSON.stringify(claude.hooks.PostToolUse) === JSON.stringify([gated]) && JSON.stringify(claude.hooks.Stop) === JSON.stringify([foreign]),

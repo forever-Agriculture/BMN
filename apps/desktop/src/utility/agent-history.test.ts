@@ -513,6 +513,14 @@ describe('agent history limit', () => {
   })
 })
 
+describe('a history state saved while OpenCode was supported (Epic 123, 123.1 AC3)', () => {
+  it('loads, and keeps no run of the retired app', () => {
+    const run = { at: '2026-11-01T00:00:00.000Z', deleted: 2, remaining: 5, failures: [] }
+    const state = readHistoryState({ applied: { '/a': { days: 30, at: 'x' } }, runs: { codex: run, opencode: { at: '2026-11-01T00:00:00.000Z', deleted: 1, remaining: 0, failures: [{ id: 'ses_1', reason: 'x' }] } } })
+    expect(state).toEqual({ applied: { '/a': { days: 30, at: 'x' } }, failures: {}, runs: { codex: run } })
+  })
+})
+
 describe('a history state saved while Cursor was supported (Epic 71)', () => {
   it('loads, and keeps no run of the retired app', () => {
     const run = { at: '2026-10-01T00:00:00.000Z', deleted: 1, remaining: 2, failures: [] }

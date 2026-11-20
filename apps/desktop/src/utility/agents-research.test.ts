@@ -294,6 +294,18 @@ describe('who researches is part of the approved team (63.3 AC7, AC8)', () => {
     expect((await research({ researcher: 'opus' })).run.state).not.toBe('failed')
   })
 
+  it('an agent on OpenCode, retired (Epic 123), named a researcher before, is refused and starts nothing (123.1 AC3)', async () => {
+    const kimi = '## kimi\n\n```yaml\nname: Kimi\nclass: pawn\nharness: opencode\nmodel: kimi-k3\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: [helper]\n```\n\n## roles'
+    approve(naming(TWO_OPUS.replace('## roles', kimi).replace('zai: {name: Z.ai', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\nzai: {name: Z.ai'), 'opus', 'kimi'))
+    plan(FULL)
+    expect(researchers({ environment: env, now: NOW }).map((entry) => entry.id)).not.toContain('kimi')
+    const result = await research({ researcher: 'kimi' })
+    expect(result.run).toMatchObject({ state: 'failed', models: 0, note: expect.stringContaining('OpenCode, which was retired on 2026-11-20') })
+    expect((await research({ researcher: 'kimi', only: { provider: 'anthropic', model: 'claude-fable-5-1' } })).run).toMatchObject({ state: 'failed', models: 0 })
+    expect(calls()).toEqual([])
+    expect(readResearch()).toEqual({ version: 1, runs: [], models: [] })
+  })
+
   it('a team that has chosen and names no one offers no one: taking the last researcher away never brings everyone back', async () => {
     const none = (text: string) => naming(text, 'opus').replace('researcher: true', 'researcher: false')
     approve(none(TWO_OPUS))
