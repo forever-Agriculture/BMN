@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   SELF_TEST_TURN_MARK_LIMIT_MS, TURN_END_KINDS, TURN_MARK_CONFIRMED_STATUSES, TURN_MARK_LIMIT_MS as PROTOCOL_LIMIT_MS, TURN_RECORDED_APPS, TURN_SWITCH_FOLDER, TURN_APP_NAMES
 } from '@bmn/protocol'
-import { TURN_MARKS, TURN_MARK_CONFIRMED, TURN_MARK_LIMIT_MS, turnFacts, turnMark, turnMarkLimitMs, turnMarksWanted, turnStanding, turnSwitchFile } from '../../bin/turn-marks.mjs'
+import {
+  SELF_TEST_TURN_MARK_LIMIT_MS as HOOK_SELF_TEST_LIMIT_MS, SELF_TEST_TURN_MARKS_ARGUMENT, TURN_MARKS, TURN_MARK_CONFIRMED, TURN_MARK_LIMIT_MS, turnFacts, turnMark, turnMarksWanted,
+  turnStanding, turnSwitchFile
+} from '../../bin/turn-marks.mjs'
 
 const CONVERSATION = '01a0b657-21a8-7f00-addd-b73646828f5b'
 const folders: string[] = []
@@ -80,12 +83,9 @@ describe('the hook\'s turn marks', () => {
 })
 
 describe('the self-test mark budget (Story 134.2)', () => {
-  it('gives a mark 300 ms unless the self-test stand-in names a longer time, at most 10 s', () => {
-    expect(turnMarkLimitMs({})).toBe(TURN_MARK_LIMIT_MS)
-    expect(turnMarkLimitMs({ BMN_SELF_TEST_TURN_MARK_LIMIT_MS: String(SELF_TEST_TURN_MARK_LIMIT_MS) })).toBe(SELF_TEST_TURN_MARK_LIMIT_MS)
-    for (const odd of ['100', '300', '10001', 'soon', '1e3', '-5', '']) {
-      expect(turnMarkLimitMs({ BMN_SELF_TEST_TURN_MARK_LIMIT_MS: odd })).toBe(TURN_MARK_LIMIT_MS)
-    }
+  it('holds the hook\'s self-test time to the protocol\'s, longer than a real mark\'s and at most 10 s', () => {
+    expect(HOOK_SELF_TEST_LIMIT_MS).toBe(SELF_TEST_TURN_MARK_LIMIT_MS)
+    expect(SELF_TEST_TURN_MARKS_ARGUMENT).toBe('--self-test-turn-marks')
     expect(SELF_TEST_TURN_MARK_LIMIT_MS).toBeGreaterThan(PROTOCOL_LIMIT_MS)
     expect(SELF_TEST_TURN_MARK_LIMIT_MS).toBeLessThanOrEqual(10_000)
   })

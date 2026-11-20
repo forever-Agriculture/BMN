@@ -20,15 +20,14 @@ export const TURN_MARKS = {
 export const TURN_MARK_LIMIT_MS = 300
 
 /**
- * The time this hook's mark gets: `TURN_MARK_LIMIT_MS`, or the longer one BMN's self-test gives its stand-in agent in
- * `BMN_SELF_TEST_TURN_MARK_LIMIT_MS` (at most 10 s). A host outside the self-test still bounds each scan by
- * `TURN_MARK_LIMIT_MS`, so the variable never makes a real prompt's "before" wait longer.
+ * BMN's own self-test only: the time its stand-in agent's marks get (`SELF_TEST_TURN_MARK_LIMIT_MS` in the protocol,
+ * a test holds the two together). Only the exact invocation `bmn hook codex --self-test-turn-marks` takes it; nothing
+ * in the environment does, so a real prompt's mark keeps `TURN_MARK_LIMIT_MS` whatever its hook inherited.
  */
-export function turnMarkLimitMs(environment = process.env) {
-  const text = environment.BMN_SELF_TEST_TURN_MARK_LIMIT_MS
-  const asked = typeof text === 'string' && /^\d{1,5}$/u.test(text) ? Number(text) : 0
-  return asked > TURN_MARK_LIMIT_MS && asked <= 10_000 ? asked : TURN_MARK_LIMIT_MS
-}
+export const SELF_TEST_TURN_MARK_LIMIT_MS = 5_000
+
+/** The one argument after the agent that gives the self-test's stand-in its marks' longer time. */
+export const SELF_TEST_TURN_MARKS_ARGUMENT = '--self-test-turn-marks'
 
 /** The statuses after which the hook confirms that the answer arrived: a "before" that waits for that word. */
 export const TURN_MARK_CONFIRMED = ['captured', 'incomplete']

@@ -204,9 +204,8 @@ function contextAnswer(event, parts) {
  * app go on, and only then does the scan count. The mark, its answer and the confirmation share one limit,
  * `until`, which the mark carries; past it the hook goes on. Nothing is printed, whatever comes back.
  */
-async function markTurnStart(marks, mark, socketPath, token) {
+async function markTurnStart(marks, mark, socketPath, token, limit) {
   const requestId = randomUUID()
-  const limit = marks.turnMarkLimitMs()
   const start = { method: 'turn.mark', params: { requestId, until: Date.now() + limit, ...mark } }
   const confirm = (outcomes) => (marks.TURN_MARK_CONFIRMED.includes(outcomes[0]?.result?.status)
     ? { method: 'turn.mark', params: { requestId, edge: 'confirm', app: mark.app, conversation: mark.conversation, ...(mark.turn === undefined ? {} : { turn: mark.turn }) } }
@@ -265,7 +264,10 @@ export async function runGuardOnly(args) {
  */
 async function runHook(args) {
   const [agent] = args
-  if (args.length !== 1 || !Object.hasOwn(HOOK_AGENTS, agent)) {
+  // Story 134.2: BMN's self-test runs its stand-in Codex as `bmn hook codex --self-test-turn-marks`, the one form that
+  // gives its marks the self-test's longer time; every hook BMN installs passes the agent alone.
+  const selfTestMarks = args.length === 2 && agent === 'codex' && args[1] === '--self-test-turn-marks'
+  if ((args.length !== 1 && !selfTestMarks) || !Object.hasOwn(HOOK_AGENTS, agent)) {
     process.stderr.write(`bmn: ${await retiredOr(agent, `hook expects one agent: ${Object.keys(HOOK_AGENTS).join('|')}`)}\n`)
     return 0
   }
@@ -313,7 +315,9 @@ async function runHook(args) {
   const turns = marks !== null && marks.turnMarksWanted(socketPath, process.env.BMN_SESSION_ID ?? process.env.AITERM_SESSION_ID)
   const mark = turns ? marks.turnMark(agent, event) : null
   const marked = Date.now()
-  if (mark?.edge === 'start') await markTurnStart(marks, mark, socketPath, token)
+  if (mark?.edge === 'start') {
+    await markTurnStart(marks, mark, socketPath, token, selfTestMarks ? marks.SELF_TEST_TURN_MARK_LIMIT_MS : marks.TURN_MARK_LIMIT_MS)
+  }
   // The end goes first among this event's calls: BMN answers "queued" at once and scans after the hook has gone.
   const ended = mark?.edge === 'end' ? [{ method: 'turn.mark', params: { requestId: randomUUID(), ...mark } }] : []
   // Epic 78: a permission the phone may answer gets its own single-use ref, and this hook waits for that answer.

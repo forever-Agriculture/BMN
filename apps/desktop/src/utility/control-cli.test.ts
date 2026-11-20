@@ -5447,6 +5447,69 @@ describe('bmn hook turn marks (Story 69.4)', () => {
     expect(marks(fixture)[0]).toMatchObject({ app: 'codex', turn: 'turn-1' })
   })
 
+  describe('the self-test stand-in\'s longer time (Story 134.2)', () => {
+    /** BMN's own word that the env variable of an earlier fix named; inherited, it must change nothing. */
+    const INHERITED = { BMN_SELF_TEST_TURN_MARK_LIMIT_MS: '5000' }
+    const late = (fixture: Fixture): void => {
+      fixture.handlers.markTurn.mockImplementation((p) => (p.edge === 'start'
+        ? new Promise((resolve) => setTimeout(() => resolve('captured'), 1_000).unref())
+        : Promise.resolve(p.edge === 'confirm' ? 'confirmed' : 'queued')))
+    }
+    async function hookWith(fixture: Fixture, args: string[], env: Record<string, string>): Promise<CliResult> {
+      const proc = await procTree(fixture.root, HOLDS_TERMINAL)
+      return runCli(['hook', ...args], {
+        env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude'), ...INHERITED, ...env },
+        input: JSON.stringify(prompt)
+      })
+    }
+
+    it.each([['claude'], ['codex']])('keeps a real %s hook at 300 ms with the old variable inherited, and gives up on a late answer', async (agent) => {
+      const fixture = await cliFixture()
+      const env = await recording(fixture)
+      late(fixture)
+      const before = Date.now()
+
+      expect(await hookWith(fixture, [agent], env)).toEqual(QUIET)
+
+      const [start] = marks(fixture)
+      expect(marks(fixture).map((mark) => mark.edge)).toEqual(['start'])
+      expect((start?.until ?? 0) - before).toBeLessThanOrEqual(300 + (Date.now() - before))
+      expect((start?.until ?? 0) - before).toBeLessThan(1_000)
+    })
+
+    it('gives only `bmn hook codex --self-test-turn-marks` 5 s, so a late answer is still confirmed', async () => {
+      const fixture = await cliFixture()
+      const env = await recording(fixture)
+      late(fixture)
+      const before = Date.now()
+
+      expect(await hookWith(fixture, ['codex', '--self-test-turn-marks'], env)).toEqual(QUIET)
+
+      const [start, confirm] = marks(fixture)
+      expect(marks(fixture).map((mark) => mark.edge)).toEqual(['start', 'confirm'])
+      expect((start?.until ?? 0) - before).toBeGreaterThan(4_000)
+      expect((start?.until ?? 0) - before).toBeLessThanOrEqual(5_000 + (Date.now() - before))
+      expect(confirm).toMatchObject({ edge: 'confirm', requestId: start?.requestId })
+    })
+
+    it.each([
+      [['claude', '--self-test-turn-marks']],
+      [['codex', '--self-test-turn-marks', 'more']],
+      [['codex', '--self-test-turn-marks=1']],
+      [['codex', '--other']]
+    ])('sends no mark for the hook arguments %j', async (args) => {
+      const fixture = await cliFixture()
+      const env = await recording(fixture)
+      answering(fixture)
+
+      const result = await hookWith(fixture, args, env)
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe('')
+      expect(fixture.handlers.markTurn).not.toHaveBeenCalled()
+    })
+  })
+
   it('goes on and prints nothing when BMN does not answer within the time of the call', async () => {
     const fixture = await cliFixture()
     const env = await recording(fixture)

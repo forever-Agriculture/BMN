@@ -533,8 +533,10 @@ the event is a sub-agent's, so that BMN can tell a tool event of the turn from a
 
 - **At a prompt** the hook sends `start` with the time until which it will wait: 300 ms from the
   moment it began, the same allowance a message's hand-over shares. BMN's own self-test alone gives
-  its stand-in agent 5 s (`SELF_TEST_TURN_MARK_LIMIT_MS`, in its hook and its `--self-test-host`
-  host), so a busy computer never fails the packaged smoke of an update; every other host bounds a
+  its stand-in agent 5 s (`SELF_TEST_TURN_MARK_LIMIT_MS`): its hook runs as
+  `bmn hook codex --self-test-turn-marks` and its host with `--self-test-host`, so a busy computer
+  never fails the packaged smoke of an update. Nothing in the environment selects the longer time:
+  every hook BMN installs passes the agent alone and keeps 300 ms, and every other host bounds a
   scan by 300 ms whatever a hook asks. BMN scans ("before") and
   answers. After `captured` or `incomplete` the hook sends `confirm` on the same connection,
   before it lets the app go on. Until then the scan is tentative: when the time passes, the

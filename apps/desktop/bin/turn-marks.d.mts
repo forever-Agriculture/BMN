@@ -1,7 +1,8 @@
 // MODULE: turn-marks.d.mts - types for the hook's turn marks, so the host and the tests read the same table and shapes
 export declare const TURN_MARKS: Record<string, { version: string; promptEvent: string; promptArrives: 'typed' | 'taken' }>
 export declare const TURN_MARK_LIMIT_MS: number
-export declare function turnMarkLimitMs(environment?: Record<string, string | undefined>): number
+export declare const SELF_TEST_TURN_MARK_LIMIT_MS: number
+export declare const SELF_TEST_TURN_MARKS_ARGUMENT: string
 export declare const TURN_MARK_CONFIRMED: string[]
 export interface TurnFacts {
   conversation?: string
