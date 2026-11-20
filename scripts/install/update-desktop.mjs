@@ -13,6 +13,7 @@ import {
   readdirSync,
   readlinkSync,
   renameSync,
+  rmSync,
   writeFileSync
 } from 'node:fs'
 import { homedir } from 'node:os'
@@ -22,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { UPDATE_UNIT, desktopEntryReturnsBrain, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 import { buildFolders, packageSmokeAndSwap } from '../lib/staged-build.mjs'
+import { startAttempt } from '../lib/update-attempts.mjs'
 import { brainFileHash, brainResourcesHash, brainCutoverStateRoot, brainDeliveryCommit, brainContainsDelivery } from '../lib/brain-provenance.mjs'
 
 import { installBrainCutoverService } from './brain-cutover-service.mjs'
@@ -35,6 +37,10 @@ let liveBuild = 'previous'
 const stateDirectory = updateStateDirectory()
 const statusPath = join(stateDirectory, 'latest.json')
 const logPath = join(stateDirectory, 'latest.log')
+/** This worker's attempt (Story 134.1): its own log under `attempts/`, which later attempts never rewrite. */
+let attempt = null
+/** The step the worker is in, so a failure names where it stopped. */
+let currentStep = 'start'
 const desktopEntry = join(
   process.env.XDG_DATA_HOME || join(homedir(), '.local/share'),
   'applications',
@@ -132,16 +138,23 @@ function gitState() {
   }
 }
 
-function writeStatus(value) {
-  mkdirSync(stateDirectory, { recursive: true })
-  const temporary = `${statusPath}.tmp-${process.pid}`
+function writeStatusIn(directory, value) {
+  mkdirSync(directory, { recursive: true })
+  const path = join(directory, 'latest.json'), temporary = `${path}.tmp-${process.pid}`
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
-  renameSync(temporary, statusPath)
+  renameSync(temporary, path)
+}
+
+function writeStatus(value) {
+  writeStatusIn(stateDirectory, value)
 }
 
 function log(message) {
-  mkdirSync(stateDirectory, { recursive: true })
-  appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`)
+  if (attempt) attempt.log(message)
+  else {
+    mkdirSync(stateDirectory, { recursive: true })
+    appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`)
+  }
 }
 
 export function brainUpdateNotice(commit,state=brainCutoverStateRoot()) {
@@ -156,8 +169,9 @@ function notify(summary, body, urgency = 'normal') {
 }
 
 function runStep(label, args) {
+  currentStep = label
   log(`START ${label}: pnpm ${args.join(' ')}`)
-  const output = openSync(logPath, 'a')
+  const output = openSync(attempt?.path ?? logPath, 'a')
   const result = spawnSync('pnpm', args, {
     cwd: repoRoot,
     // The step builds into staging, never over the live build: `package-preflight.mjs` lets it run while BMN is open.
@@ -213,11 +227,13 @@ export function prepareBrainDelivery({project=repoRoot,commit,state=stateDirecto
 
 async function runWorker() {
   mkdirSync(stateDirectory, { recursive: true })
-  writeFileSync(logPath, '')
   const queuedState = gitState()
-  writeStatus({ phase: 'waiting-for-exit', commit: queuedState.head, updatedAt: new Date().toISOString(), logPath })
+  attempt = startAttempt({ stateDirectory, commit: queuedState.head })
+  writeStatus({ phase: 'waiting-for-exit', commit: queuedState.head, updatedAt: new Date().toISOString(), logPath: attempt.path })
   log(`QUEUED commit ${queuedState.head}`)
+  currentStep = 'wait for BMN to exit'
   await waitForPackagedAppToExit()
+  currentStep = 'source check'
 
   const buildingState = gitState()
   const readiness = repositoryReadiness(buildingState)
@@ -235,6 +251,7 @@ async function runWorker() {
     sourceChange: () => sourceChangeSince(buildingState, gitState())
   })
   runStep('desktop install', ['run', 'install:desktop'])
+  currentStep = 'install check'
 
   const completedState = gitState()
   const completedReadiness = repositoryReadiness(completedState)
@@ -277,25 +294,8 @@ async function runWorker() {
   notify('BMN updated', brainUpdateNotice(completedState.head))
 }
 
-function queueWorker() {
-  if (process.platform !== 'linux') {
-    throw new Error('automatic update-after-exit currently requires Linux systemd; close BMN and run package/install manually')
-  }
-  const state = gitState()
-  const readiness = repositoryReadiness(state)
-  if (readiness) throw new Error(readiness)
-
-  prepareBrainDelivery({commit:state.head})
-
-  const active = spawnSync('systemctl', ['--user', 'is-active', '--quiet', unit])
-  if (active.status === 0) {
-    console.log(`BMN update is already queued; it will package the latest clean origin/main after BMN exits.\nLog: ${logPath}`)
-    return
-  }
-
-  mkdirSync(stateDirectory, { recursive: true })
-  writeStatus({ phase: 'queued', commit: state.head, updatedAt: new Date().toISOString(), logPath })
-  const result = spawnSync('systemd-run', [
+function startUnit() {
+  return spawnSync('systemd-run', [
     '--user',
     `--unit=${unit.replace(/\.service$/u, '')}`,
     '--collect',
@@ -306,23 +306,69 @@ function queueWorker() {
     workerPath,
     '--worker'
   ], { encoding: 'utf8' })
-  if (result.status !== 0) {
-    throw new Error(`could not queue BMN update: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`)
+}
+
+/**
+ * A failed worker attempt: its own log ends with the step it failed at, and `latest.json` names that commit, step and
+ * log, which stays readable after later attempts (Story 134.1). Returns the message.
+ */
+export function recordWorkerFailure({ directory, attempt: failed, step, error, liveBuild: live }) {
+  const message = error instanceof Error ? error.message : String(error)
+  writeStatusIn(directory, { phase: 'failed', commit: failed?.commit ?? null, failedStep: step, error: message, liveBuild: live, updatedAt: new Date().toISOString(), logPath: failed?.path ?? join(directory, 'latest.log') })
+  if (failed) failed.log(`FAILED at ${step}: ${message}`)
+  else appendFileSync(join(directory, 'latest.log'), `${new Date().toISOString()} FAILED at ${step}: ${message}\n`)
+  return message
+}
+
+const unitActive = () => spawnSync('systemctl', ['--user', 'is-active', '--quiet', unit]).status === 0
+
+/**
+ * `pnpm run update:desktop` without `--worker`: queues the worker, or refuses. A refusal (wrong platform, dirty tree,
+ * unpushed main, brain delivery, a unit that would not start) is printed and leaves `latest.json`, the attempt logs and
+ * the completed records exactly as they were (Story 134.1, Epic 111 F6): it writes nothing a launcher reads.
+ * The options exist for the tests; the command uses the defaults. Returns the exit code.
+ */
+export function queueCommand({
+  platform = process.platform, state = gitState, prepareBrain = (commit) => prepareBrainDelivery({ commit }),
+  queued = unitActive, start = startUnit, directory = stateDirectory, print = console.log, printError = console.error
+} = {}) {
+  const statusFile = join(directory, 'latest.json')
+  try {
+    if (platform !== 'linux') {
+      throw new Error('automatic update-after-exit currently requires Linux systemd; close BMN and run package/install manually')
+    }
+    const current = state()
+    const readiness = repositoryReadiness(current)
+    if (readiness) throw new Error(readiness)
+    prepareBrain(current.head)
+    if (queued()) {
+      print(`BMN update is already queued; it will package the latest clean origin/main after BMN exits.\nLog: ${join(directory, 'latest.log')}`)
+      return 0
+    }
+    const before = existsSync(statusFile) ? readFileSync(statusFile) : null
+    writeStatusIn(directory, { phase: 'queued', commit: current.head, updatedAt: new Date().toISOString(), logPath: join(directory, 'latest.log') })
+    const result = start()
+    if (result.status !== 0) {
+      // Nothing was queued: put back what the launcher read before.
+      if (before === null) rmSync(statusFile, { force: true })
+      else { const temporary = `${statusFile}.tmp-${process.pid}`; writeFileSync(temporary, before, { mode: 0o600 }); renameSync(temporary, statusFile) }
+      throw new Error(`could not queue BMN update: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`)
+    }
+    print(`Queued BMN ${current.head.slice(0, 7)} update. Close BMN; opening it from the desktop waits until the update finishes.\nLog: ${join(directory, 'latest.log')}`)
+    return 0
+  } catch (error) {
+    printError(`BMN update not queued: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
   }
-  console.log(`Queued BMN ${state.head.slice(0, 7)} update. Close BMN; opening it from the desktop waits until the update finishes.\nLog: ${logPath}`)
 }
 
 const directlyInvoked = process.argv[1] && resolve(process.argv[1]) === workerPath
-if (directlyInvoked) {
-  const worker = process.argv.includes('--worker')
-  Promise.resolve()
-    .then(() => worker ? runWorker() : queueWorker())
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error)
-      writeStatus({ phase: 'failed', error: message, liveBuild, updatedAt: new Date().toISOString(), logPath })
-      log(`FAILED ${message}`)
-      notify('BMN update failed', `See ${logPath}`, 'critical')
-      console.error(`BMN update failed: ${message}`)
-      process.exitCode = 1
-    })
+if (directlyInvoked && !process.argv.includes('--worker')) process.exitCode = queueCommand()
+else if (directlyInvoked) {
+  runWorker().catch((error) => {
+    const message = recordWorkerFailure({ directory: stateDirectory, attempt, step: currentStep, error, liveBuild })
+    notify('BMN update failed', `Failed at ${currentStep}. See ${attempt?.path ?? logPath}`, 'critical')
+    console.error(`BMN update failed at ${currentStep}: ${message}`)
+    process.exitCode = 1
+  })
 }

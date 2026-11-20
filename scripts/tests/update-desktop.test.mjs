@@ -1,14 +1,17 @@
 // MODULE: update-desktop.test.mjs - checks the queued desktop update guards and its package step
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   desktopEntryRunsLauncher,
+  queueCommand,
+  recordWorkerFailure,
   repositoryReadiness,
   runningAppPids
 } from '../install/update-desktop.mjs'
+import { KEPT_ATTEMPTS, attemptLogs, startAttempt } from '../lib/update-attempts.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -94,5 +97,101 @@ describe('desktop source update', () => {
     const launcher = '/home/owner/.local/share/bmn/launch-bmn'
     expect(desktopEntryRunsLauncher(`[Desktop Entry]\nExec="${launcher}"\n`, launcher)).toBe(true)
     expect(desktopEntryRunsLauncher('[Desktop Entry]\nExec="/repo/apps/desktop/release/linux-unpacked/bmn"\n', launcher)).toBe(false)
+  })
+
+  describe('every attempt keeps its log (Story 134.1)', () => {
+    const commitA = 'a'.repeat(40), commitB = 'b'.repeat(40)
+    const withState = (run) => {
+      const directory = mkdtempSync(join(tmpdir(), 'bmn-update-attempts-'))
+      try { return run(directory) } finally { rmSync(directory, { recursive: true, force: true }) }
+    }
+    // A folder's every file and its bytes, so "unchanged" means byte for byte.
+    const snapshot = (directory) => {
+      const files = {}
+      const visit = (path, name) => {
+        for (const entry of readdirSync(path, { withFileTypes: true })) {
+          const full = join(path, entry.name), key = name ? `${name}/${entry.name}` : entry.name
+          if (entry.isDirectory()) visit(full, key)
+          else files[key] = entry.isSymbolicLink() ? `-> ${readlinkSync(full)}` : readFileSync(full, 'hex')
+        }
+      }
+      visit(directory, '')
+      return files
+    }
+
+    it('keeps both failed attempts with their commit and failing step; latest.log points at the newest (AC1)', () => withState((directory) => {
+      const first = startAttempt({ stateDirectory: directory, commit: commitA, now: new Date('2026-11-20T15:24:00.000Z') })
+      first.log('START package: pnpm run package')
+      recordWorkerFailure({ directory, attempt: first, step: 'package', error: new Error('package failed with exit 1'), liveBuild: 'previous' })
+      const second = startAttempt({ stateDirectory: directory, commit: commitB, now: new Date('2026-11-20T15:31:00.000Z') })
+      second.log('START packaged smoke test: pnpm run smoke:packaged')
+      recordWorkerFailure({ directory, attempt: second, step: 'packaged smoke test', error: new Error('packaged self-test exited 1'), liveBuild: 'previous' })
+
+      const logs = attemptLogs(directory)
+      expect(logs).toHaveLength(2)
+      const [older, newer] = logs.map((name) => readFileSync(join(directory, 'attempts', name), 'utf8'))
+      expect(older).toContain(`ATTEMPT commit ${commitA}`)
+      expect(older).toMatch(/FAILED at package: package failed with exit 1/u)
+      expect(newer).toContain(`ATTEMPT commit ${commitB}`)
+      expect(newer).toMatch(/FAILED at packaged smoke test: packaged self-test exited 1/u)
+      expect(readlinkSync(join(directory, 'latest.log'))).toBe(join('attempts', logs[1]))
+      expect(readFileSync(join(directory, 'latest.log'), 'utf8')).toBe(newer)
+      const status = JSON.parse(readFileSync(join(directory, 'latest.json'), 'utf8'))
+      expect(status).toMatchObject({ phase: 'failed', commit: commitB, failedStep: 'packaged smoke test', liveBuild: 'previous', logPath: second.path })
+    }))
+
+    it(`keeps at most ${KEPT_ATTEMPTS} attempt logs, removing the oldest`, () => withState((directory) => {
+      for (let minute = 0; minute < KEPT_ATTEMPTS + 3; minute += 1) {
+        startAttempt({ stateDirectory: directory, commit: commitA, now: new Date(Date.UTC(2026, 10, 20, 10, minute)) })
+      }
+      const logs = attemptLogs(directory)
+      expect(logs).toHaveLength(KEPT_ATTEMPTS)
+      expect(logs[0]).toMatch(/^20261120T100300000Z-/u)
+      expect(readlinkSync(join(directory, 'latest.log'))).toBe(join('attempts', logs.at(-1)))
+    }))
+
+    it('replaces a latest.log left as a plain file by an older updater with the link', () => withState((directory) => {
+      writeFileSync(join(directory, 'latest.log'), 'old single log\n')
+      const started = startAttempt({ stateDirectory: directory, commit: commitA })
+      expect(readlinkSync(join(directory, 'latest.log'))).toBe(join('attempts', attemptLogs(directory)[0]))
+      expect(readFileSync(started.path, 'utf8')).toContain(`ATTEMPT commit ${commitA}`)
+    }))
+
+    it.each([
+      ['a dirty tree', { status: ' M scripts/install/update-desktop.mjs' }, 'working tree is not clean'],
+      ['unpushed main', { originHead: 'c'.repeat(40) }, 'push the commit first']
+    ])('leaves latest.json and the installed record byte-identical when it refuses %s (AC2)', (_name, change, reason) => withState((directory) => {
+      writeFileSync(join(directory, 'latest.json'), JSON.stringify({ phase: 'complete', commit: commitA }) + '\n')
+      mkdirSync(join(directory, 'completed'))
+      writeFileSync(join(directory, 'completed', `${commitA}.json`), '{"phase":"complete"}\n')
+      startAttempt({ stateDirectory: directory, commit: commitA })
+      const before = snapshot(directory)
+      const printed = [], started = []
+      const code = queueCommand({
+        platform: 'linux', directory,
+        state: () => ({ branch: 'main', head: commitB, originHead: commitB, status: '', ...change }),
+        prepareBrain: () => { throw new Error('reached brain delivery') },
+        queued: () => false, start: () => { started.push(true); return { status: 0 } },
+        print: (line) => printed.push(line), printError: (line) => printed.push(line)
+      })
+      expect(code).toBe(1)
+      expect(printed.join('\n')).toMatch(new RegExp(`^BMN update not queued: .*${reason}`, 'u'))
+      expect(started).toEqual([])
+      expect(snapshot(directory)).toEqual(before)
+    }))
+
+    it('puts latest.json back when the unit would not start', () => withState((directory) => {
+      writeFileSync(join(directory, 'latest.json'), JSON.stringify({ phase: 'complete', commit: commitA }) + '\n')
+      const before = snapshot(directory), printed = []
+      const code = queueCommand({
+        platform: 'linux', directory, state: () => ({ branch: 'main', head: commitB, originHead: commitB, status: '' }),
+        prepareBrain: () => {}, queued: () => false, start: () => ({ status: 1, stderr: 'Unit already exists' }),
+        print: (line) => printed.push(line), printError: (line) => printed.push(line)
+      })
+      expect(code).toBe(1)
+      expect(printed.join('\n')).toContain('could not queue BMN update: Unit already exists')
+      expect(snapshot(directory)).toEqual(before)
+      expect(existsSync(join(directory, 'attempts'))).toBe(false)
+    }))
   })
 })
