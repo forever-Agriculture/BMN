@@ -421,9 +421,10 @@ function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
       }
     })
     socket.on('error', (error) => {
-      // A sandboxed shell tool (Codex's, measured on 0.162.1) may not open a socket outside its sandbox.
+      // A sandboxed shell tool (Codex's, measured on 0.162.1) may not open a socket outside its sandbox. Epic 137: BMN's Codex
+      // rules let the agents' bmn subcommands out, but only as one plain command (measured on 0.171: a pipe, heredoc or && keeps it in).
       const sandboxed = error.code === 'EPERM' || error.code === 'EACCES'
-        ? '. A sandbox may be keeping this command from BMN: ask to run it outside the sandbox'
+        ? '. A sandbox may be keeping this command from BMN: run bmn as one plain command of its own, text in --text T (no pipe, heredoc or &&); if it still fails, ask to run it outside the sandbox'
         : ''
       finish(new CliError('IO_ERROR', `cannot reach control socket ${socketPath} (${error.code ?? error.message})${sandboxed}`))
     })

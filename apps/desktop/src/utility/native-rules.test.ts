@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CODEX_RULES, NEVER_COMMANDS, claudeDenyRows, missingClaudeRows, privateKeyNames, secretPaths, withClaudeRows } from '../../bin/native-rules.mjs'
+import { CODEX_ALLOWED_BMN, CODEX_ALLOWED_BMN_PLAN, CODEX_RULES, NEVER_COMMANDS, claudeDenyRows, missingClaudeRows, privateKeyNames, secretPaths, withClaudeRows } from '../../bin/native-rules.mjs'
 
 const homes: string[] = []
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
@@ -77,4 +77,26 @@ describe('Codex\'s rules (Story 102.3)', () => {
     for (const command of NEVER_COMMANDS) expect(check(rules, ...command.split(' '), '-af'), command).toBe('forbidden')
     for (const command of ['docker ps', 'docker volume ls', 'prime-select query', 'sudo prime-select on-demand']) expect(check(rules, ...command.split(' ')), command).toBe('nothing')
   }, 60_000)
+
+  it('allows the inventoried bmn subcommands and nothing else of bmn (Story 137.2)', () => {
+    const home = homeWith()
+    const rules = join(home, 'bmn-guard.rules')
+    writeFileSync(rules, CODEX_RULES)
+    if (check(rules, 'true') === 'no codex') return
+    for (const verb of CODEX_ALLOWED_BMN) expect(check(rules, 'bmn', verb, '--key', 'k'), verb).toBe('allow')
+    for (const verb of CODEX_ALLOWED_BMN_PLAN) expect(check(rules, 'bmn', 'plan', verb), `plan ${verb}`).toBe('allow')
+    expect(check(rules, 'bmn', 'ask', 'k', 'Pick one', '--option', 'a')).toBe('allow')
+    expect(check(rules, 'bmn', 'tell', 'status')).toBe('allow')
+    for (const command of ['bmn', 'bmn team ask --role r --key k', 'bmn send x', 'bmn research ask', 'bmn judge ask', 'bmn run dispatch',
+      'bmn plan set epic-1 done', 'bmn plan go 1', 'bmn plan allow 1', 'bmn hooks install', 'bmn --owner tell s', 'bmn --json ask k t',
+      'node bmn tell s', 'xbmn tell s']) {
+      expect(check(rules, ...command.split(' ')), command).toBe('nothing')
+    }
+  }, 60_000)
+
+  it('keeps bmn team, send and bmn as a whole out of the allow rows (the allowance\'s stays_out)', () => {
+    for (const verb of ['team', 'send', 'research', 'judge', 'run', 'hooks', 'hook', 'brain', 'roster']) expect(CODEX_ALLOWED_BMN).not.toContain(verb)
+    expect(CODEX_ALLOWED_BMN_PLAN).toEqual(['status', 'check'])
+    expect(CODEX_RULES).not.toMatch(/pattern=\["bmn"\], decision="allow"/)
+  })
 })

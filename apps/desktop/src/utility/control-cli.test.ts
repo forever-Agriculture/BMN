@@ -1530,7 +1530,7 @@ describe('bmn peers and bmn tell (Story 66.2)', () => {
     try {
       const result = await runCli(['peers'], { env: fixture.sessionEnv })
       expect(result.code).toBe(1)
-      expect(result.stderr).toBe(`bmn: IO_ERROR: cannot reach control socket ${fixture.socketPath} (EACCES). A sandbox may be keeping this command from BMN: ask to run it outside the sandbox\n`)
+      expect(result.stderr).toBe(`bmn: IO_ERROR: cannot reach control socket ${fixture.socketPath} (EACCES). A sandbox may be keeping this command from BMN: run bmn as one plain command of its own, text in --text T (no pipe, heredoc or &&); if it still fails, ask to run it outside the sandbox\n`)
     } finally {
       await chmod(dirname(fixture.socketPath), 0o700)
     }
