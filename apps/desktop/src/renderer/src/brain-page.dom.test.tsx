@@ -636,6 +636,10 @@ describe('Brain page after the post-delivery review (2026-11-20)', () => {
     expect(container!.querySelector('.b-text')!.textContent).not.toContain('MODULE')
     expect(withoutModuleHeading('a\n# MODULE: x.md - header\nb\n# MODULE: y.md - kept')).toBe('a\nb\n# MODULE: y.md - kept')
     expect(withoutModuleHeading('# Module of x\ntext')).toBe('# Module of x\ntext')
+    // In a code block it is an example and stays.
+    const example = 'Intro\n```\n# MODULE: example.md - sample\n```\nEnd'
+    expect(withoutModuleHeading(example)).toBe(example)
+    expect(withoutModuleHeading('a\r\n# MODULE: x.md - header\r\nb')).toBe('a\r\nb')
   })
 })
 

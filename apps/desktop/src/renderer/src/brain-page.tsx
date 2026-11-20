@@ -39,7 +39,14 @@ function brainTime(iso: string): string {
  * agent memory files. It repeats the note's name as the page's largest heading; the note's title already says it.
  */
 export function withoutModuleHeading(markdown: string): string {
-  return markdown.replace(/^#[ \t]+MODULE:[ \t]+\S+\.md\b[^\n]*(?:\r?\n)?/mu, '')
+  const lines = markdown.split('\n')
+  let fenced = false
+  for (const [at, line] of lines.entries()) {
+    // A line inside a ``` or ~~~ code block is an example, not the note's header (pre-review).
+    if (/^\s*(?:```|~~~)/u.test(line)) fenced = !fenced
+    else if (!fenced && /^#[ \t]+MODULE:[ \t]+\S+\.md\b/u.test(line)) return [...lines.slice(0, at), ...lines.slice(at + 1)].join('\n')
+  }
+  return markdown
 }
 
 /** True when the note's text opens with a level-1 heading of its own title. */
