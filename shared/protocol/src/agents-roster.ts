@@ -79,25 +79,31 @@ function shellScript(argv: readonly string[]): string | null {
 /**
  * The literal words in command position in a shell's command text: the first word of each simple command, after
  * `;`, `&`, `|`, `&&`, `||`, a parenthesis or a newline, with quotes removed. A word with an expansion is not literal.
+ * A `#` that starts a word comments out the rest of its line; `NAME=value` before a command is an assignment, whatever
+ * its value is quoted with.
  */
 function commandWords(script: string): string[] {
   const words: string[] = []
-  let word = '', quoted = false, literal = true, started = false, atCommand = true
+  // `bare` is the word's text before its first quote: an assignment's name and `=` are never quoted.
+  let word = '', bare = '', quoted = false, literal = true, started = false, atCommand = true
   const end = (): void => {
     if (!started) return
     if (atCommand) {
-      if (literal && !quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) { /* an assignment: the command follows */ }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(bare)) { /* an assignment: the command follows */ }
       else if (literal && COMMAND_PREFIXES.has(word) && !quoted) { /* runs the next word */ }
       else {
         if (literal) words.push(word)
         atCommand = false
       }
     }
-    word = ''; quoted = false; literal = true; started = false
+    word = ''; bare = ''; quoted = false; literal = true; started = false
   }
   for (let index = 0; index < script.length; index++) {
     const char = script[index]!
-    if (char === "'") {
+    if (char === '#' && !started) {
+      const newline = script.indexOf('\n', index)
+      index = (newline === -1 ? script.length : newline) - 1
+    } else if (char === "'") {
       const close = script.indexOf("'", index + 1)
       const stop = close === -1 ? script.length : close
       word += script.slice(index + 1, stop); quoted = true; started = true; index = stop
@@ -118,6 +124,7 @@ function commandWords(script: string): string[] {
       end(); atCommand = true
     } else {
       if (char === '$' || char === '`') literal = false
+      if (!quoted) bare += char
       word += char; started = true
     }
   }

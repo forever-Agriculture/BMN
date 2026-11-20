@@ -48,15 +48,15 @@ function listedAgents(data: RosterDataShape): RosterDataShape['agents'] {
 }
 
 /**
- * A researched model only a retired app reaches: one a retired agent uses, or whose provider only a retired app's
- * route serves, with no listed agent and no other app's route for it. Models leaves it out (123.2 AC1).
+ * A researched model only a retired app reaches: one a retired agent uses, or whose provider a retired app's route
+ * serves, while no listed agent uses it and Add to team would give its provider to no supported app (`appFor`, the same
+ * rule). Models leaves it out (123.2 AC1).
  */
 function retiredOnly(model: ResearchModelView, data: RosterDataShape): boolean {
-  const routes = data.harness_routes.filter((route) => route.provider === model.providerId)
   const retiredUse = data.agents.some((agent) => isRetiredApp(agent.harness) && agent.provider === model.providerId && agent.model === model.id)
-    || routes.some((route) => isRetiredApp(route.harness))
+    || data.harness_routes.some((route) => route.provider === model.providerId && isRetiredApp(route.harness))
   const liveUse = listedAgents(data).some((agent) => agent.provider === model.providerId && agent.model === model.id)
-    || routes.some((route) => !isRetiredApp(route.harness))
+    || appFor(data, model.providerId) !== null
   return retiredUse && !liveUse
 }
 

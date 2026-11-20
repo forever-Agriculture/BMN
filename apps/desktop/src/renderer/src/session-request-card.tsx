@@ -96,7 +96,7 @@ export function SessionRequestCard(props: {
       className={`attention-item ${cleared ? 'cleared' : actionable ? 'request' : 'update'}`}
       aria-label={[kind, request.title, `${place.workspace} › ${place.session}`, age, expiry, cleared ? 'Cleared' : null].filter(Boolean).join(' · ')}>
       <div className="where">
-        {!cleared ? <span className={`status-dot ${actionable ? 'needs-you' : ''}`} aria-hidden="true" /> : null}
+        {!cleared ? <span className={`status-dot ${actionable && !retired ? 'needs-you' : ''}`} aria-hidden="true" /> : null}
         <span>{place.workspace}</span><span className="separator">›</span><span className="name" title={place.session}>{place.session}</span>
         <span className="attention-kind">{cleared ? 'Cleared update' : kind}{retired && !(request.openedBy ?? '').startsWith('hook:opencode:') ? ` · ${RETIRED_APP_LABELS.opencode}` : ''}</span>
         <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
@@ -121,7 +121,7 @@ export function SessionRequestCard(props: {
         </div> : null}
       {request.body && (!questions || request.manualChoices && !interactive) ? <pre>{stripFormatCharacters(request.body)}</pre> : null}
       <p className="seen">{request.seenAt ? `Seen ${relativeAge(request.seenAt, props.now)}` : 'Unseen'}
-        {` · ${cleared ? 'reminder cleared' : actionable ? 'awaiting answer' : 'update'} · `}
+        {` · ${cleared ? 'reminder cleared' : retired ? 'read only' : actionable ? 'awaiting answer' : 'update'} · `}
         <span className="provenance">{attentionProvenance(request)}</span></p>
       {phone?.requests[request.requestId] ? <p className="seen">{phone.requests[request.requestId] === 'uncertain'
         ? 'Phone: may not have arrived' : phone.active ? `Phone: held until ${phone.until}` : 'Phone: waiting for delivery'}</p> : null}

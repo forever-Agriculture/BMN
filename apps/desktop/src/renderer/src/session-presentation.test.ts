@@ -228,16 +228,20 @@ describe('session presentation', () => {
 
   it('names a saved command that starts OpenCode by the rule that refuses to start it again (123.1 AC3)', () => {
     for (const argv of [['-ic', 'opencode; exec bash -i'], ['-ic', "'opencode' --help"], ['-i', '-c', 'opencode'], ['-c', 'cd /x && opencode'],
-      ['-lc', 'FOO=1 exec /home/me/.opencode/bin/opencode'], ['-o', 'pipefail', '-c', 'make | opencode']]) {
+      ['-lc', 'FOO=1 exec /home/me/.opencode/bin/opencode'], ['-o', 'pipefail', '-c', 'make | opencode'], ['-c', 'MODE="local" opencode'],
+      ['-c', '# was claude\nopencode']]) {
       expect(agentTag('/bin/bash', argv)).toBe('OpenCode (retired)')
       expect(retiredAppCommand('/bin/bash', argv)).toBe('opencode')
     }
     expect(agentTag('/usr/bin/opencode')).toBe('OpenCode (retired)')
     // A plain shell stays a shell whatever was typed into it, and a command that only names OpenCode is not it.
-    for (const argv of [[], ['-i'], ['-c', 'echo opencode'], ['-c', '"$OPENCODE"'], ['-c', 'ls', 'opencode']]) {
+    for (const argv of [[], ['-i'], ['-c', 'echo opencode'], ['-c', '"$OPENCODE"'], ['-c', 'ls', 'opencode'], ['-c', 'X="opencode"']]) {
       expect(retiredAppCommand('/bin/bash', argv)).toBeNull()
       expect(agentTag('/bin/bash', argv)).toBe('Shell')
     }
+    // A comment is not a command (final recheck): a Claude session that mentions OpenCode stays Claude's.
+    expect(retiredAppCommand('/bin/bash', ['-ic', 'claude # was: opencode; opencode'])).toBeNull()
+    expect(agentTag('/bin/bash', ['-ic', 'claude # was: opencode; opencode'])).toBe('Claude')
     // A saved Cursor launch still runs as any other program, as Epic 71 left it.
     expect(retiredAppCommand('/usr/bin/cursor-agent', [])).toBeNull()
     expect(retiredAppCommand('/bin/bash', ['-ic', 'cursor-agent'])).toBeNull()

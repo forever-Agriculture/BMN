@@ -1290,22 +1290,26 @@ describe('shell session lifecycle', () => {
         ['OpenCode 2', direct, ['--model', 'x/y']],
         ['Quoted', '/bin/bash', ['-ic', "'opencode' --help"]],
         ['Split flags', '/bin/bash', ['-i', '-c', 'opencode']],
-        ['In a list', '/bin/bash', ['-c', `cd ${cwd} && opencode`]]
+        ['In a list', '/bin/bash', ['-c', `cd ${cwd} && opencode`]],
+        ['After an assignment', '/bin/bash', ['-c', 'MODE="local" opencode']]
       ]
       const retired = []
       for (const [name, executable, argv] of launches) retired.push(await manager.create({ ...DEFAULT_SESSION_CREATION, name, cwd, executable, argv, cols: 80, rows: 24 }))
       // A plain shell, and one that only names OpenCode, are still started and offered.
       const plain = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Shell', cwd, executable: '/bin/bash', argv: ['-i'], cols: 80, rows: 24 })
       const names = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Echo', cwd, executable: '/bin/bash', argv: ['-c', 'echo opencode'], cols: 80, rows: 24 })
-      for (const created of [...retired, plain, names]) await manager.stop(created, 'update-restart')
+      // A comment is not a command: this Claude session is started again and offered (final recheck 20261120T143138-b8b417b4).
+      const commented = await manager.create({ ...DEFAULT_SESSION_CREATION, name: 'Claude', cwd, executable: '/bin/bash', argv: ['-ic', 'claude # was: opencode; opencode'], cols: 80, rows: 24 })
+      for (const created of [...retired, plain, names, commented]) await manager.stop(created, 'update-restart')
       spawns.length = 0
-      expect((await manager.interruptedCohort())?.entries.map(entry => entry.sessionId).sort()).toEqual([plain.sessionId, names.sessionId].sort())
+      expect((await manager.interruptedCohort())?.entries.map(entry => entry.sessionId).sort()).toEqual([plain.sessionId, names.sessionId, commented.sessionId].sort())
       for (const created of retired) {
         await expect(manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })).rejects.toThrow('OpenCode was retired on 20 Nov 2026.')
       }
       expect(spawns).toEqual([])
       await manager.relaunch({ sessionId: plain.sessionId, cols: 80, rows: 24 })
-      expect(spawns).toEqual(['/bin/bash -i'])
+      await manager.relaunch({ sessionId: commented.sessionId, cols: 80, rows: 24 })
+      expect(spawns).toEqual(['/bin/bash -i', '/bin/bash -ic claude # was: opencode; opencode'])
     } finally {
       database.close()
     }

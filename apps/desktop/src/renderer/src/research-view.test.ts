@@ -64,6 +64,21 @@ describe('the Models page lists (60.10 AC4, first release)', () => {
     expect(priceChanges(models, data)).toEqual(priceChanges(MODELS, DATA))
   })
 
+  it('keeps a researched model Add to team gives to Codex, though an old OpenCode route also served its provider (final recheck)', () => {
+    // A synthetic mixed team: Codex uses one model at provider P, a retired OpenCode route still names P.
+    const data = {
+      ...DATA,
+      providers: [...DATA.providers, { id: 'mixed', name: 'Mixed', hosts: ['mixed.example.test'], private_work: 'allowed' }],
+      agents: [...DATA.agents, agent('nova', { harness: 'codex', provider: 'mixed', model: 'mixed-a' })],
+      harness_routes: [...DATA.harness_routes, { harness: 'opencode', provider: 'mixed', basis: 'inspected' }]
+    } as unknown as RosterDataShape
+    const models = [...MODELS, found('mixed-a', 'mixed'), found('mixed-b', 'mixed', { fresh: true })]
+    expect(appFor(data, 'mixed')).toBe('codex')
+    const groups = researchGroups(models, data)
+    expect(groups.fresh.map((model) => model.id)).toContain('mixed-b')
+    expect(groups.team.map((row) => row.model)).toContain('mixed-a')
+  })
+
   it('groups what research found against the team as drafted', () => {
     const groups = researchGroups(MODELS, DATA)
     expect(groups.fresh.map((model) => model.id)).toEqual(['claude-opus-5-6', 'gpt-6.1-astra'])

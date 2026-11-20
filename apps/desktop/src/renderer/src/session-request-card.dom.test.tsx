@@ -63,7 +63,15 @@ it('shows a request OpenCode opened with its words and retired label, with no ch
     })))
     const article = (id: string): HTMLElement => container.querySelector<HTMLElement>(`article[data-request-id="${id}"]`)!
     const buttons = (id: string): string[] => Array.from(article(id).querySelectorAll('button'), (button) => button.textContent ?? '')
-    for (const row of stored) expect(buttons(row.requestId)).toEqual(['Dismiss'])
+    for (const row of stored) {
+      expect(buttons(row.requestId)).toEqual(['Dismiss'])
+      // It says what it is: nothing waits for an answer (final recheck).
+      expect(article(row.requestId).textContent).toContain('read only')
+      expect(article(row.requestId).textContent).not.toContain('awaiting answer')
+      expect(article(row.requestId).querySelector('.status-dot.needs-you')).toBeNull()
+    }
+    expect(article('claude').querySelector('.status-dot.needs-you')).not.toBeNull()
+    expect(article('claude').textContent).toContain('awaiting answer')
     expect(article('oc-question').textContent).toContain('Which auth method should the API use?')
     expect(article('oc-question').textContent).toContain('Session cookies')
     expect(article('oc-question').querySelector('.attention-kind')?.textContent).toBe('Question · OpenCode (retired)')

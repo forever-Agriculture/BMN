@@ -691,10 +691,10 @@ recorded payloads) is kept at the local git tag `opencode-support-final`; nothin
   bound before is never resumed or looked for; a session saved to run OpenCode is never started
   again (Start again is off, and the update's resume offer leaves it out). That is a saved command
   whose program is `opencode`, or a shell's `-c` text that runs it as a command (`bash -ic 'opencode;
-  exec bash -i'`, `bash -i -c opencode`, `bash -c 'cd app && opencode'`, a quoted name); a plain
-  shell stays a shell whatever was typed into it, and a saved Cursor command still runs as Epic 71
-  left it. Saved hook log rows read as they did. A saved question or permission from OpenCode shows
-  its words and command, labelled, with Dismiss only: no choice, no Mark answered, no answer typed
+  exec bash -i'`, `bash -i -c opencode`, `bash -c 'cd app && opencode'`, `MODE="local" opencode`, a
+  quoted name); a comment is not a command, a plain shell stays a shell whatever was typed into it,
+  and a saved Cursor command still runs as Epic 71 left it. Saved hook log rows read as they did. A saved question or permission from OpenCode shows
+  its words and command, labelled and marked "read only", with Dismiss only: no choice, no Mark answered, no answer typed
   into the session, no Telegram page (also after quiet hours) and no line in the quiet-hours
   summary. An old team ask shows what its OpenCode form could read; its turn changes name it so. An OpenCode researcher is refused before anything is made or run. BMN's last
   OpenCode history cleanup result is kept as saved and shown nowhere. No OpenCode history is read
