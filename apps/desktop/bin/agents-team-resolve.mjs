@@ -1,6 +1,6 @@
 // MODULE: agents-team-resolve.mjs - Epic 72: the one resolver that picks who answers an ask and at which effort: a recheck's teammate, else the project's approved choice, else a named agent, else the small-work candidate, else the role's chain
 import { sharedSmallWork, unlinkedSmallWork } from './agents-small-work.mjs'
-import { agentState, classRefusal, initialEfforts, isCalled, isRetired, parseCandidate, retiredWords, roleEfforts } from './agents-roster.mjs'
+import { agentState, classRefusal, initialEfforts, isCalled, isRetired, parseCandidate, retiredAppClause, roleEfforts } from './agents-roster.mjs'
 
 /**
  * Who answers is decided by rules the asker can predict (R72-FR3, 72.2 AC1), in this order: a valid
@@ -30,7 +30,7 @@ const refuse = (code, message, alternatives) => {
  */
 function notEligible(data, role, agent, context) {
   if (agent === undefined) return 'is not on the approved team'
-  if (isRetired(agent.harness)) return `runs in ${retiredWords(agent.harness)}`
+  if (isRetired(agent.harness)) return `runs in ${retiredAppClause(agent.harness)}`
   const state = agentState(agent)
   if (state !== 'active') return `is ${state}`
   if (isCalled(agent)) return 'is called by BMN itself and answers no asks'

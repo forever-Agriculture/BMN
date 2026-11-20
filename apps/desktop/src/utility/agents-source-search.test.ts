@@ -185,7 +185,9 @@ describe('nothing in BMN asks the judge or reads its answer but the command and 
     ['apps/desktop/bin', /^(bmn|.*\.mjs)$/], ['apps/desktop/src/main', /\.ts$/], ['apps/desktop/src/utility', /\.ts$/], ['apps/desktop/src/preload', /\.ts$/],
     ['apps/desktop/src/renderer/src', /\.tsx?$/], ['scripts', /\.(mjs|sh)$/], ['scripts/lib', /\.mjs$/], ['shared/protocol/src', /\.ts$/]
   ]
-  const sources = folders.flatMap(([folder, pattern]) => inFolder(folder, pattern)).filter((file) => !/\.test\.tsx?$/.test(file))
+  // The retired-references allowlist names the judge's module as a path it may mention (Epic 123), and calls nothing.
+  const sources = folders.flatMap(([folder, pattern]) => inFolder(folder, pattern))
+    .filter((file) => !/\.test\.tsx?$/.test(file) && file !== 'scripts/lib/retired-references.mjs')
   /** A call of the command from code, the module that makes the request, the function that asks, or the page's own channel. */
   const ASKS = /agents-judge(\.mjs)?['"]|\brunJudge(Command)?\(|\btryJudge\(|aiterm:judge:try|['"`]judge['"`],\s*['"`]ask['"`]|\bspawn\w*\([^)]*judge/
   const asking = (): string[] => sources.filter((file) => ASKS.test(readFileSync(join(REPOSITORY, file), 'utf8'))).sort()

@@ -229,7 +229,7 @@ describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
       `## harness-routes.cursor: ${retired}; BMN proposes removing this route on Team`,
       `## skills.only.alpha: ${retired}`,
       `## tools.docs.apps: ${retired}`,
-      `composer runs in ${retired}; nothing runs on it, and BMN proposes removing it on Team`
+      `composer runs in ${retired.replace('Cursor was', 'Cursor, which was')}; nothing runs on it, and BMN proposes removing it on Team`
     ])
     expect(agentState(parsed.data!.agents.find((agent) => agent.id === 'composer')!)).toBe('retired')
     approveFile(namesCursor())
@@ -257,7 +257,7 @@ describe('a team file that still names OpenCode and Luna (Go) (Epic 123, 123.1 A
       `## harness-routes.opencode: ${retired}; BMN proposes removing this route on Team`,
       `## skills.only.alpha: ${retired}`,
       `## tools.docs.apps: ${retired}`,
-      `luna-go runs in ${retired}; nothing runs on it, and BMN proposes removing it on Team`
+      `luna-go runs in ${retired.replace('OpenCode was', 'OpenCode, which was')}; nothing runs on it, and BMN proposes removing it on Team`
     ])
     expect(agentState(parsed.data!.agents.find((agent) => agent.id === 'luna-go')!)).toBe('retired')
     approveFile(namesOpenCode())

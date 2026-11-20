@@ -46,6 +46,10 @@ export function appName(app) {
 export function retiredWords(app) {
   return `${RETIRED_APPS[app]} was retired on ${RETIREMENTS[app].on}; BMN's support for it is kept at the git tag ${RETIREMENTS[app].tag}`
 }
+/** The same words after "runs in": "OpenCode, which was retired on …; BMN's support for it is kept at the git tag …". */
+export function retiredAppClause(app) {
+  return `${RETIRED_APPS[app]}, which ${retiredWords(app).slice(RETIRED_APPS[app].length + 1)}`
+}
 /** Each retired app's program, so a command that starts one is named for what it was. */
 const RETIRED_PROGRAMS = { 'cursor-agent': 'cursor', opencode: 'opencode' }
 /** The retired app a command's program (a name or a path) starts, or null. */
@@ -733,7 +737,7 @@ export function parseRoster(text, { now = new Date() } = {}) {
   const judgeWritten = isObject(rolesBlock?.value) && Object.hasOwn(rolesBlock.value, JUDGE_ROLE)
   for (const agent of agentById.values()) {
     const entry = blocks.get(agent.id)
-    if (isRetired(agent.harness)) warn('APP_RETIRED', entry.lines.get('harness'), `${agent.id} runs in ${retiredWords(agent.harness)}; nothing runs on it, and BMN proposes removing it on Team`)
+    if (isRetired(agent.harness)) warn('APP_RETIRED', entry.lines.get('harness'), `${agent.id} runs in ${retiredAppClause(agent.harness)}; nothing runs on it, and BMN proposes removing it on Team`)
     const route = routes.find((candidate) => candidate.harness === agent.harness)
     if (isCalled(agent) && !roleIds.has(JUDGE_ROLE) && !judgeWritten && agent.roles.includes(JUDGE_ROLE)) {
       // Said as an error, not as the warning other roles get: without the role nothing could ever ask this agent.
@@ -1420,7 +1424,9 @@ export function roleChain(data, roleId) {
     const state = agent === undefined ? 'unknown' : agentState(agent)
     return {
       agent: candidate.agent, efforts: candidate.efforts, effort_choice: candidate.choice,
-      eligible: state === 'active', state, private_work: agent === undefined ? 'public_only' : privateWorkOf(data, agent)
+      eligible: state === 'active', state, private_work: agent === undefined ? 'public_only' : privateWorkOf(data, agent),
+      // An agent on a retired app says which, when and where its support is kept (Epic 123, 123.1 AC1).
+      ...(state === 'retired' ? { retired: `runs in ${retiredAppClause(agent.harness)}` } : {})
     }
   }
   const chain = { role: role.id, candidates: role.candidates.map(describe), then: role.then }
@@ -1445,7 +1451,7 @@ export function roleChainText(chain) {
   // A limit BMN applies to the run, or why it does not (60.9 AC2); nothing is said for the app's own default.
   const limit = (context) => context === undefined || context.state === 'app-default' ? ''
     : `  context-limit=${context.limit}${context.state === 'applied' ? '' : context.state === 'out-of-range' ? ' (cannot be applied)' : ' (not supported yet)'}`
-  const about = (candidate) => `${candidate.eligible ? 'eligible' : `not eligible: ${candidate.state}`}  private-work=${candidate.private_work === 'allowed' ? 'allowed' : 'public-only'}${limit(candidate.context)}`
+  const about = (candidate) => `${candidate.eligible ? 'eligible' : `not eligible: ${candidate.retired === undefined ? candidate.state : `${candidate.state}, ${candidate.retired}`}`}  private-work=${candidate.private_work === 'allowed' ? 'allowed' : 'public-only'}${limit(candidate.context)}`
   chain.candidates.forEach((candidate, index) => {
     const effort = candidate.effort_choice ? `${candidate.efforts.join('|')} (lead chooses)` : candidate.efforts[0]
     lines.push(`  ${index + 1}. ${candidate.agent}${effort === undefined ? '' : `@${effort}`}  ${about(candidate)}`)

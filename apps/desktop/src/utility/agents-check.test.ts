@@ -223,8 +223,8 @@ describe('an app BMN retired (Epics 71 and 123)', () => {
   it('refuses an agent a team file still names on either app, and a dispatch of either program, saying when it was retired (71, 123.1 AC1)', () => {
     approve(named())
     const opencodeRun = ['env', '-i', `PATH=${env.PATH}`, 'opencode', 'run', '--standalone', '--format', 'json', '--agent', 'bmn-helper', '-m', 'opencode-go/gpt-6-luna#xhigh', '--title', 'BMN helper']
-    expect(check({ agent: 'curs', role: 'helper', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `curs runs in ${RETIRED.cursor}` })
-    expect(check({ agent: 'luna-go', role: 'helper', argv: opencodeRun })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `luna-go runs in ${RETIRED.opencode}` })
+    expect(check({ agent: 'curs', role: 'helper', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `curs runs in ${RETIRED.cursor.replace('Cursor was', 'Cursor, which was')}` })
+    expect(check({ agent: 'luna-go', role: 'helper', argv: opencodeRun })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `luna-go runs in ${RETIRED.opencode.replace('OpenCode was', 'OpenCode, which was')}` })
     expect(check({ agent: 'glm', role: 'helper', argv: ['cursor-agent', '-p', '--model', 'composer-2', 'x'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.cursor })
     expect(check({ agent: 'glm', role: 'helper', argv: ['env', '-i', '/home/owner/.local/bin/cursor-agent', '-p'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.cursor })
     expect(check({ agent: 'glm', role: 'helper', argv: opencodeRun })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.opencode })

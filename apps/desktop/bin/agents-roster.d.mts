@@ -115,6 +115,7 @@ export declare const LISTED_APPS: ListedApp[]
 export declare const RETIRED_APPS: Record<RetiredApp, string>
 export declare function isRetired(app: unknown): app is RetiredApp
 export declare function retiredWords(app: RetiredApp): string
+export declare function retiredAppClause(app: RetiredApp): string
 export declare function appRefusal(app: unknown, words: string): string
 export declare function retiredProgram(command: unknown): RetiredApp | null
 export declare function appName(app: string): string

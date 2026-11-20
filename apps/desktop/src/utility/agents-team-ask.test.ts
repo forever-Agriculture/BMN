@@ -658,7 +658,7 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
       .replace('helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}', 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna-go@high, luna@max], then: lead}')
     approve(team)
     const runs = existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()).length : 0
-    expect(refusal(() => ask({ role: 'helper', agent: 'luna-go', effort: 'high' })).message).toContain("OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final")
+    expect(refusal(() => ask({ role: 'helper', agent: 'luna-go', effort: 'high' })).message).toContain("runs in OpenCode, which was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final")
     // The role's next candidate answers in her place.
     expect(resolveTeammate(data(), { role: 'helper' }, context())).toMatchObject({ agent: { id: 'luna' } })
     expect(existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()).length : 0).toBe(runs)

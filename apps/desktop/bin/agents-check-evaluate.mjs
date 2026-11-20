@@ -3,7 +3,7 @@ import { sharedSmallWork } from './agents-small-work.mjs'
 import { lstatSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, relative, sep } from 'node:path'
-import { APP_NAMES, agentState, canonicalJson, classRefusal, isCalled, namedResearchers, retiredWords, roleEfforts, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, agentState, canonicalJson, classRefusal, isCalled, namedResearchers, retiredAppClause, roleEfforts, sha256 } from './agents-roster.mjs'
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { CLAUDE_CONTEXT_KEY, checkContext, claudeContextSettingsSize, provenControls, provenPrecedence, researchContextProven } from './agents-context.mjs'
 import { appTools, checkRunTools } from './agents-tools.mjs'
@@ -25,7 +25,7 @@ function activeAgent(generation, id) {
   // An agent BMN itself calls runs in no agent app: there is no command of it to check (65.1 AC4).
   if (isCalled(agent)) refuse('CALLED_BY_BMN', `${agent.id} is called by BMN itself and runs in no agent app, so no dispatch command is checked for it`)
   const state = agentState(agent)
-  if (state === 'retired') refuse('APP_RETIRED', `${agent.id} runs in ${retiredWords(agent.harness)}`)
+  if (state === 'retired') refuse('APP_RETIRED', `${agent.id} runs in ${retiredAppClause(agent.harness)}`)
   if (state === 'proposed') refuse('PROPOSED', `${agent.id} is proposed, not approved as active`)
   if (state === 'disabled') refuse('DISABLED', `${agent.id} is disabled`)
   return agent

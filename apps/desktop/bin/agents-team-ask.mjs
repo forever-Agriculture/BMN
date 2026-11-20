@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
-import { APP_NAMES, agentState, collisionWords, isRetired, projectChoiceFor, publicOnlyReasons, retiredWords } from './agents-roster.mjs'
+import { APP_NAMES, agentState, collisionWords, isRetired, projectChoiceFor, publicOnlyReasons, retiredAppClause } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, modeInput, teamRunsDirectory, workspaceRoot } from './agents-check.mjs'
 import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, codexMcpServers, executableIdentity } from './agents-team-forms.mjs'
@@ -231,7 +231,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   const consent = allowed(choice.agent)
   if (!consent.allowed) throw new AskRefusal(consent.code, consent.reason)
   // An agent on a retired app says when the app was retired and where its support is kept (Epics 71 and 123).
-  if (isRetired(choice.agent.harness)) throw new AskRefusal('AGENT_NOT_ELIGIBLE', `${choice.agent.id} runs in ${retiredWords(choice.agent.harness)}`)
+  if (isRetired(choice.agent.harness)) throw new AskRefusal('AGENT_NOT_ELIGIBLE', `${choice.agent.id} runs in ${retiredAppClause(choice.agent.harness)}`)
   if (agentState(choice.agent) !== 'active') throw new AskRefusal('AGENT_NOT_ELIGIBLE', `${choice.agent.id} is ${agentState(choice.agent)}`)
 
   // Only now is anything written: the run's folder and its inputs.
