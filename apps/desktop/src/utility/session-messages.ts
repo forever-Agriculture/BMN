@@ -375,17 +375,23 @@ export class SessionMessages {
       taken.length = 0
       return answer()
     }
+    // Every provider answer first, then the claims: a slow answer for a later folder must never hold a claim already made
+    // past the hook's deadline, where it would stay "taken, not confirmed" (136.2 review). Oldest first; one call takes at
+    // most the queue's bound, and a hook without `many` one.
+    const allowed: typeof candidates = []
     for (const candidate of candidates) {
-      // Oldest first; one call takes at most the queue's bound, and a hook without `many` one.
-      if (taken.length > 0 && (p.many !== true || taken.length >= SESSION_MESSAGE_MAX_WAITING)) break
+      if (allowed.length >= (p.many === true ? SESSION_MESSAGE_MAX_WAITING : 1)) break
       const refusal = await this.providerRefusal(candidate, ask)
       if (refusal !== null) {
         const detail = `Not handed over by the hook: ${stripFormatCharacters(refusal)}.`.slice(0, 400)
         if (this.hold(candidate.messageId, detail)) this.options.changed()
         continue
       }
-      // The answers above took time.
-      if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return await gone(taken)
+      allowed.push(candidate)
+    }
+    // The answers above took time.
+    if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return answer()
+    for (const candidate of allowed) {
       const claimId = randomUUID()
       const claim = await database.companion('claimMessageForHook', {
         messageId: candidate.messageId, receiverSessionId: p.sessionId, incarnationId: p.incarnationId,

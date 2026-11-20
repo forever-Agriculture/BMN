@@ -412,10 +412,16 @@ async function recoverOneWay(plan, loc, { environment = process.env } = {}) {
   return [...findings, ...copyStateFindings(loc, metadata(loc))]
 }
 const journalFiles = loc => existsSync(loc.folder) ? readdirSync(loc.folder).filter(name => /^[0-9a-f]{64}\.json$/u.test(name)) : []
-function copyStateFindings(loc, meta) {
+/**
+ * Rows whose target differs from its last copy, and unresolved provenance. `journals` (by key) are unfinished copies that
+ * recovery will finish: a target holding that journal's value from before or after its write is pending, not a conflict
+ * (136.1 review: a crash right after the target write must not read as a conflict).
+ */
+function copyStateFindings(loc, meta, journals = new Map()) {
   const findings = [], targets = rows(loc.target), source = rows(loc.source)
   if (meta.active === false) return findings
-  for (const [key, entry] of Object.entries(meta.rows)) if (!same(targets.get(key), entry.last_copied)) findings.push({ code: 'COPY_CONFLICT', key, where: loc.target, reason: `COPY_CONFLICT ${key}: canonical ${JSON.stringify(source.get(key) ?? null)}, target ${JSON.stringify(targets.get(key) ?? null)}; explicit copy requires its fresh token`, canonical: source.get(key) ?? null, target: targets.get(key) ?? null, token: combinedToken(loc, key, meta) })
+  const recovering = (key) => journals.has(key) && [journals.get(key).target_before, journals.get(key).target_after].some(value => token(key, value) === token(key, targets.get(key)))
+  for (const [key, entry] of Object.entries(meta.rows)) if (!same(targets.get(key), entry.last_copied) && !recovering(key)) findings.push({ code: 'COPY_CONFLICT', key, where: loc.target, reason: `COPY_CONFLICT ${key}: canonical ${JSON.stringify(source.get(key) ?? null)}, target ${JSON.stringify(targets.get(key) ?? null)}; explicit copy requires its fresh token`, canonical: source.get(key) ?? null, target: targets.get(key) ?? null, token: combinedToken(loc, key, meta) })
   for (const key of Object.keys(meta.unresolved)) findings.push({ code: 'COPY_PROVENANCE_REQUIRED', key, where: loc.record, reason: `${key} has unresolved move-time writer provenance` })
   return findings
 }
@@ -432,12 +438,14 @@ export function copyCheck(plan) {
   const loc = locations(plan), meta = metadata(loc), findings = [], warnings = []
   const pending = (key, reason) => warnings.push({ code: 'COPY_SYNC_PENDING', key, where: loc.record, reason: `${reason}; run \`bmn plan sync\`` })
   if (meta.version !== 2) {
+    const journals = new Map()
     for (const file of journalFiles(loc)) {
       const state = load(join(loc.folder, file))
+      journals.set(state.key, state)
       if (state.phase === 'go-waiting') findings.push({ code: 'COPY_GO_PENDING', key: state.key, where: loc.source, reason: `retry the original Go for ${state.key}; copy recovery never creates or completes a Go` })
       else pending(state.key, `an unfinished copy of ${state.key} awaits recovery`)
     }
-    return { findings: [...findings, ...copyStateFindings(loc, meta)], warnings }
+    return { findings: [...findings, ...copyStateFindings(loc, meta, journals)], warnings }
   }
   const holds = syncHolds(loc, meta), blocked = new Set(Object.keys(holds)), journalled = new Set()
   for (const hold of Object.values(holds)) findings.push({ code: hold.code, key: hold.key, where: loc.record, reason: hold.reason })

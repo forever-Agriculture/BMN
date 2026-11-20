@@ -112,6 +112,16 @@ await setWithCopy(await resolvePlan(${JSON.stringify(f.root)}),{key:'7-1-one',st
       const env = { ...process.env, XDG_STATE_HOME: join(f.root, 'state') }
       const check = JSON.parse(spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env }).stdout)
       if (boundary !== 'complete') expect(check.warnings, boundary).toContainEqual(expect.objectContaining({ code: 'COPY_SYNC_PENDING', key: '7-1-one' }))
+      // A crash between the copy's own writes is pending, never a conflict (136.1 review) ...
+      expect(check.findings.filter(one => one.code === 'COPY_CONFLICT'), boundary).toEqual([])
+      if (boundary === 'target-replaced') {
+        // ... while a target its owner changed to a third value still is.
+        const copied = readFileSync(f.target, 'utf8')
+        writeFileSync(f.target, copied.replace(/7-1-one: review[^\n]*/u, '7-1-one: done # independent target edit'))
+        const edited = JSON.parse(spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env }).stdout)
+        expect(edited.findings, boundary).toContainEqual(expect.objectContaining({ code: 'COPY_CONFLICT', key: '7-1-one' }))
+        writeFileSync(f.target, copied)
+      }
       const result = spawnSync(process.execPath, [bmn, 'plan', 'sync', '--project', f.root, '--json'], { encoding: 'utf8', env })
       const findings = JSON.parse(result.stdout).findings.filter(one => one.code?.startsWith('COPY_'))
       if (['plan-writing', 'target-writing', 'record-writing'].includes(boundary)) expect(findings, boundary).toContainEqual(expect.objectContaining({ code: 'COPY_UNCERTAIN' }))

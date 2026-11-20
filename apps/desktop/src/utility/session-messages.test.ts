@@ -1190,10 +1190,31 @@ describe('one woken call takes every waiting message (136.2 AC2, Epic 111 F21)',
     expect(stored(sent[0]!.messageId).state).toBe('waiting')
   })
 
+  it('claims nothing until every provider answer is in, so a slow later answer cannot strand an earlier claim (136.2 review)', async () => {
+    const second = repository(join(root, 'code/second'))
+    const sent = [await tell('a', 'b', 'from this folder'), await tell('c', 'b', 'from the second folder', second)]
+    let release: () => void = () => undefined
+    let asked: () => void = () => undefined
+    const reached = new Promise<void>((resolve) => { asked = resolve })
+    const slow = new Promise<void>((resolve) => { release = resolve })
+    allowed = async (_destination, senderRoot) => {
+      if (senderRoot === second) { asked(); await slow }
+      return { allowed: true, reason: 'OpenAI is allowed in this workspace' }
+    }
+
+    const taking = takeAll('b')
+    await reached
+    // The first message's folder was answered long ago; while the second's is still out, nothing is claimed yet.
+    for (const message of sent) expect(stored(message.messageId)).toMatchObject({ state: 'waiting', claimedApp: null })
+    release()
+
+    expect((await taking).messages!.map((message) => message.messageId)).toEqual(sent.map((message) => message.messageId))
+  })
+
   it('hands nothing, and gives every claim back, when the terminal is given another process partway through a batch', async () => {
     const second = repository(join(root, 'code/second'))
     const sent = [await tell('a', 'b', 'from this folder'), await tell('c', 'b', 'from the second folder', second)]
-    // The provider's answer for the second folder comes after the first message was claimed; meanwhile the terminal moved on.
+    // The terminal moves on while the provider's answer for the second folder is out: nothing is claimed for the gone process.
     allowed = (_destination, senderRoot) => {
       if (senderRoot === second) live.set('b', 'run-b-next')
       return { allowed: true, reason: 'OpenAI is allowed in this workspace' }
