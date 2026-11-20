@@ -5,7 +5,7 @@
 # lines that start with those words run, but git itself takes options that write a file (--output), read any file
 # (diff --no-index, blame --contents, -O, --pathspec-from-file, --ignore-revs-file) or run a program (external
 # diff, textconv), and it takes any unique beginning of a long option as the option (--cont= is --contents=). This
-# file stands first on the run's PATH as `git` for Claude Code and OpenCode's reader (72.9): it takes the
+# file stands first on the run's PATH as `git` for Claude Code (72.9): it takes the
 # subcommand from an allowlist and every option only when it is spelled whole as one of the read-only options
 # below, refusing anything else by name, and runs the system's git with no system or global configuration, with
 # hooks, fsmonitor, external diff, text conversion and the pager off; the project's own configuration is read as
@@ -22,7 +22,7 @@ shift
 case $command in
   log|show|diff|blame) listing=0 ;;
   # What a commit's tree or the index holds, by name (owner 2026-11-18: Claude Code teammates asked for these and
-  # were refused). Claude Code's reader only: OpenCode's broker still takes the four history commands alone.
+  # were refused).
   ls-tree|ls-files) listing=1 ;;
   *) refuse "git $command" ;;
 esac
@@ -106,9 +106,6 @@ after_dashes=0
     /*|../*|*/../*|..) refuse "the path $argument" ;;
   esac
 done
-
-# The OpenCode broker validates this same option policy before its isolated Git invocation.
-[ "${BMN_ASK_GIT_VALIDATE_ONLY:-}" = 1 ] && exit 0
 
 GIT_CONFIG_NOSYSTEM=1
 GIT_CONFIG_GLOBAL=/dev/null

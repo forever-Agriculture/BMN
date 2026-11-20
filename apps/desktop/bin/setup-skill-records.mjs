@@ -8,6 +8,8 @@ import { replaceSetupConfig, setupConfigRecovery } from './setup-config-write.mj
 import { linkTarget } from './safe-config-write.mjs'
 
 const kinds = ['own-skills', 'skills-written']
+// OpenCode was retired (Epic 123): rows written for it before stay readable, so the records still load.
+const RETIRED_SKILL_APP = 'opencode'
 const failure = message => Object.assign(new Error(message), { code: 'DEFAULTS_STATE_UNAVAILABLE' })
 const sha = text => createHash('sha256').update(text).digest('hex')
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -37,7 +39,7 @@ export function validateSetupSkillRecords(kind, value) {
       Object.entries(value.removed).every(([skill, at]) => name(skill) && timestamp(at))
   } else if (kind === 'skills-written') {
     valid = object(value) && Object.keys(value).length <= 4096 && Object.entries(value).every(([path, row]) => pathValid(path) &&
-      object(row) && ['claude', 'codex', 'opencode'].includes(row.harness) && name(row.skill) && basename(path) === row.skill &&
+      object(row) && ['claude', 'codex', RETIRED_SKILL_APP].includes(row.harness) && name(row.skill) && basename(path) === row.skill &&
       (row.kind === 'link' ? exact(row, ['harness', 'skill', 'kind', 'target']) && pathValid(row.target) :
         row.kind === 'copy' && exact(row, ['harness', 'skill', 'kind', 'hash', 'source_hash']) && hash(row.hash) && hash(row.source_hash)))
   }

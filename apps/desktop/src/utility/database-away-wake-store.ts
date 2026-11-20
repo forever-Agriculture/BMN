@@ -72,6 +72,7 @@ export function awayNightData(database: DatabaseConnection, call: AwayNightCall)
     foreground: row.foreground === null ? null : row.foreground === 1, generation: row.generation, prompt: row.prompt, outcome: row.outcome,
     reason: row.reason_code
   }))
+  // A night recorded before OpenCode was retired (Epic 123) may have woken an OpenCode session; its account still lists it.
   const sessions = database.prepare(`SELECT session_id, MAX(app) AS app FROM (
       SELECT i.session_id, b.agent_cli AS app FROM process_incarnation i JOIN conversation_binding b ON b.session_id = i.session_id
       WHERE b.status = 'bound' AND b.agent_cli IN ('claude', 'codex', 'opencode')

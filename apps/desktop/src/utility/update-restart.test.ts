@@ -14,7 +14,7 @@ type Agent = 'claude' | 'codex' | 'bash'
 function setup(agent: Agent = 'claude', atPress: UpdateRestartMember['atPress'] = 'working') {
   const root = mkdtempSync(join(tmpdir(), 'restart-test-')); roots.push(root)
   let time = Date.parse('2026-11-13T12:00:00Z'), incarnation = 'old', conversation = 'conversation', generation = 0
-  let seen: WakeObservation | undefined = { sessionId: 's', incarnationId: 'old', agent, event: 'PostToolUse', source: null, plugin: null, observedAt: new Date(time).toISOString(), foreground: 'front' }
+  let seen: WakeObservation | undefined = { sessionId: 's', incarnationId: 'old', agent, event: 'PostToolUse', source: null, observedAt: new Date(time).toISOString(), foreground: 'front' }
   let open: WakeAttention[] = []
   let lines = agent === 'codex' ? ['› ', '', 'gpt-6'] : ['──────────────', '❯ ', '──────────────']
   const write = vi.fn()
@@ -27,13 +27,13 @@ function setup(agent: Agent = 'claude', atPress: UpdateRestartMember['atPress'] 
     binding: async () => conversation, currentBinding: () => conversation,
     proof: { now: () => new Date(time), observation: () => seen, liveIncarnation: () => incarnation,
       foreground: () => 'front', generation: () => ({ generation, pending: 0 }),
-      screen: async () => ({ lines, cursor: { x: 0, y: 1 } }), write },
+      screen: async () => ({ lines }), write },
     openAttention: async () => open, notify,
     resume: vi.fn(async (_member?: UpdateRestartMember) => { void _member; incarnation = 'new'; seen = undefined; return { sessionId: 's', incarnationId: 'new', attachmentId: 'a', streamSeq: 0, captureStartedAt: new Date(time).toISOString(), modes: [], launch: { cwd: root, executable: agent } } as SessionResumeResult })
   }
   let coordinator = new UpdateRestart(options)
   const hook = (event = 'PostToolUse', extra = {}) => coordinator.hook({ sessionId: 's', incarnationId: 'old', agent, event, source: null, turn: { conversation, nested: false }, ...extra })
-  const observe = (event: string, id = incarnation, source: string | null = null): void => { seen = { sessionId: 's', incarnationId: id, agent, event, source, plugin: null, observedAt: new Date(++time).toISOString(), foreground: 'front' } }
+  const observe = (event: string, id = incarnation, source: string | null = null): void => { seen = { sessionId: 's', incarnationId: id, agent, event, source, observedAt: new Date(++time).toISOString(), foreground: 'front' } }
   const member = (): UpdateRestartMember => coordinator.snapshot()!.members[0]!
   return { get coordinator() { return coordinator }, options, targets, write, notify, hook, observe, member,
     /** The notice handed at a tool call, printed by the hook and acknowledged. */
@@ -381,7 +381,7 @@ describe('Cancel (125.4 AC5, D4)', () => {
 
 describe('after reopening: Claude Code is told once, under the idle proof (125.5 AC2, AC3, AC5)', () => {
   it('the proof starts from the resumed run\'s own start and nothing else', () => {
-    const seen = (agent: string, event: string, source: string | null): WakeObservation => ({ sessionId: 's', incarnationId: 'new', agent, event, source, plugin: null, observedAt: '2026-11-13T12:00:00.000Z', foreground: 'front' })
+    const seen = (agent: string, event: string, source: string | null): WakeObservation => ({ sessionId: 's', incarnationId: 'new', agent, event, source, observedAt: '2026-11-13T12:00:00.000Z', foreground: 'front' })
     expect(resumedStart(seen('claude', 'SessionStart', 'resume'))).toBeNull()
     expect(resumedStart(seen('claude', 'SessionStart', 'startup'))).toMatch(/not the start of its resumed run/u)
     expect(resumedStart(seen('claude', 'UserPromptSubmit', null))).toMatch(/UserPromptSubmit/u)

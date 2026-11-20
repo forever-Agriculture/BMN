@@ -1,10 +1,9 @@
-// MODULE: team-ask-harness.ts - Epic 72 test harness: an isolated home with a synthetic approved team, made-up sign-in files and stand-in Codex, Claude Code and OpenCode apps written in sh that run in BMN's real systemd user scope, as each app's own read-only mode would; no provider is reached
+// MODULE: team-ask-harness.ts - Epic 72 test harness: an isolated home with a synthetic approved team, made-up sign-in files and stand-in Codex and Claude Code apps written in sh that run in BMN's real systemd user scope, as each app's own read-only mode would; no provider is reached
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { installOpenCodeFolder } from '../../../bin/agents-opencode.mjs'
 import { readValidRoster } from '../../../bin/agents-state.mjs'
 import { scopeStarts } from '../../../bin/agents-team-supervisor.mjs'
 import { approveRoster } from '../../main/agents-approval'
@@ -146,76 +145,6 @@ printf '{"type":"assistant","session_id":"%s","message":{"model":"%s","usage":{"
 printf '{"type":"result","subtype":"success","is_error":false,"result":"claude answer %s rules=%s%s in %s%s","session_id":"%s","total_cost_usd":0.0123,"usage":{"input_tokens":3,"cache_creation_input_tokens":7,"cache_read_input_tokens":11,"output_tokens":4},"modelUsage":%s}\\n' "$id" "$rules" "$input" "$(pwd)" "$key" "$sid" "$child"
 `)
   chmodSync(join(stubs, 'claude'), 0o755)
-}
-
-/**
- * A stand-in OpenCode in sh: `auth export` and `auth import` keep a made-up sign-in in its data
- * folder, `run` answers in the folder it works in, naming its session in every event and saving the
- * session's record, which `session export` prints. Words in the question steer it: SLEEP (waits as on
- * a provider it retries), FAIL (an error event), OTHERMODEL (the session ran another model), SUBAGENT
- * (a task whose child session names the teammate's as its parent), ORPHAN (a child session that
- * names no parent), NOEXPORT (a child session with no export), TWICE (two events name one child),
- * CREDANSWER, STRAY.
- */
-export function stubOpenCode(stubs: string, version = '2.0.29'): void {
-  writeFileSync(join(stubs, 'opencode'), `#!/bin/sh
-[ "$1" = --version ] && echo "${version}" && exit 0
-data="\${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
-case "$1 $2" in
-  "auth export") if [ -f "$data/opencode.db" ]; then cat "$data/opencode.db"; else echo '[]'; fi; exit 0;;
-  "auth import") mkdir -p "$data"; cat > "$data/opencode.db"; exit 0;;
-  "session export") if [ -f "$data/session-$3.json" ]; then cat "$data/session-$3.json"; exit 0; fi; echo "no session" >&2; exit 1;;
-esac
-model=; agent=; prev=
-for a in "$@"; do [ "$prev" = -m ] && model=$a; [ "$prev" = --agent ] && agent=$a; prev=$a; done
-question=$(cat)
-id=$(printf %s "$question" | md5sum | cut -c1-12)
-sid="ses_\${id}AAAAAAAAAAAAAA"
-kid="ses_\${id}CCCCCCCCCCCCCC"
-key=
-case $question in *CREDANSWER*) key=" key ${ANSWER_KEY}";; esac
-case $question in *STRAY*) setsid sh -c "trap '' TERM HUP; sleep 300 # stray of $HOME" </dev/null >/dev/null 2>&1 &;; esac
-rules=no
-case $OPENCODE_CONFIG_CONTENT in *RULES-SENTINEL*) rules=yes;; esac
-signed=$(grep -c sk-synthetic "$data/opencode.db" 2>/dev/null || echo 0)
-provider=\${model%%/*}; rest=\${model#*/}; mid=\${rest%%#*}; variant=\${rest#*#}
-case $question in *OTHERMODEL*) mid=gpt-6-other;; esac
-mkdir -p "$data"
-printf '{"info":{"id":"%s","agent":"%s","title":"BMN ask","model":{"id":"%s","providerID":"%s","variant":"%s"},"cost":0.002,"tokens":{"input":60,"output":24,"reasoning":3,"cache":{"read":5,"write":0}}},"messages":[{"text":"MESSAGES-SENTINEL"}]}' "$sid" "$agent" "$mid" "$provider" "$variant" > "$data/session-$sid.json"
-printf '{"type":"step_start","sessionID":"%s","part":{"type":"step-start"}}\\n' "$sid"
-case $question in *SLEEP*) sleep 60;; esac
-case $question in *FAIL*) printf '{"type":"error","sessionID":"%s","error":{"type":"provider.auth","message":"made-up sign-in failure"}}\\n' "$sid"; exit 1;; esac
-# Broker metadata and the durable lifecycle match the pinned native completion export.
-child_tool=subagent
-case $question in *BROKER*)
- child_tool=bmn_subagent
- accounting="$XDG_STATE_HOME/bmn-reader"
- mkdir -p "$accounting"
- parent_hash=$(printf %s "$sid" | sha256sum | cut -d' ' -f1)
- printf '{"version":1,"parent":"%s","call":"call-synthetic","intent":"settled","child":"%s","termination":"confirmed"}' "$sid" "$kid" > "$accounting/child-$parent_hash.json"
- chmod 600 "$accounting/child-$parent_hash.json";;
-esac
-# A task the teammate started (OpenCode 2.0.29, measured 72.9): its child session has its own export, naming its parent, with its own tokens only.
-case $question in *SUBAGENT*|*ORPHAN*|*NOEXPORT*|*TWICE*)
-  parent=',"parentID":"'"$sid"'"'
-  case $question in *ORPHAN*) parent=;; esac
-  case $question in *NOEXPORT*) ;; *) printf '{"info":{"id":"%s"%s,"agent":"bmn-reader","title":"read the tests","model":{"id":"%s","providerID":"%s","variant":"low"},"cost":0.001,"tokens":{"input":30,"output":4,"reasoning":1,"cache":{"read":2,"write":0}}}}' "$kid" "$parent" "$mid" "$provider" > "$data/session-$kid.json";; esac
-  case $question in *TWICE*) printf '{"type":"tool_use","sessionID":"%s","part":{"tool":"%s","state":{"status":"running","input":{"agent":"bmn-reader","description":"read the tests","prompt":"made-up"},"metadata":{"metadata":{"sessionID":"%s","status":"running"}}}}}\\n' "$sid" "$child_tool" "$kid";; esac
-  printf '{"type":"tool_use","sessionID":"%s","part":{"tool":"%s","state":{"status":"completed","input":{"agent":"bmn-reader","description":"read the tests","prompt":"made-up"},"metadata":{"metadata":{"sessionID":"%s","status":"completed"}}}}}\\n' "$sid" "$child_tool" "$kid";;
-esac
-printf '{"type":"text","sessionID":"%s","part":{"type":"text","text":"opencode answer %s agent=%s signed=%s rules=%s in %s%s"}}\\n' "$sid" "$id" "$agent" "$signed" "$rules" "$(pwd)" "$key"
-printf '{"type":"step_finish","sessionID":"%s","part":{"type":"step-finish","tokens":{"input":20,"output":8}}}\\n' "$sid"
-`)
-  chmodSync(join(stubs, 'opencode'), 0o755)
-}
-
-/** A made-up OpenCode Go sign-in in BMN's own OpenCode folder, installed as BMN installs it, as 70.4 copies the owner's there. */
-export const GO_KEY_SENTINEL = 'sk-synthetic-go-key-SIGNIN-SENTINEL'
-export function goSignInInBmnFolder(home: string, entries = [{ id: 'a1', integrationID: 'opencode-go', label: 'Go', active: true, value: { type: 'key', key: GO_KEY_SENTINEL } }]): void {
-  const base = join(home, '.config/bmn/agents/state/opencode')
-  installOpenCodeFolder(base, { ownerCache: join(home, 'no-owner-cache') })
-  mkdirSync(join(base, 'data/opencode'), { recursive: true })
-  writeFileSync(join(base, 'data/opencode/opencode.db'), `${JSON.stringify(entries)}\n`)
 }
 
 /**

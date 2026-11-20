@@ -1,9 +1,9 @@
-// MODULE: agents-check-argv.mjs - the dispatch check (Epic 60.3) behind agents-check.mjs: dispatch argv for Codex, Claude Code and OpenCode, and the named Codex configuration keys
+// MODULE: agents-check-argv.mjs - the dispatch check (Epic 60.3) behind agents-check.mjs: dispatch argv for Codex and Claude Code, and the named Codex configuration keys
 import { basename } from 'node:path'
 import { retiredProgram, retiredWords } from './agents-roster.mjs'
 import { CODEX_CONTEXT_KEYS, wholeNumber } from './agents-context.mjs'
 
-export { CODEX_ACCESS_KEYS, CODEX_NEUTRAL_KEYS, CODEX_ROUTE_KEYS, dispatchEnvironment, harnessOf, parseOpenCode, tomlKeyPath, unquoteToml }
+export { CODEX_ACCESS_KEYS, CODEX_NEUTRAL_KEYS, CODEX_ROUTE_KEYS, dispatchEnvironment, harnessOf, tomlKeyPath, unquoteToml }
 
 // ---------------------------------------------------------------------------------------------
 // Dispatch argv
@@ -30,13 +30,12 @@ function harnessOf(command) {
   const name = basename(command)
   if (name === 'codex') return 'codex'
   if (name === 'claude') return 'claude'
-  if (name === 'opencode') return 'opencode'
   return null
 }
 
 /**
  * Parses exactly the dispatch forms dev-auto documents and nothing else: `codex exec [resume <id>]`,
- * `claude -p` and `opencode run`, each optionally behind `env -i NAME=value …`. Returns null for anything else.
+ * and `claude -p`, each optionally behind `env -i NAME=value …`. Returns null for anything else.
  * `research` also admits the arguments only a research run carries.
  */
 export function parseDispatch(argv, { research = false } = {}) {
@@ -61,54 +60,7 @@ export function parseDispatch(argv, { research = false } = {}) {
   }
   const rest = argv.slice(index + 1)
   const base = { harness, command, envMode, assignments }
-  if (harness === 'opencode') return parseOpenCode(rest, base)
   return harness === 'codex' ? parseCodex(rest, base, research) : parseClaude(rest, base)
-}
-
-const OPENCODE_VALUE_FLAGS = { '--format': 'format', '--agent': 'agent', '-m': 'model', '--model': 'model', '--title': 'title' }
-/** Arguments of `opencode run` the form refuses, each with what it would do (70.1). */
-const OPENCODE_REFUSED = {
-  '--auto': 'it approves every permission not denied',
-  '--session': 'it continues or creates a session other than the run\'s own', '-s': 'it continues or creates a session other than the run\'s own',
-  '--continue': 'it continues your last session', '-c': 'it continues your last session',
-  '--fork': 'it forks an earlier session into the run',
-  '--server': 'it sends the run to a server BMN does not start',
-  '--file': 'it attaches a file the check does not read', '-f': 'it attaches a file the check does not read'
-}
-
-/**
- * `opencode run` in the one form 70.1 measured: `--standalone` (a private server, never the background
- * service that serves the owner's terminals), `--format json` (it names the session the receipt binds),
- * `--agent`, `-m`/`--model` and `--title`, each once, and the prompt on standard input.
- */
-function parseOpenCode(args, base) {
-  if (args[0] !== 'run') return { unsupported: 'only `opencode run` is a supported OpenCode dispatch' }
-  const parsed = { ...base, standalone: false }
-  for (let index = 1; index < args.length; index += 1) {
-    const argument = args[index]
-    if (!argument.startsWith('-')) return { unsupported: `opencode run ${argument} is not a supported argument (the prompt goes through standard input, the checked --stdin file)` }
-    const equals = argument.startsWith('--') ? argument.indexOf('=') : -1
-    const flag = equals === -1 ? argument : argument.slice(0, equals)
-    if (flag === '--standalone' && equals === -1) {
-      if (parsed.standalone) return { unsupported: '--standalone given twice' }
-      parsed.standalone = true
-      continue
-    }
-    if (Object.hasOwn(OPENCODE_REFUSED, flag)) return { unsupported: `opencode run ${flag} is not a supported argument: ${OPENCODE_REFUSED[flag]}` }
-    if (Object.hasOwn(OPENCODE_VALUE_FLAGS, flag)) {
-      const value = equals !== -1 ? argument.slice(equals + 1) : args[index + 1]
-      if (value === undefined) return { unsupported: `${flag} needs a value` }
-      if (equals === -1) index += 1
-      const key = OPENCODE_VALUE_FLAGS[flag]
-      if (parsed[key] !== undefined) return { unsupported: `${flag} given twice` }
-      parsed[key] = value
-      continue
-    }
-    return { unsupported: `opencode run ${argument} is not a supported argument` }
-  }
-  if (!parsed.standalone) return { unsupported: 'opencode run must carry --standalone: without it the run goes to the background service that serves your terminals' }
-  if (parsed.format !== 'json') return { unsupported: 'opencode run must carry --format json, which names the session a receipt is bound to' }
-  return parsed
 }
 
 function parseCodex(args, base, research = false) {

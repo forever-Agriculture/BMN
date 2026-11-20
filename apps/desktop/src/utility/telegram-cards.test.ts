@@ -314,10 +314,12 @@ Next: expiry &lt;decision&gt;.</blockquote>
       .toBe('❓ <b>api-server</b> · Claude 🇺🇸\n<b>Pick a branch</b>\n\n<i>Reply to this message to answer.</i>')
     expect(requestCard({ session: 's', agent: null, flag: null }, { kind: 'permission', title: 'Wants Bash', body: null }).text)
       .toBe('🔐 <b>s</b>\n<b>Wants Bash</b>\n\n<i>Reply to this message to answer.</i>')
-    expect(noticeCard(CLAUDE, { requestKey: 'error', title: 'OpenCode reported an error', body: 'x' }).text)
-      .toBe('⚠ <b>api-server</b> · Claude 🇺🇸\n<b>OpenCode reported an error</b>\n\nx\n\n<i>Reply to this message to answer.</i>')
-    expect(exitCard({ session: 'a-very-long-session-name-over-24', agent: 'opencode', flag: null }))
-      .toBe('■ <b>a-very-long-session-nam…</b> · OpenCode exited')
+    expect(noticeCard(CLAUDE, { requestKey: 'error', title: 'Claude reported an error', body: 'x' }).text)
+      .toBe('⚠ <b>api-server</b> · Claude 🇺🇸\n<b>Claude reported an error</b>\n\nx\n\n<i>Reply to this message to answer.</i>')
+    expect(exitCard({ session: 'a-very-long-session-name-over-24', agent: 'codex', flag: null }))
+      .toBe('■ <b>a-very-long-session-nam…</b> · Codex exited')
+    // A session that ran OpenCode before it was retired (Epic 123, 123.1 AC3) names it as retired.
+    expect(exitCard({ session: 'old', agent: 'opencode', flag: null })).toBe('■ <b>old</b> · OpenCode (retired) exited')
   })
 
   it('names a request saved before Cursor was retired by the app that opened it (Epic 71)', () => {

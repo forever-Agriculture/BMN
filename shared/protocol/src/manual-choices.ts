@@ -32,5 +32,5 @@ export function readStoredManualChoices(value: string | null): ManualChoices | n
 
 /** Presentation only; manual data never acquires a native harness or dialog epoch. */
 export function manualChoiceQuestion(title: string, choices: ManualChoices): AttentionPromptQuestion {
-  return { id: null, header: null, text: title, multiSelect: false, options: choices.options, custom: true }
+  return { id: null, header: null, text: title, multiSelect: false, options: choices.options }
 }

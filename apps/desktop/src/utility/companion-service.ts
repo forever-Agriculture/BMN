@@ -154,7 +154,7 @@ import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
 import { PAGE_AFTER_MS, askedTwice, createAttentionPager, mirrorOf } from './attention-pager'
 import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
-import { RemoteAnswers, answerRoute, cleanTypedAnswer, type AnswerOutcome, type AnswerRequest, type PluginAnswer, type PromptDeadline } from './remote-answer'
+import { RemoteAnswers, answerRoute, cleanTypedAnswer, type AnswerOutcome, type AnswerRequest, type HookAnswer, type PromptDeadline } from './remote-answer'
 import { observeRepeat, ownerTurn, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
 import { GRANT_TOKEN_PREFIX, GRANT_TYPED_REPLY, grantNothingFitsPhone, TelegramGrantCards } from './telegram-grant-cards'
@@ -546,10 +546,8 @@ export class CompanionService {
     incarnationId: string
     agent: Exclude<HookEventAgent, 'terminal'>
     event: string
-    /** `subagent` for an OpenCode child's event, `interrupted` for the owner's stop of an OpenCode run (Story 93.3). */
+    /** Who the event speaks for when not the session itself, such as Claude Code going on by itself (`continues`). */
     source: string | null
-    /** What the OpenCode plugin that sent the event promises (Story 96.3); null from earlier plugins and other agents. */
-    plugin: number | null
     observedAt: string
     /** The terminal's foreground process when the report came, which is the agent's own (Story 75.4); null once it ended. */
     foreground: string | null
@@ -688,7 +686,7 @@ export class CompanionService {
         }
         if (options.manager.liveIncarnationId(m.sessionId)) throw new Error('the session already has a running process')
         // A shell has no conversation to resume; its row says so in the row's own length (design W1).
-        const shell = !['claude', 'codex', 'opencode'].includes(m.agent)
+        const shell = !['claude', 'codex'].includes(m.agent)
         if (m.typed && m.conversation && (m.agent === 'claude' || m.agent === 'codex')) {
           const start = await options.manager.resumeTypedAgent({ sessionId: m.sessionId, cols: 80, rows: 24, agentCli: m.agent, conversationReference: m.conversation, cwd: m.typed.cwd, argv: m.typed.argv })
           options.manager.detach({ attachmentId: start.attachmentId })
@@ -712,7 +710,7 @@ export class CompanionService {
           const mirror = options.manager.runningScreenMirror(id, incarnation)
           if (!mirror) return null
           await mirror.settled()
-          return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+          return { lines: mirror.undimmedLines() }
         },
         write: (id, text) => this.typeLine(id, text)
       },
@@ -744,7 +742,7 @@ export class CompanionService {
         const mirror = options.manager.runningScreenMirror(sessionId, incarnationId)
         if (!mirror) return null
         await mirror.settled()
-        return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+        return { lines: mirror.undimmedLines() }
       },
       write: (sessionId, text) => this.typeLine(sessionId, text),
       log: (line) => {
@@ -775,7 +773,7 @@ export class CompanionService {
         const mirror = options.manager.runningScreenMirror(id, incarnation)
         if (!mirror) return null
         await mirror.settled()
-        return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+        return { lines: mirror.undimmedLines() }
       },
       write: (id, text) => this.typeLine(id, text),
       delivery: input => options.database.companion('departureDelivery', input, this.iso()),
@@ -797,7 +795,7 @@ export class CompanionService {
         const mirror = options.manager.runningScreenMirror(sessionId, incarnationId)
         if (!mirror) return null
         await mirror.settled()
-        return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+        return { lines: mirror.undimmedLines() }
       },
       write: (sessionId, text) => this.typeLine(sessionId, text),
       receivers: () => options.database.companion('messageWakeReceivers', this.iso()),
@@ -1036,7 +1034,7 @@ export class CompanionService {
       read: () => this.grantRead,
       header: (run) => ({
         session: run.card.sessionId === null ? 'bmn grant' : this.knownSessions.get(run.card.sessionId)?.name ?? 'Session',
-        agent: run.card.agentCli === 'claude' || run.card.agentCli === 'codex' || run.card.agentCli === 'opencode' ? run.card.agentCli : null,
+        agent: run.card.agentCli === 'claude' || run.card.agentCli === 'codex' ? run.card.agentCli : null,
         flag: null
       }),
       ownerAway: () => this.ownerAway(),
@@ -1363,10 +1361,10 @@ export class CompanionService {
         resolveAttention: (p) => this.controlCall(
           () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
         ),
-        takeAnswers: (p) => this.controlCall(async (): Promise<{ answers: PluginAnswer[]; waiting?: boolean }> => {
-          if (p.requestRef === undefined) return { answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) }
+        takeAnswers: (p) => this.controlCall(async (): Promise<{ answers: HookAnswer[]; waiting?: boolean }> => {
+          if (p.requestRef === undefined) return { answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs) }
           // Claude's hook waits only while its request is open here and a phone could answer it (Epic 78).
-          const answers = await this.answers.take(p.sessionId, p.incarnationId, await this.phoneMayAnswer() ? p.waitMs : 0, undefined, p.requestRef)
+          const answers = await this.answers.take(p.sessionId, p.incarnationId, await this.phoneMayAnswer() ? p.waitMs : 0, p.requestRef)
           const waiting = answers.length === 0 && this.answers.hookWanted(p.sessionId, p.incarnationId, p.requestRef) && await this.phoneMayAnswer()
           // The hook leaves on either; an answer tapped after that must not wait for it.
           if (!waiting) this.answers.hookEnded(p.sessionId, p.incarnationId, p.requestRef)
@@ -2313,7 +2311,7 @@ export class CompanionService {
           const mirror = this.options.manager.runningScreenMirror(id, incarnation)
           if (!mirror) return null
           await mirror.settled()
-          return { lines: mirror.undimmedLines(), cursor: mirror.cursor() }
+          return { lines: mirror.undimmedLines() }
         },
         write: (id, line) => this.typeLine(id, line, () => { attempted = true })
       }, {
@@ -2932,9 +2930,7 @@ export class CompanionService {
     if (p.manualChoices && !manualCardFits(p.title, p.manualChoices.options.map(option => option.label), p.requestKey)) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Choice labels and decision title do not fit a Telegram card')
     }
-    const pluginPrompt = p.prompt?.harness === 'opencode'
-    if (pluginPrompt) this.producers.unavailable(p.sessionId)
-    const producer = pluginPrompt || p.origin === 'watch:repeat' || p.origin === 'watch:messages' ? null : p.producer && p.origin?.endsWith(':PreToolUse')
+    const producer = p.origin === 'watch:repeat' || p.origin === 'watch:messages' ? null : p.producer && p.origin?.endsWith(':PreToolUse')
       ? this.producers.observe(p.sessionId, p.incarnationId, p.producer)
       : this.producers.stamp(p.sessionId, p.incarnationId)
     if (p.producer && producer && (p.producer.agentCli !== producer.agentCli ||
@@ -3096,12 +3092,7 @@ export class CompanionService {
     const correlated = !!held?.prompt && !!evidence && (
       !!evidence.requestRef && evidence.requestRef === held.prompt.requestRef ||
       !!evidence.toolUseId && evidence.toolUseId === held.prompt.toolUseId)
-    // OpenCode keeps its existing exact-key hook cleanup. Its unbound legacy notices are
-    // independent of the lightweight Claude/Codex conversation slot.
-    const legacyHookCleanup = !!held && !held.producer && !held.manualChoices && (
-      held.prompt?.harness === 'opencode' && !!origin?.startsWith('hook:opencode:') ||
-      !!origin?.startsWith('hook:opencode:') && !!held.openedBy?.startsWith('hook:opencode:'))
-    if (held && !legacyHookCleanup && origin?.startsWith('hook:') &&
+    if (held && origin?.startsWith('hook:') &&
       !this.producers.canClose(held, producer, correlated, !!origin?.endsWith(':SessionEnd') || !!origin?.endsWith(':Interrupt'))) {
       this.emit('attention', sessionId)
       return Object.assign(held, { changed: false })
@@ -3117,7 +3108,7 @@ export class CompanionService {
       evidence.tool === heldPermission.tool && evidence.command === heldPermission.command)) state = 'withdrawn'
     const record = await this.options.database.companion(
       'closeAttention',
-      // A report about another request of the same slot (OpenCode's queued permissions) leaves this one open.
+      // A report about another request of the same slot leaves this one open.
       { sessionId, requestKey, ...(held ? { expectedRevision: held.revision, expectedProducer: held.producer ?? null } : {}),
         ...(evidence?.requestRef ? { expectedRequestRef: evidence.requestRef } : {}) },
       answeredRemotely ? 'answered' : state,
@@ -3357,9 +3348,7 @@ export class CompanionService {
   }
 
   private nativeProducerCurrent(record: AttentionRecord): boolean {
-    return record.prompt?.harness === 'opencode'
-      ? record.incarnationId !== null && this.options.manager.liveIncarnationId(record.sessionId) === record.incarnationId
-      : this.producers.current(record)
+    return this.producers.current(record)
   }
 
   /** Whether a permission could be answered from Telegram at all: Telegram on and permission answers allowed. */
@@ -3416,7 +3405,6 @@ export class CompanionService {
     event: string
     source: string | null
     toolName: string | null
-    plugin?: number | undefined
     fingerprint?: string | undefined
     apiHost?: string | undefined
     model?: string | undefined
@@ -3430,7 +3418,7 @@ export class CompanionService {
     const operation = async (): Promise<{ recorded: true }> => {
       let repeat: number | null = null
       const effects = [...p.effects]
-      if (p.agent === 'claude' || p.agent === 'codex' || p.agent === 'opencode') {
+      if (p.agent === 'claude' || p.agent === 'codex') {
         const result = observeRepeat(this.repeatStates.get(p.sessionId), { ...p, agent: p.agent })
         this.repeatStates.set(p.sessionId, result.state)
         repeat = result.repeat
@@ -3487,7 +3475,6 @@ export class CompanionService {
     agent: HookEventAgent
     apiHost?: string | undefined
     model?: string | undefined
-    plugin?: number | undefined
   }): { recorded: true } {
     const observedAt = this.iso()
     // Which incarnation has a harness reporting for it, kept whatever the log later drops.
@@ -3496,10 +3483,10 @@ export class CompanionService {
       // Only this run's own report may speak for it, so a queued event from a process that has
       // already been replaced never becomes the current run's observation.
       if (this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
-        // The agent left its terminal: Claude's and Codex's SessionEnd, or BMN's OpenCode plugin unloading as OpenCode quits.
-        const ended = p.event === 'SessionEnd' || (p.agent === 'opencode' && p.event === 'tui.exit')
+        // The agent left its terminal: Claude's and Codex's SessionEnd.
+        const ended = p.event === 'SessionEnd'
         // Remote answers and the Away wake read an agent's screen; a plain shell never pays for a mirror (Epic 30.2 AC1).
-        if (p.agent === 'claude' || p.agent === 'codex' || p.agent === 'opencode') {
+        if (p.agent === 'claude' || p.agent === 'codex') {
           if (ended) this.options.manager.stopScreenMirror(p.sessionId)
           else this.options.manager.screenMirror(p.sessionId, p.incarnationId)
         }
@@ -3516,7 +3503,6 @@ export class CompanionService {
           agent: p.agent,
           event: p.event,
           source: p.source,
-          plugin: p.agent === 'opencode' ? p.plugin ?? null : null,
           observedAt,
           foreground: ended ? null : this.options.manager.foregroundProcessIdentity(p.sessionId)
         })

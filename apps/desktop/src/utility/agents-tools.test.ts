@@ -1,6 +1,6 @@
 // MODULE: agents-tools.test.ts - Story 60.12: one list of MCP tools for every app, over a synthetic team, synthetic settings files in a temporary home and stub apps; no real app is started
 import { execFile } from 'node:child_process'
-import { appendFileSync, chmodSync, closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,13 +11,10 @@ import { listTransactions, restoreTransaction } from '../../bin/agents-rules.mjs
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import {
   appStateWord, appTools, checkExit, checkRunTools, checkTools, claudeRunSeen, installTools as candidateInstall, looksSecret, maskedEntry, neutralOf, pendingCounts, plainArgument, planToolsInstall, proposeTools,
-  readAppTools as candidateRead, renderTool, restoreToolsTransaction as candidateRestore, runTools, testTools as candidateTest, toolItems, toolsAutoPlan, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, writeSetupToolEntry as candidateWrite, type ToolState, type ToolsTestEntry
+  readAppTools as candidateRead, renderTool, runTools, testTools as candidateTest, toolItems, toolsAutoPlan, toolsPlanView, toolsTestsPath, transportWords, uncoveredSources, type ToolState, type ToolsTestEntry
 } from '../../bin/agents-tools.mjs'
-import { withDefaultsAdmission } from '../../bin/defaults-admission.mjs'
-import { replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { editJsonEntry } from '../../bin/agents-tool-files.mjs'
 import { approveRoster } from '../main/agents-approval'
-import { autoTestId, createAutoTests, type AutoTestTry } from '../main/auto-tests'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -27,15 +24,10 @@ const baselineTools = process.env.BMN_TOOLS_SOURCE_FILE ? await import(process.e
 const readAppTools: typeof candidateRead = baselineTools?.readAppTools ?? candidateRead
 const installTools: typeof candidateInstall = baselineTools?.installTools ?? candidateInstall
 const testTools: typeof candidateTest = baselineTools?.testTools ?? candidateTest
-const restoreToolsTransaction: typeof candidateRestore = baselineTools?.restoreToolsTransaction ?? candidateRestore
-const writeToolEntry: typeof candidateWrite = baselineTools?.writeSetupToolEntry ?? candidateWrite
-const toolAdmission: typeof withDefaultsAdmission = process.env.BMN_TOOLS_SOURCE_FILE
-  ? (await import(process.env.BMN_TOOLS_SOURCE_FILE.replace(/agents-tools\.mjs$/, 'defaults-admission.mjs'))).withDefaultsAdmission : withDefaultsAdmission
 const NOW = new Date('2026-10-10T12:00:00.000Z')
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
-const OPENCODE = '2.0.29'
-const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE }
+const VERSIONS = { codex: CODEX, claude: CLAUDE }
 /** A value only an app's own entry holds: no plan, result, record or team file may carry it. */
 const SECRET = 'sk-SYNTHETIC-SECRET-9f8e7d6c5b4a'
 
@@ -84,7 +76,7 @@ function approve(text: string): void {
  * its settings for the folder and in the folder's `.mcp.json`. `leaky` is an app whose run keeps
  * the settings' tools whatever it is told, `leakyFolder` one that keeps the folder's.
  */
-function app(name: string, version: string, { reads = true, starts = false, leaky = false, signIn = false, folders = false, leakyFolder = false, listFails = false, serverMode = 'ok', emptyPolls = 0 } = {}): void {
+function app(name: string, version: string, { reads = true, starts = false, leaky = false, signIn = false, folders = false, leakyFolder = false, listFails = false } = {}): void {
   const kind = name
   writeFileSync(join(stubs, name), `#!${process.execPath}
 const fs = require('fs'); const cp = require('child_process'); const path = require('path')
@@ -93,7 +85,7 @@ if (argv[0] === '--version') { console.log('${name} ${version}'); process.exit(0
 fs.appendFileSync(${JSON.stringify(join(home, `calls-${name}.log`))}, JSON.stringify({ argv, env: Object.keys(process.env).sort(), home: process.env.HOME }) + '\\n')
 if (${signIn}) { console.error('Please sign in'); process.exit(1) }
 const HOME = process.env.HOME
-const file = { claude: HOME + '/.claude.json', codex: HOME + '/.codex/config.toml', opencode: HOME + '/.config/opencode/' + (fs.existsSync(HOME + '/.config/opencode/opencode.json') ? 'opencode.json' : 'opencode.jsonc') }['${kind}']
+const file = { claude: HOME + '/.claude.json', codex: HOME + '/.codex/config.toml' }['${kind}']
 const text = (() => { try { return fs.readFileSync(file, 'utf8') } catch { return '' } })()
 const fromEnv = (value) => String(value).replace(/\\$\\{(?:env:)?(\\w+)\\}|\\{env:(\\w+)\\}/g, (_all, a, b) => process.env[a || b] || '')
 let servers = {}
@@ -103,7 +95,7 @@ if ('${kind}' === 'codex') {
     servers[id[1]] = { command: (/^command = "(.*)"$/m.exec(block) || [])[1], vars: JSON.parse((/^env_vars = (\\[.*\\])$/m.exec(block) || [null, '[]'])[1]) }
   }
 } else if (text.trim() !== '') {
-  const data = JSON.parse(text); const held = '${kind}' === 'opencode' ? { ...Object.fromEntries(Object.entries(data.mcp || {}).filter(([key]) => !['servers','timeout'].includes(key))), ...(data.mcp?.servers || {}) } : data.mcpServers
+  const data = JSON.parse(text); const held = data.mcpServers
   for (const [id, entry] of Object.entries(held || {})) servers[id] = entry
 }
 if (!${reads}) servers = {}
@@ -114,34 +106,6 @@ if (${folders}) {
     else if ('${kind}' === 'claude') inFolder = JSON.parse(fs.readFileSync('.mcp.json', 'utf8')).mcpServers
   } catch {}
   try { if ('${kind}' === 'claude') Object.assign(inFolder, JSON.parse(text).projects[process.cwd()].mcpServers) } catch {}
-}
-if ('${kind}' === 'opencode' && argv[0] === 'serve') {
-  fs.appendFileSync(${JSON.stringify(join(home, 'private-pids.log'))}, String(process.pid) + '\\n')
-  if ('${serverMode}' === 'never-listen') { setInterval(() => {}, 1000); return }
-  if ('${serverMode}' === 'ignore-term') process.on('SIGTERM', () => {})
-  let count = 0
-  require('http').createServer((req, res) => {
-    if (req.headers['bmn-test-password'] !== process.env.OPENCODE_PASSWORD) { res.writeHead(401); res.end(); return }
-    if ('${serverMode}' === 'api-fails') { res.writeHead(500); res.end(); return }
-    if ('${serverMode}' === 'malformed') { res.end('{invalid'); return }
-    if ('${serverMode}' === 'api-hangs') return
-    const entries = ++count <= ${emptyPolls} ? [] : Object.entries(servers)
-    if (${starts}) for (const [, entry] of entries) {
-      const command = Array.isArray(entry.command) ? entry.command : [entry.command, ...(entry.args || [])]
-      const given = Object.fromEntries(Object.entries(entry.env || entry.environment || {}).map(([key, value]) => [key, fromEnv(value)]))
-      cp.spawnSync(command[0], command.slice(1).map(fromEnv), { env: { ...process.env, ...given } })
-    }
-    res.end(JSON.stringify({ data: entries.map(([name]) => ({ name, status: { status: 'connected' } })) }))
-  }).listen(0, '127.0.0.1', function () { console.log('server listening on http://127.0.0.1:' + this.address().port) })
-  return
-}
-if ('${kind}' === 'opencode' && argv[0] === 'api') {
-  if (argv[1] !== '--server' || argv[3] !== 'mcp.list') process.exit(9)
-  fetch(argv[2] + '/mcp', { headers: { 'bmn-test-password': process.env.OPENCODE_PASSWORD } }).then(async response => {
-    if (!response.ok) process.exit(3)
-    process.stdout.write(await response.text())
-  }).catch(() => process.exit(4))
-  return
 }
 const sub = argv.indexOf('mcp')
 if (argv.includes('-p')) {
@@ -196,7 +160,7 @@ process.exit(4)
 }
 
 const passed = (harness: string, version: string, fields: Partial<ToolsTestEntry> = {}): ToolsTestEntry =>
-  ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_signs: ['start-line', 'tool-start'], isolation_covers: ['settings', 'local', 'folder'], isolation_empty: 'pass', own_command: 'pass', detail: 'synthetic', ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {}), ...fields }) as ToolsTestEntry
+  ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome: 'pass', variable: 'pass', argument: 'pass', header: 'pass', isolation: 'pass', isolation_basis: 'run', isolation_signs: ['start-line', 'tool-start'], isolation_covers: ['settings', 'local', 'folder'], isolation_empty: 'pass', own_command: 'pass', detail: 'synthetic', ...fields }) as ToolsTestEntry
 
 /** Records a test as the owner's test would. */
 function tested(harness: string, version: string, fields: Partial<ToolsTestEntry> = {}): ToolsTestEntry {
@@ -208,7 +172,6 @@ function tested(harness: string, version: string, fields: Partial<ToolsTestEntry
 
 const claudeFile = (): string => join(home, '.claude.json')
 const codexFile = (): string => join(home, '.codex/config.toml')
-const opencodeFile = (): string => join(home, '.config/opencode/opencode.json')
 const put = (path: string, text: string): void => {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, text, { mode: 0o600 })
@@ -244,7 +207,6 @@ beforeEach(() => {
   mkdirSync(stubs)
   app('claude', CLAUDE, { starts: true })
   app('codex', CODEX)
-  app('opencode', OPENCODE, { starts: true })
   workspace = join(home, 'work')
   mkdirSync(workspace, { recursive: true })
   env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }
@@ -264,10 +226,10 @@ describe('the tools section of the team file (60.12 AC2)', () => {
   it('reads each tool with its program or address, the variables it names and who gets it; a team file without the section keeps its data', () => {
     const plain = parseRoster(EXAMPLE).data!
     expect(Object.keys(plain)).not.toContain('tools')
-    const parsed = parseRoster(withTools([...TOOLS, 'args-tool: {name: Args, command: a, args: ["--key", {env: A_KEY}], public: false, apps: [opencode, claude]}']))
+    const parsed = parseRoster(withTools([...TOOLS, 'args-tool: {name: Args, command: a, args: ["--key", {env: A_KEY}], public: false, apps: [codex, claude]}']))
     expect(parsed.errors).toEqual([])
     expect(parsed.data!.tools).toEqual([
-      { id: 'args-tool', name: 'Args', command: 'a', args: ['--key', { env: 'A_KEY' }], apps: ['claude', 'opencode'] },
+      { id: 'args-tool', name: 'Args', command: 'a', args: ['--key', { env: 'A_KEY' }], apps: ['claude', 'codex'] },
       { id: 'browser', name: 'Browser', command: 'npx', args: ['--offline', '@synthetic/browser-mcp@1.0.0'], agents: ['luna'] },
       { id: 'docs', name: 'Docs', url: 'https://docs.example.test/mcp', headers: { Authorization: 'DOCS_TOKEN' }, public: true },
       { id: 'files', name: 'Files', command: 'files-tool', args: ['--root', '/srv/files'], env: { FILES_KEY: 'FILES_KEY' }, apps: ['claude', 'codex'] },
@@ -334,12 +296,13 @@ describe('what the owner\'s test proved for a version (60.12 AC1)', () => {
   })
 
   it('names for BMN\'s own run every app at a version no test settled: a first install, an update, or one that showed nothing (Story 75.8 AC1)', () => {
-    const test = (harness: string, version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): ToolsTestEntry => ({ harness, at: '2026-10-16T12:00:00.000Z', version, outcome, detail: 'synthetic', ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {}) } as ToolsTestEntry)
-    const versions = { claude: '2.1.300', codex: '0.162.0', opencode: '2.0.29' }
+    const test = (harness: string, version: string, outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'): ToolsTestEntry => ({ harness, at: '2026-10-16T12:00:00.000Z', version, outcome, detail: 'synthetic' } as ToolsTestEntry)
+    const versions = { claude: '2.1.300', codex: '0.162.0' }
     const plan = (tests: ToolsTestEntry[], at: Record<string, string | null> = versions) => toolsAutoPlan({ versions: at, tests }).map((one) => [one.harness, one.version, one.reason])
-    expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'untested']])
-    expect(plan([test('claude', '2.1.300', 'fail'), test('codex', '0.161.0', 'pass'), test('opencode', '2.0.29', 'inconclusive')])).toEqual([['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'retry']])
-    expect(plan([test('claude', '2.1.300', 'pass'), test('codex', '0.162.0', 'fail'), test('opencode', '2.0.29', 'unavailable'), test('opencode', '2.0.29', 'pass')])).toEqual([])
+    expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested']])
+    expect(plan([test('claude', '2.1.300', 'fail'), test('codex', '0.161.0', 'pass')])).toEqual([['codex', '0.162.0', 'untested']])
+    expect(plan([test('claude', '2.1.300', 'pass'), test('codex', '0.162.0', 'inconclusive')])).toEqual([['codex', '0.162.0', 'retry']])
+    expect(plan([test('claude', '2.1.300', 'pass'), test('codex', '0.162.0', 'fail'), test('codex', '0.162.0', 'unavailable'), test('codex', '0.162.0', 'pass')])).toEqual([])
     expect(plan([], { codex: null })).toEqual([])
     expect(toolsAutoPlan({ versions: { codex: '0.162.0' }, tests: [] })).toEqual([{ harness: 'codex', version: '0.162.0', key: '', reason: 'untested' }])
   })
@@ -368,7 +331,7 @@ describe('what the owner\'s test proved for a version (60.12 AC1)', () => {
     rmSync(toolsTestsPath())
     tested('codex', CODEX)
     const result = check()
-    expect(result.apps.map((entry) => [entry.harness, entry.supported])).toEqual([['claude', false], ['codex', true], ['opencode', false]])
+    expect(result.apps.map((entry) => [entry.harness, entry.supported])).toEqual([['claude', false], ['codex', true]])
     expect(appOf('claude')).toMatchObject({ tools: [], unlisted: [], reason: `no test has run on Claude Code ${CLAUDE}` })
     expect(appStateWord(appOf('claude'))).toBe('Not supported yet')
     expect(await install(['claude'])).toMatchObject({ code: 'TOOLS_UNSUPPORTED', transaction: null, written: [] })
@@ -391,10 +354,8 @@ describe('a tool as each app writes it', () => {
 
   it('names each variable the way that app does, and never a value', () => {
     expect(renderTool(docs, 'claude', SEEN).entry).toEqual({ type: 'http', url: 'https://docs.example.test/mcp', headers: { Authorization: '${DOCS_TOKEN}' } })
-    expect(renderTool(docs, 'opencode', SEEN).entry).toEqual({ type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' } })
     expect(renderTool(docs, 'codex', SEEN).entry).toEqual({ url: 'https://docs.example.test/mcp', env_http_headers: { Authorization: 'DOCS_TOKEN' } })
     expect(renderTool(local, 'claude', SEEN).entry).toEqual({ type: 'stdio', command: 'local-tool', args: ['--root', '/srv', '${LOCAL_ARG}'], env: { LOCAL_KEY: '${OWNER_KEY}' } })
-    expect(renderTool(local, 'opencode', SEEN).entry).toEqual({ type: 'local', command: ['local-tool', '--root', '/srv', '{env:LOCAL_ARG}'], environment: { LOCAL_KEY: '{env:OWNER_KEY}' } })
     expect(renderTool(plain, 'codex').entry).toEqual({ command: 'plain-tool' })
     expect(renderTool(plain, 'claude').entry).toEqual({ type: 'stdio', command: 'plain-tool', args: [] })
     expect(renderTool({ ...plain, env: { SAME: 'SAME' } }, 'codex', SEEN).entry).toEqual({ command: 'plain-tool', env_vars: ['SAME'] })
@@ -412,7 +373,7 @@ describe('a tool as each app writes it', () => {
   })
 
   it('reads an app\'s entry back as a tool, and names what holds a value inline without keeping it', () => {
-    for (const harness of ['claude', 'opencode', 'codex']) {
+    for (const harness of ['claude', 'codex']) {
       for (const tool of [docs, plain, { ...plain, env: { SAME: 'SAME' } }]) {
         const { entry } = renderTool(tool, harness, SEEN)
         const definition = Object.fromEntries(Object.entries(tool).filter(([key]) => key !== 'id' && key !== 'name'))
@@ -423,15 +384,13 @@ describe('a tool as each app writes it', () => {
       .toEqual({ definition: { command: 'x', args: ['--api-key', SECRET], env: { FINE: 'FINE_VAR' } }, secrets: ['args[1]', 'env.X_KEY'], extras: ['timeout'] })
     expect(neutralOf({ command: 'x', env: { X_KEY: SECRET } }, 'codex')!.secrets).toEqual(['env.X_KEY'])
     expect(neutralOf({ url: 'https://x.example.test', http_headers: { Authorization: `Bearer ${SECRET}` } }, 'codex')!.secrets).toEqual(['headers.Authorization'])
-    expect(neutralOf({ type: 'remote', url: `https://x.example.test/mcp?api_key=${SECRET}`, enabled: false }, 'opencode')).toMatchObject({ secrets: ['url'], extras: ['enabled'] })
     expect(neutralOf('not an entry', 'claude')).toBeNull()
     expect(neutralOf({ type: 'sse' }, 'claude')).toBeNull()
     for (const [value, harness] of [
       [{ type: 'stdio', command: 'x', args: ['--api-key', SECRET], env: { X_KEY: SECRET } }, 'claude'],
       [{ command: 'x', env: { X_KEY: SECRET }, args: [`--token=${SECRET}`] }, 'codex'],
       [{ url: 'https://x.example.test', http_headers: { Authorization: `Bearer ${SECRET}` } }, 'codex'],
-      [{ type: 'local', command: ['x', '--token', SECRET], environment: { X_KEY: SECRET } }, 'opencode'],
-      [{ type: 'remote', url: `https://name:${SECRET}@x.example.test/mcp` }, 'opencode']
+      [{ type: 'http', url: `https://name:${SECRET}@x.example.test/mcp` }, 'claude']
     ] as const) {
       const shown = JSON.stringify(maskedEntry(value, harness))
       expect(shown, `${harness} ${shown}`).not.toContain(SECRET)
@@ -462,8 +421,6 @@ describe('a tool as each app writes it', () => {
     expect(JSON.stringify(maskedEntry(entry, 'claude'))).not.toContain(SENTINEL)
     expect(maskedEntry(entry, 'claude')).toEqual({ type: 'stdio', command: 'api-tool', args: ['--header', '•••', '--cookie', '•••', '--root', '/srv'], env: { MIXED: '•••', SCHEME: 'Bearer ${API_TOKEN}' } })
     expect(neutralOf({ command: 'api-tool', args: ['--header', `Authorization: Bearer ${SENTINEL}`] }, 'codex')!.secrets).toEqual(['args[1]'])
-    expect(neutralOf({ type: 'local', command: ['api-tool', '-H', `X-Api-Key: ${SENTINEL}`], enabled: true }, 'opencode')!.secrets).toEqual(['command[1]'])
-    expect(JSON.stringify(maskedEntry({ type: 'local', command: ['api-tool', '-H', `X-Api-Key: ${SENTINEL}`], enabled: true }, 'opencode'))).not.toContain(SENTINEL)
     // On the list as `files`, in the app with a header argument: shown masked, never replaced; off the list: never proposed with it, never removed.
     put(claudeFile(), JSON.stringify({ mcpServers: { files: { type: 'stdio', command: 'files-tool', args: ['--header', `Authorization: Bearer ${SENTINEL}`] }, api: entry } }, null, 2))
     const proposal = proposeTools({ environment: env }).proposals.find((item) => item.id === 'api')!
@@ -494,12 +451,9 @@ describe('one state per app and per tool (60.12 AC4)', () => {
   it('starts with every tool an app may have missing, the rest rightly absent, and nothing for a tool kept to agents', () => {
     expect(states('claude')).toEqual({ browser: 'excluded', docs: 'missing', files: 'missing', notes: 'missing', review: 'excluded' })
     expect(states('codex')).toEqual({ browser: 'excluded', docs: 'missing', files: 'missing', notes: 'missing', review: 'excluded' })
-    // OpenCode gets public work only: of this list, the public tool.
-    expect(states('opencode')).toEqual({ browser: 'excluded', docs: 'missing', files: 'excluded', notes: 'excluded', review: 'excluded' })
-    expect(appOf('opencode').kind).toBe('public')
     expect(appStateWord(appOf('claude'))).toBe('Missing')
     expect(checkExit(check())).toBe(1)
-    expect(pendingCounts(check())).toEqual({ pending: 7, exposed: 0, blocked: 0 })
+    expect(pendingCounts(check())).toEqual({ pending: 6, exposed: 0, blocked: 0 })
     expect(check().tools.find((tool) => tool.id === 'browser')).toEqual({ id: 'browser', name: 'Browser', transport: 'npx @synthetic/browser-mcp@1.0.0', public: false, apps: null, agents: ['luna'] })
   })
 
@@ -516,25 +470,20 @@ describe('one state per app and per tool (60.12 AC4)', () => {
     // Somebody edits BMN's entry.
     put(codexFile(), readFileSync(codexFile(), 'utf8').replace('url = "https://docs.example.test/mcp"', 'url = "https://docs.example.test/v2"'))
     expect(states('codex').docs).toBe('edited-outside')
-    // Entries that are not on the list at all: exposed where the app gets public work only, unmanaged elsewhere.
-    put(opencodeFile(), JSON.stringify({ mcp: { docs: { type: 'remote', url: 'https://docs.example.test/mcp', enabled: true }, own: { type: 'local', command: ['own-tool'], enabled: true } } }, null, 2))
-    expect(states('opencode').docs).toBe('edited-outside')
-    expect(appOf('opencode').unlisted).toEqual([{ id: 'own', state: 'exposed', managed: false }])
+    // Entries that are not on the list at all: unmanaged in an app that may receive private work.
     put(claudeFile(), readFileSync(claudeFile(), 'utf8').replace(/\n}\s*$/, ',\n  "extra": 1\n}\n').replace('"mcpServers": {', '"mcpServers": {\n    "mine": { "command": "mine-tool" },'))
     expect(appOf('claude').unlisted).toEqual([{ id: 'mine', state: 'unmanaged', managed: false }])
     // A tool the app may not have, held by it: BMN's own entry after the team narrowed, and somebody else's.
     approve(withTools(TOOLS.map((line) => line.replace('apps: [claude, codex]', 'apps: [codex]').replace('command: notes-tool', 'command: notes-tool-2'))))
     expect(appOf('claude').tools.find((row) => row.id === 'files')).toEqual({ id: 'files', state: 'exposed', managed: true })
-    put(opencodeFile(), JSON.stringify({ mcp: { notes: { type: 'local', command: ['notes-tool'], enabled: true }, docs: readAppTools('opencode', env).entries.get('docs')!.value } }, null, 2))
-    expect(appOf('opencode').tools.find((row) => row.id === 'notes')).toEqual({ id: 'notes', state: 'exposed', managed: false })
-    expect(appStateWord(appOf('opencode'))).toBe('Exposed')
+    expect(appStateWord(appOf('claude'))).toBe('Exposed')
     expect(checkExit(check())).toBe(1)
     // An entry BMN cannot read, and a file it cannot read.
     put(codexFile(), `${readFileSync(codexFile(), 'utf8')}\n[other]\nx = 1\n\n[mcp_servers.notes.env]\nK = "v"\n`)
     expect(appOf('codex').tools.find((row) => row.id === 'notes')).toMatchObject({ state: 'unreadable', detail: 'BMN cannot read the entry there: its tables stand apart from each other' })
-    put(opencodeFile(), '{ "mcp": [')
-    expect(appOf('opencode')).toMatchObject({ readable: false, tools: expect.arrayContaining([{ id: 'docs', state: 'unreadable', detail: expect.any(String) }]) })
-    expect(appStateWord(appOf('opencode'))).toBe('Differs')
+    put(claudeFile(), '{ "mcpServers": [')
+    expect(appOf('claude')).toMatchObject({ readable: false, tools: expect.arrayContaining([{ id: 'docs', state: 'unreadable', detail: expect.any(String) }]) })
+    expect(appStateWord(appOf('claude'))).toBe('Differs')
   })
 
   it('takes an entry that is exactly the approved tool as holding nothing unapproved, whatever its arguments look like', async () => {
@@ -562,295 +511,6 @@ describe('one state per app and per tool (60.12 AC4)', () => {
       { id: 'renamed', state: 'blocked', detail: 'BMN has not seen Claude Code pass an environment variable to a tool on this version' }
     ])
     expect(pendingCounts(check())).toEqual({ pending: 2, exposed: 0, blocked: 2 })
-  })
-})
-
-describe('OpenCode 2 layout and entry undo (85.2)', () => {
-  const owned = 'owned: {name: Owned, command: owned-tool, public: true}'
-  const jsonc = (): string => join(home, '.config/opencode/opencode.jsonc')
-  const saved = (transaction: string) => {
-    const folder = join(home, '.config/bmn/agents/state/rules/transactions', transaction), path = join(folder, 'manifest.json')
-    return { folder, path, manifest: JSON.parse(readFileSync(path, 'utf8')) as {
-      targets: Array<{ harness: string; tool: string; path: string; at: string[]; prior: string | null; edit_receipt: { at: string[]; edit: { edits: Array<{ start: number }> } }; undoStarted?: boolean; undone?: boolean; undo_file_missing?: boolean; undo_file_witness?: unknown }>
-    } }
-  }
-  beforeEach(() => { approve(withTools([owned])) })
-
-  it.each(['legacy', 'native'])('preserves %s disabled state while replacing and undoing an entry', async layout => {
-    const file = layout === 'legacy' ? jsonc() : opencodeFile()
-    const entry = { type: 'local', command: ['old-tool'], ...(layout === 'legacy' ? { enabled: false } : { disabled: true }) }
-    const prior = JSON.stringify({ mcp: layout === 'legacy' ? { owned: entry } : { servers: { owned: entry } } }, null, 2) + '\n'
-    put(file, prior)
-    const installed = await install(['opencode'])
-    expect(installed.code).toBe('OK')
-    const after = readAppTools('opencode', env).entries.get('owned')!.value!
-    expect(after.command).toEqual(['owned-tool'])
-    expect(after).toMatchObject(layout === 'legacy' ? { enabled: false } : { disabled: true })
-    if (layout === 'native') expect(after).not.toHaveProperty('enabled')
-    expect((await restoreTransaction(installed.transaction!, { yes: true })).code).toBe('OK')
-    expect(readFileSync(file, 'utf8')).toBe(prior)
-  })
-
-  it('new native entries omit the ignored legacy enabled setting', async () => {
-    const installed = await install(['opencode'])
-    expect(installed.code).toBe('OK')
-    expect(readAppTools('opencode', env).entries.get('owned')!.value).toEqual({ type: 'local', command: ['owned-tool'] })
-  })
-
-  it('lists both layouts once and skips timeout through the public reader', () => {
-    put(jsonc(), '{"mcp":{"legacy":{"type":"local","command":["a"]},"timeout":5,"servers":{"native":{"type":"local","command":["b"]}}}}')
-    const file = readAppTools('opencode', env)
-    expect(file.readable).toBe(true)
-    expect([...file.entries.keys()]).toEqual(['legacy', 'native'])
-    expect(file.entries.get('native')?.at).toEqual(['mcp', 'servers'])
-  })
-
-  it('chooses the native json filename when neither config exists', () => {
-    expect(readAppTools('opencode', env).path).toBe(opencodeFile())
-  })
-
-  it.each(['missing', 'empty'])('restores %s original config path state', async original => {
-    if (original === 'empty') put(opencodeFile(), '')
-    const installed = await install(['opencode'])
-    expect(installed.code).toBe('OK')
-    expect(existsSync(opencodeFile())).toBe(true)
-    const state = saved(installed.transaction!)
-    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(existsSync(opencodeFile())).toBe(original === 'empty')
-    if (original === 'empty') expect(readFileSync(opencodeFile(), 'utf8')).toBe('')
-  })
-
-  it('keeps a created config when unrelated bytes change before undo removal', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => {
-      put(opencodeFile(), readFileSync(opencodeFile(), 'utf8').replace('{', '{"unrelated":"kept",'))
-    } })).toMatchObject({ code: 'OK' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toContain('"unrelated":"kept"')
-    expect(readAppTools('opencode', env).entries.size).toBe(0)
-    expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_missing).toBe(false)
-    expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_witness).toBeNull()
-  })
-
-  it.each(['file', 'parent', 'hardlink'])('refuses a created config %s change before undo removal', async change => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    const before = readFileSync(opencodeFile(), 'utf8')
-    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => {
-      if (change === 'file') { put(`${opencodeFile()}.replacement`, before); renameSync(`${opencodeFile()}.replacement`, opencodeFile()) }
-      else if (change === 'parent') { renameSync(join(home, '.config/opencode'), join(home, '.config/opencode-kept')); put(opencodeFile(), before) }
-      else linkSync(opencodeFile(), `${opencodeFile()}.kept-link`)
-    } })).toMatchObject({ code: 'REVISION_CONFLICT' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-  })
-
-  it('resumes an interrupted undo after the created config was removed', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-    expect(existsSync(opencodeFile())).toBe(false)
-    expect(saved(installed.transaction!).manifest.targets[0]).toMatchObject({ undoStarted: true, undo_file_missing: true })
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(existsSync(opencodeFile())).toBe(false)
-    expect(saved(installed.transaction!).manifest.targets[0]?.undone).toBe(true)
-  })
-
-  it('refuses a config recreated after interrupted absence restoration', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-    put(opencodeFile(), '')
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe('')
-  })
-
-  it('refuses exact-postimage recreation after interrupted removal without rebinding its witness', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    const before = readFileSync(opencodeFile(), 'utf8'), fd = openSync(opencodeFile(), 'r')
-    try {
-      await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-      expect(existsSync(opencodeFile())).toBe(false)
-      const witness = saved(installed.transaction!).manifest.targets[0]?.undo_file_witness
-      put(opencodeFile(), before)
-      const resume = saved(installed.transaction!)
-      expect(await restoreToolsTransaction(resume.manifest, resume.folder, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
-      expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-      expect(saved(installed.transaction!).manifest.targets[0]?.undone).not.toBe(true)
-      expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_witness).toEqual(witness)
-    } finally { closeSync(fd) }
-  })
-
-  it('resumes pending removal after a journal-before-unlink interruption', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-    expect(existsSync(opencodeFile())).toBe(true)
-    const witness = saved(installed.transaction!).manifest.targets[0]?.undo_file_witness
-    expect(witness).toMatchObject({ version: 1, file: { ctimeNs: expect.stringMatching(/^\d+$/) } })
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(existsSync(opencodeFile())).toBe(false)
-    expect(saved(installed.transaction!).manifest.targets[0]?.undone).toBe(true)
-  })
-
-  it('refuses a pending removal after an identical file replacement', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    const before = readFileSync(opencodeFile(), 'utf8')
-    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-    put(`${opencodeFile()}.replacement`, before); renameSync(`${opencodeFile()}.replacement`, opencodeFile())
-    const witness = saved(installed.transaction!).manifest.targets[0]?.undo_file_witness
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-    expect(saved(installed.transaction!).manifest.targets[0]?.undo_file_witness).toEqual(witness)
-  })
-
-  it.each(['missing', 'malformed', 'path', 'text'])('refuses a present pending removal with a %s witness and resumes only once absent', async fault => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    const before = readFileSync(opencodeFile(), 'utf8')
-    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-    const kept = saved(installed.transaction!), target = kept.manifest.targets[0]!
-    if (fault === 'missing') delete target.undo_file_witness
-    else if (fault === 'malformed') target.undo_file_witness = { version: 1 }
-    else target.undo_file_witness = { ...(target.undo_file_witness as Record<string, unknown>), [fault]: fault === 'path' ? `${opencodeFile()}.other` : '0'.repeat(64) }
-    writeFileSync(kept.path, JSON.stringify(kept.manifest))
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-    rmSync(opencodeFile())
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(existsSync(opencodeFile())).toBe(false)
-  })
-
-  it('requires native-layout evidence before old capability records authorize writes', () => {
-    const old = passed('opencode', OPENCODE)
-    delete old.entry_layout
-    expect(appTools('opencode', { version: OPENCODE, tests: [old] }).supported).toBe(false)
-    expect(toolsAutoPlan({ versions: { opencode: OPENCODE }, tests: [old] })).toMatchObject([{ harness: 'opencode', reason: 'untested' }])
-  })
-
-  it('keeps private comments live and absent from records, with byte-exact commented undo', async () => {
-    const before = `{\n "mcp": { "owned": {/* ${SECRET} */ "type":"local", "command":["old-tool"], "enabled":false } },\n "unrelated": {"token":"${SECRET}-unrelated"}\n}\n`
-    put(jsonc(), before)
-    const installed = await install(['opencode'])
-    expect(installed.code).toBe('OK')
-    expect(everythingBmnKeeps().includes(SECRET)).toBe(false)
-    expect(readFileSync(jsonc(), 'utf8').includes(SECRET)).toBe(true)
-    expect(readAppTools('opencode', env).entries.get('owned')?.value?.enabled).toBe(false)
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(readFileSync(jsonc(), 'utf8') === before).toBe(true)
-  })
-
-  it.each(['legacy', 'native'])('removes only a %s entry and undoes its exact bytes', async (layout) => {
-    approve(withTools([]))
-    const entry = '"owned": {/* SYNTHETIC-PRIVATE-COMMENT */"type":"local","command":["owned-tool"]}'
-    const before = layout === 'legacy' ? `{"mcp":{${entry},"timeout":123},"theme":2}` : `{"mcp":{"servers":{${entry}},"timeout":123},"theme":2}`
-    put(opencodeFile(), before)
-    const installed = await install(['opencode'], { removeUnlisted: true })
-    expect(installed.code).toBe('OK')
-    expect(readAppTools('opencode', env).entries.size).toBe(0)
-    expect(readFileSync(opencodeFile(), 'utf8')).toContain('SYNTHETIC-PRIVATE-COMMENT')
-    expect(everythingBmnKeeps()).not.toContain('SYNTHETIC-PRIVATE-COMMENT')
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-  })
-
-  it('reverses two canonical additions in order, preserving every original byte', async () => {
-    approve(withTools([owned, 'second: {name: Second, command: second-tool, public: true}']))
-    const before = '// SYNTHETIC-EOF-COMMENT'
-    put(opencodeFile(), before)
-    const installed = await install(['opencode'])
-    expect(installed.code).toBe('OK')
-    expect([...readAppTools('opencode', env).entries.keys()]).toEqual(['owned', 'second'])
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-  })
-
-  it('keeps unrelated edits and a new sibling instead of pruning their container', async () => {
-    put(opencodeFile(), '{"theme":"dark"}')
-    const installed = await install(['opencode'])
-    const changed = readFileSync(opencodeFile(), 'utf8').replace('"dark"', '"light"').replace('"servers": {', '"servers": {"sibling":{"type":"local","command":["sibling-tool"]},')
-    put(opencodeFile(), changed)
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect([...readAppTools('opencode', env).entries.keys()]).toEqual(['sibling'])
-    expect(readFileSync(opencodeFile(), 'utf8')).toContain('"theme":"light"')
-  })
-
-  it.each(['changed', 'moved'])('refuses an owned entry that was %s', async (change) => {
-    const installed = await install(['opencode'])
-    const data = JSON.parse(readFileSync(opencodeFile(), 'utf8'))
-    if (change === 'changed') data.mcp.servers.owned.command = ['changed-tool']
-    else data.mcp = { owned: data.mcp.servers.owned }
-    const before = JSON.stringify(data)
-    put(opencodeFile(), before)
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-  })
-
-  it('refuses duplicate IDs and both config filenames without writing a transaction', async () => {
-    const conflict = '{"mcp":{"owned":{"command":["a"]},"servers":{"owned":{"command":["b"]}}}}'
-    put(opencodeFile(), conflict)
-    expect(readAppTools('opencode', env).readable).toBe(false)
-    expect(await install(['opencode'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', transaction: null })
-    put(opencodeFile(), '{}'); put(jsonc(), '{}')
-    expect(await install(['opencode'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', transaction: null })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe('{}')
-    expect(readFileSync(jsonc(), 'utf8')).toBe('{}')
-  })
-
-  it('checks filename ambiguity again immediately before publication', async () => {
-    const installed = await install(['opencode'], { beforeCommit: () => { put(jsonc(), '{"external":true}') } })
-    expect(installed.code).toBe('INSTALL_FAILED')
-    expect(existsSync(opencodeFile())).toBe(false)
-    expect(readFileSync(jsonc(), 'utf8')).toBe('{"external":true}')
-  })
-
-  it('refuses unreadable readback instead of treating it as successful removal', () => {
-    put(jsonc(), '{"mcp":{"owned":{"type":"local","command":["owned-tool"]}}}')
-    const file = readAppTools('opencode', env), found = file.entries.get('owned')!
-    if (found.unreadable !== undefined) throw new Error('synthetic entry is unreadable')
-    let fault: unknown
-    try {
-      toolAdmission(() => writeToolEntry('opencode', jsonc(), 'owned', { hash: found.hash,
-        text: found.text_hash, ...(file.directory === undefined ? {} : { directory: file.directory }),
-        ...(found.at === undefined ? {} : { at: found.at }) }, undefined, undefined, {
-        publish: (path, state, text, options) => { const result = replaceFileSafely(path, state, text, options); put(path, '{invalid'); return result }
-      }))
-    } catch (error) { fault = error }
-    expect(fault).toMatchObject({ code: 'READBACK_FAILED' })
-    expect(readFileSync(jsonc(), 'utf8')).toBe('{invalid')
-  })
-
-  it('recomputes exact undo after an unrelated write wins the publication race', async () => {
-    put(opencodeFile(), '{"theme":"dark"}')
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    let calls = 0
-    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true, beforeCommit: () => {
-      calls += 1; put(opencodeFile(), readFileSync(opencodeFile(), 'utf8').replace('"dark"', '"light"'))
-    } })).toMatchObject({ code: 'OK' })
-    expect(calls).toBe(1)
-    expect(readFileSync(opencodeFile(), 'utf8')).toContain('"theme":"light"')
-    expect(readAppTools('opencode', env).entries.size).toBe(0)
-  })
-
-  it('recovers an interrupted undo after bytes were restored and before ownership was restored', async () => {
-    const before = '{"theme":1}'
-    put(opencodeFile(), before)
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    await expect(restoreToolsTransaction(state.manifest, state.folder, { yes: true, afterEntry: () => { throw new Error('synthetic interruption') } })).rejects.toThrow('synthetic interruption')
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-    expect(saved(installed.transaction!).manifest.targets[0]?.undoStarted).toBe(true)
-    expect(await restoreTransaction(installed.transaction!, { yes: true })).toMatchObject({ code: 'OK' })
-    expect(saved(installed.transaction!).manifest.targets[0]?.undone).toBe(true)
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-  })
-
-  it('refuses a forged inverse binding without changing any config bytes', async () => {
-    const installed = await install(['opencode']), state = saved(installed.transaction!)
-    const before = readFileSync(opencodeFile(), 'utf8')
-    state.manifest.targets[0]!.edit_receipt.at = ['mcp']
-    expect(await restoreToolsTransaction(state.manifest, state.folder, { yes: true })).toMatchObject({ code: 'REVISION_CONFLICT' })
-    expect(readFileSync(opencodeFile(), 'utf8')).toBe(before)
-  })
-
-  it('leaves unknown literal fields in place and out of the plan and records', async () => {
-    put(opencodeFile(), `{"mcp":{"owned":{"type":"local","command":["old-tool"],"unknown":"${SECRET}"}}}`)
-    const plan = await planToolsInstall(['opencode'], { environment: env, versions: VERSIONS })
-    expect(plan).toMatchObject({ code: 'OK', targets: [], blocked: [{ tool: 'owned' }] })
-    expect(JSON.stringify(toolsPlanView(plan)).includes(SECRET)).toBe(false)
-    expect(everythingBmnKeeps().includes(SECRET)).toBe(false)
   })
 })
 
@@ -884,14 +544,13 @@ describe('install and undo (60.12 AC4)', () => {
     expect(await planToolsInstall(['claude'], options)).toMatchObject({ code: 'TOOL_NOT_APPROVED', targets: [] })
   })
 
-  it('switches private app settings to the account relay, leaves public apps anonymous, and undoes exact prior bytes (97.2)', async () => {
+  it('switches private app settings to the account relay and undoes exact prior bytes (97.2)', async () => {
     approve(withTools(['playwright: {name: Playwright, command: bmn, args: [browser, server], public: true}']))
     const originals = [
       '{\n "mcpServers": {"playwright": {"command":"npx","args":["@playwright/mcp@0.0.75","--isolated"]}},\n "tips": {}\n}\n',
-      '# mine\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["@playwright/mcp@0.0.75", "--isolated"]\n',
-      '{"mcp":{"servers":{"playwright":{"type":"local","command":["playwright-mcp"],"enabled":true}}}}\n'
+      '# mine\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["@playwright/mcp@0.0.75", "--isolated"]\n'
     ]
-    const paths = [claudeFile(), codexFile(), opencodeFile()]
+    const paths = [claudeFile(), codexFile()]
     paths.forEach((path, index) => put(path, originals[index]!))
     const planned = await planToolsInstall([], { environment: env, versions: VERSIONS })
     expect(planned.code).toBe('OK')
@@ -904,9 +563,6 @@ describe('install and undo (60.12 AC4)', () => {
       else expect(value).not.toHaveProperty('required')
       expect(neutralOf(value, harness)!.extras).toEqual([])
     }
-    expect(readAppTools('opencode', env).entries.get('playwright')!.value).toMatchObject({
-      command: ['npx', '--offline', '@playwright/mcp@0.0.75', '--headless', '--isolated', '--viewport-size', '1280x720']
-    })
     const repeated = await planToolsInstall([], { environment: env, versions: VERSIONS })
     expect(repeated.code).toBe('OK')
     expect(repeated.targets).toEqual([])
@@ -937,13 +593,13 @@ describe('install and undo (60.12 AC4)', () => {
     const planned = await planToolsInstall([], { environment: env, versions: VERSIONS })
     expect(planned.code).toBe('OK')
     expect(planned.targets.map((target) => `${target.harness} ${target.tool} ${target.action}`)).toEqual([
-      'claude docs set', 'claude files set', 'claude notes set', 'codex docs set', 'codex files set', 'codex notes set', 'opencode docs set'
+      'claude docs set', 'claude files set', 'claude notes set', 'codex docs set', 'codex files set', 'codex notes set'
     ])
     expect(planned.targets[0]).toMatchObject({ path: claudeFile(), change: 'missing', words: 'adds the tool', before: null })
     expect(planned.targets[0]!.after).toContain('"Authorization": "${DOCS_TOKEN}"')
     const result = await install([], { expectedPlanHash: planned.planHash! })
     expect(result).toMatchObject({ code: 'OK', exposed: [], blocked: [] })
-    expect(result.written).toHaveLength(7)
+    expect(result.written).toHaveLength(6)
     // Claude Code: the entries joined the list; everything before and after it is the same bytes.
     const claudeAfter = readFileSync(claudeFile(), 'utf8')
     const mine = '    "mine": { "command": "mine-tool", "env": { "MINE_KEY": "' + SECRET + '" } }'
@@ -959,7 +615,6 @@ describe('install and undo (60.12 AC4)', () => {
       '', '[mcp_servers.docs]', 'url = "https://docs.example.test/mcp"', 'env_http_headers = { Authorization = "DOCS_TOKEN" }', '',
       '[mcp_servers.files]', 'command = "files-tool"', 'args = ["--root", "/srv/files"]', 'env_vars = ["FILES_KEY"]', '', '[mcp_servers.notes]', 'command = "notes-tool"', ''
     ].join('\n'))
-    expect(JSON.parse(readFileSync(opencodeFile(), 'utf8'))).toEqual({ mcp: { servers: { docs: { type: 'remote', url: 'https://docs.example.test/mcp', headers: { Authorization: '{env:DOCS_TOKEN}' } } } } })
     // Entries BMN did not write stay, and stay named.
     expect(appOf('claude').unlisted).toEqual([{ id: 'mine', state: 'unmanaged', managed: false, secret: true }])
     expect(checkExit(check())).toBe(0)
@@ -975,7 +630,6 @@ describe('install and undo (60.12 AC4)', () => {
     expect(undone).toMatchObject({ code: 'OK', kind: 'tools' })
     expect(readFileSync(claudeFile(), 'utf8')).toBe(claudeBefore.replace('"tips": {}', '"tips": { "seen": 4 }'))
     expect(readFileSync(codexFile(), 'utf8')).toBe(`${codexBefore}\n[history]\npersistence = "none"\n`)
-    expect(readAppTools('opencode', env).entries.size).toBe(0)
     expect(states('claude')).toMatchObject({ docs: 'missing', files: 'missing', notes: 'missing' })
     expect(listTransactions().find((entry) => entry.id === result.transaction)).toMatchObject({ reason: 'tools install', state: 'complete' })
   })
@@ -997,13 +651,32 @@ describe('install and undo (60.12 AC4)', () => {
     expect(existsSync(join(home, '.cursor'))).toBe(false)
   })
 
+  it('lists a tools install made before OpenCode was retired as saved, and its undo leaves the OpenCode file as it is (123.1 AC3)', async () => {
+    const result = await install(['codex'])
+    const manifestPath = join(home, '.config/bmn/agents/state/rules/transactions', result.transaction!, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    const openCodeFile = join(home, '.config/opencode/opencode.json')
+    const held = '{"mcp":{"servers":{"docs":{"type":"remote","url":"https://docs.example.test/mcp"}}}}\n'
+    put(openCodeFile, held)
+    manifest.targets.push({ ...manifest.targets[0], harness: 'opencode', path: openCodeFile })
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    expect(listTransactions().find((entry) => entry.id === result.transaction)?.targets).toEqual(['codex', 'opencode'])
+
+    const shown = await restoreTransaction(result.transaction!, { planOnly: true })
+    expect(new Set(shown.targets!.map((target) => target.harness))).toEqual(new Set(['codex']))
+    expect(shown.left).toEqual([{ harness: 'opencode', path: openCodeFile, reason: "OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final" }])
+    expect(await restoreTransaction(result.transaction!, { yes: true, expectedPlanHash: shown.plan_hash! })).toMatchObject({ code: 'OK', kind: 'tools', left: shown.left })
+    expect(readAppTools('codex', env).entries.size).toBe(0)
+    expect(readFileSync(openCodeFile, 'utf8')).toBe(held)
+  })
+
   it('installs for the named apps only, and for a tool kept to some apps only there', async () => {
     const result = await install(['codex'])
     expect(result.written.map((entry) => `${entry.harness} ${entry.tool}`)).toEqual(['codex docs', 'codex files', 'codex notes'])
     expect(existsSync(claudeFile())).toBe(false)
     approve(withTools(TOOLS.map((line) => line.replace('apps: [claude, codex]', 'apps: [claude]'))))
     const next = await install()
-    expect(next.written.map((entry) => `${entry.harness} ${entry.tool} ${entry.action}`)).toEqual(['claude docs set', 'claude files set', 'claude notes set', 'codex files remove', 'opencode docs set'])
+    expect(next.written.map((entry) => `${entry.harness} ${entry.tool} ${entry.action}`)).toEqual(['claude docs set', 'claude files set', 'claude notes set', 'codex files remove'])
     expect([...readAppTools('codex', env).entries.keys()]).toEqual(['docs', 'notes'])
     expect(checkExit(check())).toBe(0)
     // The removal is undone with the rest.
@@ -1085,8 +758,9 @@ describe('install and undo (60.12 AC4)', () => {
     expect(appOf('claude')).toMatchObject({ readable: true, link: join(home, 'dotfiles/claude.json') })
     expect(await install(['claude'])).toMatchObject({ code: 'TOOL_FILE_LINK', written: [] })
     expect(readFileSync(join(home, 'dotfiles/claude.json'), 'utf8')).toBe('{}\n')
-    put(opencodeFile(), '{ "mcp": [')
-    expect(await install(['opencode'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', written: [] })
+    rmSync(claudeFile())
+    put(claudeFile(), '{ "mcpServers": [')
+    expect(await install(['claude'])).toMatchObject({ code: 'TOOL_FILE_UNREADABLE', written: [] })
     // Codex now talks to another destination than the approved team says.
     put(codexFile(), 'openai_base_url = "https://elsewhere.example.test/v1"\n')
     expect(await install(['codex'])).toMatchObject({ code: 'ROUTE_CHANGED', written: [] })
@@ -1282,17 +956,6 @@ describe('install and undo (60.12 AC4)', () => {
     rmSync(join(home, '.config/bmn/agents/state'), { recursive: true })
     expect(check().tools).toEqual([])
   })
-
-  it('reports what stays exposed whatever is installed', async () => {
-    put(opencodeFile(), JSON.stringify({ mcp: { notes: { type: 'local', command: ['notes-tool'], enabled: true }, stray: { type: 'local', command: ['stray-tool'] } } }, null, 2))
-    const result = await install(['opencode'])
-    expect(result.written.map((entry) => entry.tool)).toEqual(['docs'])
-    expect(result.exposed.map((entry) => [entry.tool, entry.fix])).toEqual([
-      ['notes', `BMN did not write this entry in ${opencodeFile()}: remove it there, or let OpenCode have the tool`],
-      ['stray', 'OpenCode gets public work only and holds an entry that is not on your list: remove it there, or add it to the list and mark it Public']
-    ])
-    expect(pendingCounts(check())).toEqual({ pending: 6, exposed: 2, blocked: 0 })
-  })
 })
 
 describe('import of what the apps already hold (60.12 AC3)', () => {
@@ -1307,12 +970,11 @@ describe('import of what the apps already hold (60.12 AC3)', () => {
       'Bad Name': { type: 'stdio', command: 'x', args: [] }
     } }, null, 2))
     put(codexFile(), '[mcp_servers.playwright]\ncommand = "npx"\nargs = ["--offline", "@synthetic/browser-mcp@1.0.0"]\n\n[mcp_servers.differs]\ncommand = "differs-b"\n\n[mcp_servers]\ninline = { command = "x" }\n')
-    put(opencodeFile(), '{\n  // SYNTHETIC\n  "mcp": { "playwright": { "type": "local", "command": ["npx", "--offline", "@synthetic/browser-mcp@1.0.0"], "enabled": true } },\n}\n')
     const result = proposeTools({ environment: env })
-    expect(result.files.map((file) => [file.harness, file.readable])).toEqual([['claude', true], ['codex', true], ['opencode', true]])
+    expect(result.files.map((file) => [file.harness, file.readable])).toEqual([['claude', true], ['codex', true]])
     const byId = (id: string) => result.proposals.filter((proposal) => proposal.id === id)
-    expect(byId('playwright')).toEqual([{ id: 'playwright', state: 'ready', apps: ['claude', 'codex', 'opencode'], notes: [],
-      tool: { id: 'playwright', name: 'Playwright', command: 'npx', args: ['--offline', '@synthetic/browser-mcp@1.0.0'], apps: ['claude', 'codex', 'opencode'] } }])
+    expect(byId('playwright')).toEqual([{ id: 'playwright', state: 'ready', apps: ['claude', 'codex'], notes: [],
+      tool: { id: 'playwright', name: 'Playwright', command: 'npx', args: ['--offline', '@synthetic/browser-mcp@1.0.0'], apps: ['claude', 'codex'] } }])
     expect(byId('canva')).toEqual([{ id: 'canva', state: 'secret', apps: ['claude'], tool: { id: 'canva', name: 'Canva', url: 'https://canva.example.test/mcp', apps: ['claude'] },
       notes: ['holds a value inline (Claude Code headers.Authorization): move this value into an environment variable; it was left out and the tool cannot be installed until then'] }])
     expect(byId('search')[0]).toMatchObject({ state: 'secret', tool: { id: 'search', name: 'Search', command: 'search-tool', args: ['--api-key'], env: { SEARCH_REGION: 'SEARCH_REGION' }, apps: ['claude'] } })
@@ -1777,93 +1439,20 @@ describe('the owner\'s test of where an app reads its tools (60.12 AC1)', () => 
     expect(codex).not.toHaveProperty('isolation_basis')
     expect(calls('codex').map((call) => call.argv.join(' ').replace(/bmn-own-\w+.*/, 'bmn-own'))).toEqual(['mcp list', 'mcp add bmn-own', 'mcp remove bmn-own'])
     expect(appTools('codex', { version: CODEX })).toMatchObject({ supported: true, variable: true, isolation: false })
-    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', file: '~/.config/opencode/opencode.json', variable: 'pass', variable_basis: 'started', isolation: 'unproven', own_command: 'none',
-      detail: expect.stringContaining(NO_RUN_TEST('OpenCode')) })
   })
 
   it('records what it could not see, and an app that fails the test stays unsupported', async () => {
     rmSync(toolsTestsPath())
     app('claude', CLAUDE, { starts: false })
     expect(await testTools('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'pass', variable: 'unproven', detail: expect.stringContaining('BMN did not see it pass an environment variable to a tool') })
-    app('opencode', OPENCODE, { reads: false })
-    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 350 })).toMatchObject({ outcome: 'inconclusive', detail: 'opencode did not finish' })
-    expect(appTools('opencode', { version: OPENCODE })).toMatchObject({ supported: false })
-    app('opencode', OPENCODE, { signIn: true })
-    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'opencode did not answer in a home folder without its sign-in' })
-    rmSync(join(stubs, 'opencode'))
-    expect(await testTools('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable', version: null })
+    app('codex', CODEX, { signIn: true })
+    expect(await testTools('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'codex did not answer in a home folder without its sign-in' })
+    rmSync(join(stubs, 'codex'))
+    expect(await testTools('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable', version: null })
     // The tool is named, but the command failed: nothing it printed counts.
     app('codex', CODEX, { listFails: true })
     expect(await testTools('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'codex named the tool but ended with an error, so its answer proves nothing' })
     expect(appTools('codex', { version: CODEX })).toMatchObject({ supported: false })
-  })
-})
-
-describe('OpenCode 2 private tools test (85.3)', () => {
-  const calls = (): { argv: string[]; env: string[] }[] => readFileSync(join(home, 'calls-opencode.log'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
-  const stopped = (): void => {
-    const pids = readFileSync(join(home, 'private-pids.log'), 'utf8').trim().split('\n').map(Number)
-    expect(pids).toHaveLength(1)
-    for (const pid of pids) {
-      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
-      expect(() => process.kill(pid, 0)).toThrow()
-      expect(() => process.kill(-pid, 0)).toThrow()
-    }
-  }
-
-  it('uses only its announced private server and confirms arguments, variables and teardown', async () => {
-    app('opencode', OPENCODE, { starts: true, emptyPolls: 2 })
-    const result = await testTools('opencode', { environment: { ...env, OPENCODE_SERVER: 'http://127.0.0.1:1',
-      OPENCODE_PASSWORD: SECRET, BMN_TOKEN: SECRET, OPENAI_API_KEY: SECRET }, now: NOW, timeoutMs: 30_000 })
-    expect(result).toMatchObject({ outcome: 'pass', variable: 'pass', variable_basis: 'started', argument: 'pass', entry_layout: 'mcp.servers' })
-    const commands = calls()
-    expect(commands[0]?.argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', '0'])
-    const api = commands.slice(1)
-    expect(api.length).toBeGreaterThanOrEqual(4)
-    expect(api.every(call => call.argv.length === 4 && call.argv[0] === 'api' && call.argv[1] === '--server' && call.argv[3] === 'mcp.list')).toBe(true)
-    expect(new Set(api.map(call => call.argv[2])).size).toBe(1)
-    expect(api[0]!.argv[2]).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
-    expect(api[0]!.argv[2]).not.toBe('http://127.0.0.1:1')
-    expect(commands.every(call => call.env.includes('OPENCODE_PASSWORD') && call.env.includes('OPENCODE_DISABLE_PROJECT_CONFIG') &&
-      call.env.includes('OPENCODE_DISABLE_AUTOUPDATE') && call.env.includes('OPENCODE_DISABLE_MODELS_FETCH') &&
-      !call.env.includes('BMN_TOKEN') && !call.env.includes('OPENAI_API_KEY') && !call.env.includes('OPENCODE_SERVER'))).toBe(true)
-    expect(everythingBmnKeeps()).not.toContain(SECRET)
-    stopped()
-  })
-
-  it.each(['api-fails', 'malformed', 'never-listen', 'api-hangs'])('tears down its own server on %s without a default-service fallback', async serverMode => {
-    app('opencode', OPENCODE, { starts: true, serverMode })
-    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 600 })).toMatchObject({ outcome: 'inconclusive' })
-    expect(calls().every(call => call.argv[0] === 'serve' || call.argv[0] === 'api')).toBe(true)
-    stopped()
-  })
-
-  it('waits for a server that ignores TERM to exit after bounded escalation', async () => {
-    app('opencode', OPENCODE, { starts: true, serverMode: 'ignore-term' })
-    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 30_000 })).toMatchObject({ outcome: 'pass', argument: 'pass', variable: 'pass' })
-    stopped()
-  })
-
-  it('refuses a connected name without the stand-in confirming its values', async () => {
-    app('opencode', OPENCODE, { starts: false })
-    expect(await testTools('opencode', { environment: env, now: NOW, timeoutMs: 30_000 })).toMatchObject({ outcome: 'inconclusive',
-      detail: 'OpenCode named the tool, but its stand-in did not confirm both its argument and environment value' })
-    stopped()
-  })
-
-  it('gives the new method bounded tries while retaining the old exhausted retry record', async () => {
-    const old = { kind: 'tools' as const, harness: 'opencode' as const, version: OPENCODE, key: '' }
-    const oldTry: AutoTestTry = { count: 3, at: NOW.toISOString(), outcome: 'inconclusive' }
-    let tries: Record<string, AutoTestTry> = { [autoTestId(old)]: oldTry }, ran = 0
-    const plan = () => toolsAutoPlan({ versions: { opencode: OPENCODE }, tests: [] }).map(entry => ({ ...entry, kind: 'tools' as const }))
-    const entry = plan()[0]!
-    expect(autoTestId(entry)).not.toBe(autoTestId(old))
-    const tests = createAutoTests({ plan, read: () => tries, write: next => { tries = next }, tell: () => {}, now: () => NOW.getTime(),
-      test: async () => { ran += 1; return { outcome: 'pass', version: OPENCODE, detail: 'synthetic' } } })
-    await tests.trigger(); await tests.trigger()
-    expect(ran).toBe(1)
-    expect(tries[autoTestId(old)]).toEqual(oldTry)
-    expect(tries[autoTestId(entry)]).toMatchObject({ count: 1, outcome: 'pass' })
   })
 })
 
@@ -1882,7 +1471,7 @@ describe('bmn tools', () => {
     expect(checked.stdout).toContain(`Claude Code ${CLAUDE}: Differs - ${claudeFile()}; every tool it may have`)
     expect(checked.stdout).toContain('  excluded: 2\n  missing: docs, notes\n  unmanaged: files')
     expect(checked.stdout).toContain('  not on your list: mine')
-    expect(checked.stdout).toContain(`OpenCode ${OPENCODE}: Missing - ${opencodeFile()}; public tools only`)
+    expect(checked.stdout).not.toContain('OpenCode')
     const json = JSON.parse((await call(['tools', 'check', '--json'])).stdout)
     expect(json).toMatchObject({ ok: false, tools: expect.any(Array), apps: expect.any(Array) })
     const plan = await call(['tools', 'install', 'claude', '--plan'])
@@ -1890,7 +1479,7 @@ describe('bmn tools', () => {
     expect(plan.stdout).toContain(`claude: docs in ${claudeFile()}\n  adds the tool\n  + "docs": {`)
     expect(plan.stdout).toContain('not changed: claude files - it holds a value inline (env.FILES_KEY)')
     const planJson = JSON.parse((await call(['tools', 'install', '--plan', '--json'])).stdout)
-    expect(planJson.targets).toHaveLength(6)
+    expect(planJson.targets).toHaveLength(5)
     // Without a terminal and without --yes nothing is written.
     const unconfirmed = await call(['tools', 'install', 'codex'])
     expect(unconfirmed.code).toBe(1)
@@ -1900,7 +1489,7 @@ describe('bmn tools', () => {
     const installed = await call(['tools', 'install', '--yes'])
     // The install changed what it could and says what it could not: that is not a success.
     expect(installed.code).toBe(1)
-    expect(installed.stdout).toMatch(/^Changed 6 entries \(transaction [0-9TZ-]+-\d+\)\.$/m)
+    expect(installed.stdout).toMatch(/^Changed 5 entries \(transaction [0-9TZ-]+-\d+\)\.$/m)
     expect(installed.stdout).toContain('Sessions started before this keep the tools they had.')
     const id = /transaction ([0-9TZ-]+-\d+)/.exec(installed.stdout)![1]!
     expect((await call(['tools', 'check'])).stdout).toContain('  unmanaged: files')
@@ -1908,11 +1497,16 @@ describe('bmn tools', () => {
     expect(restored.code, restored.stderr).toBe(0)
     expect(readAppTools('codex', env).entries.size).toBe(0)
     expect((await call(['tools', 'install', 'vim'])).code).toBe(2)
-    // Epic 71: asked for Cursor, it says Cursor was retired and where its support is kept.
+    // Epics 71 and 123: asked for Cursor or OpenCode, it says the app was retired and where its support is kept.
     for (const args of [['tools', 'install', 'cursor'], ['tools', 'test', 'cursor']]) {
       const retired = await call(args)
       expect(retired.code).toBe(2)
       expect(retired.stderr).toContain("Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final")
+    }
+    for (const args of [['tools', 'install', 'opencode'], ['tools', 'test', 'opencode']]) {
+      const retired = await call(args)
+      expect(retired.code).toBe(2)
+      expect(retired.stderr).toContain("OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final")
     }
     expect((await call(['tools', 'frobnicate'])).code).toBe(2)
     expect((await call(['tools', '--help'])).stdout).toContain('bmn tools check [--json]')

@@ -805,15 +805,6 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     // Nor does it install anything by itself at start unless it names it (Story 75.9): the self-test's HOME holds the owner's own hook files.
     ...(rendererTestMode || selfTest ? { startInstalls: testRunStartInstalls(process.env.BMN_START_INSTALLS) } : {}),
     ...(rendererTestMode || selfTest ? { doctorAtStart: process.env.BMN_DOCTOR_AT_START === '1' } : {}),
-    // The self-test keeps the owner's HOME, where his approved team is read, and opens Preferences on Team: it asks
-    // no OpenCode, so nothing runs in BMN's OpenCode folder under his real roots (packaged smoke of 2026-10-15).
-    ...(selfTest ? {
-      openCodeGo: {
-        lists: async () => ({ listed: false, reason: 'The self-test asks no OpenCode' }),
-        signedIn: async () => ({ signedIn: null, reason: 'The self-test asks no OpenCode' }),
-        copy: async () => ({ ok: false, copied: false, message: 'The self-test copies no sign-in' })
-      }
-    } : {}),
     // Agents › Asks (73.1): the folder he exports an ask into.
     chooseAskExportFolder: async (event) => {
       if (selfTestTaps?.headless) throw new MainIpcError(ERROR_CODES.invalidArgument, 'File dialogs are unavailable in this run')

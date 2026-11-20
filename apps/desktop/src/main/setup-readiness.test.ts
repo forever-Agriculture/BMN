@@ -14,14 +14,13 @@ const roots = new Set<string>()
 const root = (): string => { const dir = mkdtempSync(join(tmpdir(), 'bmn-setup-reader-')); roots.add(dir); return dir }
 afterEach(() => { for (const dir of roots) rmSync(dir, { recursive: true, force: true }); roots.clear() })
 
-it('projects only state, dropping Claude identity, Codex key fragments and OpenCode connection data', () => {
+it('projects only state, dropping Claude identity and Codex key fragments', () => {
   const secret = 'sk-SYNTHETIC-private-value-0123456789'
   const samples = [
     projectSetupSignIn('claude', { code: 0, failure: null, output: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: secret, orgId: secret }) }),
-    projectSetupSignIn('codex', { code: 0, failure: null, output: `Logged in using an API key - ${secret}` }),
-    projectSetupSignIn('opencode', { code: 0, failure: null, output: JSON.stringify([{ id: secret, connections: [{ type: 'credential', id: secret, method: 'key', key: secret }] }]) })
+    projectSetupSignIn('codex', { code: 0, failure: null, output: `Logged in using an API key - ${secret}` })
   ]
-  expect(samples).toEqual([{ signIn: 'ready', method: 'oauth' }, { signIn: 'ready', method: 'api-key' }, { signIn: 'ready', method: 'other' }])
+  expect(samples).toEqual([{ signIn: 'ready', method: 'oauth' }, { signIn: 'ready', method: 'api-key' }])
   expect(JSON.stringify(samples)).not.toContain(secret)
   expect(Object.keys(samples[0]!)).toEqual(['signIn', 'method'])
   for (const app of SETUP_APPS) {
@@ -30,10 +29,10 @@ it('projects only state, dropping Claude identity, Codex key fragments and OpenC
   }
 })
 
-it('keeps the measured command table non-root and uses only the three approved fixed paths', () => {
+it('keeps the measured command table non-root and uses only the approved fixed paths', () => {
   const home = root()
   for (const app of SETUP_APPS) {
-    const folder = join(home, app === 'opencode' ? '.opencode/bin' : '.local/bin')
+    const folder = join(home, '.local/bin')
     mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, app), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     expect(findSetupProgram(app, { HOME: home, PATH: '/nonexistent' }, null)).toEqual({ path: join(folder, app), onPath: false })
@@ -43,17 +42,6 @@ it('keeps the measured command table non-root and uses only the three approved f
     expect(SETUP_INSTALL_COMMANDS[app].argv.join(' ')).not.toMatch(/\bsudo\b/)
     expect(SETUP_LOGIN_ARGUMENTS[app]).not.toContain('--with-api-key')
   }
-})
-
-it('Epic 85: keeps an empty OpenCode auth listing unknown when JSONC config may supply sign-in', async () => {
-  const home = root(), bin = join(home, 'bin'), config = join(home, '.config/opencode')
-  mkdirSync(bin); mkdirSync(config, { recursive: true })
-  writeFileSync(join(bin, 'opencode'), '#!/bin/sh\nexit 65\n', { mode: 0o755 })
-  writeFileSync(join(config, 'opencode.jsonc'), '// synthetic configuration\n{}\n')
-  const reader = new SetupReadinessReader({ environment: () => ({ HOME: home, PATH: bin }), skipDirectory: null,
-    stateDirectory: join(home, 'bmn-state'),
-    run: async (_program, argv) => ({ code: 0, failure: null, output: argv[0] === '--version' ? 'opencode v2.0.32' : '[]' }) })
-  expect((await reader.read()).apps.find(row => row.app === 'opencode')).toMatchObject({ signIn: 'unknown', method: null })
 })
 
 function installedFixture(leak: boolean): { reader: SetupReadinessReader; home: string; state: string; count: () => number } {
@@ -118,7 +106,7 @@ function versionFixture(versions: Record<string, string>, qualifyPassed = true, 
   const seams: ConstructorParameters<typeof SetupReadinessReader>[0] = { environment: () => env, skipDirectory: null, stateDirectory: state,
     run: async (program, argv) => ({ code: argv[0] === '--version' ? versionCode : 0, failure: null, output: argv[0] === '--version' ? versions[basename(program)]! :
       basename(program) === 'claude' ? '{"loggedIn":true,"authMethod":"claude.ai"}' :
-        basename(program) === 'codex' ? 'Logged in using ChatGPT' : '[{"connections":[{"type":"credential"}]}]' }),
+        'Logged in using ChatGPT' }),
     qualify: async () => { qualifications++; return qualifyPassed } }
   return { reader: new SetupReadinessReader(seams), reopen: () => new SetupReadinessReader(seams), env, versions, qualifications: () => qualifications }
 }
@@ -132,50 +120,49 @@ function teamFromReadiness(apps: Awaited<ReturnType<SetupReadinessReader['read']
 }
 
 it('reads all exact 79.1 measured version strings into ready Team proposals without qualification', async () => {
-  const f = versionFixture({ claude: '2.1.303 (Claude Code)', codex: 'codex-cli 0.163.0', opencode: 'opencode v2.0.32' })
+  const f = versionFixture({ claude: '2.1.303 (Claude Code)', codex: 'codex-cli 0.163.0' })
   const apps = await f.reader.read()
   expect(apps.apps.map(({ app, version, qualification, signIn }) => ({ app, version, qualification, signIn }))).toEqual([
     { app: 'claude', version: '2.1.303', qualification: 'measured', signIn: 'ready' },
-    { app: 'codex', version: '0.163.0', qualification: 'measured', signIn: 'ready' },
-    { app: 'opencode', version: '2.0.32', qualification: 'measured', signIn: 'ready' }
+    { app: 'codex', version: '0.163.0', qualification: 'measured', signIn: 'ready' }
   ])
   expect(f.qualifications()).toBe(0)
   expect(teamFromReadiness(apps).proposals.map(proposal => [proposal.app, proposal.needs])).toEqual([
-    ['claude', null], ['codex', null], ['opencode', 'OpenCode Console availability for BMN team asks']
+    ['claude', null], ['codex', null]
   ])
 })
 
-it.each([true, false])('qualifies an unmeasured OpenCode v version once, with confirmation bound to version and profile (pass=%s)', async passed => {
-  const f = versionFixture({ opencode: 'opencode v2.0.33' }, passed)
-  expect((await f.reader.read()).apps[2]).toMatchObject({ version: '2.0.33', qualification: 'checking', signIn: 'unknown' })
+it.each([true, false])('qualifies an unmeasured Codex version once, with confirmation bound to version and profile (pass=%s)', async passed => {
+  const f = versionFixture({ codex: 'codex-cli 0.163.1' }, passed)
+  expect((await f.reader.read()).apps[1]).toMatchObject({ version: '0.163.1', qualification: 'checking', signIn: 'unknown' })
   await f.reader.idle()
-  expect((await f.reader.read()).apps[2]).toMatchObject({ version: '2.0.33', qualification: passed ? 'passed' : 'failed', signIn: passed ? 'ready' : 'unknown' })
+  expect((await f.reader.read()).apps[1]).toMatchObject({ version: '0.163.1', qualification: passed ? 'passed' : 'failed', signIn: passed ? 'ready' : 'unknown' })
   expect(f.qualifications()).toBe(1)
-  expect((await f.reopen().read()).apps[2]).toMatchObject({ version: '2.0.33', qualification: passed ? 'passed' : 'failed' })
+  expect((await f.reopen().read()).apps[1]).toMatchObject({ version: '0.163.1', qualification: passed ? 'passed' : 'failed' })
   expect(f.qualifications()).toBe(1)
   if (!passed) {
-    f.reader.confirm('opencode', '2.0.33')
+    f.reader.confirm('codex', '0.163.1')
     const confirmed = await f.reader.read()
-    expect(confirmed.apps[2]).toMatchObject({ signIn: 'confirmed', qualification: 'failed' })
-    expect(teamFromReadiness(confirmed).availableApps).toEqual(['opencode'])
+    expect(confirmed.apps[1]).toMatchObject({ signIn: 'confirmed', qualification: 'failed' })
+    expect(teamFromReadiness(confirmed).availableApps).toEqual(['codex'])
     f.env.HOME = root()
-    expect((await f.reader.read()).apps[2]).toMatchObject({ signIn: 'unknown', qualification: 'failed' })
-    f.reader.confirm('opencode', '2.0.33')
-    f.versions.opencode = 'opencode v2.0.34'
-    expect((await f.reader.read()).apps[2]).toMatchObject({ version: '2.0.34', signIn: 'unknown', qualification: 'checking' })
+    expect((await f.reader.read()).apps[1]).toMatchObject({ signIn: 'unknown', qualification: 'failed' })
+    f.reader.confirm('codex', '0.163.1')
+    f.versions.codex = 'codex-cli 0.163.2'
+    expect((await f.reader.read()).apps[1]).toMatchObject({ version: '0.163.2', signIn: 'unknown', qualification: 'checking' })
     await f.reader.idle()
-    expect((await f.reader.read()).apps[2]).toMatchObject({ signIn: 'unknown', qualification: 'failed' })
+    expect((await f.reader.read()).apps[1]).toMatchObject({ signIn: 'unknown', qualification: 'failed' })
   }
 })
 
-it.each(['noise opencode v2.0.32', 'opencode v2.0', 'codex-cli 2.0.32', 'opencode v2.0.32 unexpected'])('leaves malformed or wrong-app version output unknown: %s', async version => {
-  const f = versionFixture({ opencode: version })
-  expect((await f.reader.read()).apps[2]).toMatchObject({ version: null, signIn: 'unknown', qualification: 'unavailable' })
+it.each(['noise codex-cli 0.163.0', 'codex-cli 0.163', '2.1.303 (Claude Code)', 'codex-cli 0.163.0 unexpected'])('leaves malformed or wrong-app version output unknown: %s', async version => {
+  const f = versionFixture({ codex: version })
+  expect((await f.reader.read()).apps[1]).toMatchObject({ version: null, signIn: 'unknown', qualification: 'unavailable' })
   expect(f.qualifications()).toBe(0)
 })
 
 it('does not trust a version printed by a failed command', async () => {
-  const f = versionFixture({ opencode: 'opencode v2.0.32' }, true, 1)
-  expect((await f.reader.read()).apps[2]).toMatchObject({ version: null, signIn: 'unknown', qualification: 'unavailable' })
+  const f = versionFixture({ codex: 'codex-cli 0.163.0' }, true, 1)
+  expect((await f.reader.read()).apps[1]).toMatchObject({ version: null, signIn: 'unknown', qualification: 'unavailable' })
   expect(f.qualifications()).toBe(0)
 })

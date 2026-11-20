@@ -18,9 +18,9 @@ import { coordinateSetupDefaults, setupSkillsSource, validSetupDefaultsRequest }
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const setupId = 'synthetic-coordinator-79'
-const versions = { claude: '2.1.303', codex: '0.163.0', opencode: '2.0.32' }
-const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR',
-  'OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT', 'BMN_SHIPPED_SKILLS', 'PATH']
+const versions = { claude: '2.1.303', codex: '0.163.0' }
+const keys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
+  'BMN_SHIPPED_SKILLS', 'PATH']
 let root, saved
 const request = (mode = 'apply', apps = ['codex'], initialize = false) => ({ mode, claim: { setupId, initialize }, ready: apps.map(app => ({ app, version: versions[app] })) })
 const apply = apps => coordinateSetupDefaults(request('apply', apps))
@@ -34,9 +34,9 @@ function approve(source = setupSkillsSource(), scope = '') {
 }
 function qualify(app) {
   appendFileSync(skillsTestsPath(), JSON.stringify({ harness: app, kind: 'capability', version: versions[app], outcome: 'pass',
-    roots: [{ root: app === 'codex' ? '.agents/skills' : app === 'claude' ? '.claude/skills' : '.config/opencode/skills', folder: true, link: true }] }) + '\n')
+    roots: [{ root: app === 'codex' ? '.agents/skills' : '.claude/skills', folder: true, link: true }] }) + '\n')
   appendFileSync(toolsTestsPath(), JSON.stringify({ harness: app, kind: 'capability', version: versions[app], outcome: 'pass',
-    at: '2026-10-20T22:00:00.000Z', variable: 'pass', argument: 'pass', header: 'pass', ...(app === 'opencode' ? { entry_layout: 'mcp.servers' } : {}) }) + '\n')
+    at: '2026-10-20T22:00:00.000Z', variable: 'pass', argument: 'pass', header: 'pass' }) + '\n')
 }
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'bmn-setup-coordinator-'))
@@ -72,7 +72,7 @@ describe('fresh setup defaults coordinator', () => {
     assert.equal((await apply()).code, 'DEFAULTS_STATE_UNAVAILABLE'); assert(!existsSync(masterPath()))
   })
 
-  for (const app of ['codex', 'opencode']) it(`installs ${app}-only rules, skills, hooks and qualified tools from the approved portable source`, async () => {
+  for (const app of ['codex']) it(`installs ${app}-only rules, skills, hooks and qualified tools from the approved portable source`, async () => {
     await prepare(); approve(); qualify(app)
     const result = await apply([app]); assert.equal(result.code, 'OK', JSON.stringify(result))
     assert(existsSync(targetPath(app))); assert(!existsSync(join(root, '.claude')))
@@ -143,14 +143,14 @@ describe('fresh setup defaults coordinator', () => {
   })
 
   it('settles an app that no approved tool reaches without running or writing its tools', async () => {
-    await prepare(); approve(setupSkillsSource(), ', apps: [claude, codex]')
-    appendFileSync(skillsTestsPath(), JSON.stringify({ harness: 'opencode', kind: 'capability', version: versions.opencode, outcome: 'pass',
-      roots: [{ root: '.config/opencode/skills', folder: true, link: true }] }) + '\n')
-    const result = await apply(['opencode']); assert.equal(result.code, 'OK', JSON.stringify(result))
+    await prepare(); approve(setupSkillsSource(), ', apps: [claude]')
+    appendFileSync(skillsTestsPath(), JSON.stringify({ harness: 'codex', kind: 'capability', version: versions.codex, outcome: 'pass',
+      roots: [{ root: '.agents/skills', folder: true, link: true }] }) + '\n')
+    const result = await apply(['codex']); assert.equal(result.code, 'OK', JSON.stringify(result))
     const tools = result.rows.filter(row => row.kind === 'tools')
-    assert.deepEqual(tools.map(row => [row.app, row.code, row.state, row.paths.length]), [['opencode', 'OK', 'excluded', 0]])
+    assert.deepEqual(tools.map(row => [row.app, row.code, row.state, row.paths.length]), [['codex', 'OK', 'excluded', 0]])
     assert(!Object.values(readDefaultsOwnership(setupId).snapshot().entries).some(row => row.target.kind === 'tools'))
-    assert(!existsSync(join(root, '.config/opencode/opencode.jsonc')))
+    assert(!existsSync(join(root, '.codex/config.toml')))
   })
 
   it('installs a tool kept to some agents into no app', async () => {

@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 // MODULE: agents-tool-files.mjs - Story 60.12: reading one MCP entry out of an app's own settings file and changing only that entry, every other byte left as it is (JSON with comments, and Codex's TOML)
 
 /**
@@ -8,8 +6,8 @@ import { createHash } from 'node:crypto'
  * entry by position and replaces, adds or removes exactly those bytes. Anything it cannot place
  * with certainty is reported as unreadable and left alone.
  *
- * Two shapes are read: a JSON object of entries under a key path (Claude Code `mcpServers`,
- * OpenCode `mcp`; comments and trailing commas allowed), and Codex's TOML
+ * Two shapes are read: a JSON object of entries under a key path (Claude Code `mcpServers`;
+ * comments and trailing commas allowed), and Codex's TOML
  * tables `[mcp_servers.<id>]` with their sub-tables.
  */
 
@@ -323,9 +321,6 @@ function applyPatches(text, edits) {
   return text
 }
 
-const digest = (text) => createHash('sha256').update(text).digest('hex')
-const receiptLimit = 1024 * 1024
-
 function jsonEditPlan(text, path, id, value, raw, preserveComments = false) {
   const unit = indentUnit(text)
   if (raw !== undefined) value = parseValue(raw)
@@ -356,76 +351,6 @@ function jsonEditPlan(text, path, id, value, raw, preserveComments = false) {
 /** Set/remove one JSONC entry, preserving surrounding comments and the existing raw-value API. */
 export function editJsonEntry(text, path, id, value, { raw } = {}) {
   return jsonEditPlan(text, path, id, value, raw).text
-}
-
-/** A comment-free prior value; callers must separately admit every literal before persisting it. */
-export function commentFreeJson(text) {
-  return plainJson(text)
-}
-
-/** Exact inverse metadata contains only the planner's edited tokens and structural trivia. */
-export function editJsonEntryWithReceipt(text, path, id, value, { raw } = {}) {
-  const plan = jsonEditPlan(text, path, id, value, raw, true)
-  const receipt = { version: 1, raw: raw !== undefined, before: digest(text), after: digest(plan.text), edits: plan.edits }
-  if (receipt.edits.length > 8192 || Buffer.byteLength(JSON.stringify(receipt)) > receiptLimit ||
-    receipt.edits.some((edit) => tokensOf(edit.delete, 0, edit.delete.length).comments || tokensOf(edit.insert, 0, edit.insert.length).comments)) fail('the entry cannot be journaled without keeping comments or exceeding the receipt limit')
-  return { text: plan.text, receipt }
-}
-
-/** Validate scope by independently replaying the same entry planner; null means unrelated file edits. */
-export function invertJsonEntry(text, path, id, receipt) {
-  if (receipt === null || typeof receipt !== 'object' || receipt.version !== 1 || typeof receipt.raw !== 'boolean' ||
-    typeof receipt.before !== 'string' || typeof receipt.after !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(receipt.before) || !/^[a-f0-9]{64}$/.test(receipt.after) || !Array.isArray(receipt.edits) ||
-    receipt.edits.length > 8192 || Buffer.byteLength(JSON.stringify(receipt)) > receiptLimit ||
-    Object.keys(receipt).sort().join(',') !== 'after,before,edits,raw,version') fail('the inverse receipt is malformed')
-  let end = 0, delta = 0
-  const inverse = []
-  for (const edit of receipt.edits) {
-    if (edit === null || typeof edit !== 'object' || Object.keys(edit).sort().join(',') !== 'delete,insert,start' ||
-      !Number.isSafeInteger(edit.start) || edit.start < end || typeof edit.delete !== 'string' || typeof edit.insert !== 'string' ||
-      tokensOf(edit.delete, 0, edit.delete.length).comments || tokensOf(edit.insert, 0, edit.insert.length).comments) fail('the inverse receipt contains an invalid token edit')
-    inverse.push({ start: edit.start + delta, delete: edit.insert, insert: edit.delete })
-    end = edit.start + edit.delete.length
-    delta += edit.insert.length - edit.delete.length
-  }
-  if (digest(text) !== receipt.after) return null
-  const before = applyPatches(text, inverse)
-  if (digest(before) !== receipt.before) fail('the inverse receipt does not reconstruct its bound file')
-  const current = readJsonEntries(text, path).get(id)
-  const replay = editJsonEntryWithReceipt(before, path, id, current?.value, { raw: receipt.raw ? current?.raw : undefined })
-  if (replay.text !== text || JSON.stringify(replay.receipt) !== JSON.stringify(receipt)) fail('the inverse receipt is not an edit of this entry')
-  return before
-}
-
-/** Both OpenCode layouts, with parser-derived provenance; metadata is never a tool. */
-export function readOpenCodeEntries(text, { strict = false } = {}) {
-  if (strict) rootOf(text, true)
-  const entries = new Map(), root = containerOf(text, ['mcp'])
-  if (!root) return entries
-  const seen = new Set()
-  const add = (member, at) => {
-    if (entries.has(member.key)) fail(`"${member.key}" is in both MCP layouts`)
-    const raw = text.slice(member.valueStart, member.valueEnd)
-    entries.set(member.key, { value: parseValue(raw), raw, at, start: member.keyStart })
-  }
-  for (const member of root.members) {
-    if (seen.has(member.key)) fail(`"${member.key}" is there twice`)
-    seen.add(member.key)
-    if (member.key === 'timeout') continue
-    if (member.key !== 'servers') { add(member, ['mcp']); continue }
-    if (text[member.valueStart] !== '{') fail('"mcp.servers" is not an object')
-    const value = parseValue(text.slice(member.valueStart, member.valueEnd))
-    // A legacy server named "servers" remains readable; a canonical add must refuse this namespace collision.
-    if (typeof value.type === 'string' || Array.isArray(value.command) || typeof value.url === 'string') { add(member, ['mcp']); continue }
-    const nested = objectSpans(text, member.valueStart), names = new Set()
-    for (const server of nested.members) {
-      if (names.has(server.key)) fail(`"${server.key}" is there twice`)
-      names.add(server.key)
-      add(server, ['mcp', 'servers'])
-    }
-  }
-  return entries
 }
 
 // ---------------------------------------------------------------------------------------------

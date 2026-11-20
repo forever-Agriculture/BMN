@@ -3,15 +3,14 @@ import { sharedSmallWork } from './agents-small-work.mjs'
 import { readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RosterError, appName, canonicalJson, classRefusal, isRetired, publicOnlyReasons, retiredWords, sha256 } from './agents-roster.mjs'
+import { RosterError, appName, canonicalJson, classRefusal, isRetired, retiredWords, sha256 } from './agents-roster.mjs'
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { checkContext, contextItems, provenControls, provenPrecedence } from './agents-context.mjs'
 import { ASK_APPS, ASK_FORMS_CHECKED, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, checkCodexMcp, claudePictureMessage, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
 import { BROWSER_STATEMENT, browserOrigin } from './agents-team-browser.mjs'
-import { OPENCODE_ASK_AGENTS, openCodeAskConfig } from './agents-opencode.mjs'
 import { NEXT_STEP, Refusal, TESTED_HARNESS_VERSIONS, readText, refuse } from './agents-check-base.mjs'
-import { dispatchEnvironment, parseDispatch, parseOpenCode } from './agents-check-argv.mjs'
-import { inspectOpenCode, resolveClaudeRoute, resolveCodexRoute, resolveOpenCodeRoute } from './agents-check-routes.mjs'
+import { dispatchEnvironment, parseDispatch } from './agents-check-argv.mjs'
+import { resolveClaudeRoute, resolveCodexRoute } from './agents-check-routes.mjs'
 import { canonicalDirectory, committedBlob, destinationOf, harnessVersion, hashFile, privateWorkAnswer, readReceiptFile, receiptHash, workspaceVisibility } from './agents-check-workspace.mjs'
 import { activeAgent, checkModelAndEffort, checkRoleEffort, evaluate, evaluateResearch, matchedDestination, receiptAnswer, receiptRoute, versionStanding } from './agents-check-evaluate.mjs'
 import { isObject } from './shared-helpers.mjs'
@@ -200,8 +199,9 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       if ((browser.qa === true) !== (inputs.role === 'qa')) refuse('WORKSPACE_MISMATCH', 'the QA browser mode does not match the checked role')
     }
 
-    // The form: the app's one read-only form, OpenCode's asker where it may read nothing but the asker's text.
-    const form = askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
+    // The form: the app's one read-only form.
+    const form = askFormName(agent.harness)
+    if (form === null) refuse('AGENT_NOT_ELIGIBLE', `${appName(agent.harness)}'s teammates are not asked through BMN`)
     const reads = askReads(form, browser)
     if (manifest.form !== form) refuse('WORKSPACE_MISMATCH', `the ask's manifest names the form ${manifest.form}, not ${form}`)
     // A public ask goes only through a form that reads nothing beyond the asker's text (R72-NFR5).
@@ -224,7 +224,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     } catch (error) {
       if (error.code !== 'ENOENT') refuse('WORKSPACE_MISMATCH', 'the instruction snapshot of this ask cannot be read')
     }
-    if (rules !== null && (agent.harness !== 'opencode' || label !== 'private')) refuse('WORKSPACE_MISMATCH', 'only a private OpenCode ask carries the owner\'s rules: Codex and Claude Code read their own')
+    if (rules !== null) refuse('WORKSPACE_MISMATCH', 'an ask carries no snapshot of the owner\'s rules: Codex and Claude Code read their own')
     const request = askRequest(agent, version, { form, effort: inputs.effort, cwd, folder, rules, pictures: manifest.pictures.map((picture) => `${folder}/${ASK_RUN_FILES.inputs}/${picture.copy}`), browser: browser === null ? null : { origin: browser.origin, interact: browser.interact, ...(browser.qa ? { qa: true } : {}) }, inherited, environment, contextTestLog })
     const built = askCommand(agent.harness, program, request)
     if (agent.harness === 'codex') {
@@ -278,18 +278,10 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
     // Where it goes, read as `roster check` reads the same app's dispatch from the same folder: the same answers evaluate gives.
     const parsed = agent.harness === 'codex'
       ? { harness: 'codex', command: program.launcher, envMode: 'clean', assignments: built.environment, config: built.command.filter((_, index) => built.command[index - 1] === '-c'), disable: [], model: agent.model, sandbox: 'read-only', askProfile: true, resume: null, cd: cwd }
-      : agent.harness === 'claude'
-        ? { harness: 'claude', command: program.launcher, envMode: 'clean', assignments: built.environment, addDir: [], model: agent.model, effort: inputs.effort }
-        // OpenCode's command read by the same parser as every OpenCode dispatch.
-        : parseOpenCode(built.command.slice(1), { harness: 'opencode', command: program.launcher, envMode: 'clean', assignments: built.environment })
-    if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)
-    const own = agent.harness === 'opencode' ? openCodeAskConfig(form === 'opencode-reader' ? 'reader' : 'asker', rules) : null
-    const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, {}, cwd)
-      : agent.harness === 'claude' ? resolveClaudeRoute(parsed, {}, cwd)
-        : resolveOpenCodeRoute(parsed, { agent: own.agent, folder: true, inline: own.content })
+      : { harness: 'claude', command: program.launcher, envMode: 'clean', assignments: built.environment, addDir: [], model: agent.model, effort: inputs.effort }
+    const resolution = agent.harness === 'codex' ? resolveCodexRoute(parsed, {}, cwd) : resolveClaudeRoute(parsed, {}, cwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
-    // OpenCode names a model with its provider (`-m opencode-go/gpt-6-luna`), as research's check reads it.
-    const { model, effort } = checkModelAndEffort(agent.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
+    const { model, effort } = checkModelAndEffort(agent, resolution, note)
     checkRoleEffort(effortRole, agent, effort, note, data)
     const context = checkContext(agent, resolution.context, proven, agent.context_limit === undefined ? [] : provenPrecedence(agent.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)
@@ -308,8 +300,7 @@ export function evaluateAsk(inputs, { environment = process.env, now = new Date(
       ...(agent.context_limit !== undefined && context.applied === null ? { context_limit_note: context.note } : {}),
       form, reads: { scope: reads.scope, words: reads.words, folder: cwd }, project, cwd, ...(manifest.pictures.length > 0 ? { pictures: manifest.pictures.length } : {}),
       sandbox: agent.harness === 'codex' ? { mode: 'read-only', source: 'Codex\'s permission profile on :read-only', approval_policy: 'never', tools: 'Codex\'s own: shell, Git, web search, sub-agents' }
-        : agent.harness === 'claude' ? { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'git ls-tree', 'git ls-files', 'WebSearch', 'Agent'] }
-          : { mode: 'read-only', source: '--agent', agent: own.agent, tools: form === 'opencode-reader' ? ['read', 'glob', 'grep', 'list', 'git log', 'git show', 'git diff', 'git blame', 'websearch', `subagent ${OPENCODE_ASK_AGENTS.subagent}`] : [] },
+        : { mode: 'read-only', source: '--permission-mode dontAsk --restricted', tools: ['Read', 'Grep', 'Glob', 'git log', 'git show', 'git diff', 'git blame', 'git ls-tree', 'git ls-files', 'WebSearch', 'Agent'] },
       run: basename(folder), data: label, consent,
       // The project's vision the reviewer was given, by path and hash, or why it was not (Epic 112); bound with the manifest below.
       ...(isObject(manifest.vision) ? { vision: manifest.vision } : {}),
@@ -386,10 +377,7 @@ function sameReceipt(receipt, recomputed) {
  */
 export function inspectRoute(agent, argv, environment, processCwd, data = null) {
   let result
-  if (agent.harness === 'opencode') {
-    const version = harnessVersion('opencode', environment)
-    result = { ...inspectOpenCode(environment), harness: 'opencode', version, version_state: versionStanding('opencode', version).state }
-  } else if (isRetired(agent.harness)) {
+  if (isRetired(agent.harness)) {
     result = { harness: agent.harness, basis: 'unknown', provider: null, host: null, reason: retiredWords(agent.harness), sources: [], inspection_only: true }
   } else {
     const parsed = argv === null

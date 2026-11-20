@@ -102,7 +102,6 @@ export function SessionRequestCard(props: {
       {!(request.manualChoices || questions?.length === 1 && questions[0]?.text === request.title) ? <h3>{request.title}</h3> : null}
       {interactive && questions ? <AttentionChoices questions={questions}
         context={request.manualChoices ? request.body ?? undefined : undefined}
-        allowsCustom={question => request.prompt?.harness !== 'opencode' || question.custom !== false}
         onAnswer={choices => answer(request, choices)} />
         : questions ? <div className="attention-questions">{questions.map((question, index) =>
         <section key={index} aria-label={stripFormatCharacters(question.text)}>

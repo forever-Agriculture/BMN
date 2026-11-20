@@ -17,7 +17,6 @@ import {
   type AgentHistoryStatus,
   type AgentsApprovalRequest,
   type AgentsOutcome,
-  type OpenCodeGoView,
   type AgentsPreview,
   type AgentsShownRevision,
   type AgentsSnapshot,
@@ -883,9 +882,6 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   saveAgentNotes(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome> {
     return invokeBridge('aiterm:agents:notes', { shown, agent, text })
   },
-  openCodeGo(copy?: boolean): Promise<OpenCodeGoView> {
-    return invokeBridge('aiterm:agents:opencode-go', copy === true ? { copy: true } : {})
-  },
   rulesSnapshot(freshDoctorLocations = false): Promise<RulesSnapshot> {
     return invokeBridge('aiterm:rules:snapshot', { freshDoctorLocations })
   },
@@ -955,7 +951,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   stopResearch(): Promise<ResearchSnapshot> {
     return invokeBridge('aiterm:research:stop', {})
   },
-  testCodexFence(harness?: 'codex' | 'opencode'): Promise<ResearchSnapshot> {
+  testCodexFence(harness?: 'codex'): Promise<ResearchSnapshot> {
     return invokeBridge('aiterm:research:fence-test', harness === undefined ? {} : { harness })
   },
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup> {

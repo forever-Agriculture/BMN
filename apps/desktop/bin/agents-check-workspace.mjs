@@ -4,7 +4,6 @@ import { closeSync, fsyncSync, openSync, readFileSync, realpathSync, renameSync,
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { RosterError, canonicalJson, resolvedDirectory, sha256 } from './agents-roster.mjs'
 import { stateDirectory } from './agents-state.mjs'
-import { OPENCODE_SESSION_ID } from './agents-opencode.mjs'
 import { BINDING_WINDOW_MS, VISIBILITY_MAX_AGE_MS, firstLine, listDirectory, readBytes, readText, refuse, traceRead } from './agents-check-base.mjs'
 import { ensurePrivateDirectory, isObject } from './shared-helpers.mjs'
 
@@ -238,8 +237,6 @@ export async function refreshVisibility(workspacePath, { now = new Date(), api =
  */
 export function destinationOf(data, harness, route) {
   if (route.basis === 'unknown') return { known: false, reason: route.reason }
-  // An OpenCode run in BMN's own folder: its -m alone decides, and BMN wrote and checked everything else it reads.
-  if (route.basis === 'folder') return { known: true, default: true, provider: route.provider, host: `default:${route.provider}`, basis: 'observed-default', harness_provider: route.provider }
   if (route.basis === 'default') {
     const approved = data.harness_routes.find((entry) => entry.harness === harness)
     if (approved === undefined) return { known: false, reason: `no approved destination for ${harness} in ## harness-routes` }
@@ -390,18 +387,12 @@ export function bindingPath(receiptHashValue) {
 /**
  * Records that the dispatch a receipt checked started `sessionId`. Accepted once per receipt and
  * only within 10 minutes of the receipt's `issued_at`; a later resume passes only for that session.
- * An OpenCode research run binds its session as well, so its usage is read by the session its check passed (70.4 AC4).
  */
 export function bindSession(receiptFile, sessionId, { now = new Date() } = {}) {
   const receipt = readReceiptFile(receiptFile)
   if (receipt === null) throw new RosterError('RECEIPT_INVALID', `${receiptFile} is not an intact version-1 receipt`)
-  if (receipt.harness === 'opencode') {
-    if (receipt.mode !== 'dispatch' && receipt.mode !== 'research') throw new RosterError('RECEIPT_INVALID', 'only the receipt of an OpenCode dispatch or research run can be bound to a session')
-    if (!OPENCODE_SESSION_ID.test(sessionId)) throw new RosterError('RECEIPT_INVALID', `${sessionId} is not an OpenCode session id`)
-  } else {
-    if (receipt.mode !== 'dispatch' || receipt.harness !== 'codex') throw new RosterError('RECEIPT_INVALID', 'only the receipt of a Codex dispatch can be bound to a session')
-    if (!SESSION_ID.test(sessionId)) throw new RosterError('RECEIPT_INVALID', `${sessionId} is not a Codex session id`)
-  }
+  if (receipt.mode !== 'dispatch' || receipt.harness !== 'codex') throw new RosterError('RECEIPT_INVALID', 'only the receipt of a Codex dispatch can be bound to a session')
+  if (!SESSION_ID.test(sessionId)) throw new RosterError('RECEIPT_INVALID', `${sessionId} is not a Codex session id`)
   const age = now.getTime() - Date.parse(receipt.issued_at)
   if (!(age >= 0 && age <= BINDING_WINDOW_MS)) throw new RosterError('RECEIPT_INVALID', 'a session is bound within 10 minutes of the check that preceded it; start a fresh checked dispatch')
   const path = bindingPath(receipt.receipt_hash)

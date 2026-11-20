@@ -18,10 +18,18 @@ function staged(app='codex') {
   next.providers=[{id:'synthetic-provider',name:'Synthetic',hosts:[],private_work:'public_only'}]
   return { o,envelope,proposal,data:next,id }
 }
+/** Codex is not ready: its member must stay proposed and off. */
+function unready() {
+  const o=options();o.apps.apps=o.apps.apps.filter(row=>row.app!=='codex')
+  const envelope=buildSetupTeamProposals(o)!, next=data(), id='synthetic-codex'
+  next.agents=[{id,name:'Codex',class:'queen',harness:'codex',model:'synthetic-model',provider:'synthetic-provider',host:'default',efforts:['medium'],roles:[],enabled:false,status:'proposed'}]
+  next.providers=[{id:'synthetic-provider',name:'Synthetic',hosts:[],private_work:'public_only'}]
+  return { o,envelope,data:next,id }
+}
 describe('setup Team proposals',()=>{
   it('keeps unresolved choices outside the roster and recommends class-legal roles without writes',()=>{
     const o=options(),before=structuredClone(o),p=buildSetupTeamProposals(o)!
-    expect(p.proposals).toHaveLength(3);expect(p.proposals.map(p=>p.app)).toEqual(SETUP_APPS)
+    expect(p.proposals).toHaveLength(2);expect(p.proposals.map(p=>p.app)).toEqual(SETUP_APPS)
     for(const proposal of p.proposals){expect(proposal).not.toHaveProperty('model');expect(proposal.roles).toEqual(expect.arrayContaining(['epic-reviewer','consultant','designer']));for(const role of proposal.roles)expect(classRefusal(proposal.class,role)).toBeNull()}
     expect(p.tools[0]?.args).toEqual(['-y',BROWSER_MCP_PACKAGE]);expect(p.tools[0]?.apps).toEqual(['claude','codex']);expect(o).toEqual(before)
   })
@@ -34,7 +42,7 @@ describe('setup Team proposals',()=>{
   })
   it('deduplicates approved apps and proposes later readiness without changing the approved team',()=>{
     const s=staged(),o=options();o.roster.approved={generation:1,createdAt:'2026-10-21',data:s.data};o.roster.file.data=s.data;o.roster.file.hash='approved';o.roster.approvalProblem=null
-    const before=structuredClone(o);expect(buildSetupTeamProposals(o)!.proposals.map(p=>p.app)).toEqual(['claude','opencode']);expect(o).toEqual(before)
+    const before=structuredClone(o);expect(buildSetupTeamProposals(o)!.proposals.map(p=>p.app)).toEqual(['claude']);expect(o).toEqual(before)
   })
   it('separates explicit approval from proposal suppression only for an already approved team', () => {
     const s = staged(), o = options()
@@ -63,13 +71,13 @@ describe('setup Team proposals',()=>{
     const next=structuredClone(s.data);next.agents[0]!.model='x'.repeat(129);expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,next,null)).toThrow()
     expect(parseRoster(rewrite(s.data)).errors).toEqual([])
   })
-  it('refuses unverified Console access as active or in any candidate chain',()=>{
-    const s=staged('opencode');expect(s.data.agents[0]).toMatchObject({enabled:false,status:'proposed'});expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,s.data,null)).not.toThrow()
-    const next=structuredClone(s.data);next.agents[0]!.enabled=true;expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,next,null)).toThrow('Console')
+  it('refuses a member on an app that is not ready as active or in any candidate chain',()=>{
+    const s=unready();expect(s.data.agents[0]).toMatchObject({enabled:false,status:'proposed'});expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,s.data,null)).not.toThrow()
+    const next=structuredClone(s.data);next.agents[0]!.enabled=true;expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,next,null)).toThrow('a ready app')
     const chained=structuredClone(s.data);chained.roles[0]!.candidates.push(`${s.id}@medium`);expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,chained,null)).toThrow('candidate')
   })
   it('refuses reactivating an already approved unavailable member even if its display note is removed',()=>{
-    const s=staged('opencode'),approved=structuredClone(s.data),next=structuredClone(s.data)
+    const s=unready(),approved=structuredClone(s.data),next=structuredClone(s.data)
     next.agents[0]!.enabled=true;next.agents[0]!.status='active';delete next.agents[0]!.enabled_note
     expect(()=>validateSetupTeamApproval(s.envelope,s.envelope.revision,next,approved)).toThrow('keep it proposed and off')
     expect(approved.agents[0]).toMatchObject({enabled:false,status:'proposed'})

@@ -1,9 +1,9 @@
 // MODULE: doctor-adapters.mjs - Bounded process groups, read-only doctor sandbox and disposable version qualification
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { accessSync, constants, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -11,8 +11,8 @@ import { parseBmnDoctor, parseClaudeDoctor, parseCodexDoctor, projectedResult } 
 import { validRowReceipts, validWorkerKeys } from './doctor-continuity.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
 
-export const SANDBOX_POLICY = 'bwrap-selected-profile-runtime-scaffold-v4'
-export const PARSER_VERSION = 'doctor-projection-v6-codex-asked-outside'
+export const SANDBOX_POLICY = 'bwrap-selected-profile-v5'
+export const PARSER_VERSION = 'doctor-projection-v7-two-apps'
 export const LIMITS = Object.freeze({ timeoutMs: 60000, outputBytes: 1024 * 1024 })
 /** The ask's own ten seconds (codex-hook-approval.mjs), and starting the command that asks on a busy machine. */
 const CODEX_ANSWER_MS = 20000
@@ -70,71 +70,11 @@ export function doctorEnvironment(environment, home = environment.HOME ?? homedi
     PATH: environment.PATH || '/usr/local/bin:/usr/bin:/bin',
     TERM: environment.TERM === 'xterm-sixel-256color' ? environment.TERM : 'xterm-256color',
     ...(typeof environment.TERMINFO_DIRS === 'string' ? { TERMINFO_DIRS: environment.TERMINFO_DIRS } : {}), LANG: 'C.UTF-8', NO_COLOR: '1',
-    DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-    OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1', ELECTRON_RUN_AS_NODE: '1'
+    DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', ELECTRON_RUN_AS_NODE: '1'
   }
 }
 
-/** Missing OpenCode initialization folders exist only in this runtime view, never on the host. */
-function openCodeRuntimeMounts(profile, restored) {
-  const locations = [
-    [join(profile.paths.XDG_DATA_HOME, 'opencode/log'), profile.paths.XDG_DATA_HOME],
-    [join(profile.paths.XDG_DATA_HOME, 'opencode/repos'), profile.paths.XDG_DATA_HOME],
-    [join(profile.paths.XDG_STATE_HOME, 'opencode'), profile.paths.XDG_STATE_HOME],
-    [profile.opencode, profile.opencode],
-    [join(profile.paths.XDG_CACHE_HOME, 'opencode/bin'), profile.paths.XDG_CACHE_HOME]
-  ]
-  const locate = (path) => {
-    const suffix = []
-    let current = path
-    for (;;) {
-      try {
-        if (!statSync(current).isDirectory()) throw new Error('initialization directory unavailable')
-        const root = realpathSync(current)
-        return { root, path: join(root, ...suffix), missing: suffix.length > 0 }
-      } catch (error) {
-        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error
-        // A broken link is an existing owner entry, not permission to replace it.
-        try { lstatSync(current); throw new Error('initialization link unavailable', { cause: error }) }
-        catch (entry) { if (!['ENOENT', 'ENOTDIR'].includes(entry.code)) throw entry }
-        if (current === '/' || suffix.length >= 64) throw new Error('initialization route unavailable', { cause: error })
-        suffix.unshift(basename(current)); current = dirname(current)
-      }
-    }
-  }
-  const overlays = new Map(), directories = new Set(), mounts = []
-  for (const [path, anchor] of locations) {
-    const location = locate(path)
-    if (!location.missing) continue
-    let root = location.root, empty = false
-    const privateRoot = ['/tmp', '/var/tmp'].find(prefix => root === prefix || root.startsWith(prefix + '/'))
-    if (privateRoot && ![...restored].some(value => root === value || root.startsWith(value + '/'))) {
-      const selected = locate(anchor)
-      if (!selected.missing) throw new Error('initialization view unavailable')
-      root = selected.path; empty = true
-    }
-    if (root === '/') throw new Error('initialization would replace filesystem root')
-    overlays.set(root, empty); directories.add(location.path)
-  }
-  for (const [root, empty] of [...overlays].sort(([a], [b]) => a.length - b.length)) {
-    mounts.push('--tmpfs', root)
-    if (empty) continue
-    const entries = readdirSync(root)
-    if (entries.length > 10000) throw new Error('initialization directory bound exceeded')
-    for (const name of entries) {
-      const path = join(root, name)
-      if (lstatSync(path).isSymbolicLink()) mounts.push('--symlink', readlinkSync(path), path)
-      else mounts.push('--ro-bind', path, path)
-    }
-  }
-  for (const path of directories) mounts.push('--dir', path)
-  mounts.push('--tmpfs', locate(locations[0][0]).path)
-  // Remounting the synthetic ancestors is nonrecursive; only the separate log mount stays writable.
-  for (const root of [...overlays.keys()].sort((a, b) => b.length - a.length)) mounts.push('--remount-ro', root)
-  return mounts
-}
-
-export function sandboxArguments(home, command, args, environment = {}, { runtime = true } = {}) {
+export function sandboxArguments(home, command, args, environment = {}) {
   const profile = selectedProfile({ ...environment, HOME: home })
   if (profile.invalid || profile.unavailable) throw new Error('selected profile unavailable')
   const mounts = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/var/tmp']
@@ -153,10 +93,6 @@ export function sandboxArguments(home, command, args, environment = {}, { runtim
     } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error }
   }
   for (const path of Object.values(profile.paths)) restore(path)
-  // OpenCode opens its log for writing even for --version; it gets a throwaway folder in place of the real one.
-  const openCodeLog = join(profile.paths.XDG_DATA_HOME, 'opencode/log')
-  if (runtime) mounts.push(...openCodeRuntimeMounts(profile, restored))
-  else try { if (lstatSync(openCodeLog).isDirectory()) mounts.push('--tmpfs', openCodeLog) } catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error }
   // The scratch directory must never be placed inside a selected read-only subtree.
   const scratch = '/tmp/bmn-doctor-work'
   if (Object.values(profile.paths).some((path) => scratch === path || scratch.startsWith(`${path}/`))) throw new Error('scratch overlaps selected profile')
@@ -165,10 +101,9 @@ export function sandboxArguments(home, command, args, environment = {}, { runtim
 
 export async function sandboxProcess(home, command, args, environment, limits = {}) {
   try {
-    const { inspection = false, inspectionLock, runtime = !inspection, ...bounds } = limits
+    const { inspectionLock, ...bounds } = limits
     const fixed = doctorEnvironment(environment, home)
-    if (inspection && environment.OPENCODE_CONFIG_CONTENT) fixed.OPENCODE_CONFIG_CONTENT = 'set'
-    const sandbox = sandboxArguments(home, command, args, environment, { runtime })
+    const sandbox = sandboxArguments(home, command, args, environment)
     // Fresh readers share the acquisition lock, outside the read-only namespace.
     // Acquisition already runs as that lock's child and must not reacquire it.
     return inspectionLock
@@ -192,8 +127,6 @@ export async function qualificationProcess(home, command, args, environment, lim
     for (const path of new Set([realpathSync(command), realpathSync(process.execPath), ...runtimeDependencies(command).directories])) mounts.push('--ro-bind', path, path)
     mounts.push('--dir', '/tmp/profile', '--ro-bind', home, '/tmp/profile', '--dir', '/tmp/work',
       '--unshare-pid', '--die-with-parent', '--new-session', '--chdir', '/tmp/work', '--', command, ...args)
-    // Only the seeded disposable log is writable; the rest of this profile stays read-only.
-    if (existsSync(join(home, '.local/share/opencode/log'))) mounts.splice(mounts.indexOf('--unshare-pid'), 0, '--tmpfs', '/tmp/profile/.local/share/opencode/log')
     const disposable = doctorEnvironment({ PATH: `${dirname(command)}:${dirname(process.execPath)}:/usr/bin:/bin` }, '/tmp/profile')
     return await boundedProcess('/usr/bin/bwrap', mounts, { environment: disposable, ...limits })
   } catch { return { code: null, failure: 'unavailable', stdout: '' } }
@@ -238,17 +171,14 @@ export async function doctorVersions(environment) {
   const root = mkdtempSync(join(tmpdir(), 'bmn-doctor-version-'))
   const versions = {}
   try {
-    for (const app of ['claude', 'codex', 'opencode']) {
+    for (const app of ['claude', 'codex']) {
       const executable = resolveExecutable(app, environment)
       if (executable === null) { versions[app] = { executable: null, version: null, identity: sha(`${app}:missing`) }; continue }
       let identity
       try { identity = executableIdentity(executable) } catch { identity = sha(`${app}:unreadable`); versions[app] = { executable: null, version: null, identity }; continue }
-      // OpenCode initializes these fixed directories even for --version. Seed only our disposable profile.
-      if (app === 'opencode') for (const directory of ['.local/share/opencode/log', '.local/share/opencode/repos',
-        '.local/state/opencode', '.config/opencode', '.cache/opencode/bin']) mkdirSync(join(root, directory), { recursive: true })
       const run = await qualificationProcess(root, executable, ['--version'], environment, { timeoutMs: 10000, outputBytes: 16384 })
-      const output = app === 'opencode' ? run.stdout.trim().replace(/^opencode\s+v(?=\d+\.)/i, 'opencode ') : run.stdout.trim()
-      const match = run.failure === null && run.code === 0 ? /^(?:(?:claude(?: code)?|codex(?:-cli)?|opencode)\s+)?(\d+\.\d+\.\d+)(?:\s|$)/i.exec(output) : null
+      const output = run.stdout.trim()
+      const match = run.failure === null && run.code === 0 ? /^(?:(?:claude(?: code)?|codex(?:-cli)?)\s+)?(\d+\.\d+\.\d+)(?:\s|$)/i.exec(output) : null
       const version = match?.[1] ?? null
       versions[app] = { executable, version, identity: sha(`${identity}:${version}`) , executableIdentity: identity }
     }
@@ -326,7 +256,7 @@ async function hooksReportWithAnswer(cli, home, environment, text, code) {
 export async function runBmnDoctor(check, home, environment, limits) {
   const packaged = new URL('./bmn.mjs', import.meta.url)
   const cli = fileURLToPath(existsSync(packaged) ? packaged : new URL('./bmn', import.meta.url))
-  const run = await sandboxProcess(home, process.execPath, [cli, check, 'check', '--json', ...(check === 'hooks' ? ['--no-codex-ask'] : [])], environment, { ...limits, inspection: true })
+  const run = await sandboxProcess(home, process.execPath, [cli, check, 'check', '--json', ...(check === 'hooks' ? ['--no-codex-ask'] : [])], environment, limits)
   if (run.failure !== null) return unavailable(run.failure === 'timeout' ? 'timeout' : 'failed')
   if (check !== 'hooks') return parseBmnDoctor(check, run.stdout, run.code)
   const answered = await hooksReportWithAnswer(cli, home, environment, run.stdout, run.code)
@@ -339,7 +269,7 @@ async function inspectionProcess(home, environment, versions, context, limits) {
   if (!validWorkerKeys(context.keys)) return null
   const run = await sandboxProcess(home, process.execPath, ['--no-warnings', limits?.workerPath ?? fileURLToPath(new URL('./doctor-inspection-worker.mjs', import.meta.url)),
     JSON.stringify(versions), String(Date.now() + Math.min(limits?.timeoutMs ?? LIMITS.timeoutMs, 60000) - 2000)], environment,
-  { ...limits, inspection: true, privateInput: JSON.stringify(context) })
+  { ...limits, privateInput: JSON.stringify(context) })
   if (run.failure !== null || run.code !== 0) return null
   try {
     if (context.mode === 'acquire') {

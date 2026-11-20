@@ -105,7 +105,7 @@ describe('the state of recording beside older numbers', () => {
     [view({ state: 'off', app: null }), 'Recording off'],
     [view({ state: 'paused', pausedRoot: '/home/synthetic/code/shop', pauseReason: 'failed' }), 'Paused after three failed scans · tries again with the next turn'],
     [view({ state: 'paused', pauseReason: 'incomplete', retryAt: NOW + 20 * 60_000 }), 'Paused after three scans that read nothing new · tries again at 15:20'],
-    [view({ state: 'not-supported', app: 'opencode' }), 'Not supported for OpenCode'],
+    [view({ state: 'not-supported', app: 'opencode' }), 'Not supported for OpenCode (retired)'],
     [null, 'Recording off']
   ] as const)('says %s above the kept turns', (given, words) => {
     const html = dialog({ view: given })

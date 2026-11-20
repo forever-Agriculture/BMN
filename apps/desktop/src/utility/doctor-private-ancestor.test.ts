@@ -27,7 +27,7 @@ it('keeps one unchanged item continuous across overlapping private temporary anc
   const worker = fileURLToPath(new URL('../../bin/doctor-inspection-worker.mjs', import.meta.url))
   const now = Date.now(), context = { keys, start: now + 800, release: now + 2400, deadline: now + 5000 }
   const runs = await Promise.all([0, 1].map(() => sandboxProcess(home, process.execPath, ['--no-warnings', holder, worker], environment,
-    { inspection: true, runtime: false, privateInput: JSON.stringify(context), timeoutMs: 6000, outputBytes: 65536 })))
+    { privateInput: JSON.stringify(context), timeoutMs: 6000, outputBytes: 65536 })))
   const acquisitions = runs.map(run => {
     expect(run.failure).toBeNull(); expect(run.code).toBe(0)
     const result = JSON.parse(run.stdout), privateResult = JSON.parse(run.privateOutput!)

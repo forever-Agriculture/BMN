@@ -1,7 +1,7 @@
 // MODULE: agents-roster.d.mts - types for the Epic 60 roster module so the main process can import it
-export type Harness = 'claude' | 'codex' | 'opencode'
-/** An app BMN retired (Epic 71): an old team file may still name it; nothing runs on it. */
-export type RetiredApp = 'cursor'
+export type Harness = 'claude' | 'codex'
+/** An app BMN retired (Epic 71, Epic 123): an old team file may still name it; nothing runs on it. */
+export type RetiredApp = 'cursor' | 'opencode'
 /** What a team file's app fields and lists may hold. */
 export type ListedApp = Harness | RetiredApp
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

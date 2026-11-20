@@ -17,7 +17,6 @@ schema_version: 2
 openai: {name: OpenAI, hosts: [api.openai.com], sites: [openai.com], private_work: allowed}
 anthropic: {name: Anthropic, hosts: [api.anthropic.com], sites: [anthropic.com], private_work: allowed}
 zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}
-opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}
 ```
 
 ## sol
@@ -182,5 +181,4 @@ zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}
 ```yaml
 claude: {provider: anthropic, basis: observed-default}
 codex: {provider: openai, basis: observed-default}
-opencode: {provider: opencode-go, basis: observed-default}
 ```

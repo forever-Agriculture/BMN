@@ -7,10 +7,9 @@ import { APP_NAMES, agentState, canonicalJson, classRefusal, isCalled, namedRese
 import { readApproved, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { CLAUDE_CONTEXT_KEY, checkContext, claudeContextSettingsSize, provenControls, provenPrecedence, researchContextProven } from './agents-context.mjs'
 import { appTools, checkRunTools } from './agents-tools.mjs'
-import { OPENCODE_FORM_TESTED, OPENCODE_HELPER_AGENT, OPENCODE_HELPER_AGENT_SHA256, OPENCODE_RESEARCH_AGENT, installOpenCodeFolder, openCodeEnvironment, openCodeFolderSha256 } from './agents-opencode.mjs'
-import { NEXT_STEP, OPENCODE_NEXT_STEP, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, Refusal, TESTED_HARNESS_VERSIONS, WEB_NEXT_STEP, WEB_TOOLS_NOTE, listDirectory, namesWebTool, reachedForWeb, readText, refuse } from './agents-check-base.mjs'
-import { dispatchEnvironment, harnessOf, parseDispatch } from './agents-check-argv.mjs'
-import { resolveClaudeRoute, resolveCodexRoute, resolveOpenCodeRoute } from './agents-check-routes.mjs'
+import { NEXT_STEP, RESEARCH_FENCE_VERSIONS, RESUME_TESTED_VERSIONS, Refusal, TESTED_HARNESS_VERSIONS, WEB_NEXT_STEP, WEB_TOOLS_NOTE, listDirectory, namesWebTool, reachedForWeb, readText, refuse } from './agents-check-base.mjs'
+import { dispatchEnvironment, parseDispatch } from './agents-check-argv.mjs'
+import { resolveClaudeRoute, resolveCodexRoute } from './agents-check-routes.mjs'
 import { boundSession, canonicalDirectory, committedBlob, destinationOf, harnessVersion, hashFile, inside, isString, packetManifest, privateWorkAnswer, readReceiptFile, receiptHash, sessionRecord, stricter, workspaceRoot, workspaceVisibility, writeState } from './agents-check-workspace.mjs'
 import { ensurePrivateDirectory, isObject } from './shared-helpers.mjs'
 
@@ -81,11 +80,6 @@ export const READ_ONLY_ITEMS = {
  */
 function checkReadOnly(role, parsed, resolution, version, note) {
   const stop = (why, must) => refuse('READ_ONLY_REQUIRED', `${role.id} is a read-only role and ${why}; the command must carry ${must}`)
-  if (parsed.harness === 'opencode') {
-    // The only OpenCode form the check reads runs BMN's own agent from BMN's own folder, both checked whole above.
-    note(`read-only role: BMN's agent ${OPENCODE_HELPER_AGENT} (only reading inside the project; the form shown on OpenCode ${OPENCODE_FORM_TESTED.version}${version === OPENCODE_FORM_TESTED.version ? '' : `; this is ${version ?? 'a version BMN cannot read'}`})`)
-    return { mode: 'read-only', source: `--agent ${OPENCODE_HELPER_AGENT}`, agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: OPENCODE_FORM_TESTED.version }
-  }
   if (parsed.harness === 'codex') {
     const must = '--sandbox read-only and -c approval_policy="never"'
     const { sandbox, approvals } = resolution.access
@@ -203,13 +197,13 @@ export function evaluate(inputs, {
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)
     const resolution = parsed.harness === 'codex'
       ? resolveCodexRoute(parsed, environment, cwd ?? processCwd)
-      : parsed.harness === 'opencode' ? resolveOpenCodeRoute(parsed) : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
+      : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
     if (parsed.resume && !(version !== null && (resumeVersions[parsed.harness] ?? []).includes(version))) {
       refuse('ROUTE_UNSUPPORTED', `resume is not checked on ${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested that a resume on this version talks to the current configuration's destination; start a fresh checked dispatch`)
     }
-    note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : parsed.harness === 'opencode' ? 'opencode run' : 'claude -p'}`)
+    note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : 'claude -p'}`)
     // The tools of this run (60.12 AC5): once the team lists any, the run is kept to exactly its agent's set and
     // shut off from everything else, judged with the run's own environment and the folder it works in (Codex's
     // `-C` where it gives one). The test log is read only then. A version without a run seen kept to its tools,
@@ -222,8 +216,7 @@ export function evaluate(inputs, {
         cwd: parsed.cd === undefined ? runFolder : (canonicalDirectory(parsed.cd, runFolder) ?? null), ...(toolsPolicyRoot === undefined ? {} : { policyRoot: toolsPolicyRoot }) })
     if (tools.refusal?.code === 'ROUTE_UNSUPPORTED') refuse('ROUTE_UNSUPPORTED', tools.refusal.message)
 
-    // OpenCode names a model with its provider; an agent that names the model alone is read with its provider.
-    const named = parsed.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent
+    const named = agent
     const { model, effort } = checkModelAndEffort(named, resolution, note)
     checkRoleEffort(role, agent, effort, note, data)
     // A role that may write is judged as before and its receipt carries nothing more (63.2 AC5).
@@ -403,18 +396,11 @@ export function evaluate(inputs, {
   } catch (error) {
     if (error instanceof Refusal) {
       const next = error.code === 'ROUTE_UNSUPPORTED' && Array.isArray(inputs.argv) && reachedForWeb(inputs.argv, error.message) ? WEB_NEXT_STEP
-        : error.code === 'ROUTE_UNSUPPORTED' && openCodeCommand(inputs.argv) ? OPENCODE_NEXT_STEP : NEXT_STEP[error.code]
+        : NEXT_STEP[error.code]
       return { verdict: 'REFUSED', code: error.code, message: error.message, next, steps, ...(error.detail === undefined ? {} : { detail: error.detail }) }
     }
     throw error
   }
-}
-
-/** Whether a refused command is an OpenCode one, so its next step names the OpenCode form. */
-function openCodeCommand(argv) {
-  if (!Array.isArray(argv)) return false
-  const index = argv.length > 0 && basename(argv[0]) === 'env' ? argv.findIndex((argument, position) => position > 0 && argument !== '-i' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(argument)) : 0
-  return index >= 0 && typeof argv[index] === 'string' && harnessOf(argv[index]) === 'opencode'
 }
 
 function emptyMcpConfig(text) {
@@ -432,9 +418,7 @@ function emptyMcpConfig(text) {
 export const RESEARCH_TOOLS = 'WebSearch,WebFetch'
 /** What a research run's `env -i` may carry: where the app lives, how to find it, its destination and the agent's context limit. */
 const RESEARCH_ENVIRONMENT = {
-  claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH', 'CODEX_HOME'],
-  // OpenCode's are BMN's folder and switches, each with its one value, which the route reader holds the run to.
-  opencode: ['PATH', ...Object.keys(openCodeEnvironment('/'))]
+  claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH', 'CODEX_HOME']
 }
 /**
  * The `-c` items every Codex research run carries: no MCP server, live web search, none of the
@@ -472,17 +456,10 @@ export const CODEX_RESEARCH_TOOLS_SEEN = ['custom:functions.exec', 'exec:apply_p
   'function:collaboration.list_agents', 'function:collaboration.send_message', 'function:collaboration.spawn_agent', 'function:collaboration.wait_agent',
   'function:functions.request_user_input', 'function:functions.request_user_input_async', 'function:functions.wait']
 
-/**
- * The tools OpenCode offers a research run, looked at on OpenCode 2.0.29 (2026-10-14): only its web
- * search, which sends the search text to the search service its folder names. A tool that is not
- * here fails the fence test (70.3), as for Codex.
- */
-export const OPENCODE_RESEARCH_TOOLS_SEEN = ['function:websearch']
-const RESEARCH_TOOLS_SEEN = { codex: CODEX_RESEARCH_TOOLS_SEEN, opencode: OPENCODE_RESEARCH_TOOLS_SEEN }
+const RESEARCH_TOOLS_SEEN = { codex: CODEX_RESEARCH_TOOLS_SEEN }
 
 /** Names the research form of an app as it is built now: a fence test counts only for the form it tested. */
 export function researchFormHash(harness) {
-  if (harness === 'opencode') return sha256(canonicalJson({ environment: RESEARCH_ENVIRONMENT.opencode, agent: OPENCODE_RESEARCH_AGENT, folder: openCodeFolderSha256(), titled: true })).slice(0, 16)
   return sha256(canonicalJson(harness === 'codex'
     ? { environment: RESEARCH_ENVIRONMENT.codex, config: CODEX_RESEARCH_CONFIG, disabled: CODEX_RESEARCH_DISABLED, sandbox: 'read-only', strict: true }
     : { environment: RESEARCH_ENVIRONMENT[harness] ?? [], tools: RESEARCH_TOOLS })).slice(0, 16)
@@ -523,8 +500,6 @@ export function prepareResearchRun(prompt, { now = new Date(), id = `${now.toISO
   writeState(`${folder}/prompt.md`, prompt)
   writeState(`${folder}/run.json`, `${JSON.stringify({ version: 1, id, prompt_sha256: sha256(prompt), created_at: now.toISOString() })}\n`)
   const run = { id, folder, prompt: `${folder}/prompt.md`, cwd: `${folder}/cwd` }
-  // An OpenCode run starts from BMN's own OpenCode folder, put in order here as `roster role` does.
-  if (harness === 'opencode') installOpenCodeFolder()
   if (harness !== 'codex') return run
   ensurePrivateDirectory(`${folder}/${CODEX_RESEARCH_HOME}`)
   symlinkSync(codexSignInFile(environment), `${folder}/${CODEX_RESEARCH_HOME}/${CODEX_SIGN_IN}`)
@@ -650,14 +625,6 @@ export function researchFormProblem(parsed) {
     }
     return null
   }
-  if (parsed.harness === 'opencode') {
-    // BMN's folder and switches with their one value each; the parser holds --standalone, --format json and no prompt on the line.
-    const off = Object.entries(openCodeEnvironment()).find(([name, value]) => parsed.assignments[name] !== value)
-    if (off !== undefined) return `a research run carries ${off[0]}=${off[1]}, BMN's own folder and switches for OpenCode runs`
-    if (parsed.agent !== OPENCODE_RESEARCH_AGENT) return `a research run runs BMN's research agent (--agent ${OPENCODE_RESEARCH_AGENT})`
-    if (parsed.title === undefined) return 'a research run names its title (--title), so OpenCode makes no request of its own to name the session'
-    return null
-  }
   if (!parsed.safeMode) return 'a research run needs --safe-mode'
   if (parsed.tools !== RESEARCH_TOOLS) return `a research run needs --tools '${RESEARCH_TOOLS}'`
   if (!parsed.strictMcp || parsed.mcpConfig === undefined || !emptyMcpConfig(parsed.mcpConfig)) return 'a research run needs --strict-mcp-config and an empty --mcp-config'
@@ -709,7 +676,7 @@ export function evaluateResearch(inputs, {
     // The fixed research switches are not part of where Codex sends data; the route reader sees the rest.
     const resolution = parsed.harness === 'codex'
       ? resolveCodexRoute({ ...parsed, config: parsed.config.filter((entry) => !CODEX_RESEARCH_CONFIG.includes(entry)) }, environment, cwd ?? processCwd)
-      : parsed.harness === 'opencode' ? resolveOpenCodeRoute(parsed, { agent: OPENCODE_RESEARCH_AGENT, folder: inputs.dry !== true }) : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
+      : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const versionEnvironment = dispatchEnvironment(parsed, environment)
     // Like appVersion and the fence test, query the executable with bare HOME/PATH. Native Codex
@@ -718,9 +685,8 @@ export function evaluateResearch(inputs, {
     if (parsed.harness === 'codex') delete versionEnvironment.CODEX_HOME
     const version = harnessVersion(parsed.command, versionEnvironment)
     note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec from a Codex folder of its own, read-only, web search, no command or app tools'
-      : parsed.harness === 'opencode' ? 'dispatch form: env -i opencode run from BMN\'s OpenCode folder, its research agent, web search only' : 'dispatch form: env -i claude -p, web tools only')
-    // An OpenCode agent's model is named with its provider, as `-m` names it.
-    const { model, effort } = checkModelAndEffort(parsed.harness === 'opencode' && !agent.model.includes('/') ? { ...agent, model: `${agent.provider}/${agent.model}` } : agent, resolution, note)
+      : 'dispatch form: env -i claude -p, web tools only')
+    const { model, effort } = checkModelAndEffort(agent, resolution, note)
     const context = checkContext(agent, resolution.context, researchContextProven(agent, version, contextTestLog),
       agent.context_limit === undefined ? [] : provenPrecedence(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal, context.why)

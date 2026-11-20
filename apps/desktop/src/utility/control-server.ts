@@ -76,7 +76,6 @@ import {
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
 import type {BrainCheckTransport} from './brain-check-capabilities'
-import { OPENCODE_REFERENCE_PATTERN } from './conversation-binding'
 import { grantAccessCommandProblem, grantCommandProblem } from '../../bin/grant-command.mjs'
 
 export class ControlError extends Error {
@@ -204,14 +203,13 @@ export interface ControlHandlers {
     evidence?: AttentionEvidence
   }): Promise<unknown>
   /**
-   * Hands a session's OpenCode plugin the answers BMN already decided from a Telegram tap, consuming them.
+   * Hands a session's hook the answers BMN already decided from a Telegram tap, consuming them.
    * Only for the session's own live process; nothing here can create or change an answer.
    */
   takeAnswers(p: {
     sessionId: string
     incarnationId: string | null
     waitMs: number
-    report: { requestRef: string; delivered: boolean } | null
     /** Claude's waiting `PermissionRequest` hook (Epic 78): only the answer for its own request, and whether it still waits. */
     requestRef?: string
   }): Promise<unknown>
@@ -224,8 +222,6 @@ export interface ControlHandlers {
     event: string
     source: string | null
     toolName: string | null
-    /** What BMN's OpenCode plugin promises (Story 96.3): 1 reports the owner's stop and quitting; absent from earlier plugins. */
-    plugin?: number | undefined
     fingerprint?: string | undefined
     /** Hostname only, from the agent's own base-URL environment; absent when the CLI could not read one. */
     apiHost?: string | undefined
@@ -402,10 +398,10 @@ const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 're
  * The harnesses a session token may report as. `terminal` is BMN's own label for a notification the
  * window read out of a session's output, so nothing on the socket may wear it.
  */
-const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'opencode']
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex']
 const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
 const MAX_HOOK_EVENT_EFFECTS = 8
-const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex', 'opencode']
+const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex']
 const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = ['startup', 'resume', 'clear', 'fork']
 /** 8-4-4-4-12 hex, the shape Claude Code session ids and Codex rollout ids use. */
 const CONVERSATION_REFERENCE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
@@ -1423,17 +1419,8 @@ export class ControlServer {
             throw unauthorized('Only a session credential may report its own conversation')
           }
           const observedCli = requireEnum(params, 'agentCli', CONVERSATION_AGENT_CLIS)
-          const conversationReference = requireText(params, 'conversationReference',
-            observedCli === 'opencode'
-              ? { min: 30, max: 30, unit: 'characters', controls: 'reject' }
-              : RULES.conversationReference)
-          if (observedCli === 'opencode'
-            ? !OPENCODE_REFERENCE_PATTERN.test(conversationReference)
-            : !CONVERSATION_REFERENCE.test(conversationReference)) {
-            throw invalidError(observedCli === 'opencode'
-              ? 'conversationReference must be an OpenCode session ID'
-              : 'conversationReference must be a UUID')
-          }
+          const conversationReference = requireText(params, 'conversationReference', RULES.conversationReference)
+          if (!CONVERSATION_REFERENCE.test(conversationReference)) throw invalidError('conversationReference must be a UUID')
           const source = requireEnum(params, 'source', CONVERSATION_OBSERVATION_SOURCES)
           const transcriptPath = readText(params, 'transcriptPath', RULES.path)
           if (transcriptPath !== undefined && !isAbsolute(transcriptPath)) {
@@ -1446,7 +1433,7 @@ export class ControlServer {
             sessionId,
             incarnationId: incarnationOf(scope),
             agentCli: observedCli,
-            conversationReference: observedCli === 'opencode' ? conversationReference : conversationReference.toLowerCase(),
+            conversationReference: conversationReference.toLowerCase(),
             source,
             ...(callerPid === undefined ? {} : { callerPid }),
             ...(transcriptPath === undefined ? {} : { transcriptPath })
@@ -1501,28 +1488,21 @@ export class ControlServer {
       }
       case 'answer.take': {
         // Read-and-consume only: the answers were decided inside the app from a Telegram tap (Epic 30, decision 5).
-        const params = closedParams(rawParams, ['wait', 'reported', 'requestRef'])
+        const params = closedParams(rawParams, ['wait', 'requestRef'])
         if (scope.kind !== 'session') throw unauthorized('Only a session may collect its own answers')
         const requestRef = params.requestRef === undefined ? undefined : requireText(params, 'requestRef', IDENTIFIER)
         const wait = params.wait ?? 0
         if (typeof wait !== 'number' || !Number.isInteger(wait) || wait < 0 || wait > MAX_ANSWER_WAIT_SECONDS) {
           throw invalidError(`wait must be a whole number of seconds from 0 to ${MAX_ANSWER_WAIT_SECONDS}`)
         }
-        // What OpenCode's server said to a reply the plugin posted: it settles only an answer this session was handed.
-        let report: { requestRef: string; delivered: boolean } | null = null
-        if (params.reported !== undefined) {
-          const reported = closedParams(params.reported, ['requestRef', 'delivered'])
-          if (typeof reported.delivered !== 'boolean') throw invalidError('reported.delivered must be true or false')
-          report = { requestRef: requireText(reported, 'requestRef', IDENTIFIER), delivered: reported.delivered }
-        }
         return handlers.takeAnswers({
-          sessionId: scope.sessionId, incarnationId: scope.incarnationId, waitMs: wait * 1000, report,
+          sessionId: scope.sessionId, incarnationId: scope.incarnationId, waitMs: wait * 1000,
           ...(requestRef === undefined ? {} : { requestRef })
         })
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'plugin', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir',
           'conversation', 'turn', 'nested', 'awayLock', 'runId', 'cards', 'callerPid', 'epicActionCall', 'epicActionExit'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const hookRun = readHookCards(params)
@@ -1532,11 +1512,6 @@ export class ControlServer {
         if (!isHookEventName(event)) throw invalidError('event must be printable ASCII without spaces')
         const source = readText(params, 'source', RULES.shownSource)
         const toolName = readText(params, 'toolName', RULES.shownSource)
-        // Story 96.3: what BMN's OpenCode plugin says it promises; only an OpenCode hook carries it, and an older plugin none.
-        const plugin = params.plugin
-        if (plugin !== undefined && (agent !== 'opencode' || typeof plugin !== 'number' || !Number.isSafeInteger(plugin) || plugin < 1 || plugin > 999)) {
-          throw invalidError('plugin must be a whole number from 1 to 999, from an OpenCode hook')
-        }
         const fingerprint = readText(params, 'fingerprint', RULES.source)
         if (fingerprint !== undefined && !/^[0-9a-f]{16}$/.test(fingerprint)) {
           throw invalidError('fingerprint must be 16 lowercase hexadecimal characters')
@@ -1579,7 +1554,6 @@ export class ControlServer {
           event,
           source: source ?? null,
           toolName: toolName ?? null,
-          ...(plugin === undefined ? {} : { plugin }),
           ...(fingerprint === undefined ? {} : { fingerprint }),
           ...(apiHost === undefined ? {} : { apiHost }),
           ...(model === undefined ? {} : { model }),

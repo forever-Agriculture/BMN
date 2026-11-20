@@ -4629,32 +4629,6 @@ describe('conversation identity reported by the harness', () => {
     })
   })
 
-  it('refuses rival OpenCode claims and releases swapped and exited conversations', async () => {
-    const fixture = await codexFixture([], ['First', 'Second'], 'opencode')
-    const [first, second] = fixture.sessions
-    const observed = 'ses_0123456789abSyntheticTest0'
-    const other = 'ses_0123456789abSyntheticTest1'
-    const observe = (session: typeof first, reference: string) => fixture.manager.observeConversation({
-      sessionId: session!.sessionId, incarnationId: session!.incarnationId,
-      agentCli: 'opencode', conversationReference: reference, source: 'resume'
-    })
-    expect(await observe(first, observed)).toMatchObject({ accepted: true })
-    expect(await observe(second, observed)).toMatchObject({ accepted: false, detail: expect.stringContaining('already resumed in "First"') })
-    await expect(fixture.manager.conversationBinding(second!.sessionId)).resolves.toMatchObject({ status: 'unsupported' })
-    await expect(fixture.manager.conversationBinding(first!.sessionId)).resolves.toMatchObject({ conversationReference: observed })
-    expect(await observe(first, other)).toMatchObject({ accepted: true })
-    expect(await observe(second, observed)).toMatchObject({ accepted: true })
-    expect(await observe(second, other)).toMatchObject({ accepted: false })
-    fixture.ptys[0]!.emitExit({ exitCode: 0 })
-    await vi.waitFor(async () => {
-      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 1 })
-    })
-    expect(await observe(second, other)).toMatchObject({ accepted: true })
-    await expect(fixture.manager.conversationBinding(second!.sessionId)).resolves.toMatchObject({
-      agentCli: 'opencode', captureRoute: 'hook-session-start', conversationReference: other
-    })
-  })
-
   it('releases the conversation it swapped to, and the one it left, when the process ends', async () => {
     const fixture = await codexFixture([], ['First', 'Second'])
     const [first, second] = fixture.sessions
@@ -4984,16 +4958,6 @@ describe('conversation identity reported by the harness', () => {
     const started = await fixture.manager.create(launch)
     expect(started.binding).toMatchObject({ status: 'bound', conversationReference: OBSERVED })
     expect(fixture.spawns).toHaveLength(1)
-  })
-
-  it('refuses an OpenCode report from a session that runs a shell, as for every agent', async () => {
-    const fixture = await codexFixture([], ['Shell'], 'bash')
-    const [created] = fixture.sessions
-
-    expect(await fixture.manager.observeConversation({
-      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'opencode',
-      conversationReference: 'ses_3a1f0c2b7ffeJ1nQx9kD4mZ0aB', source: 'startup'
-    })).toMatchObject({ accepted: false, detail: expect.stringContaining('refused: the session was launched as other, not opencode') })
   })
 
   it('refuses a preview for a session whose conversation it never learned', async () => {
@@ -5334,7 +5298,7 @@ describe('resuming what a lifecycle stop interrupted', () => {
       ])
       // A session without a binding says so in the harness's own words rather than offering Resume.
       expect(cohort?.entries[0]?.relaunchReason)
-        .toContain('Native conversation resume is available only for direct Claude, Codex or OpenCode CLI launches')
+        .toContain('Native conversation resume is available only for direct Claude or Codex CLI launches')
       expect(cohort?.entries[0]?.detail).toMatch(/^update restart · /)
     } finally {
       database.close()
@@ -5913,14 +5877,14 @@ describe('screen mirror for sessions running an agent (Epic 30.2)', () => {
     expect(manager.runningScreenMirror(created.sessionId, created.incarnationId)).toBeUndefined()
   })
 
-  it('starts on the start report BMN\'s OpenCode plugin writes before OpenCode draws its screen (Story 93.3)', async () => {
+  it('does not start on the start report an old OpenCode plugin may still write (Epic 123)', async () => {
     const { manager, pty, cwd } = await fixture()
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
     pty.emit('\x1b]7501;state=starting:app=opencode\x07\x1b[20;1H  ┃  Build · Synthetic loopback')
     for (let frame = 0; frame < 2000; frame += 1) pty.emit(`\x1b[5;1H${'⣿'.repeat(20)} frame ${frame}`)
     const mirror = manager.screenMirror(created.sessionId, created.incarnationId)!
     await mirror.settled()
-    expect(mirror.lines()[19]).toBe('  ┃  Build · Synthetic loopback')
+    expect(mirror.lines()[19]).not.toBe('  ┃  Build · Synthetic loopback')
   })
 
   it('does not start for a plain program, nor for another app\'s report', async () => {

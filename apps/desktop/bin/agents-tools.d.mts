@@ -3,7 +3,7 @@ import type { RosterAgent, RosterData, RosterTool } from './agents-roster.mjs'
 import type { Generation } from './agents-state.mjs'
 
 type Environment = NodeJS.ProcessEnv | Record<string, string>
-export type ToolsHarness = 'claude' | 'codex' | 'opencode'
+export type ToolsHarness = 'claude' | 'codex'
 export type ToolState = 'unreadable' | 'missing' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'exposed' | 'excluded' | 'blocked'
 export type ToolsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 type Versions = Partial<Record<ToolsHarness, string | null>>
@@ -24,8 +24,6 @@ export interface ToolsTestEntry {
   version: string | null
   outcome: ToolsOutcome
   detail: string
-  /** OpenCode capability records from before the native layout do not authorize new writes. */
-  entry_layout?: 'mcp.servers'
   /** Where the app was seen reading its tools, with the home folder as ~. */
   file?: string
   variable: 'pass' | 'unproven'
@@ -110,12 +108,9 @@ export interface ToolsTarget {
   before: string | null; after: string | null; unlisted?: true; at?: string[]
 }
 export declare function writeSetupToolEntry(harness: string, path: string, id: string,
-  expected: { hash: string | null; text?: string | null; directory?: string; at?: string[] }, value?: unknown, raw?: string,
-  options?: { at?: string[]; beforeCommit?: () => void; afterPublish?: () => void; journal?: (hash: string | null, note?: unknown) => void; durable?: boolean;
-    publish?: typeof import('./safe-config-write.mjs').replaceFileSafely;
-    publishMissing?: (path: string, state: import('./safe-config-write.mjs').PathState, options: { beforeCommit: () => void; afterCommit: () => void; durable: boolean }) => unknown;
-    inverse?: unknown; priorHash?: string | null; priorText?: string | null; undoing?: boolean; expectedWitness?: unknown }): { hash: string | null; text: string | null }
-export declare function validToolRemovalWitness(value: unknown, path: string, text: string): boolean
+  expected: { hash: string | null; text?: string | null; directory?: string }, value?: unknown, raw?: string,
+  options?: { beforeCommit?: () => void; afterPublish?: () => void; journal?: (hash: string | null) => void; durable?: boolean;
+    publish?: typeof import('./safe-config-write.mjs').replaceFileSafely }): { hash: string | null; text: string | null }
 export interface ToolsOpen { harness: ToolsHarness; tool: string; path: string; fix: string; unlisted?: true }
 export interface ToolsPlan { code: string; message?: string; targets: ToolsTarget[]; exposed: ToolsOpen[]; blocked: ToolsOpen[]; planHash: string | null }
 interface InstallOptions { environment?: Environment; versions?: Versions; tests?: ToolsTestEntry[]; removeUnlisted?: boolean; /** Only sets the approved Playwright browser entry. */ browserOnly?: boolean; /** Leaves an entry BMN did not write, or one changed outside it (Story 75.9). */ absent?: boolean }

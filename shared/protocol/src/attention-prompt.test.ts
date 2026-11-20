@@ -19,7 +19,7 @@ const question: AttentionPrompt = {
 
 const permission: AttentionPrompt = {
   type: 'permission',
-  harness: 'opencode',
+  harness: 'codex',
   shape: 'permission',
   requestRef: 'per_1',
   toolUseId: null,
@@ -44,7 +44,7 @@ describe('parseAttentionPrompt', () => {
   })
 
   it('accepts every harness in the closed list and nothing else', () => {
-    for (const harness of ['claude', 'codex', 'opencode'] as const) {
+    for (const harness of ['claude', 'codex'] as const) {
       expect(parseAttentionPrompt({ ...question, harness })).toEqual({ ok: true, value: { ...question, harness } })
     }
     expect(parseAttentionPrompt({ ...question, harness: 'agent' }).ok).toBe(false)
@@ -53,6 +53,12 @@ describe('parseAttentionPrompt', () => {
   it('takes no new Cursor prompt, and reads one saved before Cursor was retired as no prompt, so nothing offers to answer it (Epic 71)', () => {
     expect(parseAttentionPrompt({ ...question, harness: 'cursor' }).ok).toBe(false)
     expect(readStoredPrompt(JSON.stringify({ ...question, harness: 'cursor' }))).toBeNull()
+  })
+
+  it('takes no new OpenCode prompt, and reads one saved before OpenCode was retired as no prompt (Epic 123, 123.1 AC3)', () => {
+    expect(parseAttentionPrompt({ ...question, harness: 'opencode' }).ok).toBe(false)
+    expect(readStoredPrompt(JSON.stringify({ ...question, harness: 'opencode', questions: [{ ...question.questions[0]!, custom: false }] }))).toBeNull()
+    expect(readStoredPrompt(JSON.stringify({ ...permission, harness: 'opencode' }))).toBeNull()
   })
 
   it('keeps line breaks in question text and descriptions but no other control', () => {
@@ -133,15 +139,6 @@ describe('parseAttentionEvidence', () => {
   it('accepts a typed answer or Claude\'s joined labels up to the answer bound (Epic 31)', () => {
     const long = { ...evidence, answers: [['x'.repeat(ATTENTION_PROMPT_LIMITS.answer)], ['None of the above', 'user_note: Passkeys']] }
     expect(parseAttentionEvidence(long)).toEqual({ ok: true, value: long })
-  })
-})
-
-describe('OpenCode\'s custom flag (Epic 31)', () => {
-  it('keeps custom when a question carries it, and still reads prompts stored without it', () => {
-    const custom = { ...question, harness: 'opencode', questions: [{ ...question.questions[0]!, custom: false }] }
-    expect(parseAttentionPrompt(custom)).toEqual({ ok: true, value: custom })
-    expect(parseAttentionPrompt(question)).toEqual({ ok: true, value: question })
-    expect(parseAttentionPrompt({ ...question, questions: [{ ...question.questions[0]!, custom: 'no' }] }).ok).toBe(false)
   })
 })
 

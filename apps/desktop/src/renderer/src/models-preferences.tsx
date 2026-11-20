@@ -25,7 +25,7 @@ export interface ResearchState {
   /** Reads what research found without asking any app; once, for the pages that only offer its names. */
   peek(): void
   /** The owner's Test again: starts the fence test of one installed app. It runs in the background and calls no provider. */
-  testFence(harness: 'codex' | 'opencode'): Promise<void>
+  testFence(harness: 'codex'): Promise<void>
   choose(researcher: string): void
   start(): Promise<void>
   stop(): Promise<void>
@@ -155,13 +155,13 @@ export function researcherHint(researcher: Pick<ResearcherView, 'harness' | 'fen
 
 /** What research needs, said where no agent on the team can research: `named` is who the team names, null for a team that has not chosen yet. Mirrors bin agents-ask.mjs `noResearcherWords`: the renderer cannot load bin modules. */
 export function noResearcherWords(named: readonly string[] | null): string {
-  const where = 'on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work'
+  const where = 'on Claude Code, or on Codex where its fence test passed, whose provider may see private work'
   if (named === null) return `Research needs an active agent ${where}.`
   if (named.length === 0) return `Your team names no researcher, so nobody researches. Switch Researcher on on an agent's page: an active agent ${where}.`
   return `Research needs one of the researchers your team names: an active agent ${where}.`
 }
 
-/** The fence test's line on Models: how the installed Codex (or OpenCode, 70.3) stands for the team's researchers on it. */
+/** The fence test's line on Models: how the installed Codex stands for the team's researchers on it. */
 export function fenceWords(codex: readonly ResearcherView[], app = 'Codex'): string[] {
   const waiting = codex.filter((entry) => !entry.ok && /fence test|other tools than/.test(entry.why ?? ''))
   const names = (entries: readonly ResearcherView[]): string => {
@@ -182,7 +182,7 @@ export function fenceResultWords(last: ResearchSnapshot['fenceTest']['last'][num
 }
 
 /** One app's fence test on Models: read-only, with Test again only after a failure or once BMN stopped trying. */
-function FenceRow(props: { harness: 'codex' | 'opencode'; researchers: readonly ResearcherView[]; snapshot: ResearchSnapshot; research: ResearchState; locked: boolean }): React.JSX.Element {
+function FenceRow(props: { harness: 'codex'; researchers: readonly ResearcherView[]; snapshot: ResearchSnapshot; research: ResearchState; locked: boolean }): React.JSX.Element {
   const { harness, snapshot } = props
   const app = ROSTER_APP_NAMES[harness]
   const stopped = stoppedTest(snapshot.autoTests, 'fence', harness)
@@ -346,7 +346,6 @@ export function ModelsPage(props: {
   const unable = snapshot.researchers.filter((entry) => !entry.ok)
   const chosen = able.find((entry) => entry.id === snapshot.researcher)
   const codex = snapshot.researchers.filter((entry) => entry.harness === 'codex')
-  const openCode = snapshot.researchers.filter((entry) => entry.harness === 'opencode')
   // The choice waits for the owner while neither the approved team nor what he has staged names anyone (63.3 AC7).
   const proposed = snapshot.choice.named === null && namedResearchers(data) === null ? snapshot.choice.proposed.filter((id) => data.agents.some((agent) => agent.id === id)) : []
   const testing = snapshot.fenceTest.running
@@ -391,7 +390,6 @@ export function ModelsPage(props: {
               optionLabel={researcherLabel} onChange={(id) => research.choose(id)} />}
       </Row>
       {codex.length > 0 ? <FenceRow harness="codex" researchers={codex} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
-      {openCode.length > 0 ? <FenceRow harness="opencode" researchers={openCode} snapshot={snapshot} research={research} locked={testing || running || research.busy} /> : null}
       <Row label="Sources" hint={['Provider pages first; other sites are cited and never override them.', 'BMN reads each cited page and marks what it cannot confirm.']}>
         <ol className="sources"><li>Provider pages</li><li>Other sites</li></ol>
       </Row>

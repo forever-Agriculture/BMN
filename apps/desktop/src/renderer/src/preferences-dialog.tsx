@@ -21,7 +21,7 @@ import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { HistoryPreferences } from './history-preferences'
 import { useResearchState } from './models-preferences'
-import { PageHead, PageViewsContext, TeamLedger, TeamPreferences, TeamToast, teamProposals, useOpenCodeGo, type PageViews, type TeamPage } from './team-preferences'
+import { PageHead, PageViewsContext, TeamLedger, TeamPreferences, TeamToast, teamProposals, type PageViews, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
 import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
 import { RulesPreferences, useRulesState, type RecognisedSessions } from './rules-preferences'
@@ -262,11 +262,10 @@ export function PreferencesDialog(props: {
   const integrationsNeedOwner = rules.snapshot === null ? lastRulesNeedOwner : rulesNeedOwner(rules.snapshot)
   useEffect(() => { if (rules.snapshot !== null) lastRulesNeedOwner = integrationsNeedOwner }, [rules.snapshot, integrationsNeedOwner])
   // BMN's pending team proposals, one card on Agents › Team (Story 75.10): who researches is read from the approved team
-  // without asking the apps, and whether OpenCode lists Luna's model only while Agents › Team shows, since it starts OpenCode.
+  // without asking the apps, only while Agents › Team shows.
   const peekForProposals = research.peek
   useEffect(() => { if (page === 'agents') peekForProposals() }, [page, peekForProposals])
-  const openCodeGo = useOpenCodeGo(team, !team.snapshot?.setupTeam && page === 'agents' && shown.agents === 'team')
-  const proposals = team.data === null || team.snapshot?.setupTeam ? null : teamProposals(team.data, { lunaListed: openCodeGo.view?.listed === true, researchers: research.snapshot?.choice ?? null })
+  const proposals = team.data === null || team.snapshot?.setupTeam ? null : teamProposals(team.data, { researchers: research.snapshot?.choice ?? null })
   // Staged edits are approved from the footer on the views that stage them; New agent has its own.
   const ledger = (page === 'agents' && shownTeamPage.name !== 'new') || (page === 'integrations' && shown.integrations !== 'rules')
   const pageOf = (id: PreferencesPage, children: ReactNode): React.JSX.Element => <div className="preferences-page" hidden={page !== id}>{children}</div>
@@ -661,7 +660,7 @@ export function PreferencesDialog(props: {
         <div className="preferences-page team-page">
           <PageViewsContext.Provider value={agentsViews}>
             <TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} research={research}
-              {...(props.sessionName ? { sessionName: props.sessionName } : {})} proposals={proposals} openCodeGo={openCodeGo} go={goTeam} />
+              {...(props.sessionName ? { sessionName: props.sessionName } : {})} proposals={proposals} go={goTeam} />
           </PageViewsContext.Provider>
         </div>
       ) : null}

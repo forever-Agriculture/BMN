@@ -1,5 +1,5 @@
 // MODULE: doctor-health.tsx - Approved automatic Health doctor: its findings counted once with Health's own sections, show-only leftovers grouped and excluded from attention
-import { ROSTER_APP_NAMES, type DoctorCheck, type DoctorLeftover, type DoctorRow, type DoctorView } from '@bmn/protocol'
+import { RETIRED_APP_LABELS, ROSTER_APP_NAMES, isRetiredApp, type DoctorCheck, type DoctorLeftover, type DoctorRow, type DoctorView } from '@bmn/protocol'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Dot } from './roster-marks'
 
@@ -97,6 +97,8 @@ function CheckedTime(props: { at: number | null; now: number }): React.JSX.Eleme
   return <span className="faint" title={props.at === null ? 'No result yet' : new Date(props.at).toLocaleString()}>{doctorAge(props.at, props.now)}</span>
 }
 
+/** An app's name; a finding saved before OpenCode was retired names it so (123.1 AC3). */
+const appLabel = (app: NonNullable<DoctorLeftover['app']>): string => isRetiredApp(app) ? RETIRED_APP_LABELS[app] : ROSTER_APP_NAMES[app]
 const KIND_WORDS: Readonly<Record<DoctorLeftover['kind'], string>> = { memory: 'Memory', skills: 'Skills', plugins: 'Plugins', mcp: 'MCP' }
 type Leftover = DoctorRow['leftovers'][number] & { checkedAt: number | null }
 export interface LeftoverGroup { key: string; label: string; reasonText: string; items: Leftover[] }
@@ -106,7 +108,7 @@ export function leftoverGroups(leftovers: readonly Leftover[]): LeftoverGroup[] 
   const groups = new Map<string, LeftoverGroup>()
   for (const item of leftovers) {
     const key = `${item.app ?? 'shared'}:${item.kind}:${item.reason}`
-    const group = groups.get(key) ?? { key, label: `${item.app ? ROSTER_APP_NAMES[item.app] : 'Shared'} · ${KIND_WORDS[item.kind]} · ${item.reason.replace(/-/gu, ' ')}`, reasonText: item.reasonText, items: [] }
+    const group = groups.get(key) ?? { key, label: `${item.app ? appLabel(item.app) : 'Shared'} · ${KIND_WORDS[item.kind]} · ${item.reason.replace(/-/gu, ' ')}`, reasonText: item.reasonText, items: [] }
     group.items.push(item)
     groups.set(key, group)
   }
@@ -208,7 +210,7 @@ export function DoctorHealth(props: { view: DoctorView | undefined; now?: number
         return (
           <div key={`${row.check}:${problem?.code ?? 'state'}:${problem?.app ?? ''}:${place === 'doctor' ? problem?.item ?? 0 : place}`} className="health-row" data-doctor-check={row.check} data-doctor-state={row.state}
             data-doctor-counted={problem === null ? undefined : place}>
-            <span>{problem?.app ? ROSTER_APP_NAMES[problem.app] : LABELS[row.check]}</span>
+            <span>{problem?.app ? appLabel(problem.app) : LABELS[row.check]}</span>
             <span className="path mono" title={COMMANDS[row.check]}>{COMMANDS[row.check]}</span>
             <span className="health-state">
               <span className={counted || problem === null ? undefined : 'faint'}>{counted ? <Dot label="Needs you" /> : null}{doctorStateWords(row)}{problem ? ` · ${problem.reason}` : ''}{count > 1 ? ` · ${count} findings` : ''}</span>
@@ -226,7 +228,7 @@ export function DoctorHealth(props: { view: DoctorView | undefined; now?: number
         <p className="preferences-help">BMN reads hooks, skills, tools and rules files. It runs qualified Claude and Codex doctors read-only.</p>
         <p className="preferences-help">Checks run at start when never run, after 24 hours, or after an app version changes.</p>
         <p className="preferences-help">A new version is tried on a disposable profile first. Failed checks retry once at the next start.</p>
-        <p className="preferences-help">OpenCode has no qualified doctor. Leftovers stay show-only; BMN leaves their files and contents unchanged.</p>
+        <p className="preferences-help">Leftovers stay show-only; BMN leaves their files and contents unchanged.</p>
         {leftovers.length > 0 ? <p className="preferences-help">{view?.locationHelp}</p> : null}
       </details>
     </section>

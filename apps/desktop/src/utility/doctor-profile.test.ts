@@ -1,9 +1,9 @@
 // MODULE: doctor-profile.test.ts - Selected-profile and individually locatable Doctor regression evidence
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { doctorEnvironment, doctorVersions, runLeftoversDoctor, sandboxArguments, sandboxProcess } from '../../bin/doctor-adapters.mjs'
+import { doctorEnvironment, doctorVersions, runLeftoversDoctor, sandboxArguments } from '../../bin/doctor-adapters.mjs'
 import { doctorPaths, doctorWorker, loadDoctorState, readDoctorView, runDoctorCommand } from '../../bin/doctor.mjs'
 import { observeFile, locationRoots } from '../../bin/doctor-locations.mjs'
 import { selectedProfile } from '../../bin/doctor-profile.mjs'
@@ -14,7 +14,7 @@ for (const firstObserver of ['cli', 'startup'] as const) it(`invalidates cached 
   const identity = 'c'.repeat(64); let qualifications = 0; let checks = 0
   const dependencies = {
     environment,
-    versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex', 'opencode'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
+    versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
     qualify: async () => { qualifications += 1; return 'qualified' as const },
     appCheck: async () => ({ state: 'passed' as const, problems: [] }),
     bmnCheck: async () => { checks += 1; return { state: 'passed' as const, problems: [] } },
@@ -85,11 +85,12 @@ it('retains the selected custom profile selectors without credentials or inline 
     XDG_CONFIG_HOME: '/selected/config', XDG_DATA_HOME: '/selected/data', OPENCODE_CONFIG_DIR: '/selected/opencode',
     OPENCODE_CONFIG: '/selected/file.json', OPENCODE_CONFIG_CONTENT: 'password', OPENAI_API_KEY: 'password' }
   const result = doctorEnvironment(environment, environment.HOME)
-  for (const name of ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG']) {
+  for (const name of ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']) {
     expect(result[name]).toBe(environment[name as keyof typeof environment])
   }
   expect(result.OPENAI_API_KEY).toBeUndefined()
-  expect(result.OPENCODE_CONFIG_CONTENT).toBeUndefined()
+  // OpenCode was retired (Epic 123): its selectors no longer choose what the doctor reads.
+  for (const name of ['OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT']) expect(result[name]).toBeUndefined()
   expect(doctorEnvironment({ HOME: '/selected/home' }).CLAUDE_CONFIG_DIR).toBeUndefined()
 })
 
@@ -103,7 +104,7 @@ it('does not reuse another selected profile after restart or a joined run, and r
   let checks = 0
   const identity = 'a'.repeat(64)
   const dependencies = {
-    versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex', 'opencode'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
+    versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
     qualify: async () => { qualified += 1; return 'qualified' as const },
     appCheck: async () => ({ state: 'passed' as const, problems: [] }),
     bmnCheck: async () => { checks += 1; return { state: 'passed' as const, problems: [] } },
@@ -169,17 +170,6 @@ it('refuses a selected whole private temporary root rather than checking an empt
   expect(() => sandboxArguments(home, process.execPath, ['--version'], { HOME: home, XDG_CACHE_HOME: '/var/tmp' })).toThrow()
 })
 
-it('lets OpenCode write its log into a throwaway folder while the selected profile stays read-only', async () => {
-  const home = fixture()
-  const log = join(home, '.local/share/opencode/log')
-  mkdirSync(log, { recursive: true })
-  const run = await sandboxProcess(home, '/bin/sh', ['-c', 'echo synthetic > "$1/opencode.log" && ! (echo blocked > "$2/blocked") 2>/dev/null', 'sh', log, home],
-    { HOME: home, PATH: '/usr/bin:/bin' })
-  expect(run).toMatchObject({ code: 0, failure: null })
-  expect(readdirSync(log)).toEqual([])
-  expect(existsSync(join(home, 'blocked'))).toBe(false)
-})
-
 it('keeps a changed show-only item locatable as stale without creating a check problem or attention', async () => {
   const home = fixture()
   mkdirSync(join(home, 'objects'))
@@ -188,7 +178,7 @@ it('keeps a changed show-only item locatable as stale without creating a check p
   const environment = { HOME: home, PATH: '/usr/bin:/bin' }
   const identity = 'b'.repeat(64)
   await doctorWorker({ environment,
-    versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex', 'opencode'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
+    versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex'].map((app) => [app, { identity, executable: null, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
     qualify: async () => 'qualified', appCheck: async () => ({ state: 'passed', problems: [] }),
     bmnCheck: async () => ({ state: 'passed', problems: [] }),
     leftoversCheck: async () => ({ state: 'passed', problems: [], leftovers: [{ kind: 'plugins', app: 'claude', reason: 'disabled', item: 1, identity: 'withheld', locator: observeFile(item, locationRoots(selectedProfile(environment))).locator }] }) })

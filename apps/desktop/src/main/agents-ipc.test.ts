@@ -7,8 +7,8 @@ import { spawn } from 'node:child_process'
 import { createServer, type Server, type ServerResponse } from 'node:http'
 import { BrowserAccountsStore } from '../../bin/browser-accounts-store.mjs'
 import type { AddressInfo } from 'node:net'
-import { LUNA_GO_PROPOSAL, type AutoTestKind, type AutoTestsView } from '@bmn/protocol'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, OpenCodeGoView, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSavePlan, RulesSnapshot, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
+import { type AutoTestKind, type AutoTestsView } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, JudgeTried, JudgeView, ResearchLookup, ResearchSnapshot, WebQuestionAsked, WebQuestionsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSavePlan, RulesSnapshot, TeamAskDetail, TeamAsksSnapshot, ToolProposalView, ToolsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CODEX_RESEARCH_TOOLS_SEEN, fenceTestsPath, researchFormHash, teamRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { contextTests } from '../../bin/agents-context.mjs'
@@ -24,8 +24,7 @@ import { fenceEndedWords, fileToApproved, hooksFrom, installAgentsIpcHandlers, r
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
-/** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */
-const EXAMPLE = FIXTURE.replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}')
+const EXAMPLE = FIXTURE
 const SCRIPT = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const MASTER = '# Rules\n\nThe team: <!-- bmn:team -->.\n\n<!-- bmn:public -->\nAnswer first.\n<!-- /bmn:public -->\n'
 
@@ -43,8 +42,6 @@ let judgeTestPort: string | null
 /** What the fence test started from Models does here; none is expected unless a test sets one. */
 let fenceTest: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['fenceTest'] | null
 let researchCompare: NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]>['researchCompare'] | null
-/** What OpenCode answers about Luna through OpenCode Go here (70.4); every call is recorded with the environment it was given. */
-let openCodeGo: { listed: boolean; signedIn: boolean | null; copy: { ok: boolean; copied: boolean; message: string } | Error; calls: Array<{ kind: string; home: string | undefined }> }
 /** What installing the handlers handed back, and the notices BMN itself showed. */
 let ipc: AgentsIpcHandle
 let setupTeamInput: Awaited<ReturnType<NonNullable<Parameters<typeof installAgentsIpcHandlers>[1]['setupTeam']>>> | null
@@ -88,7 +85,6 @@ beforeEach(() => {
   notices = []
   openedInBrowser = []
   askExportInto = null
-  openCodeGo = { listed: false, signedIn: true, copy: { ok: true, copied: false, message: 'BMN\'s OpenCode folder already holds your OpenCode Go sign-in' }, calls: [] }
   autoKinds.length = 0
   ipc = installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     browserAccounts: () => new BrowserAccountsStore({ environment: { HOME: home, ...appEnv } }).list(),
@@ -105,16 +101,7 @@ beforeEach(() => {
       if (researchCompare === null || researchCompare === undefined) throw new Error('no comparison under a provider list is expected here')
       return researchCompare(options)
     },
-    notifyApp: (notice) => { notices.push(notice) }, autoTestsLater: () => {}, autoTestKinds: autoKinds, chooseAskExportFolder: async () => askExportInto,
-    openCodeGo: {
-      lists: async (options) => { openCodeGo.calls.push({ kind: 'lists', home: options?.environment?.HOME }); return { listed: openCodeGo.listed } },
-      signedIn: async (options) => { openCodeGo.calls.push({ kind: 'signedIn', home: options?.environment?.HOME }); return { signedIn: openCodeGo.signedIn } },
-      copy: async (options) => {
-        openCodeGo.calls.push({ kind: 'copy', home: options?.environment?.HOME })
-        if (openCodeGo.copy instanceof Error) throw openCodeGo.copy
-        return openCodeGo.copy
-      }
-    }
+    notifyApp: (notice) => { notices.push(notice) }, autoTestsLater: () => {}, autoTestKinds: autoKinds, chooseAskExportFolder: async () => askExportInto
   })
 })
 
@@ -141,10 +128,9 @@ describe('Health doctor cache and startup', () => {
     expect((await call<RulesSnapshot>('rules:snapshot')).browserAccounts).toMatchObject([{ name: 'Synthetic account', state: 'Sign in again' }])
   })
 
-  for (const [harness, selector] of [['codex', 'CODEX_HOME'], ['claude', 'CLAUDE_CONFIG_DIR'], ['opencode', 'OPENCODE_CONFIG_DIR']] as const) it(`keeps the Health snapshot available for an unreadable selected profile: ${harness}`, async () => {
+  for (const [harness, selector] of [['codex', 'CODEX_HOME'], ['claude', 'CLAUDE_CONFIG_DIR']] as const) it(`keeps the Health snapshot available for an unreadable selected profile: ${harness}`, async () => {
     const folder = join(home, `selected-${harness}`)
     mkdirSync(folder); appEnv[selector] = folder
-    if (harness === 'opencode') stub('opencode', 'echo "2.0.29"')
     saveDoctorState(emptyDoctorState(), { HOME: home })
     chmodSync(folder, 0)
     try {
@@ -158,7 +144,7 @@ describe('Health doctor cache and startup', () => {
   it('marks the cached doctor stale when Health observes a different installed app version', async () => {
     const state = emptyDoctorState()
     const now = Date.now()
-    Object.assign(state, { cycleStartedAt: now, versions: 'a'.repeat(64), appVersions: { claude: '2.1.295', codex: '0.161.0', opencode: null } })
+    Object.assign(state, { cycleStartedAt: now, versions: 'a'.repeat(64), appVersions: { claude: '2.1.295', codex: '0.161.0' } })
     mkdirSync(join(home, '.config/bmn/agents/state'), { recursive: true })
     state.profileKey = 'b'.repeat(64)
     state.profileIdentity = profileFingerprint(selectedProfile({ HOME: home }), state.profileKey)
@@ -200,8 +186,8 @@ async function approvedAndInstalled(): Promise<AgentsSnapshot> {
   const first = await call<AgentsOutcome>('agents:approve', { shown: await shown() })
   expect(first).toMatchObject({ ok: true, message: 'Approved · version 1' })
   const plan = await call<RulesSavePlan>('rules:plan-save', { text: MASTER })
-  expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public']])
-  expect(await saveRulesText(MASTER)).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code, Codex and OpenCode' })
+  expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full']])
+  expect(await saveRulesText(MASTER)).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code and Codex' })
   expect(file('.claude/CLAUDE.md')).toContain('The team: Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (current team: `bmn roster`; Claude Code/Codex also get BMN’s team block).')
   return snapshot()
 }
@@ -419,13 +405,6 @@ describe('restoring past an agent that was added since (60.2 AC6)', () => {
 })
 
 describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () => {
-  it('refuses to record as inspected a destination BMN cannot inspect', async () => {
-    writeFileSync(rosterFile(), FIXTURE)
-    const refused = await call<AgentsOutcome>('agents:approve', { shown: await shown() })
-    expect(refused).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', snapshot: { approved: null } })
-    expect((refused as Extract<AgentsOutcome, { ok: false }>).message).toContain('OpenCode sends data to an unknown destination')
-  })
-
   it('refuses a destination recorded as inspected once the app sends data elsewhere', async () => {
     writeFileSync(rosterFile(), EXAMPLE)
     mkdirSync(join(home, '.codex'))
@@ -435,72 +414,45 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
   })
 
-  it('reads OpenCode as unknown on Health and at approval when the app\'s environment names another OpenCode configuration, and never plans its full rules', async () => {
-    writeFileSync(rosterFile(), FIXTURE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
-    mkdirSync(join(home, '.config/opencode'), { recursive: true })
-    writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
-    const opencode = async () => (await call<RulesSnapshot>('rules:snapshot')).apps[2]
-    expect(await opencode()).toMatchObject({ harness: 'opencode', basis: 'default', provider: 'opencode-go' })
-    for (const [name, value] of [['OPENCODE_CONFIG', join(home, 'other.json')], ['OPENCODE_CONFIG_CONTENT', '{"model":"proxy/x","provider":{"proxy":{"options":{"apiKey":"KEY-SENTINEL"}}}}']] as const) {
-      appEnv = { [name]: value }
-      const view = await opencode()
-      expect(view).toMatchObject({ basis: 'unknown', provider: null })
-      expect(JSON.stringify(view)).not.toContain('KEY-SENTINEL')
-      expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', snapshot: { approved: null } })
-    }
-    appEnv = {}
-    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
-    // Inspected and allowed private work, and still public: OpenCode gets public work only (owner decisions
-    // 2026-10-10 and 2026-10-14), with OpenCode 2 installed too. Planning a save writes nothing.
-    stub('opencode', 'echo "opencode v2.0.28"')
-    const planned = async () => (await call<RulesSavePlan>('rules:plan-save', { text: MASTER })).targets.find((target) => target.harness === 'opencode')
-    expect(await planned()).toMatchObject({ rendering: 'public' })
-    appEnv = { OPENCODE_CONFIG: join(home, 'other.json') }
-    expect(await planned()).toMatchObject({ rendering: 'public' })
-    expect(existsSync(join(home, '.config/opencode/AGENTS.md'))).toBe(false)
-  })
-
   it('supports every installed app version and says whether BMN tested it (owner decision 2026-10-10)', async () => {
     writeFileSync(rosterFile(), EXAMPLE)
     await call<AgentsOutcome>('agents:approve', { shown: await shown() })
     const rows = async () => (await call<RulesSnapshot>('rules:snapshot')).apps.map((app) => [app.harness, app.version, app.versionState])
-    expect(await rows()).toEqual([['claude', '2.1.295', 'tested'], ['codex', '0.161.0', 'tested'], ['opencode', null, 'unknown']])
+    expect(await rows()).toEqual([['claude', '2.1.295', 'tested'], ['codex', '0.161.0', 'tested']])
     stub('codex', 'echo "codex-cli 0.170.0"')
     stub('claude', 'echo "2.1.200 (Claude Code)"')
     const apps = (await call<RulesSnapshot>('rules:snapshot')).apps
     expect(apps[1]).toMatchObject({ version: '0.170.0', versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.', basis: 'default', provider: 'openai' })
     expect(apps[0]).toMatchObject({ version: '2.1.200', versionState: 'other', versionNote: 'Not the version BMN tested (2.1.295). BMN reads where it sends data the same way on every version.' })
-    expect(apps[2]).toMatchObject({ versionState: 'unknown', versionNote: 'OpenCode is not installed, or its version cannot be read.' })
-    // OpenCode is read like Claude Code and Codex now (owner decision 2026-10-14).
-    stub('opencode', 'echo "opencode v2.0.28"')
-    expect((await call<RulesSnapshot>('rules:snapshot')).apps[2]).toMatchObject({ version: '2.0.28', versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' })
-    stub('opencode', 'echo "2.1.0"')
-    expect((await call<RulesSnapshot>('rules:snapshot')).apps[2]).toMatchObject({ version: '2.1.0', versionState: 'newer' })
+    expect(apps).toHaveLength(2)
     stub('codex', 'echo "codex-cli"')
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: null, versionState: 'unknown', versionNote: 'Codex is not installed, or its version cannot be read.' })
   })
 
   it('names the program PATH selects for each app, past BMN\'s own commands, and none where the app is not installed (60.6: Update…)', async () => {
     const programs = async () => (await call<RulesSnapshot>('rules:snapshot')).apps.map((app) => [app.harness, app.program, app.programTarget])
-    expect(await programs()).toEqual([['claude', join(stubs, 'claude'), undefined], ['codex', join(stubs, 'codex'), undefined], ['opencode', null, undefined]])
+    expect(await programs()).toEqual([['claude', join(stubs, 'claude'), undefined], ['codex', join(stubs, 'codex'), undefined]])
     // BMN's own folder holds a `codex` that only hands over to the next one: the program updated is the one after it.
     appEnv = { PATH: `${dirname(SCRIPT)}:${stubs}:/usr/bin:/bin` }
     expect(existsSync(join(dirname(SCRIPT), 'codex'))).toBe(true)
     expect((await programs())[1]).toEqual(['codex', join(stubs, 'codex'), undefined])
     // An app installed as a link is shown with where the link leads.
+    appEnv = {}
     mkdirSync(join(home, 'versions'))
-    writeFileSync(join(home, 'versions/opencode-1.2.3'), '#!/bin/sh\necho "1.2.3"\n')
-    chmodSync(join(home, 'versions/opencode-1.2.3'), 0o755)
-    symlinkSync(join(home, 'versions/opencode-1.2.3'), join(stubs, 'opencode'))
-    expect((await programs())[2]).toEqual(['opencode', join(stubs, 'opencode'), join(home, 'versions/opencode-1.2.3')])
+    writeFileSync(join(home, 'versions/codex-0.161.0'), '#!/bin/sh\necho "codex-cli 0.161.0"\n')
+    chmodSync(join(home, 'versions/codex-0.161.0'), 0o755)
+    rmSync(join(stubs, 'codex'))
+    symlinkSync(join(home, 'versions/codex-0.161.0'), join(stubs, 'codex'))
+    expect((await programs())[1]).toEqual(['codex', join(stubs, 'codex'), join(home, 'versions/codex-0.161.0')])
   })
 
   it('inspects with the environment a session\'s shell ends up with, read again before each call (60.6/60.7: an app found only through the shell\'s settings)', async () => {
     // Started from the desktop, BMN's own PATH lacks the folder the owner's shell adds; the app lives there.
     const shellOnly = join(home, 'shell-only')
     mkdirSync(shellOnly)
-    writeFileSync(join(shellOnly, 'opencode'), '#!/bin/sh\necho "1.2.3"\n')
-    chmodSync(join(shellOnly, 'opencode'), 0o755)
+    writeFileSync(join(shellOnly, 'codex'), '#!/bin/sh\necho "codex-cli 0.161.0"\n')
+    chmodSync(join(shellOnly, 'codex'), 0o755)
+    rmSync(join(stubs, 'codex'))
     let asked = 0
     let source: { env: NodeJS.ProcessEnv; source: 'shell' | 'app'; reason?: string } = { env: { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }, source: 'app', reason: 'bash did not answer in 5 seconds' }
     const own = new Map<string, (event: never, params: Record<string, unknown>) => unknown>()
@@ -513,12 +465,12 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     const first = await read()
     expect(asked).toBe(1)
     expect(first.ownEnvironment).toBe('bash did not answer in 5 seconds')
-    expect(first.apps[2]).toMatchObject({ harness: 'opencode', version: null, program: null })
+    expect(first.apps[1]).toMatchObject({ harness: 'codex', version: null, program: null })
     // Asked again before the next call, the shell answers: its PATH is the one inspected with.
     const second = await read()
     expect(asked).toBe(2)
     expect(second.ownEnvironment).toBeUndefined()
-    expect(second.apps[2]).toMatchObject({ harness: 'opencode', version: '1.2.3', program: join(shellOnly, 'opencode') })
+    expect(second.apps[1]).toMatchObject({ harness: 'codex', version: '0.161.0', program: join(shellOnly, 'codex') })
     expect(second.apps[0]).toMatchObject({ version: '2.1.295', program: join(stubs, 'claude') })
   })
 
@@ -617,22 +569,20 @@ describe('Save installs the rules, and Undo puts the rules and the files back to
   it('writes the master and every app\'s file as one transaction; Undo restores both and installs nothing again (AC1, AC2)', async () => {
     await approvedAndInstalled()
     const saved = await saveRulesText(NEXT)
-    expect(saved).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code, Codex and OpenCode', undo: expect.any(String) })
+    expect(saved).toMatchObject({ ok: true, message: 'Saved and installed to Claude Code and Codex', undo: expect.any(String) })
     expect(file('.config/bmn/agents/global-rules.md')).toBe(NEXT)
     expect(file('.claude/CLAUDE.md')).toContain('Answer first, plainly.')
-    // OpenCode gets the public rendering only: the public section, never the Team line.
-    expect(file('.config/opencode/AGENTS.md')).toContain('Answer first, plainly.')
-    expect(file('.config/opencode/AGENTS.md')).not.toContain('The team:')
-    expect(saved.snapshot.transactions[0]).toMatchObject({ reason: 'save', state: 'complete', master: true, targets: ['claude', 'codex', 'opencode'] })
+    expect(file('.codex/AGENTS.md')).toContain('Answer first, plainly.')
+    expect(saved.snapshot.transactions[0]).toMatchObject({ reason: 'save', state: 'complete', master: true, targets: ['claude', 'codex'] })
     const undo = await call<RulesPlan>('rules:plan-restore', { transaction: saved.undo })
     expect(undo.master).toMatchObject({ path: join(home, '.config/bmn/agents/global-rules.md'), becomes: 'its earlier bytes' })
-    expect(undo.targets.map((target) => target.harness)).toEqual(['claude', 'codex', 'opencode'])
+    expect(undo.targets.map((target) => target.harness)).toEqual(['claude', 'codex'])
     const transactions = saved.snapshot.transactions.length
     expect(await call<RulesOutcome>('rules:restore', { transaction: saved.undo, planHash: undo.planHash }))
-      .toMatchObject({ ok: true, message: 'Put back the rules and their files in Claude Code, Codex and OpenCode' })
+      .toMatchObject({ ok: true, message: 'Put back the rules and their files in Claude Code and Codex' })
     expect(file('.config/bmn/agents/global-rules.md')).toBe(MASTER)
     expect(file('.claude/CLAUDE.md')).not.toContain('Answer first, plainly.')
-    expect(file('.config/opencode/AGENTS.md')).not.toContain('Answer first, plainly.')
+    expect(file('.codex/AGENTS.md')).not.toContain('Answer first, plainly.')
     // Nothing was installed again: no new transaction, and every file is the one the save before wrote.
     const after = await call<RulesSnapshot>('rules:snapshot')
     expect(after.transactions).toHaveLength(transactions)
@@ -645,7 +595,7 @@ describe('Save installs the rules, and Undo puts the rules and the files back to
     try {
       const saved = await saveRulesText(NEXT)
       expect(saved).toMatchObject({ ok: false, code: 'PARTIAL', undo: expect.any(String) })
-      expect(saved.message).toMatch(/^Codex not written: .+ · Saved and installed to Claude Code and OpenCode$/)
+      expect(saved.message).toMatch(/^Codex not written: .+ · Saved and installed to Claude Code$/)
       expect(file('.claude/CLAUDE.md')).toContain('Answer first, plainly.')
       expect(file('.codex/AGENTS.md')).not.toContain('Answer first, plainly.')
       expect(saved.snapshot.transactions[0]).toMatchObject({ reason: 'save', state: 'partial', master: true })
@@ -681,7 +631,7 @@ describe('BMN\'s hook entries install themselves at start (Story 75.9 AC3)', () 
     expect(first?.state).toBe('checked')
     const apps = first?.state === 'checked' ? first.apps : []
     expect(apps.map((app) => [app.harness, app.state, app.installed.length, app.left])).toEqual([
-      ['claude', 'installed', 9, [{ event: 'Stop', why: 'foreign' }]], ['codex', 'not-set-up', 0, []], ['opencode', 'not-set-up', 0, []]
+      ['claude', 'installed', 9, [{ event: 'Stop', why: 'foreign' }]], ['codex', 'not-set-up', 0, []]
     ])
     const settings = JSON.parse(file('.claude/settings.json')) as { theme: string; hooks: Record<string, unknown[]> }
     expect(settings.theme).toBe('dark')
@@ -691,7 +641,7 @@ describe('BMN\'s hook entries install themselves at start (Story 75.9 AC3)', () 
     await ipc.installsAtStart()
     expect(file('.claude/settings.json')).toBe(bytes)
     const second = (await call<RulesSnapshot>('rules:snapshot')).hooks
-    expect(second?.state === 'checked' ? second.apps.map((app) => [app.harness, app.state, app.installed]) : null).toEqual([['claude', 'checked', []], ['codex', 'not-set-up', []], ['opencode', 'not-set-up', []]])
+    expect(second?.state === 'checked' ? second.apps.map((app) => [app.harness, app.state, app.installed]) : null).toEqual([['claude', 'checked', []], ['codex', 'not-set-up', []]])
   })
 })
 
@@ -815,9 +765,9 @@ describe('context limits on Integrations › Health (60.9 AC1, AC3)', () => {
   })
 
   it('refuses an app BMN has no setting for and a size that is not a number of tokens', async () => {
-    await expect(call('rules:context-plan', { harness: 'opencode', limit: 1, compact: null })).rejects.toThrow(/codex, claude/)
+    await expect(call('rules:context-plan', { harness: 'vim', limit: 1, compact: null })).rejects.toThrow(/codex, claude/)
     await expect(call('rules:context-plan', { harness: 'codex', limit: -5, compact: null })).rejects.toThrow(/positive whole number/)
-    await expect(call('rules:context-test', { harness: 'opencode' })).rejects.toThrow(/codex, claude/)
+    await expect(call('rules:context-test', { harness: 'vim' })).rejects.toThrow(/codex, claude/)
   })
 })
 
@@ -1009,7 +959,7 @@ describe('skills on Integrations › Skills and Health (60.11 AC1-AC5)', () => {
     expect(before.source).toEqual({ path: join(home, '.claude/skills'), readable: true })
     expect(before.skills.map((entry) => [entry.name, entry.description, entry.states])).toEqual([['alpha', 'Synthetic skill alpha.', {}], ['beta', 'Synthetic skill beta.', {}]])
     expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.testable])).toEqual([
-      ['claude', false, 'Not supported yet', true], ['codex', false, 'Not supported yet', true], ['opencode', false, 'Not supported yet', true]
+      ['claude', false, 'Not supported yet', true], ['codex', false, 'Not supported yet', true]
     ])
     // Story 75.9: skills install themselves, but never before an app's test passed.
     await ipc.installsAtStart()
@@ -1099,15 +1049,15 @@ describe('skills on Integrations › Skills and Health (60.11 AC1-AC5)', () => {
     await approvedAndInstalled()
     skill('alpha')
     const data = (await snapshot()).file.data as RosterDataShape
-    const staged: RosterDataShape = { ...data, skills: [{ id: 'alpha', public: true, only: ['codex', 'opencode'] }] }
+    const staged: RosterDataShape = { ...data, skills: [{ id: 'alpha', public: true, only: ['codex'] }] }
     const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
     expect(preview.valid).toBe(true)
-    expect(preview.differences).toEqual([{ scope: 'skills', id: 'alpha', field: null, kind: 'added', after: { present: true, value: { public: true, only: ['codex', 'opencode'] } } }])
-    expect(preview.consequences).toEqual(['Skill alpha would reach OpenCode', 'Skill alpha would no longer reach Claude Code'])
+    expect(preview.differences).toEqual([{ scope: 'skills', id: 'alpha', field: null, kind: 'added', after: { present: true, value: { public: true, only: ['codex'] } } }])
+    expect(preview.consequences).toEqual(['Skill alpha would no longer reach Claude Code'])
     const approved = await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })
     expect(approved).toMatchObject({ ok: true })
-    expect(file('.config/bmn/agents/roster.md')).toContain('## skills\n\n```yaml\npublic: [alpha]\nonly: {alpha: [codex, opencode]}\n```')
-    expect(((await snapshot()).approved?.data as RosterDataShape).skills).toEqual([{ id: 'alpha', public: true, only: ['codex', 'opencode'] }])
+    expect(file('.config/bmn/agents/roster.md')).toContain('## skills\n\n```yaml\npublic: [alpha]\nonly: {alpha: [codex]}\n```')
+    expect(((await snapshot()).approved?.data as RosterDataShape).skills).toEqual([{ id: 'alpha', public: true, only: ['codex'] }])
   })
 })
 
@@ -1135,8 +1085,7 @@ describe('tools on Integrations › Tools and Health (60.12 AC1-AC6)', () => {
     expect(before).toMatchObject({ pending: 0, exposed: 0, blocked: 0, tools: [] })
     expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.reason, app.path.replace(home, '~'), app.kind])).toEqual([
       ['claude', false, 'Not supported yet', 'no test has run on Claude Code 2.1.295', '~/.claude.json', 'full'],
-      ['codex', false, 'Not supported yet', 'no test has run on Codex 0.161.0', '~/.codex/config.toml', 'full'],
-      ['opencode', false, 'Not supported yet', 'OpenCode is not installed, or its version cannot be read', '~/.config/opencode/opencode.json', 'public']
+      ['codex', false, 'Not supported yet', 'no test has run on Codex 0.161.0', '~/.codex/config.toml', 'full']
     ])
 
     // What Codex already holds is proposed as a tool kept to Codex, without the value its entry held.
@@ -1151,7 +1100,7 @@ describe('tools on Integrations › Tools and Health (60.12 AC1-AC6)', () => {
     const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
     expect(preview.valid).toBe(true)
     expect(preview.differences.map((diff) => [diff.scope, diff.id, diff.kind])).toEqual([['tools', 'docs', 'added'], ['tools', 'search', 'added']])
-    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code, Codex and OpenCode', 'Tool Search would reach Codex',
+    expect(preview.consequences).toEqual(['Tool Docs would reach Claude Code and Codex', 'Tool Search would reach Codex',
       'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run'])
     expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })).toMatchObject({ ok: true })
     expect(file('.config/bmn/agents/roster.md')).toContain('## tools\n\n```yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\nsearch: {name: Search, command: search-tool, apps: [codex]}\n```')
@@ -1597,7 +1546,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       await call<ResearchSnapshot>('research:fence-test', { harness: 'codex' })
       await tested()
       expect(apps).toEqual(['codex', 'codex'])
-      await expect(call('research:fence-test', { harness: 'claude' })).rejects.toThrow(/Codex and OpenCode/)
+      await expect(call('research:fence-test', { harness: 'claude' })).rejects.toThrow('the fence test is for Codex')
     })
 
     it('says in words how a fence test that failed, showed nothing or could not run ended', async () => {
@@ -1897,8 +1846,8 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
       return text.replace(from, to)
     }
     let text = once(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
-    text = once(text, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
-      `opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [${HOST}], private_work: allowed}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
+    text = once(text, 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\n',
+      `zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\ngateway: {name: Gateway, hosts: [${HOST}], private_work: allowed}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
     text = once(text, '## roles\n', `## jev\n\n\`\`\`yaml\n${[
       'name: Jev', 'class: bishop', 'harness: bmn', 'model: jev-1.13', 'provider: gateway', 'run_by: maker', `host: ${HOST}`, 'enabled: true', 'status: active', 'roles: [judge]',
       'paid_by: per_token', 'price: {input: 0.042, output: 0, source: "https://prices.example.test/jev", as_of: 2026-10-12}'
@@ -2109,101 +2058,6 @@ describe('the judge on Team: BMN\'s proposal, its calls, the monthly limit and T
   })
 })
 
-/**
- * A team with BMN's proposal of Luna (Go) taken (70.4), as the Team page's `lunaGoProposal` takes it on a team from
- * before the researcher mark (its output is pinned in luna-go-proposal.test.ts): OpenCode Go added where missing, with
- * `privateWork`, and Luna (Go) last in the role helper at her highest effort.
- */
-function withLunaGo(data: RosterDataShape, privateWork: 'allowed' | 'public_only' = 'public_only'): RosterDataShape {
-  const { provider, agent, role } = LUNA_GO_PROPOSAL
-  const providers = data.providers.some((entry) => entry.id === provider.id) ? data.providers : [...data.providers, { ...provider, hosts: [] }]
-  return {
-    ...data, schema_version: 3,
-    providers: providers.map((entry) => (entry.id === provider.id ? { ...entry, private_work: privateWork } : entry)),
-    agents: [...data.agents, { ...agent, provider: provider.id, efforts: [...agent.efforts], roles: [role] }],
-    roles: data.roles.map((entry) => (entry.id === role ? { ...entry, candidates: [...entry.candidates, `${agent.id}@${agent.efforts.at(-1)}`] } : entry))
-  }
-}
-
-describe('Luna through OpenCode Go on Team (70.4)', () => {
-  const COPIED = { ok: true, copied: true, message: 'BMN copied your OpenCode Go sign-in into its own OpenCode folder' }
-  const kinds = (kind: string) => openCodeGo.calls.filter((entry) => entry.kind === kind)
-  /** The team in the file approved, then BMN's proposal of Luna (Go) taken and approved as the page does it. */
-  const approveProposal = async (): Promise<AgentsOutcome> => {
-    writeFileSync(rosterFile(), EXAMPLE)
-    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
-    const state = await snapshot()
-    const proposed = withLunaGo(state.approved?.data as RosterDataShape)
-    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: proposed } })
-    expect(preview.errors).toEqual([])
-    // Nothing is copied before he approves.
-    expect(kinds('copy')).toEqual([])
-    return call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: proposed, teamUpdate: bindings(preview) })
-  }
-
-  it('asks OpenCode about her with the owner\'s environment, and copies nothing for a team that names no agent on OpenCode Go', async () => {
-    writeFileSync(rosterFile(), EXAMPLE)
-    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).not.toHaveProperty('openCodeSignIn')
-    openCodeGo.listed = true
-    expect(await call<OpenCodeGoView>('agents:opencode-go')).toEqual({ listed: true, signedIn: null, reason: null })
-    expect(openCodeGo.calls).toEqual([{ kind: 'lists', home }])
-    // A yes holds while BMN runs; a no is asked again.
-    await call('agents:opencode-go')
-    expect(kinds('lists')).toHaveLength(1)
-    expect((await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).copy).toEqual({ ok: false, copied: false, message: 'The approved team names no agent on OpenCode Go, so BMN copies no sign-in' })
-    expect(kinds('copy')).toEqual([])
-  })
-
-  it('copies the Go sign-in when he approves Luna (Go), says so with the approval, and copies once', async () => {
-    openCodeGo.copy = COPIED
-    const saved = await approveProposal()
-    expect(saved).toMatchObject({ ok: true, openCodeSignIn: COPIED })
-    expect(saved.snapshot.approved?.data.agents.at(-1)).toMatchObject({ id: 'luna-go', harness: 'opencode', provider: 'opencode-go', model: 'gpt-6-luna', roles: ['helper'] })
-    expect(kinds('copy')).toEqual([{ kind: 'copy', home }])
-    // A later approval copies nothing again, and the page reads the folder as signed in without asking OpenCode.
-    const state = await snapshot()
-    const approved = state.approved?.data as RosterDataShape
-    const allowed = { ...approved, providers: approved.providers.map((entry) => (entry.id === 'opencode-go' ? { ...entry, private_work: 'allowed' as const } : entry)) }
-    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: allowed } })
-    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: allowed, teamUpdate: bindings(preview) })).not.toHaveProperty('openCodeSignIn')
-    expect(kinds('copy')).toHaveLength(1)
-    expect(await call<OpenCodeGoView>('agents:opencode-go')).toMatchObject({ signedIn: true })
-    expect(kinds('signedIn')).toEqual([])
-  })
-
-  it('says with the approval why the sign-in was not copied, and Copy sign-in tries again', async () => {
-    const missing = { ok: false, copied: false, message: 'OpenCode holds no OpenCode Go sign-in on this computer: sign in with `opencode auth login`, then copy it again' }
-    openCodeGo.copy = missing
-    openCodeGo.signedIn = false
-    expect(await approveProposal()).toMatchObject({ ok: true, openCodeSignIn: missing })
-    expect(await call<OpenCodeGoView>('agents:opencode-go')).toMatchObject({ signedIn: false })
-    expect(kinds('signedIn')).toEqual([{ kind: 'signedIn', home }])
-    openCodeGo.copy = COPIED
-    expect(await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).toMatchObject({ signedIn: true, copy: COPIED })
-    expect(kinds('copy')).toHaveLength(2)
-  })
-
-  it('keeps the approval where copying the sign-in threw, says why, and Copy sign-in tries again (Astra, Epic 70 review)', async () => {
-    openCodeGo.copy = new Error('EACCES: permission denied, mkdir \'/made-up/bmn/opencode/home\'')
-    openCodeGo.signedIn = false
-    const approved = await approveProposal()
-    expect(approved).toMatchObject({ ok: true, openCodeSignIn: { ok: false, copied: false, message: 'BMN could not copy your OpenCode Go sign-in: EACCES: permission denied, mkdir \'/made-up/bmn/opencode/home\'' } })
-    // The team approved before the copy is the one the snapshot shows.
-    expect((await snapshot()).approved?.generation).toBe((approved as { snapshot: AgentsSnapshot }).snapshot.approved?.generation)
-    expect((approved as { snapshot: AgentsSnapshot }).snapshot.approved?.data.agents.some((agent) => agent.provider === 'opencode-go')).toBe(true)
-    openCodeGo.copy = COPIED
-    expect(await call<OpenCodeGoView>('agents:opencode-go', { copy: true })).toMatchObject({ signedIn: true, copy: COPIED })
-    expect(kinds('copy')).toHaveLength(2)
-  })
-
-  it('says nothing with an approval where the folder already held the sign-in', async () => {
-    const saved = await approveProposal()
-    expect(saved).toMatchObject({ ok: true })
-    expect(saved).not.toHaveProperty('openCodeSignIn')
-    expect(kinds('copy')).toHaveLength(1)
-  })
-})
-
 describe('Agents › Asks through the app (73.1 AC2, AC3)', () => {
   const SESSION = { kind: 'session', session: 'session-made-up-1', app: 'claude' } as const
   /** A run's record written by hand; with no outcome it is still going, as far as the folder says. */
@@ -2219,9 +2073,11 @@ describe('Agents › Asks through the app (73.1 AC2, AC3)', () => {
   const GOING = '20261015T091000-0000000b'
 
   it('lists and opens every ask, stops one still going, exports and removes ended ones, and refuses a bad or gone id in its own words', async () => {
-    const ended = record(ENDED, '2026-10-15T09:00:00.000Z', { state: 'answered', exit: 0, ended_at: '2026-10-15T09:01:00.000Z' })
+    // Dated just now: BMN removes an ask that ended longer ago than it keeps them, so a fixed date would expire.
+    const at = (minutesAgo: number): string => new Date(Date.now() - minutesAgo * 60_000).toISOString()
+    const ended = record(ENDED, at(10), { state: 'answered', exit: 0, ended_at: at(9) })
     writeFileSync(join(ended, 'answer.md'), 'Bounded at three tries.')
-    const going = record(GOING, '2026-10-15T09:10:00.000Z', null)
+    const going = record(GOING, at(1), null)
     const loaded = await call<TeamAsksSnapshot>('asks:load')
     expect(loaded.asks.map((line) => line.id)).toEqual([GOING, ENDED])
     expect(loaded.asks[1]).toMatchObject({ question: 'Is the retry bounded?', by: SESSION, agent: 'astra', state: 'answered' })
@@ -2267,17 +2123,13 @@ describe('fresh setup Team approval', () => {
     await expect(call('agents:preview',{request:{kind:'staged',data:s.next}})).rejects.toThrow('Setup changed')
     await expect(call('agents:save',{shown:shownOf(s.state),data:s.next})).rejects.toThrow('Setup changed')
     expect(readFileSync(rosterFile(),'utf8')).toBe(before);expect((await snapshot()).approved).toBeNull()
-    expect(openCodeGo.calls).toEqual([])
   })
-  it('previews and saves explicit public choices through existing approval without copying credentials',async()=>{
+  it('previews and saves explicit public choices through existing approval',async()=>{
     const s=await fresh()
     const preview=await call<AgentsPreview>('agents:preview',{request:{kind:'staged',data:s.next,setupRevision:s.revision}})
     expect(preview.valid).toBe(true)
     const result=await call<AgentsOutcome>('agents:save',{shown:s.shown,data:s.next})
     expect(result.ok).toBe(true);expect((await snapshot()).approved?.data.agents[0]?.model).toBe('synthetic-model')
-    expect(openCodeGo.calls).toEqual([])
-    expect(await call<OpenCodeGoView>('agents:opencode-go',{copy:true})).toMatchObject({listed:false,signedIn:null})
-    expect(openCodeGo.calls).toEqual([])
   })
   it('refuses stale app readiness even when roster generation and hash still match',async()=>{
     const s=await fresh(),before=readFileSync(rosterFile(),'utf8');setupTeamInput!.apps.apps[0]!.version='changed'
@@ -2314,7 +2166,6 @@ describe('fresh setup Team approval', () => {
     expect(kept.approved?.data.agents[0]?.name).toBe('Synthetic Renamed Codex')
     expect(kept.differences).toEqual([])
     expect(readFileSync(rosterFile(), 'utf8')).toBe(bytes)
-    expect(openCodeGo.calls).toEqual([])
   })
   it('scoped Keep validates only the published member and leaves a private outside addition unapproved', async () => {
     const s = await outsideName('finished'), file = structuredClone(s.outside.file.data!)
@@ -2345,15 +2196,15 @@ describe('fresh setup Team approval', () => {
     expect(readFileSync(rosterFile(), 'utf8')).toBe(bytes)
     expect((await snapshot()).approved?.generation).toBe(1)
   })
-  it.each(['activate', 'chain'] as const)('refuses an outside unavailable OpenCode %s even after removing its display note', async kind => {
+  it.each(['activate', 'chain'] as const)('refuses an outside unavailable app %s even after removing its display note', async kind => {
     const s = await fresh()
-    s.next.agents.push({ ...s.next.agents[0]!, id: 'synthetic-opencode', name: 'Synthetic OpenCode', harness: 'opencode', enabled: false, status: 'proposed', enabled_note: 'Needs Console' })
-    s.next.harness_routes.push({ harness: 'opencode', provider: 'openai', basis: 'owner-declared' })
+    s.next.agents.push({ ...s.next.agents[0]!, id: 'synthetic-claude', name: 'Synthetic Claude', harness: 'claude', enabled: false, status: 'proposed', enabled_note: 'Needs Console' })
+    s.next.harness_routes.push({ harness: 'claude', provider: 'openai', basis: 'owner-declared' })
     expect((await call<AgentsOutcome>('agents:save', { shown: s.shown, data: s.next })).ok).toBe(true)
-    const file = structuredClone((await snapshot()).file.data!), unavailable = file.agents.find(agent => agent.id === 'synthetic-opencode')!
+    const file = structuredClone((await snapshot()).file.data!), unavailable = file.agents.find(agent => agent.id === 'synthetic-claude')!
     delete unavailable.enabled_note
     if (kind === 'activate') { unavailable.enabled = true; unavailable.status = 'active' }
-    else { unavailable.roles.push(file.roles[0]!.id); file.roles[0]!.candidates.push('synthetic-opencode@medium') }
+    else { unavailable.roles.push(file.roles[0]!.id); file.roles[0]!.candidates.push('synthetic-claude@medium') }
     const { rewriteRoster } = await import('../../bin/agents-roster.mjs')
     writeFileSync(rosterFile(), rewriteRoster(readFileSync(rosterFile(), 'utf8'), file))
     const outside = await snapshot(), before = readFileSync(rosterFile(), 'utf8')

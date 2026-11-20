@@ -36,13 +36,13 @@ const TEAM_ASK_USAGE = `Usage: bmn team ask --role R (--question TEXT | --questi
        bmn team asks export <id> --output PATH      The allowlisted record, never a sign-in, a home or raw logs
 
 Asks one approved teammate in a role, in its own app's read-only mode with that mode's tools: Codex's
-read-only profile, which holds back the listed credential stores, Claude Code's read tools, Git history, web search and sub-agents, OpenCode's
-read-only agent (docs/agent-control.md, "Asking a teammate"). It works in the project (--project;
+read-only profile, which holds back the listed credential stores, or Claude Code's read tools, Git history, web search and sub-agents
+(docs/agent-control.md, "Asking a teammate"). It works in the project (--project;
 the default is your repository, else an empty folder of the run's own). Its app's own tools write
 nothing; interactive browser scripts run as your user, and can read and write files and reach the network and local sockets (below and in the record).
 --file gives whole text files in the prompt; --image gives PNG, JPEG
 or WebP pictures as images, their metadata taken out, to the designer unless --role names another
-role. A Claude Code or OpenCode teammate reads one folder: a question that names a file outside it
+role. A Claude Code teammate reads one folder: a question that names a file outside it
 is refused before anything is sent (FILES_OUTSIDE); give the file's text with --file, or add
 --outside-unread to ask without it.
 --origin gives the teammate (the browser role unless --role names another) a browser for your
@@ -347,14 +347,14 @@ export function askFeatures(environment = process.env) {
   const apps = ASK_APPS.map((harness) => {
     const program = askProgram(harness, environment)
     const version = program === null ? null : harnessVersion(program.launcher, { PATH: appSearchPath(environment), HOME: environment.HOME ?? '' })
-    const form = (project, label) => {
-      const name = askFormName(harness, { project, label })
+    const form = () => {
+      const name = askFormName(harness)
       return { form: name, reads: ASK_READS[name].words }
     }
     return {
       app: harness, installed: program !== null, version, form_checked_on: ASK_FORMS_CHECKED[harness],
       ...(harness === 'codex' && program !== null ? { read_limit: codexLimitStanding(program.launcher, environment) } : {}),
-      forms: { project: form('project', 'private'), 'no-project': form(null, 'private'), public: harness === 'opencode' ? form(null, 'public') : { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' } },
+      forms: { project: form(), 'no-project': form(), public: { form: null, reads: 'not offered: its tools read beyond your text, so its asks are private' } },
       pictures: ASK_UNSUPPORTED[harness]?.pictures === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].pictures}`,
       browser: ASK_UNSUPPORTED[harness]?.browser === undefined ? 'offered' : `not offered: ${ASK_UNSUPPORTED[harness].browser}`, usage_while_running: harness === 'claude'
     }

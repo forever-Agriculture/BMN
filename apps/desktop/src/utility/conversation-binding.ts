@@ -1,9 +1,10 @@
 // MODULE: conversation-binding.ts - Native conversation identity, launch and resume contracts
 import { access, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, join } from 'node:path'
 import {
-  RETIRED_APP_LINE,
+  isRetiredApp,
+  retiredAppLine,
   retiredAppProgram,
   type AgentCli,
   type BoundConversationBinding,
@@ -17,8 +18,9 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-// OpenCode 1.18.31: a local session ID was confirmed by `opencode export` on 2026-09-22.
-export const OPENCODE_REFERENCE_PATTERN = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
+// OpenCode 1.18.31: a local session ID was confirmed by `opencode export` on 2026-09-22. OpenCode was retired in
+// Epic 123; the pattern stays only so a binding saved before then still loads, labelled, and never resumes.
+const OPENCODE_REFERENCE_PATTERN = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 
 export function isConversationReference(agent: AgentCli, value: unknown): value is string {
   return typeof value === 'string' && (agent === 'opencode'
@@ -255,7 +257,6 @@ export function agentCli(executable: string): AgentCli {
   const command = basename(executable).toLowerCase()
   if (command === 'claude' || command === 'claude.exe') return 'claude'
   if (command === 'codex' || command === 'codex.exe') return 'codex'
-  if (command === 'opencode' || command === 'opencode.exe') return 'opencode'
   return 'other'
 }
 
@@ -371,7 +372,7 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
       !isConversationReference(candidate.agentCli, candidate.conversationReference) ||
       (candidate.agentCli !== 'opencode' && !isLowercaseConversationReference(String(candidate.conversationReference ?? '')))
     ) {
-      return invalidBoundBinding(input, 'stored conversation reference must match the agent format (a lowercase UUID except for OpenCode)')
+      return invalidBoundBinding(input, 'stored conversation reference must match the agent format (a lowercase UUID except for retired OpenCode)')
     }
     if (
       (candidate.agentCli === 'claude' &&
@@ -600,16 +601,9 @@ export async function prepareConversationLaunch(
         launchContext,
         input.setup
           ? 'Setup runs the app’s exact command without conversation capture or injected arguments'
-          : 'Native conversation resume is available only for direct Claude, Codex or OpenCode CLI launches',
+          : 'Native conversation resume is available only for direct Claude or Codex CLI launches',
         capturedAt
       )
-    }
-  }
-  if (cli === 'opencode') {
-    return {
-      executable: input.executable, argv: [...input.argv], injectedArguments: [],
-      binding: unsupportedBinding(sessionId, cli, launchContext,
-        'OpenCode reports its session when it starts; Resume becomes available then', capturedAt)
     }
   }
   if (cli === 'codex') {
@@ -843,8 +837,7 @@ const MAX_BINDING_DETAIL_CHARACTERS = 2_000
 
 const OBSERVATION_AGENT_NAMES: Readonly<Record<ObservedAgentCli, string>> = {
   claude: 'Claude Code',
-  codex: 'Codex',
-  opencode: 'OpenCode'
+  codex: 'Codex'
 }
 
 const OBSERVATION_SOURCE_PHRASES: Readonly<Record<ConversationObservationSource, string>> = {
@@ -905,9 +898,7 @@ export function bindingFromObservation(
   }
   const dropped = observation.agentCli === 'codex'
     ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
-    : observation.agentCli === 'opencode'
-      ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
-      : undefined
+    : undefined
   return {
     ...binding,
     // The transcript path goes last: it is the only unbounded part, so the detail cap cuts it
@@ -915,69 +906,11 @@ export function bindingFromObservation(
     detail: conversationObservationDetail([
       conversationObservationSourceDetail(observation.agentCli, observation.source),
       replaced,
-      observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}`
-        : observation.agentCli === 'opencode'
-          ? `Resume runs: ${shownCommand(binding.launchContext.executable, ['--session', binding.conversationReference, ...opencodeResumeArguments(binding.launchContext.argv).carried])}`
-          : undefined,
+      observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}` : undefined,
       dropped === undefined ? undefined : `not carried: ${dropped}`,
       observation.transcriptPath === undefined ? undefined : `transcript ${observation.transcriptPath}`
     ])
   }
-}
-
-/** TUI flags measured on OpenCode 2.0.29 and 2.0.32; legacy selectors remain supported. */
-export const OPENCODE_RESUME_OPTIONS_CLI_VERSION = '2.0.32'
-const OPENCODE_RESUME_OPTIONS: ReadonlySet<string> = new Set([
-  '--model', '-m', '--agent', '--port', '--hostname', '--server'
-])
-const OPENCODE_RESUME_FLAGS: ReadonlySet<string> = new Set(['--standalone', '--auto'])
-
-interface OpenCodeResumeArguments extends CodexResumeArguments {
-  projectPath?: string
-}
-
-export function opencodeResumeArguments(argv: readonly string[]): OpenCodeResumeArguments {
-  const result: OpenCodeResumeArguments = { carried: [], droppedOptions: [], droppedPositionals: 0 }
-  const droppedValues = new Set([
-    '--session', '-s', '--prompt', '--log-level', '--mdns-domain', '--cors', '--replay-limit'
-  ])
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index]!
-    if (token === '--') {
-      const rest = argv.slice(index + 1)
-      const keepProject = result.projectPath === undefined && rest[0] !== undefined
-      if (keepProject) result.projectPath = rest[0]!
-      result.droppedPositionals += rest.length - (keepProject ? 1 : 0)
-      break
-    }
-    if (!token.startsWith('-')) {
-      if (!result.projectPath) result.projectPath = token
-      else result.droppedPositionals += 1
-      continue
-    }
-    const equals = token.indexOf('=')
-    const name = equals < 0 ? token : token.slice(0, equals)
-    const next = argv[index + 1]
-    if (OPENCODE_RESUME_FLAGS.has(token)) result.carried.push(token)
-    else if (OPENCODE_RESUME_OPTIONS.has(name)) {
-      if (equals >= 0 && token.slice(equals + 1).length > 0) result.carried.push(token)
-      else if (equals < 0 && next !== undefined && !next.startsWith('-')) {
-        result.carried.push(token, next)
-        index += 1
-      } else result.droppedOptions.push(name)
-    } else {
-      result.droppedOptions.push(name)
-      // Only known value options own the next argument; an unknown flag must not swallow cwd.
-      if (equals < 0 && droppedValues.has(name) && next !== undefined && !next.startsWith('-')) {
-        index += 1
-      }
-    }
-  }
-  return result
-}
-
-export function describeDroppedOpenCodeArguments(dropped: OpenCodeResumeArguments): string | undefined {
-  return describeDroppedCodexArguments(dropped)
 }
 
 export function buildNativeResumeLaunch(
@@ -1002,10 +935,8 @@ export function buildNativeResumeLaunch(
       throw new Error(parsed.unsafeReason ?? 'Stored Claude launch context contains a selector')
     }
     argv = [...parsed.contextArgv, '--resume', binding.conversationReference]
-  } else if (binding.agentCli === 'opencode') {
-    argv = ['--session', binding.conversationReference, ...opencodeResumeArguments(binding.launchContext.argv).carried]
-  } else if (binding.agentCli === 'cursor') {
-    throw new Error(RETIRED_APP_LINE)
+  } else if (isRetiredApp(binding.agentCli)) {
+    throw new Error(retiredAppLine(binding.agentCli))
   } else if (binding.captureRoute === 'hook-session-start') {
     // A hook-captured binding keeps the session's full argv, so Resume carries what `codex resume`
     // still accepts and drops the rest, which the binding detail names.
@@ -1017,9 +948,7 @@ export function buildNativeResumeLaunch(
     argv = ['resume', binding.conversationReference]
   }
   return {
-    cwd: binding.agentCli === 'opencode'
-      ? resolve(binding.launchContext.cwd, opencodeResumeArguments(binding.launchContext.argv).projectPath ?? '.')
-      : binding.launchContext.cwd,
+    cwd: binding.launchContext.cwd,
     executable: binding.launchContext.executable,
     argv,
     environment: { ...binding.launchContext.environment }
@@ -1076,9 +1005,8 @@ export async function conversationReferenceExists(binding: BoundConversationBind
       )
     )
   }
-  if (binding.agentCli === 'opencode') return true
-  // BMN no longer looks for a retired app's conversation (Epic 71).
-  if (binding.agentCli === 'cursor') return false
+  // BMN no longer looks for a retired app's conversation (Epics 71 and 123).
+  if (isRetiredApp(binding.agentCli)) return false
   const codexRoot = binding.launchContext.environment.CODEX_HOME ?? join(homedir(), '.codex')
   return (await codexRolloutPath(join(codexRoot, 'sessions'), binding.conversationReference)) !== null
 }

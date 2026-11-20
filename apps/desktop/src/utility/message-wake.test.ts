@@ -15,7 +15,7 @@ function world(agent = 'claude') {
   const quiet = SESSION_MESSAGE_WAKE_QUIET_MS
   const state = {
     now: T + quiet + 1000,
-    seen: { sessionId: 'b', incarnationId: 'run-b', agent, event: 'Stop', source: null, plugin: null, observedAt: at(T), foreground: 'fg' } as WakeObservation | undefined,
+    seen: { sessionId: 'b', incarnationId: 'run-b', agent, event: 'Stop', source: null, observedAt: at(T), foreground: 'fg' } as WakeObservation | undefined,
     attention: [{ sessionId: 'b', requestKey: `${agent}:turn`, kind: 'notice', state: 'open', openedAt: at(T) }] as WakeAttention[],
     candidates: [{ messageId: 'm1', wakeDepth: 1, wokenAt: null }] as MessageWakeCandidate[],
     screen: (agent === 'codex' ? CODEX_IDLE : CLAUDE_IDLE) as string[] | null,
@@ -43,7 +43,7 @@ function world(agent = 'claude') {
     screen: async () => {
       await Promise.resolve()
       state.beforeScreen?.()
-      return state.screen ? { lines: state.screen, cursor: { x: 0, y: 0 } } : null
+      return state.screen ? { lines: state.screen } : null
     },
     write: (sessionId, text) => written.push({ sessionId, text }),
     receivers: async () => (state.candidates.some((one) => one.wokenAt === null) ? ['b'] : []),
@@ -288,7 +288,7 @@ describe('two receivers in one sweep (110.3 AC2, full review)', () => {
     const attention: WakeAttention[] = []
     const written: string[] = []
     const finished = at(T)
-    const seen = (sessionId: string): WakeObservation => ({ sessionId, incarnationId: `run-${sessionId}`, agent: 'claude', event: 'Stop', source: null, plugin: null, observedAt: at(T), foreground: `fg-${sessionId}` })
+    const seen = (sessionId: string): WakeObservation => ({ sessionId, incarnationId: `run-${sessionId}`, agent: 'claude', event: 'Stop', source: null, observedAt: at(T), foreground: `fg-${sessionId}` })
     const wake = new MessageWake({
       now: () => new Date(T + SESSION_MESSAGE_WAKE_QUIET_MS + 1000),
       observation: (sessionId) => seen(sessionId),
@@ -302,7 +302,7 @@ describe('two receivers in one sweep (110.3 AC2, full review)', () => {
           attention.push({ sessionId: 'b', requestKey: 'claude:permission', kind: 'permission', state: 'open', openedAt: at(T) })
           generations.set('b', 2)
         }
-        return { lines: CLAUDE_IDLE, cursor: { x: 0, y: 0 } }
+        return { lines: CLAUDE_IDLE }
       },
       write: (sessionId) => written.push(sessionId),
       receivers: async () => ['a', 'b'],

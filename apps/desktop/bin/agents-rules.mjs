@@ -67,9 +67,6 @@ export function targetPath(harness, environment = process.env) {
   const home = environment.HOME || homedir()
   if (harness === 'claude') return `${absoluteUncollapsed(environment.CLAUDE_CONFIG_DIR || `${home}/.claude`)}/CLAUDE.md`
   if (harness === 'codex') return `${absoluteUncollapsed(environment.CODEX_HOME || `${home}/.codex`)}/AGENTS.md`
-  if (harness === 'opencode') {
-    return `${absoluteUncollapsed(environment.OPENCODE_CONFIG_DIR || `${environment.XDG_CONFIG_HOME || `${home}/.config`}/opencode`)}/AGENTS.md`
-  }
   throw new RosterError('MASTER_INVALID', `unknown harness ${harness}`)
 }
 
@@ -180,8 +177,7 @@ export function teamPhrase(generation) {
 
 /**
  * Which rendering an app gets and why, from the approved roster: full only when its approved
- * destination may receive private work; public for a public-only, unknown or owner-declared one,
- * and always for an app in PUBLIC_ONLY_APPS (OpenCode).
+ * destination may receive private work; public for a public-only, unknown or owner-declared one.
  */
 export function routeFor(harness, generation) {
   const answer = harnessPrivateWork(generation?.data ?? null, harness)
@@ -488,8 +484,7 @@ function stateKey(state) {
 /**
  * Story 75.9: what saving `text` writes, before anything is written. The master changes when its text does;
  * every app's file gets the rendering of `text` through the same route check and plan an install makes, the
- * full rendering only where the approved destination may receive private work, so OpenCode gets the public
- * one. An app whose destination no longer inspects as approved is named in `blocked` and is not written;
+ * full rendering only where the approved destination may receive private work. An app whose destination no longer inspects as approved is named in `blocked` and is not written;
  * the others still are. The hash binds the master as read, the new text and every target.
  */
 export async function planSave(text, { environment = process.env } = {}) {
@@ -867,10 +862,17 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
   const kept = { ...manifest, targets: manifest.targets.filter((target) => !isRetired(target.harness)) }
   const naming = (result) => (left.length === 0 ? result : { ...result, left })
   const leftWords = left.map((target) => `${target.harness}: ${target.path} -> left as it is (${target.reason})`)
+  // A setup default BMN wrote for an app it later retired (OpenCode's hooks, tools and rules, Epic 123 D8): its Undo
+  // succeeds and changes nothing, before any module of that app is looked for.
+  const retiredSetup = manifest.kind === 'setup-opencode-hooks' ? 'opencode'
+    : typeof manifest.kind === 'string' && manifest.kind.startsWith('setup-') && isRetired(manifest.setup?.target?.app) ? manifest.setup.target.app : null
+  if (retiredSetup !== null) {
+    return naming(planOnly ? { code: 'OK', plan_hash: sha256(canonicalJson({ retired: retiredSetup, transaction: manifest.id })), targets: [] }
+      : { code: 'OK', restored: [], message: `${retiredWords(retiredSetup)}; its files are left as they are` })
+  }
   if (manifest.kind === 'setup-file') return naming(await (await import('./setup-file-defaults.mjs')).restoreSetupFileTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
   if (manifest.kind === 'setup-tool') return naming(await (await import('./setup-tool-defaults.mjs')).restoreSetupToolTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
   if (manifest.kind === 'setup-hook') return naming(await (await import('./setup-hook-defaults.mjs')).restoreSetupHookTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
-  if (manifest.kind === 'setup-opencode-hooks') return naming(await (await import('./setup-opencode-hooks.mjs')).restoreSetupOpenCodeHooks(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
   if (manifest.kind === 'setup-skill') return naming(await (await import('./setup-skill-defaults.mjs')).restoreSetupSkillTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash }))
   // A skills install shares the transactions folder and this command; its entries are folders and links, undone by their own module.
   if (manifest.kind === 'skills') return naming(await (await import('./agents-skills.mjs')).restoreSkillsTransaction(kept, folder, { yes, asJson, planOnly, expectedPlanHash, leftWords }))
@@ -1000,11 +1002,10 @@ const IMPORT_EDITS = [
 /**
  * Today's Claude rules as the first master, unchanged except the edits it names: the `Source:`
  * sentence dropped, rules changed in BMN's master, the agent list in the Team section replaced by
- * the inline team placeholder, the pointer to the agent table narrowed to its dispatch commands,
- * and an `opencode` section appended from the OpenCode lines when there are any. The owner then
- * marks public sections on the Rules page.
+ * the inline team placeholder and the pointer to the agent table narrowed to its dispatch commands.
+ * The owner then marks public sections on the Rules page.
  */
-export function importedMaster(sourceText, opencodeText) {
+export function importedMaster(sourceText) {
   const changes = []
   let body = sourceText.replace(/\n+$/, '')
   for (const edit of IMPORT_EDITS) {
@@ -1030,12 +1031,7 @@ export function importedMaster(sourceText, opencodeText) {
       body = lines.join('\n')
     }
   }
-  let text = `${body}\n`
-  if (opencodeText !== null && opencodeText.trim() !== '') {
-    text += `\n<!-- bmn:apps opencode -->\n${opencodeText.replace(/\n+$/, '')}\n<!-- /bmn:apps -->\n`
-    changes.push('the OpenCode lines become an opencode section')
-  }
-  return { text, changes }
+  return { text: `${body}\n`, changes }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1079,7 +1075,7 @@ export function lastProbes({ inspect } = {}) {
   })
 }
 
-const PROBE_COMMANDS = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
+const PROBE_COMMANDS = { claude: 'claude', codex: 'codex' }
 
 /**
  * Which apps BMN gives the loading test by itself (Story 75.8): an app that may receive private work, whose rules
@@ -1186,7 +1182,7 @@ export async function probe(harness, { environment = process.env, now = new Date
         ? record('pass', 'the probe run\'s rollout carries the rendered header before any tool ran', version)
         : record('fail', 'the probe run\'s rollout does not carry the rendered header before any tool ran', version)
     }
-    // Only Claude Code is left here: OpenCode never holds a full rendering (routeFor).
+    // Only Claude Code is left here.
     const run = spawnSync(command, ['-p', '--tools', '', '--no-session-persistence', '--output-format', 'text'],
       { cwd: folder, env: environment, input: question, encoding: 'utf8', timeout: timeoutMs })
     if (run.error || run.status !== 0) return record('inconclusive', `${command} did not answer (timeout or error)`, version)
@@ -1244,7 +1240,7 @@ const RULES_USAGE = `Usage: bmn rules render <app>                     The exact
                                                    for a new app version or new rules (--auto marks such a run)
 
 Apps: ${HARNESSES.join(', ')}. The master is ~/.config/bmn/agents/global-rules.md: untagged text goes to every app;
-<!-- bmn:apps codex opencode --> … <!-- /bmn:apps --> limits a section to those apps; <!-- bmn:public --> …
+<!-- bmn:apps codex --> … <!-- /bmn:apps --> limits a section to those apps; <!-- bmn:public --> …
 <!-- /bmn:public --> marks a section a public-only destination may receive; one <!-- bmn:team -->, which may sit
 inside a sentence, becomes the approved team's names by app. An app whose approved destination may not receive
 private work gets only the public sections. This covers only the global files BMN writes, never project files
@@ -1348,9 +1344,8 @@ export async function runRulesCommand(argv) {
       } catch (error) {
         throw new RosterError('MASTER_MISSING', `cannot read ${source} (${error.code})`)
       }
-      const adapter = existsSync(`${agentsDirectory()}/adapters/opencode.md`) ? readFileSync(`${agentsDirectory()}/adapters/opencode.md`, 'utf8') : null
-      const { text, changes } = importedMaster(sourceText, adapter)
-      const details = [`Master: ${masterPath()} (new)`, `From: ${source}${adapter === null ? '' : ` and ${agentsDirectory()}/adapters/opencode.md`}`,
+      const { text, changes } = importedMaster(sourceText)
+      const details = [`Master: ${masterPath()} (new)`, `From: ${source}`,
         ...(changes.length === 0 ? ['Unchanged.'] : ['Changed:', ...changes.map((change) => `  ${change}`)]), unifiedDiff(sourceText, text, masterPath())].join('\n')
       if (!await confirm('Create the rules master from these rules?', details, { yes: options.yes === true, asJson })) return asJson ? 2 : 1
       writeMaster(expected, text, `import from ${source}`)

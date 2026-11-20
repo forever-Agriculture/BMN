@@ -73,7 +73,6 @@ import { removePurgedFiles } from './archive-purge-files'
 import { routeTerminalSavedOutputGet } from './saved-output-route'
 import { type AgentHistoryAdapter } from './agent-history'
 import { codexHistoryAdapter } from './agent-history-codex'
-import { openCodeHistoryAdapter } from './agent-history-opencode'
 import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
 import { testTelegramOrigin } from './telegram-connector'
@@ -282,12 +281,12 @@ function agentHome(): string {
   return process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? process.env.BMN_SELF_TEST_HOME : homedir()
 }
 
-/** Codex and OpenCode, pruned by their own delete commands (databases only ever opened read-only). */
+/** Codex, pruned by its own delete command (its database only ever opened read-only). */
 function historyAdapters(): AgentHistoryAdapter[] {
   const home = agentHome()
   const open: OpenReadOnly = (path) => new (BetterSqlite3 as unknown as new (path: string, options: { readonly: true; fileMustExist: true }) =>
     ReturnType<OpenReadOnly>)(path, { readonly: true, fileMustExist: true })
-  return [codexHistoryAdapter({ home, open }), openCodeHistoryAdapter({ home, open })]
+  return [codexHistoryAdapter({ home, open })]
 }
 
 async function start(): Promise<void> {

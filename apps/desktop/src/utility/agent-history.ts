@@ -21,21 +21,21 @@ import {
 
 export const DAY_MS = 86_400_000
 export const RUN_INTERVAL_MS = DAY_MS
-/** OpenCode deletes a session a live process holds (docs/agent-history.md), so anything this recent is left alone. */
+/** An agent's delete may remove a session a live process holds (docs/agent-history.md), so anything this recent is left alone. */
 const RECENT_SESSION_MS = DAY_MS
 
 export interface HistoryCandidate {
   id: string
   /** Last activity, epoch milliseconds: the newest of the session and every session deleted with it. */
   updatedAt: number
-  /** Sessions the agent's delete removes with this one (OpenCode 2's subagent sessions); each is protected like it. */
+  /** Sessions the agent's delete removes with this one; each is protected like it. */
   family?: readonly string[]
 }
 
 /** `absent`: the agent is not installed here, so History does not list it. */
 type AdapterAvailability =
   /**
-   * `pass`: what this look found that the same pass's candidates and deletes must use (OpenCode's layout),
+   * `pass`: what this look found that the same pass's candidates and deletes must use,
    * so a look taken meanwhile for another reader cannot change it; the runner hands it back as it came.
    */
   | { ok: true; sessions: number; pass?: unknown }
@@ -61,7 +61,7 @@ export interface AgentHistoryState {
 export const AGENT_HISTORY_STATE_KEY = 'agentHistoryState'
 
 /** The apps whose history BMN prunes by their own delete commands. */
-const HISTORY_AGENTS: readonly AgentHistoryAgent[] = ['codex', 'opencode']
+const HISTORY_AGENTS: readonly AgentHistoryAgent[] = ['codex']
 
 export function emptyHistoryState(): AgentHistoryState {
   return { applied: {}, failures: {}, runs: {} }
@@ -81,7 +81,7 @@ export function readHistoryState(value: unknown): AgentHistoryState {
     if (typeof failure === 'string') state.failures[path] = failure
   }
   for (const [agent, entry] of Object.entries(record(raw.runs))) {
-    // A run saved for an app BMN no longer manages (Cursor, retired in Epic 71) is left behind.
+    // A run saved for an app BMN no longer manages (Cursor, retired in Epic 71; OpenCode, Epic 123) is left behind.
     if (!HISTORY_AGENTS.includes(agent as AgentHistoryAgent)) continue
     const { at, deleted, remaining, failures } = record(entry)
     if (typeof at === 'string' && typeof deleted === 'number' && typeof remaining === 'number' && Array.isArray(failures)) {

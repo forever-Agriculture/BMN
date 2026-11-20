@@ -27,12 +27,11 @@ export function buildSetupTeamProposals(options: {
   const revision = createHash('sha256').update(JSON.stringify({ profile, ready: ready.map(({ app, program, version, signIn }) => ({ app, program, version, signIn })),
     file: roster.file.hash, generation: roster.approved?.generation ?? null, source: defaults.source, names: defaults.names })).digest('hex')
   return { revision, blocked, source: defaults.source, skills: defaults.names, availableApps: ready.map(row => row.app),
-    // OpenCode gets no browser tool: browser checks go through Codex (owner, 2026-10-22).
     tools: [{ id: 'playwright', name: 'Playwright', command: 'npx', args: ['-y', BROWSER_MCP_PACKAGE], public: true, apps: ['claude', 'codex'] }],
     proposals: blocked ? [] : ready.filter(row => !roster.approved?.data.agents.some(agent => agent.harness === row.app)).map(row => ({
       id: `setup-${row.app}`, app: row.app, version: row.version!, name: SETUP_APP_NAMES[row.app], class: 'queen', roles,
       reasons: roles.map(role => ({ role, reason: `Proposes ${SETUP_APP_NAMES[row.app]} and the model you choose to ${ROLES[role as keyof typeof ROLES]}.` })),
-      needs: row.app === 'opencode' ? 'OpenCode Console availability for BMN team asks' : null
+      needs: null
     })) }
 }
 
@@ -52,7 +51,7 @@ export function validateSetupTeamApproval(proposals: SetupTeamProposals | null, 
     const provider = data.providers.find(provider => provider.id === agent.provider)
     if (provider?.private_work !== 'public_only') throw new Error('Setup members start with public work only.')
     const proposal = proposals.proposals.find(proposal => proposal.app === agent.harness)
-    const needs = agent.harness === 'opencode' ? 'OpenCode Console availability for BMN team asks' : proposal?.needs ??
+    const needs = proposal?.needs ??
       (agent.harness === 'bmn' ? 'an account verified outside setup' : !proposals.availableApps.includes(agent.harness as import('@bmn/protocol').SetupApp) ? 'a ready app' : null)
     if (needs && (agent.enabled || agent.status !== 'proposed' || data.roles.some(role => role.candidates.some(candidate => candidate.split('@')[0] === agent.id)))) {
       throw new Error(`${agent.name} needs ${needs}; keep it proposed and off, outside candidate chains.`)

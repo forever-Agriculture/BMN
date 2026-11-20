@@ -1,15 +1,15 @@
 // MODULE: agents-tools.mjs - Story 60.12: one list of MCP tools for every agent app: each app's own settings entry, one state per app and tool, install and undo as one transaction, import of what the apps already hold, and the tools of one agent's run
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
-import { execFile, spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { appendFileSync, chmodSync, closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { appendFileSync, chmodSync, closeSync, constants, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BROWSER_MCP_PACKAGE } from './agents-team-browser.mjs'
 import { APP_NAMES, HARNESSES, RosterError, TOOL_PATTERN, agentsDirectory, appName, appRefusal, canonicalJson, harnessPrivateWork, publicOnlyReasons, sha256 } from './agents-roster.mjs'
 import { approvedIfAny } from './agents-state.mjs'
-import { ToolFileError, commentFreeJson, editJsonEntry, editJsonEntryWithReceipt, invertJsonEntry, editTomlEntry, readJsonEntries, readOpenCodeEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
-import { ConfigWriteError, pathState, replaceFileSafely, sameState } from './safe-config-write.mjs'
+import { ToolFileError, editJsonEntry, editTomlEntry, readJsonEntries, readTomlEntries, renderTomlEntry } from './agents-tool-files.mjs'
+import { ConfigWriteError, pathState, replaceFileSafely } from './safe-config-write.mjs'
 import { home, isObject, spellings } from './shared-helpers.mjs'
 
 /**
@@ -34,47 +34,10 @@ class ToolsError extends Error {
   }
 }
 
-function openCodePair(path) {
-  if (!['opencode.json', 'opencode.jsonc'].includes(basename(path))) throw new ToolFileError('the OpenCode tools file is not a supported user config filename')
-  return ['opencode.json', 'opencode.jsonc'].map((name) => join(dirname(path), name))
-}
-
-function openCodeToolFile(environment) {
-  const base = `${environment.XDG_CONFIG_HOME || `${home(environment)}/.config`}/opencode`
-  const json = join(base, 'opencode.json'), jsonc = join(base, 'opencode.jsonc')
-  return present(json) ? json : present(jsonc) ? jsonc : json
-}
-
-function checkOpenCodeFile(path) {
-  const pair = openCodePair(path), held = pair.filter(present)
-  if (held.length > 1) throw new ToolFileError('both opencode.json and opencode.jsonc exist; choose one before changing tools')
-  if (held.length === 1 && held[0] !== path) throw new ToolFileError('OpenCode now uses the other config file; review its tools again')
-}
-
-const sameAt = (a, b) => canonicalJson(a ?? null) === canonicalJson(b ?? null)
-const canonicalAt = (harness) => harness === 'opencode' ? ['mcp', 'servers'] : TOOL_APPS[harness].path
+const canonicalAt = (harness) => TOOL_APPS[harness].path
 
 function ownedEntry(record, file, found) {
-  if (!record || !found || typeof record.hash !== 'string' || record.hash !== found.hash) return false
-  if (file.harness !== 'opencode') return true
-  if (record.at === undefined) return file.path.endsWith('/opencode.jsonc') && sameAt(found.at, ['mcp'])
-  return record.path === file.path && sameAt(record.at, found.at)
-}
-
-/** Unknown fields and comments are never copied into an OpenCode inverse record. */
-function priorProblem(entry) {
-  if (!entry) return null
-  if (entry.unreadable || entry.secrets.length || entry.extras.some((name) => !['enabled', 'disabled'].includes(name))) return 'its complete entry cannot be kept for undo without keeping an inline or unknown value'
-  const value = entry.value
-  if (value.type !== undefined && !['local', 'remote'].includes(value.type) || value.enabled !== undefined && typeof value.enabled !== 'boolean' || value.disabled !== undefined && typeof value.disabled !== 'boolean' ||
-    Array.isArray(value.command) && looksSecret(value.command[0])) return 'its complete entry cannot be kept for undo without keeping an inline or unknown value'
-  const admitted = renderTool(entry.definition, 'opencode', { variable: true, argument: true, header: true }).entry
-  for (const [key, item] of Object.entries(value)) {
-    if (['enabled', 'disabled'].includes(key)) continue
-    if (['headers', 'environment'].includes(key) && isObject(item) && Object.keys(item).length === 0) continue
-    if (!admitted || !Object.hasOwn(admitted, key) || canonicalJson(item) !== canonicalJson(admitted[key])) return 'its complete entry cannot be kept for undo without keeping an inline or unknown value'
-  }
-  return null
+  return Boolean(record && found && typeof record.hash === 'string' && record.hash === found.hash)
 }
 
 function accountBrowserLauncher() {
@@ -85,7 +48,7 @@ function accountBrowserLauncher() {
 }
 export function isAccountBrowser(tool) { return tool?.id === 'playwright' && tool.command === 'bmn' && JSON.stringify(tool.args) === JSON.stringify(['browser', 'server']) }
 export function accountBrowserDefinition(harness, privateWork, launcher = accountBrowserLauncher()) {
-  return privateWork && ['claude', 'codex', 'opencode'].includes(harness)
+  return privateWork && ['claude', 'codex'].includes(harness)
     ? { command: launcher, args: ['browser', 'server', harness] }
     : { command: 'npx', args: ['--offline', BROWSER_MCP_PACKAGE, '--headless', '--isolated', '--viewport-size', '1280x720'] }
 }
@@ -96,14 +59,11 @@ export const ACCOUNT_BROWSER_CODEX_SETTINGS = Object.freeze({
   env_vars: Object.freeze(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'BMN_DATA_HOME'])
 })
 
-function wantedEntry(tool, harness, app, found) {
+function wantedEntry(tool, harness, app) {
   const result = renderTool(isAccountBrowser(tool) ? { ...tool, ...accountBrowserDefinition(harness, app.kind === 'full') } : tool, harness, app)
   if (result.entry && isAccountBrowser(tool) && harness === 'codex' && app.kind === 'full') {
     result.entry = { ...result.entry, ...ACCOUNT_BROWSER_CODEX_SETTINGS,
       env_vars: [...new Set([...(result.entry.env_vars ?? []), ...ACCOUNT_BROWSER_CODEX_SETTINGS.env_vars])] }
-  }
-  if (result.entry && harness === 'opencode') for (const key of ['enabled', 'disabled']) {
-    if (typeof found?.value?.[key] === 'boolean') result.entry[key] = found.value[key]
   }
   return result
 }
@@ -124,11 +84,6 @@ export const TOOL_APPS = {
     command: 'codex', format: 'toml', path: ['mcp_servers'], reference: null, referencePattern: null,
     file: (environment) => `${environment.CODEX_HOME || `${home(environment)}/.codex`}/config.toml`,
     list: ['mcp', 'list'], add: (id, program) => ['mcp', 'add', id, '--', program], remove: (id) => ['mcp', 'remove', id]
-  },
-  opencode: {
-    command: 'opencode', format: 'json', path: ['mcp'], reference: (name) => `{env:${name}}`, referencePattern: /^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/,
-    file: openCodeToolFile,
-    list: null, add: null, remove: null
   }
 }
 
@@ -190,10 +145,9 @@ export function toolsAutoPlan({ versions, tests = toolsTests() } = {}) {
   for (const harness of HARNESSES) {
     const version = versions?.[harness]
     if (typeof version !== 'string' || TOOL_APPS[harness] === undefined) continue
-    const ofVersion = tests.filter((entry) => entry.harness === harness && entry.version === version &&
-      (harness !== 'opencode' || entry.entry_layout === 'mcp.servers'))
+    const ofVersion = tests.filter((entry) => entry.harness === harness && entry.version === version)
     if (ofVersion.some((entry) => entry.outcome === 'pass' || entry.outcome === 'fail')) continue
-    plan.push({ harness, version, key: harness === 'opencode' ? 'private-server-mcp-list-v1' : '', reason: ofVersion.length === 0 ? 'untested' : 'retry' })
+    plan.push({ harness, version, key: '', reason: ofVersion.length === 0 ? 'untested' : 'retry' })
   }
   return plan
 }
@@ -220,7 +174,6 @@ export function appTools(harness, { version, tests = toolsTests() }) {
   for (const entry of tests) if (entry.harness === harness && entry.version === version) last = entry
   if (last === null) return { ...base, reason: `no test has run on ${APP_NAMES[harness]} ${version}` }
   if (last.outcome !== 'pass') return { ...base, reason: `the test on ${APP_NAMES[harness]} ${version} did not pass: ${last.detail ?? last.outcome}` }
-  if (harness === 'opencode' && last.entry_layout !== 'mcp.servers') return { ...base, reason: 'the tools test predates OpenCode 2\'s MCP layout; BMN will test it again' }
   const covers = Array.isArray(last.isolation_covers) ? last.isolation_covers.filter((entry) => typeof entry === 'string') : []
   const signs = Array.isArray(last.isolation_signs) ? last.isolation_signs : []
   const isolation = RUN_TEST_APPS.includes(harness) && last.isolation === 'pass' && last.isolation_basis === 'run' && RUN_SIGNS.every((sign) => signs.includes(sign)) && covers.includes('settings')
@@ -266,13 +219,6 @@ export function renderTool(tool, harness, { variable = false, argument = false, 
   }
   const references = (map) => Object.fromEntries(Object.entries(map).map(([name, from]) => [name, spec.reference(from)]))
   const args = (definition.args ?? []).map((arg) => (isObject(arg) ? spec.reference(arg.env) : arg))
-  if (harness === 'opencode') {
-    return {
-      entry: definition.url !== undefined
-        ? { type: 'remote', url: definition.url, ...(definition.headers ? { headers: references(definition.headers) } : {}) }
-        : { type: 'local', command: [definition.command, ...args], ...(definition.env ? { environment: references(definition.env) } : {}) }
-    }
-  }
   const typed = harness === 'claude'
   return {
     entry: definition.url !== undefined
@@ -404,14 +350,6 @@ export function neutralOf(value, harness) {
       for (const name of Object.keys(isObject(value.env) ? value.env : {})) secrets.push(`env.${name}`)
       definition = { command: value.command, args: literalArgs(value.args, 'args'), env: Object.fromEntries(forwarded.map((name) => [name, name])) }
     } else return null
-  } else if (harness === 'opencode') {
-    known = ['type', 'command', 'environment', 'url', 'headers', 'enabled', 'disabled']
-    if (value.enabled === false) extras.push('enabled')
-    if (value.disabled === true) extras.push('disabled')
-    if (typeof value.url === 'string' && value.type !== 'local') definition = { url: value.url, headers: bindings(value.headers, 'headers') }
-    else if (Array.isArray(value.command) && value.command.length > 0 && value.command.every((part) => typeof part === 'string')) {
-      definition = { command: value.command[0], args: literalArgs(value.command.slice(1), 'command'), env: bindings(value.environment, 'environment') }
-    } else return null
   } else {
     known = ['type', 'command', 'args', 'env', 'url', 'headers']
     if (typeof value.url === 'string') definition = { url: value.url, headers: bindings(value.headers, 'headers') }
@@ -446,7 +384,6 @@ export function maskedEntry(value, harness) {
   if (isObject(masked) && harness === 'codex') {
     for (const key of ['env', 'http_headers']) if (isObject(masked[key])) masked[key] = Object.fromEntries(Object.keys(masked[key]).map((name) => [name, MASK]))
   }
-  if (isObject(masked) && harness === 'opencode' && Array.isArray(masked.command)) masked.command = masked.command.map((part, index) => (hidden.has(`command[${index - 1}]`) ? MASK : part))
   return masked
 }
 
@@ -466,7 +403,6 @@ export function readAppTools(harness, environment = process.env, { path, at } = 
   let state
   try {
     path ??= spec.file(environment)
-    if (harness === 'opencode') checkOpenCodeFile(path)
     state = pathState(path)
   } catch (error) {
     return { harness, path, readable: false, detail: error.message, entries: new Map(), state: null }
@@ -481,7 +417,7 @@ export function readAppTools(harness, environment = process.env, { path, at } = 
     }
   }
   try {
-    const raw = spec.format === 'toml' ? readTomlEntries(text) : harness === 'opencode' && at === undefined ? readOpenCodeEntries(text) : readJsonEntries(text, at ?? spec.path)
+    const raw = spec.format === 'toml' ? readTomlEntries(text) : readJsonEntries(text, at ?? spec.path)
     const entries = new Map()
     for (const [id, entry] of raw) {
       if (entry.unreadable !== undefined) entries.set(id, { unreadable: entry.unreadable })
@@ -584,10 +520,9 @@ function toolState(app, file, tool, records, wanted) {
     if (found === undefined) return { state: 'excluded' }
     return { state: 'exposed', managed: ownedEntry(known, file, found), ...(found.secrets.length > 0 ? { secret: true } : {}) }
   }
-  const rendered = wantedEntry(tool, app.harness, app, found)
+  const rendered = wantedEntry(tool, app.harness, app)
   if (rendered.blocked !== undefined) return { state: 'blocked', detail: rendered.blocked }
   if (found === undefined) return { state: 'missing' }
-  if (app.harness === 'opencode' && priorProblem(found)) return { state: 'blocked', detail: priorProblem(found) }
   // An entry that is exactly what BMN writes for the approved tool holds nothing the owner did not approve,
   // whatever its arguments look like: the rule for values is for what BMN did not write and nobody approved.
   const same = found.hash === sha256(canonicalJson(rendered.entry))
@@ -621,7 +556,7 @@ export function checkTools({ environment = process.env, tests = toolsTests(), ve
       tools: tools.map((tool) => ({ id: tool.id, ...toolState(app, file, tool, records, eligible(tool, harness, kind)) })),
       unlisted: [...file.entries.entries()].filter(([id]) => !listed.has(id)).map(([id, entry]) => ({
         id, state: kind === 'full' ? 'unmanaged' : 'exposed', managed: ownedEntry(records[recordKey(harness, id)], file, entry),
-        ...(entry.secrets?.length || harness === 'opencode' && priorProblem(entry) ? { secret: true } : {})
+        ...(entry.secrets?.length ? { secret: true } : {})
       }))
     }
   })
@@ -734,7 +669,7 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
       } else if (absent && (row.state === 'unmanaged' || row.state === 'edited-outside')) {
         blocked.push({ ...base, fix: `${row.state === 'unmanaged' ? 'BMN did not write this entry' : 'this entry was changed outside BMN'}, so it leaves it as it is: remove it there and BMN writes the tool` })
       } else if (!SETTLED_STATES.includes(row.state) && row.state !== 'unreadable') {
-        changes.push({ ...base, action: 'set', change: row.state, words: CHANGE_WORDS[row.state], found, entry: wantedEntry(tools.get(row.id), harness, app, found).entry })
+        changes.push({ ...base, action: 'set', change: row.state, words: CHANGE_WORDS[row.state], found, entry: wantedEntry(tools.get(row.id), harness, app).entry })
       }
     }
     for (const row of browserOnly ? [] : app.unlisted) {
@@ -748,14 +683,12 @@ export async function planToolsInstall(harnesses = [], { environment = process.e
     if (changes.length > 0 && app.link !== undefined) return stop('TOOL_FILE_LINK', `${app.path} is a link to ${app.link}: BMN does not write through a link or replace it; make it a file, or change the entry there by hand. Nothing was written`)
     for (const change of changes) {
       const { found, entry, ...rest } = change
-      if (harness === 'opencode' && priorProblem(found)) return stop('TOOL_ENTRY_PRIVATE', `${name}: ${priorProblem(found)}; nothing was written`)
-      if (harness === 'opencode' && !found && sameAt(file.entries.get('servers')?.at, ['mcp'])) return stop('TOOL_LAYOUT_CONFLICT', 'a legacy server named servers occupies OpenCode 2\'s server namespace; nothing was written')
       targets.push({
         ...rest, ...(entry === undefined ? {} : { entry }),
         at: found?.at ?? canonicalAt(harness), file_kind: file.state.kind,
         before: found === undefined ? null : entryText(harness, change.tool, maskedEntry(found.value, harness)),
         after: entry === undefined ? null : entryText(harness, change.tool, entry),
-        prior: found === undefined ? null : harness === 'opencode' ? commentFreeJson(found.raw) : found.raw, prior_hash: found === undefined ? null : found.hash, prior_text: found === undefined ? null : found.text_hash,
+        prior: found === undefined ? null : found.raw, prior_hash: found === undefined ? null : found.hash, prior_text: found === undefined ? null : found.text_hash,
         directory: file.directory, wanted_hash: entry === undefined ? null : sha256(canonicalJson(entry))
       })
     }
@@ -803,137 +736,31 @@ function entryTextIn(harness, text, id, at = canonicalAt(harness)) {
  * that text: anything else stops here and is never taken for what BMN wrote.
  * Returns `{ hash, text }`, the entry's parsed-value hash and its exact-text hash.
  */
-function inverseBinding(note, file, path, id, at, expected, priorHash, priorText) {
-  const fields = ['version', 'harness', 'path', 'at', 'entry', 'file_kind', 'prior_hash', 'prior_text', 'written_hash', 'written_text', 'edit']
-  if (!isObject(note) || Object.keys(note).sort().join(',') !== fields.sort().join(',') || note.version !== 1 || note.harness !== 'opencode' ||
-    note.path !== join(file.directory, basename(path)) || note.entry !== id || !sameAt(note.at, at) || !['file', 'missing'].includes(note.file_kind) ||
-    note.prior_hash !== priorHash || note.prior_text !== priorText || note.written_hash !== expected.hash || note.written_text !== expected.text) {
-    throw new ToolsError('REVISION_CONFLICT', 'the inverse receipt does not belong to this tool entry')
-  }
-}
-
-const REMOVAL_FILE_FIELDS = ['dev', 'ino', 'mode', 'nlink', 'uid', 'gid', 'size', 'mtimeNs', 'ctimeNs']
-const REMOVAL_PARENT_FIELDS = ['dev', 'ino', 'mode', 'uid', 'gid']
-
-function validRemovalWitness(value, path, text) {
-  const fields = (object, names) => isObject(object) && Object.keys(object).sort().join(',') === [...names].sort().join(',') &&
-    names.every((name) => typeof object[name] === 'string' && /^(?:0|[1-9]\d{0,31})$/.test(object[name]))
-  return isObject(value) && Object.keys(value).sort().join(',') === 'file,parent,path,text,version' && value.version === 1 &&
-    typeof value.path === 'string' && value.path.length <= 4096 && value.path === path && value.text === text &&
-    fields(value.file, REMOVAL_FILE_FIELDS) && fields(value.parent, REMOVAL_PARENT_FIELDS)
-}
-
-/** A removal's observable generation; reads do not alter any recorded field. No file contents are kept. */
-function removalWitness(path, state) {
-  let object, parent
-  try { object = lstatSync(path, { bigint: true }); parent = lstatSync(state.directory, { bigint: true }) }
-  catch { throw new ToolsError('REVISION_CONFLICT', 'the created file or its directory cannot be verified; nothing was removed') }
-  if (state.kind !== 'file' || !object.isFile() || object.nlink !== 1n || !parent.isDirectory()) throw new ToolsError('REVISION_CONFLICT', 'the created file or its directory is ambiguous; nothing was removed')
-  const fields = (stat, names) => Object.fromEntries(names.map((name) => {
-    if (typeof stat[name] !== 'bigint' || stat[name] < 0n) throw new ToolsError('REVISION_CONFLICT', 'the file revision is unavailable; nothing was removed')
-    return [name, stat[name].toString()]
-  }))
-  return { version: 1, path: join(state.directory, basename(path)), text: sha256(state.text),
-    file: fields(object, REMOVAL_FILE_FIELDS), parent: fields(parent, REMOVAL_PARENT_FIELDS) }
-}
-
-function sameRemovalIdentity(a, b) {
-  return ['dev', 'ino', 'mode', 'nlink', 'uid', 'gid'].every((key) => a.file[key] === b.file[key]) &&
-    REMOVAL_PARENT_FIELDS.every((key) => a.parent[key] === b.parent[key])
-}
-
-function writeEntry(harness, path, id, expected, value, raw, {
-  beforeCommit, journal, afterPublish, durable = false, publish = replaceFileSafely, at,
-  inverse, priorHash, priorText, undoing = false, legacyJson = false, expectedWitness, publishMissing
-} = {}) {
+function writeEntry(harness, path, id, expected, value, raw, { beforeCommit, journal, afterPublish, durable = false, publish = replaceFileSafely } = {}) {
   assertDefaultsAdmission()
   const read = () => readAppTools(harness, undefined, { path })
-  let intended, chosenAt, directory, removedFile = false
+  const at = canonicalAt(harness)
+  let intended, directory
   for (let attempt = 0; ; attempt += 1) {
     const file = read()
     if (!file.readable) throw new ToolsError('TOOL_FILE_UNREADABLE', `${path}: ${file.detail}`)
     if (file.link !== undefined) throw new ToolsError('TOOL_FILE_LINK', `${path} became a link; nothing was written there`)
     if (expected.directory !== undefined && file.directory !== expected.directory) throw new ToolsError('REVISION_CONFLICT', `${path} now leads to another folder than the one shown; nothing was written there`)
     const found = file.entries.get(id)
-    chosenAt = harness === 'opencode' ? at ?? found?.at ?? (legacyJson ? ['mcp'] : canonicalAt(harness)) : canonicalAt(harness)
-    if (harness === 'opencode' && !sameAt(chosenAt, ['mcp']) && !sameAt(chosenAt, ['mcp', 'servers'])) throw new ToolsError('TOOL_LAYOUT_CONFLICT', 'the tool entry is outside OpenCode\'s supported MCP layouts')
     directory = file.directory
-    if ((found?.hash ?? null) !== expected.hash || (expected.text !== undefined && (found?.text_hash ?? null) !== expected.text) ||
-      harness === 'opencode' && found !== undefined && (!sameAt(found.at, chosenAt) || expected.at !== undefined && !sameAt(found.at, expected.at))) {
+    if ((found?.hash ?? null) !== expected.hash || (expected.text !== undefined && (found?.text_hash ?? null) !== expected.text)) {
       throw new ToolsError('REVISION_CONFLICT', `${id} in ${path} changed while BMN was reading it; nothing was written there`)
     }
-    if (harness === 'opencode' && !legacyJson && priorProblem(found)) throw new ToolsError('TOOL_ENTRY_PRIVATE', priorProblem(found))
-    if (harness === 'opencode' && !legacyJson && raw !== undefined) {
-      let prior
-      try { prior = JSON.parse(commentFreeJson(raw)) } catch { throw new ToolsError('TOOL_ENTRY_PRIVATE', 'the saved prior entry cannot be read safely') }
-      const neutral = neutralOf(prior, harness)
-      if (!neutral || priorProblem({ value: prior, ...neutral }) || inverse !== undefined && sha256(canonicalJson(prior)) !== priorHash) {
-        throw new ToolsError('TOOL_ENTRY_PRIVATE', 'the saved prior entry is not the admitted entry for this undo')
-      }
-    }
-    if (harness === 'opencode' && sameAt(chosenAt, ['mcp', 'servers']) && sameAt(file.entries.get('servers')?.at, ['mcp'])) {
-      throw new ToolsError('TOOL_LAYOUT_CONFLICT', 'a legacy server occupies OpenCode 2\'s server namespace; nothing was written')
-    }
-    let next = null, edit = null, exactInverse = false
-    if (inverse !== undefined) {
-      inverseBinding(inverse, file, path, id, chosenAt, expected, priorHash, priorText)
-      next = invertJsonEntry(file.text ?? '', chosenAt, id, inverse.edit)
-      if (next !== null) {
-        exactInverse = true
-        const prior = readOpenCodeEntries(next).get(id)
-        const neutral = prior ? neutralOf(prior.value, harness) : null
-        if ((prior ? sha256(canonicalJson(prior.value)) : null) !== priorHash || (prior ? sha256(prior.raw) : null) !== priorText ||
-          prior && (!neutral || priorProblem({ ...prior, ...neutral }))) throw new ToolsError('REVISION_CONFLICT', 'the inverse receipt does not restore the admitted prior entry')
-      }
-    }
-    if (next === null) {
-      if (harness === 'opencode' && !legacyJson) {
-        const change = editJsonEntryWithReceipt(file.text ?? '', chosenAt, id, value, { raw })
-        next = change.text; edit = change.receipt
-      } else next = edited(harness, file.text ?? '', id, value, raw, chosenAt)
-    }
-    intended = entryTextIn(harness, next, id, chosenAt)
-    const removeCreated = undoing && exactInverse && inverse.file_kind === 'missing' && next === '' &&
-      value === undefined && raw === undefined
-    const witness = removeCreated ? removalWitness(path, file.state) : null
-    if (expectedWitness !== undefined && (!removeCreated ||
-      !validRemovalWitness(expectedWitness, join(directory, basename(path)), sha256(file.text ?? '')) ||
-      canonicalJson(expectedWitness) !== canonicalJson(witness))) {
-      throw new ToolsError('REVISION_CONFLICT', 'the pending removal no longer names the same file; nothing was removed')
-    }
-    const nextEntry = harness === 'opencode' ? readOpenCodeEntries(next).get(id) : null
-    const note = harness !== 'opencode' ? undefined : undoing ? {
-      version: 1, path: join(directory, basename(path)), at: chosenAt, before: sha256(file.text ?? ''), after: sha256(next), file_missing: removeCreated, file_witness: witness
-    } : {
-      version: 1, harness, path: join(directory, basename(path)), at: chosenAt, entry: id, file_kind: file.state.kind,
-      prior_hash: found?.hash ?? null, prior_text: found?.text_hash ?? null,
-      written_hash: nextEntry ? sha256(canonicalJson(nextEntry.value)) : null, written_text: intended, edit
-    }
-    journal?.(intended, note)
+    const next = edited(harness, file.text ?? '', id, value, raw, at)
+    intended = entryTextIn(harness, next, id, at)
+    journal?.(intended)
     let published = false
     try {
       const before = () => {
         if (attempt === 0) beforeCommit?.()
         assertDefaultsAdmission()
-        if (harness === 'opencode') checkOpenCodeFile(path)
       }
-      const after = () => { published = true; removedFile = removeCreated; afterPublish?.() }
-      if (removeCreated) {
-        if (publish !== replaceFileSafely && typeof publishMissing !== 'function') throw new ToolsError('WRITE_FAILED', 'restoring file absence needs the guarded file publisher')
-        before()
-        const current = pathState(path), fresh = removalWitness(path, current)
-        if (!sameRemovalIdentity(witness, fresh)) {
-          throw new ToolsError('REVISION_CONFLICT', 'the created file or its directory was replaced; nothing was removed')
-        }
-        if (!sameState(current, file.state)) {
-          throw new ConfigWriteError('REVISION_CONFLICT', 'the created file changed before undo; nothing was removed')
-        }
-        if (canonicalJson(witness) !== canonicalJson(fresh)) throw new ConfigWriteError('REVISION_CONFLICT', 'the created file revision changed before undo; nothing was removed')
-        if (typeof publishMissing === 'function') publishMissing(path, current, { beforeCommit: before, afterCommit: after, durable })
-        else { unlinkSync(path); after() }
-      } else {
-        publish(path, file.state, next, { beforeCommit: before, afterCommit: after, durable })
-      }
+      publish(path, file.state, next, { beforeCommit: before, afterCommit: () => { published = true; afterPublish?.() }, durable })
       break
     } catch (error) {
       // A post-publication exception retains its original receipt and never starts another write attempt.
@@ -943,10 +770,8 @@ function writeEntry(harness, path, id, expected, value, raw, {
   const file = read(), after = file.entries.get(id)
   const gone = value === undefined && raw === undefined
   const good = file.readable && file.link === undefined && file.directory === directory &&
-    (harness !== 'opencode' || file.state.kind === (removedFile ? 'missing' : 'file')) &&
     (gone ? after === undefined : after !== undefined && after.unreadable === undefined && after.text_hash === intended &&
-      (raw !== undefined || after.hash === sha256(canonicalJson(value)))) &&
-    (harness !== 'opencode' || after === undefined || sameAt(after.at, chosenAt))
+      (raw !== undefined || after.hash === sha256(canonicalJson(value))))
   if (!good) throw new ToolsError('READBACK_FAILED', `${path} does not hold what BMN wrote for ${id}; check it by hand`)
   if (durable) {
     const fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY)
@@ -956,7 +781,6 @@ function writeEntry(harness, path, id, expected, value, raw, {
 }
 
 export { writeEntry as writeSetupToolEntry }
-export { validRemovalWitness as validToolRemovalWitness }
 
 /**
  * One install transaction (60.12 AC4): show every entry, ask (default No), plan again and write
@@ -1009,17 +833,15 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
     for (const [index, target] of confirmed.targets.entries()) {
       try {
         beforeTarget?.(target, index)
-        writeEntry(target.harness, target.path, target.tool, { hash: target.prior_hash, text: target.prior_text, directory: target.directory, at: target.at }, target.entry, undefined, {
-          at: target.at, durable: target.harness === 'opencode',
+        writeEntry(target.harness, target.path, target.tool, { hash: target.prior_hash, text: target.prior_text, directory: target.directory }, target.entry, undefined, {
           beforeCommit: beforeCommit === undefined ? undefined : () => beforeCommit(target, index),
-          journal: (intended, receipt) => {
+          journal: (intended) => {
             manifest.targets[index].started = true
             manifest.targets[index].written_text = intended
-            if (receipt !== undefined) manifest.targets[index].edit_receipt = receipt
             save()
             // The note must be on disk before the entry is: an install that cannot keep it writes nothing.
             const kept = JSON.parse(readFileSync(`${folder}/manifest.json`, 'utf8')).targets[index]
-            if (kept.started !== true || kept.written_text !== intended || canonicalJson(kept.edit_receipt ?? null) !== canonicalJson(receipt ?? null)) throw new ToolsError('WRITE_FAILED', 'BMN could not keep its note of this change, so nothing was written')
+            if (kept.started !== true || kept.written_text !== intended) throw new ToolsError('WRITE_FAILED', 'BMN could not keep its note of this change, so nothing was written')
           }
         })
         afterTarget?.(target, index)
@@ -1032,8 +854,7 @@ export async function installTools(harnesses = [], { yes = false, asJson = false
       assertDefaultsAdmission()
       const next = written()
       if (target.action === 'remove') delete next[recordKey(target.harness, target.tool)]
-      else next[recordKey(target.harness, target.tool)] = { harness: target.harness, tool: target.tool, hash: target.wanted_hash,
-        ...(target.harness === 'opencode' ? { path: target.path, at: target.at } : {}) }
+      else next[recordKey(target.harness, target.tool)] = { harness: target.harness, tool: target.tool, hash: target.wanted_hash }
       writePrivateToolRecord(next)
       manifest.targets[index].done = true
       save()
@@ -1091,43 +912,27 @@ export async function restoreToolsTransaction(manifest, folder, { yes = false, a
     for (const plan of plans) {
       const count = `${restored.length} entr${restored.length === 1 ? 'y' : 'ies'} restored`
       try {
-        const now = observe(plan), at = plan.at ?? (plan.harness === 'opencode' ? ['mcp'] : canonicalAt(plan.harness))
-        if (now.unreadable || typeof plan.directory === 'string' && now.current_directory !== plan.directory ||
-          plan.harness === 'opencode' && now.current_at !== null && !sameAt(now.current_at, at)) throw new ToolsError('REVISION_CONFLICT', `${plan.tool} or its file/layout changed since BMN wrote it`)
-        const pendingRemoval = plan.harness === 'opencode' && plan.target.undoStarted === true && plan.target.undo_file_missing === true && now.file.state.kind !== 'missing'
-        const expectedWitness = pendingRemoval ? plan.target.undo_file_witness : undefined
-        if (pendingRemoval && (!validRemovalWitness(expectedWitness, join(now.file.directory, basename(plan.path)), sha256(now.file.text ?? '')) ||
-          expectedWitness.text !== plan.edit_receipt?.edit?.after)) {
-          throw new ToolsError('REVISION_CONFLICT', 'the pending removal has no matching file witness; nothing was removed')
-        }
-        const resuming = plan.target.undoStarted === true && now.current_text === plan.target.undo_text && now.current_hash === (plan.prior_hash ?? null) &&
-          (plan.target.undo_file_missing !== true || now.file.state.kind === 'missing')
+        const now = observe(plan)
+        if (now.unreadable || typeof plan.directory === 'string' && now.current_directory !== plan.directory) throw new ToolsError('REVISION_CONFLICT', `${plan.tool} or its file changed since BMN wrote it`)
+        const resuming = plan.target.undoStarted === true && now.current_text === plan.target.undo_text && now.current_hash === (plan.prior_hash ?? null)
         const exact = plan.started === true || typeof plan.written_text === 'string'
         if (!resuming && (now.current_hash !== plan.written_hash || (exact ? now.current_text !== plan.written_text : plan.done !== true))) {
           throw new ToolsError('REVISION_CONFLICT', `${plan.tool} in ${plan.path} changed since BMN wrote it`)
         }
         const key = recordKey(plan.harness, plan.tool), records = written(), priorRecord = plan.prior_record ?? null
-        const installedRecord = plan.action === 'remove' ? null : { harness: plan.harness, tool: plan.tool, hash: plan.written_hash,
-          ...(plan.harness === 'opencode' && plan.at !== undefined ? { path: plan.path, at } : {}) }
+        const installedRecord = plan.action === 'remove' ? null : { harness: plan.harness, tool: plan.tool, hash: plan.written_hash }
         const record = records[key] ?? null
         if (canonicalJson(record) !== canonicalJson(installedRecord) && canonicalJson(record) !== canonicalJson(priorRecord)) throw new ToolsError('REVISION_CONFLICT', 'the tool ownership record changed since this transaction')
         if (!resuming) {
           writeEntry(plan.harness, plan.path, plan.tool, {
-            hash: now.current_hash, text: now.current_text, at, ...(now.current_directory === null ? {} : { directory: now.current_directory })
+            hash: now.current_hash, text: now.current_text, ...(now.current_directory === null ? {} : { directory: now.current_directory })
           }, undefined, plan.prior ?? undefined, {
-            at, undoing: true, durable: plan.harness === 'opencode', legacyJson: plan.harness === 'opencode' && plan.edit_receipt === undefined,
-            inverse: plan.edit_receipt, priorHash: plan.prior_hash ?? null, priorText: plan.prior_text ?? null,
-            expectedWitness,
             beforeCommit: beforeCommit === undefined ? undefined : () => beforeCommit(plan),
-            journal: (intended, note) => {
+            journal: (intended) => {
               plan.target.undoStarted = true; plan.target.undo_text = intended
-              if (note !== undefined) plan.target.undo_file_hash = note.after
-              plan.target.undo_file_missing = note?.file_missing === true
-              plan.target.undo_file_witness = note?.file_witness ?? null
               save()
               const kept = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')).targets.find((target) => target.harness === plan.harness && target.tool === plan.tool && target.path === plan.path)
-              if (kept?.undoStarted !== true || kept.undo_text !== intended || kept.undo_file_hash !== plan.target.undo_file_hash ||
-                kept.undo_file_missing !== plan.target.undo_file_missing || canonicalJson(kept.undo_file_witness) !== canonicalJson(plan.target.undo_file_witness)) throw new ToolsError('WRITE_FAILED', 'the undo publication note could not be kept')
+              if (kept?.undoStarted !== true || kept.undo_text !== intended) throw new ToolsError('WRITE_FAILED', 'the undo publication note could not be kept')
             }
           })
           afterEntry?.(plan)
@@ -1135,8 +940,7 @@ export async function restoreToolsTransaction(manifest, folder, { yes = false, a
         // A resumed undo still observes this entry again before restoring its ownership metadata.
         const after = observe(plan)
         if (after.unreadable || after.current_hash !== (plan.prior_hash ?? null) || after.current_text !== plan.target.undo_text ||
-          plan.target.undo_file_missing === true && after.file.state.kind !== 'missing' ||
-          after.current_directory !== now.current_directory || plan.harness === 'opencode' && after.current_at !== null && !sameAt(after.current_at, at)) throw new ToolsError('READBACK_FAILED', 'the restored tool entry could not be verified')
+          after.current_directory !== now.current_directory) throw new ToolsError('READBACK_FAILED', 'the restored tool entry could not be verified')
         const latest = written()
         if (canonicalJson(latest[key] ?? null) !== canonicalJson(record)) throw new ToolsError('REVISION_CONFLICT', 'the tool ownership record changed during undo')
         if (priorRecord === null) delete latest[key]
@@ -1474,76 +1278,6 @@ function run(command, argv, { cwd, env, input = '', timeoutMs }) {
   return { finished: !result.error && result.status !== null, ok: !result.error && result.status === 0, stdout: result.stdout ?? '', text: `${result.stdout ?? ''}\n${result.stderr ?? ''}` }
 }
 
-/** Only the server created here is addressed or stopped. No default service URL is used. */
-async function openCodeToolsList(command, { cwd, env, timeoutMs, id }) {
-  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-  const stopMs = Math.min(3000, Math.max(100, Math.floor(timeoutMs / 4)))
-  const deadline = Date.now() + timeoutMs, queryEnd = deadline - stopMs
-  const serverEnv = { ...env, OPENCODE_PASSWORD: randomBytes(24).toString('base64url'),
-    OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
-  const server = spawn(command, ['serve', '--hostname', '127.0.0.1', '--port', '0'], {
-    cwd, env: serverEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: true
-  })
-  let ended = false, said = '', overflow = false
-  const end = () => { ended = true }
-  server.once('exit', end); server.once('error', end)
-  const collect = (chunk) => {
-    if (Buffer.byteLength(said) + chunk.length > 64 * 1024) { overflow = true; return }
-    said += chunk
-  }
-  server.stdout.on('data', collect); server.stderr.on('data', collect)
-  let result = { finished: false, ok: false, stdout: '', text: '' }
-  const groupAlive = () => {
-    if (!Number.isSafeInteger(server.pid) || server.pid <= 0) return false
-    try { process.kill(-server.pid, 0); return true } catch (error) { return error.code !== 'ESRCH' }
-  }
-  const signal = (name) => {
-    if (!Number.isSafeInteger(server.pid) || server.pid <= 0) return
-    try { process.kill(-server.pid, name) } catch { /* Its own group may already be gone. */ }
-  }
-  try {
-    let url = null
-    while (Date.now() < queryEnd && !ended && !overflow) {
-      url = /server listening on (http:\/\/127\.0\.0\.1:(\d+))\b/.exec(said)?.[1] ?? null
-      if (url && Number(new URL(url).port) > 0 && Number(new URL(url).port) <= 65535) break
-      url = null
-      await pause(Math.min(40, Math.max(1, queryEnd - Date.now())))
-    }
-    let previous = null
-    while (url && !ended && !overflow && Date.now() < queryEnd) {
-      const answer = await new Promise((resolve) => {
-        execFile(command, ['api', '--server', url, 'mcp.list'], {
-          cwd, env: serverEnv, encoding: 'utf8', timeout: Math.max(1, Math.min(5000, queryEnd - Date.now())), killSignal: 'SIGKILL', maxBuffer: 256 * 1024
-        }, (error, stdout) => resolve({ error, stdout }))
-      })
-      if (answer.error) break
-      let entries
-      try { entries = JSON.parse(answer.stdout).data } catch { break }
-      if (!Array.isArray(entries) || entries.length > 1024 || !entries.every((entry) =>
-        isObject(entry) && typeof entry.name === 'string' && TOOL_PATTERN.test(entry.name) &&
-        isObject(entry.status) && typeof entry.status.status === 'string') || new Set(entries.map((entry) => entry.name)).size !== entries.length) break
-      const expected = entries.find((entry) => entry.name === id)
-      if (expected?.status.status === 'connected') {
-        const current = canonicalJson(entries.map((entry) => [entry.name, entry.status.status]).sort((a, b) => a[0].localeCompare(b[0])))
-        if (current === previous) { result = { finished: true, ok: true, stdout: id, text: id }; break }
-        previous = current
-      } else previous = null
-      await pause(Math.min(400, Math.max(1, queryEnd - Date.now())))
-    }
-    if (ended && Date.now() < queryEnd) result.finished = true
-  } catch {
-    // Child output and its temporary password never enter a record or error.
-  } finally {
-    signal('SIGTERM')
-    const termEnd = Math.min(deadline, Date.now() + Math.floor(stopMs / 2))
-    while ((!ended || groupAlive()) && Date.now() < termEnd) await pause(20)
-    if (!ended || groupAlive()) signal('SIGKILL')
-    while ((!ended || groupAlive()) && Date.now() < deadline) await pause(20)
-    if (!ended || groupAlive()) result = { finished: false, ok: false, stdout: '', text: '' }
-  }
-  return result
-}
-
 /**
  * The stand-in tool the owner's test places. It notes that it was started, under which name and
  * with what it was given; it answers the few questions an app asks a tool it starts, offers no
@@ -1664,7 +1398,7 @@ export async function testTools(harness, { environment = process.env, now = new 
   const { harnessVersion } = await import('./agents-check.mjs')
   const version = harnessVersion(spec.command, environment)
   const done = (outcome, detail, extra = {}) => record({ harness, kind: 'capability', at: now.toISOString(), version, outcome, variable: 'unproven', argument: 'unproven', isolation: 'unproven', own_command: 'none',
-    ...(harness === 'opencode' ? { entry_layout: 'mcp.servers' } : {}), ...extra, detail, ...(by === 'bmn' ? { by } : {}) })
+    ...extra, detail, ...(by === 'bmn' ? { by } : {}) })
   if (version === null) return done('unavailable', `${spec.command} is not installed or did not answer --version`)
   const folder = mkdtempSync(`${home(environment)}/.bmn-tools-test-`)
   try {
@@ -1681,8 +1415,7 @@ export async function testTools(harness, { environment = process.env, now = new 
     writeFileSync(`${folder}/tool.cjs`, STAND_IN)
     writeFileSync(program, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec ${shellWord(process.execPath)} ${shellWord(`${folder}/tool.cjs`)} ${shellWord(log)} "$@"\n`)
     chmodSync(program, 0o755)
-    const testEnvironment = harness === 'opencode' ? { PATH: environment.PATH ?? '' }
-      : Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|ANTHROPIC_|OPENAI_)/.test(key)))
+    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
     // Codex passes a variable only under its own name, and never as an argument; the other apps are asked for both.
     const from = harness === 'codex' ? 'BMN_TOOL_TEST_GIVEN' : 'BMN_TOOL_TEST_VALUE'
@@ -1704,9 +1437,7 @@ export async function testTools(harness, { environment = process.env, now = new 
       writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`)
       writeFileSync(`${work}/.mcp.json`, `${JSON.stringify({ mcpServers: { [elsewhere[1].id]: standIn(elsewhere[1].id) } }, null, 2)}\n`)
     }
-    const listed = harness === 'opencode'
-      ? await openCodeToolsList(spec.command, { cwd: work, env: testEnvironment, timeoutMs, id })
-      : run(spec.command, spec.list, { cwd: work, env: testEnvironment, timeoutMs })
+    const listed = run(spec.command, spec.list, { cwd: work, env: testEnvironment, timeoutMs })
     if (!listed.text.includes(id)) {
       if (!listed.finished) return done('inconclusive', `${spec.command} did not finish`)
       if (!listed.ok) return done('inconclusive', `${spec.command} did not answer in a home folder without its sign-in`)
@@ -1716,9 +1447,6 @@ export async function testTools(harness, { environment = process.env, now = new 
     // Seen for certain when the stand-in was started with the value; an app that lists a tool without
     // starting it shows only that this version reads the entry's variable name, which its listing repeats.
     const listing = standInNotes(log)
-    if (harness === 'opencode' && !listing.some((note) => note.id === id && note.env === nonce && note.arg === nonce)) {
-      return done('inconclusive', 'OpenCode named the tool, but its stand-in did not confirm both its argument and environment value')
-    }
     const basis = listing.some((note) => note.env === nonce) ? 'started' : listed.text.includes(from) ? 'listed' : null
     const variable = basis === null ? 'unproven' : 'pass'
     const argument = listing.some((note) => note.arg === nonce) ? 'pass' : 'unproven'

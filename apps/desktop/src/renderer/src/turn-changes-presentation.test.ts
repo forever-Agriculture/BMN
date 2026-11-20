@@ -73,7 +73,7 @@ describe('the header plate of the latest turn', () => {
     expect(short(view({ state: 'off', app: null }))).toBe('Recording off')
     expect(full(view({ state: 'paused', pausedRoot: '/synthetic/repo', pauseReason: 'failed' }))).toBe('Paused[muted: · 4 files]')
     expect(short(view({ state: 'paused', pausedRoot: '/synthetic/repo', pauseReason: 'failed' }))).toBe('Paused')
-    expect(full(view({ state: 'not-supported', app: 'opencode' }))).toBe('Not supported for OpenCode[muted: · 4 files]')
+    expect(full(view({ state: 'not-supported', app: 'opencode' }))).toBe('Not supported for OpenCode (retired)[muted: · 4 files]')
     expect(short(view({ state: 'not-supported', app: 'opencode' }))).toBe('Not supported')
     // No gold beside a state, whatever the earlier turn was.
     const earlier = view({ state: 'off', latest: noTotals(TURN_WORDINGS.beforeUnavailable()) })
@@ -98,7 +98,7 @@ describe('the state of recording', () => {
     expect(turnRecordingWords(view({ state: 'off' }))).toBe('Recording off')
     expect(turnRecordingWords(null)).toBe('Recording off')
     expect(turnRecordingWords(view({ state: 'paused' }))).toBe('Paused')
-    expect(turnRecordingWords(view({ state: 'not-supported', app: 'opencode' }))).toBe('Not supported for OpenCode')
+    expect(turnRecordingWords(view({ state: 'not-supported', app: 'opencode' }))).toBe('Not supported for OpenCode (retired)')
     expect(turnRecordingWords(view({ state: 'not-supported', app: 'my-agent' }))).toBe('Not supported for my-agent')
   })
 

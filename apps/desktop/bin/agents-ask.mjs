@@ -8,7 +8,7 @@ import { RosterError, appName, namedResearchers } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { CODEX_RESEARCH_ANSWER, evaluateResearch, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import {
-  RESEARCH_RUNNING, answerText, appVersion, bindResearchSession, compareBeforeFirstRun, fetchPublicPage, pageText, researchArgv, researchDirectory, researchLockHolder, researchers,
+  RESEARCH_RUNNING, answerText, appVersion, compareBeforeFirstRun, fetchPublicPage, pageText, researchArgv, researchDirectory, researchLockHolder, researchers,
   runOnce, settledResearcher, takeLock, takeResearchLock
 } from './agents-research.mjs'
 import { writePrivate } from './agents-rules.mjs'
@@ -123,7 +123,7 @@ export function questionProblem(question, { home = process.env.HOME ?? '' } = {}
 // ---------------------------------------------------------------------------------------------
 // Who asked
 
-const APP_OF_PROGRAM = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
+const APP_OF_PROGRAM = { claude: 'claude', codex: 'codex' }
 
 /** The names of the programs this one was started under, nearest first. */
 function programsAbove(pid = process.ppid) {
@@ -519,7 +519,7 @@ function markCounts(claims) {
 
 /** What research needs, said where no agent on the team can research now: the words Models uses (mirrored by models-preferences.tsx noResearcherWords, since the renderer cannot load bin modules). */
 export function noResearcherWords(named) {
-  const where = 'on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work'
+  const where = 'on Claude Code, or on Codex where its fence test passed, whose provider may see private work'
   if (named === null) return `Research needs an active agent ${where}.`
   if (named.length === 0) return `Your team names no researcher, so nobody researches. Switch Researcher on on an agent's page: an active agent ${where}.`
   return `Research needs one of the researchers your team names: an active agent ${where}.`
@@ -684,20 +684,17 @@ export async function runAsk({
     if (result.ended === 'stopped') return await finish('stopped', { note: 'Stopped before the researcher answered.' })
     if (result.ended === 'limit') return await finish('limit', { note: 'Ended at the time limit before the researcher answered.' })
     if (result.ended === 'failed') return await finish('failed', { note: result.reason })
-    // An OpenCode researcher's session is bound to the run's check and kept with the question (70.4 AC4).
-    const bound = bindResearchSession(agent.harness, result.stdout, run, { now: now() })
-    const session = bound === null || bound.session === null ? {} : { session: bound.session }
     const notes = (...said) => {
-      const words = [...said, bound?.note].filter((part) => part !== undefined).join(' ')
+      const words = said.filter((part) => part !== undefined).join(' ')
       return words === '' ? {} : { note: words }
     }
     const printed = answerText(agent.harness, result.stdout, run)
     const answer = printed.ok ? parseAskAnswer(printed.text) : printed
-    if (!answer.ok) return await finish('no-answer', { ...session, ...notes(`no usable answer: ${answer.reason}`) })
+    if (!answer.ok) return await finish('no-answer', { ...notes(`no usable answer: ${answer.reason}`) })
     const claims = await markClaims(answer.claims, { fetchPage, signal, deadline })
     const cut = signal?.aborted ? 'Stopped while BMN read the cited pages; the pages not read by then are marked not readable.'
       : Date.now() >= deadline ? 'The time limit came while BMN read the cited pages; the pages not read by then are marked not readable.' : undefined
-    return await finish('answered', { answer: answer.answer, claims, not_found: answer.notFound, counts: markCounts(claims), ...session, ...notes(cut) })
+    return await finish('answered', { answer: answer.answer, claims, not_found: answer.notFound, counts: markCounts(claims), ...notes(cut) })
   } catch (error) {
     if (run !== null) removeResearchCodexFolders(run)
     return await finish('failed', { note: error instanceof Error ? error.message : String(error) })

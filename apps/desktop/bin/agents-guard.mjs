@@ -22,7 +22,7 @@ const GUARD_LIMIT_MS = 2000
 
 /**
  * The event that carries a prompt in each app. Claude Code and Codex document a prompt hook that
- * answers `decision: block`, which stops the prompt. OpenCode has no prompt event.
+ * answers `decision: block`, which stops the prompt.
  */
 export const GUARD_APPS = {
   claude: { event: 'UserPromptSubmit' },

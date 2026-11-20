@@ -2,10 +2,10 @@
 import { hasExactKeys } from './closed-shape'
 import { isRecord } from './shared-helpers'
 
-export const SETUP_APPS = ['claude', 'codex', 'opencode'] as const
+export const SETUP_APPS = ['claude', 'codex'] as const
 export type SetupApp = typeof SETUP_APPS[number]
 export const SETUP_APP_NAMES: Readonly<Record<SetupApp, string>> = {
-  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode'
+  claude: 'Claude Code', codex: 'Codex'
 }
 
 export interface SetupAppReadiness {
@@ -30,12 +30,11 @@ export interface SetupAppsSnapshot {
 /** Measured79.1 installers run as the session's own command; never as text typed into a shell. */
 export const SETUP_INSTALL_COMMANDS: Readonly<Record<SetupApp, { executable: string; argv: readonly string[] }>> = {
   claude: { executable: '/bin/bash', argv: ['-o', 'pipefail', '-c', 'curl -fsSL https://claude.ai/install.sh | bash'] },
-  codex: { executable: '/bin/bash', argv: ['-o', 'pipefail', '-c', 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'] },
-  opencode: { executable: '/bin/bash', argv: ['-o', 'pipefail', '-c', 'curl -fsSL https://opencode.ai/v2/install | bash'] }
+  codex: { executable: '/bin/bash', argv: ['-o', 'pipefail', '-c', 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'] }
 }
 
 export const SETUP_LOGIN_ARGUMENTS: Readonly<Record<SetupApp, readonly string[]>> = {
-  claude: ['auth', 'login'], codex: ['login'], opencode: ['auth', 'login']
+  claude: ['auth', 'login'], codex: ['login']
 }
 
 export function isSetupApp(value: unknown): value is SetupApp {

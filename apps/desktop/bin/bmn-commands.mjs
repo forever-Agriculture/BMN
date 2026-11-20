@@ -5,7 +5,7 @@ import { createConnection } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { ConfigWriteError } from './safe-config-write.mjs'
 import { isObject } from './shared-helpers.mjs'
-import { ATTENTION_KINDS, FLAG_OPTIONS, LIST_OPTIONS, MAX_ANSWER_WAIT_SECONDS, PROGRESS_STATES, TIMEOUT_MS, USAGE, VALUE_OPTIONS } from './bmn-words.mjs'
+import { ATTENTION_KINDS, FLAG_OPTIONS, LIST_OPTIONS, PROGRESS_STATES, TIMEOUT_MS, USAGE, VALUE_OPTIONS } from './bmn-words.mjs'
 
 export { COMMANDS, CliError, UsageError, call, callEach, commandUsage, describeAway, parseArguments, readCredentials, requireNonEmpty }
 
@@ -218,25 +218,6 @@ const COMMANDS = {
         origin: 'cli'
       })
     })
-  },
-  answer: {
-    args: ['action'],
-    options: ['wait', 'reported'],
-    build: ([action], options) => {
-      if (action !== 'take') throw new UsageError('answer supports only: take')
-      let reported
-      if (options.reported !== undefined) {
-        const match = /^([\x21-\x3c\x3e-\x7e]{1,128})=(ok|failed)$/.exec(String(options.reported))
-        if (!match) throw new UsageError('--reported must be REQUEST_ID=ok or REQUEST_ID=failed')
-        reported = { requestRef: match[1], delivered: match[2] === 'ok' }
-      }
-      const wait = options.wait === undefined ? 0 : Number(options.wait)
-      if (!Number.isInteger(wait) || wait < 0 || wait > MAX_ANSWER_WAIT_SECONDS || !/^\d+$/.test(String(options.wait ?? '0'))) {
-        throw new UsageError(`--wait must be a whole number of seconds from 0 to ${MAX_ANSWER_WAIT_SECONDS}`)
-      }
-      // The socket holds the call open for up to --wait; the connection deadline allows for it.
-      return { method: 'answer.take', params: { wait, ...(reported ? { reported } : {}) }, timeoutMs: TIMEOUT_MS + wait * 1000 }
-    }
   },
   peers: {
     args: [],

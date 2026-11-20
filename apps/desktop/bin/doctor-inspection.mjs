@@ -154,8 +154,7 @@ export function createInspectionSession(profile, suppliedKeys, deadline, private
       if (![...gaps.values()].some((gap) => gap.input === input)) gap(input, 'step', { code: 'UNSUPPORTED' }, 'scan')
     }
     const item = rows.length + 1
-    const managed = app === 'opencode' && ['plugins', 'mcp'].includes(kind) && profile.opencodeManagedFiles.includes(itemSource?.path)
-    const value = { kind, app, reason, item, identity: 'withheld', ...(managed ? { source: 'managed' } : {}), locator: complete && unambiguous ? locator(itemSource, coordinates) : { status: 'unresolved' } }
+    const value = { kind, app, reason, item, identity: 'withheld', locator: complete && unambiguous ? locator(itemSource, coordinates) : { status: 'unresolved' } }
     // Parsed MCP entries carry their complete value separately; unrelated file bytes are not that item.
     const receipt = complete ? { item, itemTag: privateTag(keys.item, 'item', [kind, app, tuple(itemSource, entryIdentity ? 'semantic' : 'item'), itemValue]),
       contextTag: privateTag(keys.context, 'context', [kind, app, reason, dependencies.filter((d) => !d.witnessOnly).map((d) => [tuple(d.source), d.projection])]) } : null

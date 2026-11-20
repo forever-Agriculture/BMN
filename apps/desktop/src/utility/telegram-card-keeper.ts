@@ -11,7 +11,6 @@ import type { TelegramCardData, TelegramCardRecord, TelegramCardState } from './
 import {
   cleanTypedAnswer,
   shownChoice,
-  typedAnswerable,
   type AnswerOutcome,
   type AnswerRequest,
   type QuestionChoice,
@@ -549,9 +548,8 @@ export class TelegramCardKeeper {
   }
 
   /**
-   * A report that came after the card already said the answer was not confirmed: a confirmation, or OpenCode
-   * refusing the reply (nothing applied, so fresh buttons while the request is open). Queued behind the card's
-   * own settlement, which may still be on its way.
+   * A report that came after the card already said the answer was not confirmed: a confirmation. Queued behind
+   * the card's own settlement, which may still be on its way.
    */
   lateOutcome(requestId: string, outcome: AnswerOutcome): void {
     const card = this.cardFor(requestId)
@@ -717,7 +715,8 @@ export class TelegramCardKeeper {
     const step = progress.step
     const question = prompt.questions[step]!
     const chosen = progress.choices.map((choice, index) => shownChoice(prompt.questions[index]!, choice))
-    const other = typedAnswerable(prompt, question)
+    // Every Claude and Codex question takes a typed answer.
+    const other = true
     if (progress.typing && other) {
       const options = this.newToken()
       return {

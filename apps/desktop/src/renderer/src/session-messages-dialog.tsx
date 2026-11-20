@@ -1,7 +1,7 @@
 // MODULE: session-messages-dialog.tsx - the owner's reading of one workspace's messages between sessions, read-only (Epic 66, Story 75.4)
 import { useEffect, useRef, useState } from 'react'
 import {
-  ROSTER_APP_NAMES, SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_LIST_LIMIT, SESSION_MESSAGE_PAIR_HOURLY,
+  ROSTER_APP_NAMES, SESSION_MESSAGE_HANDOVER, SESSION_MESSAGE_LIST_LIMIT, appDisplayName, SESSION_MESSAGE_PAIR_HOURLY,
   SESSION_MESSAGES_HELP, sessionMessageFirstLine, sessionMessageStateWord,
   type SessionMessageListing, type SessionMessageListRow, type SessionMessagePairPause, type WorkspaceRecord
 } from '@bmn/protocol'
@@ -12,7 +12,7 @@ import { SELF_REFRESH_MS, useSelfRefresh } from './self-refresh'
 import { relativeAge } from './session-presentation'
 import './session-messages.css'
 
-const appName = (app: string): string => (ROSTER_APP_NAMES as Readonly<Record<string, string | undefined>>)[app] ?? app
+const appName = (app: string): string => appDisplayName(app)
 const localTime = (iso: string): string => new Date(iso).toLocaleString()
 const clockTime = (iso: string): string => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 

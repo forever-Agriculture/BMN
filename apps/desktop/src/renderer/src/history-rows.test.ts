@@ -39,13 +39,13 @@ describe('History rows', () => {
   it('puts failures on a second line that starts with the count and keeps detail in the title', () => {
     expect(agentFailure({ ...codex, lastRun: { at: AT, deleted: 3, remaining: 0, failures: [{ id: 'a', reason: 'session is open elsewhere' }] } }))
       .toEqual({ text: '1 failed: session is open elsewhere', title: 'a: session is open elsewhere' })
-    expect(agentFailure({ agent: 'opencode', state: 'unrecognised', detail: 'session has no time_updated' }))
-      .toEqual({ text: 'not recognised: session has no time_updated', title: 'session has no time_updated' })
+    expect(agentFailure({ agent: 'codex', state: 'unrecognised', detail: 'threads has no updated_at' }))
+      .toEqual({ text: 'not recognised: threads has no updated_at', title: 'threads has no updated_at' })
     expect(agentFailure(codex)).toBeNull()
   })
 
   it('writes one confirm sentence with counts, and says batches past 200', () => {
-    expect(confirmSentence(status({ claude: [folder()], agents: [codex, { agent: 'opencode', state: 'managed', sessions: 8, candidates: 3 }] })))
+    expect(confirmSentence(status({ claude: [folder()], agents: [{ ...codex, candidates: 415 }] })))
       .toBe('Sets 1 Claude folder to 30 days; deletes 415 sessions for good, in batches of 200.')
     expect(confirmSentence(status({ agents: [{ ...codex, candidates: 3 }] }))).toBe('Deletes 3 sessions for good.')
     expect(confirmSentence(status({ claude: [folder(), folder({ path: '/g' })] }))).toBe('Sets 2 Claude folders to 30 days.')

@@ -14,7 +14,7 @@ import { askJson, showWords } from '../../bin/agents-team-cli.mjs'
 import { recordInterrupted, requestHash } from '../../bin/agents-team-places.mjs'
 import { appAskDetail } from '../../bin/agents-team-app.mjs'
 import { qaAskInputs } from '../../bin/agents-team-qa.mjs'
-import { ANSWER_KEY, EXAMPLE, SCOPES, approve, goSignInInBmnFolder, leftovers, scopeGone, settle, stubOpenCode, teamAskHome } from './test-fixtures/team-ask-harness'
+import { ANSWER_KEY, EXAMPLE, SCOPES, approve, leftovers, scopeGone, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
 const CLI = fileURLToPath(new URL('../../bin/agents-team-cli.mjs', import.meta.url))
 const ORIGIN = 'http://127.0.0.1:4173'
@@ -245,7 +245,7 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     expect(requestHash({ ...request, browser: { origin: ORIGIN, interact: false, disposable: true } })).not.toBe(requestHash({ ...request, browser: { origin: ORIGIN, interact: true, disposable: true } }))
   })
 
-  it('refuses, saying why: an address that is not loopback, no --disposable, a public ask, the server not in npx\'s cache, an OpenCode teammate', () => {
+  it('refuses, saying why: an address that is not loopback, no --disposable, a public ask, the server not in npx\'s cache', () => {
     expect(refusal(() => ask({ browser: { origin: 'http://192.168.1.20:8080', disposable: true } }))).toMatchObject({ code: 'INPUT_INVALID', message: expect.stringContaining('is not a loopback address') })
     expect(refusal(() => ask({ browser: { origin: ORIGIN, disposable: false } }))).toMatchObject({ code: 'DISPOSABLE_REQUIRED', message: expect.stringContaining(BROWSER_STATEMENT) })
     // What the browser shows is the asker's private app: Codex and Claude Code asks are private, and so is every browser ask.
@@ -253,12 +253,6 @@ describe('a browser ask to each app (74.3 AC1, AC4)', () => {
     stubNpx(false)
     expect(refusal(() => ask())).toMatchObject({ code: 'BROWSER_UNAVAILABLE', message: expect.stringContaining('npx @playwright/mcp@0.0.75 --version') })
     stubNpx()
-    stubOpenCode(stubs)
-    goSignInInBmnFolder(home)
-    approve(home, EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [browser]\n```\n\n## roles')
-      .replace('browser: {candidates: [luna@max], then: lead}', 'browser: {candidates: [luna-go@high], then: lead}')
-      .replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
-    expect(refusal(() => ask({ agent: 'luna-go', effort: 'high' }))).toMatchObject({ message: expect.stringContaining('BMN adds a browser only to Codex and Claude Code') })
   })
 })
 

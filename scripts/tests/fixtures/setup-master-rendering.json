@@ -22,16 +22,6 @@
       "app": "codex",
       "privateWork": "public_only",
       "kind": "public"
-    },
-    {
-      "app": "opencode",
-      "privateWork": "allowed",
-      "kind": "public"
-    },
-    {
-      "app": "opencode",
-      "privateWork": "public_only",
-      "kind": "public"
     }
   ]
 }

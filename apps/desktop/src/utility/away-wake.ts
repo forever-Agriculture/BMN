@@ -1,4 +1,4 @@
-// MODULE: away-wake.ts - Stories 90.6, 93.3 and 96.3: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
+// MODULE: away-wake.ts - Stories 90.6 and 93.3: while the owner is Away, one fixed line every 2 hours into each agent session that is provably idle at an empty prompt
 import { awayWakeReasonCode, type AwayRecord, type AwayWakeDecision, type AwayWakeTick } from '@bmn/protocol'
 
 export const AWAY_WAKE_EVERY_MS = 2 * 60 * 60 * 1000
@@ -7,7 +7,7 @@ export const AWAY_WAKE_QUIET_MS = 15 * 60 * 1000
 /** The one line BMN ever types (R90-FR6, 90.6 AC5). It is never an approval, an answer or a resume of a stopped run. */
 export const AWAY_WAKE_LINE = 'BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed, continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.'
 
-type WakeApp = 'claude' | 'codex' | 'opencode'
+type WakeApp = 'claude' | 'codex'
 
 /** The latest hook event a session's current run reported, as the companion service keeps it. */
 export interface WakeObservation {
@@ -15,18 +15,15 @@ export interface WakeObservation {
   incarnationId: string
   agent: string
   event: string
-  /** Who the event speaks for when not the session itself: an OpenCode child's `subagent`, the owner's `interrupted` stop (Story 93.3). */
+  /** Who the event speaks for when not the session itself, such as Claude Code going on by itself (`continues`). */
   source: string | null
-  /** What the OpenCode plugin that sent the event promises (Story 96.3); null from BMN's earlier plugins and other agents. */
-  plugin: number | null
   observedAt: string
   foreground: string | null
 }
 
-/** The settled mirror's rows with dim cells blanked, and its cursor, read together. */
+/** The settled mirror's rows with dim cells blanked. */
 export interface WakeScreen {
   lines: string[]
-  cursor: { x: number; y: number }
 }
 
 export interface WakeAttention {
@@ -78,19 +75,9 @@ export interface WakeFacts {
   prompt: 'idle' | 'busy' | 'none' | null
 }
 
-/**
- * Which agents report a finished turn with which hook events (Claude's idle_prompt Notification repeats its Stop;
- * BMN's OpenCode plugin reports a root run that succeeded, or that the owner stopped, as `session.idle`).
- */
-const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'StopFailure', 'Notification'], codex: ['Stop'], opencode: ['session.idle'] }
-/**
- * The promise an OpenCode session's loaded plugin must make (Story 96.3): its events carry `bmn_plugin` 1 or later once
- * it reports the owner's stop as `interrupted` and quitting as `tui.exit`. BMN's earlier plugins reported a stop as a
- * finished turn and carried no mark. The file on disk says nothing about what a running OpenCode loaded or about a stop
- * reported before (2.0.29 reloads a changed file by itself), so only the mark on the session's own event lets BMN wake it.
- */
-export const OPENCODE_WAKE_PLUGIN = 1
-const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || agent === 'codex' || agent === 'opencode'
+/** Which agents report a finished turn with which hook events (Claude's idle_prompt Notification repeats its Stop). */
+const FINISHED: Record<WakeApp, readonly string[]> = { claude: ['Stop', 'StopFailure', 'Notification'], codex: ['Stop'] }
+const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || agent === 'codex'
 
 /**
  * The app's empty prompt, recorded from real sessions on 2026-10-23 (plan/references/090, evidence 90.6/screens):
@@ -98,27 +85,13 @@ const isWakeApp = (agent: string): agent is WakeApp => agent === 'claude' || age
  * followed by exactly one blank line, one block of footer lines and only blank lines to the end of the screen: a
  * draft's further lines, even after blank ones, would make a second block. Empty means nothing after the marker once
  * dim placeholder text is blanked; anything else (a draft, a dialog's options, an unknown screen) is not idle.
- *
- * OpenCode 2's, recorded from pinned 2.0.29 and 2.0.32 on 2026-10-25 (Story 93.1, plan/references/093): its composer is
- * one block of `  ┃` rows whose last names the agent and model (`  ┃  Build · …`) above a `  ╹▀▀…` rule. Empty means
- * the block's top row, one blank content row and one blank row above the name, with the cursor on the content row's
- * first cell. An open dialog leaves that block drawn but holds the cursor in its own field, so OpenCode needs the cursor;
- * a draft, a paste's `[Pasted ~N lines]` or a second line fills or grows the block, and Home or a child view draws none.
  */
-export function idlePrompt(app: WakeApp, lines: readonly string[], cursor?: { x: number; y: number }): boolean {
+export function idlePrompt(app: WakeApp, lines: readonly string[]): boolean {
   const rule = (line: string | undefined): boolean => line !== undefined && /^─{10,}\s*$/u.test(line)
   const empty = (line: string, marker: string): boolean => line.slice(line.indexOf(marker) + marker.length).replace(/\s/gu, '') === ''
   if (app === 'claude') {
     const inputs = lines.flatMap((line, index) => line.startsWith('❯') && rule(lines[index - 1]) && rule(lines[index + 1]) ? [line] : [])
     return inputs.length === 1 && empty(inputs[0]!, '❯')
-  }
-  if (app === 'opencode') {
-    const names = lines.flatMap((line, index) => /^ {2}┃ {2}\S.* · /u.test(line) && /^ {2}╹▀{10,}/u.test(lines[index + 1] ?? '') ? [index] : [])
-    if (cursor === undefined || names.length !== 1) return false
-    const name = names[0]!
-    let top = name
-    while (top > 0 && lines[top - 1]!.startsWith('  ┃')) top -= 1
-    return name - top === 3 && lines.slice(top, name).every((line) => /^ {2}┃\s*$/u.test(line)) && cursor.x === 5 && cursor.y === top + 1
   }
   let index = lines.length - 1
   while (index >= 0 && !lines[index]!.startsWith('›')) index -= 1
@@ -227,7 +200,6 @@ function finishedOwnTurn(seen: WakeObservation): string | null {
   // A child's turn is not the session's, and a stop the owner made stays a stop (R93-FR2).
   // Nor is a stop Claude Code goes on from by itself, with work in flight.
   if (seen.source === 'subagent' || seen.source === 'interrupted' || seen.source === 'continues') return `its latest event is ${seen.event} from ${seen.source}, not its own finished turn`
-  if (app === 'opencode' && (seen.plugin ?? 0) < OPENCODE_WAKE_PLUGIN) return 'its OpenCode runs an earlier BMN plugin, which reports the owner\'s stop as a finished turn'
   return null
 }
 
@@ -293,14 +265,14 @@ export async function typeIfIdle(proof: WakeProof, p: {
     if (proof.liveIncarnation(seen.sessionId) !== seen.incarnationId) return 'its run changed'
     const latest = proof.observation(seen.sessionId)
     if (!latest || latest.agent !== seen.agent || latest.event !== seen.event || latest.source !== seen.source ||
-      latest.plugin !== seen.plugin || latest.observedAt !== seen.observedAt) return 'its agent reported again'
+      latest.observedAt !== seen.observedAt) return 'its agent reported again'
     const front = proof.foreground(seen.sessionId)
     const foreground = front !== null && seen.foreground !== null && front === seen.foreground
     if (p.facts) p.facts.foreground = foreground
     if (!foreground) return 'its agent is not in the foreground'
     const changes = proof.generation(seen.sessionId)
     if (changes.generation !== generation || changes.pending > 0) return 'its requests changed'
-    const prompt = screen === null ? 'none' : idlePrompt(app, screen.lines, screen.cursor) ? 'idle' : 'busy'
+    const prompt = screen === null ? 'none' : idlePrompt(app, screen.lines) ? 'idle' : 'busy'
     if (p.facts) p.facts.prompt = prompt
     if (prompt === 'none') return 'no screen to read'
     if (prompt === 'busy') return 'its prompt is not empty and idle'

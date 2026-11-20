@@ -1,11 +1,11 @@
 // MODULE: doctor-leftovers.mjs - One bounded scanner for acquisition and private item/reason reconstruction
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import { readJsonItems, readOpenCodeEntries, readTomlEntries } from './agents-tool-files.mjs'
+import { basename, isAbsolute, join } from 'node:path'
+import { readJsonItems, readTomlEntries } from './agents-tool-files.mjs'
 import { selectedProfile } from './doctor-profile.mjs'
 import { createInspectionSession, inspectionResult } from './doctor-inspection.mjs'
-import { matchContinuity, privateTag } from './doctor-continuity.mjs'
+import { matchContinuity } from './doctor-continuity.mjs'
 import { projectedResult } from './doctor-results.mjs'
 
 export const leftoversModule = import.meta.url
@@ -16,16 +16,14 @@ const BMN_SKILLS = new Set(['plan', 'team-ask', 'report-artifact', 'team-page', 
 async function scanOnce(versions, keys, deadline, privateTmpfs) {
   const { SKILL_APPS, rootPath } = await import('./agents-skills.mjs')
   const { TOOL_APPS, neutralOf } = await import('./agents-tools.mjs')
-  const env = process.env, profile = selectedProfile(env), H = profile.home
+  const env = process.env, profile = selectedProfile(env)
   const s = createInspectionSession(profile, keys, deadline, privateTmpfs)
   if (profile.invalid || profile.unavailable) { s.gap('profile', 'step', { code: 'UNSUPPORTED' }); return s.finish() }
-  if (profile.inline) s.gap('inline-config', 'step', { code: 'UNSUPPORTED' })
   const file = (path) => s.file(path)
   const json = (path) => { const source = file(path); return { source, data: s.json(source) } }
   const entries = (source, at = [], toml = false, strict = false) => {
     if (!source.known || s.text(source) === null) return []
-    try { return toml ? [...readTomlEntries(s.text(source), at, { strict })].map(([key, entry]) => ({ ...entry, key })) :
-      at === null ? [...readOpenCodeEntries(s.text(source), { strict })].map(([key, entry]) => ({ ...entry, key })) : readJsonItems(s.text(source), at, { strict }) }
+    try { return toml ? [...readTomlEntries(s.text(source), at, { strict })].map(([key, entry]) => ({ ...entry, key })) : readJsonItems(s.text(source), at, { strict }) }
     catch { s.gap(source.key, 'file', malformed); source.known = false; return [] }
   }
   const exists = (path) => { const source = s.meta(path); return { source, value: s.exists(source) } }
@@ -129,7 +127,7 @@ async function scanOnce(versions, keys, deadline, privateTmpfs) {
     }
     const roots = new Map(), rootEvidence = []
     for (const [app, spec] of Object.entries(SKILL_APPS)) for (const root of spec.roots) {
-      const path = root.startsWith('.config/opencode/') ? join(profile.opencode, root.slice('.config/opencode/'.length)) : rootPath(root, env)
+      const path = rootPath(root, env)
       const probe = dir(path); rootEvidence.push(use(probe))
       const target = probe.source.value?.route.nodes.at(-1)?.object
       const key = probe.value ? `${target.device}:${target.inode}` : path
@@ -250,36 +248,6 @@ async function scanOnce(versions, keys, deadline, privateTmpfs) {
       ({ value: listed.has(`${plugin}@${market}`), deps: [s.dep(source, ['membership', `${plugin}@${market}`, listed.has(`${plugin}@${market}`)])] }), [])
   }
 
-  function pluginsOpenCode() {
-    const seen = new Set()
-    // Managed sources come first so a shared reference is listed once with its managed origin.
-    const files = [...profile.opencodeFiles.flatMap((path) => [['plugin'], ['plugins']].map((at) => [path, at])),
-      [join(profile.opencode, 'cli.json'), ['plugins']]]
-    for (const [path, at] of files) {
-      const source = file(path)
-      for (const entry of entries(source, at)) {
-        const reference = typeof entry.value === 'string' ? entry.value : at[0] === 'plugins' ? entry.value?.package : null
-        if (typeof reference !== 'string' || reference.length === 0) { s.gap(source.key, 'file', malformed); s.row('plugins', 'opencode', 'unreadable', source, [at, entry.key], [s.dep(null, undefined)]); continue }
-        const raw = reference.startsWith('file:') ? reference.slice(5) : reference
-        const local = raw.startsWith('.') || raw.startsWith('/') || raw.startsWith('~')
-        const resolved = local ? resolve(dirname(path), raw.replace(/^~/, H)) : null
-        const key = local ? `local:${resolved}` : `package:${reference}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        const target = local ? exists(resolved) : null
-        if (!local || !target.value) s.row('plugins', 'opencode', local ? target.source.known ? 'plugin-missing' : 'unreadable' : 'app-managed', source,
-          [at, entry.key, entry.value], target ? [use(target)] : [], { start: entry.start })
-      }
-    }
-    for (const folder of ['plugin', 'plugins']) {
-      const discovery = s.directory(join(profile.opencode, folder))
-      for (const name of s.names(discovery)) {
-        const source = s.tree(join(profile.opencode, folder, name))
-        if (source.known && source.value.missingTarget) s.row('plugins', 'opencode', 'plugin-missing', source, [folder, name], [s.dep(discovery, name)])
-      }
-    }
-  }
-
   async function approvedTools() {
     const pointer = file(join(profile.bmn, 'state/current')), deps = [s.dep(pointer, null)]
     if (!pointer.known) return { known: false, ids: new Set(), deps }
@@ -322,10 +290,10 @@ async function scanOnce(versions, keys, deadline, privateTmpfs) {
 
   async function mcp() {
     const team = await approvedTools()
-    const toolRows = (app, path, at, scope = [], inherited = [], supplied = null) => {
+    const toolRows = (app, path, at, scope = [], inherited = []) => {
       const source = file(path)
       if (!source.known) { s.row('mcp', app, 'unreadable', source, [at, scope], []); return 0 }
-      const list = supplied ?? entries(source, at, app === 'codex', true)
+      const list = entries(source, at, app === 'codex', true)
       for (const entry of list) {
         const value = entry.value, neutral = entry.unreadable ? null : neutralOf(value, app), deps = [...inherited]
         let reason = null
@@ -352,22 +320,6 @@ async function scanOnce(versions, keys, deadline, privateTmpfs) {
     }
     toolRows('claude', TOOL_APPS.claude.file(env), TOOL_APPS.claude.path)
     toolRows('codex', TOOL_APPS.codex.file(env), 'mcp_servers')
-    const openCode = new Map()
-    for (const path of profile.opencodeFiles) {
-      const source = file(path)
-      if (!source.known) { toolRows('opencode', path, null); continue }
-      for (const entry of entries(source, null, false, true)) {
-        const group = openCode.get(entry.key) ?? []
-        group.push({ path, source, entry }); openCode.set(entry.key, group)
-      }
-    }
-    for (const group of openCode.values()) {
-      const first = group[0]
-      const tag = (entry) => privateTag(keys.context, 'mcp-definition', entry.value ?? null)
-      const conflict = group.some(({ entry }) => entry.unreadable || !neutralOf(entry.value, 'opencode') || tag(entry) !== tag(first.entry))
-      const dependencies = group.slice(1).map(({ source, entry }) => s.dep(source, [entry.at, entry.key, entry.value ?? null]))
-      toolRows('opencode', first.path, null, [], dependencies, [{ ...first.entry, ...(conflict ? { unreadable: true } : {}) }])
-    }
     const config = file(profile.claudeJson)
     for (const project of entries(config, ['projects'])) toolRows('claude', profile.claudeJson, ['projects', project.key, 'mcpServers'], ['project', project.key])
     const registry = file(join(profile.claude, 'plugins/installed_plugins.json')), seen = new Set()
@@ -383,7 +335,7 @@ async function scanOnce(versions, keys, deadline, privateTmpfs) {
   }
 
   for (const [name, run] of [['memory-claude', claudeMemory], ['memory-codex', codexMemory], ['skills', skills],
-    ['plugins-claude', pluginsClaude], ['plugins-codex', pluginsCodex], ['plugins-opencode', pluginsOpenCode], ['mcp', mcp]]) {
+    ['plugins-claude', pluginsClaude], ['plugins-codex', pluginsCodex], ['mcp', mcp]]) {
     try { await run() } catch (error) { s.gap(name, 'step', error, 'scan') }
   }
   return s.finish()

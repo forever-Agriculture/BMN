@@ -9,16 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   bindSession, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_TOOLS_SEEN, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun,
   readCodexConfig, refreshVisibility, removeResearchCodexFolders, researchFormHash, setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility, type FenceTestEntry,
-  WEB_NEXT_STEP, WEB_TOOLS_NOTE, inspectRoute
+  WEB_NEXT_STEP, WEB_TOOLS_NOTE
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
-import { canonicalJson, namedResearchers, parseRoster, rewriteRoster, sha256, starterRoster } from '../../bin/agents-roster.mjs'
-import { LUNA_GO_PROPOSAL, type RosterDataShape } from '@bmn/protocol'
+import { canonicalJson, namedResearchers, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
-import { OPENCODE_FOLDERS } from './test-fixtures/opencode-destinations'
-import { startStandin, type Standin } from './test-fixtures/opencode-standin'
-import { OPENCODE_HELPER_AGENT_SHA256, OPENCODE_SESSION_ID, installOpenCodeFolder, openCodeConfigFiles, openCodeEnvironment, openCodeFolder, openCodeFolderProblem } from '../../bin/agents-opencode.mjs'
-import { OPENCODE_NEXT_STEP } from '../../bin/agents-check.mjs'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
 
@@ -39,13 +34,11 @@ function edit(text: string, from: string, to: string): string {
 }
 
 const GLM_OFF = 'enabled: false\nstatus: active\nefforts: []\nroles: [helper]\nenabled_note: NOTE-SENTINEL-GLM'
-const KIMI = '## kimi\n\n```yaml\nname: Kimi\nclass: pawn\nharness: opencode\nmodel: kimi-k3\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: [helper]\n```\n\n## roles'
 
-/** The example plus GLM switched on (a public-only provider on an explicit host) and Kimi on OpenCode, an app BMN cannot check. */
+/** The example plus GLM switched on (a public-only provider on an explicit host). */
 function roster(extra: (text: string) => string = (text) => text): string {
   let text = EXAMPLE
   text = edit(text, GLM_OFF, 'enabled: true\nstatus: active\nefforts: [low]\nroles: [helper]')
-  text = edit(text, '## roles', KIMI)
   return extra(text)
 }
 
@@ -137,7 +130,7 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
     const fable = check({ agent: 'fable', argv: FABLE_PACKET('the owner global rules') })
     expect(fable.verdict, JSON.stringify(fable)).toBe('PASS')
     expect(fable.receipt).toMatchObject({ model: 'fable', route: { host: 'default:anthropic', provider: 'anthropic' } })
-    // A Claude Code dispatch binds no session, refused in the words it had before OpenCode (70.2 AC5).
+    // A Claude Code dispatch binds no session.
     writeFileSync(join(home, 'fable.json'), JSON.stringify(fable.receipt))
     expect(() => bindSession(join(home, 'fable.json'), '019a2f6e-1c2b-7d3e-8f40-123456789abc', { now: NOW })).toThrow(/^only the receipt of a Codex dispatch can be bound to a session$/)
   })
@@ -207,291 +200,44 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
   })
 
   it('reports the first refusal when several apply', () => {
-    // An OpenCode command outside the checked form, with private data: the form is refused before the data is.
-    expect(check({ agent: 'kimi', role: 'helper', argv: ['opencode', 'run', '--model', 'opencode-go/kimi-k3', 'x'] }).code).toBe('ROUTE_UNSUPPORTED')
-    expect(check({ agent: 'kimi', role: 'helper', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: 'kimi runs on opencode, the command is codex' })
+    // A command for another app, with private data: the app is refused before the data is.
+    expect(check({ agent: 'glm', role: 'helper', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: 'glm runs on claude, the command is codex' })
     // A wrong model with private data for a public-only provider: the model is refused first.
     expect(check({ agent: 'glm', role: 'helper', argv: GLM().map((part) => (part === 'glm-5.3' ? 'glm-9' : part)) }).code).toBe('MODEL_MISMATCH')
   })
 })
 
-/**
- * A team with BMN's proposal of Luna (Go) taken (70.4), as the Team page's `lunaGoProposal` takes it on a team from
- * before the researcher mark (its output is pinned in luna-go-proposal.test.ts): OpenCode Go added where missing, with
- * `privateWork`, and Luna (Go) last in the role helper at her highest effort.
- */
-function withLunaGo(data: RosterDataShape, privateWork: 'allowed' | 'public_only' = 'public_only'): RosterDataShape {
-  const { provider, agent, role } = LUNA_GO_PROPOSAL
-  const providers = data.providers.some((entry) => entry.id === provider.id) ? data.providers : [...data.providers, { ...provider, hosts: [] }]
-  return {
-    ...data, schema_version: 3,
-    providers: providers.map((entry) => (entry.id === provider.id ? { ...entry, private_work: privateWork } : entry)),
-    agents: [...data.agents, { ...agent, provider: provider.id, efforts: [...agent.efforts], roles: [role] }],
-    roles: data.roles.map((entry) => (entry.id === role ? { ...entry, candidates: [...entry.candidates, `${agent.id}@${agent.efforts.at(-1)}`] } : entry))
+describe('an app BMN retired (Epics 71 and 123)', () => {
+  const RETIRED = {
+    cursor: "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final",
+    opencode: "OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final"
   }
-}
-
-/** The OpenCode form `bmn roster role --json` hands out, with Kimi's model and effort; `change` changes one part. */
-const form = (change: (argv: string[]) => string[] = (argv) => argv): string[] => change(['env', '-i',
-  ...Object.entries(openCodeEnvironment()).map(([name, value]) => `${name}=${value}`), `PATH=${env.PATH}`,
-  'opencode', 'run', '--standalone', '--format', 'json', '--agent', 'bmn-helper', '-m', 'opencode-go/kimi-k3#low', '--title', 'BMN helper'])
-const kimi = (argv: string[], inputs: Partial<Inputs> = {}, environment = env) => check({ agent: 'kimi', role: 'helper', argv, ...inputs }, environment)
-/** The fixture's OpenCode Go may see private work, so a form that passes passes on the private workspace too. */
-const allowGo = (text: string) => edit(text, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}')
-
-describe('an OpenCode helper run in the one form 70.1 measured (70.2)', () => {
-  /** Drops a flag, and with `value` the argument after it. */
-  const without = (flag: string, value = true) => (argv: string[]) => argv.filter((part, index) => part !== flag && !(value && argv[index - 1] === flag))
-
-  beforeEach(() => {
-    stub('opencode', 'opencode v2.0.29')
-    installOpenCodeFolder()
-    approve(roster(allowGo))
+  /** A team file written while both apps were supported: an agent on each, its provider and its route. */
+  const named = (): string => roster((text) => {
+    let next = edit(text, '## roles', '## curs\n\n```yaml\nname: Curs\nclass: pawn\nharness: cursor\nmodel: composer-2\nprovider: cursor\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: []\n```\n\n' +
+      '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [xhigh]\nroles: [helper]\n```\n\n## roles')
+    next = edit(next, 'zai: {name: Z.ai', 'cursor: {name: Cursor, hosts: [], private_work: allowed}\nopencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\nzai: {name: Z.ai')
+    return edit(next, 'codex: {provider: openai, basis: observed-default}\n', 'codex: {provider: openai, basis: observed-default}\nopencode: {provider: opencode-go, basis: observed-default}\n')
   })
 
-  it('passes the form and records the model, effort, destination and BMN\'s agent', () => {
-    const passed = kimi(form())
-    expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
-    expect(passed.receipt).toMatchObject({ harness: 'opencode', agent: 'kimi', model: 'opencode-go/kimi-k3', effort: 'low', data: 'private',
-      route: { provider: 'opencode-go', host: 'default:opencode-go', basis: 'observed-default', sources: ['-m'] },
-      private_work: { answer: 'allowed', allowed: true }, harness_version: { version: '2.0.29', state: 'tested' } })
-    expect(passed.steps).toContain('dispatch form: env -i opencode run')
+  it('refuses an agent a team file still names on either app, and a dispatch of either program, saying when it was retired (71, 123.1 AC1)', () => {
+    approve(named())
+    const opencodeRun = ['env', '-i', `PATH=${env.PATH}`, 'opencode', 'run', '--standalone', '--format', 'json', '--agent', 'bmn-helper', '-m', 'opencode-go/gpt-6-luna#xhigh', '--title', 'BMN helper']
+    expect(check({ agent: 'curs', role: 'helper', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `curs runs in ${RETIRED.cursor}` })
+    expect(check({ agent: 'luna-go', role: 'helper', argv: opencodeRun })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `luna-go runs in ${RETIRED.opencode}` })
+    expect(check({ agent: 'glm', role: 'helper', argv: ['cursor-agent', '-p', '--model', 'composer-2', 'x'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.cursor })
+    expect(check({ agent: 'glm', role: 'helper', argv: ['env', '-i', '/home/owner/.local/bin/cursor-agent', '-p'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.cursor })
+    expect(check({ agent: 'glm', role: 'helper', argv: opencodeRun })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.opencode })
+    expect(check({ agent: 'glm', role: 'helper', argv: ['/home/owner/.opencode/bin/opencode', 'run', 'x'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: RETIRED.opencode })
   })
 
-  it('names the run read-only by BMN\'s own agent for a read-only role', () => {
-    approve(roster((text) => edit(allowGo(text), 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}',
-      'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max, kimi@low], then: lead, read_only: true}')))
-    const passed = kimi(form())
-    expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
-    expect(passed.receipt?.sandbox).toEqual({ mode: 'read-only', source: '--agent bmn-helper', agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: '2.0.32' })
+  it('`bmn roster role` and `bmn roster route` leave Luna (Go) out or say she runs in a retired app (123.1 AC1)', async () => {
+    approve(named())
+    const helper = JSON.parse((await runCli(['roster', 'role', 'helper', '--json'])).stdout)
+    expect(JSON.stringify(helper)).not.toContain('luna-go')
+    const route = await runCli(['roster', 'route', '--agent', 'luna-go'])
+    expect(route.stdout + route.stderr).toContain(RETIRED.opencode)
   })
-
-  it.each([
-    ['no --standalone (the background service)', without('--standalone', false), 'opencode run must carry --standalone: without it the run goes to the background service that serves your terminals'],
-    ['--auto', (argv: string[]) => [...argv, '--auto'], 'opencode run --auto is not a supported argument: it approves every permission not denied'],
-    ['--session', (argv: string[]) => [...argv, '--session', 'ses_0123456789abABCDEFGHIJKLMN'], 'opencode run --session is not a supported argument: it continues or creates a session other than the run\'s own'],
-    ['--continue', (argv: string[]) => [...argv, '-c'], 'opencode run -c is not a supported argument: it continues your last session'],
-    ['--fork', (argv: string[]) => [...argv, '--fork'], 'opencode run --fork is not a supported argument: it forks an earlier session into the run'],
-    ['--server', (argv: string[]) => [...argv, '--server', 'http://127.0.0.1:4096'], 'opencode run --server is not a supported argument: it sends the run to a server BMN does not start'],
-    ['--file', (argv: string[]) => [...argv, '--file', 'notes.md'], 'opencode run --file is not a supported argument: it attaches a file the check does not read'],
-    ['another flag', (argv: string[]) => [...argv, '--thinking'], 'opencode run --thinking is not a supported argument'],
-    ['the prompt on the command line', (argv: string[]) => [...argv, 'review this'], 'opencode run review this is not a supported argument (the prompt goes through standard input, the checked --stdin file)'],
-    ['another output', (argv: string[]) => argv.map((part) => (part === 'json' ? 'default' : part)), 'opencode run must carry --format json, which names the session a receipt is bound to'],
-    ['another subcommand', (argv: string[]) => argv.map((part) => (part === 'run' ? 'serve' : part)), 'only `opencode run` is a supported OpenCode dispatch'],
-    ['no env -i', (argv: string[]) => argv.slice(argv.indexOf('opencode')), 'an OpenCode run is checked only behind env -i, with the folders and switches `bmn roster role <role> --json` gives'],
-    ['the project\'s own configuration on', without('OPENCODE_DISABLE_PROJECT_CONFIG=1', false), 'without OPENCODE_DISABLE_PROJECT_CONFIG=1 a repository\'s own opencode.json or .opencode folder replaces BMN\'s agent and the address requests go to, and runs its own plugin'],
-    ['OpenCode updating itself', without('OPENCODE_DISABLE_AUTOUPDATE=1', false), 'env -i must carry OPENCODE_DISABLE_AUTOUPDATE=1, so the run does not update OpenCode'],
-    ['a model list fetched for the run', without('OPENCODE_DISABLE_MODELS_FETCH=1', false), 'env -i must carry OPENCODE_DISABLE_MODELS_FETCH=1, so the run takes the model list built into OpenCode instead of fetching one'],
-    ['another configuration named', (argv: string[]) => [...argv.slice(0, 2), 'OPENCODE_CONFIG_DIR=/tmp/elsewhere', ...argv.slice(2)], 'env -i OPENCODE_CONFIG_DIR names another OpenCode configuration'],
-    ['an extra variable', (argv: string[]) => [...argv.slice(0, 2), 'OPENCODE_API_KEY=made-up', ...argv.slice(2)], 'env -i OPENCODE_API_KEY is not part of the OpenCode form'],
-    ['the owner\'s own configuration folder', (argv: string[]) => argv.map((part) => (part.startsWith('XDG_CONFIG_HOME=') ? `XDG_CONFIG_HOME=${home}/.config` : part)), () => `env -i XDG_CONFIG_HOME must be ${openCodeFolder()}/config, a folder of BMN's own for OpenCode runs`],
-    ['another agent', (argv: string[]) => argv.map((part) => (part === 'bmn-helper' ? 'build' : part)), '--agent build is not BMN\'s agent; the form runs --agent bmn-helper'],
-    ['no agent', without('--agent'), 'opencode run must carry --agent bmn-helper, BMN\'s read-only agent']
-  ] as Array<[string, (argv: string[]) => string[], string | (() => string)]>)('refuses %s, with the OpenCode form as the next step', (_name, change, message) => {
-    // The folder is under the test's home, known only once the test runs.
-    expect(kimi(form(change))).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED', message: typeof message === 'function' ? message() : message, next: OPENCODE_NEXT_STEP })
-  })
-
-  it('refuses a folder that is not BMN\'s, and roster role puts it back', async () => {
-    const config = join(openCodeFolder(), 'config/opencode')
-    const loosened = (openCodeConfigFiles()['agents/bmn-helper.md'] ?? '').replace('"effect":"deny"', '"effect":"allow"')
-    writeFileSync(join(config, 'agents/bmn-helper.md'), loosened)
-    expect(kimi(form())).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: `${config}/agents/bmn-helper.md differs from BMN's text; \`bmn roster role <role> --json\` puts BMN's folder back` })
-    installOpenCodeFolder()
-    writeFileSync(join(config, 'AGENTS.md'), 'rules OpenCode would read')
-    expect(kimi(form()).message).toBe(`${config}/AGENTS.md is not one of BMN's OpenCode files, and OpenCode would read it; \`bmn roster role <role> --json\` puts BMN's folder back`)
-    rmSync(join(config, 'AGENTS.md'))
-    mkdirSync(join(config, 'plugins'), { recursive: true })
-    symlinkSync('/etc/hostname', join(config, 'plugins/linked.ts'))
-    expect(kimi(form()).message).toContain('plugins/linked.ts is a link, and BMN\'s OpenCode folder holds none')
-    rmSync(join(config, 'plugins/linked.ts'))
-    writeFileSync(join(openCodeFolder(), 'home/.gitconfig'), '[user]')
-    expect(kimi(form()).message).toBe(`${openCodeFolder()}/home is not empty, and OpenCode would read what is there; \`bmn roster role <role> --json\` puts BMN's folder back`)
-    // `roster role` puts the folder back for a role with an OpenCode candidate.
-    approve(roster((text) => edit(allowGo(text), 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}',
-      'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max, kimi@low], then: lead}')))
-    await runCli(['roster', 'role', 'helper', '--json'])
-    expect(kimi(form()).verdict).toBe('PASS')
-    expect(readdirSync(join(openCodeFolder(), 'home'))).toEqual([])
-    expect(readdirSync(config).sort()).toEqual(['agents', 'opencode.json', 'plugins'])
-  })
-
-  it('reads the model and effort from -m, and the destination needs a title', () => {
-    expect(kimi(form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'opencode-go/kimi-k2#low' : part))))).toMatchObject({ code: 'MODEL_MISMATCH', message: '-m opencode-go/kimi-k2 is not opencode-go/kimi-k3' })
-    expect(kimi(form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'opencode-go/kimi-k3' : part))))).toMatchObject({ code: 'EFFORT_UNSUPPORTED', message: 'the command names no effort' })
-    expect(kimi(form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'opencode-go/kimi-k3#high' : part))))).toMatchObject({ code: 'EFFORT_UNSUPPORTED', message: '-m #variant high is not among kimi\'s efforts (low)' })
-    expect(kimi(form(without('-m')))).toMatchObject({ code: 'MODEL_MISMATCH', message: 'the command names no model; kimi is opencode-go/kimi-k3' })
-    expect(kimi(form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'kimi-k3' : part))))).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: '-m kimi-k3 is not <provider>/<model>#<effort> as OpenCode reads it' })
-    expect(kimi(form(without('--title')))).toMatchObject({ code: 'HOST_UNKNOWN', message: 'the destination cannot be resolved: without --title OpenCode names the session with a title model the form does not name' })
-  })
-
-  it('reads the provider from -m, and the provider decides private work', () => {
-    // The roster keeps an agent's provider and the app's approved default one, so another provider in -m is another model.
-    expect(kimi(form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'zai/kimi-k3#low' : part))))).toMatchObject({ code: 'MODEL_MISMATCH', message: '-m zai/kimi-k3 is not opencode-go/kimi-k3' })
-    approve(roster())
-    expect(kimi(form())).toMatchObject({ code: 'DATA_FORBIDDEN' })
-  })
-
-  it('binds an OpenCode receipt to an OpenCode session id only', () => {
-    const passed = kimi(form())
-    const file = join(home, 'receipt.json')
-    writeFileSync(file, JSON.stringify(passed.receipt))
-    expect(() => bindSession(file, '019a2f6e-1c2b-7d3e-8f40-123456789abc', { now: NOW })).toThrow('019a2f6e-1c2b-7d3e-8f40-123456789abc is not an OpenCode session id')
-    expect(bindSession(file, 'ses_ec5823af7ffepgpND2nXll0Qbh', { now: NOW })).toMatchObject({ session_id: 'ses_ec5823af7ffepgpND2nXll0Qbh' })
-    const codex = check({ argv: ASTRA_REVIEW(workspace) })
-    writeFileSync(file, JSON.stringify(codex.receipt))
-    expect(() => bindSession(file, 'ses_ec5823af7ffepgpND2nXll0Qbh', { now: NOW })).toThrow(/^ses_ec5823af7ffepgpND2nXll0Qbh is not a Codex session id$/)
-  })
-
-  it('hands a lead the form in roster role and installs BMN\'s folder there', async () => {
-    rmSync(openCodeFolder(), { recursive: true, force: true })
-    approve(roster((text) => edit(allowGo(text), 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}',
-      'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max, kimi@low], then: lead}')))
-    const role = JSON.parse((await runCli(['roster', 'role', 'helper', '--json'])).stdout)
-    const candidate = role.candidates.find((entry: { agent: string }) => entry.agent === 'kimi')
-    expect(candidate.opencode).toMatchObject({ folder: openCodeFolder(), argv: ['run', '--standalone', '--format', 'json', '--agent', 'bmn-helper'],
-      then: ['-m', '<provider>/<model>#<effort>', '--title', '<title>'], agent_sha256: OPENCODE_HELPER_AGENT_SHA256, form_tested_on: '2.0.32' })
-    expect(candidate.opencode.env).toEqual(Object.entries(openCodeEnvironment()).map(([name, value]) => `${name}=${value}`))
-    expect(role.candidates.find((entry: { agent: string }) => entry.agent === 'luna').opencode).toBeUndefined()
-    expect(kimi(form()).verdict).toBe('PASS')
-    const text = (await runCli(['roster', 'role', 'helper'])).stdout
-    expect(text).toContain(`  opencode: env -i ${candidate.opencode.env.join(' ')} PATH=<your PATH> opencode run --standalone --format json --agent bmn-helper -m <provider>/<model>#<effort> --title <title> < <prompt file>`)
-  })
-
-  it('passes Luna (Go) as BMN proposes her, on a team that held no OpenCode before, and keeps private work from OpenCode Go until he allows it (70.4)', async () => {
-    // A team as the owner's stood on 2026-10-14: no OpenCode agent, no OpenCode Go, no destination recorded for OpenCode.
-    const before = parseRoster(edit(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n', ''), 'opencode: {provider: opencode-go, basis: observed-default}\n', ''))
-    expect(before.errors).toEqual([])
-    approve(rewriteRoster(starterRoster(), withLunaGo(before.data as unknown as RosterDataShape) as never))
-    const luna = form((argv) => argv.map((part) => (part === 'opencode-go/kimi-k3#low' ? 'opencode-go/gpt-6-luna#max' : part)))
-    expect(check({ agent: 'luna-go', role: 'helper', argv: luna })).toMatchObject({ code: 'DATA_FORBIDDEN' })
-    approve(rewriteRoster(starterRoster(), withLunaGo(before.data as unknown as RosterDataShape, 'allowed') as never))
-    const passed = check({ agent: 'luna-go', role: 'helper', argv: luna })
-    expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
-    expect(passed.receipt).toMatchObject({ harness: 'opencode', agent: 'luna-go', model: 'opencode-go/gpt-6-luna', effort: 'max', route: { provider: 'opencode-go', host: 'default:opencode-go' } })
-    // `roster role helper` names her last, with the form; on this team from before the researcher mark every agent researches, she too.
-    const role = JSON.parse((await runCli(['roster', 'role', 'helper', '--json'])).stdout)
-    expect(role.candidates.at(-1)).toMatchObject({ agent: 'luna-go', opencode: { folder: openCodeFolder() } })
-    expect(namedResearchers(readApproved().data)).toBeNull()
-  })
-
-  it('refuses an agent a team file still names on Cursor, and a cursor-agent dispatch, saying Cursor was retired (Epic 71)', () => {
-    const retired = "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final"
-    approve(roster((text) => edit(edit(text, '## roles', '## curs\n\n```yaml\nname: Curs\nclass: pawn\nharness: cursor\nmodel: composer-2\nprovider: cursor\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: []\n```\n\n## roles'),
-      'opencode-go: {name: OpenCode Go', 'cursor: {name: Cursor, hosts: [], private_work: allowed}\nopencode-go: {name: OpenCode Go')))
-    expect(check({ agent: 'curs', role: 'helper', argv: form() })).toMatchObject({ verdict: 'REFUSED', code: 'APP_RETIRED', message: `curs runs in ${retired}` })
-    expect(check({ agent: 'kimi', role: 'helper', argv: ['cursor-agent', '-p', '--model', 'composer-2', 'x'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: retired })
-    expect(check({ agent: 'kimi', role: 'helper', argv: ['env', '-i', '/home/owner/.local/bin/cursor-agent', '-p'] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: retired })
-  })
-})
-
-/** The real OpenCode on this computer, for the opt-in run below (BMN_OPENCODE_REAL=1); empty when either is missing. */
-const REAL_OPENCODE = process.env.BMN_OPENCODE_REAL === '1'
-  ? (() => {
-      try {
-        return realpathSync(execFileSync('sh', ['-c', 'command -v opencode'], { encoding: 'utf8' }).trim())
-      } catch {
-        return ''
-      }
-    })()
-  : ''
-
-describe.runIf(REAL_OPENCODE !== '')('the real OpenCode run through the checked form on a stand-in model (70.2, BMN_OPENCODE_REAL=1)', () => {
-  let standin: Standin | null = null
-  afterEach(async () => {
-    await standin?.close()
-    standin = null
-  })
-
-  it('reads only inside the project, changes nothing, and sends none of the owner\'s or the repository\'s own files', async () => {
-    const marker = (name: string) => `MADE-UP-${name}-${'7f3a'}`
-    // Owner-like files in the home the check sees, a file outside the project, and a repository that tries to loosen BMN's agent.
-    const files: Record<string, string> = {
-      '.config/opencode/AGENTS.md': marker('OWNER_RULES'), '.config/opencode/opencode.json': JSON.stringify({ instructions: [join(home, 'owner-instructions.md')] }),
-      'owner-instructions.md': marker('OWNER_INSTRUCTIONS'), '.claude/CLAUDE.md': marker('OWNER_CLAUDE'), '.agents/skills/made-up/SKILL.md': `---\nname: made-up\ndescription: ${marker('OWNER_SKILL')}\n---\n`,
-      'outside.txt': marker('OUTSIDE'), 'work/src/notes.md': `# Made-up notes\n${marker('PROJECT_FILE')}\n`, 'work/AGENTS.md': marker('PROJECT_RULES'),
-      'work/opencode.json': JSON.stringify({ instructions: ['./more-rules.md'], agent: { 'bmn-helper': { permission: { edit: 'allow', bash: 'allow', external_directory: 'allow' } } } }),
-      'work/more-rules.md': marker('PROJECT_INSTRUCTIONS'),
-      'work/.opencode/agents/bmn-helper.md': `---\ndescription: ${marker('PROJECT_AGENT')}\nmode: primary\npermission:\n  "*": allow\n---\nWrite freely.\n`,
-      'work/.opencode/plugin/made-up.ts': `import { writeFileSync } from 'node:fs'\nwriteFileSync(${JSON.stringify(join(home, 'plugin-ran'))}, 'x')\nexport const MadeUp = async () => ({})\n`
-    }
-    for (const [path, content] of Object.entries(files)) {
-      mkdirSync(dirname(join(home, path)), { recursive: true })
-      writeFileSync(join(home, path), content)
-    }
-    approve(roster((text) => edit(edit(allowGo(text), 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}',
-      'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max, kimi@max], then: lead, read_only: true}'), 'model: kimi-k3\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low]',
-    'model: kimi-k3\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [max]')))
-    installOpenCodeFolder(undefined, { ownerCache: `${savedHome}/.cache/opencode` })
-    const path = `${dirname(REAL_OPENCODE)}:/usr/bin:/bin`
-    // Kimi on OpenCode 2.0.29 takes only the max variant; it speaks Chat Completions.
-    const argv = form((parts) => parts.map((part) => (part.startsWith('PATH=') ? `PATH=${path}` : part === 'opencode-go/kimi-k3#low' ? 'opencode-go/kimi-k3#max' : part)))
-    const checked = kimi(argv, {}, { HOME: home, PATH: path })
-    expect(checked.verdict, JSON.stringify(checked)).toBe('PASS')
-    expect(checked.receipt?.harness_version).toMatchObject({ state: 'tested' })
-
-    standin = await startStandin([
-      { tool: 'write', input: { path: join(workspace, 'made-up-written.txt'), content: 'made-up write' } },
-      { tool: 'edit', input: { path: join(workspace, 'src/notes.md'), oldString: '# Made-up notes', newString: '# Edited' } },
-      { tool: 'shell', input: { command: `touch ${join(workspace, 'made-up-shell')}`, description: 'A made-up step' } },
-      { tool: 'bash', input: { command: `touch ${join(workspace, 'made-up-bash')}`, description: 'A made-up step' } },
-      { tool: 'read', input: { path: join(home, 'outside.txt') } },
-      { tool: 'webfetch', input: { url: 'http://127.0.0.1:{PORT}/trap/webfetch' } },
-      { tool: 'subagent', input: { agent: 'general', description: 'made-up', prompt: 'made-up sub-agent task' } },
-      { tool: 'read', input: { path: join(workspace, 'src/notes.md') } },
-      { text: 'made-up final answer' }
-    ])
-    // The run is the checked command; only the test adds the stand-in's address for OpenCode Go and a proxy that refuses every tunnel.
-    const added = [`OPENCODE_CONFIG_CONTENT=${JSON.stringify({ provider: { 'opencode-go': { options: { baseURL: `http://127.0.0.1:${standin.port}/v1`, apiKey: 'made-up-not-a-credential' } } } })}`,
-      `HTTPS_PROXY=http://127.0.0.1:${standin.port}`, `HTTP_PROXY=http://127.0.0.1:${standin.port}`, 'NO_PROXY=127.0.0.1,localhost']
-    const run = [...argv.slice(0, 2), ...added, ...argv.slice(2)]
-    const result = await new Promise<{ code: number | null; stdout: string }>((resolve) => {
-      const child = execFile(run[0] ?? 'env', run.slice(1), { cwd: workspace, timeout: 90_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => resolve({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout }))
-      child.stdin?.end('Made-up request: read src/notes.md and say what it holds.')
-    })
-    const events = result.stdout.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as { type: string; sessionID?: string; part?: { text?: string } })
-    expect(result.code, result.stdout.slice(-2000)).toBe(0)
-    expect(events.filter((event) => event.type === 'text').at(-1)?.part?.text).toBe('made-up final answer')
-    const session = events[0]?.sessionID ?? ''
-    expect(session).toMatch(OPENCODE_SESSION_ID)
-
-    // Nothing was changed, started or fetched.
-    expect(readdirSync(workspace).sort()).toEqual(['.opencode', 'AGENTS.md', 'more-rules.md', 'opencode.json', 'src'])
-    expect(readFileSync(join(workspace, 'src/notes.md'), 'utf8')).toBe(files['work/src/notes.md'])
-    expect(existsSync(join(home, 'plugin-ran'))).toBe(false)
-    expect(standin.trapped).toEqual([])
-    expect(standin.tunnels).toEqual([])
-    expect(openCodeFolderProblem()).toBeNull()
-
-    // Only reading tools were offered; the rest were refused, and so was the read outside the project.
-    const main = standin.requests.filter((request) => request.tools.length > 0)
-    expect(main.length).toBe(9)
-    for (const request of main) expect(request.tools.every((tool) => ['read', 'glob', 'grep', 'list'].includes(tool)), request.tools.join(',')).toBe(true)
-    // A tool result is JSON text, so its quotes arrive escaped.
-    const results = (main.at(-1)?.results ?? []).map((result) => result.replaceAll('\\"', '"'))
-    for (const [index, tool] of ['write', 'edit', 'shell', 'bash'].entries()) expect(results[index]).toContain(`No tool named "${tool}"`)
-    expect(results[4]).toMatch(/Permission denied|external_directory/)
-    expect(results[5]).toContain('No tool named "webfetch"')
-    expect(results[6]).toContain('No tool named "subagent"')
-    expect(results[7]).toContain(marker('PROJECT_FILE'))
-
-    // The provider saw the project file it asked to read, and nothing else of the markers.
-    const seen = Object.keys(files).map((name) => files[name] ?? '').flatMap((content) => content.match(/MADE-UP-[A-Z_]+-7f3a/g) ?? [])
-      .filter((value, index, all) => all.indexOf(value) === index && standin?.requests.some((request) => request.body.includes(value)))
-    expect(seen).toEqual([marker('PROJECT_FILE')])
-
-    // The receipt binds to the run's own session.
-    const file = join(home, 'receipt.json')
-    writeFileSync(file, JSON.stringify(checked.receipt))
-    expect(bindSession(file, session, { now: NOW })).toMatchObject({ session_id: session })
-
-    // Its usage, model and agent are read back from BMN's folder as dev-auto's models.md says (70.4 AC3), and that read leaves the folder as it was.
-    const exported = execFileSync(argv[0] ?? 'env', [...argv.slice(1, argv.indexOf('run')), 'session', 'export', session, '--standalone'], { cwd: workspace, timeout: 60_000, encoding: 'utf8' })
-    const info = JSON.parse(exported).info
-    expect(info).toMatchObject({ id: session, agent: 'bmn-helper', model: { providerID: 'opencode-go', id: 'kimi-k3', variant: 'max' } })
-    expect(info.tokens).toMatchObject({ input: expect.any(Number), output: expect.any(Number) })
-    expect(openCodeFolderProblem()).toBeNull()
-  }, 120_000)
 })
 
 describe('destination resolution (60.3 AC3-AC4)', () => {
@@ -748,7 +494,7 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
 
   it('no exception applies to an owner-declared destination, and none changes the host check or the need for a readable app version', () => {
     approve(roster((text) => edit(edit(text, 'folder: /synthetic/EXCEPTION-SENTINEL-FOLDER', `folder: ${workspace}`),
-      'zai-synthetic: {provider: zai', 'opencode-here: {provider: opencode-go, folder: ' + workspace + '}\nzai-synthetic: {provider: zai')))
+      'zai-synthetic: {provider: zai', 'anthropic-here: {provider: anthropic, folder: ' + workspace + '}\nzai-synthetic: {provider: zai')))
     expect(check({ agent: 'glm', role: 'helper', argv: GLM().map((part) => part.replace('api.z.ai', 'api.other.example')) }).code).toBe('HOST_MISMATCH')
     stub('claude', '2.9.0 (Claude Code)')
     expect(check({ agent: 'glm', role: 'helper', argv: GLM() }).receipt?.harness_version).toEqual({ version: '2.9.0', state: 'newer than BMN tested' })
@@ -1344,79 +1090,8 @@ describe('receipts and --verify (60.3 AC7)', () => {
     expect(route.stdout).toContain('inspection only, never an authorization')
     expect(route.stdout).toContain('destination: default:openai (default)')
     expect(route.stdout).toContain('provider: openai (may see private work)')
-    const kimi = JSON.parse((await runCli(['roster', 'route', '--agent', 'kimi', '--json'])).stdout)
-    expect(kimi).toMatchObject({ agent: 'kimi', harness: 'opencode', inspection_only: true, basis: 'unknown' })
   })
 
-  it('reads OpenCode 2\'s configuration shapes and version for its destination (owner decision 2026-10-14)', async () => {
-    stub('opencode', 'opencode v2.0.28')
-    mkdirSync(join(home, '.config/opencode'), { recursive: true })
-    const route = async (config: string) => {
-      writeFileSync(join(home, '.config/opencode/opencode.jsonc'), config)
-      return JSON.parse((await runCli(['roster', 'route', '--agent', 'kimi', '--json'])).stdout)
-    }
-    // OpenCode's own provider is named by the model's prefix, also where the model is written as an object.
-    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ basis: 'default', provider: 'opencode-go', host: 'default:opencode-go', version: '2.0.28', version_state: 'tested' })
-    expect(await route('{ "model": { "providerID": "opencode-go", "model": "kimi-k3" } }')).toMatchObject({ basis: 'default', provider: 'opencode-go', model: 'opencode-go/kimi-k3' })
-    // The roster decides, as for Claude Code and Codex: the fixture's OpenCode Go gets public work only.
-    expect(await route('{ "model": "opencode-go/kimi-k3" }')).toMatchObject({ roster_provider: 'opencode-go', private_work: 'public_only' })
-    // A provider entry that can carry data elsewhere makes the destination unknown, in either version's layout.
-    for (const entry of ['"provider": { "opencode-go": { "npm": "x" } }', '"providers": { "opencode-go": { "package": "@acme/provider" } }',
-      '"providers": { "opencode-go": { "canonical": "openai" } }', '"providers": { "opencode-go": { "settings": { "baseURL": "https://proxy.example.test/v1" } } }']) {
-      expect(await route(`{ "model": "opencode-go/kimi-k3", ${entry} }`)).toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc gives opencode-go its own address' })
-    }
-    // So does the chosen model's own entry, or one of its variants (OpenCode 2's model-level package and settings).
-    for (const entry of ['{ "package": "file:///opt/acme" }', '{ "settings": { "baseURL": "https://proxy.example.test/v1" } }',
-      '{ "variants": { "high": { "settings": { "baseURL": "https://proxy.example.test/v1" } } } }', 'null']) {
-      expect(await route(`{ "model": "opencode-go/kimi-k3#high", "providers": { "opencode-go": { "models": { "kimi-k3": ${entry} } } } }`))
-        .toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc gives opencode-go/kimi-k3 its own address' })
-    }
-    // A model entry that only renames or describes it keeps the provider's destination, and a variant is not a provider.
-    expect(await route('{ "model": "opencode-go/kimi-k3#high", "providers": { "opencode-go": { "models": { "kimi-k3": { "modelID": "kimi-k3-0901", "name": "Kimi" } } } } }'))
-      .toMatchObject({ basis: 'default', host: 'default:opencode-go', model: 'opencode-go/kimi-k3' })
-    // Every model that gets the conversation counts: the title model and each agent's, in the file or beside it.
-    expect(await route('{ "model": "opencode-go/kimi-k3", "small_model": "opencode-go/kimi-mini", "agents": { "review": { "model": "opencode-go/kimi-k3#high" } } }'))
-      .toMatchObject({ basis: 'default', host: 'default:opencode-go' })
-    expect(await route('{ "model": "opencode-go/kimi-k3", "small_model": "openrouter/cheap" }'))
-      .toMatchObject({ basis: 'unknown', host: null, reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
-    expect(await route('{ "model": "opencode-go/kimi-k3", "agent": { "plan": { "model": "anthropic/claude-sonnet-4-5" } } }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, anthropic)' })
-    expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "kimi-k3" } } }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc agents.review.model names no model BMN reads as <provider>/<model>' })
-    expect(await route('{ "model": "opencode-go/kimi-k3", "agents": { "review": { "model": "opencode-go/kimi-k3" } }, "providers": { "opencode-go": { "models": { "kimi-k3": { "package": "@acme/x" } } } } }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc gives opencode-go/kimi-k3 its own address' })
-    // A command runs on its own model too, named in the file or in a file beside it.
-    expect(await route('{ "model": "opencode-go/kimi-k3", "commands": { "release": { "template": "x", "model": "openrouter/cheap#high" } } }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
-    expect(await route('{ "model": "opencode-go/kimi-k3", "command": { "release": { "template": "x", "model": "openrouter/cheap" } } }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)' })
-    // A file beside the configuration names its model too, read whole or not at all (more in the next test).
-    mkdirSync(join(home, '.config/opencode/agents'), { recursive: true })
-    writeFileSync(join(home, '.config/opencode/agents/review.md'), '---\ndescription: Reviews\nmodel: "openrouter/cheap#low"\n---\nReview it.\n')
-    expect(await route('{ "model": "opencode-go/kimi-k3" }'))
-      .toMatchObject({ basis: 'unknown', reason: 'opencode.jsonc sends the conversation to more than one provider (opencode-go, openrouter)', sources: ['opencode.jsonc model', 'agents/review.md'] })
-    rmSync(join(home, '.config/opencode/agents'), { recursive: true })
-  })
-
-  it('reads an OpenCode folder only where it understands all of it: every agent and command file\'s front matter, the configuration\'s JSON with comments, and one configuration file (consultant, 2026-10-14)', () => {
-    stub('opencode', 'opencode v2.0.28')
-    const folder = join(home, '.config/opencode')
-    for (const { label, files, expected } of OPENCODE_FOLDERS) {
-      rmSync(folder, { recursive: true, force: true })
-      for (const [path, text] of Object.entries(files)) {
-        mkdirSync(dirname(join(folder, path)), { recursive: true })
-        writeFileSync(join(folder, path), text)
-      }
-      const route = inspectRoute({ harness: 'opencode' } as Parameters<typeof inspectRoute>[0], null, env, home)
-      if (expected.basis === 'default') {
-        expect(route, label).toMatchObject({ basis: 'default', provider: 'opencode-go', host: 'default:opencode-go', ...(expected.model === undefined ? {} : { model: expected.model }) })
-      } else {
-        expect(route, label).toMatchObject({ basis: 'unknown', host: null })
-        if (typeof expected.reason === 'string') expect(route.reason, label).toBe(expected.reason)
-        else expect(route.reason, label).toMatch(expected.reason)
-      }
-    }
-  }, 60_000)
 })
 
 describe('codex exec resume (60.3 AC8)', () => {
@@ -1528,7 +1203,7 @@ describe('research runs (60.3 AC11)', () => {
     writeFileSync(join(home, 'research.json'), JSON.stringify(pass.receipt))
     expect(verifyReceipt(join(home, 'research.json'), RESEARCH(), { environment: env, cwd: run.cwd })).toEqual({ ok: true })
     expect(verifyReceipt(join(home, 'research.json'), RESEARCH(['--add-dir', home]), { environment: env, cwd: run.cwd })).toMatchObject({ ok: false })
-    // Only an OpenCode research run binds its session (70.4 AC4); this one is refused in the words of before (70.2 AC5).
+    // Only a Codex dispatch binds its session.
     expect(() => bindSession(join(home, 'research.json'), '019a2f6e-1c2b-7d3e-8f40-123456789abc', { now: NOW })).toThrow(/^only the receipt of a Codex dispatch can be bound to a session$/)
   })
 
@@ -1986,15 +1661,15 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
     ['a context limit set and one removed', EXAMPLE, (text: string) => edit(edit(text, 'context_window: 400000\ncontext_limit: 272000', 'context_window: 400000'),
       'efforts: [low, medium, high]\nroles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]', 'efforts: [low, medium, high]\nroles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]\ncontext_limit: 272000'),
     ['Sol: context limit 272 000 → app default', 'Astra: context limit app default → 272 000']],
-    ['an exception added, never naming its folder', EXAMPLE, (text: string) => edit(text, 'zai-synthetic: {provider: zai', 'opencode-app: {provider: opencode-go, folder: /synthetic/EXCEPTION-SENTINEL-NEW}\nzai-synthetic: {provider: zai'),
-      ['OpenCode Go could receive private work in one more workspace']],
+    ['an exception added, never naming its folder', EXAMPLE, (text: string) => edit(text, 'zai-synthetic: {provider: zai', 'zai-app: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-NEW}\nzai-synthetic: {provider: zai'),
+      ['Z.ai could receive private work in one more workspace']],
     ['an exception removed', EXAMPLE, (text: string) => edit(text, '## exceptions\n\n```yaml\nzai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}\n```\n\n', ''),
       ['Z.ai could no longer receive private work in one workspace']],
     ['a destination declared on the owner\'s word', EXAMPLE, (text: string) => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'),
       ['Sol could no longer receive private work', 'Astra could no longer receive private work', 'Luna could no longer receive private work',
         'Codex would count as sending data to OpenAI on your word, so it gets public work only']],
     ['a tool added for every app: the apps that may have it, never one that gets public work only', EXAMPLE, (text: string) => `${text}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\ndocs: {name: Docs, url: "https://docs.example.test/mcp", public: true}\n\`\`\`\n`,
-      ['Tool Docs would reach Claude Code, Codex and OpenCode', 'Tool Notes would reach Claude Code and Codex',
+      ['Tool Docs would reach Claude Code and Codex', 'Tool Notes would reach Claude Code and Codex',
         'With a tool on the list, the check keeps every Claude Code run to exactly its own tools, once its tools test passed there; it does not judge the tools of a Codex run']],
     ['the last tool taken off the list', `${EXAMPLE}\n## tools\n\n\`\`\`yaml\nnotes: {name: Notes, command: notes-tool}\n\`\`\`\n`, () => EXAMPLE,
       ['Tool Notes would no longer reach Claude Code and Codex', 'With no tool on the list, the check no longer looks at which tools a run has']],
@@ -2047,38 +1722,4 @@ describe('consequences in words (60.5 AC7; the same sentences `bmn roster status
     })
     expect(output).toContain('If approved:\n  Changing OpenAI to Public work only stops Sol, Astra and Luna receiving private work')
   })
-})
-
-it('Epic 85 full review: managed sources refuse every OpenCode dispatch before execution', () => {
-  const managed = join(home, 'synthetic-managed'), base = join(home, 'synthetic-run')
-  mkdirSync(managed)
-  const code = `
-    const [routesUrl, openCodeUrl, argvUrl, base] = process.argv.slice(1);
-    const {resolveOpenCodeRoute} = await import(routesUrl);
-    const {openCodeEnvironment,openCodeAskConfig,OPENCODE_HELPER_AGENT,OPENCODE_RESEARCH_AGENT} = await import(openCodeUrl);
-    const {parseDispatch} = await import(argvUrl);
-    const rows=[];
-    for(const kind of ['helper','reader','asker','researcher']) {
-      const ask = ['reader','asker'].includes(kind) ? openCodeAskConfig(kind) : null;
-      const agent = ask?.agent ?? (kind==='helper' ? OPENCODE_HELPER_AGENT : OPENCODE_RESEARCH_AGENT);
-      const env={...openCodeEnvironment(base),PATH:'/usr/bin:/bin',...(ask ? {OPENCODE_CONFIG_CONTENT:ask.content}:{})};
-      const parsed=parseDispatch(['env','-i',...Object.entries(env).map(([k,v])=>k+'='+v),'opencode','run','--standalone','--format','json','--agent',agent,'-m','opencode-go/gpt-6-luna#high','--title','Synthetic']);
-      rows.push({kind,result:resolveOpenCodeRoute(parsed,{base,folder:false,agent,inline:ask?.content??null})});
-    }
-    console.log(JSON.stringify(rows));
-  `
-  const run = () => JSON.parse(execFileSync('/usr/bin/bwrap', [
-    '--unshare-all', '--cap-drop', 'ALL', '--new-session', '--die-with-parent', '--ro-bind', '/', '/',
-    '--tmpfs', '/etc', '--dir', '/etc/opencode', '--ro-bind', managed, '/etc/opencode', '--proc', '/proc', '--dev', '/dev',
-    '--', process.execPath, '--input-type=module', '-e', code,
-    new URL('../../bin/agents-check-routes.mjs', import.meta.url).href,
-    new URL('../../bin/agents-opencode.mjs', import.meta.url).href,
-    new URL('../../bin/agents-check-argv.mjs', import.meta.url).href, base
-  ], { env: { HOME: home, PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 5000 })) as Array<{ kind: string; result: { unsupported?: string; route?: unknown } }>
-  expect(run().every(row => row.result.route !== undefined)).toBe(true)
-  writeFileSync(join(managed, 'opencode.jsonc'), '{"plugins":["./synthetic-plugin"]}')
-  for (const row of run()) expect(row.result.unsupported, row.kind).toMatch(/managed/i)
-  rmSync(join(managed, 'opencode.jsonc'))
-  mkdirSync(join(managed, 'plugins')); writeFileSync(join(managed, 'plugins/synthetic.mjs'), 'throw new Error("must never execute")')
-  for (const row of run()) expect(row.result.unsupported, row.kind).toMatch(/managed/i)
 })

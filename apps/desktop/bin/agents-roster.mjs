@@ -21,15 +21,17 @@ export const OLDEST_SCHEMA_VERSION = 2
 export function schemaSupported(version) {
   return Number.isSafeInteger(version) && version >= OLDEST_SCHEMA_VERSION && version <= SCHEMA_VERSION
 }
-export const HARNESSES = ['claude', 'codex', 'opencode']
+export const HARNESSES = ['claude', 'codex']
 /**
- * Apps BMN supported once and retired (Epic 71), with how they are named. A team file that still
- * names one is read, with a note; nothing runs on it, and Team proposes removing it. The support
- * itself is kept at a git tag, so it can come back.
+ * Apps BMN supported once and retired (Cursor in Epic 71, OpenCode in Epic 123), with how they are
+ * named. A team file that still names one is read, with a note; nothing runs on it, and Team proposes
+ * removing it. Each app's support is kept at a git tag of its own, so it can come back.
  */
-export const RETIRED_APPS = { cursor: 'Cursor' }
-const RETIRED_ON = '2026-10-14'
-const RETIRED_TAG = 'cursor-support-final'
+export const RETIRED_APPS = { cursor: 'Cursor', opencode: 'OpenCode' }
+const RETIREMENTS = {
+  cursor: { on: '2026-10-14', tag: 'cursor-support-final' },
+  opencode: { on: '2026-11-20', tag: 'opencode-support-final' }
+}
 /** The apps a team file's lists may name: the ones BMN serves, then the retired ones, which an old file may still hold. */
 export const LISTED_APPS = [...HARNESSES, ...Object.keys(RETIRED_APPS)]
 /** Whether an app is one BMN retired. */
@@ -42,10 +44,10 @@ export function appName(app) {
 }
 /** What every command says when it is asked for a retired app, in place of "unknown app". */
 export function retiredWords(app) {
-  return `${RETIRED_APPS[app]} was retired on ${RETIRED_ON}; BMN's support for it is kept at the git tag ${RETIRED_TAG}`
+  return `${RETIRED_APPS[app]} was retired on ${RETIREMENTS[app].on}; BMN's support for it is kept at the git tag ${RETIREMENTS[app].tag}`
 }
 /** Each retired app's program, so a command that starts one is named for what it was. */
-const RETIRED_PROGRAMS = { 'cursor-agent': 'cursor' }
+const RETIRED_PROGRAMS = { 'cursor-agent': 'cursor', opencode: 'opencode' }
 /** The retired app a command's program (a name or a path) starts, or null. */
 export function retiredProgram(command) {
   const name = typeof command === 'string' ? command.slice(command.lastIndexOf('/') + 1) : ''
@@ -66,14 +68,7 @@ export function isCalled(agent) {
   return agent?.harness === CALLED_BY_BMN
 }
 /** How BMN names each agent app to the owner, in the order they are always listed. */
-export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
-/**
- * Apps that get public work only whatever their destination reads. OpenCode converts older
- * configuration shapes BMN does not read (a model entry's own `provider`, a variant's direct
- * fields, renamed providers), so its reading cannot rule out another endpoint; it stays here by
- * owner decision 2026-10-14 after the fifth review found one more.
- */
-const PUBLIC_ONLY_APPS = ['opencode']
+export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex' }
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 /** The five chess classes: a knight leads an epic/project, a queen may hold any role, a rook designs, a bishop reviews and advises, a pawn does jobs a lead hands off. */
 const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
@@ -148,7 +143,7 @@ export function readOnlyProposal(data) {
 }
 
 /** The agent apps that have a research form the check admits. */
-export const RESEARCH_APPS = ['claude', 'codex', 'opencode']
+export const RESEARCH_APPS = ['claude', 'codex']
 
 /**
  * The agents the approved team names as researchers (63.3). Null only for a team from before the
@@ -1344,10 +1339,9 @@ export function calledParties(data, agent) {
 
 /**
  * Whether an app's approved default destination may receive private work, with the reason in
- * words: only an inspected default whose provider answers `allowed`, in an app not in
- * PUBLIC_ONLY_APPS. Missing, owner-declared and public-only destinations get public work only (60.3 AC4,
- * 60.4 AC1), and so does every app in PUBLIC_ONLY_APPS, whatever its configuration reads today
- * (owner decisions 2026-10-10, narrowing 60.4 AC3, and 2026-10-14, which kept OpenCode on it).
+ * words: only an inspected default whose provider answers `allowed`. Missing, owner-declared and
+ * public-only destinations get public work only (60.3 AC4, 60.4 AC1; owner decision 2026-10-10,
+ * narrowing 60.4 AC3).
  */
 export function harnessPrivateWork(data, harness) {
   const app = appName(harness)
@@ -1356,7 +1350,6 @@ export function harnessPrivateWork(data, harness) {
   const provider = data.providers.find((entry) => entry.id === route.provider) ?? null
   if (route.basis === 'owner-declared') return { allowed: false, reason: `BMN can't confirm where ${app} sends data`, route, provider }
   if (provider?.private_work !== 'allowed') return { allowed: false, reason: `${provider?.name ?? route.provider} gets public work only`, route, provider }
-  if (PUBLIC_ONLY_APPS.includes(harness)) return { allowed: false, reason: `BMN does not check what ${app} sends`, route, provider }
   return { allowed: true, reason: `${provider.name} may see private work`, route, provider }
 }
 
@@ -1471,11 +1464,8 @@ export function roleChainText(chain) {
   if (chain.read_only === true) {
     lines.push('  read-only: a run for this role is refused unless it is started so that it cannot write')
     const forms = new Map(chain.candidates.filter((candidate) => candidate.read_only !== undefined).map((candidate) => [candidate.read_only.argv.join(' '), candidate.read_only.argv]))
-    for (const argv of forms.values()) lines.push(`    ${argv[0] === '--sandbox' ? 'codex exec' : argv[0] === '--agent' ? 'opencode run' : 'claude -p'} must carry: ${argv.map((item) => (/^[A-Za-z0-9_=,.:/-]+$/.test(item) ? item : `'${item}'`)).join(' ')}`)
+    for (const argv of forms.values()) lines.push(`    ${argv[0] === '--sandbox' ? 'codex exec' : 'claude -p'} must carry: ${argv.map((item) => (/^[A-Za-z0-9_=,.:/-]+$/.test(item) ? item : `'${item}'`)).join(' ')}`)
   }
-  // An OpenCode candidate runs only in the one form the check reads (70.2), whatever the role.
-  const openCode = chain.candidates.find((candidate) => candidate.opencode !== undefined)?.opencode
-  if (openCode !== undefined) lines.push(`  opencode: env -i ${openCode.env.join(' ')} PATH=<your PATH> opencode ${[...openCode.argv, ...openCode.then].join(' ')} < <prompt file>`)
   return lines.join('\n')
 }
 

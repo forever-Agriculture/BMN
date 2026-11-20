@@ -12,7 +12,6 @@ import { installOwnSkills, shippedSkillNames } from './agents-own-skills.mjs'
 import { installSkills } from './agents-skills.mjs'
 import { installSetupHook, setupHookPath } from './setup-hook-defaults.mjs'
 import { setupHookGroups } from './bmn-hooks.mjs'
-import { installSetupOpenCodeHooks } from './setup-opencode-hooks.mjs'
 import { installSetupTool } from './setup-tool-defaults.mjs'
 import { toolReachesApp } from './agents-tools.mjs'
 import { readSetupRecovery } from './setup-recovery.mjs'
@@ -113,16 +112,13 @@ export async function coordinateSetupDefaults(request) {
       const master = { path: masterPath(), hash: sha256(DEFAULT_SETUP_MASTER), parts: parseMaster(DEFAULT_SETUP_MASTER).parts }
       return installSetupFile({ kind: 'rules', app, path, entry: 'rules' }, render(master, app, latest).text, { setupId })
     }))
-    if (app === 'opencode') await run('hooks', app, () => installSetupOpenCodeHooks({ setupId }))
-    else {
-      const path = setupHookPath(app)
-      // Event names come from the native hook contract; adapters reread each actual config under admission.
-      for (const event of Object.keys(setupHookGroups(app, '{}').groups)) {
-        await run('hooks', app, () => installSetupHook(app, event, { setupId }))
-      }
-      // Keep the row's path available even where an existing foreign group made no write.
-      for (const row of rows.filter(row => row.kind === 'hooks' && row.app === app)) if (row.paths.length === 0) row.paths.push(path)
+    const hookPath = setupHookPath(app)
+    // Event names come from the native hook contract; adapters reread each actual config under admission.
+    for (const event of Object.keys(setupHookGroups(app, '{}').groups)) {
+      await run('hooks', app, () => installSetupHook(app, event, { setupId }))
     }
+    // Keep the row's path available even where an existing foreign group made no write.
+    for (const row of rows.filter(row => row.kind === 'hooks' && row.app === app)) if (row.paths.length === 0) row.paths.push(hookPath)
     if (own.code === 'OK') await run('skills', app, async () => {
       const result = await installSkills([app], { yes: true, asJson: true, absent: true, versions })
       // Nothing to write and nothing held back: the app already has every skill.
@@ -132,7 +128,7 @@ export async function coordinateSetupDefaults(request) {
     else rows.push(project('skills', app, { code: 'DEFAULTS_SOURCE_UNAVAILABLE' }))
     const tools = (generation.data.tools ?? []).filter(tool => toolReachesApp(tool, app))
     for (const tool of tools) await run('tools', app, () => installSetupTool(app, tool.id, { setupId, versions }))
-    // No approved tool is meant for this app (owner 2026-10-22: OpenCode gets none), so its tools step is settled.
+    // No approved tool is meant for this app, so its tools step is settled.
     if (tools.length === 0) rows.push(project('tools', app, { code: 'OK', state: 'excluded' }))
   }
   return finish({ code: rows.every(row => row.code === 'OK') ? 'OK' : 'DEFAULTS_PARTIAL', source, names, rows })

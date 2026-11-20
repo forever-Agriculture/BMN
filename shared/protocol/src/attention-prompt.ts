@@ -4,7 +4,7 @@ import { stripFormatCharacters } from './file-reference'
 import { isRecord } from './shared-helpers'
 
 /** The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). */
-type AttentionPromptHarness = 'claude' | 'codex' | 'opencode'
+type AttentionPromptHarness = 'claude' | 'codex'
 
 /**
  * Which row of the remote-answer shape matrix this prompt is. `choice` covers one or several
@@ -30,18 +30,13 @@ export interface AttentionPromptQuestion {
   text: string
   multiSelect: boolean
   options: AttentionPromptOption[]
-  /**
-   * OpenCode's own `custom` flag: false when the agent turned off typed answers for this question. Absent
-   * when the harness did not say, and for every Claude and Codex question, which always allow one.
-   */
-  custom?: boolean
 }
 
 export interface AttentionQuestionsPrompt {
   type: 'questions'
   harness: AttentionPromptHarness
   shape: Exclude<AttentionPromptShape, 'permission' | 'sandbox-network'>
-  /** The harness's request id when it has one (OpenCode `que_…`), else null. */
+  /** The harness's request id when it has one, else null. */
   requestRef: string | null
   /** The tool call that asked (Claude and Codex `tool_use_id`), which its PostToolUse repeats. */
   toolUseId: string | null
@@ -52,10 +47,10 @@ export interface AttentionPermissionPrompt {
   type: 'permission'
   harness: AttentionPromptHarness
   shape: 'permission' | 'sandbox-network' | 'subagent'
-  /** The harness's request id when it has one (OpenCode `per_…`), else null. */
+  /** The harness's request id when it has one, else null. */
   requestRef: string | null
   toolUseId: string | null
-  /** What wants permission, as the harness names it: `Bash`, `Edit`, OpenCode `bash`. */
+  /** What wants permission, as the harness names it: `Bash`, `Edit`. */
   tool: string
   /** The exact command, path or URL; null when the harness did not say exactly. */
   command: string | null
@@ -87,7 +82,7 @@ export const ATTENTION_PROMPT_LIMITS = Object.freeze({
   answer: 4_000
 })
 
-const HARNESSES: readonly AttentionPromptHarness[] = ['claude', 'codex', 'opencode']
+const HARNESSES: readonly AttentionPromptHarness[] = ['claude', 'codex']
 const QUESTION_SHAPES: readonly AttentionQuestionsPrompt['shape'][] = ['choice', 'async-choice', 'multi-select', 'subagent']
 const PERMISSION_SHAPES: readonly AttentionPermissionPrompt['shape'][] = ['permission', 'sandbox-network', 'subagent']
 
@@ -152,18 +147,16 @@ function option(value: unknown): AttentionPromptOption {
 }
 
 function question(value: unknown, typedOnly = false): AttentionPromptQuestion {
-  if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'], ['custom'])) {
+  if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'])) {
     throw new PromptError('prompt question has the wrong shape')
   }
   if (typeof value.multiSelect !== 'boolean') throw new PromptError('prompt question multiSelect must be true or false')
-  if ('custom' in value && typeof value.custom !== 'boolean') throw new PromptError('prompt question custom must be true or false')
   return {
     id: nullableText(value.id, 'question id', ATTENTION_PROMPT_LIMITS.identifier),
     header: nullableShownText(value.header, 'question header', ATTENTION_PROMPT_LIMITS.header),
     text: shownText(value.text, 'question text', ATTENTION_PROMPT_LIMITS.text, true),
     multiSelect: value.multiSelect,
-    options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options, typedOnly ? 0 : 1).map(option),
-    ...('custom' in value ? { custom: value.custom as boolean } : {})
+    options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options, typedOnly ? 0 : 1).map(option)
   }
 }
 
@@ -259,11 +252,11 @@ export function mergeSamePrompt(stored: AttentionPrompt, incoming: AttentionProm
 export interface AttentionEvidence {
   /** The tool call the report is about (Claude and Codex `tool_use_id`). */
   toolUseId: string | null
-  /** The harness's request id (OpenCode `requestID`). */
+  /** The harness's request id, when it has one. */
   requestRef: string | null
   /**
    * What each question was answered with, in the order the prompt asked them, exactly as the harness reported
-   * it: Claude one string per question (labels joined by ", "), Codex its answers list, OpenCode its labels.
+   * it: Claude one string per question (labels joined by ", "), Codex its answers list.
    * Null when the report names none.
    */
   answers: string[][] | null

@@ -99,7 +99,7 @@ describe('an opened message, read-only (Story 66.2, 75.4)', () => {
     expect(messageNote(message({ state: 'printed', claimedApp: 'claude' }), NOW))
       .toBe("Printed for the agent by Claude Code's hook: printed, not proven read. Hand-over measured on Claude Code 2.1.318.")
     // An app BMN holds no measurement for is named without one.
-    expect(messageNote(message({ state: 'printed', claimedApp: 'opencode' }), NOW)).toBe("Printed for the agent by OpenCode's hook: printed, not proven read.")
+    expect(messageNote(message({ state: 'printed', claimedApp: 'opencode' }), NOW)).toBe("Printed for the agent by OpenCode (retired)'s hook: printed, not proven read.")
   })
 
   it('says which apps a hook hands messages to, as bmn hooks check does; no other app takes one', () => {

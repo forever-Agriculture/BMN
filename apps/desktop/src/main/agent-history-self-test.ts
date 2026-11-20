@@ -67,9 +67,9 @@ function listFiles(root: string): string[] {
 }
 
 /**
- * A home with `~/.claude`, two more Claude folders for the stand-in's hook calls to teach BMN, a Codex and
- * an OpenCode 2 store (one old, one recent and one old-but-held session each; in OpenCode, held through a
- * subagent's session, plus an old one whose subagent was busy two days ago), and recording binaries.
+ * A home with `~/.claude`, two more Claude folders for the stand-in's hook calls to teach BMN, a Codex store (one
+ * old, one recent and one old-but-held session), and recording binaries. An OpenCode 2 store and a recording `opencode`
+ * stay beside them: OpenCode was retired (Epic 123), so BMN must neither list nor run them.
  */
 export function prepareHistoryFixture(isolatedCwd: string, now = Date.now()): HistoryFixture {
   const roots = selfTestHistoryRoots()

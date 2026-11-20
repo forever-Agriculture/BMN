@@ -3,7 +3,7 @@ const REPEAT_WINDOW = 20
 /** Tune against the local repeat-watch.log calibration segments. */
 export const REPEAT_NOTICE_AT = 8
 
-export type RepeatAgent = 'claude' | 'codex' | 'opencode'
+export type RepeatAgent = 'claude' | 'codex'
 
 export interface RepeatSegment {
   agent: RepeatAgent
@@ -26,9 +26,9 @@ export interface RepeatEvent {
   fingerprint?: string | undefined
 }
 
-/** The owner's next message: Claude's and Codex's prompt hook, or an OpenCode root run starting (OpenCode has no prompt hook). */
+/** The owner's next message: Claude's and Codex's prompt hook. */
 export function ownerTurn(event: Pick<RepeatEvent, 'agent' | 'event' | 'source'>): boolean {
-  return event.event === 'UserPromptSubmit' || (event.agent === 'opencode' && event.event === 'session.status' && event.source !== 'subagent')
+  return event.event === 'UserPromptSubmit'
 }
 
 export function observeRepeat(previous: RepeatState | undefined, event: RepeatEvent): {

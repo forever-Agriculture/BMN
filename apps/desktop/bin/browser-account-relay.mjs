@@ -254,7 +254,7 @@ export class AccountBrowserRelay {
   }
 }
 export async function runAccountBrowser(app) {
-  const allowed = ['claude', 'codex', 'opencode'].includes(app) && harnessPrivateWork(approvedIfAny()?.data, app).allowed
+  const allowed = ['claude', 'codex'].includes(app) && harnessPrivateWork(approvedIfAny()?.data, app).allowed
   const relay = new AccountBrowserRelay({ allowed })
   let queue = Promise.resolve()
   const finish = async () => { await queue.catch(() => {}); await relay.end(); process.exit(0) }

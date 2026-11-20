@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { countryFlag, MODEL_ORIGIN_TABLE, modelOrigin } from './model-origin'
 
-const classify = (agent: 'claude' | 'codex' | 'opencode', apiHost: string | null, model: string | null) =>
+const classify = (agent: 'claude' | 'codex', apiHost: string | null, model: string | null) =>
   modelOrigin({ agent, apiHost, model })
 
 describe('modelOrigin table rows', () => {
@@ -74,9 +74,9 @@ describe('modelOrigin table rows', () => {
     ]
     for (const [model, expected] of tokenCases) {
       // A router prefix never hides the model: the last segment is what speaks.
-      expect(classify('opencode', 'openrouter.ai', model), model).toBe(expected)
-      expect(classify('opencode', 'openrouter.ai', `some-router/${model}`), model).toBe(expected)
-      expect(classify('opencode', 'openrouter.ai', `accounts/fireworks/models/${model}`), model).toBe(expected)
+      expect(classify('claude', 'openrouter.ai', model), model).toBe(expected)
+      expect(classify('claude', 'openrouter.ai', `some-router/${model}`), model).toBe(expected)
+      expect(classify('claude', 'openrouter.ai', `accounts/fireworks/models/${model}`), model).toBe(expected)
     }
   })
 
@@ -119,8 +119,7 @@ describe('modelOrigin precedence', () => {
   it('falls back to the agent default only when no host was reported', () => {
     expect(classify('claude', null, null)).toBe('US')
     expect(classify('codex', null, null)).toBe('US')
-    expect(classify('opencode', null, null)).toBeNull()
-    expect(classify('opencode', null, 'kimi-k2')).toBe('CN')
+    expect(classify('codex', null, 'kimi-k2')).toBe('CN')
     // A host that was reported but matches nothing silences the default: no guesses.
     expect(classify('claude', 'llm.internal.example', null)).toBeNull()
     expect(classify('claude', 'openrouter.ai', null)).toBeNull()
@@ -131,9 +130,9 @@ describe('modelOrigin precedence', () => {
     // A Claude alias behind Z.ai's fully qualified name is still GLM, not a guess from the alias.
     expect(classify('claude', 'api.z.ai.', 'claude-sonnet-4-5')).toBe('CN')
     expect(classify('claude', 'dashscope-intl.aliyuncs.com', 'claude-opus-4-5')).toBe('CN')
-    expect(classify('opencode', 'localhost', 'phi4')).toBe('US')
-    expect(classify('opencode', 'localhost', 'chatgpt-4o-latest')).toBe('US')
-    expect(classify('opencode', 'openrouter.ai', 'stepfun-ai/step3')).toBe('CN')
+    expect(classify('claude', 'localhost', 'phi4')).toBe('US')
+    expect(classify('claude', 'localhost', 'chatgpt-4o-latest')).toBe('US')
+    expect(classify('claude', 'openrouter.ai', 'stepfun-ai/step3')).toBe('CN')
   })
 
   it('prefers the maker named at the start of the model name', () => {
@@ -150,14 +149,14 @@ describe('modelOrigin precedence', () => {
       ['only1'], ['to4-mini']
     ]
     for (const [model] of never) {
-      expect(classify('opencode', 'openrouter.ai', model), model).toBeNull()
+      expect(classify('claude', 'openrouter.ai', model), model).toBeNull()
     }
   })
 
   it('documents what the shape and plain-word rules accept beyond the bare word', () => {
     // A shape matches any continuation of its prefix, and a plain word matches wherever a word
     // begins: that breadth is the price of `qwen3` and `abab6.5`, and these are its known edges.
-    expect(classify('opencode', 'openrouter.ai', 'yi-light')).toBe('CN')
-    expect(classify('opencode', 'openrouter.ai', 'nova-fitness-plan')).toBe('US')
+    expect(classify('claude', 'openrouter.ai', 'yi-light')).toBe('CN')
+    expect(classify('claude', 'openrouter.ai', 'nova-fitness-plan')).toBe('US')
   })
 })

@@ -396,7 +396,7 @@ describe('a destination that is only the owner\'s word (60.8 AC2)', () => {
     expect(prompt('claude', session(['claude']))).toMatchObject({ outcome: 'pass', cause: 'allowed' })
   })
 
-  it('stands for nothing in Cursor, which was retired, and says so (Epic 71)', () => {
+  it('stands for nothing in Cursor or OpenCode, which were retired, and says so (Epics 71 and 123)', () => {
     approve(team())
     expect(Object.keys(GUARD_APPS)).toEqual(['claude', 'codex'])
     expect(stopAnswer('cursor', 'anything')).toBeNull()
@@ -405,7 +405,8 @@ describe('a destination that is only the owner\'s word (60.8 AC2)', () => {
     expect(guardStanding('claude')).toBe('prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Claude Code 2.1.296)')
     expect(guardStanding('codex')).toBe('prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Codex 0.162.1)')
     expect(GUARD_MEASURED).toEqual(PROTOCOL_GUARD_MEASURED)
-    expect(guardStanding('opencode')).toMatch(/not available in OpenCode/)
+    expect(stopAnswer('opencode', 'anything')).toBeNull()
+    expect(guardStanding('opencode')).toBe("prompt guard: OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final")
   })
 })
 

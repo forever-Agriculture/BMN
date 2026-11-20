@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { timedBesideControl } from './test-fixtures/load-clock'
-import { parseAttentionPrompt, type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
+import { type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
 import { RemoteAnswers, claudeCountdownMs, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
 const SCREENS = join(__dirname, 'test-fixtures', 'remote-answers', 'screens')
@@ -56,14 +56,15 @@ const CLAUDE_BASH: AttentionPrompt = {
   type: 'permission', harness: 'claude', shape: 'permission', requestRef: 'ref-bash', toolUseId: null,
   tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
 }
-const OPENCODE_QUESTION: AttentionPrompt = {
+/** A request OpenCode opened before Epic 123 retired it: still readable, never answered. */
+const OPENCODE_QUESTION = {
   type: 'questions', harness: 'opencode', shape: 'choice', requestRef: 'que_1', toolUseId: null,
   questions: [question('Which auth method should the API use?', 'JWT', 'Session cookies')]
-}
-const OPENCODE_PERMISSION: AttentionPrompt = {
+} as unknown as AttentionPrompt
+const OPENCODE_PERMISSION = {
   type: 'permission', harness: 'opencode', shape: 'permission', requestRef: 'per_1', toolUseId: null,
   tool: 'bash', command: 'touch oc-c.txt', cwd: null
-}
+} as unknown as AttentionPrompt
 
 function record(prompt: AttentionPrompt, overrides: Partial<AttentionRecord> = {}): AttentionRecord {
   return {
@@ -155,19 +156,27 @@ describe('which shapes have a route (decision 7)', () => {
   it('answers only the verified cells', () => {
     expect(answerRoute(CLAUDE_SINGLE)).toBe('claude-keys')
     expect(answerRoute(CODEX_TWO)).toBe('codex-keys')
-    expect(answerRoute(OPENCODE_QUESTION)).toBe('opencode-api')
     // Epic 78: a Claude permission is answered by its own hook, by keys once that has stopped; with no ref, not at all.
     expect(answerRoute(CLAUDE_BASH)).toBe('claude-hook')
     expect(answerRoute({ ...CLAUDE_BASH, requestRef: null })).toBeNull()
-    expect(answerRoute(OPENCODE_PERMISSION)).toBe('opencode-api')
     expect(answerRoute(null)).toBeNull()
     expect(answerRoute({ ...CLAUDE_SINGLE, shape: 'multi-select' })).toBeNull()
     expect(answerRoute({ ...CODEX_TWO, shape: 'async-choice' })).toBe('codex-message')
-    expect(answerRoute({ ...OPENCODE_QUESTION, shape: 'subagent' })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, tool: 'Edit', requestRef: null })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, command: null })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, harness: 'codex' })).toBeNull()
-    expect(answerRoute({ ...OPENCODE_PERMISSION, shape: 'sandbox-network' })).toBeNull()
+  })
+
+  it('gives a request OpenCode opened before its retirement no route, so nothing is typed or handed out (123.1 AC3)', async () => {
+    expect(answerRoute(OPENCODE_QUESTION)).toBeNull()
+    expect(answerRoute(OPENCODE_PERMISSION)).toBeNull()
+    for (const prompt of [OPENCODE_QUESTION, OPENCODE_PERMISSION]) {
+      const h = harness({ record: record(prompt) })
+      expect(h.engine.canDeny(record(prompt))).toBe(false)
+      await expect(ask(h, prompt.type === 'permission' ? deny : choose(0))).resolves.toEqual({ state: 'refused', reason: 'unsupported' })
+      await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
+      expect(h.writes).toEqual([])
+    }
   })
 
   it('confirms only a report naming exactly the answer sent', () => {
@@ -176,9 +185,6 @@ describe('which shapes have a route (decision 7)', () => {
     expect(evidenceConfirms(CLAUDE_THREE, choose(0, 1, 0), evidence({ toolUseId: 'toolu_other', answers: [['Postgres'], ['Later'], ['Staging']] }))).toBe(false)
     expect(evidenceConfirms(CLAUDE_BASH, allow, evidence({ permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' }))).toBe(true)
     expect(evidenceConfirms(CLAUDE_BASH, allow, evidence({ permission: 'allowed', tool: 'Bash', command: 'touch other.txt' }))).toBe(false)
-    expect(evidenceConfirms(OPENCODE_PERMISSION, deny, evidence({ requestRef: 'per_1', permission: 'denied' }))).toBe(true)
-    expect(evidenceConfirms(OPENCODE_PERMISSION, deny, evidence({ requestRef: 'per_2', permission: 'denied' }))).toBe(false)
-    expect(evidenceConfirms(OPENCODE_QUESTION, choose(0), evidence({ answers: [['JWT']] }))).toBe(false)
   })
 })
 
@@ -442,7 +448,7 @@ describe('reports that speak for another dialog (Astra A5)', () => {
 describe('answering a Claude permission through its own waiting hook (Epic 78)', () => {
   const HOOKED: AttentionPrompt = { ...CLAUDE_BASH, requestRef: 'ref-1' }
   /** The hook's ask, as `bmn hook claude` makes it: in flight until an answer or the wait ends. */
-  const hookAsks = (h: Harness, ref = 'ref-1', waitMs = 500) => h.engine.take('s1', 'inc-1', waitMs, undefined, ref)
+  const hookAsks = (h: Harness, ref = 'ref-1', waitMs = 500) => h.engine.take('s1', 'inc-1', waitMs, ref)
 
   it('has its own route only while a hook asked for the request', () => {
     expect(answerRoute(HOOKED)).toBe('claude-hook')
@@ -459,10 +465,10 @@ describe('answering a Claude permission through its own waiting hook (Epic 78)',
     const waiting = hookAsks(h)
     await settle()
     const pending = ask(h, allow)
-    // Neither the OpenCode route, another ref, another session nor another process collects it.
+    // Neither a take without its ref, another ref, another session nor another process collects it.
     await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
-    await expect(h.engine.take('s1', 'inc-1', 0, undefined, 'ref-2')).resolves.toEqual([])
-    await expect(h.engine.take('s2', 'inc-2', 0, undefined, 'ref-1')).resolves.toEqual([])
+    await expect(h.engine.take('s1', 'inc-1', 0, 'ref-2')).resolves.toEqual([])
+    await expect(h.engine.take('s2', 'inc-2', 0, 'ref-1')).resolves.toEqual([])
     await expect(waiting).resolves.toEqual([{ requestRef: 'ref-1', kind: 'permission', reply: 'once' }])
     h.engine.evidence('s1', 'claude:permission', evidence({ permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' }))
     await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Allow once'] })
@@ -630,108 +636,6 @@ describe('Claude\'s own countdown on a permission (Story 78.5)', () => {
     expect(other.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'unknown' })
     other.live.delete('s1')
     expect(other.engine.deadline(record(CLAUDE_BASH), 1_000)).toEqual({ state: 'unknown' })
-    expect(h.engine.deadline(record(OPENCODE_PERMISSION), 50_000)).toEqual({ state: 'unknown' })
-  })
-})
-
-describe('answering OpenCode through its plugin', () => {
-  it('hands the plugin the answer by request id, writes no keys, and confirms from the replied event', async () => {
-    const h = harness({ record: record(OPENCODE_QUESTION) })
-    const pending = ask(h, choose(1))
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toEqual([{ requestRef: 'que_1', kind: 'question', answers: [['Session cookies']] }])
-    // Consumed: a second collection finds nothing.
-    await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
-    h.engine.evidence('s1', 'opencode:question', evidence({ requestRef: 'que_1', answers: [['Session cookies']] }))
-    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Session cookies'] })
-    expect(h.writes).toEqual([])
-  })
-
-  it('sends and confirms the exact label of an option whose label holds a format character (Astra review)', async () => {
-    const parsed = parseAttentionPrompt({ ...OPENCODE_QUESTION, questions: [question('Which one?', 'A\u200BB', 'AB')] })
-    if (!parsed.ok) throw new Error(parsed.error)
-    const h = harness({ record: record(parsed.value) })
-    const pending = ask(h, choose(0))
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toEqual([{ requestRef: 'que_1', kind: 'question', answers: [['A\u200BB']] }])
-    h.engine.evidence('s1', 'opencode:question', evidence({ requestRef: 'que_1', answers: [['A\u200BB']] }))
-    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['A\u200BB'] })
-  })
-
-  it('never hands one session\'s answer to another session or process', async () => {
-    const h = harness({ record: record(OPENCODE_QUESTION) })
-    const pending = ask(h, choose(0))
-    await settle()
-    await expect(h.engine.take('s2', 'inc-2', 0)).resolves.toEqual([])
-    await expect(h.engine.take('s1', 'inc-old', 0)).resolves.toEqual([])
-    await expect(h.engine.take('s1', null, 0)).resolves.toEqual([])
-    await expect(pending).resolves.toEqual({ state: 'refused', reason: 'not-delivered' })
-    // Nothing was sent, so a later tap may try again.
-    const retry = ask(h, choose(0))
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
-    await expect(retry).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['JWT'] })
-  })
-
-  it('offers Deny only while this is the session\'s one pending permission, because reject answers them all', async () => {
-    const h = harness({ record: record(OPENCODE_PERMISSION) })
-    expect(h.engine.canDeny(record(OPENCODE_PERMISSION))).toBe(true)
-    open(h, record({ ...OPENCODE_PERMISSION, requestRef: 'per_2' }, { requestId: 'request-2' }))
-    expect(h.engine.canDeny(record(OPENCODE_PERMISSION))).toBe(false)
-    await expect(ask(h, deny)).resolves.toEqual({ state: 'refused', reason: 'unsupported' })
-    h.engine.evidence('s1', 'opencode:permission', evidence({ requestRef: 'per_2', permission: 'allowed' }))
-    expect(h.engine.canDeny(record(OPENCODE_PERMISSION))).toBe(true)
-    const pending = ask(h, deny, { epoch: h.engine.epochOf('request-1')! })
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toEqual([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }])
-    h.engine.evidence('s1', 'opencode:permission', evidence({ requestRef: 'per_1', permission: 'denied' }))
-    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Deny'] })
-  })
-
-  it('drops a queued Deny once another permission has opened, because reject would answer both (Astra A2)', async () => {
-    const h = harness({ record: record(OPENCODE_PERMISSION) })
-    const pending = ask(h, deny)
-    await settle()
-    open(h, record({ ...OPENCODE_PERMISSION, requestRef: 'per_2' }, { requestId: 'request-2' }))
-    await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
-    await expect(pending).resolves.toEqual({ state: 'refused', reason: 'changed' })
-  })
-
-  it('tells the card when OpenCode refuses the reply after the answer was already reported unconfirmed, and frees the request (R3)', async () => {
-    const h = harness({ record: record(OPENCODE_QUESTION) })
-    const late: Array<[string, unknown]> = []
-    h.engine.onLateOutcome((requestId, outcome) => late.push([requestId, outcome]))
-    const pending = ask(h, choose(1))
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
-    await expect(pending).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Session cookies'] })
-    await h.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: false })
-    expect(late).toEqual([['request-1', { state: 'refused', reason: 'api-refused' }]])
-    // Nothing was applied, so the owner may tap again.
-    const retry = ask(h, choose(0), { epoch: h.engine.epochOf('request-1')! })
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
-    await expect(retry).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['JWT'] })
-  })
-
-  it('drops a queued answer whose dialog changed before the plugin collected it (R4)', async () => {
-    const h = harness({ record: record(OPENCODE_QUESTION) })
-    const pending = ask(h, choose(1))
-    await settle()
-    h.engine.hookReported('s1')
-    await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
-    await expect(pending).resolves.toEqual({ state: 'refused', reason: 'changed' })
-  })
-
-  it('confirms or refuses from what OpenCode\'s server told the plugin, and only for the process it handed the answer to', async () => {
-    const h = harness({ record: record(OPENCODE_QUESTION) })
-    const pending = ask(h, choose(1))
-    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
-    // Another process, or a request it was never handed, cannot settle it.
-    await h.engine.take('s1', 'inc-old', 0, { requestRef: 'que_1', delivered: true })
-    await h.engine.take('s1', 'inc-1', 0, { requestRef: 'que_9', delivered: true })
-    await h.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: true })
-    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Session cookies'] })
-
-    const refused = harness({ record: record(OPENCODE_QUESTION) })
-    const failed = ask(refused, choose(1))
-    await expect(refused.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
-    await refused.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: false })
-    await expect(failed).resolves.toEqual({ state: 'refused', reason: 'api-refused' })
   })
 })
 
@@ -831,13 +735,6 @@ const CLAUDE_FEATURES: AttentionPrompt = {
 const CODEX_AUTH: AttentionPrompt = {
   type: 'questions', harness: 'codex', shape: 'choice', requestRef: null, toolUseId: 'call_auth',
   questions: [{ ...question('Which auth method should the API use?', 'JWT', 'Sessions'), id: 'auth' }]
-}
-const OPENCODE_FEATURES: AttentionPrompt = {
-  type: 'questions', harness: 'opencode', shape: 'multi-select', requestRef: 'que_2', toolUseId: null,
-  questions: [
-    multiQuestion('Which features should v1 include?', 'SSO', 'Rate limiting', 'Audit log'),
-    question('Which auth method?', 'JWT', 'Sessions')
-  ]
 }
 const answers = (...choices: QuestionChoice[]): RemoteAnswer => ({ type: 'choices', choices })
 const REVIEW = (question: string, answer: string): string[] =>
@@ -961,17 +858,6 @@ describe('answering multi-select and typed answers (Epic 31)', () => {
     await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['“Passkeys first”'] })
   })
 
-  it('hands OpenCode every label of a multi-select question, typed text last, through its plugin', async () => {
-    const h = harness({ record: record(OPENCODE_FEATURES) })
-    const pending = ask(h, answers({ set: [0, 1], typed: 'Webhooks' }, { typed: 'Passkeys' }))
-    await settle()
-    expect(await h.engine.take('s1', 'inc-1', 0)).toEqual([
-      { requestRef: 'que_2', kind: 'question', answers: [['SSO', 'Rate limiting', 'Webhooks'], ['Passkeys']] }
-    ])
-    h.engine.evidence('s1', 'opencode:question', evidence({ requestRef: 'que_2', answers: [['SSO', 'Rate limiting', 'Webhooks'], ['Passkeys']] }))
-    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['SSO · Rate limiting · “Webhooks”', '“Passkeys”'] })
-  })
-
   it('refuses answers that do not fit the question, writing nothing', async () => {
     const shapes: Array<[AttentionPrompt, RemoteAnswer]> = [
       [CLAUDE_SINGLE, answers({ set: [0] })],
@@ -984,8 +870,6 @@ describe('answering multi-select and typed answers (Epic 31)', () => {
       [CLAUDE_SINGLE, answers({ typed: 'two\nlines' })],
       [CLAUDE_SINGLE, answers({ typed: ' padded' })],
       [CLAUDE_SINGLE, answers({ typed: 'x'.repeat(2_001) })],
-      // OpenCode said this question takes no typed answer.
-      [{ ...OPENCODE_QUESTION, questions: [{ ...OPENCODE_QUESTION.questions[0]!, custom: false }] } as AttentionPrompt, answers({ typed: 'Mine' })],
       // Codex asks no multi-select question; a prompt saying so is not its dialog.
       [{ ...CODEX_AUTH, shape: 'multi-select', questions: [{ ...CODEX_AUTH.questions[0]!, multiSelect: true }] } as AttentionPrompt, answers({ set: [0] })]
     ]
@@ -1017,9 +901,8 @@ describe('answering multi-select and typed answers (Epic 31)', () => {
     expect(evidenceConfirms(CLAUDE_FEATURES, answers({ set: [0], typed: 'Mine' }), report('Rate limiting, Mine'))).toBe(true)
   })
 
-  it('routes Claude and OpenCode multi-select, never a shape that disagrees with its questions', () => {
+  it('routes Claude multi-select, never a shape that disagrees with its questions', () => {
     expect(answerRoute(CLAUDE_FEATURES)).toBe('claude-keys')
-    expect(answerRoute(OPENCODE_FEATURES)).toBe('opencode-api')
     expect(answerRoute({ ...CLAUDE_FEATURES, shape: 'choice' })).toBeNull()
     expect(answerRoute({ ...CLAUDE_SINGLE, shape: 'multi-select' })).toBeNull()
   })

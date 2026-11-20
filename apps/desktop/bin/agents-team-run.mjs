@@ -6,8 +6,6 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
-import { openCodeFolder, openCodeSessionInfo, openCodeChildSessions } from './agents-opencode.mjs'
-import { readChildAccounting } from './opencode-child-accounting.mjs'
 import { ASK_RUN_FILES, checkCodexMcp, codexMcpServers, sameProgram } from './agents-team-forms.mjs'
 import { maskCredentials, maskedNames } from './agents-team-inputs.mjs'
 import { browserRecord, browserTemporary } from './agents-team-browser.mjs'
@@ -40,8 +38,6 @@ export const TIME_LIMIT = Object.freeze({ default: 30, min: 1, max: 120 })
 /** The app's raw output over which a run fails, and the answer kept. */
 const OUTPUT_LIMIT = 64 * 1024 * 1024
 export const ANSWER_LIMIT = 1024 * 1024
-/** What OpenCode recorded of an ask's sessions, read after the run (72.5): their info alone, never their messages. */
-const OPENCODE_SESSION_INFO = 'session-info.json'
 /** Each final state and its exit code (the contract's "Exit codes"). */
 export const OUTCOME_EXIT = Object.freeze({ answered: 0, failed: 1, interrupted: 1, refused: 10, 'out-of-time': 15, stopped: 16, 'not-attributed': 17 })
 /**
@@ -344,8 +340,7 @@ function codexRolloutUsage(path) {
 
 const USAGE_BASIS = Object.freeze({
   codex: 'the teammate\'s own turns (turn.completed) plus each sub-agent\'s own rollout (its last token count), each counted once: a parent\'s figure does not include its sub-agents\' (72.9 AC2)',
-  claude: 'Claude Code\'s own total for the whole run (result.modelUsage and total_cost_usd), sub-agents and web search included; each sub-agent\'s own count is shown, never added (72.9 AC2)',
-  opencode: 'each session\'s own export, summed: the teammate\'s and each sub-agent\'s, each counted once; OpenCode keeps each session\'s own tokens (measured 2026-10-15)'
+  claude: 'Claude Code\'s own total for the whole run (result.modelUsage and total_cost_usd), sub-agents and web search included; each sub-agent\'s own count is shown, never added (72.9 AC2)'
 })
 
 /**
@@ -514,59 +509,6 @@ export function observeAsk(folder, harness, request, { startedAt = null, endedAt
     for (const id of [...sessions].filter((entry) => entry !== observed.session)) if (observed.session !== null) problems.push(`the run named a session BMN cannot identify, ${id}`)
     // Claude Code does not report its effort: it is the one the pinned command named.
     if (request.effort !== undefined) Object.assign(observed, { effort: request.effort, effort_source: 'pinned command (--effort)' })
-  } else if (harness === 'opencode') {
-    // Every event names the session (70.1); the model, its variant and the usage are in the sessions' own records, read after the run (finishAsk).
-    if (typeof events[0]?.sessionID === 'string') Object.assign(observed, { session: events[0].sessionID, session_source: 'every event (sessionID)' })
-    const sessions = new Set()
-    // One entry per child session, whatever number of events name it: its usage is counted once (72.9 AC5).
-    const children = new Map()
-    for (const event of events) {
-      if (typeof event.sessionID === 'string') sessions.add(event.sessionID)
-      if (event.type === 'text' && typeof event.part?.text === 'string') answer = event.part.text
-      if (event.type === 'error') failure = typeof event.error?.message === 'string' ? `OpenCode reported an error: ${event.error.message.slice(0, 200)}` : `OpenCode reported an error (${event.error?.type ?? 'unknown'})`
-      if (event.type === 'tool_use' && ['subagent', 'task', 'bmn_subagent'].includes(event.part?.tool)) {
-        const child = event.part.state?.metadata?.metadata?.sessionID ?? event.part.state?.metadata?.sessionId ?? null
-        if (typeof child === 'string') children.set(child, { session: child, name: event.part.state?.input?.description ?? null, role: event.part.tool === 'bmn_subagent' ? 'bmn-reader' : event.part.state?.input?.agent ?? null, status: event.part.state?.status ?? null })
-      }
-    }
-    const record = readJsonOrNull(join(folder, OPENCODE_SESSION_INFO))
-    for (const child of record?.subagents ?? []) if (typeof child.session === 'string') children.set(child.session, { ...child, ...children.get(child.session), session: child.session })
-    const started = [...children.values()]
-    const info = record?.info
-    if (info !== undefined && info !== null && info.id === observed.session) {
-      if (typeof info.model?.id === 'string') Object.assign(observed, { model: info.model.id, model_source: 'session export' })
-      if (typeof info.model?.variant === 'string') Object.assign(observed, { effort: info.model.variant, effort_source: 'session export (variant)' })
-      if (typeof info.model?.provider === 'string' && typeof request.provider === 'string' && info.model.provider !== request.provider) problems.push(`the session ran on ${info.model.provider}, not ${request.provider}`)
-      const tokens = { input_tokens: info.tokens?.input ?? 'unknown', cached_input_tokens: info.tokens?.cache_read ?? 'unknown', output_tokens: info.tokens?.output ?? 'unknown', reasoning_tokens: info.tokens?.reasoning ?? 'unknown', reported_cost: info.reported_cost ?? 'unknown' }
-      let complete = record.discovery?.complete ?? !events.some(event => event.type === 'tool_use' && event.part?.tool === 'bmn_subagent')
-      for (const child of started) {
-        const found = (record.subagents ?? []).find((entry) => entry.info?.id === child.session || entry.session === child.session)
-        const own = found?.info
-        if (own === undefined || own === null) {
-          // Named by the teammate's own event, its export unread: the sub-agent stands, its usage is incomplete.
-          complete = false
-          subagents.push({ session: child.session, name: child.name ?? null, role: child.role ?? null, status: child.status ?? null, parent: child.parent ?? null, kind: 'OpenCode sub-agent', model: null, effort: null, usage: 'incomplete', usage_reason: found?.failed ?? 'its session export could not be read' })
-          continue
-        }
-        if (own.parent !== observed.session) {
-          // Its own export says it is not the teammate's: a session BMN cannot identify (exit 17).
-          complete = false
-          problems.push(`the run named a sub-agent session whose export names ${own.parent === null ? 'no parent' : `another parent, ${own.parent}`}, ${child.session}`)
-          subagents.push({ session: child.session, name: child.name ?? null, role: child.role ?? null, status: child.status ?? null, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: 'incomplete', usage_reason: 'its session export does not name the teammate as its parent' })
-          continue
-        }
-        const childTokens = { input_tokens: own.tokens?.input ?? 'unknown', cached_input_tokens: own.tokens?.cache_read ?? 'unknown', output_tokens: own.tokens?.output ?? 'unknown', reasoning_tokens: own.tokens?.reasoning ?? 'unknown', reported_cost: own.reported_cost ?? 'unknown' }
-        for (const key of Object.keys(tokens)) tokens[key] = addTokens(tokens[key], childTokens[key])
-        subagents.push({ session: child.session, name: child.name ?? null, role: child.role ?? null, status: child.status ?? null, parent: own.parent, kind: 'OpenCode sub-agent', model: own.model?.id ?? null, effort: own.model?.variant ?? null, usage: childTokens })
-      }
-      Object.assign(usage, tokens, { source: started.length === 0 ? 'session export' : 'session exports', complete })
-      if (!complete) usage.incomplete_reason = record.discovery?.reason ?? 'a sub-agent\'s session could not be read'
-    } else {
-      const why = record?.failed ?? 'no session export'
-      Object.assign(observed, { model_source: `unknown: ${why}`, effort_source: `unknown: ${why}` })
-      usage.source = `unknown: ${why}`
-    }
-    for (const id of [...sessions].filter((entry) => entry !== observed.session)) if (observed.session !== null) problems.push(`the run named a session BMN cannot identify, ${id}`)
   }
   if (observed.session === null) problems.push('the run named no session in its first event')
   const names = [request.model, ...(request.aliases ?? [])]
@@ -581,36 +523,6 @@ export function observeAsk(folder, harness, request, { startedAt = null, endedAt
 
 // ---------------------------------------------------------------------------------------------
 // The end of a run, called by its supervisor
-
-/**
- * Reads an OpenCode ask's session records with OpenCode itself in BMN's folder, as 70.4 did for
- * research, and keeps only their info (`session-info.json`): the teammate's and each sub-agent's
- * model, variant, tokens and reported spend. The program is the one the run's snapshot names.
- */
-function recordOpenCodeSessions(folder) {
-  const { events } = eventsOf(folder)
-  const session = events.find((event) => typeof event.sessionID === 'string')?.sessionID ?? null
-  const brokerAttempted = events.some(event => event.type === 'tool_use' && event.part?.tool === 'bmn_subagent')
-  const children = new Map(events.filter((event) => event.type === 'tool_use' && ['subagent', 'task', 'bmn_subagent'].includes(event.part?.tool))
-    .map((event) => event.part.state?.metadata?.metadata?.sessionID ?? event.part.state?.metadata?.sessionId ?? null)
-    .filter((id) => typeof id === 'string').map(id => [id, { session: id }]))
-  const ledger = readChildAccounting(join(openCodeFolder(), 'state/bmn-reader'), session)
-  for (const child of ledger.children) children.set(child.session, child)
-  const discovery = { complete: ledger.missing ? !brokerAttempted : ledger.complete,
-    ...(!ledger.complete && (!ledger.missing || brokerAttempted) ? { reason: ledger.reason ?? 'child accounting is missing for an observed child call' } : {}) }
-  const launcher = readJsonOrNull(join(folder, ASK_RUN_FILES.snapshots, 'executable.json'))?.launcher?.path
-  const environment = { PATH: launchEnvironment(folder).PATH ?? '/usr/bin:/bin' }
-  if (!discovery.complete && typeof launcher === 'string') {
-    const listed = openCodeChildSessions(session, openCodeFolder(), { launcher, environment })
-    for (const id of listed.children) if (!children.has(id)) children.set(id, { session: id, parent: session, role: 'bmn-reader' })
-    // Enumeration recovers identities, but a snapshot cannot settle a pending create or termination.
-    if (!listed.complete) discovery.reason += '; native child enumeration was incomplete'
-  }
-  const read = (id) => (typeof launcher === 'string' ? openCodeSessionInfo(id, openCodeFolder(), { launcher, environment }) : { failed: 'the run\'s program is not recorded' })
-  writeWhole(join(folder, OPENCODE_SESSION_INFO), `${JSON.stringify({ version: 1, ...read(session), discovery,
-    subagents: [...children.values()].map((child) => ({ ...child, ...read(child.session) })) }, null, 2)}\n`)
-
-}
 
 /** Masks any credential in the run's raw output in place, and says which patterns were masked (R72-NFR5). */
 function maskOutput(folder) {
@@ -681,8 +593,6 @@ export function finishRun(folder, { interrupted = null } = {}) {
   const state = readJsonOrNull(join(folder, RUN_FILES.state)) ?? {}
   const harness = receipt.harness ?? null
   const started = exit.started !== false && existsSync(join(folder, RUN_FILES.events))
-  // OpenCode keeps its usage in each session's own record: read in BMN's folder (72.5 AC2, 72.9 AC5).
-  if (harness === 'opencode' && started) recordOpenCodeSessions(folder)
   const masked = { output: started ? maskOutput(folder) : [], answer: [] }
   // A browser ask's record, once the scope (and the browser's server in it) has ended: pages and screenshots kept, the rest gone (74.3 AC3).
   finishBrowser(folder)
@@ -706,8 +616,6 @@ export function finishRun(folder, { interrupted = null } = {}) {
     outcome = 'out-of-time'
     const minutes = readJsonOrNull(join(folder, RUN_FILES.launch))?.time_limit_minutes
     reason = `the run's time limit${minutes ? ` of ${minutes} minute${minutes === 1 ? '' : 's'}` : ''} ended it`
-    // OpenCode retries a provider error without end and says nothing (70.1): a run that started steps and answered nothing was still waiting on its provider.
-    if (harness === 'opencode' && seen.answer === null && seen.failure === null && eventsOf(folder).events.some((event) => event.type === 'step_start')) reason += '; OpenCode was still waiting on its provider, which it retries without end'
   } else if (exit.ended === 'output') {
     outcome = 'failed'
     reason = `the app's output went over ${OUTPUT_LIMIT / 1024 / 1024} MiB`

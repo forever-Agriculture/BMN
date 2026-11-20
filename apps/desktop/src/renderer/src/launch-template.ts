@@ -25,7 +25,7 @@ export const INITIAL_SESSION_FORM: SessionLaunchForm = Object.freeze({
   terminalGraphics: null
 })
 
-type LaunchAgentId = 'terminal' | 'claude' | 'codex' | 'opencode'
+type LaunchAgentId = 'terminal' | 'claude' | 'codex'
 
 interface LaunchAgent {
   id: LaunchAgentId
@@ -42,8 +42,7 @@ const LAUNCH_SHELL = '/bin/bash'
 export const LAUNCH_AGENTS: ReadonlyArray<LaunchAgent> = [
   { id: 'terminal', label: 'Terminal', name: 'Shell', command: null },
   { id: 'claude', label: 'Claude Code', name: 'Claude', command: 'claude' },
-  { id: 'codex', label: 'Codex', name: 'Codex', command: 'codex' },
-  { id: 'opencode', label: 'OpenCode', name: 'OpenCode', command: 'opencode' }
+  { id: 'codex', label: 'Codex', name: 'Codex', command: 'codex' }
 ]
 
 function agentArgv(agent: LaunchAgent): string[] {

@@ -12,8 +12,7 @@ import {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export const AGENT_NAMES: Readonly<Record<AgentHistoryAgent, string>> = Object.freeze({
-  codex: 'Codex',
-  opencode: 'OpenCode'
+  codex: 'Codex'
 })
 
 /** `28 Sep`, in the owner's local time. */

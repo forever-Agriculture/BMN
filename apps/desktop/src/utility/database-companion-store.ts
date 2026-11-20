@@ -476,7 +476,7 @@ export function closeAttention(
 
 /**
  * A phone answer that its harness confirmed only after one of the harness's own hooks had already closed the
- * request (OpenCode reports busy or idle as fast as the replied event). Only a hook's close is re-attributed.
+ * request. Only a hook's close is re-attributed.
  */
 function creditTelegramAnswer(
   database: DatabaseConnection,

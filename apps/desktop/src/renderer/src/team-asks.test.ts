@@ -108,7 +108,7 @@ describe('Agents › Asks', () => {
     const text = words(render())
     expect(text).toContain('A shell asked Opus xhigh Lead ~/code/invoices the question only no usage the check refused the command: Opus is off since 13 Oct Refused')
     expect(text).toContain('A closed session\'s shell asked Luna max Helper ~/code/shop the question only 1 min 31 s 3,204 in · 412 out · cost unknown · subscription the events named a second session Not attributed')
-    expect(text).toContain('bash (OpenCode) asked Luna (Go) max Helper ~/code/shop the question only · public 30 min usage unknown OpenCode was still waiting on its provider Out of time')
+    expect(text).toContain('bash (OpenCode (retired)) asked Luna (Go) max Helper ~/code/shop the question only · public 30 min usage unknown OpenCode was still waiting on its provider Out of time')
   })
 
   it('is a record, not a place to ask: no Ask button, no question field, no panel', () => {

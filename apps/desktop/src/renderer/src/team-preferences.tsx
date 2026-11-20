@@ -9,15 +9,14 @@ import {
   ROSTER_HARNESSES,
   ROSTER_JUDGE_ROLE,
   ROSTER_THEN,
-  LUNA_GO_PROPOSAL,
-  RETIRED_APP_LINE,
   RETIRED_APP_NAMES,
   appDisplayName,
   isRetiredApp,
+  retiredAppLine,
+  retiredAppsLine,
   rosterApp,
   type AgentAppView,
   type ContextLimitView,
-  type OpenCodeGoView,
   type AgentsGenerationSummary,
   type RosterAgentShape,
   type RosterClass,
@@ -44,7 +43,6 @@ import {
   calledParties,
   isCalled,
   judgeProposal,
-  lunaGoProposal,
   retiredAppProposal,
   roleBar,
   type RetiredRemoval,
@@ -373,72 +371,6 @@ export function judgeClause(proposed: RosterDataShape): string {
   return `${jev.name} as Judge, with its two providers ${parties.allowed ? `${names}, which may both see private work, as you chose` : `${names}; ${jev.name} gets ${parties.reason}`}`
 }
 
-/** Luna through OpenCode Go (70.4): what she would do, who gets her work, and the sign-in an approval copies. */
-export function lunaGoClause(proposed: RosterDataShape): string {
-  const luna = proposed.agents.find((agent) => agent.id === LUNA_GO_PROPOSAL.agent.id)
-  if (luna === undefined) return ''
-  const helper = luna.roles.includes(LUNA_GO_PROPOSAL.role)
-  const researcher = luna.researcher === true || namedResearchers(proposed) === null
-  const roles = helper && researcher ? 'a read-only helper and a researcher' : helper ? 'a read-only helper' : researcher ? 'a researcher' : 'an agent with no role yet'
-  const provider = proposed.providers.find((entry) => entry.id === luna.provider)
-  const work = provider?.private_work === 'allowed' ? `${provider.name} may see private work, as you chose` : `${provider?.name ?? luna.provider} gets public work only until you allow it`
-  return `${luna.name} as ${roles}, run by OpenCode, which lists her model on OpenCode Go; ${work}`
-}
-
-/** What approving Luna through OpenCode Go also does, said on its own line under the proposals. */
-export const LUNA_GO_SIGN_IN_WORDS = 'Once you approve, BMN copies your OpenCode Go sign-in into its own OpenCode folder.'
-
-/** What Copy sign-in takes, said under why an agent on OpenCode Go cannot run yet. */
-export const OPEN_CODE_COPY_WORDS = "Copy sign-in takes yours from OpenCode on this computer, once, and nothing else of OpenCode's."
-
-/** Why an approved agent on OpenCode Go cannot run yet: BMN's folder holds no Go sign-in. */
-export function openCodeSignInWords(approved: RosterDataShape | null | undefined): string {
-  const names = (approved?.agents ?? []).filter((agent) => agent.harness === 'opencode' && agent.provider === LUNA_GO_PROPOSAL.provider.id).map((agent) => agent.name)
-  const who = names.length === 0 ? 'An agent on OpenCode Go' : names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
-  return `${who} cannot run yet: BMN's OpenCode folder holds no OpenCode Go sign-in.`
-}
-
-/** What OpenCode on this computer says of Luna through OpenCode Go (70.4), and the press that copies a sign-in. */
-interface OpenCodeGoState { view: OpenCodeGoView | null; copying: boolean; copy(): void }
-
-/** Asks the main process about Luna through OpenCode Go while Agents shows and after each approval; it starts OpenCode, so never before. */
-export function useOpenCodeGo(team: TeamState, shown: boolean): OpenCodeGoState {
-  const [view, setView] = useState<OpenCodeGoView | null>(null)
-  const [copying, setCopying] = useState(false)
-  const approvedNumber = team.snapshot?.approved?.generation ?? null
-  useEffect(() => {
-    if (!shown) return undefined
-    let cancelled = false
-    window.aiTerminal.openCodeGo().then((next) => { if (!cancelled) setView(next) }).catch(() => { if (!cancelled) setView(null) })
-    return () => { cancelled = true }
-  }, [shown, approvedNumber])
-  const setNotice = team.setNotice
-  const copy = (): void => {
-    setCopying(true)
-    window.aiTerminal.openCodeGo(true)
-      .then((next) => {
-        setView(next)
-        if (next.copy !== undefined) setNotice({ ok: next.copy.ok, text: next.copy.message })
-      })
-      .catch((error: unknown) => setNotice({ ok: false, text: `The sign-in could not be copied: ${error instanceof Error ? error.message : String(error)}` }))
-      .finally(() => setCopying(false))
-  }
-  return { view, copying, copy }
-}
-
-/** Once the approved team names an agent on OpenCode Go and BMN's folder holds no sign-in for it: Copy sign-in, its own note, never part of a proposal (R75-NFR2). */
-export function OpenCodeSignInNote(props: { team: TeamState; state: OpenCodeGoState }): React.JSX.Element | null {
-  const { team, state } = props
-  if (state.view?.signedIn !== false) return null
-  return (
-    <div className="page-note with-action" role="status">
-      <Dot label="Needs you" />
-      <div className="note-text review"><div>{openCodeSignInWords(team.snapshot?.approved?.data)}</div><div>{OPEN_CODE_COPY_WORDS}</div></div>
-      <button type="button" className="small" disabled={state.copying} onClick={state.copy}>{state.copying ? 'Copying…' : 'Copy sign-in'}</button>
-    </div>
-  )
-}
-
 /** "a", "a and b", "a, b and c". */
 function joined(names: readonly string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
@@ -447,20 +379,19 @@ function joined(names: readonly string[]): string {
 /** What BMN's proposal takes out of a team file that still names a retired app (71.2 AC3, the 71.1 design notes). */
 export function retiredAppClause(removed: RetiredRemoval): string {
   const parts = [...removed.agents, ...removed.routes.map((app) => `the ${appDisplayName(app)} route`), ...removed.providers.map((name) => `the ${name} provider`),
-    ...(removed.lists ? [`${joined(Object.values(RETIRED_APP_NAMES))} from the apps a skill or tool is kept to`] : [])]
-  return `${RETIRED_APP_LINE.replace(/\.$/, '')}, so ${joined(parts)} ${parts.length === 1 ? 'is' : 'are'} taken out of the team file`
+    ...(removed.lists ? [`${joined(removed.apps.map((app) => RETIRED_APP_NAMES[app]))} from the apps a skill or tool is kept to`] : [])]
+  return `${retiredAppsLine(removed.apps).replace(/\.$/, '')}, so ${joined(parts)} ${parts.length === 1 ? 'is' : 'are'} taken out of the team file`
 }
 
 /** BMN's pending proposals taken in one go (Story 75.10), each said as one clause in the order they are taken. */
-interface TeamProposals { data: RosterDataShape; clauses: string[]; /** Lines that say what approving the clauses also does. */ notes?: string[] }
+interface TeamProposals { data: RosterDataShape; clauses: string[] }
 
 /**
  * Every proposal BMN has pending for this team, taken one after the other in the order BMN applies
- * them: a retired app out, the judge, the researchers, Luna through OpenCode Go (named a researcher
- * where the team now names its researchers) and the read-only roles. Each clause is said of the team
+ * them: a retired app out, the judge, the researchers and the read-only roles. Each clause is said of the team
  * as it would be once all are taken. Null when nothing is pending.
  */
-export function teamProposals(data: RosterDataShape, pending: { lunaListed: boolean; researchers: { named: string[] | null; proposed: readonly string[] } | null }): TeamProposals | null {
+export function teamProposals(data: RosterDataShape, pending: { researchers: { named: string[] | null; proposed: readonly string[] } | null }): TeamProposals | null {
   let next = data
   const retired = retiredAppProposal(next)
   if (retired !== null) next = retired.data
@@ -469,18 +400,15 @@ export function teamProposals(data: RosterDataShape, pending: { lunaListed: bool
   const choice = pending.researchers
   const researchers = choice !== null && choice.named === null && namedResearchers(next) === null ? choice.proposed.filter((id) => next.agents.some((agent) => agent.id === id)) : []
   if (researchers.length > 0) next = nameResearchers(next, researchers)
-  const luna = pending.lunaListed ? lunaGoProposal(next) : null
-  if (luna !== null) next = luna
   const held = readOnlyProposal(next)
   if (held.length > 0) next = holdProposed(next)
   const clauses = [
     ...(retired === null ? [] : [retiredAppClause(retired.removed)]),
     ...(judged === null ? [] : [judgeClause(next)]),
     ...(researchers.length === 0 ? [] : [`${listedAgents(next, researchers)} as researchers, one agent per model`]),
-    ...(luna === null ? [] : [lunaGoClause(next)]),
     ...(held.length === 0 ? [] : [`${listedRoles(held)} held to read-only`])
   ]
-  return clauses.length === 0 ? null : { data: next, clauses, ...(luna === null ? {} : { notes: [LUNA_GO_SIGN_IN_WORDS] }) }
+  return clauses.length === 0 ? null : { data: next, clauses }
 }
 
 /** The one card's lines: a head, then every pending proposal on a line of its own (docs/design.md W2), or with nothing approved yet the first approval that carries them. */
@@ -488,7 +416,7 @@ function proposalsWords(proposals: TeamProposals, nothingInEffect: string | null
   const count = proposals.clauses.length
   const head = nothingInEffect !== null ? [nothingInEffect, `BMN's proposal${count === 1 ? ' is' : 's are'} included:`]
     : [`BMN proposes ${count} change${count === 1 ? '' : 's'} to your team. Nothing changes until you approve it.`]
-  return [...head, ...proposals.clauses.map((clause) => `${clause}.`), ...(proposals.notes ?? [])]
+  return [...head, ...proposals.clauses.map((clause) => `${clause}.`)]
 }
 
 /**
@@ -533,7 +461,7 @@ function SetupProposalCards(props: { team: TeamState; data: RosterDataShape; foc
   ))}</>
 }
 
-function AgentsPage(props: { focusProposal?: string | undefined; team: TeamState; data: RosterDataShape; proposals: TeamProposals | null; openCodeGo: OpenCodeGoState | null; go(page: TeamPage): void }): React.JSX.Element {
+function AgentsPage(props: { focusProposal?: string | undefined; team: TeamState; data: RosterDataShape; proposals: TeamProposals | null; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const groups = agentGroups(data)
   const prose = team.snapshot?.file.prose ?? {}
@@ -555,7 +483,6 @@ function AgentsPage(props: { focusProposal?: string | undefined; team: TeamState
       </PageHead>
       <ProposalsCard team={team} proposals={props.proposals} />
       <SetupProposalCards team={team} data={data} go={props.go} focusProposal={props.focusProposal} />
-      {props.openCodeGo ? <OpenCodeSignInNote team={team} state={props.openCodeGo} /> : null}
       {team.snapshot?.file.link ? (
         <div className="page-note">
           <dl className="kv"><dt>Team file</dt><dd className="path" title={team.snapshot.file.link}><bdi>{displayPath(team.snapshot.file.link, team.snapshot.home)}</bdi></dd></dl>
@@ -842,7 +769,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
   if (rosterApp(agent) === null) return <CalledAgentPage team={team} data={data} agent={agent} sessionName={props.sessionName} go={props.go} />
   // Epic 71: an agent on a retired app keeps its page, with no app chosen until the owner picks one.
   const app = liveApp(agent)
-  const appHint = app === null ? `${RETIRED_APP_LINE} Pick an app to keep ${agent.name}, or use the proposal on Team to remove it.`
+  const appHint = app === null ? `${isRetiredApp(agent.harness) ? `${retiredAppLine(agent.harness)} ` : ''}Pick an app to keep ${agent.name}, or use the proposal on Team to remove it.`
     : agent.roles.length === 0 ? `${CALLED_WORDS}: BMN asks the model itself, and it runs in no agent app. Such an agent holds the role Judge only.` : undefined
   return (
     <>
@@ -1429,8 +1356,6 @@ export function TeamPreferences(props: {
   team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; sessionName?(id: string): string | undefined; go(page: TeamPage): void
   /** BMN's pending proposals, one card on Team (Story 75.10). */
   proposals?: TeamProposals | null
-  /** Luna through OpenCode Go: the sign-in note under the card. */
-  openCodeGo?: OpenCodeGoState | null
 }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
@@ -1471,7 +1396,7 @@ export function TeamPreferences(props: {
   if (page.name === 'changes') return <ChangesPage team={team} proposals={props.proposals ?? null} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
   if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} sessionName={props.sessionName ?? (() => undefined)} go={props.go} />
-  return <AgentsPage focusProposal={page.name === 'agents' ? page.focusProposal : undefined} team={team} data={data} proposals={props.proposals ?? null} openCodeGo={props.openCodeGo ?? null} go={props.go} />
+  return <AgentsPage focusProposal={page.name === 'agents' ? page.focusProposal : undefined} team={team} data={data} proposals={props.proposals ?? null} go={props.go} />
 }
 
 function ReviewGroups(props: { groups: readonly DiffGroup[]; general: readonly string[]; data: RosterDataShape | null }): React.JSX.Element {

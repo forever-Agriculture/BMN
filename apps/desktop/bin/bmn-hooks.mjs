@@ -1,23 +1,20 @@
 // MODULE: bmn-hooks.mjs - the bmn command line behind bin/bmn: hook events as attention calls, the agents' hook files and `bmn hooks` check, install and install --absent
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
-import { createHash } from 'node:crypto'
-import { closeSync, constants, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { absoluteUncollapsed, currentText, jsonIndent, linkTarget, rewrittenNumbers, writeAtomically } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
 import { isObject } from './shared-helpers.mjs'
-import { CONVERSATION_REFERENCE, CONVERSATION_SOURCES, HOOKS_USAGE, OPENCODE_REFERENCE } from './bmn-words.mjs'
+import { CONVERSATION_REFERENCE, CONVERSATION_SOURCES, HOOKS_USAGE, HOOK_AGENTS } from './bmn-words.mjs'
 import { CliError, UsageError, parseArguments } from './bmn-commands.mjs'
-import { EARLIER_OPENCODE_PLUGINS, HOOK_AGENTS, OPENCODE_PLUGIN } from './bmn-opencode-plugin.mjs'
 import { usageFailure } from './bmn-results.mjs'
 import { CODEX_RULES, codexRulesPath, missingClaudeRows, withClaudeRows } from './native-rules.mjs'
-import { openCodeFloorPlan } from './opencode-floor.mjs'
 import { guardWords, probeCommandGuard } from './hooks-floor.mjs'
 import { approvalFrom, approvalNeedsHim, approvalWords, askCodexHooks, claimWithApproval, codexHookKey, guardWithApproval } from './codex-hook-approval.mjs'
 
-export { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, holdAtTestGate, hookEventName, hookRequests, openCodeSubagent, phoneAnswerable, retiredOr, runHooks, userInputTool }
+export { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, holdAtTestGate, hookEventName, hookRequests, phoneAnswerable, retiredOr, runHooks, userInputTool }
 
 /** Processes that can stand between an agent and a hook it runs. */
 const HOOK_WRAPPERS = new Set(['sh', 'dash', 'bash', 'zsh', 'fish', 'ksh', 'env', 'timeout', 'nice', 'nohup', 'stdbuf'])
@@ -136,7 +133,7 @@ function promptId(value) {
 /**
  * The agent's own questions as the app stores them (docs/remote-answers.md), or undefined when the
  * payload is not well formed. Async questions may omit options; that never creates an answer route.
- * Claude and Codex name the text `question`, Codex async `title`; OpenCode marks multi-select `multiple`.
+ * Claude and Codex name the text `question`, Codex async `title`.
  */
 function questionsPrompt(harness, input, ids, shape) {
   const candidates = isObject(input) && Array.isArray(input.questions) ? input.questions : []
@@ -157,10 +154,8 @@ function questionsPrompt(harness, input, ids, shape) {
       id: promptId(candidate.id),
       header: promptLine(candidate.header, PROMPT_LIMITS.header),
       text,
-      multiSelect: candidate.multiSelect === true || candidate.multiple === true,
-      options,
-      // OpenCode may turn typed answers off for one question; the others always allow them.
-      ...(harness === 'opencode' && typeof candidate.custom === 'boolean' ? { custom: candidate.custom } : {})
+      multiSelect: candidate.multiSelect === true,
+      options
     })
   }
   return {
@@ -301,21 +296,6 @@ function codexEvidence(event) {
   return evidenceOf({ toolUseId: promptId(event.tool_use_id), answers })
 }
 
-/** OpenCode's replied events name the request they answer and exactly what was answered. */
-function openCodeEvidence(event) {
-  const requestRef = promptId(event.requestID)
-  if (event.hook_event_name === 'permission.replied') {
-    // "always" is never sent from the phone, so it proves nothing about an answer BMN sent.
-    return evidenceOf({ requestRef, permission: event.reply === 'once' ? 'allowed' : event.reply === 'reject' ? 'denied' : null })
-  }
-  const raw = event.answers
-  const answers = Array.isArray(raw) && raw.length > 0 && raw.length <= PROMPT_LIMITS.questions &&
-    raw.every((labels) => Array.isArray(labels) && labels.length > 0 && labels.length <= PROMPT_LIMITS.options)
-    ? raw.map((labels) => labels.map((label) => promptLine(label, PROMPT_LIMITS.answer)))
-    : null
-  return evidenceOf({ requestRef, answers: answers && answers.every((labels) => labels.every((label) => label !== null)) ? answers : null })
-}
-
 /** Claude Code lists in-flight background work and scheduled wake-ups on Stop; either resumes the agent without the owner. */
 export function resumesByItself(event) {
   return [event.background_tasks, event.session_crons].some((list) => Array.isArray(list) && list.length > 0)
@@ -329,7 +309,7 @@ export function resumesByItself(event) {
 function conversationObservation(agent, event) {
   if (!CONVERSATION_SOURCES.includes(event.source)) return undefined
   if (event.agent_id !== undefined && event.agent_id !== null) return undefined
-  if (typeof event.session_id !== 'string' || !(agent === 'opencode' ? OPENCODE_REFERENCE : CONVERSATION_REFERENCE).test(event.session_id)) return undefined
+  if (typeof event.session_id !== 'string' || !CONVERSATION_REFERENCE.test(event.session_id)) return undefined
   const transcript = event.transcript_path
   return {
     method: 'conversation.observe',
@@ -484,65 +464,6 @@ function hookRequests(agent, event, permissionRef = null) {
   }))
   // The harness's own report of the answer, so an answer sent from the phone can be confirmed.
   const proven = (calls, evidence) => calls.map((call) => ({ ...call, params: { ...call.params, evidence } }))
-  if (agent === 'opencode') {
-    const id = event.sessionID ?? event.info?.id
-    if (openCodeSubagent(event)) {
-      switch (event.hook_event_name) {
-        case 'permission.asked':
-          return open('subagent-permission', 'permission', titleText(`OpenCode subagent asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode subagent asks permission'),
-            bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined),
-            permissionPrompt('opencode', 'subagent', event.permission, event.metadata?.command, { requestRef: event.id }, null))
-        case 'permission.replied':
-          return event.reply === 'reject' ? withdraw('subagent-permission')
-            : ['once', 'always'].includes(event.reply) ? answered('subagent-permission') : []
-        case 'question.asked': {
-          const summary = userInputSummary('OpenCode subagent', event)
-          return open('subagent-question', 'question', summary.title, summary.body,
-            questionsPrompt('opencode', event, { requestRef: event.id }, 'subagent'))
-        }
-        case 'question.replied': return answered('subagent-question')
-        case 'question.rejected': return withdraw('subagent-question')
-        default: return []
-      }
-    }
-    switch (event.hook_event_name) {
-      case 'permission.asked':
-        return open('permission', 'permission', titleText(`OpenCode asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode asks permission'),
-          bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined),
-          // Only `metadata.command` says exactly what runs; `patterns` are what an "always" would cover.
-          permissionPrompt('opencode', 'permission', event.permission, event.metadata?.command, { requestRef: event.id }, null))
-      case 'permission.replied':
-        return proven(event.reply === 'reject' ? withdraw('permission')
-          : ['once', 'always'].includes(event.reply) ? answered('permission') : [], openCodeEvidence(event))
-      case 'question.asked': {
-        const summary = userInputSummary(name, event)
-        return open('question', 'question', summary.title, summary.body, questionsPrompt('opencode', event, { requestRef: event.id }))
-      }
-      case 'question.replied': return proven(answered('question'), openCodeEvidence(event))
-      case 'question.rejected': return withdraw('question')
-      case 'session.status':
-        return event.status?.type === 'busy' ? [...answered('permission', 'question'), ...withdraw('turn', 'error')] : []
-      case 'session.idle':
-        return [...withdraw('permission', 'question', 'subagent-permission', 'subagent-question'), ...open('turn', 'notice', 'OpenCode finished a turn')]
-      case 'session.error':
-        return open('error', 'notice', 'OpenCode reported an error',
-          bodyText(typeof event.error === 'string' ? event.error : event.error?.data?.message ?? event.error?.message ?? JSON.stringify(event.error)))
-      // The session was deleted, or OpenCode quit and BMN's plugin left with it (tui.exit, Story 93.3): nothing it asked
-      // can be answered from the phone any more.
-      case 'session.deleted':
-      case 'tui.exit': return withdraw('permission', 'question', 'turn', 'error', 'subagent-permission', 'subagent-question')
-      case 'session.created':
-      case 'tui.session.select': {
-        const observation = conversationObservation(agent, {
-          session_id: id, source: event.hook_event_name === 'session.created' ? 'startup' : 'resume'
-        })
-        // Another conversation in this terminal: the last one's requests can no longer be answered from the phone.
-        const withdrawals = withdraw('permission', 'question', 'turn', 'error', 'subagent-permission', 'subagent-question')
-        return observation ? [...withdrawals, observation] : withdrawals
-      }
-      default: return []
-    }
-  }
   switch (event.hook_event_name) {
     case 'PreToolUse': {
       if (agent === 'claude' && event.tool_name === 'AskUserQuestion') {
@@ -635,13 +556,6 @@ function hookRequests(agent, event, permissionRef = null) {
   }
 }
 
-/** An OpenCode event from a subagent's session rather than the one the plugin pinned for the owner. */
-function openCodeSubagent(event) {
-  const id = event.sessionID ?? event.info?.id
-  const first = process.env.BMN_OPENCODE_SESSION_ID
-  return Boolean(event.info?.parentID || (first && id && id !== first))
-}
-
 /**
  * The hook file each agent reads, and the events BMN expects to find wired in it. `hooks check`
  * reports exactly this list and `hooks install` writes exactly these entries; a unit test drives
@@ -699,12 +613,6 @@ const HOOK_ENTRY_TIMEOUT = 5
  * and BMN follows them there rather than writing a file the harness will never look at.
  */
 function hookFilePath(agent) {
-  if (agent === 'opencode') {
-    // OpenCode 2's terminal reads cli.json from this folder, and loads a local plugin only as a folder
-    // named there, from that folder's tui.ts (2.0.28 skips an entry that is a file).
-    const config = process.env.OPENCODE_CONFIG_DIR || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/opencode`
-    return `${absoluteUncollapsed(config)}/bmn/tui.ts`
-  }
   const [directory, ...rest] = HOOK_FILES[agent].path
   const moved = agent === 'claude' ? process.env.CLAUDE_CONFIG_DIR : agent === 'codex' ? process.env.CODEX_HOME : undefined
   // The owner's own home can hold a `..` as easily as a directory they moved the config to.
@@ -910,7 +818,7 @@ function hookEventState(listed, agent, event) {
   let older = false
   const unrecognised = []
   const gatedEntries = []
-  // Only Codex's timeout rule names its reason; a Claude or OpenCode report stays as it was.
+  // Only Codex's timeout rule names its reason; a Claude report stays as it was.
   const wholeSeconds = HOOK_FILES[agent].timeout === 'whole-non-negative-number'
   let droppedTimeout = false
   for (const group of groups) {
@@ -1036,8 +944,7 @@ function gatesEvent(matcher, agent, event) {
 }
 
 /** One agent's report, from one already-read snapshot so a check and an install cannot disagree. */
-function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readHookFile(path, agent)) {
-  if (agent === 'opencode') return checkOpenCodePlugin(path)
+function checkHooks(agent, path, file = readHookFile(path, agent)) {
   const spec = HOOK_FILES[agent]
   const hooks = isObject(file.data.hooks) ? file.data.hooks : {}
   const events = [...spec.events, ...spec.optional].map((event) => {
@@ -1172,8 +1079,6 @@ function writeCodexRules(path) {
   return true
 }
 
-/** OpenCode's refusal rows for the config beside its plugin (Story 102.15): BMN's plugin lives at `<config>/bmn/tui.ts`. */
-const openCodeFloor = (path) => openCodeFloorPlan(dirname(dirname(path)), homedir())
 
 /** The rows `file` lacks, for Claude; Codex's rules are a file of their own. */
 const claudeRowsToAdd = (agent, file) => (agent === 'claude' ? missingClaudeRows(file.data ?? {}, homedir()) ?? [] : [])
@@ -1274,9 +1179,8 @@ async function runHooks(argv) {
       return parsed.options.help ? 0 : 2
     }
     if (action === 'print') {
-      if (agent !== 'opencode' || rest.length || parsed.options.file || parsed.options.json || parsed.options.yes) throw new UsageError('hooks print expects opencode without options')
-      writeSync(1, OPENCODE_PLUGIN)
-      return 0
+      // BMN's OpenCode plugin went with OpenCode (Epic 123): asked for it, print says so.
+      throw new UsageError(await retiredOr(agent, `hooks expects check or install, not ${action}`))
     }
     if (action === 'approval') {
       if (agent !== undefined || parsed.options.file !== undefined || parsed.options.yes || parsed.options.absent || parsed.options['no-codex-ask'] || parsed.options.json !== true) throw new UsageError('hooks approval takes only --json')
@@ -1325,10 +1229,6 @@ async function checkHooksCommand(agents, pathFor, asJson, askCodex = true) {
   const turns = new Map(marks === null ? [] : reports.map((report) => [report.agent, marks.turnStanding(report.agent)]))
   // Stories 102.3 and 102.4: the app's own rules, and whether the command guard answers when asked.
   const floor = new Map(reports.map((report) => {
-    if (report.agent === 'opencode') {
-      const plan = openCodeFloor(report.file)
-      return [report.agent, { nativeRules: plan.state, ...(plan.hisRows?.length ? { hisRows: plan.hisRows } : {}) }]
-    }
     const file = readHookFile(report.file, report.agent)
     return [report.agent, { commandGuard: commandGuardStanding(report.agent, file), nativeRules: nativeRules(report.agent, report.file, file) }]
   }))
@@ -1368,106 +1268,6 @@ async function checkHooksCommand(agents, pathFor, asJson, askCodex = true) {
   return ok ? 0 : 1
 }
 
-/**
- * OpenCode 2 loads a terminal plugin only when cli.json names its folder in "plugins", and reads the
- * folder's tui.ts; OpenCode 1's server plugin lived in plugin/ or plugins/, where OpenCode 2 refuses to
- * load it (2.0.28). `path` is the tui.ts: its folder is the entry, and the folder above holds cli.json.
- */
-function openCodeFiles(path) {
-  const entry = dirname(path)
-  const config = dirname(entry)
-  return { entry, cli: `${config}/cli.json`, older: ['plugin', 'plugins'].map((folder) => `${config}/${folder}/bmn.ts`) }
-}
-
-/** BMN's own plugin text, from any release, as its comments say: true of a copy someone edited too. */
-function openCodeBMNText(text) {
-  return text !== null && text.includes('// Shipped by BMN') && text.includes('bmn hook opencode')
-}
-
-/**
- * The terminal plugin file's bytes and the file they were read from, through one descriptor, or null when it is
- * absent. What it holds for BMN (Story 96.3): `current`, `earlier` (byte for byte a plugin BMN shipped before, which
- * only BMN wrote), `edited` (BMN's comments, other bytes) or `foreign`; only an earlier one is BMN's to upgrade.
- */
-function readOpenCodePlugin(path) {
-  let fd
-  try { fd = openSync(path, constants.O_RDONLY) } catch (error) {
-    if (error.code === 'ENOENT') return null
-    throw error
-  }
-  try {
-    const stat = fstatSync(fd)
-    const bytes = readFileSync(fd)
-    const text = bytes.toString('utf8')
-    const earlier = EARLIER_OPENCODE_PLUGINS[createHash('sha256').update(bytes).digest('hex')]
-    const state = text === OPENCODE_PLUGIN ? 'current' : earlier?.kind === 'terminal' ? 'earlier' : openCodeBMNText(text) ? 'edited' : 'foreign'
-    return { bytes, text, identity: `${stat.dev}:${stat.ino}`, state }
-  } finally {
-    closeSync(fd)
-  }
-}
-
-/** cli.json as BMN can add to it: its text, its data and the plugins it names, or why it cannot. */
-function readOpenCodeCli(path) {
-  let text
-  try { text = currentText(path) } catch (error) {
-    return { state: 'unreadable', reason: `cannot read ${path} (${error.code ?? error.message})` }
-  }
-  if (text === null) return { state: 'missing', text: null, data: {}, plugins: [] }
-  let data
-  try { data = JSON.parse(text) } catch (error) {
-    return { state: 'unparsable', reason: `${path} is not valid JSON (${error.message}); BMN leaves it untouched` }
-  }
-  if (!isObject(data)) return { state: 'unusable', reason: `${path} does not hold a JSON object; BMN leaves it untouched` }
-  if (data.plugins !== undefined && !Array.isArray(data.plugins)) {
-    return { state: 'unusable', reason: `"plugins" in ${path} is not a list; BMN leaves it untouched` }
-  }
-  return { state: 'read', text, data, plugins: data.plugins ?? [] }
-}
-
-/**
- * OpenCode 1's plugin files that are BMN's own: byte for byte one BMN shipped, as for the terminal plugin (Story 96.3;
- * BMN's comments alone never make a file BMN's). Anything else in their place is the owner's and stays.
- */
-function olderOpenCodePlugins(path) {
-  return openCodeFiles(path).older.flatMap((file) => {
-    try {
-      const bytes = readFileSync(file)
-      return EARLIER_OPENCODE_PLUGINS[createHash('sha256').update(bytes).digest('hex')]?.kind === 'server' ? [{ file, text: bytes.toString('utf8') }] : []
-    } catch {
-      return []
-    }
-  })
-}
-
-function checkOpenCodePlugin(path) {
-  let text
-  try { text = currentText(path) } catch (error) {
-    return { agent: 'opencode', file: path, state: 'unreadable', detail: error.code, events: [], missing: ['plugin', 'cli.json'] }
-  }
-  const older = olderOpenCodePlugins(path)
-  // Story 96.3: only BMN's current plugin or one it shipped earlier, byte for byte, is BMN's; an edited copy is not.
-  let found
-  try { found = readOpenCodePlugin(path)?.state ?? 'missing' } catch { found = 'missing' }
-  // OpenCode 2 refuses OpenCode 1's plugin at every start, so while it stays the plugin needs a reinstall.
-  const plugin = found === 'current' && older.length === 0 ? 'wired' : ['current', 'earlier'].includes(found) ? 'wired (older wording)' : 'missing'
-  const reasons = [
-    ...(found === 'earlier' ? ['an earlier release of BMN\'s plugin; BMN upgrades it at its next start'] : []),
-    ...(found === 'edited' ? ['a copy of BMN\'s plugin edited since BMN wrote it; BMN leaves it as it is, and install replaces it'] : []),
-    ...(older.length === 0 ? [] : [`OpenCode 1's plugin is still at ${older.map((entry) => entry.file).join(', ')}; install removes it`])
-  ]
-  const { entry, cli: cliPath } = openCodeFiles(path)
-  const cli = readOpenCodeCli(cliPath)
-  const listed = cli.state === 'read' && cli.plugins.includes(entry)
-  const events = [
-    { event: 'plugin', optional: false, state: plugin, ...(reasons.length === 0 ? {} : { reason: reasons.join('; ') }) },
-    { event: 'cli.json', optional: false, state: listed ? 'wired' : 'missing',
-      ...(cli.reason === undefined ? {} : { reason: cli.reason }) }
-  ]
-  return { agent: 'opencode', file: path, state: text === null ? 'missing' : 'read', events,
-    missing: events.filter((row) => row.state !== 'wired').map((row) => row.event) }
-}
-
 async function confirmHookWrite(path, target, entries, diff, yes, asJson, fullReplacement = null) {
   if (yes) return true
   if (asJson || !process.stdin.isTTY || !process.stderr.isTTY) {
@@ -1499,105 +1299,7 @@ function confirmationResult(path, asJson) {
   return 2
 }
 
-async function installOpenCodePlugin(path, asJson, yes) {
-  const { entry, cli: cliPath } = openCodeFiles(path)
-  let before
-  let cli
-  let older
-  const targets = new Map()
-  try {
-    before = currentText(path)
-    cli = readOpenCodeCli(cliPath)
-    older = olderOpenCodePlugins(path)
-    for (const file of [path, cliPath, ...older.map((old) => old.file)]) targets.set(file, linkTarget(file))
-  } catch (error) {
-    process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)
-    return 1
-  }
-  if (cli.state !== 'read' && cli.state !== 'missing') {
-    process.stderr.write(`bmn: ${cli.reason}; nothing was installed\n`)
-    return 1
-  }
-  const writePlugin = before !== OPENCODE_PLUGIN
-  const cliNext = cli.plugins.includes(entry) ? null
-    : `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
-  const floorPlan = openCodeFloor(path)
-  const writeFloor = floorPlan.state === 'missing'
-  if (writeFloor) targets.set(floorPlan.file, linkTarget(floorPlan.file))
-  const installed = [...(writePlugin ? ['plugin'] : []), ...(cliNext === null ? [] : ['cli.json']), ...(writeFloor ? ['permission'] : [])]
-  if (installed.length === 0 && older.length === 0) {
-    const result = { installed: [], backups: [], removed: [], file: path }
-    process.stdout.write(`${asJson ? JSON.stringify(result, null, 2) : `Already wired OpenCode plugin: ${path}`}\n`)
-    return 0
-  }
-  if (cliNext !== null && rewrittenNumbers(cli.text ?? '').length > 0) {
-    process.stderr.write(`bmn: ${cliPath} holds a number BMN cannot write back unchanged; nothing was installed\n`)
-    return 1
-  }
-  const diff = [
-    ...(writePlugin ? [unifiedDiff(before ?? '', OPENCODE_PLUGIN, path)] : []),
-    ...(cliNext === null ? [] : [unifiedDiff(cli.text ?? '', cliNext, cliPath)]),
-    ...(writeFloor ? [unifiedDiff(floorPlan.text ?? '', floorPlan.next, floorPlan.file)] : []),
-    ...older.map((old) => unifiedDiff(old.text, '', old.file))
-  ].join('\n')
-  const entries = [...installed, ...older.map((old) => `remove ${old.file}`)]
-  if (!await confirmHookWrite(path, targets.get(path), entries, diff, yes, asJson, writePlugin ? OPENCODE_PLUGIN : null)) {
-    return confirmationResult(path, asJson)
-  }
-  return withDefaultsAdmission(async () => {
-    const unchanged = (file, expected) => () => {
-      assertDefaultsAdmission()
-      if (linkTarget(file) !== targets.get(file)) throw new CliError('REVISION_CONFLICT', `${file} changed target while bmn was reading it; nothing more was written`)
-      if (currentText(file) !== expected) throw new CliError('REVISION_CONFLICT', `${file} changed while bmn was reading it; nothing more was written`)
-    }
-    const stamp = new Date().toISOString()
-    const backups = []
-    const removed = []
-    // Every file that exists is copied before it changes. The plugin goes first and the cli.json entry
-    // second, so a stop between them leaves a plugin OpenCode does not load yet, never an entry naming nothing.
-    const copy = (file, to) => {
-      copyFileSync(file, to)
-      backups.push(to)
-    }
-    try {
-      if (writePlugin) {
-        unchanged(path, before)()
-        if (before !== null) copy(path, `${path}.bmn-backup-${stamp}`)
-        writeAtomically(path, OPENCODE_PLUGIN, unchanged(path, before))
-      }
-      if (cliNext !== null) {
-        unchanged(cliPath, cli.text)()
-        if (cli.text !== null) copy(cliPath, `${cliPath}.bmn-backup-${stamp}`)
-        writeAtomically(cliPath, cliNext, unchanged(cliPath, cli.text))
-      }
-      if (writeFloor) {
-        unchanged(floorPlan.file, floorPlan.text)()
-        if (floorPlan.text !== null) copy(floorPlan.file, `${floorPlan.file}.bmn-backup-${stamp}`)
-        writeAtomically(floorPlan.file, floorPlan.next, unchanged(floorPlan.file, floorPlan.text))
-      }
-      for (const old of older) {
-        unchanged(old.file, old.text)()
-        // Kept in BMN's own folder, outside plugin/ and plugins/, where OpenCode would try to load it.
-        copy(old.file, `${entry}/${basename(dirname(old.file))}-bmn.ts.bmn-backup-${stamp}`)
-        unlinkSync(old.file)
-        removed.push(old.file)
-      }
-    } catch (error) {
-      process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)
-      return 1
-    }
-    const result = { installed, backups, removed, file: path }
-    const lines = [`Installed OpenCode plugin: ${path}`, ...(installed.includes('cli.json') ? [`Named in: ${cliPath}`] : []),
-      ...(writeFloor ? [`OpenCode's own refusal rows in: ${floorPlan.file}`] : []),
-      ...removed.map((file) => `Removed OpenCode 1's plugin: ${file}`), ...backups.map((file) => `Backup: ${file}`),
-      'Restart OpenCode to load it. `bmn hooks check` reports configuration, not that a hook fired.']
-    process.stdout.write(`${asJson ? JSON.stringify(result, null, 2) : lines.join('\n')}\n`)
-    return 0
-  })
-}
-
 async function installHooksCommand(agent, path, asJson, yes) {
-  if (agent === 'opencode') return installOpenCodePlugin(path, asJson, yes)
   const profileReview = 'If Codex uses this file, review /hooks there if you want these enabled.'
   // One read: the report, the merge and the conflict check all describe the same bytes.
   const file = readHookFile(path, agent)
@@ -1706,7 +1408,7 @@ const LEFT_WHY = { changed: 'changed', gated: 'gated', foreign: 'not BMN\'s' }
 
 /** The folder an app keeps its settings in: an app that never ran here has none, and BMN creates none for it. */
 function appSetUp(agent, path) {
-  return existsSync(agent === 'opencode' ? dirname(openCodeFiles(path).entry) : dirname(path))
+  return existsSync(dirname(path))
 }
 
 /**
@@ -1803,98 +1505,6 @@ function absentClaudeOrCodex(agent, path) {
 }
 
 /**
- * Story 96.3: BMN's earlier plugin, read as `read`, replaced by the current one. A copy is made and read back first;
- * the new text is published by rename only while the path still leads to the same file with the same bytes, and is
- * read back after. Returns the copy's path.
- */
-function upgradeOpenCodePlugin(path, read) {
-  assertDefaultsAdmission()
-  const target = linkTarget(path)
-  const unchanged = () => {
-    holdAtTestGate()
-    assertDefaultsAdmission()
-    if (linkTarget(path) !== target) throw new CliError('REVISION_CONFLICT', `${path} changed target while bmn was reading it; nothing was written`)
-    const now = readOpenCodePlugin(path)
-    if (now === null || now.identity !== read.identity || !now.bytes.equals(read.bytes)) {
-      throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
-    }
-  }
-  unchanged()
-  const backup = `${path}.bmn-backup-${new Date().toISOString()}`
-  copyFileSync(path, backup, constants.COPYFILE_EXCL)
-  if (!readFileSync(backup).equals(read.bytes)) throw new CliError('IO_ERROR', `the copy ${backup} does not read back as ${path}; the plugin was not upgraded`)
-  try {
-    writeAtomically(path, OPENCODE_PLUGIN, unchanged)
-  } catch (error) {
-    // Nothing replaced the file, so the copy of it is no backup of anything (96 review).
-    try { unlinkSync(backup) } catch { /* already gone */ }
-    throw error
-  }
-  if (currentText(path) !== OPENCODE_PLUGIN) throw new CliError('IO_ERROR', `${path} does not read back as BMN's plugin after the upgrade; its copy is ${backup}`)
-  return backup
-}
-
-/**
- * OpenCode's two entries: the plugin file and its folder named in cli.json. A plugin file there that is not
- * BMN's is left, and so is cli.json then, which would otherwise make OpenCode load it. BMN's own plugin from an
- * earlier release, byte for byte, is upgraded (Story 96.3); a copy of it someone edited is left and reported as
- * changed. OpenCode 1's plugin still beside it counts as in place and is left for `hooks install`. A cli.json BMN
- * cannot add to stays as it is, as `hooks install` leaves it; BMN's own earlier plugin is upgraded all the same, since
- * cli.json decides only whether OpenCode loads the folder (Epic 96 review).
- */
-function absentOpenCode(path) {
-  const { entry, cli: cliPath } = openCodeFiles(path)
-  const before = readOpenCodePlugin(path)
-  const cli = readOpenCodeCli(cliPath)
-  const older = olderOpenCodePlugins(path)
-  const placed = []
-  const olderEvents = []
-  const absent = []
-  const left = []
-  const upgrade = before?.state === 'earlier'
-  if (before === null) absent.push('plugin')
-  else if (before.state === 'current' || upgrade) {
-    placed.push('plugin')
-    if (older.length > 0) olderEvents.push('plugin')
-  } else left.push({ event: 'plugin', why: before.state === 'edited' ? 'changed' : 'foreign' })
-  const backups = []
-  if (upgrade) {
-    try { backups.push(upgradeOpenCodePlugin(path, before)) }
-    catch (error) {
-      // The plugin stays the earlier one, which cannot tell a stop from a finished turn: Health says so (Story 96.6).
-      if (error instanceof CliError) error.earlier = ['plugin']
-      throw error
-    }
-  }
-  // OpenCode's own refusal rows: BMN's start keeps them, with a backup, and leaves a file it cannot merge into (Story 102.15).
-  const floorPlan = openCodeFloor(path)
-  if (floorPlan.state === 'missing') {
-    const backup = writeHookFile(floorPlan.file, floorPlan.text, linkTarget(floorPlan.file), floorPlan.next)
-    if (backup !== null) backups.push(backup)
-  }
-  const upgraded = upgrade ? { upgraded: ['plugin'], backups } : {}
-  if (cli.state !== 'read' && cli.state !== 'missing') {
-    return { state: 'left', placed, older: olderEvents, installed: [], left, why: cli.state, detail: cli.reason.replace(/; BMN leaves it untouched$/, ''), ...upgraded }
-  }
-  if (cli.plugins.includes(entry)) placed.push('cli.json')
-  else if (left.length === 0) absent.push('cli.json')
-  const done = { placed, older: olderEvents, left }
-  if (absent.length === 0 && !upgrade) return { state: 'checked', ...done, installed: [] }
-  if (absent.includes('cli.json') && rewrittenNumbers(cli.text ?? '').length > 0) {
-    return { state: 'left', ...done, installed: [], why: 'numbers', detail: `${cliPath} holds a number BMN cannot write back unchanged`, ...upgraded }
-  }
-  // The plugin first and cli.json second, as `hooks install` writes them: a stop between leaves a plugin OpenCode does not load yet.
-  if (absent.includes('plugin')) writeHookFile(path, null, linkTarget(path), OPENCODE_PLUGIN)
-  if (absent.includes('cli.json')) {
-    const nextText = `${JSON.stringify({ ...cli.data, plugins: [...cli.plugins, entry] }, null, cli.text === null ? 2 : jsonIndent(cli.text))}\n`
-    const backup = writeHookFile(cliPath, cli.text, linkTarget(cliPath), nextText)
-    if (backup !== null) backups.push(backup)
-  }
-  return { state: 'installed', ...done, placed: [...placed, ...absent], installed: absent,
-    ...(upgrade ? { upgraded: ['plugin'] } : {}), ...(backups.length === 0 ? {} : { backups }) }
-}
-
-/**
  * `hooks install --absent`: what BMN runs at every start. Each app set up on this computer gets the entries it
  * lacks entirely and nothing else; what BMN leaves is listed with why. A second run writes nothing. Exit 0 when
  * every set-up app has every entry BMN expects, 1 when one was left or could not be written.
@@ -1909,12 +1519,12 @@ async function installAbsentCommand(agents, pathFor, asJson) {
         continue
       }
       try {
-        const row = { agent, file: path, ...(agent === 'opencode' ? { ...absentOpenCode(path), nativeRules: openCodeFloor(path).state } : absentClaudeOrCodex(agent, path)) }
+        const row = { agent, file: path, ...absentClaudeOrCodex(agent, path) }
         // Story 102.4: once the file holds what it will hold, what Codex says about it. It answers for the start's report, after the install.
         results.push(agent === 'codex' && row.commandGuard !== undefined ? withCodexApproval(row, await codexApproval(path)) : row)
       } catch (error) {
         const detail = error instanceof CliError ? error.message : `cannot write ${path} (${error.code ?? error.message})`
-        results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail, ...(error.earlier ? { earlier: error.earlier } : {}) })
+        results.push({ agent, file: path, state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', detail })
       }
     }
     const ok = results.every((result) => result.state !== 'failed' && result.state !== 'left' && result.left.length === 0)
@@ -1928,7 +1538,6 @@ async function installAbsentCommand(agents, pathFor, asJson) {
       const head = `${name}  ${result.file}`
       const body = [
         ...(result.installed.length > 0 ? [`  added: ${result.installed.join(', ')}`] : []),
-        ...((result.upgraded ?? []).length > 0 ? [`  upgraded from an earlier BMN release: ${result.upgraded.join(', ')}`] : []),
         ...((result.raised ?? []).length > 0 ? [`  timeout raised: ${result.raised.join(', ')}`] : []),
         ...((result.widened ?? []).length > 0 ? [`  matcher widened: ${result.widened.join(', ')}`] : []),
         ...((result.reworded ?? []).length > 0 ? [`  brought to the current wording: ${result.reworded.join(', ')}`] : []),

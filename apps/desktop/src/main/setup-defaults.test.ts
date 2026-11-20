@@ -9,8 +9,7 @@ import { SetupDefaultsCoordinator, parseSetupDefaultsReport, runSetupDefaults, s
 
 const snapshot: SetupAppsSnapshot = { platform: 'linux', checkedAt: '2026-10-20T22:00:00.000Z', curlAvailable: true, apps: [
   { app: 'codex', program: '/synthetic/codex', onPath: true, version: '0.163.0', signIn: 'ready', method: 'chatgpt', qualification: 'measured' },
-  { app: 'claude', program: '/synthetic/claude', onPath: true, version: '2.1.303', signIn: 'signed-out', method: null, qualification: 'measured' },
-  { app: 'opencode', program: '/synthetic/opencode', onPath: true, version: '2.0.32', signIn: 'confirmed', method: null, qualification: 'failed' }
+  { app: 'claude', program: '/synthetic/claude', onPath: true, version: '2.1.303', signIn: 'signed-out', method: null, qualification: 'measured' }
 ] }
 const report = (code = 'OK'): SetupDefaultsReport => ({ code, source: '/synthetic/bmn/agents/skills', names: ['plan'], rows: [] })
 function fixture(state: FirstRunSetupRecord['state'] = 'active') {
@@ -40,7 +39,7 @@ it('coalesces simultaneous startup/approval/Health reads into one durable claim 
   expect(f.seams.claim).toHaveBeenCalledOnce()
   expect(f.seams.run.mock.calls.map(([request]) => request)).toEqual([
     { mode: 'prepare', claim: { setupId: 'synthetic-claim', initialize: true }, ready: [] },
-    { mode: 'apply', claim: { setupId: 'synthetic-claim', initialize: false }, ready: [{ app: 'codex', version: '0.163.0' }, { app: 'opencode', version: '2.0.32' }] }
+    { mode: 'apply', claim: { setupId: 'synthetic-claim', initialize: false }, ready: [{ app: 'codex', version: '0.163.0' }] }
   ])
 })
 
@@ -60,10 +59,11 @@ it('does not apply or silently reinitialize when a previously claimed journal is
 
 it('uses a supplied later-read readiness snapshot and never includes signed-out or missing-version apps', async () => {
   const f = fixture('finished'), apps = structuredClone(snapshot)
-  apps.apps[0]!.version = null
+  // Claude Code reads as signed in now, but its version could not be read: it stays out like a signed-out app.
+  apps.apps[1]!.signIn = 'confirmed'; apps.apps[1]!.version = null
   await f.coordinator.refresh(apps)
   expect(f.seams.apps).not.toHaveBeenCalled()
-  expect(f.seams.run.mock.calls[1]?.[0]).toMatchObject({ mode: 'apply', ready: [{ app: 'opencode', version: '2.0.32' }] })
+  expect(f.seams.run.mock.calls[1]?.[0]).toMatchObject({ mode: 'apply', ready: [{ app: 'codex', version: '0.163.0' }] })
 })
 
 it('projects failure to fixed state and starts no child for an unsupported platform', async () => {
@@ -74,9 +74,9 @@ it('projects failure to fixed state and starts no child for an unsupported platf
 })
 
 it('passes profile roots and routing selectors without credential values to the child', () => {
-  expect(setupDefaultsEnvironment({ HOME: '/synthetic', PATH: '/usr/bin', OPENAI_API_KEY: 'synthetic-secret',
-    OPENCODE_CONFIG_CONTENT: '{"apiKey":"synthetic-secret"}', BMN_CONTROL_TOKEN: 'synthetic-secret' })).toEqual({
-    HOME: '/synthetic', PATH: '/usr/bin', OPENCODE_CONFIG_CONTENT: 'set', ELECTRON_RUN_AS_NODE: '1'
+  expect(setupDefaultsEnvironment({ HOME: '/synthetic', PATH: '/usr/bin', OPENAI_API_KEY: 'synthetic-secret', CODEX_HOME: '/synthetic/codex',
+    ANTHROPIC_BASE_URL: 'https://gateway.example.test', BMN_CONTROL_TOKEN: 'synthetic-secret' })).toEqual({
+    HOME: '/synthetic', PATH: '/usr/bin', CODEX_HOME: '/synthetic/codex', ANTHROPIC_BASE_URL: 'https://gateway.example.test', ELECTRON_RUN_AS_NODE: '1'
   })
 })
 

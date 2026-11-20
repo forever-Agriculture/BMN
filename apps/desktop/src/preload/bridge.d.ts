@@ -9,7 +9,6 @@ import type {
   AgentHistoryStatus,
   AgentsApprovalRequest,
   AgentsOutcome,
-  OpenCodeGoView,
   AgentsPreview,
   AgentsShownRevision,
   AgentsSnapshot,
@@ -427,8 +426,6 @@ export interface AiTerminalBridge {
   openTeamFile(): Promise<{ ok: boolean; path: string; message?: string }>
   /** An agent's notes, the owner's own words; never reach an agent. */
   saveAgentNotes(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome>
-  /** Luna through OpenCode Go (70.4): whether OpenCode lists her and BMN's folder is signed in; `copy` copies the owner's Go sign-in there. */
-  openCodeGo(copy?: boolean): Promise<OpenCodeGoView>
   /** Epic 60.6: the master, each app's rendering, health from `bmn rules check`, loading tests, the agent apps, installs and history. */
   rulesSnapshot(freshDoctorLocations?: boolean): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>
@@ -466,8 +463,8 @@ export interface AiTerminalBridge {
   /** Owner-run: starts the research with that agent. It runs in the background; the snapshot says how far it is. */
   startResearch(researcher: string): Promise<ResearchSnapshot>
   stopResearch(): Promise<ResearchSnapshot>
-  /** The owner's Test again: starts the fence test of the installed app named, or of Codex and OpenCode. It calls no provider and runs in the background; the snapshot says when it has ended. */
-  testCodexFence(harness?: 'codex' | 'opencode'): Promise<ResearchSnapshot>
+  /** The owner's Test again: starts the fence test of the installed Codex. It calls no provider and runs in the background; the snapshot says when it has ended. */
+  testCodexFence(harness?: 'codex'): Promise<ResearchSnapshot>
   /** Owner-run: researches one model name on one provider and resolves when that run ends. */
   lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup>
   /** Story 64.3: the kept web questions, what holds the research lock now, the switch and the day's count. */

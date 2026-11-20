@@ -102,16 +102,10 @@ Commands:
                                             parts. Resume offers it only when BMN has no conversation of its
                                             own, and runs it only after the owner reads it. Outside BMN it
                                             records nothing and exits 0
-  answer take [--wait S] [--reported R=ok|failed]
-                                            Collect, once, the answers BMN decided from a Telegram tap for
-                                            this session's own OpenCode requests (used by BMN's plugin);
-                                            waits up to S seconds (0-25) for one to arrive.
-                                            --reported says whether OpenCode accepted the reply to request R
   hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
-                                            agent is one of claude|codex|opencode; always exits 0. It
+                                            agent is one of claude|codex; always exits 0. It
                                             prints only BMN's answers to its own agent: a guard's hold, the
                                             away refusal, a brief, notice or message, a phone decision
-  hooks print opencode                     Print the shipped OpenCode TypeScript plugin
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
   hooks install <agent> [--file PATH]       Review and approve each hook-file change before installation;
@@ -308,7 +302,7 @@ handoff with its own stamp: nothing the first one said carries over as permissio
 (its Git top-level, as for a message) and the folder each attached file was published from. A file
 whose folder BMN cannot tell refuses the whole handoff: "BMN cannot tell which folder <name> came
 from, so it hands it to nobody; nothing was sent". A receiver no agent there takes messages from
-(OpenCode, a plain shell, a stopped session) is refused with its reason, as for `bmn tell`. When
+(a plain shell, a stopped session) is refused with its reason, as for `bmn tell`. When
 the receiving hook asks, BMN hands the pointer over only if the agent's provider may see private
 work in the sender's folder and in every attached file's folder, by the approved team as it stands
 at that moment; otherwise it stays queued and Messages says why. The receiving process is checked
@@ -387,11 +381,9 @@ it is doing. From an archived session it says so and lists nothing. Any destinat
 would not list is refused in one wording, "That session is not one of your peers; run bmn peers",
 whatever the reason. A peer is refused too, with its reason, when no agent there takes messages:
 "That session is stopped", "runs no agent now, only its shell" (also an agent that exited into its
-still-running shell), "runs no agent whose hook BMN has heard from", or "runs <app>, which takes no
-messages" (OpenCode); each ends "nothing was sent". OpenCode is refused because a message reaches
-Claude Code and Codex through the hook that runs after a tool call and hands its text to the agent,
-and no way for OpenCode's terminal plugin to give text to its agent has been measured (owner's decision,
-2026-10-16; kept 2026-10-25). The agent in front is the one whose own hook
+still-running shell), or "runs no agent whose hook BMN has heard from"; each ends "nothing was sent".
+A message reaches Claude Code and Codex through the hook that runs after a tool call and hands its
+text to the agent. The agent in front is the one whose own hook
 reported from the very process that holds the terminal now, not the last one seen there. Claude
 Code reports as it starts; Codex 0.162.1 reports nothing until its first turn starts, so a Codex
 that has not yet been given a prompt is one BMN has not heard from (measured 2026-10-16). The
@@ -496,7 +488,7 @@ agent sends work, taking and reporting. A resting agent reads a message at the f
 turn. A message not collected within 24 hours is no longer handed over: it reads *expired*, and
 nothing is deleted by that; a message stored before Story 110.2 keeps its two hours, and a handoff
 always has two. When a message expires undelivered, its sender's agent gets one line at its next
-tool call where its app hands messages over (Claude Code and Codex; an OpenCode sender is not told),
+tool call where its app hands messages over (Claude Code and Codex),
 naming the receiver and the message's first words, once (it counts as told when the hook asks, so
 a hook that fails then is not told again); the words are left out when the provider the hook
 resolved for that event may not see private work from the folder it was sent from.
@@ -548,8 +540,7 @@ bound to its incarnation; only then does the row read `Reaching a safe point`, a
 end after that makes it `Ready`. Printed means the hook wrote it, never that the agent read it or
 saved a handoff. The two notices give the clock time BMN closes by and say what will follow, each
 truthfully for its app: a Claude Code session is told BMN will resume it and tell it to continue, a
-Codex session that BMN will resume it and type nothing into it. OpenCode's plugin supplies no hook
-text and receives no notice.
+Codex session that BMN will resume it and type nothing into it.
 
 BMN closes when every row is `Ready`, at the clock time in the dialog's head (five minutes after
 the press, eight seconds of that kept for the final capture and shutdown), or on **Restart now**.
@@ -600,10 +591,10 @@ These notices and lines grant no authority and lift no stop. Restart, Cancel and
 window-only, unavailable on the agent control socket even with an owner token; `restart.printed`
 can acknowledge only its own bound member.
 
-## Agent hooks: Needs you for Claude Code, Codex and OpenCode
+## Agent hooks: Needs you for Claude Code and Codex
 
-`bmn hook claude`, `bmn hook codex` and `bmn hook opencode` read one hook event as JSON on stdin
-and keep **Needs you** in step with the agent ([Cursor was retired](#cursor-retired)). They always exit 0 and print
+`bmn hook claude` and `bmn hook codex` read one hook event as JSON on stdin
+and keep **Needs you** in step with the agent ([Cursor](#cursor-retired) and [OpenCode](#opencode-retired) were retired). They always exit 0 and print
 only BMN's answers to their own agent, so a hook never disturbs it otherwise: the [command guard](#the-command-guard)'s
 ask or block, a [prompt guard](#the-prompt-guard) stop, the away refusal of a blocking question, BMN's
 [start brief](#bmns-start-brief), the away and departure notices, an owner-initiated update restart notice, a [message for their own agent](#messages-between-sessions),
@@ -617,10 +608,6 @@ the command text alone and holds while BMN is closed, they do nothing outside BM
 | Claude `Notification` (permission prompt) | Opens a `permission` request, unless a question or permission of that session already carries its dialog: Claude sends this notice about 6 s into any unanswered prompt, questions included |
 | Claude `Notification` (question dialog) | Opens a `question` request |
 | Codex `PreToolUse` for `request_user_input` or `request_user_input_async` | Opens a `question` request with the question text and choices (blocking and async are different shapes) |
-| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request, carrying the request id and the exact command from the event's `metadata`; subagents and other sessions in the same process share their own `subagent-permission` request. `permission.replied` carries evidence naming its request id and reply, and closes only the request holding that id: OpenCode keeps one slot for several pending permissions |
-| OpenCode `question.asked`, `question.replied`, `question.rejected` | Opens, answers or withdraws a `question` request; subagents and other sessions in the same process share their own `subagent-question` request. `question.replied` carries evidence with its request id and answers |
-| OpenCode main `session.status` busy, `session.idle`, `session.error` | Clears main prompts, or opens a finished-turn or error notice. Main idle also withdraws subagent requests; main busy leaves them open. Subagent status, idle and errors are not reported |
-| OpenCode main `session.created`, `tui.session.select`, `session.deleted` | Captures the conversation or clears the plugin's requests, including subagent requests on select/delete. These events from subagents are ignored |
 | `PostToolUse`, Claude `PostToolUseFailure`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes or fails. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run. A `PostToolUse` resolve carries **evidence**: the chosen answers of the question tool in question order, or the tool and exact input that ran (see below) |
 | `Stop` | Withdraws open prompts and opens a `notice` that the turn finished, with the last message. Codex keeps a queued async question open until the owner submits input. When Claude still has background tasks or a scheduled wake-up, it opens nothing: the agent resumes without you |
 | `SessionEnd` | Retires requests attributable to that producer; ambiguous events leave them unavailable |
@@ -677,6 +664,38 @@ tools, prompt-guard warning and the recorded payloads), is kept at the local git
 - Launch sets are gone (Story 75.3, 2026-10-16); a set saved with a Cursor entry stays in the
   database, unread. A notice BMN left on a session that such an entry opened still reads.
 
+### OpenCode, retired
+
+OpenCode was retired on 2026-11-20 (Epic 123, owner decision): BMN supports the two apps that give
+him leads, Claude Code and Codex. BMN's support for OpenCode (its terminal plugin and hooks, Resume,
+history rows, rules file, skills, tools, helper and research runs, the fence test, Luna (Go) and the
+recorded payloads) is kept at the local git tag `opencode-support-final`; nothing of it runs any more.
+
+- Every command asked for OpenCode (`bmn hooks`, `bmn rules`, `bmn skills`, `bmn tools`) says:
+  "OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag
+  opencode-support-final". `bmn hook opencode`, run by BMN's plugin installed before, prints that
+  line on stderr, exits 0 and tells BMN nothing. `bmn answer take`, which only that plugin used, is
+  gone. The prompt guard's line for OpenCode says the same.
+- A team file that still names OpenCode (an agent such as Luna (Go), its route, a provider, or a
+  skill or tool kept to it) is read, with an `APP_RETIRED` warning at each place. An agent on
+  OpenCode takes no work: `bmn roster check` refuses it with `APP_RETIRED`, `bmn team ask` refuses it
+  with "<id> runs in" and the retirement line (a role's next candidate answers in its place), and a
+  dispatch of `opencode` is refused with the retirement line. The one proposals card on Agents ›
+  Team names removing those lines; nothing changes until you approve it.
+- The judge stays. Jev is called by BMN itself through OpenCode Zen ([the judge](#the-judge)); its
+  key is read from OpenCode's own sign-in file at each call by the judge's module and kept nowhere.
+  Without that sign-in `bmn judge ask` answers `NO_KEY`. The `opencode` program and its sign-in are
+  yours and stay.
+- Old records load as they were saved and are read only, named "OpenCode (retired)": a conversation
+  bound before is never resumed or looked for; saved hook log rows keep their own event words; a
+  saved question from OpenCode shows no answer; its Telegram card and turn changes name it so. No
+  OpenCode history is read and no OpenCode hook, plugin, rules file, skill or tool is written.
+- A setup default, rules, skills or tools install made before still lists OpenCode under Earlier
+  installs. Its undo answers with the retirement line and success, and leaves each OpenCode file as
+  it is: nothing under `~/.config/opencode` is written or removed by BMN. Epic 123 moved BMN's own
+  files there (its plugin, the `cli.json` entry naming it, its `AGENTS.md` and its helper folder) to
+  one dated backup folder once, by hand.
+
 ### Notifications from any program
 
 A harness with no BMN hook still speaks the terminal's own notification language, and BMN reads it.
@@ -720,8 +739,8 @@ entries) and suppressions (an open refused or changing nothing). A failed write 
 Each hook event also tells BMN which model the agent is using, so the session can show its maker's
 flag. `bmn hook` sends the **hostname only** of the agent's API base URL — `ANTHROPIC_BASE_URL` for
 Claude Code, `OPENAI_BASE_URL` for Codex; never the scheme, path, query or any credential in it —
-and the model name when the event carries one (Claude's `SessionStart` `model`, OpenCode's
-`info.modelID`), trimmed to 128 printable characters. A host that is not a plain name or
+and the model name when the event carries one (Claude's `SessionStart` `model`), trimmed to 128
+printable characters. A host that is not a plain name or
 bracketed IPv6 address is left out rather than sent. The hook and the flag work without it:
 an older `bmn` that sends neither still reports.
 
@@ -744,28 +763,23 @@ event, so it always describes the agent now. Most events carry no model, so the 
 last reported model within its session; a different agent, or a new session in it, starts from what
 it reports itself, and the agent's `SessionEnd` takes the flag away, since the shell it leaves behind
 has none. A new run starts without one, and after BMN restarts the next hook of any kind brings it
-back. OpenCode shows a flag only when its events already carry a model (`message.updated`'s
-`info.modelID`); the shipped plugin is unchanged.
+back.
 
 Known limits: a base URL BMN cannot read a host from (no scheme, a `unix:` URL) counts as unset, so
 the agent's default provider decides; and a Codex provider configured in `~/.codex/config.toml`
 rather than `OPENAI_BASE_URL` is not seen, so it reads as OpenAI unless the model name says otherwise.
 Claude Code reports its model only at `SessionStart`, so a `/model` switch mid-session shows the old
-model until the next session. OpenCode sends no session end BMN recognises, so after it exits its
-shell keeps the flag until the run ends or another agent reports.
+model until the next session.
 
 ### Repeated tool calls
 
-For Claude Code, Codex and OpenCode, BMN counts identical tool calls, failed ones included, since your last message. Eight
+For Claude Code and Codex, BMN counts identical tool calls, failed ones included, since your last message. Eight
 matching calls among the last 20 open one **Needs you** notice; the hook log shows the count as
 `same call ×8`. The watch only tells you and never changes the agent or its process. The threshold
 is the `REPEAT_NOTICE_AT` constant in `repeat-watch.ts`; the bounded local `repeat-watch.log` under
 BMN's state directory records counts, tool names and whether a notice opened for calibration. BMN
 keeps no tool input or output in that log. Claude Code's free-text `description` label is left out
-of the comparison, so a relabelled retry still counts. OpenCode has no prompt hook: its terminal plugin reports
-each finished call of the session on screen and of its subagents (`tool.execute.after`, with the name and input
-OpenCode gave when the call started), and the count starts again when that session's next run starts. A subagent's
-run starting does not reset it, and a message you add while a run is still going counts only from the next run.
+of the comparison, so a relabelled retry still counts.
 
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
@@ -790,7 +804,7 @@ alone. Readings are kept in memory only; BMN makes no network call and shows no 
 
 ### Resume for any program
 
-BMN resumes Claude Code, Codex and OpenCode itself. Any other program — a wrapper, a new
+BMN resumes Claude Code and Codex itself. Any other program — a wrapper, a new
 agent, a long-running script — can tell BMN how to resume it:
 
 ```bash
@@ -830,7 +844,7 @@ Approval does not enable any account in `bmn policy`.
 
 Before approval, setup prepares an empty portable skills folder at
 `~/.config/bmn/agents/skills` and records ownership. The approved team names that source, so Codex
-or OpenCode works without a Claude folder. After approval, BMN writes its shipped pointer-only
+works without a Claude folder. After approval, BMN writes its shipped pointer-only
 master at `~/.config/bmn/agents/global-rules.md` only when absent. It leaves an existing master
 alone. Ready apps receive the setup-owned master, shipped skills, hooks and approved tools;
 tools wait for that app's capability test. A later-ready app receives defaults at the next read.
@@ -854,19 +868,8 @@ keep their current startup behavior and personal configuration.
 **At every start** BMN runs `bmn hooks install --absent --yes` for each app set up on this computer, one whose settings
 folder exists (it creates no folder). It adds an entry only where an event has none of BMN's in any shape. It leaves as
 it is, and adds nothing beside: an entry inside a matcher, BMN's wording with a field the app will not run, a
-`bmn hook <agent>` call in a wording BMN did not write, an OpenCode plugin file BMN did not write (with its `cli.json`),
-and a file BMN cannot add to. An older wording runs and counts as in place. An OpenCode plugin that is byte for byte one
-BMN shipped earlier (a fixed list of SHA-256 hashes read from main's history, `EARLIER_OPENCODE_PLUGINS` in
-`bin/bmn-opencode-plugin.mjs`; BMN's comments alone never make a file BMN's) is upgraded to the current one: a copy is
-made and read back, the new text replaces the file only while the path still leads to the file BMN read with the bytes
-it read, and is read back after (Story 96.3); one edited since is left and listed as `changed`, with its `cli.json`
-entry. OpenCode 2.0.29 loads a changed plugin file again while it runs (its log says `plugin reconciliation`), and the Away
-wake-up goes by the mark on each event, so a stop the earlier plugin reported stays a stop. Known limit: the current plugin
-reports its own unloading as `tui.exit`, so a later rewrite of it while OpenCode runs in a BMN session (by hand, or a rollback
-to a copy) reaches BMN as a quit followed by the next plugin's events, which withdraws that session's open requests; the
-October 14 plugin says nothing as it unloads (Story 96.3 live check). The start-up install runs in the background and
-does not wait for sessions, so a session already running OpenCode then sees that rewrite: harmless for the October 14
-plugin, but the next change of the current plugin text will withdraw the open requests of such a session. Every file is copied before it changes,
+`bmn hook <agent>` call in a wording BMN did not write, and a file BMN cannot add to. An older wording runs and counts
+as in place. Every file is copied before it changes,
 written as `install` writes it and checked once more against the bytes and the link it read; a second start writes
 nothing. Exit `0` when every set-up app has every entry, `1` when one was left or could not be written; `--json` prints
 each app's `state` (`checked`, `installed`, `left`, `failed` or `not-set-up`), what is in place, in an older wording,
@@ -880,14 +883,13 @@ or whose text, matcher or timeout changed; the row shows Needs you until it does
 bmn hooks check              # what each agent's own hook file carries, for every event BMN expects
 bmn hooks install claude     # review the target and diff, then answer Yes
 bmn hooks install codex
-bmn hooks install opencode   # BMN's terminal plugin beside OpenCode's cli.json, named in it
 ```
 
 `check` prints one line per event, `wired`, `wired (older wording)` or `missing`, and exits `0` when nothing is missing
 and `1` otherwise; `--json` prints the same report as one object. Per app it also says whether the prompt guard is in
 force, on a `messages:` line whether the hook hands [messages](#messages-between-sessions) to a working agent, and on a
 `turn changes:` line whether turns are recorded ([turn-changes.md](turn-changes.md#how-a-turn-is-recorded)), each with
-the version it was measured on. Run it after a harness update rewrites its hook or plugin file. For Claude Code and
+the version it was measured on. Run it after a harness update rewrites its hook file. For Claude Code and
 Codex both commands read the file the app reads, `~/.claude/settings.json` and `~/.codex/hooks.json`, or the same file
 under `CLAUDE_CONFIG_DIR` or `CODEX_HOME`; `--file PATH` replaces it, for tests.
 
@@ -929,26 +931,6 @@ any process with file access can still edit these files.
 **The window it cannot close.** If the harness writes the file between that last check and the rename, its change is
 lost and the backup, taken before the check, does not hold it. Neither harness offers a lock, so close the harness, or
 keep it from rewriting its settings, while `install` runs.
-
-**OpenCode 2** (2.0.29 and 2.0.32; forms and permission replies measured against a local stand-in). `bmn hooks print opencode` prints the terminal plugin shipped with this CLI. `install` writes it
-as `bmn/tui.ts` in OpenCode's config folder (`OPENCODE_CONFIG_DIR`, otherwise `~/.config/opencode`) and adds the `bmn`
-folder to `plugins` in `cli.json` there: OpenCode 2 loads a local terminal plugin only as a folder named in that list,
-and skips an entry naming a file without a word. `check` reports `plugin` (`tui.ts` byte for byte: `wired`, `wired
-(older wording)` for one BMN shipped earlier, which BMN's next start upgrades, or `missing`, also for a copy edited since
-BMN wrote it) and `cli.json` (whether the list names the folder); a `cli.json` that is not a JSON
-object with a `plugins` list is reported and left untouched. `install` backs up every file it changes, shows the whole
-plugin file in its prompt, and moves OpenCode 1's BMN plugin, which OpenCode 2 refuses to load, out of `plugin/` or
-`plugins/` to `bmn/plugin-bmn.ts.bmn-backup-<time>`; a file there that is not BMN's stays. Restart OpenCode after
-installing.
-
-The plugin runs in the terminal's own process, so it acts only inside BMN, for the session the terminal shows and its
-subagents. It turns OpenCode 2's events into the OpenCode 1 shapes `bmn hook opencode` reads
-([remote-answers.md](remote-answers.md#opencode-2028)), one call at a time, each killed after 3 seconds. While a
-question or permission of its session waits, it runs `bmn answer take --wait 25` in a loop, sends any answer through its
-own OpenCode client and reports it with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed` only for the
-server's own refusal (nothing applied), and nothing for a lost connection or a decoding error, as the reply may still
-have landed. It sends a reject only while that permission is the only one of its session waiting, and stops when
-nothing waits and after three failed calls (a real 2.0.28 run's payloads: `test-fixtures/remote-answers/opencode-2/`).
 
 **What counts as BMN's entry.** Exactly three commands, compared whole and never parsed, after dropping only the space,
 tab and newline bash itself drops at either end. `wired`:
@@ -1012,13 +994,11 @@ already there:
 **Compaction.** Session details shows when a conversation was compacted ("Compacted: 16:10 (2 times this run)", or "No
 compaction observed in this run"), and Hook events reads such an event as "Conversation compacted". It is information
 only: nothing opens in Needs you or goes to Telegram, and a new run starts from none. Claude Code reports `SessionStart`
-with source `compact`, OpenCode `session.compacted` (a subagent's is logged, not counted). Codex 0.157.1 sends
+with source `compact`. Codex 0.157.1 sends
 `SessionStart` with source `compact` after an automatic compaction, but for a manual `/compact` only `PreCompact` and
 `PostCompact` with trigger `manual`; `PostCompact` is therefore an optional Codex entry, reported by `check` and never
 installed, and BMN counts its `manual` trigger only. Whether an automatic compaction on OpenAI's side also sends
-`SessionStart` is not measured. OpenCode's count follows the session the plugin holds as yours (the first it hears
-from, or the one you last selected); a compaction elsewhere is logged as a subagent's, so the line can undercount but
-never invents one.
+`SessionStart` is not measured.
 
 ### The push policy
 
@@ -1201,14 +1181,8 @@ only: `docker --context x system prune` and a full path are the guard's.
 - **Codex:** the same commands as `forbidden` prefix rules in `~/.codex/rules/bmn-guard.rules`, a file BMN owns whole; Codex
   reads it beside `default.rules` (measured on 0.166.0). `iommu=soft` and credential reads stay the guard's, because a Codex
   rule cannot name a file inside any command; a Codex teammate's reads are limited by its permission profile.
-- **OpenCode:** `permission.bash` and `permission.read` `deny` rows for the same commands and the secret list, inside the
-  `permission` object of its global config, last in each map because the last match wins, between `BMN floor` comment marks;
-  every other byte stays his, and taking the marked lines out gives back his exact file. A row he already has keeps his word and
-his place; `bmn hooks check` names one that is not `deny`. Commands naming a private key are matched up to where a shell word
-ends, so its `.pub` beside it stays readable. This is a floor with no parser, for
-  the forms proven on 2.0.29: plain, `sudo` and a `&&` chain are refused, with his `plugin/guardrails.ts` absent. **A project's
-  `opencode.json` or an agent's own `permission` allowing the same command overrides it** (measured). `permission.asked`
-  already reaches Needs you.
+- **OpenCode** was retired (Epic 123): BMN no longer writes or checks its floor. Rows written before stay in its config
+  between their `BMN floor` comment marks, as his file's own `deny` rows.
 
 BMN also names, in `bmn doctor`, an allow row that can run any program (Story 102.14), because an allow row runs outside the
 app's limits with no prompt.
@@ -1372,13 +1346,9 @@ per session before anything is read, so overlapping sweeps type nothing twice. A
 the next one after now; missed times are not made up. Back, or only leaving, types nothing, and a new period starts its
 own times.
 
-A session is woken only when all of these hold: it runs Claude Code, Codex or OpenCode; its latest hook event is a
+A session is woken only when all of these hold: it runs Claude Code or Codex; its latest hook event is a
 finished turn reported after he left (for Claude Code a `Stop`, or a `StopFailure`: a turn an API error such as a lost
-connection ended; a compaction, Claude Code's own while idle included, keeps the event before it as the latest; for OpenCode its own root run's `session.idle`: never a child's run, which BMN's
-plugin marks `subagent`, nor the owner's interrupt, marked `interrupted`, and only from a plugin whose events carry
-`bmn_plugin` 1, its promise that it marks the interrupt and reports quitting: BMN's earlier plugins reported the owner's
-stop as a finished turn, and the plugin file on disk says nothing about what a running OpenCode loaded or about a stop
-reported before (2.0.29 reloads a changed file by itself); Story 96.3), at least 15 minutes after BMN saw that turn
+connection ended; a compaction, Claude Code's own while idle included, keeps the event before it as the latest), at least 15 minutes after BMN saw that turn
 finish (the time BMN keeps for a message's wake, else the still-open `turn` notice's; opening the session, which clears
 that reminder, does not stop the wake). BMN keeps a run's latest event and that time in memory only, so after a restart of
 BMN a session it saw finish before is not woken until it reports a finished turn again: a restart fails safe, typing
@@ -1387,20 +1357,12 @@ own `bmn ask` card or a notice does not hold it: his card, 2026-11-07, Epic 111 
 together right before the one write, he is still Away in that period, the same run is live with its agent (not a shell or
 another program) in the foreground, its requests have not changed and none is being changed, and its screen shows that
 app's empty prompt (Claude Code's `❯` line between its two rules, Codex's last `›` line, with nothing but dim
-placeholder text after the marker; OpenCode's composer, one block of exactly one empty content row above its agent and
-model line, with the cursor on that row's first cell, under any agent; as recorded from real sessions, OpenCode's on
-pinned 2.0.29 and 2.0.32 in Epic 93). Any state BMN cannot read skips the session for that time. OpenCode's command
-palette and agent picker leave the empty composer drawn but hold the cursor in their own field, so the cursor refuses
-them; a draft, a paste's `[Pasted ~N lines]`, a second line, Home and a child's view are refused by their screens, a
-permission or question by its open request. Every app gets the same write: the line as one bracketed paste, then Enter.
-OpenCode submits it whole, once, with the one space it adds after any summarized paste (measured on both pins, Epic 93).
+placeholder text after the marker). Any state BMN cannot read skips the session for that time; a permission or question
+is refused by its open request. Every app gets the same write: the line as one bracketed paste, then Enter.
 
 The guarantee holds when BMN writes, not inside the app (Epic 93, D3; the same for every app): BMN reads the screen,
 then checks everything above and writes in one synchronous step, so what the app draws after that read (a draft it
-restores, a dialog it opens) is not seen. BMN's OpenCode plugin looks once a second at which session the terminal shows,
-and tells BMN of a switch only after every report already on its way (each is given up to 3 s, and several may be
-waiting), so after a switch at the keyboard the latest event BMN holds can still be the previous session's for a
-second or more; no fixed bound is promised. A draft of only spaces with the cursor moved back to its start reads as empty.
+restores, a dialog it opens) is not seen. A draft of only spaces with the cursor moved back to its start reads as empty.
 
 The text is exactly: `BMN wake-up (the owner is away; every 2 hours): if your work is unfinished and still allowed,
 continue it from your handoff; otherwise stop. This is not the owner: it grants nothing and lifts no stop.` It is never

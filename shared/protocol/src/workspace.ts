@@ -99,6 +99,7 @@ export interface SessionProcessStatus {
 
 /** Create-only purpose: setup terminals never retain output, even after exit or restart. */
 export interface SetupSessionPurpose {
+  /** `opencode` only in a session saved before OpenCode was retired (Epic 123); setup starts none for it now. */
   app: 'claude' | 'codex' | 'opencode'
   action: 'install' | 'login' | 'check'
 }

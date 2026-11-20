@@ -165,7 +165,7 @@ export async function readDoctorView({ environment = process.env, now = Date.now
     let state = loadDoctorState(environment)
     const binding = acquisitionBinding(state)
     const requestKey = createHash('sha256').update(JSON.stringify([binding, doctorEnvironment(environment),
-      Boolean(environment.OPENCODE_CONFIG_CONTENT), appVersions, workerPath ?? null])).digest('hex')
+      appVersions, workerPath ?? null])).digest('hex')
     if (freshLocations && pendingInspections.has(requestKey)) running = false
     if (!running) recoverDoctorAttempt(state, now)
     let profile = selectedProfile(environment)

@@ -28,7 +28,7 @@ function checkParent(parent) {
 /** Pin the directory used by publication/removal; never follow a replacement parent into another folder. */
 const pinned = (parent, name) => `/proc/self/fd/${parent.fd}/${name}`
 
-// Paired OpenCode hook publications use the same pinned-directory and whole-file observations.
+// Shared-config publications use the same pinned-directory and whole-file observations.
 export { parentOf as setupFileParent, checkParent as assertSetupFileParent, pinned as setupPinnedPath, observe as observeSetupFile }
 export { saveManifest as saveSetupManifest }
 
@@ -118,15 +118,14 @@ export function holdSetupFile(path, expected, parent, { manifest, folder, key = 
   }
 }
 
-/** This adapter handles an entire absent rules/master/plugin file, never a shared config file. */
+/** This adapter handles an entire absent rules or master file, never a shared config file. */
 export function installSetupFile(target, text, { setupId, now = new Date(), beforePublish, afterPublish } = {}) {
   return withDefaultsAdmission(() => {
-    if (!['master', 'rules'].includes(target.kind) && !(target.kind === 'hooks' && target.entry === 'plugin')) {
+    if (!['master', 'rules'].includes(target.kind)) {
       throw conflict('this setup adapter cannot replace a shared configuration file')
     }
     if ((target.kind === 'master' && (target.app !== 'master' || target.entry !== 'master')) ||
-      (target.kind === 'rules' && (!['claude', 'codex', 'opencode'].includes(target.app) || target.entry !== 'rules')) ||
-      (target.kind === 'hooks' && target.app !== 'opencode')) throw conflict('this file is not a supported setup target')
+      (target.kind === 'rules' && (!['claude', 'codex'].includes(target.app) || target.entry !== 'rules'))) throw conflict('this file is not a supported setup target')
     if (typeof text !== 'string' || Buffer.byteLength(text) > 1024 * 1024 || text.includes('\0')) throw conflict('invalid setup file text')
     defaultsTargetKey(target)
     const parent = parentOf(target.path)
@@ -143,7 +142,7 @@ export function installSetupFile(target, text, { setupId, now = new Date(), befo
       const name = `.bmn-setup-${process.pid}-${randomBytes(8).toString('hex')}.tmp`
       staged = pinned(parent, name)
       manifest = { id, created_at: now.toISOString(), kind: 'setup-file', reason: `setup ${target.kind}`, state: 'started',
-        targets: ['claude', 'codex', 'opencode'].includes(target.app) ? [{ harness: target.app, path: target.path }] : [],
+        targets: ['claude', 'codex'].includes(target.app) ? [{ harness: target.app, path: target.path }] : [],
         ...(target.kind === 'master' ? { master: { path: target.path } } : {}),
         setup: { setupId, target, before, staging: { version: 1, kind: 'file', sourcePath: target.path, path: join(parent.real, name) },
           ...(target.kind === 'rules' ? { priorRecord } : {}) } }

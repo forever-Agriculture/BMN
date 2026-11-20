@@ -82,9 +82,9 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     expect(parsed.data?.agents.map((agent) => agent.class)).toEqual(['knight', 'knight', 'bishop', 'rook', 'pawn', 'bishop', 'pawn', 'pawn'])
     expect(parsed.data?.roles).toHaveLength(10)
     expect(parsed.data?.providers.map((provider) => `${provider.id}:${provider.private_work}`))
-      .toEqual(['openai:allowed', 'anthropic:allowed', 'zai:public_only', 'opencode-go:public_only'])
+      .toEqual(['openai:allowed', 'anthropic:allowed', 'zai:public_only'])
     expect(parsed.data?.exceptions).toEqual([{ id: 'zai-synthetic', provider: 'zai', folder: '/synthetic/EXCEPTION-SENTINEL-FOLDER' }])
-    expect(parsed.data?.harness_routes.map((route) => route.harness)).toEqual(['claude', 'codex', 'opencode'])
+    expect(parsed.data?.harness_routes.map((route) => route.harness)).toEqual(['claude', 'codex'])
     expect(parsed.data?.agents.find((agent) => agent.id === 'sol')).toMatchObject({
       context_window: 400000, context_limit: 272000, paid_by: 'subscription',
       price: { input: 1.25, cached_input: 0.125, output: 10, as_of: '2026-10-01' }
@@ -136,7 +136,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     ['a bishop in the lead chain', (t) => edit(t, 'candidates: [sol@xhigh, opus@xhigh]', 'candidates: [sol@xhigh, opus@xhigh, astra@high]'), 'ROLE_NOT_HELD'],
     ['candidate naming an unknown agent', (t) => edit(t, 'browser: {candidates: [luna@max]', 'browser: {candidates: [nova@max]'), 'UNKNOWN_AGENT'],
     ['agent naming an unknown provider', (t) => edit(t, 'model: gpt-6-luna\nprovider: openai', 'model: gpt-6-luna\nprovider: nowhere'), 'UNKNOWN_PROVIDER'],
-    ['harness route naming an unknown provider', (t) => edit(t, 'opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: nowhere, basis: owner-declared}'), 'UNKNOWN_PROVIDER'],
+    ['harness route naming an unknown provider', (t) => edit(t, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: nowhere, basis: owner-declared}'), 'UNKNOWN_PROVIDER'],
     ['one host listed by two providers', (t) => edit(t, 'hosts: [api.z.ai]', 'hosts: [api.z.ai, API.OpenAI.com]'), 'DUPLICATE_HOST'],
     ['provider answer outside its enum', (t) => edit(t, 'hosts: [api.z.ai], private_work: public_only', 'hosts: [api.z.ai], private_work: sometimes'), 'INVALID_VALUE'],
     ['too many provider hosts', (t) => edit(t, 'hosts: [api.z.ai]', `hosts: [${Array.from({ length: 9 }, (_, n) => `h${n}.z.ai`).join(', ')}]`), 'INVALID_VALUE'],
@@ -145,7 +145,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     ['exception folder with ..', (t) => edit(t, 'folder: /synthetic/EXCEPTION-SENTINEL-FOLDER', 'folder: /work/../app'), 'EXCEPTION_PATH'],
     ['exception folder with ~ (never expanded)', (t) => edit(t, 'folder: /synthetic/EXCEPTION-SENTINEL-FOLDER', 'folder: ~/code'), 'EXCEPTION_PATH'],
     ['exception for an unknown provider', (t) => edit(t, 'zai-synthetic: {provider: zai', 'zai-synthetic: {provider: nowhere'), 'UNKNOWN_PROVIDER'],
-    ['host: default on a harness whose default provider is another', (t) => edit(t, 'name: Opus\nclass: knight\nharness: claude', 'name: Opus\nclass: knight\nharness: opencode'), 'ROUTE_CONFLICT'],
+    ['host: default on a harness whose default provider is another', (t) => edit(t, 'name: Opus\nclass: knight\nharness: claude', 'name: Opus\nclass: knight\nharness: codex'), 'ROUTE_CONFLICT'],
     ['empty efforts on an enabled agent', (t) => edit(t, 'efforts: [max]', 'efforts: []'), 'INVALID_VALUE'],
     ['compact_at without a context limit', (t) => edit(t, SOL_CONTEXT, 'context_window: 400000\ncompact_at: 1000'), 'INVALID_VALUE'],
     ['compact_at not below the context limit', (t) => edit(t, SOL_CONTEXT, `${SOL_CONTEXT}\ncompact_at: 272000`), 'INVALID_VALUE'],
@@ -180,7 +180,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     const one = 'zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}'
     expect(codes(edit(EXAMPLE, one, `a: {provider: zai, folder: ${home}/work/app}\nb: {provider: zai, folder: ${home}/alias}`))).toEqual(['EXCEPTION_COLLISION'])
     // The same folder for another provider is a different exception.
-    expect(codes(edit(EXAMPLE, one, `a: {provider: zai, folder: ${home}/work/app}\nb: {provider: opencode-go, folder: ${home}/alias}`))).toEqual([])
+    expect(codes(edit(EXAMPLE, one, `a: {provider: zai, folder: ${home}/work/app}\nb: {provider: anthropic, folder: ${home}/alias}`))).toEqual([])
     const many = Array.from({ length: 65 }, (_, n) => `e${n}: {provider: zai, folder: /synthetic/f${n}}`).join('\n')
     expect(codes(edit(EXAMPLE, one, many))).toEqual(['INVALID_VALUE'])
   })
@@ -213,9 +213,9 @@ const MODELS_TABLE: Record<string, { candidates: string[]; then: string; recheck
 describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
   /** A file written while Cursor was supported: its provider, its route, an agent on it, and a skill and a tool kept to it. */
   const namesCursor = (): string => {
-    let text = edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
-      'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ncursor: {name: Cursor, hosts: [], private_work: public_only}\n')
-    text = edit(text, 'opencode: {provider: opencode-go, basis: observed-default}\n', 'opencode: {provider: opencode-go, basis: observed-default}\ncursor: {provider: cursor, basis: owner-declared}\n')
+    let text = edit(EXAMPLE, 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\n',
+      'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\ncursor: {name: Cursor, hosts: [], private_work: public_only}\n')
+    text = edit(text, 'codex: {provider: openai, basis: observed-default}\n', 'codex: {provider: openai, basis: observed-default}\ncursor: {provider: cursor, basis: owner-declared}\n')
     text = edit(text, '## roles\n', '## composer\n\n```yaml\nname: Composer\nclass: pawn\nharness: cursor\nmodel: composer-2\nprovider: cursor\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: []\n```\n\n## roles\n')
     const fence = '```'
     return `${text}\n## skills\n\n${fence}yaml\nonly: {alpha: [claude, cursor]}\n${fence}\n\n## tools\n\n${fence}yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", apps: [codex, cursor]}\n${fence}\n`
@@ -235,6 +235,35 @@ describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
     approveFile(namesCursor())
     expect((await runCli(['team'])).stdout).not.toContain('composer')
     expect((await runCli(['team', '--all'])).stdout).toMatch(/composer {2}Composer {2}pawn {2}cursor {2}composer-2 .*\[retired\]/)
+  })
+})
+
+describe('a team file that still names OpenCode and Luna (Go) (Epic 123, 123.1 AC1)', () => {
+  /** A file written while OpenCode was supported: OpenCode Go, its route, Luna (Go) on it, and a skill and a tool kept to it. */
+  const namesOpenCode = (): string => {
+    let text = edit(EXAMPLE, 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\n',
+      'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\nopencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n')
+    text = edit(text, 'codex: {provider: openai, basis: observed-default}\n', 'codex: {provider: openai, basis: observed-default}\nopencode: {provider: opencode-go, basis: observed-default}\n')
+    text = edit(text, '## roles\n', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [xhigh]\nroles: []\n```\n\n## roles\n')
+    const fence = '```'
+    return `${text}\n## skills\n\n${fence}yaml\nonly: {alpha: [claude, opencode]}\n${fence}\n\n## tools\n\n${fence}yaml\ndocs: {name: Docs, url: "https://docs.example.test/mcp", apps: [codex, opencode]}\n${fence}\n`
+  }
+
+  it('is read without failing and left unchanged, with a warning at each line that names OpenCode, and Luna (Go) takes no work', async () => {
+    const parsed = parseRoster(namesOpenCode())
+    expect(parsed.errors).toEqual([])
+    const retired = "OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final"
+    expect(parsed.warnings.filter((warning) => warning.code === 'APP_RETIRED').map((warning) => warning.message).sort()).toEqual([
+      `## harness-routes.opencode: ${retired}; BMN proposes removing this route on Team`,
+      `## skills.only.alpha: ${retired}`,
+      `## tools.docs.apps: ${retired}`,
+      `luna-go runs in ${retired}; nothing runs on it, and BMN proposes removing it on Team`
+    ])
+    expect(agentState(parsed.data!.agents.find((agent) => agent.id === 'luna-go')!)).toBe('retired')
+    approveFile(namesOpenCode())
+    expect(readFileSync(join(home, '.config/bmn/agents/roster.md'), 'utf8')).toBe(namesOpenCode())
+    expect((await runCli(['team'])).stdout).not.toContain('luna-go')
+    expect((await runCli(['team', '--all'])).stdout).toMatch(/luna-go {2}Luna \(Go\) {2}pawn {2}opencode {2}gpt-6-luna .*\[retired\]/)
   })
 })
 
@@ -417,12 +446,12 @@ describe('machine differences (60.5 AC2)', () => {
     const changed = {
       ...approved,
       providers: approved.providers.map((provider) => (provider.id === 'zai' ? { ...provider, private_work: 'allowed' as const } : provider)),
-      exceptions: [...approved.exceptions, { id: 'opencode-app', provider: 'opencode-go', folder: '/synthetic/EXCEPTION-SENTINEL-NEW' }]
+      exceptions: [...approved.exceptions, { id: 'zai-app', provider: 'zai', folder: '/synthetic/EXCEPTION-SENTINEL-NEW' }]
     }
     const diff = machineDiff(approved, changed)
     expect(diff).toEqual([
       expect.objectContaining({ scope: 'providers', id: 'zai', field: 'private_work', before: { present: true, value: 'public_only' }, after: { present: true, value: 'allowed' } }),
-      expect.objectContaining({ scope: 'exceptions', id: 'opencode-app', field: null, kind: 'added' })
+      expect.objectContaining({ scope: 'exceptions', id: 'zai-app', field: null, kind: 'added' })
     ])
     expect(JSON.stringify(diff)).not.toContain('EXCEPTION-SENTINEL')
   })

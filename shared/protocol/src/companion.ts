@@ -106,7 +106,7 @@ export function hasAttentionChoices(record: AttentionRecord): boolean {
 export type QuestionChoice = number | { set: number[]; typed?: string } | { typed: string }
 
 export type AnswerRefusal = 'gone' | 'changed' | 'not-on-screen' | 'unsupported' | 'permissions-off' |
-  'claimed' | 'not-delivered' | 'api-refused'
+  'claimed' | 'not-delivered'
 
 export type AnswerOutcome =
   | { state: 'refused'; reason: AnswerRefusal }
@@ -157,13 +157,13 @@ const ATTENTION_ORIGINS = Object.freeze([
 export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
 /** `terminal` is not a harness: it is what a program's own OSC notification is logged as. */
-const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'terminal'] as const)
+const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'terminal'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
 /**
- * What a saved row or request may name: the agents above, and Cursor, which BMN retired (Epic 71).
- * A row saved before then is read as it was; no new one names Cursor.
+ * What a saved row or request may name: the agents above, and Cursor and OpenCode, which BMN retired
+ * (Epics 71 and 123). A row saved before then is read as it was; no new one names either.
  */
-export const HOOK_EVENT_RECORD_AGENTS = Object.freeze([...HOOK_EVENT_AGENTS, 'cursor'] as const)
+export const HOOK_EVENT_RECORD_AGENTS = Object.freeze([...HOOK_EVENT_AGENTS, 'cursor', 'opencode'] as const)
 export type HookEventRecordAgent = (typeof HOOK_EVENT_RECORD_AGENTS)[number]
 
 /** `RULES.source` size: the whole origin and a hook event name alike are at most this many characters. */
@@ -255,15 +255,13 @@ export interface HookEventsView {
  * counts once. Claude Code, and Codex 0.157.1 after an automatic compaction, send `SessionStart`
  * with source `compact`; Codex's manual `/compact` sends only `PostCompact`, whose trigger the CLI
  * logs as the source (measured 2026-09-28, docs/agent-control.md). Codex's automatic `PostCompact`
- * is not counted because its `SessionStart` already was. OpenCode publishes `session.compacted`;
- * the CLI logs a subagent's with source `subagent`, which is not the owner's conversation.
+ * is not counted because its `SessionStart` already was.
  */
 export function isCompactionEvent(record: Pick<HookEventRecord, 'agent' | 'event' | 'source'>): boolean {
   switch (record.agent) {
     case 'claude': return record.event === 'SessionStart' && record.source === 'compact'
     case 'codex': return (record.event === 'SessionStart' && record.source === 'compact') ||
       (record.event === 'PostCompact' && record.source === 'manual')
-    case 'opencode': return record.event === 'session.compacted' && record.source !== 'subagent'
     default: return false
   }
 }
@@ -279,7 +277,7 @@ export interface HookCompaction {
 /**
  * The agents whose plan use BMN can read without a network call (Story 37.1, docs/usage-sources.md):
  * Claude Code through its status-line input, Codex through the `token_count` lines of its own session
- * file. `claude glm` and OpenCode report no plan windows on this machine.
+ * file. `claude glm` reports no plan windows on this machine.
  */
 export const USAGE_AGENTS = Object.freeze(['claude', 'codex'] as const)
 export type UsageAgent = (typeof USAGE_AGENTS)[number]
@@ -700,7 +698,7 @@ export interface AgentHistoryClaudeFolder {
   failure?: string
 }
 
-export type AgentHistoryAgent = 'codex' | 'opencode'
+export type AgentHistoryAgent = 'codex'
 
 export interface AgentHistoryRun {
   at: string

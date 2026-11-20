@@ -5,10 +5,9 @@ import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { bashExit, callOwnListener, isObject } from './shared-helpers.mjs'
-import { CONVERSATION_REFERENCE, HOOK_TIMEOUT_MS, TIMEOUT_MS } from './bmn-words.mjs'
+import { CONVERSATION_REFERENCE, HOOK_AGENTS, HOOK_TIMEOUT_MS, TIMEOUT_MS } from './bmn-words.mjs'
 import { callEach } from './bmn-commands.mjs'
-import { HOOK_AGENTS } from './bmn-opencode-plugin.mjs'
-import { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, hookEventName, hookRequests, openCodeSubagent, resumesByItself, phoneAnswerable, retiredOr, userInputTool } from './bmn-hooks.mjs'
+import { HOOK_WRAPPERS, PERMISSION_WAIT_MS, asyncUserInputTool, claudeConfigDir, hookEventName, hookRequests, resumesByItself, phoneAnswerable, retiredOr, userInputTool } from './bmn-hooks.mjs'
 
 export { runHook }
 
@@ -507,15 +506,10 @@ function hookApiHost(agent) {
 
 /**
  * The model name the payload carried, trimmed and bounded to 128 printable UTF-16 units. Claude Code
- * puts it at `model`; BMN's OpenCode plugin sends `message.updated` with `{ info: { modelID } }`,
- * OpenCode 1's own shape (@opencode-ai/sdk EventMessageUpdated), which its OpenCode 2 plugin builds
- * from the model a step started with. Both are read here.
+ * puts it at `model`.
  */
 function hookModel(agent, event) {
-  const raw = typeof event.model === 'string' ? event.model
-    : agent === 'opencode' && isObject(event.info) && typeof event.info.modelID === 'string'
-      ? event.info.modelID
-      : undefined
+  const raw = typeof event.model === 'string' ? event.model : undefined
   if (raw === undefined) return undefined
   const printable = [...raw.trim()].filter((ch) => ch.charCodeAt(0) > 0x1f && ch.charCodeAt(0) !== 0x7f)
   // The utility counts UTF-16 units and refuses the whole observation above 128, so the cut is in
@@ -572,17 +566,13 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
   })
   // `source` and `toolName` take the same `RULES.source` shape as the event name: a tool called "Éditeur"
   // belongs in the log as much as one called "Bash".
-  // Codex names what caused a compaction `trigger` (manual or auto). Every event of an OpenCode subagent's session is
-  // the subagent's, whatever source it carries: its compaction is not counted as the owner's (Story 36.1), its run
-  // starting never resets the repeat watch (Story 92.2), and its finished run is never the owner's turn (Story 93.3).
+  // Codex names what caused a compaction `trigger` (manual or auto).
   // A Claude Code stop that lists work in flight is not a resting point: the app goes on by itself (Epic 125, D4).
-  const source = agent === 'opencode' && openCodeSubagent(event) ? 'subagent' : agent === 'claude' && eventName === 'Stop' && resumesByItself(event) ? 'continues' : hookEventName(event.source) ??
+  const source = agent === 'claude' && eventName === 'Stop' && resumesByItself(event) ? 'continues' : hookEventName(event.source) ??
     (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger) : undefined)
   const toolName = hookEventName(event.tool_name)
-  // What BMN's OpenCode plugin promises with every event it sends (Story 96.3); earlier plugins send none.
-  const plugin = agent === 'opencode' && Number.isSafeInteger(event.bmn_plugin) && event.bmn_plugin >= 1 && event.bmn_plugin <= 999 ? event.bmn_plugin : undefined
   const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
-    (agent === 'codex' && eventName === 'PostToolUse') || (agent === 'opencode' && eventName === 'tool.execute.after')
+    (agent === 'codex' && eventName === 'PostToolUse')
     ? toolFingerprint(event, agent) : undefined
   return {
     method: 'hook.observe',
@@ -592,7 +582,6 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
       effects,
       ...(source === undefined ? {} : { source }),
       ...(toolName === undefined ? {} : { toolName }),
-      ...(plugin === undefined ? {} : { plugin }),
       ...(fingerprint === undefined ? {} : { fingerprint }),
       ...(apiHost === null ? {} : { apiHost }),
       ...(model === undefined ? {} : { model }),

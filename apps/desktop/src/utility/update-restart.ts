@@ -51,11 +51,11 @@ export const resumedStart = (seen: WakeObservation): string | null =>
 export function restartStateAtPress(
   agent: string, seen: Pick<WakeObservation, 'event' | 'source'> | undefined, terminalWorking: () => boolean, requestOpen = false
 ): UpdateRestartMember['atPress'] {
-  if (agent !== 'claude' && agent !== 'codex' && agent !== 'opencode') return terminalWorking() ? 'working' : 'ended'
+  if (agent !== 'claude' && agent !== 'codex') return terminalWorking() ? 'working' : 'ended'
   if (!seen) return 'unknown'
   // A stop with work in flight (`continues`) is the app going on by itself, never a resting point.
   if (seen.source === 'subagent' || seen.source === 'continues' || requestOpen) return 'working'
-  const finished = agent === 'claude' ? ['Stop', 'StopFailure', 'Notification'] : agent === 'codex' ? ['Stop'] : ['session.idle']
+  const finished = agent === 'claude' ? ['Stop', 'StopFailure', 'Notification'] : ['Stop']
   return finished.includes(seen.event) || seen.event === 'SessionStart' ? 'ended' : 'working'
 }
 

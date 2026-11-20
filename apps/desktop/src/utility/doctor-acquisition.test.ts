@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.resetModules()
   home = mkdtempSync(join(tmpdir(), 'bmn-doctor-acquisition-')); roots.push(home)
   vi.stubEnv('HOME', home); vi.stubEnv('PATH', '/usr/bin:/bin')
-  for (const key of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT',
+  for (const key of ['CLAUDE_CONFIG_DIR', 'CODEX_HOME',
     'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) vi.stubEnv(key, undefined)
   seam.hook = null; seam.descriptors.clear()
 })
@@ -58,39 +58,26 @@ async function scanSandbox(): Promise<ProjectedDoctorResult> {
   receipts.set(pair.result, pair.rows); sandboxed.add(pair.result); return pair.result
 }
 
-it('OpenCode 2 MCP: reads both layouts without metadata rows and returns private locations', async () => {
-  const path = join(home, '.config/opencode/opencode.json')
-  const config = (command: string): string => JSON.stringify({ mcp: { timeout: 123,
-    legacy: { type: 'local', command: ['bmn-synthetic-missing-legacy'] }, servers: { native: { type: 'local', command: [command] } } } })
-  put(path, config('bmn-synthetic-missing-native'))
-  const first = await scan()
-  expect(first.state).toBe('passed')
-  expect(first.leftovers).toHaveLength(2)
-  expect(first.leftovers?.every(row => row.kind === 'mcp' && row.app === 'opencode' && row.reason === 'missing-program' && row.locator?.status === 'located')).toBe(true)
-  expect(JSON.stringify(first)).not.toMatch(/legacy|native|bmn-synthetic|opencode.json/)
-})
-
 it('Epic 86 MCP continuity: keeps an unchanged MCP item through a sibling entry change', async () => {
-  const path = join(home, '.config/opencode/opencode.json')
-  const config = (command: string): string => JSON.stringify({ mcp: { timeout: 123,
-    legacy: { type: 'local', command: ['bmn-synthetic-missing-legacy'] }, servers: { native: { type: 'local', command: [command] } } } })
-  put(path, config('bmn-synthetic-missing-native'))
+  const path = join(home, '.claude.json')
+  const config = (command: string): string => JSON.stringify({ tips: 123,
+    mcpServers: { stays: { command: 'bmn-synthetic-missing-stays' }, changes: { command } } })
+  put(path, config('bmn-synthetic-missing-changes'))
   const first = await scan()
   expect(first.state).toBe('passed')
   expect(first.leftovers).toHaveLength(2)
-  expect(first.leftovers?.every(row => row.kind === 'mcp' && row.app === 'opencode' && row.reason === 'missing-program' && row.locator?.status === 'located')).toBe(true)
+  expect(first.leftovers?.every(row => row.kind === 'mcp' && row.app === 'claude' && row.reason === 'missing-program' && row.locator?.status === 'located')).toBe(true)
   put(path, config('bmn-synthetic-missing-replacement'))
   const second = await scan(), matches = matchContinuity(receipts.get(first)!, receipts.get(second)!)
   expect(matches).toEqual([{ item: first.leftovers![0]!.item, current: second.leftovers![0]!.item }, { item: first.leftovers![1]!.item, current: null }])
-  expect(JSON.stringify(first)).not.toMatch(/legacy|native|bmn-synthetic|opencode.json/)
+  expect(JSON.stringify(first)).not.toMatch(/stays|changes|bmn-synthetic|claude\.json/)
 })
 
-it.each(['claude', 'codex', 'opencode-legacy', 'opencode-native'])('Epic 86 MCP continuity: %s keeps entries across sibling insertion and reordering with fresh coordinates', async app => {
-  const path = join(home, app === 'claude' ? '.claude.json' : app === 'codex' ? '.codex/config.toml' : '.config/opencode/opencode.json')
-  const entry = { command: app.startsWith('opencode') ? ['bmn-synthetic-missing'] : 'bmn-synthetic-missing', ...(app.startsWith('opencode') ? { type: 'local' } : {}) }
+it.each(['claude', 'codex'])('Epic 86 MCP continuity: %s keeps entries across sibling insertion and reordering with fresh coordinates', async app => {
+  const path = join(home, app === 'claude' ? '.claude.json' : '.codex/config.toml')
+  const entry = { command: 'bmn-synthetic-missing' }
   const body = (names: string[]): string => app === 'codex' ? names.map(name => `[mcp_servers.${name}]\ncommand="bmn-synthetic-missing"\n`).join('\n') :
-    JSON.stringify(app === 'claude' ? { mcpServers: Object.fromEntries(names.map(name => [name, entry])) } :
-      { mcp: app === 'opencode-native' ? { servers: Object.fromEntries(names.map(name => [name, entry])) } : Object.fromEntries(names.map(name => [name, entry])) }, null, 2)
+    JSON.stringify({ mcpServers: Object.fromEntries(names.map(name => [name, entry])) }, null, 2)
   put(path, body(['keep', 'sibling']))
   const first = await scan()
   expect(first.state).toBe('passed'); expect(receipts.get(first)).toHaveLength(2)
@@ -102,20 +89,20 @@ it.each(['claude', 'codex', 'opencode-legacy', 'opencode-native'])('Epic 86 MCP 
 })
 
 it.each(['value', 'key', 'layout', 'replacement', 'hardlink', 'symlink', 'ownership', 'program', 'witness'])('Epic 86 MCP continuity: refuses %s changes', async change => {
-  const path = join(home, '.config/opencode/opencode.json'), target = join(home, 'target.json'), program = join(home, 'missing-program')
-  const entry = { type: 'local', command: [program], extra: { ignored: 'before' } }
-  const body = JSON.stringify({ mcp: { keep: entry } })
+  const path = join(home, '.claude.json'), target = join(home, 'target.json'), program = join(home, 'missing-program')
+  const entry = { command: program, extra: { ignored: 'before' } }
+  const body = JSON.stringify({ mcpServers: { keep: entry } })
   if (change === 'symlink') { put(target, body); mkdirSync(join(path, '..'), { recursive: true }); symlinkSync(target, path) }
   else put(path, body)
   const first = await scan()
   expect(first.state).toBe('passed'); expect(receipts.get(first)).toHaveLength(1)
-  if (change === 'value') put(path, JSON.stringify({ mcp: { keep: { ...entry, extra: { ignored: 'after' } } } }))
-  if (change === 'key') put(path, JSON.stringify({ mcp: { renamed: entry } }))
-  if (change === 'layout') put(path, JSON.stringify({ mcp: { servers: { keep: entry } } }))
+  if (change === 'value') put(path, JSON.stringify({ mcpServers: { keep: { ...entry, extra: { ignored: 'after' } } } }))
+  if (change === 'key') put(path, JSON.stringify({ mcpServers: { renamed: entry } }))
+  if (change === 'layout') put(path, JSON.stringify({ projects: { [home]: { mcpServers: { keep: entry } } } }))
   if (change === 'replacement') { put(path + '.new', body); renameSync(path + '.new', path) }
   if (change === 'hardlink') linkSync(path, path + '.link')
   if (change === 'symlink') { put(target + '.new', body); rmSync(path); symlinkSync(target + '.new', path) }
-  if (change === 'ownership') put(join(home, '.config/bmn/agents/state/rules/tools-written.json'), '{"opencode|keep":{}}')
+  if (change === 'ownership') put(join(home, '.config/bmn/agents/state/rules/tools-written.json'), '{"claude|keep":{}}')
   if (change === 'program') { put(program, '#!/bin/sh\nexit 0\n'); chmodSync(program, 0o700) }
   if (change === 'witness') put(join(home, '.config/bmn/agents/state/rules/tools-written.json'), '{')
   const fresh = await scan()
@@ -127,7 +114,7 @@ it.each(['value', 'key', 'layout', 'replacement', 'hardlink', 'symlink', 'owners
 })
 
 it.each([
-  ['json duplicate nested', '.config/opencode/opencode.json', '{"mcp":{"keep":{"type":"local","command":["bmn-synthetic-missing"],"extra":{"x":1,"x":2}}}}'],
+  ['json duplicate nested', '.claude.json', '{"mcpServers":{"keep":{"command":"bmn-synthetic-missing","extra":{"x":1,"x":2}}}}'],
   ['toml array section', '.codex/config.toml', '[mcp_servers.keep]\ncommand="bmn-synthetic-missing"\n[[mcp_servers.keep.extra]]\nx=1\n'],
   ['toml unknown header', '.codex/config.toml', '[mcp_servers.keep]\ncommand="bmn-synthetic-missing"\n[mcp_servers.keep.extra\nx=1\n'],
   ['toml duplicate assignment', '.codex/config.toml', '[mcp_servers.keep]\ncommand="bmn-synthetic-missing"\ncommand="bmn-synthetic-other"\n'],
@@ -143,12 +130,12 @@ it.each([
 })
 
 it('Epic 86 MCP continuity: non-MCP items retain their whole-file content guard', async () => {
-  const path = join(home, '.config/opencode/opencode.json')
-  put(path, '{"plugin":["synthetic-package"],"metadata":0}')
+  const path = join(home, '.codex/config.toml')
+  put(path, 'model = "synthetic-a"\n[plugins.synthetic]\nenabled = false\n')
   const first = await scan()
   expect(first.state).toBe('passed'); expect(receipts.get(first)).toHaveLength(1)
   expect(first.leftovers![0]!.kind).toBe('plugins')
-  put(path, '{"plugin":["synthetic-package"],"metadata":1}')
+  put(path, 'model = "synthetic-b"\n[plugins.synthetic]\nenabled = false\n')
   const fresh = await scan()
   expect(fresh.state).toBe('passed'); expect(receipts.get(fresh)).toHaveLength(1)
   expect(matchContinuity(receipts.get(first)!, receipts.get(fresh)!)).toEqual([{ item: first.leftovers![0]!.item, current: null }])
@@ -175,14 +162,6 @@ it('Epic 86 MCP continuity: accepts fully read TOML subtables and unrelated arra
   put(join(home, '.codex/config.toml'), '[mcp_servers.keep]\ncommand="bmn-synthetic-missing"\n[mcp_servers.keep.extra]\nx={nested=[1,2]}\n[[unrelated]]\nx=1\n')
   const result = await scan()
   expect(result.state).toBe('passed'); expect(receipts.get(result)).toHaveLength(1)
-})
-
-it('OpenCode 2 MCP: marks a decoded cross-layout collision as incomplete rather than inventing a server row', async () => {
-  put(join(home, '.config/opencode/opencode.json'), '{"mcp":{"same":{"type":"local","command":["missing"]},"servers":{"same":{"type":"local","command":["missing"]}}}}')
-  const result = await scan()
-  expect(result.state).toBe('partial')
-  expect(result.problems?.length).toBeGreaterThan(0)
-  expect(result.leftovers?.filter(row => row.kind === 'mcp' && row.app === 'opencode')).toHaveLength(0)
 })
 
 it('retains second-pass coverage when a newly discovered item changes after its observation', async () => {
@@ -227,8 +206,8 @@ async function resolvers() {
 }
 
 for (const kind of ['json', 'toml', 'mcp'] as const) it(`reacquires ${kind} after a same-size reorder without publishing first-read coordinates`, async () => {
-  const path = join(home, kind === 'json' ? '.config/opencode/opencode.json' : '.codex/config.toml')
-  const before = kind === 'json' ? '{"plugin":["./ordinary","./password"]}'
+  const path = join(home, kind === 'json' ? '.claude.json' : '.codex/config.toml')
+  const before = kind === 'json' ? '{"mcpServers":{"ordinary":{"command":"missing-a"},"password":{"command":"missing-b"}}}'
     : kind === 'toml' ? '[plugins.ordinary]\nenabled=false\n[plugins.password]\nenabled=false\n'
       : '[mcp_servers.ordinary]\ncommand="missing-a"\n[mcp_servers.password]\ncommand="missing-b"\n'
   const after = before.replaceAll('ordinary', 'TEMPWORD').replaceAll('password', 'ordinary').replaceAll('TEMPWORD', 'password')
@@ -309,10 +288,10 @@ for (const mutation of ['rowid', 'wal-create', 'state'] as const) it(`rejects a 
 })
 
 it('revalidates an earlier configuration observation before publishing the scan', async () => {
-  const path = join(home, '.config/opencode/opencode.json')
-  put(path, '{"plugin":["./ordinary","./password"]}')
+  const path = join(home, '.codex/config.toml')
+  put(path, '[plugins.ordinary]\nenabled=false\n[plugins.password]\nenabled=false\n')
   const later = join(home, '.claude.json'); put(later, '{}')
-  const fired = mutateOnce(later, ['readFileSync', 'readSync'], () => put(path, '{"plugin":["./password","./ordinary"]}'))
+  const fired = mutateOnce(later, ['readFileSync', 'readSync'], () => put(path, '[plugins.password]\nenabled=false\n[plugins.ordinary]\nenabled=false\n'))
   const result = await scan()
   expect(fired()).toBe(true)
   expect(result.state).toBe('partial')
@@ -320,8 +299,8 @@ it('revalidates an earlier configuration observation before publishing the scan'
 })
 
 it('retains unchanged, individually resolvable controls with no disclosed names', async () => {
-  const path = join(home, '.config/opencode/opencode.json')
-  put(path, '{"plugin":["./ordinary","./password"]}')
+  const path = join(home, '.codex/config.toml')
+  put(path, '[plugins.ordinary]\nenabled=false\n[plugins.password]\nenabled=false\n')
   const result = await scan()
   expect(result.state).toBe('passed')
   expect(result.leftovers).toHaveLength(2)
@@ -417,18 +396,18 @@ it.skipIf(process.getuid?.() === 0)('keeps a plugin cache folder BMN cannot read
 it('keeps a plugin cache folder changed after observation and before publication partial', async () => {
   const folder = join(home, '.codex/plugins/cache/market/ordinary/1')
   put(join(folder, 'file'), 'bytes')
-  const later = join(home, '.config/opencode/plugins'); mkdirSync(later, { recursive: true })
-  const fired = mutateOnce(later, ['readdirSync'], () => put(join(folder, 'file'), 'other bytes'))
+  const later = join(home, '.claude.json'); put(later, '{}')
+  const fired = mutateOnce(later, ['readFileSync', 'readSync'], () => put(join(folder, 'file'), 'other bytes'))
   const result = await scan()
   expect(fired()).toBe(true)
   expect(result.state).toBe('partial')
 })
 
 it('keeps a check passed when only a sibling of an unchanged source appears during the scan', async () => {
-  const path = join(home, '.config/opencode/opencode.json')
-  put(path, '{"plugin":["./ordinary","./password"]}')
-  const later = join(home, '.config/opencode/plugins'); mkdirSync(later, { recursive: true })
-  const fired = mutateOnce(later, ['readdirSync'], () => put(join(home, '.config/opencode/zzz'), 'bytes'))
+  const path = join(home, '.codex/config.toml')
+  put(path, '[plugins.ordinary]\nenabled=false\n[plugins.password]\nenabled=false\n')
+  const later = join(home, '.claude.json'); put(later, '{}')
+  const fired = mutateOnce(later, ['readFileSync', 'readSync'], () => put(join(home, '.codex/zzz'), 'bytes'))
   const result = await scan()
   expect(fired()).toBe(true)
   expect(result.state).toBe('passed')
@@ -443,7 +422,7 @@ it('retains a database source witness which refuses a later write before publica
   state.exec("create table threads(id text,cwd text)")
   const { observeDatabases, unchangedSince, map } = await resolvers()
   const source = observeDatabases([path, join(home, '.codex/state_5.sqlite')], map)[0]!
-  const later = join(home, '.config/opencode/plugins'); mkdirSync(later, { recursive: true })
+  const later = join(home, 'later-folder'); mkdirSync(later, { recursive: true })
   const fired = mutateOnce(later, ['readdirSync'], () => db.exec("insert into stage1_outputs values ('added')"))
   readdirSync(later)
   expect(fired()).toBe(true); expect(unchangedSince(source)).toBe(false)

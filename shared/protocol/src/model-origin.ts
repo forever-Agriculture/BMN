@@ -9,7 +9,7 @@
  */
 
 /** The agents whose hooks can report model facts; `terminal` notices never carry any. */
-export type ModelOriginAgent = 'claude' | 'codex' | 'opencode'
+export type ModelOriginAgent = 'claude' | 'codex'
 
 interface ModelOriginFacts {
   agent: ModelOriginAgent
@@ -134,8 +134,7 @@ export const MODEL_ORIGIN_TABLE: readonly ModelOriginRow[] = Object.freeze([
 /** The country an agent falls back to when its environment names no API host at all. */
 const DEFAULT_PROVIDER_COUNTRIES: Readonly<Record<ModelOriginAgent, ModelOriginCountry | null>> = Object.freeze({
   claude: 'US',
-  codex: 'US',
-  opencode: null
+  codex: 'US'
 })
 
 function hostMatches(host: string, entry: string): boolean {

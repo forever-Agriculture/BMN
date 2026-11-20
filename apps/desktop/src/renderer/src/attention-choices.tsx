@@ -7,10 +7,9 @@ import {
   type QuestionChoice
 } from '@bmn/protocol'
 
-function QuestionOptions({ question, context, custom, immediate, disabled, onChange }: {
+function QuestionOptions({ question, context, immediate, disabled, onChange }: {
   question: AttentionPromptQuestion
   context?: string | undefined
-  custom: boolean
   immediate: boolean
   disabled: boolean
   onChange(choice: QuestionChoice | null): void
@@ -44,20 +43,19 @@ function QuestionOptions({ question, context, custom, immediate, disabled, onCha
           {option.description ? <span className="attention-prompt-description">{stripFormatCharacters(option.description)}</span> : null}
         </button>
       </li>)}
-      {custom ? <li>
+      <li>
         <button type="button" disabled={disabled} aria-expanded={other} onClick={() =>
           change(question.multiSelect ? selected : [], !other, typed)}>Other…</button>
         {other ? <input aria-label={`Other answer for ${stripFormatCharacters(question.text)}`} autoFocus maxLength={4000}
           disabled={disabled} value={typed} onChange={event => change(selected, true, event.target.value)} /> : null}
-      </li> : null}
+      </li>
     </ul>
   </section>
 }
 
-export function AttentionChoices({ questions, context, allowsCustom, onAnswer }: {
+export function AttentionChoices({ questions, context, onAnswer }: {
   questions: AttentionPromptQuestion[]
   context?: string | undefined
-  allowsCustom(question: AttentionPromptQuestion): boolean
   onAnswer(choices: QuestionChoice[]): Promise<AnswerOutcome>
 }): React.JSX.Element {
   const [choices, setChoices] = useState<Record<number, QuestionChoice | null>>({})
@@ -93,7 +91,7 @@ export function AttentionChoices({ questions, context, allowsCustom, onAnswer }:
     if (ready) void answer(questions.map((_, index) => choices[index]!))
   }}>
     {questions.map((question, index) => <QuestionOptions key={index} question={question} context={index === 0 ? context : undefined}
-      custom={allowsCustom(question)} immediate={immediate} disabled={busy || sent} onChange={choice => {
+      immediate={immediate} disabled={busy || sent} onChange={choice => {
         if (immediate && typeof choice === 'number') { void answer([choice]); return }
         setChoices(current => ({ ...current, [index]: choice }))
       }} />)}

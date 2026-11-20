@@ -1,9 +1,8 @@
-// MODULE: agents-team-forms.mjs - Epic 72: each app's own read-only command for an ask, as Story 72.9 measured it: Codex's sandbox, Claude Code's tool permissions and OpenCode's agent permissions, each with every tool its mode keeps read-only
+// MODULE: agents-team-forms.mjs - Epic 72: each app's own read-only command for an ask, as Story 72.9 measured it: Codex's sandbox and Claude Code's tool permissions, each with every tool its mode keeps read-only
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { OPENCODE_FORM_TESTED, openCodeAskConfig, openCodeEnvironment, openCodeFolder } from './agents-opencode.mjs'
 import { BROWSER_SERVER, browserServer, browserTools } from './agents-team-browser.mjs'
 import { realOrNull } from './shared-helpers.mjs'
 import { CODEX_DENIED_WORDS, codexAskProfile } from './native-rules.mjs'
@@ -18,22 +17,16 @@ import { CODEX_DENIED_WORDS, codexAskProfile } from './native-rules.mjs'
  */
 
 /** The apps whose teammates BMN asks. */
-export const ASK_APPS = Object.freeze(['codex', 'claude', 'opencode'])
+export const ASK_APPS = Object.freeze(['codex', 'claude'])
 
 /** The app version each form was last checked on with 72.9's measurement script, and when (R72-FR8). Never a gate. */
 export const ASK_FORMS_CHECKED = Object.freeze({
   codex: { version: '0.166.0', on: '2026-11-02' },
-  claude: { version: '2.1.300', on: '2026-10-15' },
-  opencode: OPENCODE_FORM_TESTED
+  claude: { version: '2.1.300', on: '2026-10-15' }
 })
 
-/** What an app's form does not offer, and why, in the words a refusal gives (R72-NFR12). */
-export const ASK_UNSUPPORTED = Object.freeze({
-  opencode: {
-    pictures: 'BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate',
-    browser: 'BMN adds a browser only to Codex and Claude Code (74.3), so OpenCode teammates do not check apps in a browser; ask a Codex or Claude Code teammate'
-  }
-})
+/** What an app's form does not offer, and why, in the words a refusal gives (R72-NFR12): today every app's form offers all. */
+export const ASK_UNSUPPORTED = Object.freeze({})
 
 /** The parts of one ask's folder under BMN's state (`team/runs/<id>/`), as the contract's record table names them. */
 export const ASK_RUN_FILES = Object.freeze({
@@ -55,9 +48,7 @@ export const ASK_READS = Object.freeze({
   'codex-read-only': { scope: 'computer', reach: 'any file your user can read except the listed credential stores', words: `Codex's read-only permission profile: any file your user can read except the listed credential stores (${CODEX_DENIED_WORDS}), with its shell, Git, web search and sub-agents; it writes nothing` },
   'codex-qa': { scope: 'computer', reach: 'any file your user can read except the listed credential stores', words: 'Codex QA form: native command, web, app and collaboration tools switched off; read-only permission profile without the listed credential stores; tool closure remains unverified until its version-pinned fence passes' },
   'claude-qa': { scope: 'text', reach: 'nothing beyond its QA brief and browser', words: 'Claude Code QA form: restricted, no built-in tools, only the QA relay\'s browser tools; a stand-in fence proves that closure for each run' },
-  'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history and listings through BMN\'s git, web search and sub-agents; it writes nothing' },
-  'opencode-reader': { scope: 'folder', reach: 'the project folder', words: 'OpenCode with BMN\'s read-only broker: the project folder only, with read, glob, grep, bounded Git history, web search and one read-only sub-agent; it writes nothing' },
-  'opencode-asker': { scope: 'text', reach: 'nothing beyond your text', words: 'only your question and the files\' text: OpenCode with every action denied' }
+  'claude-read-tools': { scope: 'folder', reach: 'its working folder', words: 'Claude Code with --restricted: its working folder only, with Read, Grep, Glob, Git history and listings through BMN\'s git, web search and sub-agents; it writes nothing' }
 })
 
 /** Interactive browser callbacks execute outside the app's own read-only mode (74.5). */
@@ -66,9 +57,6 @@ export function askReads(form, browser = null) {
   return { scope: 'computer', reach: 'any file your user can read',
     words: 'Interactive Playwright scripts: any file your user can read; scripts run in the MCP server process as your user, and can read and write files and reach the network and local sockets, outside the app\'s read-only mode' }
 }
-
-/** An ask's OpenCode session title: with one named, OpenCode makes no request of its own to name the session (70.3). */
-const OPENCODE_ASK_TITLE = 'BMN ask'
 
 /** Codex logs the turn span that names each thread's model and effort only at this level; the log holds no prompt or answer text (72.1 AC2). */
 const CODEX_ASK_LOG = 'codex_core=info,codex_core::stream_events_utils=debug'
@@ -113,7 +101,7 @@ function onPath(name, path) {
  * an ask runs and, for Codex's npm launcher, the native payload it starts. Returns `{ launcher, payload }` or null.
  */
 export function askProgram(harness, environment = process.env) {
-  const name = harness === 'claude' ? 'claude' : harness === 'opencode' ? 'opencode' : 'codex'
+  const name = harness === 'claude' ? 'claude' : 'codex'
   const launcher = onPath(name, appSearchPath(environment))
   if (launcher === null) return null
   const real = realOrNull(launcher)
@@ -125,16 +113,11 @@ export function askProgram(harness, environment = process.env) {
   return { launcher, payload: real }
 }
 
-/**
- * The name of the form an ask gets: the app's one form, and OpenCode's asker where it may read nothing but the
- * asker's text: a public ask, an ask with no project, and a private ask to a teammate whose provider takes public
- * work only (`textOnly`). Those providers still get the text-only form; the project reader uses BMN's
- * confined broker rather than OpenCode's native filesystem tools.
- */
-export function askFormName(harness, { project, label, textOnly = false }) {
+/** The name of the form an ask gets: the app's one form, or null for an app whose teammates BMN does not ask. */
+export function askFormName(harness) {
   if (harness === 'codex') return 'codex-read-only'
   if (harness === 'claude') return 'claude-read-tools'
-  return project !== null && label === 'private' && !textOnly ? 'opencode-reader' : 'opencode-asker'
+  return null
 }
 
 const pairs = (environment) => Object.entries(environment).map(([name, value]) => `${name}=${value}`)
@@ -198,9 +181,8 @@ function claudeTools(browser, folder) {
 
 /**
  * The command of one ask: `env -i` with the app's environment, then the app in its form. `request`:
- * `{ form, model, provider, effort, cwd, folder, pictures, rules, context, environment, browser }`: `cwd` the
+ * `{ form, model, provider, effort, cwd, folder, pictures, context, environment, browser }`: `cwd` the
  * project or the run's empty work folder, `folder` the run's folder, `pictures` their paths in it,
- * `rules` the owner's rules for an OpenCode private ask (Codex and Claude Code read their own),
  * `environment` the asker's, for HOME, PATH and the apps' own home folders, `browser` a browser ask's
  * `{ origin, interact }` or null. Returns
  * `{ argv, environment, cwd, stdin }`; `stdin` is `text` (the prompt) or `stream-json` (Claude
@@ -235,14 +217,6 @@ export function askCommand(harness, program, request) {
     command = [program.launcher, '-p', '--model', request.model, '--effort', request.effort, ...claudeTools(request.browser, request.folder), ...context.argv,
       ...(pictures.length > 0 ? ['--input-format', 'stream-json'] : [])]
     if (pictures.length > 0) stdin = 'stream-json'
-  } else if (harness === 'opencode') {
-    if (request.browser) throw new Error(ASK_UNSUPPORTED.opencode.browser)
-    // BMN's own OpenCode folder (its OpenCode Go sign-in), the form's agents given inline: the folder's files stay as they are.
-    const reader = request.form === 'opencode-reader'
-    const own = openCodeAskConfig(reader ? 'reader' : 'asker', request.rules ?? null)
-    environment = { ...openCodeEnvironment(openCodeFolder()), PATH: reader ? `${join(request.folder, ASK_RUN_FILES.bin)}:${path}` : path, OPENCODE_CONFIG_CONTENT: own.content }
-    const reference = request.model.includes('/') ? request.model : `${request.provider}/${request.model}`
-    command = [program.launcher, 'run', '--standalone', '--format', 'json', '--agent', own.agent, '-m', `${reference}#${request.effort}`, '--title', OPENCODE_ASK_TITLE]
   } else {
     throw new Error(`no ask form for ${harness}`)
   }

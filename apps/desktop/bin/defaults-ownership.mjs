@@ -6,6 +6,7 @@ import { agentsDirectory } from './agents-roster.mjs'
 import { assertDefaultsAdmission, defaultsAdmissionToken } from './defaults-admission.mjs'
 
 const kinds = ['master', 'rules', 'skills', 'tools', 'hooks', 'own-skills']
+// OpenCode was retired (Epic 123); its entries in an existing journal stay readable, and nothing new is written for it.
 const apps = ['master', 'source', 'claude', 'codex', 'opencode']
 const stages = ['publishing', 'installed', 'refreshing', 'removing', 'retained', 'opted-out']
 const recordKinds = ['own-skills', 'skills-written']

@@ -71,20 +71,22 @@ describe('the session form', () => {
 })
 
 describe('launch agents', () => {
-  it('offers OpenCode and preserves its launch when reopening the form', () => {
-    const form = applyLaunchAgent({ ...INITIAL_SESSION_FORM, cwd: '/work', terminalGraphics: 'sixel' }, 'opencode')
-    expect(form).toMatchObject({ name: 'OpenCode', executable: '/bin/bash', cwd: '/work', terminalGraphics: 'sixel' })
+  it('offers Codex and preserves its launch when reopening the form', () => {
+    const form = applyLaunchAgent({ ...INITIAL_SESSION_FORM, cwd: '/work', terminalGraphics: 'sixel' }, 'codex')
+    expect(form).toMatchObject({ name: 'Codex', executable: '/bin/bash', cwd: '/work', terminalGraphics: 'sixel' })
     const params = sessionCreateParams('workspace-1', form, { cols: 80, rows: 24 })
-    expect(params.argv).toEqual(['-ic', 'opencode; exec bash -i'])
-    expect(launchAgentOf(form)).toBe('opencode')
-    expect(applyLaunchAgent({ ...form, name: 'My review' }, 'opencode').name).toBe('My review')
-    expect(applyLaunchAgent(form, 'codex').name).toBe('Codex')
+    expect(params.argv).toEqual(['-ic', 'codex; exec bash -i'])
+    expect(launchAgentOf(form)).toBe('codex')
+    expect(applyLaunchAgent({ ...form, name: 'My review' }, 'codex').name).toBe('My review')
+    expect(applyLaunchAgent(form, 'claude').name).toBe('Claude')
   })
 
-  it('offers the four choices with no Cursor, and reads a form saved for Cursor as a custom launch (Epic 71)', () => {
-    expect(LAUNCH_AGENTS.map((agent) => agent.label)).toEqual(['Terminal', 'Claude Code', 'Codex', 'OpenCode'])
+  it('offers the three choices with no Cursor or OpenCode, and reads a form saved for either as a custom launch (Epics 71, 123)', () => {
+    expect(LAUNCH_AGENTS.map((agent) => agent.label)).toEqual(['Terminal', 'Claude Code', 'Codex'])
     const saved = { ...INITIAL_SESSION_FORM, name: 'Cursor', executable: '/bin/bash', argv: quoteArgv(['-ic', 'cursor-agent; exec bash -i']) }
     expect(launchAgentOf(saved)).toBeNull()
+    const openCode = { ...INITIAL_SESSION_FORM, name: 'OpenCode', executable: '/bin/bash', argv: quoteArgv(['-ic', 'opencode; exec bash -i']) }
+    expect(launchAgentOf(openCode)).toBeNull()
   })
 
   it('runs an agent inside an interactive shell that survives the agent exiting', () => {
@@ -103,7 +105,7 @@ describe('launch agents', () => {
 
   it('keeps a typed name and follows the pick for a suggested one', () => {
     expect(applyLaunchAgent({ ...INITIAL_SESSION_FORM, name: 'Review' }, 'codex').name).toBe('Review')
-    expect(applyLaunchAgent(applyLaunchAgent(INITIAL_SESSION_FORM, 'claude'), 'opencode').name).toBe('OpenCode')
+    expect(applyLaunchAgent(applyLaunchAgent(INITIAL_SESSION_FORM, 'claude'), 'codex').name).toBe('Codex')
     expect(applyLaunchAgent({ ...INITIAL_SESSION_FORM, name: '  ' }, 'codex').name).toBe('Codex')
   })
 

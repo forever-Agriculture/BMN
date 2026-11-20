@@ -30,7 +30,6 @@ export const ALLOWED = {
   'shared/protocol/src/binding.ts': 'a binding saved before the retirement',
   'shared/protocol/src/companion.ts': 'hook rows and requests saved before the retirement',
   'apps/desktop/src/utility/conversation-binding.ts': 'a binding saved before the retirement, never resumed',
-  'apps/desktop/src/utility/session-manager.ts': 'a binding saved before the retirement, never resumed or looked for',
   'apps/desktop/src/utility/store-schema.ts': 'the migration that once allowed its bindings',
   'apps/desktop/src/utility/agent-history.ts': 'a history state saved before the retirement',
   'apps/desktop/src/renderer/src/session-presentation.ts': 'its name on old sessions, sets and requests',

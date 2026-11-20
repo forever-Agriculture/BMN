@@ -1,33 +1,45 @@
 // MODULE: agents-roster.ts - Epic 60 shapes the Preferences Team and Rules pages exchange with the main process
-export const ROSTER_HARNESSES = ['claude', 'codex', 'opencode'] as const
+export const ROSTER_HARNESSES = ['claude', 'codex'] as const
 export type RosterHarness = (typeof ROSTER_HARNESSES)[number]
 /** How each agent app is named to the owner. */
-export const ROSTER_APP_NAMES: Readonly<Record<RosterHarness, string>> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
+export const ROSTER_APP_NAMES: Readonly<Record<RosterHarness, string>> = { claude: 'Claude Code', codex: 'Codex' }
 /** What each app's own updater is started with. BMN shows the command; the updater itself decides what it does. */
-export const ROSTER_APP_UPDATE_ARGUMENTS: Readonly<Record<RosterHarness, readonly string[]>> = { claude: ['update'], codex: ['update'], opencode: ['upgrade'] }
+export const ROSTER_APP_UPDATE_ARGUMENTS: Readonly<Record<RosterHarness, readonly string[]>> = { claude: ['update'], codex: ['update'] }
 /**
- * Apps BMN retired (Epic 71), named as they always were. An old team file or a stored record may
- * still name one: it is read and shown by this name, and nothing runs on it.
+ * Apps BMN retired (Cursor in Epic 71, OpenCode in Epic 123), named as they always were. An old team
+ * file or a stored record may still name one: it is read and shown by this name, and nothing runs on it.
  */
-const ROSTER_RETIRED_HARNESSES = ['cursor'] as const
+const ROSTER_RETIRED_HARNESSES = ['cursor', 'opencode'] as const
 export type RosterRetiredHarness = (typeof ROSTER_RETIRED_HARNESSES)[number]
 /** What a team file's app fields and lists may hold: an app BMN serves, or one it retired. */
 export type RosterListedApp = RosterHarness | RosterRetiredHarness
-export const RETIRED_APP_NAMES: Readonly<Record<RosterRetiredHarness, string>> = { cursor: 'Cursor' }
+export const RETIRED_APP_NAMES: Readonly<Record<RosterRetiredHarness, string>> = { cursor: 'Cursor', opencode: 'OpenCode' }
+/** How an old record (a session, binding, request, turn or finding) names the retired app it ran: Cursor as Epic 71 left it, OpenCode marked retired (123.1 AC3). */
+export const RETIRED_APP_LABELS: Readonly<Record<RosterRetiredHarness, string>> = { cursor: 'Cursor', opencode: 'OpenCode (retired)' }
 /** Each retired app's program, so a saved command that starts one is recognised. */
-const RETIRED_APP_PROGRAMS: Readonly<Record<string, RosterRetiredHarness>> = { 'cursor-agent': 'cursor' }
+const RETIRED_APP_PROGRAMS: Readonly<Record<string, RosterRetiredHarness>> = { 'cursor-agent': 'cursor', opencode: 'opencode' }
+const RETIRED_APP_DATES: Readonly<Record<RosterRetiredHarness, string>> = { cursor: '14 Oct 2026', opencode: '20 Nov 2026' }
 /** The one sentence a screen gives where an old record names a retired app (71.1 design notes). */
-export const RETIRED_APP_LINE = 'Cursor was retired on 14 Oct 2026.'
+export function retiredAppLine(app: RosterRetiredHarness): string {
+  return `${RETIRED_APP_NAMES[app]} was retired on ${RETIRED_APP_DATES[app]}.`
+}
+/** The sentence for several retired apps at once, in their retirement order: "Cursor was retired on 14 Oct 2026 and OpenCode on 20 Nov 2026." */
+export function retiredAppsLine(apps: readonly RosterRetiredHarness[]): string {
+  const named = ROSTER_RETIRED_HARNESSES.filter((app) => apps.includes(app))
+  if (named.length <= 1) return retiredAppLine(named[0] ?? 'cursor')
+  const [first, ...rest] = named
+  return `${RETIRED_APP_NAMES[first!]} was retired on ${RETIRED_APP_DATES[first!]}${rest.map((app) => ` and ${RETIRED_APP_NAMES[app]} on ${RETIRED_APP_DATES[app]}`).join('')}.`
+}
 
 /** Whether a value names an app BMN retired. */
 export function isRetiredApp(value: unknown): value is RosterRetiredHarness {
   return typeof value === 'string' && (ROSTER_RETIRED_HARNESSES as readonly string[]).includes(value)
 }
 
-/** How an app is named to the owner, a retired one included; anything else is shown as written. */
+/** How an app is named to the owner, a retired one by its label ("OpenCode (retired)"); anything else is shown as written. */
 export function appDisplayName(value: string): string {
   if ((ROSTER_HARNESSES as readonly string[]).includes(value)) return ROSTER_APP_NAMES[value as RosterHarness]
-  return isRetiredApp(value) ? RETIRED_APP_NAMES[value] : value
+  return isRetiredApp(value) ? RETIRED_APP_LABELS[value] : value
 }
 
 /** The retired app a command's program (a name or a path) starts, or null. */
@@ -105,17 +117,6 @@ interface RosterExceptionShape { id: string; provider: string; folder: string }
 
 /** The owner's teammate for one role in one project (73.2): the project's real folder, the role, the agent, an optional effort and end date. */
 interface RosterProjectChoiceShape { id: string; project: string; role: string; agent: string; effort?: RosterEffort; ends?: string }
-
-/**
- * BMN's first OpenCode agent (70.4; the owner's card "Luna via Go", 2026-10-14): Luna's model through
- * his OpenCode Go plan, a read-only helper and a researcher. OpenCode Go joins the team as a new
- * provider does, getting public work only until he allows it. Her efforts are those his Codex Luna holds.
- */
-export const LUNA_GO_PROPOSAL = {
-  provider: { id: 'opencode-go', name: 'OpenCode Go', private_work: 'public_only' },
-  agent: { id: 'luna-go', name: 'Luna (Go)', class: 'pawn', harness: 'opencode', model: 'gpt-6-luna', host: 'default', enabled: true, status: 'active', efforts: ['xhigh', 'max'] },
-  role: 'helper'
-} as const satisfies { provider: Omit<RosterProviderShape, 'hosts'>; agent: Omit<RosterAgentShape, 'provider' | 'roles' | 'efforts'> & { efforts: readonly RosterEffort[] }; role: string }
 
 export interface RosterRouteShape {
   harness: RosterListedApp
@@ -257,18 +258,8 @@ export type AgentsApprovalRequest = { setupRevision?: string } & (
  */
 export interface AgentsRulesUpdate { transaction: string | null; written: RosterHarness[]; skipped: RosterHarness[]; failed?: string }
 
-/** What became of the OpenCode Go sign-in an approval copied into BMN's OpenCode folder (70.4). */
-export interface OpenCodeSignInResult { ok: boolean; copied: boolean; message: string }
-
-/**
- * Luna through OpenCode Go (70.4), as the Team page asks it: whether the installed OpenCode lists her
- * model, and whether BMN's OpenCode folder holds a Go sign-in (null where the approved team names no
- * agent on OpenCode Go, or OpenCode could not be asked). `copy` is what a press of Copy sign-in did.
- */
-export interface OpenCodeGoView { listed: boolean; signedIn: boolean | null; reason: string | null; copy?: OpenCodeSignInResult }
-
 export type AgentsOutcome =
-  | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate; openCodeSignIn?: OpenCodeSignInResult; installed?: string[] }
+  | { ok: true; snapshot: AgentsSnapshot; message: string; rulesUpdate?: AgentsRulesUpdate; installed?: string[] }
   | { ok: false; code: string; message: string; errors?: RosterIssueShape[]; snapshot: AgentsSnapshot }
 
 /** One agent app as Integrations › Health shows it: its version and where it sends data as inspected. */
@@ -570,11 +561,11 @@ export interface ResearchSnapshot {
   choice: { named: string[] | null; proposed: string[] }
   /** The name of a researcher the owner had picked that the team no longer names, until he picks again or researches. */
   dropped: string | null
-  /** The fence test of the installed Codex and OpenCode, by BMN or the owner's Test again: whether one is going, and how the last one the owner started ended. */
+  /** The fence test of the installed Codex, by BMN or the owner's Test again: whether one is going, and how the last one the owner started ended. */
   fenceTest: {
     running: boolean; ended: { ok: boolean; text: string } | null
     /** The last fence test recorded for each app, whoever started it: what its read-only row on Models says (Story 75.8). */
-    last: { harness: 'codex' | 'opencode'; verdict: 'pass' | 'fail' | 'inconclusive'; version: string | null; at: string }[]
+    last: { harness: 'codex'; verdict: 'pass' | 'fail' | 'inconclusive'; version: string | null; at: string }[]
   }
   /** The tests BMN runs by itself, of which this page shows the fence test's (Story 75.8). */
   autoTests: AutoTestsView
@@ -628,7 +619,7 @@ type TeamAskAsker = { kind: 'owner' } | { kind: 'shell' } | { kind: 'session'; s
 type TeamAskScope = 'computer' | 'folder' | 'text'
 /** What a run's teammate could read: the mode its app ran in, in its own words, where it worked, and what went with the question. */
 export interface TeamAskReads {
-  /** The app's mode (`codex-read-only`, `claude-read-tools`, `opencode-reader`, `opencode-asker`); null for a run made before 72.9. */
+  /** The app's mode (`codex-read-only`, `claude-read-tools`; a run from before OpenCode was retired may say `opencode-reader` or `opencode-asker`); null for a run made before 72.9. */
   form: string | null
   scope: TeamAskScope
   /** Its reach in a few words ("any file your user can read"); null where it read only the text. */
@@ -658,7 +649,7 @@ export interface TeamAskSubagentView {
   session: string
   name: string | null
   role: string | null
-  /** "Codex sub-agent", "Claude Code sub-agent", "OpenCode sub-agent". */
+  /** "Codex sub-agent", "Claude Code sub-agent" ("OpenCode sub-agent" in a run from before OpenCode was retired). */
   kind: string
   model: string | null
   effort: string | null
@@ -827,10 +818,6 @@ export interface HookAppAtStart {
   reworded?: string[]
   raised?: string[]
   widened?: string[]
-  /** Entries BMN's own earlier release wrote, upgraded byte for byte at this start (Story 96.3); absent when none was. */
-  upgraded?: string[]
-  /** BMN's own earlier OpenCode plugin left in place because its upgrade failed: it cannot tell a stop from a finished turn (Story 96.6). */
-  earlier?: string[]
   /** Events BMN left as they are, each with why; a whole file it could not add to has `why` on the app instead. */
   left: { event: string; why: HookLeftWhy }[]
   why?: HookLeftWhy

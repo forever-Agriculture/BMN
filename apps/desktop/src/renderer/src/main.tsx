@@ -185,6 +185,11 @@ import {
 } from './workspace-tree'
 import { APP_EVENT_REFRESH_MS, SHELL_READY_WAIT_MS, type ShellDialog, type SidePanel } from './app-shell'
 
+/** A setup session saved before OpenCode was retired (Epic 123) opens Setup on no app in particular. */
+function setupFocus(app: import('@bmn/protocol').SetupSessionPurpose['app']): import('@bmn/protocol').SetupApp | undefined {
+  return app === 'opencode' ? undefined : app
+}
+
 function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
   // Commands BMN is typing into a new session, or typed into one that still runs; each reads the sessions' output for its own.
@@ -1261,7 +1266,7 @@ function App(): React.JSX.Element {
       })
       await reloadWorkspaceSessions(record.workspaceId)
       if (record.setup) {
-        setSetupFocusApp(record.setup.app)
+        setSetupFocusApp(setupFocus(record.setup.app))
         setTree(current => selectTreeWorkspace(current, record.workspaceId))
         setSetupPage(true)
       }
@@ -2412,9 +2417,9 @@ function App(): React.JSX.Element {
                 onView={(update) => applySessionView(writer, sessionsRef.current, terminalStartup.sessionId, update)}
                 onFailure={setFailure}
                 onSelect={(focusTerminal) => focusLayoutSession(terminalStartup.sessionId, focusTerminal)}
-                onSetup={terminalStartup.setup ? () => { setSetupFocusApp(terminalStartup.setup!.app); setTree(current => selectTreeWorkspace(current, terminalStartup.workspaceId)); setSetupPage(true) } : undefined}
+                onSetup={terminalStartup.setup ? () => { setSetupFocusApp(setupFocus(terminalStartup.setup!.app)); setTree(current => selectTreeWorkspace(current, terminalStartup.workspaceId)); setSetupPage(true) } : undefined}
                 onCloseSetup={record?.setup ? () => {
-                  setSetupFocusApp(record.setup!.app)
+                  setSetupFocusApp(setupFocus(record.setup!.app))
                   if (record.lastProcess?.state === 'live') stopSession(record)
                   else { setTree(current => selectTreeWorkspace(current, record.workspaceId)); setSetupPage(true) }
                 } : undefined}

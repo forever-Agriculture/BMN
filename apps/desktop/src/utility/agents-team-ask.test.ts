@@ -6,15 +6,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { evaluate, evaluateAsk, teamRunsDirectory, visibilityPath } from '../../bin/agents-check.mjs'
+import { evaluate, evaluateAsk, teamRunsDirectory } from '../../bin/agents-check.mjs'
 import { codexAskProfile } from '../../bin/native-rules.mjs'
-import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS, askFormName } from '../../bin/agents-team-forms.mjs'
+import { ASK_READS, ASK_RUN_FILES, CLAUDE_ASK_TOOLS } from '../../bin/agents-team-forms.mjs'
 import { InputRefusal, LIMITS, askProject, checkQuestion, credentialHits, maskCredentials, maskedNames, outsidePaths, readInputFile, textFile } from '../../bin/agents-team-inputs.mjs'
 import { ACCESS_GONE, AskUsageError, WIDE_READ_GONE, filePrompt, prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { AskRefusal, resolveTeammate } from '../../bin/agents-team-resolve.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster, saveAndApprove } from '../main/agents-approval'
-import { CODEX_MCP_LIST, goSignInInBmnFolder, stubOpenCode } from './test-fixtures/team-ask-harness'
+import { CODEX_MCP_LIST } from './test-fixtures/team-ask-harness'
 import { startAsk } from '../../bin/agents-team-run.mjs'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -80,15 +80,6 @@ function makeProject(name = 'app'): string {
   writeFileSync(join(root, 'build/out.js'), 'ignored\n')
   writeFileSync(join(root, 'notes.txt'), 'untracked\n')
   return realpathSync(root)
-}
-
-/** A visibility record that says GitHub serves `commit` of this project publicly. */
-function provePublic(root: string, commit: string): void {
-  git(root, 'remote', 'add', 'origin', 'https://github.com/synthetic-owner/app.git')
-  mkdirSync(join(home, '.config/bmn/agents/state/visibility'), { recursive: true })
-  writeFileSync(visibilityPath(root), JSON.stringify({
-    version: 1, workspace: root, checked_at: '2026-10-15T01:00:00.000Z', visibility: 'public', origin: 'github.com/synthetic-owner/app', repository_id: 7, default_branch: 'main', commit
-  }))
 }
 
 const data = () => readApproved().data
@@ -655,45 +646,22 @@ describe('an ask made ready and judged (72.2 AC2-AC5, 72.9 AC1, AC4)', () => {
     expect(readdirSync(teamRunsDirectory())).toHaveLength(runs)
   })
 
-  it('--data public goes only to a form that reads nothing beyond the asker\'s text, and a file is public only as the public commit\'s own bytes (R72-NFR5)', () => {
-    const root = makeProject()
+  it('--data public goes to no app left: Codex and Claude Code read beyond the asker\'s text (R72-NFR5; OpenCode\'s asker retired, Epic 123)', () => {
+    makeProject()
     // Codex and Claude Code read with their own tools: their asks are private.
     expect(refusal(() => ask({ role: 'designer', data: 'public' })).message).toContain('Claude Code\'s own tools read beyond what you hand over, so its asks are private')
     expect(refusal(() => ask({ agent: 'astra', data: 'public' })).message).toContain('Codex\'s own tools read beyond what you hand over, so its asks are private')
-    // OpenCode with every action denied reads only the text: a public question goes there, a file only as the public commit's bytes.
-    stubOpenCode(stubs)
-    goSignInInBmnFolder(home)
-    approve(EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [helper]\n```\n\n## roles')
-      .replace('helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}', 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna-go@high, luna@max], then: lead}'))
-    const go = (request: Partial<Parameters<typeof prepareAsk>[0]> = {}) => ask({ role: 'helper', agent: 'luna-go', effort: 'high', data: 'public', ...request })
-    expect(go().verdict).toMatchObject({ verdict: 'PASS', receipt: { form: 'opencode-asker', data: 'public', consent: [{ kind: 'question', basis: 'declared public by the asker' }] } })
-    expect(refusal(() => go({ files: [join(root, 'src/retry.ts')] })).message).toContain('not proven public (no record)')
-    provePublic(root, git(root, 'rev-parse', 'HEAD').trim())
-    expect(go({ files: [join(root, 'src/retry.ts')] }).verdict.receipt?.consent[1]?.basis).toMatch(/^byte-identical to src\/retry.ts in the public commit [0-9a-f]{12}$/)
-    // A public ask names no project, even asked from inside one: its form never reads it.
-    expect(go({ files: [join(root, 'src/retry.ts')] }, ).verdict.receipt).toMatchObject({ project: null })
-    writeFileSync(join(root, 'src/retry.ts'), 'changed\n')
-    expect(refusal(() => go({ files: [join(root, 'src/retry.ts')] })).message).toContain('is not byte-identical to src/retry.ts')
   })
 
-  it('a private ask to an OpenCode teammate whose provider takes public work only gets only the asker\'s text, which a folder exception can cover (72.6\'s measured route)', () => {
-    const root = makeProject()
-    stubOpenCode(stubs)
-    goSignInInBmnFolder(home)
-    const team = EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [helper]\n```\n\n## roles')
+  it('a team that still names Luna (Go), an OpenCode teammate, loads; asking her says OpenCode was retired and starts nothing (123.1 AC1)', () => {
+    const team = EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [helper]\n```\n\n## roles')
       .replace('helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}', 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna-go@high, luna@max], then: lead}')
     approve(team)
-    const go = () => ask({ role: 'helper', agent: 'luna-go', effort: 'high', files: [join(root, 'src/retry.ts')] }, { cwd: root })
-    // Without a folder exception its private work is refused, as before.
-    expect(refusal(go).message).toContain('OpenCode Go gets public work only')
-    // With one for the project, the question and the file are covered; OpenCode's reader, which could follow a link out, is not used.
-    approve(team.replace('zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}', `zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}\ngo-app: {provider: opencode-go, folder: ${root}}`))
-    const asked = go()
-    expect(asked.verdict).toMatchObject({ verdict: 'PASS', receipt: { agent: 'luna-go', form: 'opencode-asker', data: 'private', consent: [{ kind: 'question', basis: 'exception go-app' }, { kind: 'file', basis: 'exception go-app' }] } })
-    expect(asked.argv).toContain('bmn-ask-asker')
-    // A teammate whose provider takes private work still gets the reader in a project.
-    expect(askFormName('opencode', { project: root, label: 'private' })).toBe('opencode-reader')
-    expect(askFormName('opencode', { project: root, label: 'private', textOnly: true })).toBe('opencode-asker')
+    const runs = existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()).length : 0
+    expect(refusal(() => ask({ role: 'helper', agent: 'luna-go', effort: 'high' })).message).toContain("OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final")
+    // The role's next candidate answers in her place.
+    expect(resolveTeammate(data(), { role: 'helper' }, context())).toMatchObject({ agent: { id: 'luna' } })
+    expect(existsSync(teamRunsDirectory()) ? readdirSync(teamRunsDirectory()).length : 0).toBe(runs)
   })
 
   it('the check refuses a command other than the one it builds, another folder, a changed prompt and a folder BMN did not make', () => {

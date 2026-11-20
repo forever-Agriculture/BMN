@@ -32,6 +32,10 @@ export const PROBLEMS = Object.freeze({
 })
 
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+/** The apps BMN checks now. */
+const APPS = Object.freeze(['claude', 'codex'])
+/** A saved result from before OpenCode was retired (Epic 123) may still name it; it is read, never produced. */
+const RECORD_APPS = Object.freeze([...APPS, 'opencode'])
 const HOOK_FLOOR_CAUSES = Object.freeze(['guard:does-not-answer', 'rules:missing'])
 /** Story 102.4: what Codex said about BMN's entries; no other app has this. */
 const HOOK_APPROVAL_CAUSES = Object.freeze(['approval:not-approved', 'approval:unverified', 'approval:no-codex'])
@@ -56,20 +60,21 @@ export function causeAllowed(code, app, cause) {
   if (code === 'tool-check' && ['unlisted-exposed', 'unlisted-managed'].includes(cause)) return true
   return Object.hasOwn(STATE_WORDS, code) && STATE_WORDS[code].needs.includes(cause)
 }
-const fact = (code, item = 1, app, cause) => ({ code, item, ...(['claude', 'codex', 'opencode'].includes(app) ? { app } : {}),
+const fact = (code, item = 1, app, cause) => ({ code, item, ...(RECORD_APPS.includes(app) ? { app } : {}),
   ...(typeof cause === 'string' && causeAllowed(code, app, cause) ? { cause } : {}) })
 const result = (problems, partial = false) => ({
   state: partial ? 'partial' : problems.length > 0 ? 'problems' : 'passed',
   problems: partial ? [...problems, fact('additional-details')] : problems
 })
 const invalid = () => result([], true)
-const completeApps = (rows, key) => rows.length === 3 &&
-  new Set(rows.map((row) => row?.[key])).size === 3 &&
-  rows.every((row) => ['claude', 'codex', 'opencode'].includes(row?.[key]))
+const completeApps = (rows, key) => rows.length === APPS.length &&
+  new Set(rows.map((row) => row?.[key])).size === APPS.length &&
+  rows.every((row) => APPS.includes(row?.[key]))
 // The producer's qualified vocabulary, not arbitrary state prefixes or user-provided optional flags.
 const HOOK_EVENTS = Object.freeze({
   claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionStart', 'SessionEnd'],
   codex: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
+  // Read only in a saved result from before OpenCode was retired (Epic 123).
   opencode: ['plugin', 'cli.json']
 })
 const CODEX_OPTIONAL_HOOKS = ['PermissionRequest', 'PostCompact']
@@ -195,7 +200,7 @@ export function parseBmnDoctor(check, text, exitCode) {
     partial = !completeApps(data.agents, 'agent') || typeof data.ok !== 'boolean'
     for (const app of data.agents) {
       currentApp = app?.agent
-      if (!object(app) || typeof app.agent !== 'string' || !['claude', 'codex', 'opencode'].includes(app.agent) ||
+      if (!object(app) || typeof app.agent !== 'string' || !APPS.includes(app.agent) ||
         !Array.isArray(app.events) || app.events.length === 0) { partial = true; continue }
       const required = HOOK_EVENTS[app.agent]
       const seen = new Set()
@@ -204,11 +209,10 @@ export function parseBmnDoctor(check, text, exitCode) {
         if (!object(event) || (!required.includes(event.event) && !optional) || seen.has(event.event)) { partial = true; continue }
         seen.add(event.event)
         if (typeof event.optional !== 'boolean' || event.optional !== optional) partial = true
-        if (event.state === 'wired' || event.state === 'wired (older wording)' && ['claude', 'codex'].includes(app.agent)) continue
+        if (event.state === 'wired' || event.state === 'wired (older wording)') continue
         if (event.state === 'missing') {
           if (!optional || event.optional !== true) add('hook-check', `missing:${event.event}`)
-        } else if (event.state === 'wired (older wording)' && app.agent === 'opencode' && event.event === 'plugin') add('hook-check', 'older-wording:plugin')
-        else partial = true
+        } else partial = true
       }
       if (required.some(event => !seen.has(event))) partial = true
       // Stories 102.3 and 102.4: a guard that does not answer, or the app's own rules gone. A report from before them says nothing.
@@ -247,7 +251,7 @@ export function projectedResult(value) {
   const problems = []
   for (const row of value.problems) {
     if (!object(row) || !Object.hasOwn(PROBLEMS, row.code) || !Number.isSafeInteger(row.item) || row.item < 1 || row.item > 10000) return null
-    if (row.app !== undefined && !['claude', 'codex', 'opencode'].includes(row.app)) return null
+    if (row.app !== undefined && !RECORD_APPS.includes(row.app)) return null
     if (row.cause !== undefined && (typeof row.cause !== 'string' || !causeAllowed(row.code, row.app, row.cause))) return null
     if (row.count !== undefined && (!Number.isSafeInteger(row.count) || row.count < 1 || row.count > 10000 || !row.code.startsWith('leftover-'))) return null
     if (row.code.startsWith('leftover-') && row.count === undefined) return null

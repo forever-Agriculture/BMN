@@ -15,7 +15,7 @@ const sha = text => createHash('sha256').update(text).digest('hex')
 const same = (a, b) => a?.kind === b?.kind && a?.hash === b?.hash && a?.parent === b?.parent && a?.object === b?.object
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const failure = (message, code = 'REVISION_CONFLICT') => Object.assign(new Error(message), { code })
-const app = target => ['claude', 'codex', 'opencode'].includes(target.app)
+const app = target => ['claude', 'codex'].includes(target.app)
 const inside = (path, root) => path === root || path.startsWith(`${root}/`)
 const originalFolder = transaction => join(agentsDirectory(), 'state/rules/transactions', transaction)
 const records = (journal, initialize = false) => Object.fromEntries(['own-skills', 'skills-written'].map(kind => [kind, readSetupSkillRecords(journal, kind, { initialize })]))

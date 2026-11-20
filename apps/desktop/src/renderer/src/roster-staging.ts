@@ -9,7 +9,6 @@ import {
   ROSTER_JUDGE_ROLE,
   ROSTER_LEAD_ROLE,
   ROSTER_SCHEMA_VERSION,
-  LUNA_GO_PROPOSAL,
   appDisplayName,
   isRetiredApp,
   rosterApp,
@@ -23,6 +22,7 @@ import {
   type RosterPriceShape,
   type RosterPrivateWork,
   type RosterProviderShape,
+  type RosterRetiredHarness,
   type RosterRoleShape,
   type RosterRouteShape,
   type RosterSkillShape,
@@ -858,30 +858,8 @@ export function judgeProposal(data: RosterDataShape): RosterDataShape | null {
   }
 }
 
-/** The model an OpenCode agent runs, as `-m` names it: `<provider>/<model>`. */
-function openCodeModelOf(agent: RosterAgentShape): string {
-  return agent.model.includes('/') ? agent.model : `${agent.provider}/${agent.model}`
-}
-
-/**
- * The team with Luna (Go) proposed, or null where there is nothing to propose: the team already
- * holds an OpenCode agent on her model, or the id. She joins the role helper where the team has one,
- * at her highest effort, last in its order; she is named a researcher where the team names its
- * researchers, and researches anyway on a team from before that mark. A proposal only: nothing
- * changes until the owner approves it.
- */
-export function lunaGoProposal(data: RosterDataShape): RosterDataShape | null {
-  const { provider, agent, role } = LUNA_GO_PROPOSAL
-  const model = `${provider.id}/${agent.model}`
-  if (data.agents.some((entry) => entry.id === agent.id || (entry.harness === 'opencode' && openCodeModelOf(entry) === model))) return null
-  const providers = data.providers.some((entry) => entry.id === provider.id) ? data.providers : [...data.providers, { ...provider, hosts: [] }]
-  const added: RosterAgentShape = { ...agent, provider: provider.id, efforts: [...agent.efforts], roles: [], ...(namedResearchers(data) === null ? {} : { researcher: true }) }
-  const next: RosterDataShape = { ...data, schema_version: ROSTER_SCHEMA_VERSION, providers, agents: [...data.agents, added] }
-  return data.roles.some((entry) => entry.id === role) ? toggleAgentRole(next, agent.id, role) : next
-}
-
 /** What BMN's proposal takes out of a team file that still names a retired app. */
-export interface RetiredRemoval { agents: string[]; routes: string[]; providers: string[]; lists: boolean }
+export interface RetiredRemoval { agents: string[]; routes: string[]; providers: string[]; lists: boolean; apps: RosterRetiredHarness[] }
 
 /**
  * Epic 71 (71.2 AC3): the team file without the app BMN retired. Its agents go, with their places
@@ -920,9 +898,12 @@ export function retiredAppProposal(data: RosterDataShape): { data: RosterDataSha
   }
   const lists = JSON.stringify([skills, tools]) !== JSON.stringify([data.skills, data.tools])
   if (gone.length === 0 && goneRoutes.length === 0 && !lists) return null
+  // The retired apps the file named, for the one sentence that says when each was retired.
+  const apps = [...new Set([...gone.map((agent) => agent.harness), ...goneRoutes.map((route) => route.harness),
+    ...(data.skills ?? []).flatMap((mark) => mark.only ?? []), ...(data.tools ?? []).flatMap((tool) => tool.apps ?? [])])].filter(isRetiredApp)
   return {
     data: { ...next, schema_version: ROSTER_SCHEMA_VERSION },
-    removed: { agents: gone.map((agent) => agent.name), routes: goneRoutes.map((route) => route.harness), providers: goneProviders.map((provider) => provider.name), lists }
+    removed: { agents: gone.map((agent) => agent.name), routes: goneRoutes.map((route) => route.harness), providers: goneProviders.map((provider) => provider.name), lists, apps }
   }
 }
 
@@ -954,8 +935,7 @@ export function idFor(name: string, taken: readonly string[]): string {
 
 /** The provider each app reaches when nothing overrides it; the roster's own record wins when it has one. */
 const APP_PROVIDERS: Readonly<Record<RosterHarness, { id: string; name: string }>> = {
-  claude: { id: 'anthropic', name: 'Anthropic' }, codex: { id: 'openai', name: 'OpenAI' },
-  opencode: { id: 'opencode-go', name: 'OpenCode Go' }
+  claude: { id: 'anthropic', name: 'Anthropic' }, codex: { id: 'openai', name: 'OpenAI' }
 }
 
 export interface Landing {

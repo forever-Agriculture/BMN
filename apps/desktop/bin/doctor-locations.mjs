@@ -3,6 +3,7 @@ import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, readS
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, relative } from 'node:path'
 
+// The OpenCode roots stay readable in a saved result from before OpenCode was retired (Epic 123); no new location uses them.
 export const LOCATION_ROOTS = Object.freeze(['home', 'claude-profile', 'codex-profile', 'opencode-profile',
   'claude-skills', 'codex-skills', 'shared-skills', 'opencode-skills', 'opencode-skill',
   'claude-user-config', 'opencode-custom-config', 'opencode-xdg', 'opencode-managed', 'filesystem'])
@@ -38,11 +39,9 @@ const LIMIT = OBSERVATION_LIMITS.entries
 const ROUTE_LIMIT = 64
 
 export function locationRoots(profile) {
-  return { home: profile.home, 'claude-profile': profile.claude, 'codex-profile': profile.codex, 'opencode-profile': profile.opencode,
+  return { home: profile.home, 'claude-profile': profile.claude, 'codex-profile': profile.codex,
     'claude-skills': join(profile.claude, 'skills'), 'codex-skills': join(profile.codex, 'skills'), 'shared-skills': join(profile.home, '.agents/skills'),
-    'opencode-skills': join(profile.opencode, 'skills'), 'opencode-skill': join(profile.opencode, 'skill'),
-    'claude-user-config': profile.claudeJson, 'opencode-custom-config': profile.paths.OPENCODE_CONFIG ?? profile.opencode,
-    'opencode-xdg': join(profile.paths.XDG_CONFIG_HOME, 'opencode'), 'opencode-managed': '/etc/opencode', filesystem: '/' }
+    'claude-user-config': profile.claudeJson, filesystem: '/' }
 }
 export function unresolvedLocation() { return { status: 'unresolved' } }
 

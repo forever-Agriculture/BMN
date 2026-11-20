@@ -1,6 +1,6 @@
 // MODULE: bmn-words.mjs - the bmn command line behind bin/bmn: its shared constants and help texts (USAGE, HOOKS_USAGE, AGENT_BRIEF, TERMINAL_BRIEF, the handoff outline)
 
-export { AGENT_BRIEF, ATTENTION_KINDS, CONVERSATION_REFERENCE, CONVERSATION_SOURCES, FLAG_OPTIONS, GLOBAL_OPTIONS, HANDOFF_OUTLINE, HOOKS_USAGE, HOOK_TIMEOUT_MS, LIST_OPTIONS, MAX_ANSWER_WAIT_SECONDS, OPENCODE_REFERENCE, PIPED_FIELDS, PROGRESS_STATES, TERMINAL_BRIEF, TIMEOUT_MS, USAGE, VALUE_OPTIONS }
+export { AGENT_BRIEF, ATTENTION_KINDS, CONVERSATION_REFERENCE, CONVERSATION_SOURCES, FLAG_OPTIONS, GLOBAL_OPTIONS, HANDOFF_OUTLINE, HOOKS_USAGE, HOOK_TIMEOUT_MS, LIST_OPTIONS, HOOK_AGENTS, PIPED_FIELDS, PROGRESS_STATES, TERMINAL_BRIEF, TIMEOUT_MS, USAGE, VALUE_OPTIONS }
 
 const TIMEOUT_MS = 10_000
 /** A hook runs inside the agent's turn, so a stalled app must not hold the agent up for long. */
@@ -9,11 +9,11 @@ const PROGRESS_STATES = ['running', 'waiting', 'blocked', 'claimed-done', 'verif
 /** SessionStart sources that mean the process is now in a different conversation; `compact` is not one. */
 const CONVERSATION_SOURCES = ['startup', 'resume', 'clear', 'fork']
 const CONVERSATION_REFERENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-// OpenCode 1.18.31 session IDs observed on 2026-09-22; OpenCode 2.0.28 keeps the shape (2026-10-14).
-const OPENCODE_REFERENCE = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
+/** The agents whose hooks `bmn hook` and `bmn hooks` serve, as they are named to the owner. */
+const HOOK_AGENTS = { claude: 'Claude', codex: 'Codex' }
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
-  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait', 'reported',
+  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text',
   'body-file', 'text-file', 'detail-file', 'choices-json', 'choices-file', 'note', 'revision',
   'choice', 'reason', 'affects', 'reverse', 'op', 'result'
 ])
@@ -29,8 +29,6 @@ const PIPED_FIELDS = {
   handoff: { option: 'text-file', twin: 'text', field: 'text', limit: 16 * 1024, unit: 'bytes' },
   tell: { option: 'text-file', twin: 'text', field: 'text', limit: 2000, unit: 'characters', received: 16 * 1024 }
 }
-/** The longest `answer take --wait` the app accepts (control-server MAX_ANSWER_WAIT_SECONDS). */
-const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id', 'ref', 'depends'])
 const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear', 'yes', 'absent', 'status', 'leaving', 'night', 'no-codex-ask'])
@@ -121,16 +119,10 @@ Commands:
                                             parts. Resume offers it only when BMN has no conversation of its
                                             own, and runs it only after the owner reads it. Outside BMN it
                                             records nothing and exits 0
-  answer take [--wait S] [--reported R=ok|failed]
-                                            Collect, once, the answers BMN decided from a Telegram tap for
-                                            this session's own OpenCode requests (used by BMN's plugin);
-                                            waits up to S seconds (0-${MAX_ANSWER_WAIT_SECONDS}) for one to arrive.
-                                            --reported says whether OpenCode accepted the reply to request R
   hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
-                                            agent is one of claude|codex|opencode; always exits 0. It
+                                            agent is one of claude|codex; always exits 0. It
                                             prints only BMN's answers to its own agent: a guard's hold, the
                                             away refusal, a brief, notice or message, a phone decision
-  hooks print opencode                     Print the shipped OpenCode TypeScript plugin
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
   hooks install <agent> [--file PATH]       Review and approve each hook-file change before installation;
@@ -212,9 +204,8 @@ const HOOKS_USAGE = `Usage: bmn hooks check [agent] [--file PATH] [--json] [--no
        bmn hooks approval --json
        bmn hooks install <agent> [--file PATH] [--json] [--yes]
        bmn hooks install [agent] --absent --yes [--file PATH] [--json]
-       bmn hooks print opencode
 
-Agents: ${['claude', 'codex', 'opencode'].join('|')}. With no agent, check reads every one of them.
+Agents: ${Object.keys(HOOK_AGENTS).join('|')}. With no agent, check reads every one of them.
 
 check   reads each agent's own hook file and prints one line per event BMN expects:
         wired for the entry BMN writes, wired (older wording) for the two other entries
@@ -241,20 +232,9 @@ install previews the exact target and diff on stderr and asks Yes (default No) b
         the event has none of BMN's in any shape. An event whose entry sits inside a
         matcher, is BMN's wording with a field the app will not run (changed), or
         names bmn hook <agent> in a wording BMN did not write (not BMN's) is left
-        as it is and listed; so is an OpenCode plugin file BMN did not write, and a
-        file BMN cannot add to. An OpenCode plugin that is byte for byte one BMN
-        shipped earlier is upgraded, after a copy, and read back; one edited since
-        is left and listed as changed. A second run writes nothing. Exit 0 when
-        every set-up app has every entry, 1 when one was left or could not be
-        written.
-
-OpenCode (2.0.28 and later) loads BMN's terminal plugin, bmn/tui.ts in its config
-folder, only when cli.json there names the bmn folder in "plugins". check compares
-tui.ts with the shipped plugin byte for byte (an earlier one BMN shipped reads wired
-(older wording); one edited since, missing) and reads that entry. install writes both,
-each after a backup, and removes OpenCode 1's BMN plugin from plugin/ or plugins/
-(OpenCode 2 refuses to load it), with the copy kept in the bmn folder; print emits the
-exact TypeScript install writes.
+        as it is and listed; so is a file BMN cannot add to. A second run writes
+        nothing. Exit 0 when every set-up app has every entry, 1 when one was left
+        or could not be written.
 
 Both report what is configured, never whether a hook has fired, and neither needs the
 control socket or a token. --file replaces the agent's own file, for tests.`

@@ -13,7 +13,7 @@ import { pictureFile, pictureType, treatExif, treatPicture } from '../../bin/age
 import { prepareAsk } from '../../bin/agents-team-ask.mjs'
 import { exportAsk, startAsk, waitAsk } from '../../bin/agents-team-run.mjs'
 import { askFeatures } from '../../bin/agents-team-cli.mjs'
-import { EXAMPLE, SCOPES, approve, leftovers, ownSystemd, settle, stubOpenCode, goSignInInBmnFolder, teamAskHome } from './test-fixtures/team-ask-harness'
+import { EXAMPLE, SCOPES, approve, leftovers, ownSystemd, settle, teamAskHome } from './test-fixtures/team-ask-harness'
 
 // Synthetic pictures Pillow made once (16x8, a red square): a JPEG with its JFIF header only, a lossy WebP and a lossless WebP with alpha.
 const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAIABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD0zVvDXim58eJqdnrXlaKLiCQ2n2qVcooXeuwDbzhuM855rv6KK5YxUb2O6tiJVlFSt7qtovzP/9k=', 'base64')
@@ -404,12 +404,6 @@ describe.skipIf(!SCOPES)('a picture ask in each app\'s own read-only mode (72.8,
     expect(judge()).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH', message: 'the picture message on standard input is not the pictures and the prompt BMN wrote for this ask' })
     writeFileSync(join(prepared.folder, 'inputs/pictures/1.png'), SHOT())
     expect(judge()).toMatchObject({ verdict: 'REFUSED', code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('is not the copy BMN made for this ask') })
-    // OpenCode's pictures were never measured: its teammate is not asked about pictures.
-    stubOpenCode(stubs)
-    goSignInInBmnFolder(home)
-    approve(home, EXAMPLE.replace('## roles', '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: rook\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [high]\nroles: [designer]\n```\n\n## roles').replace('designer: {candidates: [fable@medium], then: lead}', 'designer: {candidates: [luna-go@high], then: lead}'))
-    expect(code(() => ask({ agent: 'luna-go', data: 'public', images: [join(home, 'shots/screen.png')] }))).toBe('AGENT_NOT_ELIGIBLE: luna-go cannot answer here: BMN never measured a picture ask on OpenCode (72.1 measured Codex and Claude Code), so OpenCode teammates are not asked about pictures; ask a Codex or Claude Code teammate')
-    expect(askFeatures(env).apps.find((app: { app: string }) => app.app === 'opencode')).toMatchObject({ pictures: expect.stringMatching(/^not offered: BMN never measured a picture ask on OpenCode/u) })
     expect(askFeatures(env).apps.find((app: { app: string }) => app.app === 'claude')).toMatchObject({ pictures: 'offered' })
   })
 })

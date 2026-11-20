@@ -14,7 +14,7 @@ export interface SavedDoctorState {
   profileKey: string | null; profileIdentity: string | null
   availabilityFailure: { recordedAt: number; startupId: string | null } | null
   schemaVersion: 1; cycleStartedAt: number | null; versions: string | null; cycleStartupId: string | null
-  appVersions: Record<'claude' | 'codex' | 'opencode', string | null>
+  appVersions: Record<'claude' | 'codex', string | null>
   retryUsed: boolean; attempt: DoctorAttempt | null
   qualifications: Partial<Record<'claude' | 'codex', DoctorQualification>>
   results: Partial<Record<DoctorCheck, SavedDoctorResult>>

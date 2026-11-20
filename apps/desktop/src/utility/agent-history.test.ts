@@ -35,7 +35,7 @@ interface FakeAdapter extends AgentHistoryAdapter {
   failing: Set<string>
 }
 
-function fakeAdapter(agent: 'codex' | 'opencode', sessions: HistoryCandidate[], options: { available?: false } = {}): FakeAdapter {
+function fakeAdapter(agent: 'codex', sessions: HistoryCandidate[], options: { available?: false } = {}): FakeAdapter {
   const adapter: FakeAdapter = {
     agent,
     sessions: [...sessions],
@@ -274,23 +274,23 @@ describe('agent history limit', () => {
   })
 
   it('keeps a session whose delete would take a bound or running one with it, and marks the whole family while deleting (Astra review)', async () => {
-    const opencode = fakeAdapter('opencode', [
+    const codex = fakeAdapter('codex', [
       { id: 'root-bound-child', updatedAt: daysAgo(60), family: ['child-bound'] },
       { id: 'root-running-child', updatedAt: daysAgo(60), family: ['child-running'] },
       { id: 'root-free', updatedAt: daysAgo(50), family: ['child-free'] }
     ])
-    const f = await fixture({ adapters: [opencode], live: ['child-bound'], commandLines: 'opencode -s child-running\nbash' })
+    const f = await fixture({ adapters: [codex], live: ['child-bound'], commandLines: 'codex resume child-running\nbash' })
     const seen: boolean[] = []
-    const remove = opencode.remove.bind(opencode)
-    opencode.remove = async (id) => {
+    const remove = codex.remove.bind(codex)
+    codex.remove = async (id) => {
       seen.push(f.history.isDeleting(id), f.history.isDeleting('child-free'))
       return remove(id)
     }
-    expect((await f.history.status()).agents).toEqual([{ agent: 'opencode', state: 'managed', sessions: 3, candidates: 1 }])
+    expect((await f.history.status()).agents).toEqual([{ agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }])
     await f.history.confirm()
     await f.history.run()
 
-    expect(opencode.removed).toEqual(['root-free'])
+    expect(codex.removed).toEqual(['root-free'])
     expect(seen).toEqual([true, true])
     expect(f.history.isDeleting('child-free')).toBe(false)
   })
@@ -345,15 +345,15 @@ describe('agent history limit', () => {
   })
 
   it('skips anything touched within the last day even under a limit it would pass', async () => {
-    const opencode = fakeAdapter('opencode', [{ id: 'today', updatedAt: NOW.getTime() - 1000 }])
+    const codex = fakeAdapter('codex', [{ id: 'today', updatedAt: NOW.getTime() - 1000 }])
     // A candidates() that ignores the cutoff must still not reach a session in use today.
-    opencode.candidates = async () => opencode.sessions
-    const f = await fixture({ adapters: [opencode] })
+    codex.candidates = async () => codex.sessions
+    const f = await fixture({ adapters: [codex] })
     await f.history.confirm()
 
     await f.history.run()
 
-    expect(opencode.removed).toEqual([])
+    expect(codex.removed).toEqual([])
   })
 
   it('records a failed delete, does not retry it that run, and goes on', async () => {
@@ -372,18 +372,20 @@ describe('agent history limit', () => {
 
   it('runs nothing when unconfirmed or Never, and reports an unrecognised store without deleting', async () => {
     const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(400) }])
-    const broken = fakeAdapter('opencode', [{ id: 'old2', updatedAt: daysAgo(400) }], { available: false })
-    const never = await fixture({ adapters: [codex, broken], settings: { keepDays: null } })
+    const never = await fixture({ adapters: [codex], settings: { keepDays: null } })
 
     await never.history.run()
     await never.history.confirm()
     await never.history.run()
 
     expect(codex.removed).toEqual([])
-    expect(broken.removed).toEqual([])
     expect(await never.claudeDays()).toBe(36_500)
-    const status = await never.history.status()
-    expect(status.agents[1]).toEqual({ agent: 'opencode', state: 'unrecognised', detail: 'threads has no updated_at' })
+    const broken = fakeAdapter('codex', [{ id: 'old2', updatedAt: daysAgo(400) }], { available: false })
+    const unread = await fixture({ adapters: [broken] })
+    await unread.history.confirm()
+    await unread.history.run()
+    expect(broken.removed).toEqual([])
+    expect((await unread.history.status()).agents[0]).toEqual({ agent: 'codex', state: 'unrecognised', detail: 'threads has no updated_at' })
   })
 
   it('does not list an agent that is not installed', async () => {
@@ -505,9 +507,9 @@ describe('agent history limit', () => {
     const proc = await mkdtemp(join(tmpdir(), 'bmn-proc-'))
     roots.push(proc)
     await mkdir(join(proc, '42'))
-    await writeFile(join(proc, '42', 'cmdline'), 'opencode\0-s\0ses_0123456789abABCDEFGHIJKLMN\0')
+    await writeFile(join(proc, '42', 'cmdline'), `${['codex', 'resume', '01a0e466-9639-7372-89eb-960c2fe7e28a'].join('\0')}\0`)
     await mkdir(join(proc, 'self'))
-    expect(runningCommandLines(proc)).toContain('opencode -s ses_0123456789abABCDEFGHIJKLMN')
+    expect(runningCommandLines(proc)).toContain('codex resume 01a0e466-9639-7372-89eb-960c2fe7e28a')
   })
 })
 

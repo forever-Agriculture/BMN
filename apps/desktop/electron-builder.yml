@@ -33,8 +33,6 @@ extraResources:
     to: bin/bmn-words.mjs
   - from: bin/bmn-commands.mjs
     to: bin/bmn-commands.mjs
-  - from: bin/bmn-opencode-plugin.mjs
-    to: bin/bmn-opencode-plugin.mjs
   - from: bin/bmn-results.mjs
     to: bin/bmn-results.mjs
   - from: bin/bmn-hooks.mjs
@@ -60,8 +58,6 @@ extraResources:
     to: bin/doctor-profile.mjs
   - from: bin/doctor-locations.mjs
     to: bin/doctor-locations.mjs
-  - from: bin/opencode-floor.mjs
-    to: bin/opencode-floor.mjs
   - from: bin/doctor-text.mjs
     to: bin/doctor-text.mjs
   - from: bin/risky-allow.mjs
@@ -142,8 +138,6 @@ extraResources:
     to: bin/setup-tool-defaults.mjs
   - from: bin/setup-hook-defaults.mjs
     to: bin/setup-hook-defaults.mjs
-  - from: bin/setup-opencode-hooks.mjs
-    to: bin/setup-opencode-hooks.mjs
   # The prompt guard and the context, skills and tools commands; agents-check.mjs imports two of them,
   # so without these the dispatch check does not load either. scripts/lib/cli-modules.mjs finds the set.
   - from: bin/agents-guard.mjs
@@ -216,19 +210,6 @@ extraResources:
     to: bin/agents-ask.mjs
   - from: bin/agents-fence.mjs
     to: bin/agents-fence.mjs
-  # Epic 70: BMN's folder for OpenCode helper runs, its agent and the one `opencode run` form the check reads.
-  - from: bin/agents-opencode.mjs
-    to: bin/agents-opencode.mjs
-  - from: bin/opencode-project-reader.mjs
-    to: bin/opencode-project-reader.mjs
-  - from: bin/opencode-project-git.mjs
-    to: bin/opencode-project-git.mjs
-  - from: bin/opencode-reader-child.mjs
-    to: bin/opencode-reader-child.mjs
-  - from: bin/opencode-reader-plugin.mjs
-    to: bin/opencode-reader-plugin.mjs
-  - from: bin/opencode-child-accounting.mjs
-    to: bin/opencode-child-accounting.mjs
   # A research run is started under this file as a program of its own, by the command line and by the app alike.
   - from: bin/agents-supervised.mjs
     to: bin/agents-supervised.mjs

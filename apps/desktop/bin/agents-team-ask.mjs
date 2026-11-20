@@ -1,14 +1,12 @@
 // MODULE: agents-team-ask.mjs - Epic 72: one teammate's ask made ready to start: the teammate chosen, every input read, scanned and its consent decided before anything is written, the run's folder built, the app's own read-only command built and judged
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative } from 'node:path'
-import { APP_NAMES, agentState, collisionWords, projectChoiceFor, publicOnlyReasons } from './agents-roster.mjs'
+import { APP_NAMES, agentState, collisionWords, isRetired, projectChoiceFor, publicOnlyReasons, retiredWords } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { askConsent, askRequest, evaluateAsk, expectedDestination, harnessVersion, modeInput, teamRunsDirectory, workspaceRoot } from './agents-check.mjs'
 import { ASK_APPS, ASK_READS, ASK_RUN_FILES, ASK_UNSUPPORTED, appSearchPath, askCommand, askFormName, askProgram, askReads, claudePictureMessage, codexMcpServers, executableIdentity } from './agents-team-forms.mjs'
-import { readMaster, render } from './agents-rules.mjs'
-import { openCodeFolders } from './agents-opencode.mjs'
 import { askerOf } from './agents-ask.mjs'
 import { InputRefusal, LIMITS, askProject, canonicalProject, checkQuestion, outsidePaths, sha256Of, textFile } from './agents-team-inputs.mjs'
 import { AskRefusal, resolveTeammate } from './agents-team-resolve.mjs'
@@ -97,15 +95,6 @@ function picturePrompt(prompt, pictures) {
   return `${prompt.replace(/\n?$/u, '\n')}\nThe asker gave you ${pictures.length === 1 ? 'this picture' : `these ${pictures.length} pictures`}, attached as ${pictures.length === 1 ? 'an image' : 'images in this order'}:\n${lines.join('\n')}\n`
 }
 
-/** The owner's global rules for an app as BMN generates them, or null when there is no rules master. */
-function instructionRules(harness, generation) {
-  try {
-    return render(readMaster(), harness, generation).text
-  } catch {
-    return null
-  }
-}
-
 function writePrivate(path, text, mode = 0o600) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   writeFileSync(path, text, { mode })
@@ -186,9 +175,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // What the browser shows is the asker's app: private work no folder exception names (74.3).
   if (browser !== null) named.push({ kind: 'browser', label: `the app at ${browser.origin}`, root: null })
   // What a candidate's form reads besides: the project it works in, and whatever its mode reaches beyond (72.9 AC1).
-  // A teammate whose provider takes public work only reads only the text its folder exceptions can cover.
-  const formOf = (agent) => askFormName(agent.harness, { project, label, textOnly: publicOnlyReasons(agent, data).length > 0 })
-  const inputsOf = (agent) => (project !== null && ASK_READS[formOf(agent)].scope !== 'text' ? [...named, { kind: 'project', label: `the project ${project}`, root: project }] : named)
+  const formOf = (agent) => askFormName(agent.harness)
+  const inputsOf = (agent) => (project !== null && ASK_READS[formOf(agent)]?.scope !== 'text' ? [...named, { kind: 'project', label: `the project ${project}`, root: project }] : named)
 
   // The teammate, judged for these inputs and what its app's mode can read.
   const generation = readApproved()
@@ -209,12 +197,12 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     // What an app's form does not offer stays unavailable and says why (R72-NFR12).
     if (pictures.length > 0 && ASK_UNSUPPORTED[agent.harness]?.pictures !== undefined) return `cannot answer here: ${ASK_UNSUPPORTED[agent.harness].pictures}`
     if (browser !== null && ASK_UNSUPPORTED[agent.harness]?.browser !== undefined) return `cannot answer here: ${ASK_UNSUPPORTED[agent.harness].browser}`
-    // OpenCode runs in BMN's own OpenCode folder, with the OpenCode Go sign-in BMN copied there (70.4).
-    if (agent.harness === 'opencode' && !existsSync(openCodeFolders().data)) return 'runs on OpenCode, and BMN\'s OpenCode folder holds no sign-in yet: BMN copies your OpenCode Go sign-in when you approve an OpenCode teammate in the Team view'
     return 'proven'
   }
   const allowed = (agent) => {
     const form = formOf(agent)
+    // An app whose teammates BMN does not ask has no form, and so nothing it may be sent.
+    if (form === null) return { allowed: false, reason: standing(agent), code: 'AGENT_NOT_ELIGIBLE' }
     // A teammate with tools reads beyond what the asker hands over, so its asks are private (R72-NFR5).
     if (label === 'public' && ASK_READS[form].scope !== 'text') return { allowed: false, reason: `${APP_NAMES[agent.harness]}'s own tools read beyond what you hand over, so its asks are private`, code: 'PUBLIC_NOT_VERIFIED' }
     try {
@@ -242,6 +230,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // A teammate the data may not reach is refused for that reason: the asker's data decides, not who else is on the team.
   const consent = allowed(choice.agent)
   if (!consent.allowed) throw new AskRefusal(consent.code, consent.reason)
+  // An agent on a retired app says when the app was retired and where its support is kept (Epics 71 and 123).
+  if (isRetired(choice.agent.harness)) throw new AskRefusal('AGENT_NOT_ELIGIBLE', `${choice.agent.id} runs in ${retiredWords(choice.agent.harness)}`)
   if (agentState(choice.agent) !== 'active') throw new AskRefusal('AGENT_NOT_ELIGIBLE', `${choice.agent.id} is ${agentState(choice.agent)}`)
 
   // Only now is anything written: the run's folder and its inputs.
@@ -296,10 +286,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   // The question alone, as the asker wrote it, for the record and Agents › Asks (73.1); the prompt above is what is sent.
   writePrivate(join(folder, ASK_RUN_FILES.question), request.question)
   // The forms that read history run BMN's own git, first on their PATH (72.1 AC1, 72.9 AC1).
-  if (form === 'claude-read-tools' || form === 'opencode-reader') writePrivate(join(folder, ASK_RUN_FILES.bin, 'git'), readFileSync(ASK_GIT), 0o700)
-  // Codex and Claude Code read the owner's own rules in their own homes; a private OpenCode ask carries them in its agent (BMN's folder holds none).
-  const rules = harness === 'opencode' && label === 'private' ? instructionRules(harness, generation) : null
-  if (rules !== null) writePrivate(join(folder, ASK_RUN_FILES.rules), rules)
+  if (form === 'claude-read-tools') writePrivate(join(folder, ASK_RUN_FILES.bin, 'git'), readFileSync(ASK_GIT), 0o700)
   // The browser's server saves its files here, its session log among them; BMN reads its record from it (74.3 AC3).
   if (browser !== null) mkdirSync(join(folder, ASK_RUN_FILES.browser), { mode: 0o700 })
   const manifest = {
@@ -310,7 +297,8 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
     question: { bytes: question.bytes, sha256: question.sha256 },
     inputs: inputsOf(choice.agent),
     files: texts.map((file, index) => ({ path: file.path, real: file.real, copy: copies[index], bytes: file.bytes.length, sha256: file.sha256 })),
-    rules: rules === null ? null : { sha256: sha256Of(Buffer.from(rules)), bytes: Buffer.byteLength(rules) },
+    // Codex and Claude Code read the owner's own rules in their own homes; an ask carries none.
+    rules: null,
     // Each picture with its hashes before and after and what was taken out and kept, by name (72.8 AC2).
     pictures: pictures.map((picture, index) => ({
       label: picture.path, real: picture.real, copy: pictureCopies[index], media_type: picture.media_type, width: picture.width, height: picture.height,
@@ -335,7 +323,7 @@ export function prepareAsk(request, { environment = process.env, cwd = process.c
   }, null, 2)}\n`)
 
   const built = askCommand(harness, installed.program, askRequest(choice.agent, installed.version, {
-    form, effort: choice.effort, cwd: workIn, folder, rules, pictures: pictureCopies.map((copy) => join(inputs, copy)), browser, inherited, environment, contextTestLog
+    form, effort: choice.effort, cwd: workIn, folder, pictures: pictureCopies.map((copy) => join(inputs, copy)), browser, inherited, environment, contextTestLog
   }))
   // Claude Code takes its pictures as one user message on standard input, the pictures first, then the prompt.
   if (built.stdin === 'stream-json') writePrivate(join(folder, ASK_RUN_FILES.message), claudePictureMessage(pictures, prompt))

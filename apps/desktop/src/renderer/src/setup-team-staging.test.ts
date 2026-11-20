@@ -38,9 +38,9 @@ describe('explicit setup Team staging',()=>{
    const draft=complete(other);expect(draft.efforts).toEqual(['medium']);const added=stageSetupAgent(existing,draft,other,{...envelope,proposals:[other]})
    expect(added.data.agents.at(-1)).not.toHaveProperty('context_window');expect(existing.agents[0]!.efforts).toEqual(['max'])
  })
- it('keeps unavailable Console members proposed/off and outside every candidate chain',()=>{
-   const p={...proposal,id:'setup-opencode',app:'opencode' as const,name:'OpenCode',needs:'OpenCode Console availability'},added=stageSetupAgent(data(),complete(p),p,{...envelope,proposals:[p]})
-   expect(added.data.agents[0]).toMatchObject({enabled:false,status:'proposed',enabled_note:'Needs OpenCode Console availability'})
+ it('keeps members that need something first proposed/off and outside every candidate chain',()=>{
+   const p={...proposal,id:'setup-codex-later',app:'codex' as const,name:'Codex',needs:'an account verified outside setup'},added=stageSetupAgent(data(),complete(p),p,{...envelope,proposals:[p]})
+   expect(added.data.agents[0]).toMatchObject({enabled:false,status:'proposed',enabled_note:'Needs an account verified outside setup'})
    expect(added.data.roles.every(role=>!role.candidates.some(c=>c.startsWith(added.id+'@')))).toBe(true)
    expect(parseRoster(rewriteRoster('# Synthetic setup\n',added.data)).errors).toEqual([])
  })
@@ -78,7 +78,7 @@ describe('Fable Team findings on actual component',()=>{
    const html=render(team(),{name:'new',proposal:proposal.id});expect(html).not.toContain('Set once for Provider not chosen');expect(html).toContain('Choose a provider first')
  })
  it('disables unavailable activation on both the card and member page and shows why',()=>{
-   const p={...proposal,id:'setup-opencode',app:'opencode' as const,name:'OpenCode',needs:'OpenCode Console availability'},added=stageSetupAgent(data(),complete(p),p,{...envelope,proposals:[p]}),state=team(added.data)
-   for(const page of [{name:'agents' as const},{name:'agent' as const,id:added.id}]){const html=render(state,page);expect(html).toMatch(/disabled=""[^>]*>Activate/);expect(html).toContain('Needs OpenCode Console availability')}
+   const p={...proposal,id:'setup-codex-later',app:'codex' as const,name:'Codex',needs:'an account verified outside setup'},added=stageSetupAgent(data(),complete(p),p,{...envelope,proposals:[p]}),state=team(added.data)
+   for(const page of [{name:'agents' as const},{name:'agent' as const,id:added.id}]){const html=render(state,page);expect(html).toMatch(/disabled=""[^>]*>Activate/);expect(html).toContain('Needs an account verified outside setup')}
  })
 })

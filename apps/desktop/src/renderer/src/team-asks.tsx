@@ -86,7 +86,7 @@ function billingWords(billing: string): string {
 
 export function costWords(cost: number | null): string {
   if (cost === null) return 'cost unknown'
-  // A real cost too small for four places (an OpenCode Go ask's $0.0000458) is not shown as nothing.
+  // A real cost too small for four places (such as $0.0000458) is not shown as nothing.
   return cost > 0 && cost < 0.00005 ? 'under $0.0001' : `$${cost.toFixed(4)}`
 }
 

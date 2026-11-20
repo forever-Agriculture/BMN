@@ -9,12 +9,12 @@ const object = (value) => value !== null && typeof value === 'object' && !Array.
 const time = (value) => Number.isSafeInteger(value) && value >= 0
 const digest = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const id = (value) => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value)
-const APPS = ['claude', 'codex', 'opencode']
+const APPS = ['claude', 'codex']
 const version = (value) => value === null || typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value)
 
 export function emptyDoctorState() {
   return { schemaVersion: 1, profileKey: null, profileIdentity: null, availabilityFailure: null, cycleStartedAt: null, versions: null, cycleStartupId: null,
-    appVersions: { claude: null, codex: null, opencode: null }, retryUsed: false, attempt: null, qualifications: {}, results: {}, continuity: null }
+    appVersions: { claude: null, codex: null }, retryUsed: false, attempt: null, qualifications: {}, results: {}, continuity: null }
 }
 
 /** Only schema values survive disk reads. Arbitrary strings in a tampered state never reach JSON or Health. */
@@ -127,7 +127,7 @@ export function doctorView(state, { now = Date.now(), running = false, versions 
     if (!row) return { check, state: 'unqualified', problems: [], leftovers: [], checkedAt: null, stale: false }
     return { check, state: row.state, problems: row.problems.map((problem) => ({ ...problem,
       reason: problemWords(problem), fix: PROBLEMS[problem.code][1] })),
-      leftovers: (row.leftovers ?? []).map((item) => ({ ...item, reasonText: LEFTOVER_REASONS[item.reason] + (item.source === 'managed' ? ' OpenCode reads this entry from managed configuration.' : ''), location: leftoverLocation(item) })), checkedAt: row.checkedAt,
+      leftovers: (row.leftovers ?? []).map((item) => ({ ...item, reasonText: LEFTOVER_REASONS[item.reason] + (item.source === 'managed' ? ' OpenCode (retired) read this entry from managed configuration.' : ''), location: leftoverLocation(item) })), checkedAt: row.checkedAt,
       stale: !profileMatches || changed ||
         now - row.checkedAt > DAY || row.version !== state.versions || (versions !== null && state.versions !== versions) }
   })

@@ -16,7 +16,7 @@ import { brainSwitchComplete } from './brain-state.mjs'
  * BMN ships a few skills of its own, listed in `skills/manifest.json` beside them (in the repository, and in a
  * packaged build under resources/skills). At start BMN puts each one the skills folder lacks there as a link to
  * its own copy under `~/.local/share/bmn/skills/<name>`, which an update refreshes and which stays readable while
- * BMN is closed or being rebuilt; the existing skills install then carries it into Codex and OpenCode with the
+ * BMN is closed or being rebuilt; the existing skills install then carries it into Codex with the
  * same ownership, route and eligibility checks as any other skill.
  *
  * Whose entry is it: a link to BMN's copy is BMN's; a link into a BMN checkout or install (how the owner linked

@@ -16,8 +16,8 @@ import {
 /*
  * Only the utility process calls `answer`: it is reached from the BMN window or Telegram and from nothing
  * on the control socket or in the `bmn` CLI, because the owner token is readable by the agents
- * themselves. The one socket route here, `take`, hands an OpenCode plugin an answer already decided;
- * it can neither create nor change one.
+ * themselves. The one socket route here, `take`, hands Claude's waiting permission hook an answer already
+ * decided; it can neither create nor change one.
  */
 
 /** One choice per question, or a permission decision. "Always allow" does not exist here. */
@@ -38,11 +38,6 @@ export function cleanTypedAnswer(text: string): string {
   return [...folded].slice(0, TYPED_ANSWER_CHARS).join('').trim()
 }
 
-/** Whether this question may be answered with typed text: always for Claude and Codex, for OpenCode unless it said not. */
-export function typedAnswerable(prompt: AttentionQuestionsPrompt, question: AttentionPromptQuestion): boolean {
-  return prompt.harness !== 'opencode' || question.custom !== false
-}
-
 export interface AnswerRequest {
   requestId: string
   /** The request revision, dialog epoch and process the card was sent for. */
@@ -53,13 +48,13 @@ export interface AnswerRequest {
   via?: 'app' | 'telegram'
 }
 
-type AnswerRoute = 'claude-keys' | 'claude-hook' | 'codex-keys' | 'opencode-api' | 'codex-message'
+type AnswerRoute = 'claude-keys' | 'claude-hook' | 'codex-keys' | 'codex-message'
 
 /**
- * What an OpenCode plugin collects through `answer.take` and posts to its own server, or what Claude's waiting
- * `PermissionRequest` hook collects and returns as its decision (Epic 78): `once` is allow, `reject` is deny.
+ * What Claude's waiting `PermissionRequest` hook collects through `answer.take` and returns as its decision
+ * (Epic 78): `once` is allow, `reject` is deny.
  */
-export type PluginAnswer =
+export type HookAnswer =
   | { requestRef: string; kind: 'question'; answers: string[][] }
   | { requestRef: string; kind: 'permission'; reply: 'once' | 'reject' }
 
@@ -92,7 +87,7 @@ interface AnswerTiming {
   stepMs: number
   /** How long an attributable report may take before the answer is `sent-unconfirmed`. */
   confirmMs: number
-  /** How long OpenCode's plugin may take to collect an answer. */
+  /** How long a waiting hook may take to collect an answer. */
   pickupMs: number
   /** How long an unconfirmed answer can still be upgraded by a late report. */
   lateMs: number
@@ -115,6 +110,8 @@ const MAX_KEY_OPTIONS = 8
 /** Which verified route answers this prompt, or null for every shape the matrix leaves without buttons. */
 export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null {
   if (!prompt) return null
+  // Only Claude Code and Codex are answered; a request a retired app opened before its retirement is shown, never answered.
+  if (prompt.harness !== 'claude' && prompt.harness !== 'codex') return null
   if (prompt.type === 'questions') {
     if (prompt.harness === 'codex' && prompt.shape === 'async-choice') return 'codex-message'
     // The shape and the questions must agree: `multi-select` exactly when some question is one.
@@ -122,13 +119,11 @@ export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null 
     if (prompt.shape !== (multi ? 'multi-select' : 'choice')) return null
     // Codex has no multi-select question (docs/remote-answers.md); a prompt claiming one is not its dialog.
     if (prompt.harness === 'codex' && prompt.questions.some((question) => question.multiSelect)) return null
-    if (prompt.harness === 'opencode') return 'opencode-api'
     if (prompt.questions.some((question) => question.options.length > MAX_KEY_OPTIONS)) return null
     return prompt.harness === 'claude' ? 'claude-keys' : 'codex-keys'
   }
   // An allow needs the exact thing that would run; Codex permissions stay with Auto Review.
   if (prompt.shape !== 'permission' || prompt.command === null) return null
-  if (prompt.harness === 'opencode') return 'opencode-api'
   if (prompt.harness !== 'claude') return null
   // A request ref is set only by a `PermissionRequest` hook that waits for this answer with the input whole and
   // sees no other deciding hook (Epic 78); without one, some approval-relevant part is not on the card, so no
@@ -165,7 +160,6 @@ function sameIds(expected: string | null, reported: string | null): boolean {
 
 /** Whether a harness report names exactly the answer that was sent (decision 4). */
 export function evidenceConfirms(prompt: AttentionPrompt, answer: RemoteAnswer, evidence: AttentionEvidence): boolean {
-  if (prompt.harness === 'opencode' && (prompt.requestRef === null || evidence.requestRef !== prompt.requestRef)) return false
   if (!sameIds(prompt.requestRef, evidence.requestRef) || !sameIds(prompt.toolUseId, evidence.toolUseId)) return false
   if (prompt.type === 'questions') {
     if (answer.type !== 'choices' || evidence.answers === null || evidence.answers.length !== prompt.questions.length) return false
@@ -177,7 +171,6 @@ export function evidenceConfirms(prompt: AttentionPrompt, answer: RemoteAnswer, 
   }
   if (answer.type !== 'permission') return false
   if (evidence.permission !== (answer.decision === 'allow' ? 'allowed' : 'denied')) return false
-  if (prompt.harness === 'opencode') return true
   // Claude's permission prompt carries no tool call id, so the tool and its exact input stand in for it.
   return evidence.tool === prompt.tool && evidence.command === prompt.command
 }
@@ -193,8 +186,7 @@ function choiceFits(prompt: AttentionQuestionsPrompt, question: AttentionPromptQ
   if (typeof choice === 'number') return !question.multiSelect && index(choice)
   if (typeof choice !== 'object' || choice === null) return false
   // On a screen route the text must show on screen: one made only of frame glyphs never could.
-  const typedFits = (typed: unknown): boolean => cleanTyped(typed) && typedAnswerable(prompt, question) &&
-    (prompt.harness === 'opencode' || normalizeScreenText(typed) !== '')
+  const typedFits = (typed: unknown): boolean => cleanTyped(typed) && normalizeScreenText(typed) !== ''
   if ('set' in choice) {
     const set = choice.set
     if (!question.multiSelect || !Array.isArray(set) || !set.every(index)) return false
@@ -313,19 +305,13 @@ interface Pending {
   closed: boolean
 }
 
-/** What an OpenCode plugin says became of an answer it collected: its own server accepted or rejected the reply. */
-interface PluginReport {
-  requestRef: string
-  delivered: boolean
-}
-
 interface Delivery {
   requestId: string
-  /** The request ref of the Claude hook this answer is for; absent for an OpenCode plugin's. */
-  hook?: string
+  /** The request ref of the Claude hook this answer is for. */
+  hook: string
   sessionId: string
   incarnationId: string
-  payload: PluginAnswer
+  payload: HookAnswer
   taken: boolean
   onTaken(): void
   /** Whether it may still be handed out: a Deny must still answer this request alone. */
@@ -347,16 +333,12 @@ export class RemoteAnswers {
   private readonly takers = new Map<string, Set<() => void>>()
   /** Claude hooks waiting for an answer, by their request ref: how many `take` calls are in flight, and when one last was. */
   private readonly hookWaiters = new Map<string, { sessionId: string; incarnationId: string; inFlight: number; lastSeen: number }>()
-  /** Plugin answers handed out and not yet reported on, by session and harness request id. */
-  private readonly handedOut = new Map<string, { requestId: string; incarnationId: string }>()
   private readonly watches = new Map<string, Watch>()
   /**
    * The one request per session whose keys BMN is writing right now, from the first key to the last; its own
    * keys move its dialog through its steps, so only its departures are not counted meanwhile.
    */
   private readonly typing = new Map<string, string>()
-  /** OpenCode permission requests still waiting, per session: its `reject` answers all of them at once. */
-  private readonly openCodePermissions = new Map<string, Set<string>>()
   private readonly lateListeners = new Set<(requestId: string, outcome: AnswerOutcome) => void>()
   /** Per answer being typed, the listener that notes screen changes since its last key. */
   private readonly stopScreenTracking = new Map<string, () => void>()
@@ -411,11 +393,6 @@ export class RemoteAnswers {
         visible: false
       })
     }
-    if (prompt.harness === 'opencode' && prompt.type === 'permission' && prompt.requestRef !== null) {
-      const refs = this.openCodePermissions.get(record.sessionId) ?? new Set<string>()
-      refs.add(prompt.requestRef)
-      this.openCodePermissions.set(record.sessionId, refs)
-    }
     const route = answerRoute(prompt)
     // A Claude permission's countdown is followed for its card even when the card has no buttons.
     const countdown = prompt.harness === 'claude' && prompt.type === 'permission'
@@ -467,13 +444,10 @@ export class RemoteAnswers {
     return this.tracked.get(requestId)?.epoch ?? null
   }
 
-  /** Whether a Deny would answer only this OpenCode request: its `reject` also denies every other pending one. */
+  /** Whether a Deny may be sent for this request: a permission with a route that answers it. */
   canDeny(record: AttentionRecord): boolean {
     const prompt = record.prompt
-    if (!prompt || prompt.type !== 'permission') return false
-    if (prompt.harness !== 'opencode') return answerRoute(prompt) !== null
-    const refs = this.openCodePermissions.get(record.sessionId)
-    return prompt.requestRef !== null && refs !== undefined && refs.size === 1 && refs.has(prompt.requestRef)
+    return !!prompt && prompt.type === 'permission' && answerRoute(prompt) !== null
   }
 
   /**
@@ -481,7 +455,6 @@ export class RemoteAnswers {
    * or null. Called before the store closes the request, so the close can say who answered.
    */
   evidence(sessionId: string, requestKey: string, evidence: AttentionEvidence): string | null {
-    if (evidence.requestRef !== null) this.openCodePermissions.get(sessionId)?.delete(evidence.requestRef)
     for (const [requestId, pending] of this.pending) {
       if (pending.record.sessionId !== sessionId || pending.record.requestKey !== requestKey) continue
       // A report from a later process, or about a request that already closed, speaks for another dialog
@@ -508,9 +481,6 @@ export class RemoteAnswers {
     this.claims.delete(record.requestId)
     this.dropDeliveries((delivery) => delivery.requestId === record.requestId)
     const prompt = record.prompt
-    if (prompt?.harness === 'opencode' && prompt.type === 'permission' && prompt.requestRef !== null) {
-      this.openCodePermissions.get(record.sessionId)?.delete(prompt.requestRef)
-    }
     if (prompt?.harness === 'claude' && prompt.requestRef !== null) {
       this.hookWaiters.delete(prompt.requestRef)
       // The hook's next ask learns the request is over and ends its wait.
@@ -565,18 +535,16 @@ export class RemoteAnswers {
   }
 
   /**
-   * The answers waiting for this session's OpenCode plugin, consumed as they are returned. Waits up to
-   * `waitMs` for one to arrive. Only the session's own live process can collect them.
+   * The answer waiting for this session's Claude hook, consumed as it is returned. Waits up to `waitMs` for it to
+   * arrive. Only the session's own live process can collect it.
    */
   async take(
     sessionId: string,
     incarnationId: string | null,
     waitMs: number,
-    report?: PluginReport,
     requestRef?: string
-  ): Promise<PluginAnswer[]> {
+  ): Promise<HookAnswer[]> {
     if (incarnationId === null) return []
-    if (report) this.pluginReported(sessionId, incarnationId, report)
     // A Claude hook collects only the answer for its own request, and counts as waiting while it asks.
     const waiter = requestRef === undefined ? undefined : this.hookWaiter(sessionId, incarnationId, requestRef)
     // A hook whose request is over, or is another process's, is told so at once: nothing waits for it.
@@ -626,14 +594,14 @@ export class RemoteAnswers {
       (waiter.inFlight > 0 || Date.now() - waiter.lastSeen < HOOK_GAP_MS)
   }
 
-  private async collectWaiting(sessionId: string, incarnationId: string, waitMs: number, requestRef?: string): Promise<PluginAnswer[]> {
-    const collect = (): PluginAnswer[] => {
+  private async collectWaiting(sessionId: string, incarnationId: string, waitMs: number, requestRef?: string): Promise<HookAnswer[]> {
+    const collect = (): HookAnswer[] => {
       const queue = this.deliveries.get(sessionId) ?? []
       const ready: Delivery[] = []
       for (const delivery of queue) {
         if (delivery.incarnationId !== incarnationId || delivery.taken) continue
-        // Plugin answers go to the plugin, a hook's answer to that hook only.
-        if ((delivery.hook ?? null) !== (requestRef ?? null)) continue
+        // A hook's answer goes to that hook only.
+        if (delivery.hook !== requestRef) continue
         if (!delivery.valid()) {
           delivery.taken = true
           delivery.onDropped()
@@ -641,7 +609,6 @@ export class RemoteAnswers {
         }
         delivery.taken = true
         delivery.onTaken()
-        this.handedOut.set(`${sessionId}\u0000${delivery.payload.requestRef}`, { requestId: delivery.requestId, incarnationId })
         ready.push(delivery)
       }
       const rest = queue.filter((delivery) => !delivery.taken)
@@ -664,27 +631,6 @@ export class RemoteAnswers {
       this.takers.set(sessionId, takers)
     })
     return collect()
-  }
-
-  /**
-   * The plugin's own server accepted or rejected an answer it collected. Acceptance is OpenCode answering that
-   * request by id (decision 4); a rejection means nothing was applied. Only the process that collected it may say.
-   */
-  private pluginReported(sessionId: string, incarnationId: string, report: PluginReport): void {
-    const key = `${sessionId}\u0000${report.requestRef}`
-    const handed = this.handedOut.get(key)
-    if (!handed || handed.incarnationId !== incarnationId) return
-    this.handedOut.delete(key)
-    const pending = this.pending.get(handed.requestId)
-    if (!pending) return
-    const outcome: AnswerOutcome = report.delivered
-      ? { state: 'confirmed', sent: pending.sent }
-      : { state: 'refused', reason: 'api-refused' }
-    if (pending.settled) for (const listener of this.lateListeners) listener(handed.requestId, outcome)
-    pending.settle(outcome)
-    // OpenCode applied nothing, so the request is free for another tap; nothing is resent by itself.
-    if (!report.delivered) this.claims.delete(handed.requestId)
-    this.finishPending(handed.requestId)
   }
 
   dispose(): void {
@@ -723,10 +669,9 @@ export class RemoteAnswers {
       }).join('\n\n')
       return this.deps.submitMessage(record, request, text, current, markWritten)
     }
-    if (route === 'opencode-api') return this.deliverToPlugin(record, prompt, request, current, markWritten)
     // The waiting hook answers the very invocation that asked; once it has stopped waiting, keys are the way.
     if (route === 'claude-hook' && prompt.requestRef !== null && this.hookWaiting(record, prompt.requestRef)) {
-      return this.deliverToPlugin(record, prompt, request, current, markWritten, prompt.requestRef)
+      return this.deliverToHook(record, prompt, request, current, markWritten, prompt.requestRef)
     }
     // Write and Edit have no key route: once their hook has stopped waiting, the laptop answers them.
     if (prompt.type === 'permission' && prompt.tool !== 'Bash') return refused('unsupported')
@@ -960,18 +905,18 @@ export class RemoteAnswers {
     return true
   }
 
-  private async deliverToPlugin(
+  private async deliverToHook(
     record: AttentionRecord,
     prompt: AttentionPrompt,
     request: AnswerRequest,
     current: () => boolean,
     markWritten: () => void,
-    hook?: string
+    hook: string
   ): Promise<AnswerOutcome> {
     if (prompt.requestRef === null) return { state: 'refused', reason: 'unsupported' }
     if (!current()) return { state: 'refused', reason: 'changed' }
     const answer = request.answer
-    const payload: PluginAnswer = answer.type === 'permission'
+    const payload: HookAnswer = answer.type === 'permission'
       ? { requestRef: prompt.requestRef, kind: 'permission', reply: answer.decision === 'allow' ? 'once' : 'reject' }
       : {
           requestRef: prompt.requestRef,
@@ -989,25 +934,22 @@ export class RemoteAnswers {
     })
     const delivery: Delivery = {
       requestId: record.requestId,
-      ...(hook === undefined ? {} : { hook }),
+      hook,
       sessionId: record.sessionId,
       incarnationId: request.incarnationId,
       payload,
       taken: false,
       onTaken: () => {
-        // From here the answer may reach OpenCode; the claim holds until the request closes.
+        // From here the answer may reach Claude; the claim holds until the request closes.
         markWritten()
         taken()
       },
-      // OpenCode's reject denies every permission still waiting, so a Deny stays valid only while this
-      // request is the session's one pending permission, up to the moment it is handed out.
-      // It also stays valid only while the dialog is the one the tap was for.
+      // It stays valid only while the dialog is the one the tap was for.
       valid: () => this.tracked.has(record.requestId) && current() &&
-        (hook === undefined || this.tracked.get(record.requestId)?.prompt.requestRef === hook) &&
-        (payload.kind !== 'permission' || payload.reply !== 'reject' || this.canDeny(record)),
+        this.tracked.get(record.requestId)?.prompt.requestRef === hook,
       onDropped: () => dropped()
     }
-    // The plugin's reply can reach the hook before `take` returns, so the report is awaited first.
+    // The hook's report can arrive before `take` returns, so the report is awaited first.
     const confirmation = this.expectConfirmation(record, prompt, answer, sent)
     this.deliveries.set(record.sessionId, [...(this.deliveries.get(record.sessionId) ?? []), delivery])
     for (const wake of [...(this.takers.get(record.sessionId) ?? [])]) wake()
@@ -1053,7 +995,6 @@ export class RemoteAnswers {
     if (!pending) return
     for (const timer of pending.timers) clearTimeout(timer)
     this.pending.delete(requestId)
-    for (const [key, handed] of this.handedOut) if (handed.requestId === requestId) this.handedOut.delete(key)
     pending.settle({ state: 'sent-unconfirmed', sent: pending.sent })
   }
 
@@ -1134,7 +1075,6 @@ export class RemoteAnswers {
 
 /** Whether the dialog of a keystroke-answered prompt is on screen, at any of its steps. */
 function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): boolean {
-  if (prompt.harness === 'opencode') return false
   if (prompt.type === 'permission') {
     return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null
   }

@@ -1,15 +1,97 @@
 // MODULE: agents-judge.mjs - Epic 65: one checked call to the team's judge (Jev). A text and typed questions go to the approved host, numbers come back, and BMN reads them under the one rule the proof tested; every call is counted, and the key it uses appears nowhere
+import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import { homedir } from 'node:os'
 import { JUDGE_ROLE, RosterError, agentState, calledParties, isCalled, judges } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
 import { workspaceRoot, workspaceVisibility } from './agents-check.mjs'
 import { isPublicAddress, publicHostName, resolveHost, takeLock } from './agents-research.mjs'
 import { writePrivate } from './agents-rules.mjs'
 import { isObject, pause } from './shared-helpers.mjs'
-import { openCodeJudgeKey } from './agents-opencode.mjs'
+
+
+// ---------------------------------------------------------------------------------------------
+// The judge's key (Epic 123 D2: moved here from the retired OpenCode module; BMN keeps no key)
+
+/** The most `opencode auth export` may print before BMN stops reading it. */
+const EXPORT_LIMIT = 4 * 1024 * 1024
+
+/** Runs the owner's `opencode` once with the arguments given, reading its standard output in memory only. */
+function runOpenCode(args, { env, cwd, timeoutMs }) {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const chunks = []
+    let size = 0
+    let child
+    try {
+      child = spawn('opencode', args, { env, cwd, stdio: ['pipe', 'pipe', 'ignore'] })
+    } catch {
+      settle({ missing: true })
+      return
+    }
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
+    child.stdout.on('data', (chunk) => {
+      size += chunk.length
+      if (size > EXPORT_LIMIT) child.kill('SIGKILL')
+      else chunks.push(chunk)
+    })
+    child.on('error', (error) => settle(error.code === 'ENOENT' ? { missing: true } : { status: null, signal: null, stdout: '' }))
+    child.on('close', (status, signal) => settle({ status, signal, stdout: size > EXPORT_LIMIT ? '' : Buffer.concat(chunks).toString('utf8') }))
+    child.stdin.on('error', () => {})
+    child.stdin.end('')
+  })
+}
+
+/**
+ * The owner's own OpenCode, for `auth export`: his home and data folders as his environment names
+ * them, the project's configuration switched off, no update and no model list fetched.
+ */
+function ownerOpenCodeEnvironment(environment) {
+  const kept = { HOME: environment.HOME || homedir(), PATH: environment.PATH ?? '' }
+  for (const name of ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME']) {
+    if (typeof environment[name] === 'string' && environment[name].startsWith('/')) kept[name] = environment[name]
+  }
+  if (typeof environment.OPENCODE_DB === 'string') kept.OPENCODE_DB = environment.OPENCODE_DB
+  return { ...kept, OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
+}
+
+/**
+ * The judge's one key, chosen from OpenCode 2's `auth export` of the owner's own sign-ins: the one
+ * active API key for OpenCode Go, else for OpenCode. It stays in memory; no other sign-in escapes this call.
+ */
+export async function judgeKey({ environment = process.env, timeoutMs = 5000 } = {}) {
+  const result = await runOpenCode(['auth', 'export', '--standalone'], { env: ownerOpenCodeEnvironment(environment), cwd: environment.HOME || homedir(), timeoutMs })
+  if (result.missing || result.status !== 0) return { reason: 'OpenCode could not export its sign-ins on this computer' }
+  let entries
+  try {
+    entries = JSON.parse(result.stdout)
+  } catch {
+    return { reason: 'OpenCode exported its sign-ins in a form BMN does not read' }
+  }
+  if (!Array.isArray(entries) || entries.some((entry) => entry === null || typeof entry !== 'object' ||
+    typeof entry.integrationID !== 'string' || typeof entry.active !== 'boolean' ||
+    entry.value === null || typeof entry.value !== 'object' || typeof entry.value.type !== 'string')) {
+    return { reason: 'OpenCode exported its sign-ins in a form BMN does not read' }
+  }
+  for (const integration of ['opencode-go', 'opencode']) {
+    const matches = entries.filter((entry) => entry.integrationID === integration && entry.active === true && entry.value.type === 'key')
+    if (matches.length === 0) continue
+    if (matches.length !== 1) return { reason: 'OpenCode holds more than one active API-key sign-in for the judge\'s integration' }
+    const key = matches[0].value.key
+    if (typeof key !== 'string' || !/^[\x21-\x7e]{8,512}$/.test(key)) return { reason: 'OpenCode exported its sign-ins in a form BMN does not read' }
+    return { key }
+  }
+  return { reason: 'OpenCode holds no active API-key sign-in for its Go or OpenCode integration' }
+}
 
 /**
  * Jev writes no text. One call carries a text (`state`) and a map of typed questions about it, and
@@ -763,7 +845,7 @@ export async function runJudge({
   }
 
   const deadline = clock + Math.min(Math.max(1, deadlineMs), DEADLINE_MAX_MS)
-  const signIn = await openCodeJudgeKey({ environment, timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())) })
+  const signIn = await judgeKey({ environment, timeoutMs: Math.max(1, Math.min(5000, deadline - Date.now())) })
   if (signIn.key === undefined) return refused('NO_KEY', signIn.reason)
   const key = signIn.key
   const price = agent.price.input

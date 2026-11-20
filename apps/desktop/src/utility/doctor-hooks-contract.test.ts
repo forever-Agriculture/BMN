@@ -8,17 +8,14 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parseBmnDoctor } from '../../bin/doctor-results.mjs'
 import { codexHookKey } from '../../bin/codex-hook-approval.mjs'
-import { OPENCODE_PLUGIN } from '../../bin/bmn-opencode-plugin.mjs'
 import { doctorVersions, runBmnDoctor } from '../../bin/doctor-adapters.mjs'
 import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
-import { withOpenCodeFloor } from '../../bin/opencode-floor.mjs'
 import { doctorWorker, loadDoctorState, readDoctorView } from '../../bin/doctor.mjs'
 import { observeHookWrites } from './test-fixtures/hook-write-observer'
 
 const REQUIRED = {
   claude: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionStart', 'SessionEnd'],
-  codex: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
-  opencode: ['plugin', 'cli.json']
+  codex: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
 }
 const report = () => ({ ok: true, agents: Object.entries(REQUIRED).map(([agent, events]) => ({ agent, state: 'read',
   events: [...events.map(event => ({ event, optional: false, state: 'wired' })),
@@ -48,10 +45,6 @@ ${codexStart}while IFS= read -r line; do
   esac
 done
 `, { mode: 0o755 })
-  const plugin = join(home, '.config/opencode/bmn/tui.ts')
-  mkdirSync(dirname(plugin), { recursive: true }); writeFileSync(plugin, OPENCODE_PLUGIN)
-  writeFileSync(join(home, '.config/opencode/cli.json'), JSON.stringify({ plugins: [dirname(plugin)] }))
-  writeFileSync(join(home, '.config/opencode/opencode.json'), withOpenCodeFloor('{\n}\n', home)!)
 }
 
 describe('Doctor hooks producer contract', () => {
@@ -61,21 +54,18 @@ describe('Doctor hooks producer contract', () => {
 
   it('removes exactly the fourteen false findings in the installed contract', () => {
     const input = report()
-    for (const app of input.agents.filter(app => app.agent !== 'opencode')) {
+    for (const app of input.agents) {
       for (const row of app.events.slice(0, 6)) row.state = 'wired (older wording)'
     }
     expect(parse(input)).toEqual({ state: 'passed', problems: [] })
   })
 
-  it('retains every required missing event and OpenCode’s older plugin finding', () => {
+  it('retains every required missing event', () => {
     for (const [app, events] of Object.entries(REQUIRED)) for (const event of events) {
       const input = report(), row = input.agents.find(row => row.agent === app)!.events.find(row => row.event === event)!
       row.state = 'missing'; input.ok = false
       expect(parse(input, 1)).toEqual({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app, cause: `missing:${event}` }] })
     }
-    const input = report()
-    input.agents[2]!.events[0]!.state = 'wired (older wording)'; input.ok = false
-    expect(parse(input, 1)).toEqual({ state: 'problems', problems: [{ code: 'hook-check', item: 1, app: 'opencode', cause: 'older-wording:plugin' }] })
   })
 
   it('keeps unknown, malformed, duplicated and incomplete contracts partial without child text', () => {
@@ -86,7 +76,9 @@ describe('Doctor hooks producer contract', () => {
       (v: ReturnType<typeof report>) => { v.agents[1]!.events.at(-1)!.optional = false },
       (v: ReturnType<typeof report>) => { v.agents[0]!.events.pop() },
       (v: ReturnType<typeof report>) => { v.agents[0]!.events.push({ ...v.agents[0]!.events[0]! }) },
-      (v: ReturnType<typeof report>) => { v.agents[2] = v.agents[0]! },
+      (v: ReturnType<typeof report>) => { v.agents[1] = v.agents[0]! },
+      // A report from before OpenCode was retired (Epic 123) names three apps: it is not the producer's current contract.
+      (v: ReturnType<typeof report>) => { v.agents.push({ agent: 'opencode', state: 'read', events: [{ event: 'plugin', optional: false, state: 'wired' }], missing: [] }) },
       (v: ReturnType<typeof report>) => { v.ok = false }
     ]
     for (const mutate of cases) {
@@ -115,11 +107,11 @@ describe('Doctor hooks producer contract', () => {
       for (const state of ['wired', 'missing', 'wired (older wording)', 'sk-SYNTHETIC-SECRET', null, false, 1, {}, []]) {
         const input = report(); const row = input.agents.find(row => row.agent === app)!.events.find(row => row.event === event)!
         const value = { ...input, agents: input.agents.map(agent => ({ ...agent, events: agent.events.map(item => item === row ? { ...item, state } : item) })) }
-        const knownFailure = state === 'missing' || state === 'wired (older wording)' && app === 'opencode' && event === 'plugin'
-        const knownSuccess = state === 'wired' || state === 'wired (older wording)' && app !== 'opencode'
+        const knownFailure = state === 'missing'
+        const knownSuccess = state === 'wired' || state === 'wired (older wording)'
         const output = parseBmnDoctor('hooks', JSON.stringify(value), knownFailure ? 1 : 0)
         expect(output.state, `${app}/${event}/${JSON.stringify(state)}`).toBe(knownFailure ? 'problems' : knownSuccess ? 'passed' : 'partial')
-        expect(output.problems.filter(problem => problem.code === 'hook-check')).toEqual(knownFailure ? [{ code: 'hook-check', item: 1, app, cause: state === 'missing' ? `missing:${event}` : 'older-wording:plugin' }] : [])
+        expect(output.problems.filter(problem => problem.code === 'hook-check')).toEqual(knownFailure ? [{ code: 'hook-check', item: 1, app, cause: `missing:${event}` }] : [])
         expect(JSON.stringify(output)).not.toContain('SYNTHETIC')
       }
     }
@@ -135,7 +127,7 @@ describe('Doctor hooks producer contract', () => {
           XDG_STATE_HOME: join(home, '.local/state'), XDG_CACHE_HOME: join(home, '.cache') } })
       const actual = JSON.parse(text)
       expect(actual.ok).toBe(true)
-      expect(actual.agents.map((row: { events: unknown[] }) => row.events.length)).toEqual([10, 9, 2])
+      expect(actual.agents.map((row: { events: unknown[] }) => row.events.length)).toEqual([10, 9])
       expect(parseBmnDoctor('hooks', text, 0)).toEqual({ state: 'passed', problems: [] })
     } finally { rmSync(home, { recursive: true, force: true }) }
   }, 150_000)
@@ -202,7 +194,7 @@ describe('Doctor hooks producer contract', () => {
     }), 150_000)
   })
 
-  it('invalidates the old parser identity even when all three app programs are missing', async () => {
+  it('invalidates the old parser identity even when both app programs are missing', async () => {
     const home = mkdtempSync(join(tmpdir(), 'bmn-doctor-parser-identity-'))
     try {
       const versions = await doctorVersions({ HOME: home, PATH: join(home, 'empty') })
@@ -220,7 +212,7 @@ describe('Doctor hooks producer contract', () => {
       const legacyProblems: ReturnType<typeof parseBmnDoctor>['problems'] = Array.from({ length: 14 }, (_, index) => ({ code: 'hook-check', item: index + 1, app: index < 6 ? 'claude' : 'codex' }))
       const dependencies = {
         environment: { HOME: home, PATH: '/usr/bin:/bin' }, now: () => clock,
-        versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex', 'opencode'].map(app => [app, { executable: null, identity, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
+        versions: async () => ({ identity, apps: Object.fromEntries(['claude', 'codex'].map(app => [app, { executable: null, identity, version: '1.0.0' }])) as Awaited<ReturnType<typeof doctorVersions>>['apps'] }),
         qualify: async () => 'qualified' as const,
         appCheck: async () => ({ state: 'passed' as const, problems: [] }),
         bmnCheck: async (check: string): Promise<ReturnType<typeof parseBmnDoctor>> => check === 'hooks' ? legacy ? { state: 'problems' as const, problems: legacyProblems } : parseBmnDoctor('hooks', JSON.stringify(currentReport), 0)

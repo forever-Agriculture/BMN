@@ -2,12 +2,12 @@
 import type { Generation } from './agents-state.mjs'
 
 type Environment = NodeJS.ProcessEnv | Record<string, string>
-export type SkillsHarness = 'claude' | 'codex' | 'opencode'
+export type SkillsHarness = 'claude' | 'codex'
 export type SkillState = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
 export type SkillsOutcome = 'pass' | 'fail' | 'inconclusive' | 'unavailable'
 
-/** `list` is the command that names the skills an app sees, or for OpenCode 2 the operation its server answers. */
-export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | { server: string } | null; prompt: boolean }>
+/** `list` is the command that names the skills an app sees. */
+export declare const SKILL_APPS: Record<SkillsHarness, { command: string; roots: string[]; list: { argv: string[]; input: string } | null; prompt: boolean }>
 export declare function skillsTestsPath(): string
 /** Shared with the read-only doctor inventory; applies the same profile/root overrides as skill discovery. */
 export declare function rootPath(root: string, environment?: Environment): string

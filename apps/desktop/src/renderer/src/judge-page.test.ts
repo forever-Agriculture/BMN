@@ -119,8 +119,8 @@ describe('the team file\'s own rules, kept the same on the Team pages (65.1)', (
   })
 
   it('an agent with no role can be turned into one BMN calls; one that holds a role cannot', () => {
-    expect(appChoices(agent('haiku'))).toEqual(['claude', 'codex', 'opencode', 'bmn'])
-    expect(appChoices(agent('sol', { roles: ['lead'] }))).toEqual(['claude', 'codex', 'opencode'])
+    expect(appChoices(agent('haiku'))).toEqual(['claude', 'codex', 'bmn'])
+    expect(appChoices(agent('sol', { roles: ['lead'] }))).toEqual(['claude', 'codex'])
     expect(callByBmn(BEFORE, 'sol')).toBe(BEFORE)
     const withFields = { ...BEFORE, agents: BEFORE.agents.map((entry) => (entry.id === 'haiku' ? { ...entry, context_window: 200_000, context_limit: 150_000, compact_at: 100_000, researcher: true } : entry)) }
     const turned = callByBmn(withFields, 'haiku')
@@ -141,17 +141,17 @@ describe('the team file\'s own rules, kept the same on the Team pages (65.1)', (
 
 describe('Agents › Team with a judge (65.1 AC5, AC7)', () => {
   it('while the team holds no judge, the one proposals card on Team names Jev and offers Approve… (Story 75.10)', () => {
-    const proposals = teamProposals(BEFORE, { lunaListed: false, researchers: null })
+    const proposals = teamProposals(BEFORE, { researchers: null })
     expect(proposals?.data).toEqual(DATA)
     const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: team(BEFORE), page: { name: 'agents' }, go: noop, proposals }))
     expect(words(markup)).toContain('BMN proposes 1 change to your team. Nothing changes until you approve it. Jev as Judge, with its two providers OpenCode Zen and TypeSafe AI, which may both see private work, as you chose.')
     expect(markup).toMatch(/<div class="page-note with-action" role="status" data-proposals="1">.*?>Approve…<\/button>/)
-    expect(teamProposals(DATA, { lunaListed: false, researchers: null })).toBeNull()
+    expect(teamProposals(DATA, { researchers: null })).toBeNull()
     expect(pageMarkup({ name: 'agents' })).not.toMatch(/Use proposal|BMN proposes/)
   })
 
   it('with nothing approved, Changes shows the same card, so one Approve… carries the proposals wherever it is pressed (Story 75.10)', () => {
-    const proposals = teamProposals(BEFORE, { lunaListed: false, researchers: null })
+    const proposals = teamProposals(BEFORE, { researchers: null })
     const base = team(BEFORE)
     const unapproved = team(BEFORE, { approved: null, snapshot: { ...base.snapshot!, approved: null } })
     const changes = (shown: typeof proposals): string => renderToStaticMarkup(createElement(TeamPreferences, { team: unapproved, page: { name: 'changes' }, go: noop, proposals: shown }))

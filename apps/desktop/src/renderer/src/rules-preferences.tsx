@@ -3,7 +3,7 @@ import { BrowserAccounts, BrowserAccountsHealth, browserAccountAttention, useBro
 import { useCallback, useContext, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { takesPress, type CommandPress, type CommandStart, type RunInSession } from './session-command'
 import {
-  RETIRED_APP_LINE,
+  retiredAppLine,
   ROSTER_APP_NAMES,
   ROSTER_APP_UPDATE_ARGUMENTS,
   ROSTER_HARNESSES,
@@ -184,7 +184,7 @@ export function rulesStatus(snapshot: Pick<RulesSnapshot, 'master' | 'health'>):
   return { text: `Saved and installed ${saved}`, needs: false }
 }
 
-/** "Claude Code, Codex and OpenCode". */
+/** "Claude Code and Codex". */
 function andWords(names: readonly string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
@@ -241,7 +241,7 @@ function rowCauses(snapshot: RulesSnapshot, area: HealthArea, app: RosterHarness
       ...unlisted.filter((entry) => entry.state === 'exposed' || entry.managed).map((entry) => key(entry.managed ? 'unlisted-managed' : 'unlisted-exposed'))]
   }
   const hooks = snapshot.hooks?.state === 'checked' ? snapshot.hooks.apps.find((entry) => entry.harness === app) : undefined
-  return hooks === undefined ? [] : [...hooks.left.map((entry) => key(`missing:${entry.event}`)), ...((hooks.earlier ?? []).includes('plugin') ? [key('older-wording:plugin')] : [])]
+  return hooks === undefined ? [] : hooks.left.map((entry) => key(`missing:${entry.event}`))
 }
 
 /**
@@ -657,7 +657,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
           <Targets targets={pending.plan.targets} home={home} words={undoWords} />
           {(pending.plan.left ?? []).map((target) => (
             <p key={target.path} className="preferences-help">
-              {RETIRED_APP_LINE} <span className="path mono" title={target.path}>{displayPath(target.path, home)}</span> is left as it is.
+              {retiredAppLine(target.harness)} <span className="path mono" title={target.path}>{displayPath(target.path, home)}</span> is left as it is.
             </p>
           ))}
         </Sheet>

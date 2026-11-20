@@ -17,7 +17,8 @@ describe('hook event words', () => {
     expect(words('claude', 'SessionStart', 'compact')).toBe('Conversation compacted')
     expect(words('codex', 'SessionStart', 'compact')).toBe('Conversation compacted')
     expect(words('codex', 'PostCompact', 'manual')).toBe('Conversation compacted')
-    expect(words('opencode', 'session.compacted', null)).toBe('Conversation compacted')
+    // A row saved before OpenCode was retired (Epic 123) keeps its own words: BMN counts no OpenCode compaction now.
+    expect(words('opencode', 'session.compacted', null)).toBe('session.compacted')
     // Counted once: Codex's automatic PostCompact is followed by its SessionStart compact.
     expect(words('codex', 'PostCompact', 'auto')).toBe('PostCompact · auto')
     expect(words('codex', 'PreCompact', 'manual')).toBe('PreCompact · manual')

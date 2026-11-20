@@ -396,10 +396,6 @@ async function verifyRegisteredInvokeEnvelopes(): Promise<string[]> {
 }
 
 /** A binding the agent's SessionStart hook recorded, naming this conversation. */
-function boundBy(binding: PersistedConversationBinding, agentCli: string, reference: string): boolean {
-  return binding.status === 'bound' && binding.agentCli === agentCli && binding.captureRoute === 'hook-session-start' &&
-    binding.conversationReference === reference
-}
 
 /** The one printer for a failed self-test: the first failure is the reason, printed once. */
 export function reportSelfTestFailure(error: unknown): void {
@@ -1814,7 +1810,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const showArchivedReachable = await host.applicationWindow.webContents.executeJavaScript(
       "document.body.innerText.includes('Show archived')"
     ) as boolean
-    console.error('[BMN] self-test phase: agent handoff and OpenCode acceptance')
+    console.error('[BMN] self-test phase: agent handoff and retired OpenCode')
     const acceptanceWait = async <T>(read: () => Promise<T | undefined>, label: string): Promise<T> => {
       const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
@@ -2052,80 +2048,37 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (Object.values(fileReferenceWire).length !== 6 || Object.values(fileReferenceWire).some((value) => value !== true)) {
       throw new Error(`the file-reference wire proof failed: ${JSON.stringify(fileReferenceWire)}`)
     }
-    const openCodeDirectory = join(isolatedCwd, 'opencode-acceptance')
-    const openCodeReference = 'ses_0123456789abSyntheticTest0'
+    // Epic 123: OpenCode was retired. A session still running its program reports through `bmn hook opencode`, which
+    // says OpenCode was retired and succeeds, and nothing is opened, recorded or bound for it (123.1 AC3).
+    const openCodeDirectory = join(isolatedCwd, 'opencode-retired')
     const openCodeExecutable = writeAcceptanceHarness(openCodeDirectory, 'opencode', [
-      `const sessionID = ${JSON.stringify(openCodeReference)}`,
-      "const event = (hook_event_name, props = {}) => cli(['hook', 'opencode'], JSON.stringify({ hook_event_name, sessionID, ...props }))",
-      "event('session.created', { info: { id: sessionID } })",
-      "event('permission.asked', { permission: 'bash', patterns: ['echo acceptance'] })",
-      "writeFileSync(file('opened'), '')",
-      "await wait('reply-gate')",
-      "event('permission.replied', { reply: 'once' })",
-      "event('session.idle')",
-      "writeFileSync(file('finished'), '')"
+      "const sessionID = 'ses_0123456789abSyntheticTest0'",
+      "const hook = (payload) => spawnSync('bmn', ['hook', 'opencode'], { input: JSON.stringify({ sessionID, ...payload }), encoding: 'utf8' })",
+      "const runs = [{ hook_event_name: 'session.created', info: { id: sessionID } },",
+      "  { hook_event_name: 'permission.asked', permission: 'bash', patterns: ['echo acceptance'] }, { hook_event_name: 'session.idle' }].map(hook)",
+      "writeFileSync(file('finished'), JSON.stringify(runs.map(r => ({ status: r.status, stdout: r.stdout, stderr: r.stderr }))))"
     ])
     const openCodeSession = await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
-      name: 'OpenCode acceptance', cwd: isolatedCwd, executable: openCodeExecutable,
+      name: 'OpenCode retired', cwd: isolatedCwd, executable: openCodeExecutable,
       argv: ['--model', 'fixture/model'], cols: 80, rows: 24 }, true)
-    await untilFileExists(join(openCodeDirectory, 'opened'), 'opened OpenCode permission')
-    const openCodePermission = await acceptanceWait(async () =>
-      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
-        .find(row => row.sessionId === openCodeSession.session.sessionId && row.kind === 'permission' && row.state === 'open'), 'OpenCode permission')
-    await host.recoverApplicationRenderer(host.applicationWindow)
-    const openCodeProvenance = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
-      const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
-        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
-      } throw new Error('OpenCode provenance UI timed out'); };
-      (await wait(() => document.querySelector('[data-session-requests="${openCodeSession.session.sessionId}"]'))).click();
-      const row = await wait(() => [...document.querySelectorAll('.attention-item')]
-        .find(r => r.textContent.includes('OpenCode asks to bash')));
-      const provenance = row.querySelector('.provenance').textContent;
-      document.querySelector('[aria-label="Close session requests"]').click();
-      return provenance;
-    })()`) as string
-    writeFileSync(join(openCodeDirectory, 'reply-gate'), '')
-    await untilFileExists(join(openCodeDirectory, 'finished'), 'finished OpenCode events')
+    await untilFileExists(join(openCodeDirectory, 'finished'), 'retired OpenCode hook calls')
+    const openCodeHookRuns = JSON.parse(readFileSync(join(openCodeDirectory, 'finished'), 'utf8')) as Array<{ status: number | null; stdout: string; stderr: string }>
     const openCodeRequests = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
       .filter(row => row.sessionId === openCodeSession.session.sessionId)
     const openCodeBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: openCodeSession.session.sessionId })
-    const openCodeEvents = await client.request<Array<{ agent: string; event: string; effects: string[] }>>(METHOD_REGISTRY.hookEventsList, { sessionId: openCodeSession.session.sessionId })
-    const openCodeObservationUi = await inspectHarnessObservation(
-      openCodeSession.session.sessionId, 'OpenCode acceptance', 'OpenCode', 'session.idle', false
-    )
-    if (Object.values(openCodeObservationUi).some((value) => value !== true)) {
-      throw new Error(`OpenCode observation view failed: ${JSON.stringify(openCodeObservationUi)}`)
+    const openCodeEvents = await client.request<Array<{ agent: string; event: string }>>(METHOD_REGISTRY.hookEventsList, { sessionId: openCodeSession.session.sessionId })
+    const openCodeRetired = {
+      hookRuns: openCodeHookRuns.map(run => ({ status: run.status, quiet: run.stdout === '', retired: run.stderr.includes('OpenCode was retired on 2026-11-20') })),
+      requests: openCodeRequests.length, events: openCodeEvents.length, binding: { agentCli: openCodeBinding.agentCli, status: openCodeBinding.status }
     }
-    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: openCodeSession.session.sessionId,
-      incarnationId: openCodeSession.session.lastProcess?.incarnationId, cause: 'explicit' })
-    const openCodePreview = await client.request<{ command: string }>(METHOD_REGISTRY.sessionResumePreview, { sessionId: openCodeSession.session.sessionId })
-    const openCodeResumed = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionResume, { sessionId: openCodeSession.session.sessionId, cols: 80, rows: 24 })
-    const openCodeArguments = await untilHarnessRuns(join(openCodeDirectory, 'argv.log'), 2)
-    const openCodeAcceptance = {
-      provenance: openCodeProvenance,
-      openedBy: openCodePermission.openedBy,
-      resolvedBy: openCodeRequests.find(row => row.requestId === openCodePermission.requestId)?.resolvedBy,
-      permissionState: openCodeRequests.find(row => row.requestId === openCodePermission.requestId)?.state,
-      notice: openCodeRequests.some(row => row.kind === 'notice' && row.title === 'OpenCode finished a turn'),
-      events: openCodeEvents, binding: openCodeBinding, preview: openCodePreview.command,
-      resumedArguments: openCodeArguments[1]
-    }
-    if (openCodeAcceptance.provenance !== 'from OpenCode permission.asked' ||
-      openCodeAcceptance.openedBy !== 'hook:opencode:permission.asked' ||
-      openCodeAcceptance.resolvedBy !== 'hook:opencode:permission.replied' || openCodeAcceptance.permissionState !== 'answered' ||
-      !openCodeAcceptance.notice || !boundBy(openCodeBinding, 'opencode', openCodeReference) ||
-      !openCodeAcceptance.preview.includes('--session ' + openCodeReference) ||
-      JSON.stringify(openCodeAcceptance.resumedArguments) !== JSON.stringify(['--session', openCodeReference, '--model', 'fixture/model']) ||
-      JSON.stringify(openCodeEvents.map((event) => event.event)) !==
-        JSON.stringify(['session.created', 'permission.asked', 'permission.replied', 'session.idle']) ||
-      !openCodeEvents.every((event) => event.agent === 'opencode') ||
-      !openCodeEvents[1]?.effects.includes('opened') || !openCodeEvents[2]?.effects.includes('answered')) {
-      throw new Error(`OpenCode acceptance failed: ${JSON.stringify(openCodeAcceptance)}`)
+    if (openCodeRetired.hookRuns.length !== 3 || !openCodeRetired.hookRuns.every(run => run.status === 0 && run.quiet && run.retired) ||
+      openCodeRetired.requests !== 0 || openCodeRetired.events !== 0 || openCodeBinding.status === 'bound') {
+      throw new Error(`OpenCode retirement acceptance failed: ${JSON.stringify(openCodeRetired)}`)
     }
     for (const stopped of [
       { sessionId: petitionSource.session.sessionId, incarnationId: petitionSource.session.lastProcess?.incarnationId },
       { sessionId: petitionDestination.session.sessionId, incarnationId: petitionDestination.session.lastProcess?.incarnationId },
-      { sessionId: openCodeResumed.sessionId, incarnationId: openCodeResumed.incarnationId }
+      { sessionId: openCodeSession.session.sessionId, incarnationId: openCodeSession.session.lastProcess?.incarnationId }
     ]) await client.request(METHOD_REGISTRY.sessionStop, { ...stopped, cause: 'explicit' })
 
     console.error('[BMN] self-test phase: subagent routing and repeat watch')
@@ -2176,24 +2129,25 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       name: 'Routing acceptance B', defaultCwd: isolatedCwd, position: 20
     })
     const routingDirectory = join(isolatedCwd, 'routing-acceptance')
-    const routingExecutable = writeAcceptanceHarness(routingDirectory, 'opencode', [
-      "process.env.BMN_OPENCODE_SESSION_ID = 'ses_main'",
-      "const event = (hook_event_name, props = {}) => cli(['hook', 'opencode'], JSON.stringify({ hook_event_name, sessionID: 'ses_main', ...props }))",
-      "event('permission.asked', { permission: 'main-tool' })",
-      "event('permission.asked', { sessionID: 'ses_child', permission: 'child-tool', patterns: ['child-pattern'] })",
-      "event('question.asked', { sessionID: 'ses_child', questions: [{ question: 'Child routing question?' }] })",
-      "event('session.status', { status: { type: 'busy' } })",
-      "event('permission.asked', { permission: 'main-tool' })",
+    // A question in another workspace lights that workspace's dot, and answering it clears the dot. The stand-in is
+    // a Claude Code asking through its real `bmn hook claude` (OpenCode's child routing left with OpenCode, Epic 123).
+    const routingQuestion = { question: 'Which routing should the API use?', header: 'Routing', multiSelect: false,
+      options: [{ label: 'Direct', description: 'One hop' }, { label: 'Proxied', description: 'Through the gateway' }] }
+    const routingExecutable = writeAcceptanceHarness(routingDirectory, 'claude', [
+      "if (process.argv.includes('--help')) process.exit(0)",
+      "const session_id = '00000000-0000-4000-8000-0000000000a1'",
+      `const questions = [${JSON.stringify(routingQuestion)}]`,
+      "const event = (payload) => spawnSync('bmn', ['hook', 'claude'], { input: JSON.stringify({ session_id, cwd: process.cwd(), ...payload }), stdio: ['pipe', 'ignore', 'ignore'] })",
+      "event({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_selftest_routing', tool_input: { questions } })",
       "writeFileSync(file('opened'), '')",
       "await wait('reply')",
-      "event('permission.replied', { sessionID: 'ses_child', reply: 'once' })",
-      "event('question.rejected', { sessionID: 'ses_child' })",
-      "event('permission.replied', { reply: 'reject' })",
+      "event({ hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_selftest_routing', tool_input: { questions },",
+      "  tool_response: { questions, answers: { [questions[0].question]: 'Direct' } } })",
       "writeFileSync(file('resolved'), '')"
     ])
     const routingSession = await host.createSessionRuntime({ workspaceId: routingWorkspace.workspaceId,
       name: 'Child routing', cwd: isolatedCwd, executable: routingExecutable, argv: [], cols: 80, rows: 24 }, true)
-    await untilFileExists(join(routingDirectory, 'opened'), 'child permission and question after parent busy')
+    await untilFileExists(join(routingDirectory, 'opened'), 'the other workspace question')
     const routingRequests = async () => (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
       .filter(row => row.sessionId === routingSession.session.sessionId)
     const routingOpened = await routingRequests()
@@ -2211,7 +2165,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       } throw new Error('workspace B attention dot missing');
     })()`) as { dot: boolean; text: string; selectedInA: boolean }
     writeFileSync(join(routingDirectory, 'reply'), '')
-    await untilFileExists(join(routingDirectory, 'resolved'), 'matching child replies')
+    await untilFileExists(join(routingDirectory, 'resolved'), 'the answered question')
     const routingResolved = await routingRequests()
     const workspaceAttentionCleared = await acceptanceWait(async () =>
       await host.applicationWindow!.webContents.executeJavaScript(`(() => {
@@ -2219,22 +2173,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         return row && !row.querySelector('.status-dot.needs-you') && !row.querySelector('.visually-hidden') ? true : undefined;
       })()`) as true | undefined, 'workspace B attention cleared')
     const subagentAcceptance = {
-      open: routingOpened.map(({ requestKey, kind, title, body, state }) => ({ requestKey, kind, title, body, state })),
+      open: routingOpened.map(({ requestKey, kind, title, state }) => ({ requestKey, kind, title, state })),
       resolved: routingResolved.map(({ requestKey, state, resolvedBy }) => ({ requestKey, state, resolvedBy })),
       workspaceAttentionOpened, workspaceAttentionCleared
     }
-    const openedRouting = (key: string) => subagentAcceptance.open.find((request) => request.requestKey === key && request.state === 'open')
-    const resolvedRouting = (key: string, state: string, event: string) => subagentAcceptance.resolved.some((request) =>
-      request.requestKey === key && request.state === state && request.resolvedBy === event)
-    if (openedRouting('opencode:permission')?.kind !== 'permission' ||
-      openedRouting('opencode:subagent-permission')?.kind !== 'permission' ||
-      openedRouting('opencode:subagent-permission')?.title !== 'OpenCode subagent asks to child-tool' ||
-      openedRouting('opencode:subagent-permission')?.body !== 'child-pattern' ||
-      openedRouting('opencode:subagent-question')?.kind !== 'question' ||
-      !resolvedRouting('opencode:subagent-permission', 'answered', 'hook:opencode:permission.replied') ||
-      !resolvedRouting('opencode:subagent-question', 'withdrawn', 'hook:opencode:question.rejected') ||
+    if (subagentAcceptance.open.filter((request) => request.kind === 'question' && request.state === 'open').length !== 1 ||
+      !subagentAcceptance.resolved.some((request) => request.state === 'answered' && request.resolvedBy === 'hook:claude:PostToolUse') ||
       !workspaceAttentionOpened.selectedInA || workspaceAttentionOpened.text !== '1 waiting for your response') {
-      throw new Error(`subagent requests were not routed and answered as their own: ${JSON.stringify(subagentAcceptance)}`)
+      throw new Error(`the other workspace's question was not shown and answered as its own: ${JSON.stringify(subagentAcceptance)}`)
     }
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: routingSession.session.sessionId,
       incarnationId: routingSession.session.lastProcess?.incarnationId, cause: 'explicit' })
@@ -2934,10 +2880,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const codexOther = await fullerRun('codex-other', 'codex:question', 'Which auth method should the API use?', [
       { tap: 'Other…' }, { reply: 'Passkeys first' }
     ])
-    const openCodeMore = await fullerRun('opencode-more', 'opencode:question', 'Which features should v1 include?', [
-      { tap: '○ 2 · Rate limiting' }, { tap: 'Next · 1 selected' }, { tap: '2 · Sessions' }
-    ])
-    const fuller = { claudeMore, codexOther, openCodeMore }
+    const fuller = { claudeMore, codexOther }
     console.error(`[BMN] self-test phase: fuller telegram answers ${JSON.stringify(fuller)}`)
     const DOWN = '\u001b[B'
     const inOrder = (sequence: string[], expected: string[]): boolean => {
@@ -2960,13 +2903,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       !inOrder(codexOther.sequence, [
         'send:1 · JWT|2 · Sessions|Other…', 'edit:‹ Options:<i>Reply to this message with your answer.</i>',
         'edit::✓ <i>Sent: “Passkeys first”</i>'
-      ]) || codexOther.keys !== `${DOWN}${DOWN}\tPasskeys first\r` || codexOther.request?.resolvedBy !== 'telegram' ||
-      !inOrder(openCodeMore.sequence, [
-        'send:○ 1 · SSO|○ 2 · Rate limiting|○ 3 · Audit log|Other…',
-        // OpenCode's second question turned typed answers off: no Other… there.
-        'edit:1 · JWT|2 · Sessions|‹ Back:<i>Nothing is sent until this answer.</i>',
-        'edit::✓ <i>Sent: Rate limiting · Sessions</i>'
-      ]) || openCodeMore.keys !== '[["Rate limiting"],["Sessions"]]' || openCodeMore.request?.resolvedBy !== 'telegram') {
+      ]) || codexOther.keys !== `${DOWN}${DOWN}\tPasskeys first\r` || codexOther.request?.resolvedBy !== 'telegram') {
       throw new Error(`fuller telegram answers went wrong: ${JSON.stringify(fuller)}`)
     }
     // Epic 78: a Claude permission is allowed from its card through the hook that waits for it, with no key typed.
@@ -3166,8 +3103,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     stoppedBeforeRestartSessionIds.add(answerSession.sessionId)
 
     // Epic 31 (Stories 31.1, 31.2): one history limit. The stand-in's own `bmn hook claude` calls teach BMN two
-    // more Claude folders; Start cleanup, clicked in Preferences, writes all three and prunes the fake Codex and
-    // OpenCode stores through recording binaries. The owner's real files are never in reach: the host's home,
+    // more Claude folders; Start cleanup, clicked in Preferences, writes all three and prunes the fake Codex store
+    // through a recording binary, leaving the retired OpenCode's alone. The owner's real files are never in reach: the host's home,
     // CODEX_HOME and XDG_DATA_HOME are this run's scratch folders.
     console.error('[BMN] self-test phase: agent history')
     historyFixture = prepareHistoryFixture(isolatedCwd)
@@ -3212,18 +3149,16 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       .some((folder) => folder.path === path && folder.current === current && folder.target === 30 && folder.pending)
     if (!agentHistory.pending.needsConfirmation || !pendingFolder(historyFixture.claudeHome, null) ||
       !pendingFolder(historyFixture.glm, 90) || !pendingFolder(historyFixture.work, null) ||
-      JSON.stringify(agentHistory.pending.agents) !== JSON.stringify([
-        { agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }, { agent: 'opencode', state: 'managed', sessions: 4, candidates: 1 }]) ||
-      !historyPendingView.dot || historyPendingView.confirm !== 'Sets 3 Claude folders to 30 days; deletes 2 sessions for good.' ||
+      JSON.stringify(agentHistory.pending.agents) !== JSON.stringify([{ agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }]) ||
+      !historyPendingView.dot || historyPendingView.confirm !== 'Sets 3 Claude folders to 30 days; deletes 1 session for good.' ||
       !historyPendingView.rows.some((row) => row.startsWith('GLM | ') && row.endsWith('90 days → 30 days')) ||
       agentHistory.settled.needsConfirmation || historySettledView.dot || historySettledView.confirm !== null ||
       JSON.stringify(agentHistory.settled.days) !== '[30,30,30]' || JSON.stringify(agentHistory.settled.backups) !== '[1,1,1]' ||
       !agentHistory.settled.glmEnvKept ||
       JSON.stringify(agentHistory.settled.codexCalls) !== JSON.stringify([`${historyFixture.home}|delete --force ${historyFixture.ids.oldCodex}`]) ||
-      // OpenCode 2: one version read for every status look, one for the run, then the old family's delete only.
-      JSON.stringify(agentHistory.settled.openCodeCalls) !== JSON.stringify([`${historyFixture.home}|--version`, `${historyFixture.home}|--version`,
-        `${historyFixture.home}|session delete ${historyFixture.ids.oldOpenCode} --standalone`]) ||
-      JSON.stringify(agentHistory.settled.runs) !== '[{"agent":"codex","deleted":1,"failures":0},{"agent":"opencode","deleted":1,"failures":0}]' ||
+      // Epic 123: OpenCode was retired; its store sits on disk and its program is on PATH, and BMN runs it never.
+      JSON.stringify(agentHistory.settled.openCodeCalls) !== '[]' ||
+      JSON.stringify(agentHistory.settled.runs) !== '[{"agent":"codex","deleted":1,"failures":0}]' ||
       !agentHistory.settled.storeUnchanged || learnedFolders.some((folder) => !historySettled.claude.some((row) => row.path === folder && !row.pending))) {
       throw new Error(`agent history went wrong: ${JSON.stringify(agentHistory)}`)
     }
@@ -3241,7 +3176,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
     // The voice flow stops and starts the destination session once, the hook-reported Codex phase
     // starts two sessions and resumes one, the terminal-mode program adds one, and Epic 16/18's
-    // three synthetic sessions plus OpenCode Resume add four; the new OpenCode routing and repeat
+    // three synthetic sessions plus the retired OpenCode stand-in add four; the routing and repeat
     // fixtures add two more incarnations, and all are stopped again. Epic 29's model-origin run adds
     // one live incarnation that the application restart below interrupts.
     // Epic 30.2's remote-answer stand-in adds one more incarnation, stopped before this check.
@@ -4059,6 +3994,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     ) }, null, 2)}\n`)
     const configBefore = readFileSync(syntheticClaudeSettings, 'utf8')
     const codexFile = join(syntheticCodexConfigDir, 'hooks.json')
+    // OpenCode was retired (Epic 123): BMN writes no plugin for it, before or after.
     const openCodePlugin = join(syntheticOpenCodeConfigDir, 'plugins', 'bmn.ts')
     const absentBefore = !existsSync(codexFile) && !existsSync(openCodePlugin)
     const hookIntegrationUi = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
@@ -5410,7 +5346,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       sixelViewSwap,
       cspProbe,
       graphicsTerminfo,
-      openCodeAcceptance,
+      openCodeRetired,
       subagentAcceptance,
       repeatAcceptance,
       resetModes,
@@ -5439,7 +5375,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       sessionActivity,
       requestProvenance,
       hookIntegration: hookIntegrationAcceptance,
-      harnessObservations: { opencode: openCodeObservationUi, codex: codexObservationUi },
+      harnessObservations: { codex: codexObservationUi },
       terminalNotice,
       repositoryLaunch,
       checkoutPeers,

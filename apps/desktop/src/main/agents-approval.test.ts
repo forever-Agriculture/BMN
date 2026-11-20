@@ -308,11 +308,11 @@ describe('versions accepted under the earlier rule (owner decision 2026-10-10: e
   it('a destination recorded as inspected is refused unless the app inspects it again at commit (60.6 AC4)', () => {
     writeRoster(EXAMPLE)
     // Without the app's inspector nothing is recorded as inspected, on a first approval or later.
-    expect(() => approval.approveRoster(shown())).toThrow(expect.objectContaining({ code: 'ROUTE_CHANGED', message: expect.stringContaining('claude, codex, opencode') }))
+    expect(() => approval.approveRoster(shown())).toThrow(expect.objectContaining({ code: 'ROUTE_CHANGED', message: expect.stringContaining('claude, codex') }))
     const seen: unknown[] = []
     const inspect = (routes: unknown[]) => { seen.push(...routes) }
     expect(approval.approveRoster(shown(), { checkInspectedRoutes: inspect }).number).toBe(1)
-    expect(seen).toEqual([{ harness: 'claude', provider: 'anthropic' }, { harness: 'codex', provider: 'openai' }, { harness: 'opencode', provider: 'opencode-go' }])
+    expect(seen).toEqual([{ harness: 'claude', provider: 'anthropic' }, { harness: 'codex', provider: 'openai' }])
     // An unchanged destination is not inspected again, and a declared one never is.
     seen.length = 0
     writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))

@@ -8,16 +8,14 @@ import { basename, dirname, join } from 'node:path'
 import {
   ERROR_CODES,
   agentTeamBlock,
-  RETIRED_APP_LINE,
   ROSTER_APP_NAMES,
   isRetiredApp,
+  retiredAppsLine,
   type AgentAppView,
   type AgentsApprovalRequest,
   type AgentsOutcome,
   type AgentsPreview,
   type AgentsRulesUpdate,
-  type OpenCodeGoView,
-  type OpenCodeSignInResult,
   type AgentsShownRevision,
   type AgentsSnapshot,
   AUTO_TEST_KINDS,
@@ -85,10 +83,9 @@ import {
 import { judgeLimit, judgeTotals, readJudgeRecord, runJudge, setJudgeLimit } from '../../bin/agents-judge.mjs'
 import { ASK_KEPT, ASK_LIMIT_MS, ASK_MAX_CHARS, ASK_PER_DAY, agentsMayAsk, askedCount, readQuestions, removeQuestions, runAsk, setAgentsMayAsk, type QuestionRecord } from '../../bin/agents-ask.mjs'
 import { chooseResearcher, fetchPublicPage, processStart, publicHostName, readResearch, resolvesPublic, researchLockHolder, researchView, researcherChoice, researchers, runResearch, settledResearcher, type ResearchRunRecord } from '../../bin/agents-research.mjs'
-import { fenceAutoPlan, fenceSubjects, runFenceTest } from '../../bin/agents-fence.mjs'
+import { fenceAutoPlan, runFenceTest } from '../../bin/agents-fence.mjs'
 import { appAskDetail, appAskExport, appAskRemove, appAskStop, appAsks } from '../../bin/agents-team-app.mjs'
 import { AskRefusal } from '../../bin/agents-team-resolve.mjs'
-import { OPENCODE_GO_PROVIDER, copyOpenCodeGoSignIn, openCodeGoSignedIn, openCodeListsLuna } from '../../bin/agents-opencode.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastListingTests, lastLoadingTests, lastSkillsTest, pendingCounts, skillsAutoPlan, skillsLoadingAutoPlan, skillsTests } from '../../bin/agents-skills.mjs'
 import { appStateWord as toolsStateWord, checkTools, lastToolsTest, pendingCounts as toolsPendingCounts, proposeTools, toolsAutoPlan, toolsTests } from '../../bin/agents-tools.mjs'
 import { allowWorkspace, approveRoster, approveSections, judgeChoiceUniqueness, judgeProjectChoices, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
@@ -136,8 +133,6 @@ interface AgentsIpcOptions {
   researchLimitMs?(): number | undefined
   /** Runs the fence test of the installed Codex; tests replace it. */
   fenceTest?: typeof runFenceTest
-  /** Asks OpenCode about Luna through OpenCode Go and copies the owner's Go sign-in into BMN's folder (70.4); tests replace them. */
-  openCodeGo?: { lists?: typeof openCodeListsLuna; signedIn?: typeof openCodeGoSignedIn; copy?: typeof copyOpenCodeGoSignIn }
   /** Compares a Codex researcher's tools under the provider's own model list before its first run; tests replace it. */
   researchCompare?: NonNullable<Parameters<typeof runResearch>[0]['compare']>
   /** Shows the owner a notice from BMN itself; absent in tests that have nobody to tell. */
@@ -175,13 +170,11 @@ export interface AgentsIpcHandle {
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
-const RULES_ENV = ['HOME', 'PATH', 'TERM', 'TERMINFO_DIRS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG',
+const RULES_ENV = ['HOME', 'PATH', 'TERM', 'TERMINFO_DIRS', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'BMN_SHIPPED_SKILLS', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME',
   'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const
-/** Variables the rules CLI only needs to know are set; their value may hold a key, so a mark is passed on instead. */
-const RULES_ENV_MARKS = ['OPENCODE_CONFIG_CONTENT'] as const
 const PROBE_OUTCOME_WORDS: Readonly<Record<string, string>> = { pass: 'passed', fail: 'failed', inconclusive: 'was inconclusive', unavailable: 'was unavailable' }
 /** The command whose `--version` names each app's installed version. */
-const APP_COMMANDS: Readonly<Record<RosterHarness, string>> = { claude: 'claude', codex: 'codex', opencode: 'opencode' }
+const APP_COMMANDS: Readonly<Record<RosterHarness, string>> = { claude: 'claude', codex: 'codex' }
 /** How many approved versions Agents › Changes describes; older ones stay in `bmn roster status`. */
 const HISTORY_LIMIT = 40
 const CLI_TIMEOUT_MS = 30_000
@@ -453,15 +446,9 @@ function runCli(script: string, args: string[], env: NodeJS.ProcessEnv, timeoutM
   })
 }
 
-/** Whether a team names an active agent on OpenCode Go, whose runs need BMN's OpenCode folder signed in there (70.4). */
-function namesOpenCodeGo(data: RosterDataShape | null | undefined): boolean {
-  return (data?.agents ?? []).some((agent) => agent.harness === 'opencode' && agent.provider === OPENCODE_GO_PROVIDER && agent.enabled && agent.status === 'active')
-}
-
 function rulesEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const name of RULES_ENV) if (source[name] !== undefined) env[name] = source[name]
-  for (const name of RULES_ENV_MARKS) if (source[name]) env[name] = 'set'
   return env
 }
 
@@ -804,13 +791,13 @@ async function rulesSnapshot(context: RulesIpcContext, freshDoctorLocations = fa
   }
 }
 
-/** "Claude Code, Codex and OpenCode". */
+/** "Claude Code and Codex". */
 function andList(names: readonly string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1) as string}`
 }
 
 /**
- * Story 75.9: what a save says, a failure first: "Codex not written: … · Saved and installed to Claude Code and OpenCode".
+ * Story 75.9: what a save says, a failure first: "Codex not written: … · Saved and installed to Claude Code and Codex".
  * A save of the same text writes only the apps' files, and says Installed.
  */
 function savedWords(result: Pick<SaveResult, 'written' | 'failed' | 'blocked' | 'master'>): string {
@@ -875,8 +862,6 @@ export function hooksFrom(result: CliResult, checkedAt: string): HooksAtStart {
     apps.push({
       harness: row.agent as RosterHarness, file: String(row.file ?? ''), state: row.state as HookAppAtStart['state'],
       placed: names(row.placed), older: names(row.older), installed: names(row.installed), left, ...(reason === undefined ? {} : { why: reason }),
-      ...(names(row.upgraded).length === 0 ? {} : { upgraded: names(row.upgraded) }),
-      ...(names(row.earlier).length === 0 ? {} : { earlier: names(row.earlier) }),
       ...(names(row.reworded).length === 0 ? {} : { reworded: names(row.reworded) }),
       ...(names(row.raised).length === 0 ? {} : { raised: names(row.raised) }),
       ...(names(row.widened).length === 0 ? {} : { widened: names(row.widened) }),
@@ -1077,7 +1062,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     },
     test: async (entry) => {
       const ctx = context()
-      if (entry.kind === 'fence') return fenceAuto(entry.harness as 'codex' | 'opencode', ctx)
+      if (entry.kind === 'fence') return fenceAuto('codex', ctx)
       const argv = entry.kind === 'rules' ? ['rules', 'probe', entry.harness, '--auto', '--json']
         : entry.kind === 'skills' ? ['skills', 'test', entry.harness, '--auto', '--json']
           : entry.kind === 'skills-loading' ? ['skills', 'test', entry.harness, '--prompt', '--auto', '--json']
@@ -1170,34 +1155,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     // Story 75.9: what the approval changed in the skills and tools reaches the apps at once, with Undo under Earlier installs.
     const installed = await installSkillsAndTools()
     if (installed.length > 0) done = { ...done, installed }
-    const signIn = await signInAfterApproval(result.snapshot)
-    return signIn === null ? done : { ...done, openCodeSignIn: signIn }
-  }
-
-  // Luna through OpenCode Go (70.4). Once BMN's folder was seen signed in, it is not asked again while BMN runs.
-  let goSignedIn = false
-  // Whether OpenCode lists her model: a yes holds while BMN runs, a no is asked again, since OpenCode may be installed meanwhile.
-  let lunaListed: Promise<{ listed: boolean; reason?: string }> | null = null
-  const copyGoSignIn = async (): Promise<OpenCodeSignInResult> => {
-    let result: OpenCodeSignInResult
-    try {
-      result = await (options.openCodeGo?.copy ?? copyOpenCodeGoSignIn)({ environment: context().probeEnv })
-    } catch (error) {
-      // A failure on the disk is a sign-in not copied: the approval before it stands, and Copy sign-in tries again.
-      return { ok: false, copied: false, message: `BMN could not copy your OpenCode Go sign-in: ${error instanceof Error ? error.message : String(error)}` }
-    }
-    if (result.ok) goSignedIn = true
-    return result
-  }
-  /**
-   * The owner's card of 2026-10-14: when he approves an agent on OpenCode Go, BMN copies his Go sign-in
-   * into its OpenCode folder, once. Null where the approved team names no such agent or the folder
-   * already held one.
-   */
-  const signInAfterApproval = async (snapshot: AgentsSnapshot): Promise<OpenCodeSignInResult | null> => {
-    if (options.setupDefaults || goSignedIn || !namesOpenCodeGo(snapshot.approved?.data)) return null
-    const result = await copyGoSignIn()
-    return result.ok && !result.copied ? null : result
+    return done
   }
 
   const setupProposals = async (snapshot: AgentsSnapshot = agentsSnapshot(), intent: 'propose' | 'approve' = 'propose'): Promise<import('@bmn/protocol').SetupTeamProposals | null> =>
@@ -1209,30 +1167,6 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:agents:snapshot', async () => {
     const snapshot = agentsSnapshot()
     return { ...snapshot, setupTeam: await setupProposals(snapshot) }
-  })
-  handle('aiterm:agents:opencode-go', async (params): Promise<OpenCodeGoView> => {
-    if (options.setupDefaults) return { listed: false, signedIn: null, reason: 'Setup never reads or copies an OpenCode sign-in.' }
-    const approved = approvedOrProblem().generation?.data as RosterDataShape | undefined
-    let copy: OpenCodeSignInResult | undefined
-    if (params.copy === true) {
-      // A sign-in is copied only for a team the owner approved with an agent on OpenCode Go.
-      copy = namesOpenCodeGo(approved) ? await copyGoSignIn() : { ok: false, copied: false, message: 'The approved team names no agent on OpenCode Go, so BMN copies no sign-in' }
-    }
-    lunaListed ??= (options.openCodeGo?.lists ?? openCodeListsLuna)({ environment: context().probeEnv })
-    const listing = await lunaListed
-    if (!listing.listed) lunaListed = null
-    let signedIn: boolean | null = null
-    let reason = listing.reason ?? null
-    if (namesOpenCodeGo(approved)) {
-      if (goSignedIn) signedIn = true
-      else {
-        const asked = await (options.openCodeGo?.signedIn ?? openCodeGoSignedIn)({ environment: context().probeEnv })
-        signedIn = asked.signedIn
-        if (asked.signedIn === true) goSignedIn = true
-        if (asked.reason !== undefined) reason = asked.reason
-      }
-    }
-    return { listed: listing.listed, signedIn, reason, ...(copy === undefined ? {} : { copy }) }
   })
   handle('aiterm:agents:preview', async (params) => {
     const request = requestParam(params)
@@ -1385,7 +1319,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return rulesOutcome(ctx, result, (report) => {
       const apps = ((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness)
       // A retired app's files are left as they are (Epic 71), and the message says so.
-      const left = Array.isArray(report.left) && report.left.length > 0 ? ` ${RETIRED_APP_LINE} Its files are left as they are.` : ''
+      const leftApps = Array.isArray(report.left) ? (report.left as { harness?: unknown }[]).map((entry) => entry?.harness).filter(isRetiredApp) : []
+      const left = leftApps.length > 0 ? ` ${retiredAppsLine(leftApps)} Its files are left as they are.` : ''
       // Story 75.9: the Undo of a save puts the rules themselves back too.
       if (report.master === true) return `${apps.length === 0 ? 'Put back the rules' : `Put back the rules and their files in ${andList(apps)}`}${left === '' ? '' : `.${left}`}`
       if (apps.length === 0) return `Nothing was put back.${left}`
@@ -1508,14 +1443,14 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   let research: { researcher: string; done: number; total: number; lookup: boolean; controller: AbortController } | null = null
   let researchEnded: ResearchSnapshot['ended'] = null
   let researcherList: ResearcherView[] | null = null
-  // The fence test of the installed Codex and OpenCode (63.3): BMN runs it by itself (Story 75.8), the owner with Test again; one at a time, and it calls no provider.
+  // The fence test of the installed Codex (63.3): BMN runs it by itself (Story 75.8), the owner with Test again; one at a time, and it calls no provider.
   let fenceTest: Omit<ResearchSnapshot['fenceTest'], 'last'> = { running: false, ended: null }
   /** The last fence test recorded for each app, from the record the check reads; a comparison made during a research is not one. */
   const lastFences = (): ResearchSnapshot['fenceTest']['last'] => {
     const last: ResearchSnapshot['fenceTest']['last'] = []
     try {
       for (const entry of fenceTests()) {
-        if (entry.harness !== 'codex' && entry.harness !== 'opencode') continue
+        if (entry.harness !== 'codex') continue
         if ((entry.catalog ?? 'bundled') !== 'bundled') continue
         const found = last.findIndex((one) => one.harness === entry.harness)
         const row = { harness: entry.harness, verdict: entry.verdict, version: entry.version, at: entry.at } as const
@@ -1533,7 +1468,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return { ...ctx.probeEnv, PATH: (ctx.probeEnv.PATH ?? '').split(':').filter((entry) => entry !== own).join(':') }
   }
   /** BMN's own fence test of one app: the test Test again runs, never beside a research or another fence test. */
-  const fenceAuto = async (harness: 'codex' | 'opencode', ctx: RulesIpcContext): Promise<{ outcome: AutoTestOutcome; version: string | null; detail: string } | null> => {
+  const fenceAuto = async (harness: 'codex', ctx: RulesIpcContext): Promise<{ outcome: AutoTestOutcome; version: string | null; detail: string } | null> => {
     if (fenceTest.running || research !== null) return null
     fenceTest = { ...fenceTest, running: true }
     try {
@@ -1605,9 +1540,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     return researchSnapshot(false)
   })
   handle('aiterm:research:fence-test', (params) => {
-    // Test again on one app's row tests that app; with none named, Codex and OpenCode as before.
+    // Test again tests Codex; the fence test is for no other app.
     const only = params.harness === undefined ? null : harnessParam(params.harness)
-    if (only === 'claude') invalidMainIpc('the fence test is for Codex and OpenCode')
+    if (only === 'claude') invalidMainIpc('the fence test is for Codex')
     if (fenceTest.running || research !== null) return researchSnapshot(false)
     const ctx = context()
     fenceTest = { running: true, ended: null }
@@ -1617,12 +1552,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       fenceTest = { running: false, ended }
     }
     const test = options.fenceTest ?? runFenceTest
-    // Codex as before; OpenCode too where the team has an agent on it (70.3), one after the other.
-    const both = async () => {
-      const entries = only === 'opencode' ? [] : [await test({ environment: researchEnvironment(ctx), now: ctx.now() })]
-      if (only === 'opencode' || (only === null && fenceSubjects(readApproved().data, 'opencode').length > 0)) entries.push(await test({ harness: 'opencode', environment: researchEnvironment(ctx), now: ctx.now() }))
-      return entries
-    }
+    const both = async () => [await test({ environment: researchEnvironment(ctx), now: ctx.now() })]
     void both().then(
       (entries) => finish({ ok: entries.every((entry) => entry.verdict === 'pass'), text: entries.map(fenceEndedWords).join(' ') }),
       (error: unknown) => finish({ ok: false, text: `The fence test could not run: ${error instanceof Error ? error.message : String(error)}` }))
@@ -1958,7 +1888,7 @@ function isQuestionCommand(pid: number, start: string): boolean {
 
 /** How a fence test ended, for the page's notice. */
 export function fenceEndedWords(entry: Pick<FenceTestEntry, 'verdict' | 'version' | 'models' | 'reasons'> & { harness?: string }): string {
-  const name = entry.harness === 'opencode' ? ROSTER_APP_NAMES.opencode : ROSTER_APP_NAMES.codex
+  const name = ROSTER_APP_NAMES.codex
   const app = `${name}${entry.version === null ? '' : ` ${entry.version}`}`
   if (entry.verdict === 'pass') return `The fence test of ${app} passed: a research run sends its provider nothing of yours.`
   const why = [...entry.models.flatMap((model) => model.reasons.map((reason) => `${model.model}: ${reason}`)), ...(entry.reasons ?? [])]

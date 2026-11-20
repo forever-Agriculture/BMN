@@ -64,10 +64,10 @@ export class SetupDefaultsCoordinator {
 /** Config roots and routing selectors only; the defaults child receives no credential environment values. */
 export function setupDefaultsEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const names = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'BMN_SHIPPED_SKILLS',
-    'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL',
+    'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
   return { ...Object.fromEntries(names.filter(name => environment[name] !== undefined).map(name => [name, environment[name]])),
-    ...(environment.OPENCODE_CONFIG_CONTENT ? { OPENCODE_CONFIG_CONTENT: 'set' } : {}), ELECTRON_RUN_AS_NODE: '1' }
+    ELECTRON_RUN_AS_NODE: '1' }
 }
 
 export function parseSetupDefaultsReport(value: unknown): SetupDefaultsReport | null {

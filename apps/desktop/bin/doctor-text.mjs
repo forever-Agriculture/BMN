@@ -1,6 +1,7 @@
 // MODULE: doctor-text.mjs - Story 102.12: what `bmn doctor` prints: each problem and what to do, in plain words; identities and routes only with --details
 
-const APP = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' }
+// A saved result from before OpenCode was retired (Epic 123) may still name it.
+const APP = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode (retired)' }
 const KIND = { plugins: 'plugin', mcp: 'MCP entry', memory: 'memory', skills: 'skill', hooks: 'hook', rules: 'rules file' }
 
 /** A finding of BMN's own checks in plain words: only the app's name and a closed cause word, never text from the tool's own file. */

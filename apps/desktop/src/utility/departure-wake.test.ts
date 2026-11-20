@@ -11,10 +11,10 @@ function fixture(agent = 'claude') {
   let record = startDeparture({ ...EMPTY_GRANT_RECORD, periods: [], operations: [] }, { source: 'app', agentSessionId: null, periodId: 'period',
     collection: newDepartureCollection(selectDepartureSessions([{ sessionId: 's', incarnationId: 'i', name: 'Synthetic', agent, lastEventAt: AT }], AT), AT)
   }, 'back', AT).record
-  let seen: WakeObservation | undefined = { sessionId: 's', incarnationId: 'i', agent, event: 'Stop', source: null, plugin: null, observedAt: AT, foreground: 'front' }
+  let seen: WakeObservation | undefined = { sessionId: 's', incarnationId: 'i', agent, event: 'Stop', source: null, observedAt: AT, foreground: 'front' }
   let epoch = 0, generation = 0, pending = 0, handed = false, finished: string | null = AT, front: string | null = 'front', live = 'i'
   let attention: WakeAttention[] = []
-  let screen: WakeScreen | null = { lines: agent === 'codex' ? ['• ok', '', '›', '', '  GPT-6.1-Sol · synthetic', '  ? for shortcuts'] : ['● ok', RULE, '❯ ', RULE, 'Synthetic'], cursor: { x: 0, y: 0 } }
+  let screen: WakeScreen | null = { lines: agent === 'codex' ? ['• ok', '', '›', '', '  GPT-6.1-Sol · synthetic', '  ? for shortcuts'] : ['● ok', RULE, '❯ ', RULE, 'Synthetic'] }
   let beforeScreen: (() => void) | null = null, beforeClaim: (() => void) | null = null, throws = false
   const writes: string[] = []
   const period = () => openGrantPeriod(record)
@@ -44,7 +44,7 @@ function fixture(agent = 'claude') {
     set beforeClaim(value: (() => void) | null) { beforeClaim = value },
     set throws(value: boolean) { throws = value }, set finished(value: string | null) { finished = value },
     set attention(value: WakeAttention[]) { attention = value },
-    draft: () => { screen = { lines: ['● ok', RULE, '❯ my draft', RULE], cursor: { x: 10, y: 2 } } },
+    draft: () => { screen = { lines: ['● ok', RULE, '❯ my draft', RULE] } },
     type: () => { generation++ }, pending: () => { pending++ }, cancel: () => { epoch++ }, handed: () => { handed = true },
     replace: () => { live = 'new' }, foreground: () => { front = 'shell' }, report: () => { seen = { ...seen!, observedAt: now.toISOString(), event: 'PreToolUse' } },
     endWindow: () => { now = new Date(Date.parse(AT) + 180_000) }

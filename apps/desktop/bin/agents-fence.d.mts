@@ -10,14 +10,14 @@ export declare function fenceDirectory(): string
 /** Which planted markers a text holds, plainly or inside base64. */
 export declare function markersIn(text: string, markers: Record<string, string>): string[]
 /** The approved, active agents on an app (Codex unless named), one per model: what a fence test covers. */
-export declare function fenceSubjects(data: Pick<RosterData, 'agents'>, harness?: 'codex' | 'opencode'): RosterAgent[]
+export declare function fenceSubjects(data: Pick<RosterData, 'agents'>, harness?: 'codex'): RosterAgent[]
 /** One app BMN gives the fence test by itself now (Story 75.8); `key` is the research form and the models. */
-export interface FenceAutoPlanEntry { harness: 'codex' | 'opencode'; version: string; key: string; reason: 'untested' | 'retry' }
-export declare function fenceAutoPlan(options?: { data?: Pick<RosterData, 'agents'> | null; versions?: Partial<Record<'codex' | 'opencode', string | null>>; tests?: unknown[] }): FenceAutoPlanEntry[]
+export interface FenceAutoPlanEntry { harness: 'codex'; version: string; key: string; reason: 'untested' | 'retry' }
+export declare function fenceAutoPlan(options?: { data?: Pick<RosterData, 'agents'> | null; versions?: Partial<Record<'codex', string | null>>; tests?: unknown[] }): FenceAutoPlanEntry[]
 
 export interface FenceTestOptions {
   /** The app whose installed version is tested; Codex unless named. */
-  harness?: 'codex' | 'opencode'
+  harness?: 'codex'
   agents?: RosterAgent[]
   environment?: Environment
   now?: Date
@@ -29,7 +29,7 @@ export interface FenceTestOptions {
   entries?: Record<string, string>
   renewal?: boolean
   /** Builds another command than a research run's; such a test counts for nothing. */
-  argvOf?: (agent: RosterAgent, options: { environment: Environment; run: { folder: string; codex?: string }; openCodeBase?: string }) => string[]
+  argvOf?: (agent: RosterAgent, options: { environment: Environment; run: { folder: string; codex?: string } }) => string[]
   record?: boolean
   /** The most one run of the test may take. */
   limitMs?: number

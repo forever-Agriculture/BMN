@@ -201,7 +201,7 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
       title: 'Claude Code context test failed',
       body: 'The own context limits of Opus and Haiku do not hold on Claude Code 2.1.296: the test BMN ran by itself failed. Integrations › Health has the details and Test again.'
     })
-    expect(autoTestNotice({ kind: 'fence', harness: 'opencode', version: '1.18.32' }, null, true).body).toBe('BMN ran the fence test on OpenCode 1.18.32 3 times and it showed nothing, so it stopped trying. Agents › Models has Test again.')
+    expect(autoTestNotice({ kind: 'fence', harness: 'codex', version: '0.161.0' }, null, true).body).toBe('BMN ran the fence test on Codex 0.161.0 3 times and it showed nothing, so it stopped trying. Agents › Models has Test again.')
     expect(autoTestNotice({ kind: 'skills-loading', harness: 'codex', version: '0.162.1' }, { version: '0.162.2' }, false).body).toBe('The skill loading test BMN ran by itself on Codex 0.162.2 failed. Integrations › Skills has the details and Test again.')
   })
 
@@ -217,7 +217,6 @@ describe('BMN runs its own app tests (Story 75.8)', () => {
       mkdirSync(join(home, '.claude'))
       writeFileSync(join(home, '.claude/.credentials.json'), '{}')
       expect(signInMark('claude', { HOME: home })).toMatch(/^signed-in \d+$/)
-      expect(signInMark('opencode', { HOME: home })).toBe('none')
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

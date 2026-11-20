@@ -204,8 +204,7 @@ export function createAutoTests(seams: AutoTestsSeams): AutoTests {
 export function signInMark(harness: RosterHarness, environment: NodeJS.ProcessEnv): string {
   const home = environment.HOME ?? ''
   const file = harness === 'codex' ? join(environment.CODEX_HOME || join(home, '.codex'), 'auth.json')
-    : harness === 'claude' ? join(environment.CLAUDE_CONFIG_DIR || join(home, '.claude'), '.credentials.json')
-      : join(environment.XDG_DATA_HOME || join(home, '.local/share'), 'opencode/auth.json')
+    : join(environment.CLAUDE_CONFIG_DIR || join(home, '.claude'), '.credentials.json')
   try {
     return `signed-in ${Math.trunc(statSync(file).mtimeMs)}`
   } catch {

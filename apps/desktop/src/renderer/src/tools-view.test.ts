@@ -22,8 +22,8 @@ const NONE = Object.fromEntries(Object.entries(DATA).filter(([key]) => key !== '
 describe('who a tool is for', () => {
   it('is every app, some apps, or the runs of some agents and then no app', () => {
     expect([toolScope(DOCS), toolScope(FILES), toolScope(BROWSER)]).toEqual(['all', 'apps', 'agents'])
-    expect(toolForApp(DOCS, 'opencode')).toBe(true)
-    expect([toolForApp(FILES, 'codex'), toolForApp(FILES, 'opencode')]).toEqual([true, false])
+    expect(toolForApp(DOCS, 'codex')).toBe(true)
+    expect([toolForApp(FILES, 'codex'), toolForApp({ ...FILES, apps: ['claude'] }, 'codex')]).toEqual([true, false])
     expect(toolForApp(BROWSER, 'codex')).toBe(false)
     const name = (id: string): string => DATA.agents.find((entry) => entry.id === id)?.name ?? id
     expect([scopeWords(DOCS, name), scopeWords(FILES, name), scopeWords(BROWSER, name)]).toEqual(['every app', 'Claude Code, Codex', 'the runs of Luna'])
@@ -34,11 +34,11 @@ describe('who a tool is for', () => {
     const narrowed = toggleToolApp(DATA, 'files', 'claude')
     expect(narrowed.tools!.find((tool) => tool.id === 'files')).toEqual({ ...FILES, apps: ['codex'] })
     expect(narrowed.tools!.filter((tool) => tool.id !== 'files')).toEqual([BROWSER, DOCS])
-    // The last app stays; all three apps is every app again.
+    // The last app stays; both apps is every app again.
     expect(toggleToolApp(narrowed, 'files', 'codex')).toBe(narrowed)
-    const all = (['opencode', 'claude'] as const).reduce((data, harness) => toggleToolApp(data, 'files', harness), narrowed)
+    const all = toggleToolApp(narrowed, 'files', 'claude')
     expect(all.tools!.find((tool) => tool.id === 'files')).not.toHaveProperty('apps')
-    expect(toggleToolApp(DATA, 'docs', 'opencode').tools!.find((tool) => tool.id === 'docs')!.apps).toEqual(['claude', 'codex'])
+    expect(toggleToolApp(DATA, 'docs', 'codex').tools!.find((tool) => tool.id === 'docs')!.apps).toEqual(['claude'])
     // A tool kept to agents has no app to toggle; its agents toggle, and the last one stays.
     expect(toggleToolApp(DATA, 'browser', 'codex')).toBe(DATA)
     expect(toggleToolAgent(DATA, 'browser', 'astra').tools!.find((tool) => tool.id === 'browser')!.agents).toEqual(['astra', 'luna'])
@@ -58,13 +58,16 @@ describe('who a tool is for', () => {
     expect(removeTool(DATA, 'docs').tools!.map((tool) => tool.id)).toEqual(['browser', 'files'])
   })
 
-  it('reads a tool saved for Cursor too: Cursor is named but never offered, and saving the tool leaves it out (Epic 71)', () => {
-    const saved: RosterToolShape = { ...FILES, apps: ['claude', 'cursor'] }
+  it('reads a tool saved for Cursor or OpenCode too: each is named but never offered, and saving the tool leaves it out (Epics 71, 123)', () => {
     const name = (id: string): string => id
-    expect(scopeWords(saved, name)).toBe('Claude Code, Cursor')
-    expect(draftFrom(saved).apps).toEqual(['claude'])
-    expect(toolFrom(draftFrom(saved), DATA)).toEqual({ tool: { ...FILES, apps: ['claude'] } })
-    expect(toggleToolApp({ ...DATA, tools: [saved] }, 'files', 'codex').tools![0]!.apps).toEqual(['claude', 'codex'])
+    for (const [retired, word] of [['cursor', 'Cursor'], ['opencode', 'OpenCode (retired)']] as const) {
+      const saved: RosterToolShape = { ...FILES, apps: ['claude', retired] }
+      expect(scopeWords(saved, name)).toBe(`Claude Code, ${word}`)
+      expect(draftFrom(saved).apps).toEqual(['claude'])
+      expect(toolFrom(draftFrom(saved), DATA)).toEqual({ tool: { ...FILES, apps: ['claude'] } })
+      // Codex added beside Claude Code is every app that remains: the list goes.
+      expect(toggleToolApp({ ...DATA, tools: [saved] }, 'files', 'codex').tools![0]).not.toHaveProperty('apps')
+    }
   })
 })
 
@@ -85,9 +88,9 @@ describe('a tool\'s state in words', () => {
     // Story 75.9: what BMN installs by itself never takes over an entry it did not write.
     expect(toolStateHint('unmanaged', on, true, 'Codex')).toBe('Codex holds something else under this name, which BMN leaves as it is: remove it there and BMN adds the tool')
     expect(toolStateHint('blocked', on, true, 'Codex', 'Codex has no way to pass an environment variable as an argument')).toBe('Codex has no way to pass an environment variable as an argument')
-    expect(toolStateHint('exposed', on, false, 'OpenCode')).toBe('OpenCode holds this tool but may not have it')
-    expect(toolStateHint('missing', { supported: false }, true, 'OpenCode')).toBe('Tools are not supported yet in OpenCode: Health says how BMN\'s test of it stands')
-    expect(toolStateHint('current', on, false, 'OpenCode')).toBe('Not for OpenCode')
+    expect(toolStateHint('exposed', on, false, 'Codex')).toBe('Codex holds this tool but may not have it')
+    expect(toolStateHint('missing', { supported: false }, true, 'Codex')).toBe('Tools are not supported yet in Codex: Health says how BMN\'s test of it stands')
+    expect(toolStateHint('current', on, false, 'Codex')).toBe('Not for Codex')
   })
 
   it('says when an app was tested and what the test saw', () => {
@@ -117,8 +120,8 @@ describe('Add tool and Edit: plain rows', () => {
   it('builds a new tool from the rows, taking a variable only by its name', () => {
     const draft: ToolDraft = { ...EMPTY_DRAFT, id: 'search', name: ' Search ', command: ' search-tool ', args: '--region\n\n  eu  \n$SEARCH_REGION', env: 'SEARCH_KEY\nTOKEN = OWNER_TOKEN', scope: 'agents', agents: ['luna', 'nobody', 'luna'] }
     expect(toolFrom(draft, DATA)).toEqual({ tool: { id: 'search', name: 'Search', command: 'search-tool', args: ['--region', 'eu', { env: 'SEARCH_REGION' }], env: { SEARCH_KEY: 'SEARCH_KEY', TOKEN: 'OWNER_TOKEN' }, agents: ['luna'] } })
-    expect(toolFrom({ ...EMPTY_DRAFT, id: 'web', name: 'Web', kind: 'address', url: 'http://localhost:8931/mcp', scope: 'apps', apps: ['opencode', 'claude'], public: true }, DATA))
-      .toEqual({ tool: { id: 'web', name: 'Web', url: 'http://localhost:8931/mcp', public: true, apps: ['claude', 'opencode'] } })
+    expect(toolFrom({ ...EMPTY_DRAFT, id: 'web', name: 'Web', kind: 'address', url: 'http://localhost:8931/mcp', scope: 'apps', apps: ['codex'], public: true }, DATA))
+      .toEqual({ tool: { id: 'web', name: 'Web', url: 'http://localhost:8931/mcp', public: true, apps: ['codex'] } })
     expect(idFromName('  My Browser (v2)! ')).toBe('my-browser-v2')
   })
 

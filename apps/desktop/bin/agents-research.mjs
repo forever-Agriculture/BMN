@@ -7,9 +7,8 @@ import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { EFFORTS, RESEARCH_APPS, agentState, appName, isCalled, namedResearchers, researcherProposal } from './agents-roster.mjs'
 import { readApproved, stateDirectory } from './agents-state.mjs'
-import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, bindSession, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
+import { CODEX_RESEARCH_ANSWER, CODEX_RESEARCH_CONFIG, CODEX_RESEARCH_DISABLED, CODEX_RESEARCH_HOME, RESEARCH_TOOLS, evaluateResearch, harnessVersion, prepareResearchRun, removeResearchCodexFolders, researchRunsDirectory } from './agents-check.mjs'
 import { contextItems, researchContextProven } from './agents-context.mjs'
-import { openCodeAnswer, openCodeResearchArgv, openCodeSession } from './agents-opencode.mjs'
 import { writePrivate } from './agents-rules.mjs'
 import { NOTHING_STARTED, processLives, processStart, startSupervised } from './agents-supervised.mjs'
 import { isObject, onlyKeys } from './shared-helpers.mjs'
@@ -130,14 +129,11 @@ export function researchEffort(agent) {
  * The one command a research run is: `env -i` with the home folder and the program path, then the
  * app's research form (60.3 AC11). `run` is the folder BMN made for it, or null for the question
  * "could this agent research at all". A Codex run is also pointed at a Codex folder of its own
- * (63.3): the one in `run`, or `codexHome` where there is no run yet. An OpenCode run (70.3) starts
- * from BMN's OpenCode folder, or `openCodeBase` for the fence test's planted one.
+ * (63.3): the one in `run`, or `codexHome` where there is no run yet.
  */
-export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined, codexHome = undefined, openCodeBase = undefined } = {}) {
+export function researchArgv(agent, { environment = process.env, run = null, version = null, contextTests = undefined, codexHome = undefined } = {}) {
   const effort = researchEffort(agent)
   const context = contextItems(agent, researchContextProven(agent, version, contextTests))
-  // An OpenCode run starts from BMN's own OpenCode folder, never the owner's home; OpenCode has no context control BMN applies.
-  if (agent.harness === 'opencode') return openCodeResearchArgv(agent, effort, { path: environment.PATH ?? '', ...(openCodeBase === undefined ? {} : { base: openCodeBase }) })
   const head = ['/usr/bin/env', '-i', `HOME=${environment.HOME ?? ''}`, `PATH=${environment.PATH ?? ''}`]
   if (agent.harness === 'codex') {
     const home = run?.codex ?? codexHome ?? (run === null ? CODEX_RESEARCH_HOME : `${run.folder}/${CODEX_RESEARCH_HOME}`)
@@ -375,9 +371,8 @@ export function parseAnswer(text, batch, { now = new Date() } = {}) {
   return { ok: true, models }
 }
 
-/** The answer text inside what the app printed: Claude Code's result object, OpenCode's last text event, or the file Codex wrote. */
+/** The answer text inside what the app printed: Claude Code's result object, or the file Codex wrote. */
 export function answerText(harness, stdout, run) {
-  if (harness === 'opencode') return openCodeAnswer(stdout)
   if (harness === 'codex') {
     try {
       return { ok: true, text: readFileSync(`${run.folder}/${CODEX_RESEARCH_ANSWER}`, 'utf8') }
@@ -393,23 +388,6 @@ export function answerText(harness, stdout, run) {
   }
   if (!isObject(printed) || printed.is_error === true || typeof printed.result !== 'string') return { ok: false, reason: 'Claude Code reported an error instead of an answer' }
   return { ok: true, text: printed.result }
-}
-
-/**
- * Binds the session an OpenCode research run ran in to the receipt its check wrote in the run's
- * folder (70.4 AC4), as a lead binds a dispatch's. Other apps' research binds nothing: null.
- * The answer stands either way; where the session was not bound, `note` says why.
- */
-export function bindResearchSession(harness, stdout, run, { now = new Date() } = {}) {
-  if (harness !== 'opencode') return null
-  const session = openCodeSession(stdout)
-  if (session === null) return { session: null, note: 'OpenCode named no single session, so the run is bound to none.' }
-  try {
-    bindSession(`${run.folder}/receipt.json`, session, { now })
-    return { session }
-  } catch (error) {
-    return { session, note: `BMN could not bind session ${session} to the run's check: ${error instanceof Error ? error.message : String(error)}.` }
-  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1178,11 +1156,9 @@ export async function runResearch({
   const agent = data.agents.find((entry) => entry.id === researcher)
   const id = `${started.toISOString().replace(/[-:.]/g, '').slice(0, 15)}-${only === null ? 'team' : 'one'}`
   const record = { id, kind: only === null ? 'research' : 'lookup', at: started.toISOString(), researcher, researcher_name: agent?.name ?? researcher, state: 'complete', models: 0 }
-  // Why an OpenCode run's session was not bound: said with the research, which stands all the same.
-  const unbound = []
   // A research that found nothing is reported and not kept: the page goes on showing the last one that found something.
   const finish = (state, note, found) => {
-    const said = [note, ...unbound].filter(Boolean).join(' ')
+    const said = note || ''
     const run = { ...record, state, models: found.length, ...(said ? { note: said } : {}) }
     if (found.length > 0) saveResearch(mergeResearch(readResearch(), run, found))
     return { run, found }
@@ -1253,8 +1229,6 @@ export async function runResearch({
       if (result.ended === 'failed') {
         failures.push(`${batch.name}: ${result.reason}`)
       } else {
-        const bound = bindResearchSession(agent.harness, result.stdout, run, { now: now() })
-        if (bound?.note !== undefined) unbound.push(`${batch.name}: ${bound.note}`)
         const text = answerText(agent.harness, result.stdout, run)
         const answer = text.ok ? parseAnswer(text.text, batch, { now: now() }) : text
         if (!answer.ok) failures.push(`${batch.name}: ${answer.reason}`)

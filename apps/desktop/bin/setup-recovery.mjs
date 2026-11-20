@@ -5,7 +5,6 @@ import { agentsDirectory, canonicalJson } from './agents-roster.mjs'
 import { withDefaultsAdmission } from './defaults-admission.mjs'
 import { defaultsTargetKey, optionalDefaultsOwnership } from './defaults-ownership.mjs'
 import { setupSkillRecordPath } from './setup-skill-records.mjs'
-import { setupConfigAbsence } from './setup-config-write.mjs'
 
 const originalId = value => /^[0-9TZ-]+-\d+$/.test(value)
 const refreshId = value => /^refresh-[a-f0-9]{24}$/.test(value)
@@ -14,6 +13,16 @@ const pathValid = value => typeof value === 'string' && value.length <= 4096 && 
 const pinned = (fd, name) => `/proc/self/fd/${fd}${name ? `/${name}` : ''}`
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs
 const invalid = () => { throw new Error('recovery history needs inspection') }
+const fingerprint = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === 'hash,kind,object,parent' &&
+  typeof value.parent === 'string' && /^\d+:\d+$/.test(value.parent) &&
+  (value.kind === 'absent' ? value.hash === null && value.object === null : value.kind === 'file' &&
+    typeof value.hash === 'string' && /^[a-f0-9]{64}$/.test(value.hash) && typeof value.object === 'string' && /^\d+:\d+$/.test(value.object))
+/** An old OpenCode setup Undo removed a file it had created; its preimage is held, and only read here as a record (Epic 123). */
+const openCodeAbsence = operation => operation && typeof operation === 'object' &&
+  Object.keys(operation).sort().join(',') === 'after,before,directory,path,phase,stagedPath,version' && operation.version === 2 &&
+  ['preparing', 'intent', 'held', 'published', 'complete', 'unresolved'].includes(operation.phase) && operation.stagedPath === null &&
+  fingerprint(operation.before) && operation.before.kind === 'file' && fingerprint(operation.after) && operation.after.kind === 'absent' &&
+  operation.before.parent === operation.after.parent
 
 /** Never reads a target, holding or staging payload. Missing locations remain recorded, not silently forgotten. */
 export function readSetupRecovery(setupId, { maxEntries = 8192, maxBytes = 32 * 1024 * 1024, maxPaths = 4096, maxOutputBytes = 1024 * 1024 } = {}) {
@@ -77,7 +86,7 @@ export function readSetupRecovery(setupId, { maxEntries = 8192, maxBytes = 32 * 
       for (const key of ['configInstall', 'configUndo']) {
         const operation = setup[key], holding = setup[`${key}Holding`]
         if (operation === undefined) { if (holding !== undefined) invalid(); continue }
-        const absence = key === 'configUndo' && value.kind === 'setup-tool' && setup.target?.app === 'opencode' && setupConfigAbsence(operation)
+        const absence = key === 'configUndo' && value.kind === 'setup-tool' && setup.target?.app === 'opencode' && openCodeAbsence(operation)
         if (!(operation.version === 1 || absence) || !paths.includes(operation.path) || !parents(operation.path).includes(operation.directory)) invalid()
         // Completed stages have been consumed by publication; incomplete stages are recorded even if currently missing.
         if (absence) {

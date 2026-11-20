@@ -1,7 +1,7 @@
 import {
-  RETIRED_APP_LINE,
-  RETIRED_APP_NAMES,
+  RETIRED_APP_LABELS,
   isRetiredApp,
+  retiredAppLine,
   type ConversationBindingState,
   type ConversationResumePreview,
   type ReportedResumeCommand,
@@ -36,8 +36,8 @@ export function conversationBindingPresentation(
   // Epic 71: a conversation BMN bound before its app was retired is named, never resumed.
   if (binding.status === 'bound' && isRetiredApp(binding.agentCli)) {
     return {
-      label: `${RETIRED_APP_NAMES[binding.agentCli]} conversation`,
-      detail: `${RETIRED_APP_LINE} Reference ${binding.conversationReference}.`,
+      label: `${RETIRED_APP_LABELS[binding.agentCli]} conversation`,
+      detail: `${retiredAppLine(binding.agentCli)} Reference ${binding.conversationReference}.`,
       canResume: false,
       canLocate: false,
       canStartNew: false
@@ -157,7 +157,7 @@ export function resumeConfirmationPresentation(
   preview: ConversationResumePreview,
   sessionName: string
 ): ResumeConfirmationPresentation {
-  const cli = preview.agentCli === 'claude' ? 'Claude Code' : preview.agentCli === 'opencode' ? 'OpenCode' : 'Codex'
+  const cli = preview.agentCli === 'claude' ? 'Claude Code' : 'Codex'
   return {
     message: `Resume the ${cli} conversation in "${sessionName}". This command runs:`,
     command: preview.command,

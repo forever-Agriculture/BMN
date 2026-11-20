@@ -34,7 +34,7 @@ export const MIRROR_SHARED_WORDS = 8
 export const MIRROR_WORD_SHARE = 0.8
 const COMMON = new Set(('that this with from have your will what which when then than them they into only also does after before about would ' +
   'could should there their these those were been being more most some such each other over under just like make made want need asks codex ' +
-  'claude opencode questions question recommended keep').split(' '))
+  'claude questions question recommended keep').split(' '))
 function decisionParts(record: AttentionRecord): string[] {
   const prompt = record.prompt?.type === 'questions' ? record.prompt.questions.flatMap(item => [item.header ?? '', item.text, ...item.options.map(option => option.label)]) : []
   return [record.title, record.body ?? '', ...prompt, ...(record.manualChoices?.options.map(option => option.label) ?? [])]

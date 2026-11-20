@@ -222,7 +222,8 @@ describe('agents (60.5 AC2–AC4)', () => {
     expect(landingFor(DATA, 'codex', '')).toEqual({ provider: { id: 'openai', name: 'OpenAI' }, isNew: false, host: null })
     expect(landingFor(DATA, 'claude', ' API.Z.AI ')).toEqual({ provider: { id: 'zai', name: 'Z.ai' }, isNew: false, host: 'api.z.ai' })
     expect(landingFor(DATA, 'claude', 'api.moonshot.test')).toEqual({ provider: { id: 'api-moonshot-test', name: 'api.moonshot.test' }, isNew: true, host: 'api.moonshot.test' })
-    expect(landingFor(DATA, 'opencode', 'default')).toEqual({ provider: { id: 'opencode-go', name: 'OpenCode Go' }, isNew: true, host: null })
+    expect(landingFor({ ...DATA, providers: DATA.providers.filter((provider) => provider.id !== 'openai'), harness_routes: [] }, 'codex', 'default'))
+      .toEqual({ provider: { id: 'openai', name: 'OpenAI' }, isNew: true, host: null })
     expect(idFor('Kimi K3!', ['kimi-k3'])).toBe('kimi-k3-2')
     expect(idFor('***', [])).toBe('agent')
   })
@@ -241,23 +242,24 @@ describe('agents (60.5 AC2–AC4)', () => {
   })
 
   it('an agent on an app the team has no destination for records that app on the owner\'s word', () => {
-    const { data } = addAgent(DATA, { name: 'Kimi', class: 'pawn', harness: 'opencode', model: 'opencode-go/kimi-k3', host: '', privateWork: 'allowed', roles: [], efforts: ['max'] })
-    expect(data.harness_routes.at(-1)).toEqual({ harness: 'opencode', provider: 'opencode-go', basis: 'owner-declared' })
-    expect(data.providers.at(-1)).toEqual({ id: 'opencode-go', name: 'OpenCode Go', hosts: [], private_work: 'allowed' })
-    expect(find(data, 'kimi')).toMatchObject({ provider: 'opencode-go', host: 'default' })
+    const bare = { ...DATA, providers: DATA.providers.filter((provider) => provider.id !== 'openai'), harness_routes: DATA.harness_routes.filter((route) => route.harness !== 'codex') }
+    const { data } = addAgent(bare, { name: 'Kimi', class: 'pawn', harness: 'codex', model: 'gpt-kimi', host: '', privateWork: 'allowed', roles: [], efforts: ['max'] })
+    expect(data.harness_routes.at(-1)).toEqual({ harness: 'codex', provider: 'openai', basis: 'owner-declared' })
+    expect(data.providers.at(-1)).toEqual({ id: 'openai', name: 'OpenAI', hosts: [], private_work: 'allowed' })
+    expect(find(data, 'kimi')).toMatchObject({ provider: 'openai', host: 'default' })
   })
 
   it('records an app without a destination as BMN inspected it, and on the owner\'s word when the inspection does not reach that provider', () => {
     const bare = { ...DATA, harness_routes: [] }
     const app = (harness: AgentAppView['harness'], basis: string, provider: string | null): AgentAppView => ({ harness, version: '1.0.0', program: `/synthetic/bin/${harness}`, basis, provider, host: null, sources: [], versionState: 'tested', versionNote: '' })
-    const inspected = [app('claude', 'default', 'anthropic'), app('codex', 'explicit', 'zai'), app('opencode', 'unknown', null)]
+    const inspected = [app('claude', 'default', 'anthropic'), app('codex', 'explicit', 'zai')]
     // Provider default on an agent whose app has no destination yet: the owner chose nothing about the app, so BMN's own reading is what gets recorded.
     expect(moveAgent(bare, 'astra', 'claude', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }])
     expect(addAgent(bare, { name: 'Haiku', class: 'pawn', harness: 'claude', model: 'haiku-x', host: '', privateWork: 'allowed', roles: [], efforts: ['low'] }, inspected).data.harness_routes)
       .toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }])
     // An app that reaches somewhere else, one BMN cannot read, or apps not read yet: only the owner's word can be recorded.
     expect(moveAgent(bare, 'astra', 'codex', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'codex', provider: 'openai', basis: 'owner-declared' }])
-    expect(moveAgent(bare, 'astra', 'opencode', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'opencode', provider: 'opencode-go', basis: 'owner-declared' }])
+    expect(moveAgent(bare, 'astra', 'codex', '', 'public_only', [app('claude', 'default', 'anthropic'), app('codex', 'unknown', null)]).harness_routes).toEqual([{ harness: 'codex', provider: 'openai', basis: 'owner-declared' }])
     expect(moveAgent(bare, 'astra', 'claude', '').harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'owner-declared' }])
     expect([unrecordedBasis('claude', 'anthropic', inspected), unrecordedBasis('claude', 'zai', inspected), unrecordedBasis('claude', 'anthropic', null)]).toEqual(['observed-default', 'owner-declared', 'owner-declared'])
     // A destination already recorded is never rewritten by a move.
@@ -320,9 +322,10 @@ describe('agent apps (60.6 AC4)', () => {
     const accepted = listing('0.170.0')
     const declared = setDestination(accepted, 'codex', { id: 'zai', name: 'Z.ai' }, 'owner-declared')
     expect(declared.harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }, { harness: 'codex', provider: 'zai', basis: 'owner-declared' }])
-    const opencode = setDestination(DATA, 'opencode', { id: 'opencode-go', name: 'OpenCode Go' }, 'owner-declared')
-    expect(opencode.harness_routes.map((route) => route.harness)).toEqual(['claude', 'codex', 'opencode'])
-    expect(opencode.providers.at(-1)).toEqual({ id: 'opencode-go', name: 'OpenCode Go', hosts: [], private_work: 'public_only' })
+    const onlyCodex = { ...DATA, harness_routes: DATA.harness_routes.filter((route) => route.harness === 'codex') }
+    const claude = setDestination(onlyCodex, 'claude', { id: 'moonshot', name: 'Moonshot' }, 'owner-declared')
+    expect(claude.harness_routes.map((route) => route.harness)).toEqual(['claude', 'codex'])
+    expect(claude.providers.at(-1)).toEqual({ id: 'moonshot', name: 'Moonshot', hosts: [], private_work: 'public_only' })
   })
 
   it('removing the last accepted version removes the list', () => {
@@ -351,7 +354,7 @@ describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
 
   it('proposes removing its agents, their places, its route and its provider, and trims the lists that name another app too', () => {
     const proposal = retiredAppProposal(OLD)!
-    expect(proposal.removed).toEqual({ agents: ['Composer'], routes: ['cursor'], providers: ['Cursor'], lists: true })
+    expect(proposal.removed).toEqual({ agents: ['Composer'], routes: ['cursor'], providers: ['Cursor'], lists: true, apps: ['cursor'] })
     expect(proposal.data.agents.map((entry) => entry.id)).toEqual(DATA.agents.map((entry) => entry.id))
     expect(role(proposal.data, 'epic-reviewer')).toEqual(role(DATA, 'epic-reviewer'))
     expect(proposal.data.providers).toEqual(DATA.providers)
@@ -374,6 +377,21 @@ describe('a team file that still names Cursor (Epic 71, 71.2 AC3)', () => {
     expect(retiredAppProposal(DATA)).toBeNull()
     // Lists that name only Cursor change nothing, so there is nothing to propose.
     expect(retiredAppProposal({ ...DATA, skills: [{ id: 'composer-only', only: ['cursor'] }] })).toBeNull()
+  })
+
+  it('removes OpenCode and Luna (Go) the same way, and names both apps when a file holds both (Epic 123, 123.1 AC1)', () => {
+    const both: RosterDataShape = {
+      ...OLD,
+      agents: [...OLD.agents, agent('luna-go', { name: 'Luna (Go)', class: 'pawn', harness: 'opencode', provider: 'opencode-go', roles: [], efforts: ['xhigh'] })],
+      providers: [...OLD.providers, { id: 'opencode-go', name: 'OpenCode Go', hosts: [], private_work: 'public_only' }],
+      harness_routes: [...OLD.harness_routes, { harness: 'opencode', provider: 'opencode-go', basis: 'observed-default' }],
+      skills: [{ id: 'review', only: ['claude', 'cursor', 'opencode'] }]
+    }
+    const proposal = retiredAppProposal(both)!
+    expect(proposal.removed).toEqual({ agents: ['Composer', 'Luna (Go)'], routes: ['cursor', 'opencode'], providers: ['Cursor', 'OpenCode Go'], lists: true, apps: ['cursor', 'opencode'] })
+    expect(proposal.data.agents.map((entry) => entry.id)).toEqual(DATA.agents.map((entry) => entry.id))
+    expect(proposal.data.harness_routes).toEqual(DATA.harness_routes)
+    expect(proposal.data.skills).toEqual([{ id: 'review', only: ['claude'] }])
   })
 
   it('offers no provider only its lines name as another app\'s destination (71.3, design notes screen 27)', () => {
@@ -463,7 +481,7 @@ describe('differences in words (60.5 AC7)', () => {
     expect(lines(changed('roles', 'helper', 'candidates', ['luna@max'], ['astra@medium|high', 'nobody@low']))).toEqual(['Helper · order: Luna max → Astra medium or high, nobody low'])
     expect(lines(changed('agent', 'astra', 'roles', ['helper'], ['helper', 'epic-reviewer']))).toEqual(['Roles: Helper → Helper, Epic reviewer'])
     expect(lines(changed('agent', 'astra', 'provider', 'openai', 'zai'))).toEqual(['Provider: OpenAI → Z.ai'])
-    expect(lines(changed('harness-routes', 'opencode', 'provider', 'zai', 'openai'))).toEqual(['OpenCode · provider: Z.ai → OpenAI'])
+    expect(lines(changed('harness-routes', 'opencode', 'provider', 'zai', 'openai'))).toEqual(['OpenCode (retired) · provider: Z.ai → OpenAI'])
     expect(lines(changed('agent', 'astra', 'price', undefined, { input: 1.25, cached_input: 0.125, output: 10, source: 'https://www.prices.example.test/api', as_of: '2026-10-01' }))).toEqual([`Price: — → $1.25 / $10.00 · cached $0.125 · prices.example.test, ${dayWords('2026-10-01')}`])
     expect(lines(changed('agent', 'astra', 'price', { input: 10, output: 60 }, { input: 10, output: 40 }))).toEqual(['Price: $10.00 / $60.00 → $10.00 / $40.00'])
   })

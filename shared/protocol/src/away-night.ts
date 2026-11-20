@@ -24,6 +24,7 @@ export const AWAY_WAKE_REASONS = Object.freeze({
   'app-not-woken': { stage: 'early', missed: false, words: 'its app is not woken (no recorded idle prompt)' },
   'not-finished-turn': { stage: 'early', missed: false, words: 'its latest event is not a finished turn' },
   'child-or-stop': { stage: 'early', missed: false, words: 'its latest event came from a child or from the owner\'s stop' },
+  // Only in a tick recorded before OpenCode was retired (Epic 123).
   'plugin-earlier': { stage: 'early', missed: false, words: 'its OpenCode runs an earlier BMN plugin' },
   'finish-unknown': { stage: 'early', missed: false, words: 'BMN did not see this run finish a turn' },
   quiet: { stage: 'early', missed: false, words: 'its turn finished less than 15 minutes before' },

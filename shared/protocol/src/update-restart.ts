@@ -108,7 +108,7 @@ export function updateRestartCancelListed(m: UpdateRestartMember): boolean {
  */
 export function updateRestartWords(m: UpdateRestartMember, stage: UpdateRestartStage): string {
   // A session that runs no agent BMN knows is named for what it is, a shell.
-  if (stage === 'offer') return `${['claude', 'codex', 'opencode'].includes(m.agent) ? m.agent : 'shell'} · ${m.atPress === 'ended' ? 'idle' : m.atPress === 'working' ? 'working' : 'state not known'}`
+  if (stage === 'offer') return `${['claude', 'codex'].includes(m.agent) ? m.agent : 'shell'} · ${m.atPress === 'ended' ? 'idle' : m.atPress === 'working' ? 'working' : 'state not known'}`
   if (stage === 'waiting') return m.ready ? 'Ready' : m.notice === 'printed' ? 'Reaching a safe point' : 'Not told yet'
   if (stage === 'cancelled') {
     // "Stopped for the restart" only where BMN observed the turn end after the printed notice.

@@ -249,7 +249,7 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
     addSession('e', 'w1', 4)
     change('e', { archived: true })
     // Whatever runs there: the peer check comes first and says nothing about a session the sender may not message.
-    fronts.set('x', { state: 'agent', app: 'opencode' })
+    fronts.set('x', { state: 'agent', app: 'codex' })
     live.delete('e')
     for (const destination of ['a', 'x', 'e', 'no-such-session']) {
       await expect(tell('a', destination)).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument, message: SESSION_MESSAGE_NOT_A_PEER })
@@ -269,9 +269,7 @@ describe('bmn tell (66.2 AC3-AC5)', () => {
     ['is stopped', () => { live.delete('b') }, 'That session is stopped; nothing was sent'],
     ['runs a plain shell', () => { fronts.delete('b') }, 'That session runs no agent now, only its shell; nothing was sent'],
     ['runs a program whose hook BMN never heard from', () => { fronts.set('b', { state: 'program' }) },
-      'That session runs no agent whose hook BMN has heard from; nothing was sent'],
-    ['runs OpenCode, which has no hand-over', () => { fronts.set('b', { state: 'agent', app: 'opencode' }) },
-      'That session runs OpenCode, which takes no messages; nothing was sent']
+      'That session runs no agent whose hook BMN has heard from; nothing was sent']
   ])('refuses a message to a session that %s, with the reason, and stores nothing (75.4 AC5)', async (_what, arrange, reason) => {
     arrange()
     await expect(tell('a', 'b')).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument, message: reason })
@@ -1100,9 +1098,8 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect((await take('b')).message).toBeNull()
   })
 
-  it('hands nothing to an app without a measured hand-over, or to a process the session no longer runs', async () => {
+  it('hands nothing to a process the session no longer runs', async () => {
     const sent = await tell('a', 'b')
-    expect((await take('b', OPENAI, { app: 'opencode' })).message).toBeNull()
     expect((await take('b', OPENAI, { incarnationId: 'run-earlier' })).message).toBeNull()
     expect(stored(sent.messageId).state).toBe('waiting')
   })
@@ -1116,7 +1113,6 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
     expect(await ask({ agent: 'claude' })).toBe(true)
     expect(await ask({ event: 'Stop' })).toBe(false)
     expect(await ask({ agent: 'claude', event: 'PostToolUseFailure' })).toBe(false)
-    expect(await ask({ agent: 'opencode' })).toBe(false)
     expect(await ask({ incarnationId: 'run-earlier' })).toBe(false)
     expect(await ask({ incarnationId: null })).toBe(false)
     expect(await ask({ sessionId: 'a', incarnationId: 'run-a' })).toBe(false)
@@ -1315,8 +1311,8 @@ describe('handoffs that deliver themselves (Story 75.5)', () => {
   })
 
   it('refuses a receiver no agent there takes messages from, as bmn tell does, and stores nothing', async () => {
-    fronts.set('b', { state: 'agent', app: 'opencode' })
-    await expect(handoff('a', 'b')).rejects.toMatchObject({ message: expect.stringContaining('takes no messages') })
+    fronts.set('b', { state: 'program' })
+    await expect(handoff('a', 'b')).rejects.toMatchObject({ message: expect.stringContaining('runs no agent whose hook BMN has heard from') })
     fronts.delete('b')
     await expect(handoff('a', 'b')).rejects.toMatchObject({ message: expect.stringContaining('only its shell') })
     live.delete('b')

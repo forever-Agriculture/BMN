@@ -2,7 +2,7 @@
 import type { RetiredApp, RosterData, RosterProvider, RosterRoute } from './agents-roster.mjs'
 import type { Generation } from './agents-state.mjs'
 import type { PathState } from './safe-config-write.mjs'
-export type RulesHarness = 'claude' | 'codex' | 'opencode'
+export type RulesHarness = 'claude' | 'codex'
 export interface MasterIssue { code: string; line: number; message: string }
 export interface Master { path: string; text: string; hash: string; parts: { kind: string; [key: string]: unknown }[] }
 export type RenderingKind = 'full' | 'public'
@@ -71,7 +71,7 @@ export declare function restoreTransaction(id: string, options?: { yes?: boolean
 }>
 export declare function masterHistory(): { revision: number; hash: string; bytes: number; at: string; reason: string; intact: boolean }[]
 export declare function writeMaster(expected: PathState, text: string, reason: string, options?: { now?: Date }): PathState
-export declare function importedMaster(sourceText: string, opencodeText: string | null): { text: string; changes: string[] }
+export declare function importedMaster(sourceText: string): { text: string; changes: string[] }
 export type ProbeInspector = (harness: RulesHarness) => { version: string | null; host: string | null }
 export declare function probeInspector(environment?: NodeJS.ProcessEnv | Record<string, string>): Promise<ProbeInspector>
 export declare function lastProbes(options?: { inspect?: ProbeInspector }): (Partial<ProbeEntry> & { harness: RulesHarness; outcome: ProbeEntry['outcome'] | null; stale?: boolean })[]

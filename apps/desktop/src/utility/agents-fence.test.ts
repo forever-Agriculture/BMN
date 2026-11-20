@@ -1,15 +1,13 @@
-// MODULE: agents-fence.test.ts - Stories 63.3 and 70.3: the fence test of a Codex and an OpenCode research run, over stand-in apps and the loopback stand-in for their provider; no provider and no real app is reached
-import { execFile, execFileSync } from 'node:child_process'
+// MODULE: agents-fence.test.ts - Story 63.3: the fence test of a Codex research run, over a stand-in app and the loopback stand-in for their provider; no provider and no real app is reached
+import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { CODEX_RESEARCH_TOOLS_SEEN, OPENCODE_RESEARCH_TOOLS_SEEN, bindSession, bindingPath, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, researchFormHash, researchRunsDirectory, type FenceTestEntry } from '../../bin/agents-check.mjs'
+import { CODEX_RESEARCH_TOOLS_SEEN, evaluateResearch, fenceStanding, fenceTests, fenceTestsPath, prepareResearchRun, researchFormHash, type FenceTestEntry } from '../../bin/agents-check.mjs'
 import { FENCE_MARKERS, compareUnderProviderList, fenceAutoPlan, fenceDirectory, fenceSubjects, markersIn, providerModelList, runFenceTest } from '../../bin/agents-fence.mjs'
-import { readQuestions, runAsk } from '../../bin/agents-ask.mjs'
-import { answerText, researchArgv, researchers, runResearch } from '../../bin/agents-research.mjs'
-import { openCodeFolder, openCodeFolderProblem, openCodeSession } from '../../bin/agents-opencode.mjs'
+import { researchArgv, researchers } from '../../bin/agents-research.mjs'
 import { processLives } from '../../bin/agents-supervised.mjs'
 import type { RosterAgent } from '../../bin/agents-roster.mjs'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -18,7 +16,6 @@ import { approveRoster } from '../main/agents-approval'
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const FAKE = fileURLToPath(new URL('./test-fixtures/agents/fake-codex.mjs', import.meta.url))
-const FAKE_OPENCODE = fileURLToPath(new URL('./test-fixtures/agents/fake-opencode.mjs', import.meta.url))
 const NOW = new Date('2026-10-10T12:00:00.000Z')
 
 let home: string
@@ -359,193 +356,6 @@ describe('the tool list under the provider\'s own model list (63.3 AC6)', () => 
     expect(await compare()).toEqual({ ok: false, reason: 'the provider\'s model list does not name gpt-6-luna, so its tool list could not be compared with the tested one' })
     expect(fenceStanding('codex', '0.161.0', 'gpt-6-luna').passed).toBe(true)
   }, 60_000)
-})
-
-describe('the fence test of an OpenCode research run (70.3)', () => {
-  const LUNA_GO = '## luna-go\n\n```yaml\nname: Luna (Go)\nclass: pawn\nharness: opencode\nmodel: gpt-6-luna\nprovider: opencode-go\nhost: default\nenabled: true\nstatus: active\nefforts: [low, high]\nroles: [helper]\n```\n\n## roles'
-  /** How the stand-in OpenCode behaves in this test; see fake-opencode.mjs. */
-  const opencode = (mode: Record<string, unknown> = {}): void => writeFileSync(join(stubs, 'opencode-mode.json'), JSON.stringify(mode))
-  const testOpenCode = (options: Parameters<typeof runFenceTest>[0] = {}) => runFenceTest({ harness: 'opencode', environment: env, now: NOW, limitMs: 20_000, ...options })
-  const lunaGo = () => agents('luna-go')[0] as RosterAgent
-  const offer = () => researchers({ environment: env, now: NOW }).filter((entry) => entry.harness === 'opencode').map((entry) => [entry.id, entry.ok, entry.why])
-  const research = (argv?: string[]) => {
-    const run = prepareResearchRun('Made-up research prompt.\n', { now: NOW, harness: 'opencode', environment: env })
-    return evaluateResearch({ agent: 'luna-go', argv: argv ?? researchArgv(lunaGo(), { environment: env, run, version: '2.0.29' }), stdin: run.prompt, cwd: run.cwd }, { environment: env, cwd: run.cwd, now: NOW })
-  }
-
-  beforeEach(() => {
-    writeFileSync(join(stubs, 'opencode'), readFileSync(FAKE_OPENCODE, 'utf8').replace(/^#!.*\n/, `#!${process.execPath}\n`))
-    chmodSync(join(stubs, 'opencode'), 0o755)
-    opencode()
-    // OpenCode Go may see private work in this team, so research on it is judged by the fence alone.
-    const text = EXAMPLE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}').replace('## roles', LUNA_GO)
-    writeFileSync(join(home, '.config/bmn/agents/roster.md'), text)
-    const generation = (JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/current'), 'utf8')) as { generation: number }).generation
-    approveRoster({ generation, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
-  })
-
-  it('passes for the team\'s OpenCode model, records it against the version and the form, and opens the offer', async () => {
-    expect(offer()).toEqual([['luna-go', false, 'the fence test has not run for this version of OpenCode yet']])
-    const entry = await testOpenCode()
-    expect(entry, JSON.stringify(entry)).toMatchObject({ harness: 'opencode', version: '2.0.29', form: researchFormHash('opencode'), catalog: 'bundled', verdict: 'pass', reasons: [] })
-    expect(entry.models.map((model) => [model.model, model.verdict, model.reasons, model.tools])).toEqual([['opencode-go/gpt-6-luna', 'pass', [], [...OPENCODE_RESEARCH_TOOLS_SEEN]]])
-    expect(fenceStanding('opencode', '2.0.29', 'opencode-go/gpt-6-luna')).toMatchObject({ passed: true, tools: [...OPENCODE_RESEARCH_TOOLS_SEEN] })
-    expect(fenceStanding('opencode', '2.0.30', 'opencode-go/gpt-6-luna')).toMatchObject({ passed: false, why: 'untested' })
-    expect(offer()).toEqual([['luna-go', true, undefined]])
-    expect(readdirSync(fenceDirectory())).toEqual([])
-    expect(readFileSync(fenceTestsPath(), 'utf8')).not.toMatch(/FENCE-[A-Z]+-[0-9a-f]{8}/)
-    // BMN's own OpenCode folder, where real runs start, was not touched: the test plants a folder of its own.
-    expect(existsSync(openCodeFolder())).toBe(false)
-  }, 60_000)
-
-  it('Epic 85: overrides the selected catalog model address in the isolated fence test', async () => {
-    opencode({ modelBaseURL: 'http://127.0.0.1:1' })
-    const entry = await testOpenCode()
-    expect(entry, JSON.stringify(entry)).toMatchObject({ verdict: 'pass' })
-  })
-
-  it.each([
-    ['the owner\'s rules file reaches the provider', { leaks: true }, 'reached the provider: the OpenCode rules file'],
-    ['a tool BMN has not looked at is offered', { extraTool: 'bash' }, 'a tool BMN has not looked at: function:bash'],
-    ['a file is written in the home folder', { writes: true }, 'written during the run: fake-opencode-wrote.txt'],
-    ['the search reaches an address on this computer', { fetchesLocal: true }, 'a tool fetched an address on this computer']
-  ])('fails where %s, and the offer stays closed', async (_name, mode, reason) => {
-    opencode(mode)
-    const entry = await testOpenCode()
-    expect(entry.verdict, JSON.stringify(entry)).toBe('fail')
-    expect(entry.models[0]?.reasons).toContain(reason)
-    expect(offer()).toEqual([['luna-go', false, 'the fence test of this version of OpenCode did not pass']])
-  }, 60_000)
-
-  it('refuses research until the fence passed, with Codex\'s words; a different tool list closes it again (AC2, AC3)', async () => {
-    expect(research()).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED', detail: 'fence-untested',
-      message: 'research runs in OpenCode only on a version whose fence test passed, and none is on record for opencode 2.0.29 with opencode-go/gpt-6-luna: the owner runs `bmn roster fence`, or picks a researcher on Claude Code' })
-    expect((await testOpenCode()).verdict).toBe('pass')
-    const passed = research()
-    expect(passed.verdict, JSON.stringify(passed)).toBe('PASS')
-    expect(passed.receipt).toMatchObject({ mode: 'research', harness: 'opencode', model: 'opencode-go/gpt-6-luna', effort: 'low', fence: { form: researchFormHash('opencode'), tools: [...OPENCODE_RESEARCH_TOOLS_SEEN] } })
-    // The run was put in BMN's own folder, as `roster role` does.
-    expect(openCodeFolderProblem()).toBeNull()
-    // A later record of the same version and model with other tools, as a comparison under another list would write it.
-    const [tested] = fenceTests()
-    const other = { ...tested, catalog: 'live', verdict: 'fail', models: [{ model: 'opencode-go/gpt-6-luna', verdict: 'fail', tools: ['function:websearch', 'function:webfetch'], reasons: ['the tools differ'] }] }
-    writeFileSync(fenceTestsPath(), `${readFileSync(fenceTestsPath(), 'utf8')}${JSON.stringify(other)}\n`)
-    expect(research()).toMatchObject({ code: 'ROUTE_UNSUPPORTED', detail: 'fence-live',
-      message: 'under the provider\'s own model list OpenCode 2.0.29 offers opencode-go/gpt-6-luna other tools than the fence test saw (the tools differ), so no research runs there until that is looked at' })
-  }, 60_000)
-
-  it('accepts exactly the research form', async () => {
-    expect((await testOpenCode()).verdict).toBe('pass')
-    const run = prepareResearchRun('Made-up research prompt.\n', { now: NOW, harness: 'opencode', environment: env })
-    const argv = researchArgv(lunaGo(), { environment: env, run, version: '2.0.29' })
-    const refused = (changed: string[]) => evaluateResearch({ agent: 'luna-go', argv: changed, stdin: run.prompt, cwd: run.cwd }, { environment: env, cwd: run.cwd, now: NOW })
-    expect(refused(argv.map((part) => (part === 'bmn-researcher' ? 'bmn-helper' : part)))).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: 'a research run runs BMN\'s research agent (--agent bmn-researcher)' })
-    expect(refused(argv.slice(0, -2))).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: 'a research run names its title (--title), so OpenCode makes no request of its own to name the session' })
-    expect(refused([...argv.slice(0, 2), 'FOO=1', ...argv.slice(2)]).message).toMatch(/^a research run's env -i carries only PATH, HOME, .*, not FOO$/)
-    expect(refused(argv.map((part) => (part === 'opencode-go/gpt-6-luna#low' ? 'opencode-go/gpt-6-luna#high' : part)))).toMatchObject({ verdict: 'PASS' })
-    expect(refused([...argv, '--auto']).code).toBe('ROUTE_UNSUPPORTED')
-  }, 60_000)
-
-  it('covers each OpenCode model of the approved team once, and reads the answer from the last text event', () => {
-    expect(fenceSubjects(readApproved().data, 'opencode').map((agent) => agent.id)).toEqual(['luna-go'])
-    expect(fenceSubjects(readApproved().data).map((agent) => agent.id)).toEqual(['sol', 'astra', 'luna'])
-    const events = (...lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n')
-    expect(answerText('opencode', events({ type: 'step_start' }, { type: 'text', part: { text: 'first' } }, { type: 'text', part: { text: '{"version":1}' } }), { folder: '' })).toEqual({ ok: true, text: '{"version":1}' })
-    expect(answerText('opencode', events({ type: 'step_start' }), { folder: '' })).toEqual({ ok: false, reason: 'OpenCode printed no answer' })
-    expect(answerText('opencode', events({ type: 'error', error: { type: 'provider.auth', message: 'made-up refusal' } }), { folder: '' })).toEqual({ ok: false, reason: 'OpenCode reported an error: made-up refusal' })
-    expect(answerText('opencode', 'not json', { folder: '' })).toEqual({ ok: false, reason: 'OpenCode printed a line that is not JSON' })
-  })
-
-  describe('the session of a research run (70.4 AC4)', () => {
-    const SESSION = 'ses_0123456789abFakeOpenCode01'
-    const ANSWER = JSON.stringify({ version: 1, answer: 'People use Jev mostly to route requests by intent.', claims: [], not_found: ['an independent measurement'] })
-    const ask = (now: () => Date = () => NOW) => runAsk({ question: 'How do people use the Jev 1.13 model, according to public pages?', agent: 'luna-go', owner: true, environment: env, now,
-      fetchPage: async () => ({ ok: false, reason: 'no page in this test' }) })
-    const receiptOf = (run: string) => join(researchRunsDirectory(), run, 'receipt.json')
-    const bindingOf = (receipt: string) => JSON.parse(readFileSync(bindingPath(JSON.parse(readFileSync(receipt, 'utf8')).receipt_hash), 'utf8')) as { session_id: string }
-
-    it('is read from the events: the one OpenCode id they all name', () => {
-      const events = (...lines: unknown[]) => lines.map((line) => JSON.stringify(line)).join('\n')
-      expect(openCodeSession(events({ type: 'step_start', sessionID: SESSION }, { type: 'text', sessionID: SESSION, part: { text: 'x' } }))).toBe(SESSION)
-      expect(openCodeSession(events({ type: 'step_start', sessionID: SESSION }, { type: 'text', sessionID: 'ses_0123456789abFakeOpenCode02' }))).toBeNull()
-      expect(openCodeSession(events({ type: 'step_start', sessionID: '019a2f6e-1c2b-7d3e-8f40-123456789abc' }))).toBeNull()
-      expect(openCodeSession(events({ type: 'step_start' }))).toBeNull()
-      expect(openCodeSession(`${events({ type: 'step_start', sessionID: SESSION })}\nnot json`)).toBeNull()
-    })
-
-    it('is bound to the run\'s check and kept with the question; a second binding is refused, as for a dispatch', async () => {
-      expect((await testOpenCode()).verdict).toBe('pass')
-      opencode({ answer: ANSWER })
-      const asked = await ask()
-      expect(asked, JSON.stringify(asked)).toMatchObject({ ok: true, outcome: 'answered', session: SESSION })
-      expect(asked.note).toBeUndefined()
-      const receipt = receiptOf(asked.run!)
-      expect(JSON.parse(readFileSync(receipt, 'utf8'))).toMatchObject({ mode: 'research', harness: 'opencode' })
-      expect(bindingOf(receipt)).toMatchObject({ session_id: SESSION })
-      expect(readQuestions().find((entry) => entry.id === asked.id)).toMatchObject({ outcome: 'answered', session: SESSION })
-      expect(() => bindSession(receipt, SESSION, { now: NOW })).toThrow('this receipt is already bound to a session; a binding is accepted once')
-    }, 60_000)
-
-    it('leaves the answer standing where the session cannot be bound, and says why', async () => {
-      expect((await testOpenCode()).verdict).toBe('pass')
-      opencode({ answer: ANSWER, sessions: true })
-      const two = await ask()
-      expect(two, JSON.stringify(two)).toMatchObject({ ok: true, outcome: 'answered', note: 'OpenCode named no single session, so the run is bound to none.' })
-      expect(two).not.toHaveProperty('session')
-      // The binding comes after the ten minutes its check allows: refused, and the answer stands.
-      opencode({ answer: ANSWER })
-      let calls = 0
-      const late = await ask(() => (calls++ === 0 ? NOW : new Date(NOW.getTime() + 11 * 60_000)))
-      expect(late, JSON.stringify(late)).toMatchObject({ ok: true, outcome: 'answered', session: SESSION,
-        note: `BMN could not bind session ${SESSION} to the run's check: a session is bound within 10 minutes of the check that preceded it; start a fresh checked dispatch.` })
-      expect(existsSync(bindingPath(JSON.parse(readFileSync(receiptOf(late.run!), 'utf8')).receipt_hash))).toBe(false)
-    }, 60_000)
-
-    it('is bound for each run of a Models research', async () => {
-      expect((await testOpenCode()).verdict).toBe('pass')
-      opencode({ answer: JSON.stringify({ version: 1, models: [] }) })
-      const listed = () => (existsSync(researchRunsDirectory()) ? readdirSync(researchRunsDirectory()) : [])
-      const before = new Set(listed())
-      const { run } = await runResearch({ researcher: 'luna-go', environment: env, now: () => NOW, fetchPage: async () => ({ ok: false, reason: 'no page in this test' }) })
-      const runs = listed().filter((name) => !before.has(name))
-      expect(runs.length, JSON.stringify(run)).toBeGreaterThan(0)
-      for (const name of runs) expect(bindingOf(receiptOf(name))).toMatchObject({ session_id: SESSION })
-      expect(run.note ?? '').not.toContain('bind')
-    }, 60_000)
-  })
-})
-
-/** The real OpenCode on this computer, for the opt-in run below (BMN_OPENCODE_REAL=1); empty when either is missing. */
-const REAL_OPENCODE = process.env.BMN_OPENCODE_REAL === '1'
-  ? (() => {
-      try {
-        return realpathSync(execFileSync('sh', ['-c', 'command -v opencode'], { encoding: 'utf8' }).trim())
-      } catch {
-        return ''
-      }
-    })()
-  : ''
-
-describe.runIf(REAL_OPENCODE !== '')('the fence test on the installed OpenCode (70.3, BMN_OPENCODE_REAL=1)', () => {
-  it('passes for Luna through OpenCode Go: only web search is offered, and none of the planted files reaches the stand-in', async () => {
-    const luna = { ...agents('luna')[0], id: 'luna-go', name: 'Luna (Go)', harness: 'opencode', model: 'gpt-6-luna', provider: 'opencode-go', efforts: ['low', 'high'] } as RosterAgent
-    const entry = await runFenceTest({ harness: 'opencode', agents: [luna], environment: { HOME: home, PATH: `${dirname(REAL_OPENCODE)}:/usr/bin:/bin` }, now: NOW, limitMs: 90_000 })
-    // The record, made-up markers only, can be kept beside a run's evidence.
-    if (process.env.BMN_OPENCODE_FENCE_RECORD !== undefined) writeFileSync(process.env.BMN_OPENCODE_FENCE_RECORD, `${JSON.stringify(entry, null, 2)}\n`)
-    expect(entry, JSON.stringify(entry)).toMatchObject({ harness: 'opencode', form: researchFormHash('opencode'), verdict: 'pass', reasons: [] })
-    expect(entry.models.map((model) => [model.model, model.verdict, model.tools])).toEqual([['opencode-go/gpt-6-luna', 'pass', [...OPENCODE_RESEARCH_TOOLS_SEEN]]])
-  }, 180_000)
-
-  it('fails when the same run reads the owner\'s own OpenCode folder: his plugin loads and his MCP server starts', async () => {
-    const luna = { ...agents('luna')[0], id: 'luna-go', name: 'Luna (Go)', harness: 'opencode', model: 'gpt-6-luna', provider: 'opencode-go', efforts: ['low', 'high'] } as RosterAgent
-    const entry = await runFenceTest({
-      harness: 'opencode', agents: [luna], environment: { HOME: home, PATH: `${dirname(REAL_OPENCODE)}:/usr/bin:/bin` }, now: NOW, limitMs: 90_000, record: false,
-      argvOf: (agent, options) => researchArgv(agent, options).map((part) => (part.startsWith('XDG_CONFIG_HOME=') ? `XDG_CONFIG_HOME=${options.environment.HOME}/.config` : part))
-    })
-    expect(entry.form).toBe('other')
-    expect(entry.verdict, JSON.stringify(entry)).toBe('fail')
-    expect(entry.models[0]?.reasons).toEqual(expect.arrayContaining(['a plugin of the owner\'s was loaded', 'an MCP server of the owner\'s was started']))
-  }, 180_000)
 })
 
 describe('`bmn roster fence`', () => {

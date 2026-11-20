@@ -1,6 +1,6 @@
 // MODULE: agents-skills.mjs - Story 60.11: one skills folder for every agent app: where each app reads skills (the owner's test, per version), one state per app and skill, and install, removal and undo as one transaction
 import { assertDefaultsAdmission, withDefaultsAdmission } from './defaults-admission.mjs'
-import { execFile, spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import {
   appendFileSync, chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync,
@@ -11,7 +11,7 @@ import { APP_NAMES, HARNESSES, RosterError, SKILL_PATTERN, agentsDirectory, appR
 import { approvedIfAny } from './agents-state.mjs'
 import { linkTarget } from './safe-config-write.mjs'
 import { installOwnSkills, ownSkillNames } from './agents-own-skills.mjs'
-import { canonicalRoute, home, pause } from './shared-helpers.mjs'
+import { canonicalRoute, home } from './shared-helpers.mjs'
 import { optionalDefaultsOwnership } from './defaults-ownership.mjs'
 import { applySetupSkillPlan, assertCompatibleSkillMetadata, writeCompatibleSkillMetadata } from './setup-app-skills.mjs'
 
@@ -41,16 +41,14 @@ class SkillsError extends Error {
 /**
  * Per app: its program, the folders (under the home folder) it may read user-level skills from,
  * in the order BMN prefers to install into, and how BMN lists the skills it sees without sending
- * a prompt: a command, or for OpenCode 2 the operation its server answers (`opencode debug skill`
- * went with 2.0; see openCodeServerList).
+ * a prompt: a command.
  * `prompt` says whether BMN can tell, in a run of that app, the app handing a skill's text to the
  * model from the model reading the file itself; only there does a loading test say pass or fail.
  * These are what BMN asks; what an app answers is recorded by the owner's test, per version.
  */
 export const SKILL_APPS = {
   claude: { command: 'claude', roots: ['.claude/skills'], list: { argv: ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], input: '/context\n' }, prompt: true },
-  codex: { command: 'codex', roots: ['.agents/skills', '.codex/skills', '.claude/skills'], list: { argv: ['debug', 'prompt-input'], input: '' }, prompt: true },
-  opencode: { command: 'opencode', roots: ['.config/opencode/skills', '.config/opencode/skill', '.agents/skills', '.claude/skills'], list: { server: 'skill.list' }, prompt: false }
+  codex: { command: 'codex', roots: ['.agents/skills', '.codex/skills', '.claude/skills'], list: { argv: ['debug', 'prompt-input'], input: '' }, prompt: true }
 }
 
 /** States that need nothing done: the skill is where it should be, or is rightly absent. */
@@ -792,93 +790,8 @@ function testSkillGone(path, work) {
 
 /** What an app answers when asked which skills it sees; `reason` says why an answer is missing, where BMN knows. */
 async function listOutput(spec, cwd, environment, timeoutMs) {
-  if (spec.list.server !== undefined) return openCodeServerList(spec, cwd, environment, timeoutMs)
   const run = spawnSync(spec.command, spec.list.argv, { cwd, env: environment, input: spec.list.input, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 })
   return { finished: !run.error && run.status !== null, ok: !run.error && run.status === 0, text: `${run.stdout ?? ''}\n${run.stderr ?? ''}` }
-}
-
-// OpenCode 2.0.29 (2026-10-14) answers with no skills for about half a second after its server
-// starts, then with every skill of every folder at once.
-const SERVER_POLL_MS = 400
-const SERVER_EMPTY_MS = 10_000
-const SERVER_STOP_MS = 3000
-
-/** The skills in an answer of OpenCode's server, one `name path` line each, or null for an answer BMN cannot read. A skill's text is never kept. */
-function serverSkills(stdout) {
-  let answer
-  try {
-    answer = JSON.parse(stdout)
-  } catch {
-    return null
-  }
-  if (!Array.isArray(answer?.data)) return null
-  return answer.data.map((entry) => `${typeof entry?.name === 'string' ? entry.name : ''} ${typeof entry?.path === 'string' ? entry.path : ''}`).join('\n')
-}
-
-/**
- * OpenCode 2 lists its skills only through its server. BMN starts a private one on a free
- * loopback port (`opencode serve --port 0`, never the owner's background service), with a password
- * made for this run that is never shown or kept, asks it for its skills until two answers in a
- * row agree and name a skill (or have been empty for ten seconds), and stops it.
- */
-async function openCodeServerList(spec, cwd, environment, timeoutMs) {
-  const env = { ...environment, OPENCODE_PASSWORD: randomBytes(24).toString('base64url'), OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
-  const deadline = Date.now() + timeoutMs
-  const server = spawn(spec.command, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
-  let said = ''
-  let ended = false
-  const exited = new Promise((resolve) => {
-    const end = () => {
-      ended = true
-      resolve()
-    }
-    server.once('exit', end)
-    server.once('error', end)
-  })
-  server.stdout.on('data', (chunk) => { said += chunk })
-  server.stderr.on('data', (chunk) => { said += chunk })
-  try {
-    let url = null
-    while (url === null) {
-      url = /server listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(said)?.[1] ?? null
-      if (url !== null) break
-      if (ended) return { finished: true, ok: false, text: said, reason: 'its server did not start' }
-      if (Date.now() >= deadline) return { finished: false, ok: false, text: said }
-      await pause(50)
-    }
-    let previous = null
-    let since = Date.now()
-    while (Date.now() < deadline) {
-      const answer = await new Promise((resolve) => {
-        execFile(spec.command, ['api', '--server', url, spec.list.server], { cwd, env, encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), maxBuffer: 64 * 1024 * 1024 },
-          (error, stdout) => resolve({ error, stdout: stdout ?? '' }))
-      })
-      if (answer.error?.killed) return { finished: false, ok: false, text: previous ?? '' }
-      if (answer.error) return { finished: true, ok: false, text: answer.stdout, reason: 'its server did not answer' }
-      const skills = serverSkills(answer.stdout)
-      if (skills === null) return { finished: true, ok: false, text: '', reason: 'its server answered in a form BMN cannot read' }
-      if (skills !== previous) {
-        previous = skills
-        since = Date.now()
-      } else if (skills !== '' || Date.now() - since >= SERVER_EMPTY_MS) {
-        return { finished: true, ok: true, text: skills }
-      }
-      await pause(SERVER_POLL_MS)
-    }
-    return { finished: false, ok: false, text: previous ?? '' }
-  } finally {
-    const signal = (name) => {
-      try {
-        process.kill(-server.pid, name)
-      } catch {
-        // Already gone.
-      }
-    }
-    if (!ended) {
-      signal('SIGTERM')
-      if (!(await Promise.race([exited.then(() => true), pause(SERVER_STOP_MS).then(() => false)]))) signal('SIGKILL')
-    }
-  }
 }
 
 /**
@@ -911,7 +824,7 @@ export async function testSkillsFolders(harness, { environment = process.env, no
       symlinkSync(`${folder}/kept/${linkName}`, `${at}/${linkName}`)
       return { root, folderName, linkName }
     })
-    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|OPENCODE_|ANTHROPIC_|OPENAI_)/.test(key)))
+    const testEnvironment = Object.fromEntries(Object.entries(environment).filter(([key]) => !/^(XDG_|CLAUDE_|CODEX_|ANTHROPIC_|OPENAI_)/.test(key)))
     testEnvironment.HOME = testHome
     const listed = await listOutput(spec, `${folder}/work`, testEnvironment, timeoutMs)
     const roots = names.map((entry) => ({ root: entry.root, folder: listed.text.includes(entry.folderName), link: listed.text.includes(entry.linkName) }))
@@ -1111,9 +1024,7 @@ const LOADING_SKILL = (name, token) => `---\nname: ${name}\ndescription: BMN tes
  * with every tool off and says so itself; Codex cannot run without tools, so its saved record must
  * show the skill's words in a message given to the model before any tool was called, and the run
  * come to its end. A run that ended in an error, a report BMN cannot read or that stops before the
- * run's end, or a tool that may have read the file is inconclusive. In
- * OpenCode BMN has no way to tell the two apart, so the result is inconclusive and no
- * prompt is sent. The prompt goes to the app's provider, so the test runs only where the approved
+ * run's end, or a tool that may have read the file is inconclusive. The prompt goes to the app's provider, so the test runs only where the approved
  * destination may receive private work; it is bound like a listing test.
  */
 /**

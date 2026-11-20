@@ -28,8 +28,6 @@ export interface QuestionRecord {
   question: string | null
   outcome: AskOutcome | 'running' | 'interrupted'
   code?: string; note?: string; run?: string; answer?: string; claims?: MarkedClaim[]; not_found?: string[]; counts?: MarkCounts; took_ms?: number
-  /** The OpenCode session the researcher's run was bound to (70.4 AC4). */
-  session?: string
 }
 export declare function questionsPath(): string
 export declare function readQuestions(): QuestionRecord[]

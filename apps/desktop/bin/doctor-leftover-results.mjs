@@ -17,6 +17,7 @@ export const LEFTOVER_REASONS = Object.freeze({
   'plugin-owned': 'The MCP entry belongs to an app plugin.'
 })
 const KINDS = ['memory', 'skills', 'plugins', 'mcp']
+// A saved inventory from before OpenCode was retired (Epic 123) may still name it; the check no longer produces such rows.
 const APPS = ['claude', 'codex', 'opencode']
 
 export function leftoverLocation(item) {

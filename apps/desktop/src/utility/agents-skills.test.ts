@@ -27,8 +27,7 @@ const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roste
 const NOW = new Date('2026-10-10T12:00:00.000Z')
 const CODEX = '0.161.0'
 const CLAUDE = '2.1.295'
-const OPENCODE = '1.18.31'
-const VERSIONS = { codex: CODEX, claude: CLAUDE, opencode: OPENCODE }
+const VERSIONS = { codex: CODEX, claude: CLAUDE }
 /** A line only a skill's own text holds: no plan, result or record may carry it. */
 const BODY = 'SYNTHETIC-SKILL-BODY-7f3a'
 
@@ -72,32 +71,6 @@ function lister(name: string, version: string, command: string, folders: string[
   ].join('\n'))
 }
 
-/**
- * A stub OpenCode 2: `serve` says where it listens and stays up until stopped; `api` answers with
- * a built-in skill and the skills in the given folders under HOME, as JSON, after `emptyFor`
- * answers with none (the server loads its skills a moment after it starts). `answer` replaces
- * the JSON with other words.
- */
-function openCode(version: string, folders: string[], { links = true, fail = false, emptyFor = 0, answer = '', noServer = false } = {}): void {
-  stub('opencode', [
-    `if [ "$1" = "--version" ]; then echo "opencode v${version}"; exit 0; fi`,
-    `echo "$@" >> "${home}/calls-opencode.log"`,
-    `env >> "${home}/env-opencode.log"`,
-    ...(noServer ? ['if [ "$1" = "serve" ]; then echo "port in use" >&2; exit 1; fi'] : []),
-    `if [ "$1" = "serve" ]; then echo $$ > "${home}/opencode-serve.pid"; echo "server listening on http://127.0.0.1:4097"; exec sleep 60; fi`,
-    '[ "$1 $2 $3 $4" = "api --server http://127.0.0.1:4097 skill.list" ] || exit 4',
-    ...(fail ? ['exit 3'] : []),
-    `n=$(cat "${home}/opencode-answers" 2>/dev/null || echo 0); echo $((n + 1)) > "${home}/opencode-answers"`,
-    `if [ "$n" -lt ${emptyFor} ]; then echo '{"location":{},"data":[]}'; exit 0; fi`,
-    ...(answer === '' ? [
-      `printf '{"location":{},"data":[{"id":"opencode","name":"OpenCode","path":"/builtin/opencode.md","content":"${BODY}"}'`,
-      ...folders.map((folder) => `for d in "$HOME"/${folder}/*/; do ${links ? '' : '[ -L "${d%/}" ] && continue; '}[ -f "\${d}SKILL.md" ] && printf ',{"name":"%s","path":"%s","content":"${BODY}"}' "$(basename "$d")" "\${d}SKILL.md"; done`),
-      `printf ']}\n'`
-    ] : [`echo '${answer}'`]),
-    'exit 0'
-  ].join('\n'))
-}
-
 function skill(name: string, { at = source, description = `Synthetic skill ${name}.`, extra = {} as Record<string, string> } = {}): string {
   const folder = join(at, name)
   mkdirSync(folder, { recursive: true })
@@ -115,7 +88,6 @@ function tested(harness: string, version: string, roots: SkillsRoot[], outcome =
 }
 
 const codexFolder = (): string => join(home, '.agents/skills')
-const opencodeFolder = (): string => join(home, '.config/opencode/skills')
 const check = () => checkSkills({ environment: env, versions: VERSIONS })
 const states = (harness: string): Record<string, SkillState> => Object.fromEntries(check().apps.find((app) => app.harness === harness)!.skills.map((row) => [row.name, row.state]))
 const install = (apps: string[] = [], options = {}) => installSkills(apps, { yes: true, environment: env, versions: VERSIONS, now: NOW, ...options })
@@ -130,7 +102,6 @@ beforeEach(() => {
   mkdirSync(stubs)
   lister('codex', CODEX, 'debug prompt-input', ['.agents/skills'])
   lister('claude', CLAUDE, '-p', ['.claude/skills'])
-  openCode(OPENCODE, ['.config/opencode/skills'])
   env = { HOME: home, PATH: `${stubs}:/usr/bin:/bin` }
   source = join(home, '.claude/skills')
   skill('alpha', { extra: { 'notes/more.md': 'more\n' } })
@@ -215,74 +186,43 @@ describe('where an app reads skills: the owner-run test (60.11 AC1)', () => {
   })
 
   it('records an app that names only real folders as needing copies, and one that reads the skills folder itself', async () => {
-    openCode(OPENCODE, ['.config/opencode/skills', '.claude/skills'], { links: false })
-    const result = await testSkillsFolders('opencode', { environment: env, now: NOW })
+    lister('claude', CLAUDE, '-p', ['.claude/skills'], { links: false })
+    const result = await testSkillsFolders('claude', { environment: env, now: NOW })
     expect(result.outcome).toBe('pass')
-    expect(result.detail).toBe('OpenCode reads skills from ~/.config/opencode/skills (folders only, no links), ~/.claude/skills (folders only, no links)')
-    expect(appSkills('opencode', { environment: env, version: OPENCODE, source })).toMatchObject({ supported: true, location: opencodeFolder(), format: 'copy', reads_source: true })
-    // With the skills kept elsewhere, the same app no longer reads the source itself.
-    expect(appSkills('opencode', { environment: env, version: OPENCODE, source: join(home, 'elsewhere') })).toMatchObject({ reads_source: false })
+    expect(result.detail).toBe('Claude Code reads skills from ~/.claude/skills (folders only, no links)')
+    // It reads the skills folder itself: nothing is written for it.
+    expect(appSkills('claude', { environment: env, version: CLAUDE, source })).toMatchObject({ supported: true, location: null, reads_source: true })
+    // With the skills kept elsewhere, the same app no longer reads the source itself, and gets copies, not links.
+    expect(appSkills('claude', { environment: env, version: CLAUDE, source: join(home, 'elsewhere') })).toMatchObject({ reads_source: false, location: source, format: 'copy' })
   })
 
   it('keeps an app unsupported when it cannot be asked, did not answer, or named nothing', async () => {
     lister('claude', CLAUDE, '-p', ['.claude/skills'], { fail: true })
     expect(await testSkillsFolders('claude', { environment: env, now: NOW })).toMatchObject({ outcome: 'inconclusive', detail: 'claude did not answer in a home folder without its sign-in' })
-    openCode(OPENCODE, ['.nowhere'])
-    expect(await testSkillsFolders('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail' })
-    for (const harness of ['claude', 'opencode']) {
-      expect(appSkills(harness, { environment: env, version: VERSIONS[harness as 'claude'] ?? '1.0.0', source }).supported).toBe(false)
+    lister('codex', CODEX, 'debug prompt-input', ['.nowhere'])
+    expect(await testSkillsFolders('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail' })
+    for (const harness of ['claude', 'codex'] as const) {
+      expect(appSkills(harness, { environment: env, version: VERSIONS[harness], source }).supported).toBe(false)
     }
-    expect(check().apps.find((app) => app.harness === 'opencode')).toMatchObject({ supported: false, skills: [] })
-    expect(await planSkillsInstall(['opencode'], { environment: env, versions: VERSIONS })).toMatchObject({ code: 'SKILLS_UNSUPPORTED', targets: [] })
-  })
-
-  it('asks OpenCode 2 through a private server on a free loopback port, with a password made for the run, waits until it has loaded its skills, and stops it', async () => {
-    openCode(OPENCODE, ['.config/opencode/skills', '.agents/skills', '.claude/skills'], { emptyFor: 2 })
-    const result = await testSkillsFolders('opencode', { environment: { ...env, OPENCODE_PASSWORD: 'owner-password' }, now: NOW })
-    expect(result).toMatchObject({ outcome: 'pass', detail: 'OpenCode reads skills from ~/.config/opencode/skills, ~/.agents/skills, ~/.claude/skills' })
-    // Two answers without skills while the server loads them, then two that agree.
-    const api = 'api --server http://127.0.0.1:4097 skill.list'
-    expect(readFileSync(join(home, 'calls-opencode.log'), 'utf8').trim().split('\n')).toEqual(['serve --hostname 127.0.0.1 --port 0', api, api, api, api])
-    const passwords = [...readFileSync(join(home, 'env-opencode.log'), 'utf8').matchAll(/^OPENCODE_PASSWORD=(.*)$/gm)].map((found) => found[1])
-    expect(passwords).toHaveLength(5)
-    expect(new Set(passwords).size).toBe(1)
-    expect(passwords[0]).toMatch(/^[A-Za-z0-9_-]{32}$/)
-    const recorded = readFileSync(skillsTestsPath(), 'utf8')
-    expect(recorded).not.toContain(passwords[0])
-    expect(recorded).not.toContain(BODY)
-    // The server was stopped, and the throwaway home is gone.
-    const pid = Number(readFileSync(join(home, 'opencode-serve.pid'), 'utf8'))
-    expect(() => process.kill(pid, 0)).toThrow()
-    expect(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-'))).toEqual([])
-    expect(appSkills('opencode', { environment: env, version: OPENCODE, source })).toMatchObject({ supported: true, reads_source: true, location: opencodeFolder(), format: 'link' })
-  })
-
-  it('says why OpenCode gave no list: its server did not start, did not answer, or answered in a form BMN cannot read', async () => {
-    const why = async (): Promise<string> => (await testSkillsFolders('opencode', { environment: env, now: NOW })).detail
-    openCode(OPENCODE, ['.config/opencode/skills'], { noServer: true })
-    expect(await why()).toBe('opencode did not answer in a home folder without its sign-in (its server did not start)')
-    openCode(OPENCODE, ['.config/opencode/skills'], { fail: true })
-    expect(await why()).toBe('opencode did not answer in a home folder without its sign-in (its server did not answer)')
-    openCode(OPENCODE, ['.config/opencode/skills'], { answer: 'Not JSON' })
-    expect(await why()).toBe('opencode did not answer in a home folder without its sign-in (its server answered in a form BMN cannot read)')
-    expect(appSkills('opencode', { environment: env, version: OPENCODE, source }).supported).toBe(false)
+    expect(check().apps.find((app) => app.harness === 'codex')).toMatchObject({ supported: false, skills: [] })
+    expect(await planSkillsInstall(['codex'], { environment: env, versions: VERSIONS })).toMatchObject({ code: 'SKILLS_UNSUPPORTED', targets: [] })
   })
 
   it('names for BMN\'s own run every app at a version no folders test settled: a first install, an update, or one that showed nothing (Story 75.8 AC1)', () => {
     const entry = (harness: string, version: string, outcome: SkillsTestEntry['outcome'], by?: 'bmn'): SkillsTestEntry => ({ harness, kind: 'capability', at: NOW.toISOString(), version, outcome, detail: 'synthetic', ...(by ? { by } : {}) })
-    const versions = { claude: '2.1.300', codex: '0.162.0', opencode: '2.0.29' }
+    const versions = { claude: '2.1.300', codex: '0.162.0' }
     const plan = (tests: SkillsTestEntry[], at: Record<string, string | null> = versions) => skillsAutoPlan({ versions: at, tests, generation: null }).map((one) => [one.harness, one.version, one.reason])
     // A first install: every app BMN can ask which skills it sees.
-    expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'untested']])
+    expect(plan([])).toEqual([['claude', '2.1.300', 'untested'], ['codex', '0.162.0', 'untested']])
     // A settled version is not named again, whoever ran it; an update is; one that showed nothing is tried again.
-    expect(plan([entry('claude', '2.1.300', 'fail'), entry('codex', '0.161.0', 'pass'), entry('opencode', '2.0.29', 'inconclusive', 'bmn')]))
-      .toEqual([['codex', '0.162.0', 'untested'], ['opencode', '2.0.29', 'retry']])
-    expect(plan([entry('claude', '2.1.300', 'pass'), entry('codex', '0.162.0', 'pass', 'bmn'), entry('opencode', '2.0.29', 'unavailable'), entry('opencode', '2.0.29', 'pass')])).toEqual([])
+    expect(plan([entry('claude', '2.1.300', 'fail'), entry('codex', '0.161.0', 'pass')])).toEqual([['codex', '0.162.0', 'untested']])
+    expect(plan([entry('claude', '2.1.300', 'pass'), entry('codex', '0.162.0', 'inconclusive', 'bmn')])).toEqual([['codex', '0.162.0', 'retry']])
+    expect(plan([entry('claude', '2.1.300', 'pass'), entry('codex', '0.162.0', 'unavailable'), entry('codex', '0.162.0', 'pass', 'bmn')])).toEqual([])
     // With no approved team no app may receive private work, so no listing follows the folders test.
     expect(skillsAutoPlan({ versions, tests: [entry('codex', '0.162.0', 'pass')], generation: null }).filter((one) => one.harness === 'codex')).toEqual([])
     // A listing is not where the app reads skills, and an app whose version cannot be read is never named.
     expect(plan([{ ...entry('codex', '0.162.0', 'pass'), kind: 'listing' }], { codex: '0.162.0' })).toEqual([['codex', '0.162.0', 'untested']])
-    expect(plan([], { ...versions, codex: null }).map(([harness]) => harness)).toEqual(['claude', 'opencode'])
+    expect(plan([], { ...versions, codex: null }).map(([harness]) => harness)).toEqual(['claude'])
     // Every entry names its tries by the version alone: the caller bounds them.
     expect(skillsAutoPlan({ versions: { codex: '0.162.0' }, tests: [], generation: null })).toEqual([{ harness: 'codex', version: '0.162.0', key: '', reason: 'untested' }])
   })
@@ -630,34 +570,31 @@ describe('generated copies for an app that does not follow links (60.11 AC3, AC4
 })
 
 describe('which skills an app may have (60.11 AC2, AC3)', () => {
-  beforeEach(() => {
-    tested('opencode', OPENCODE, [{ root: '.config/opencode/skills', folder: true, link: true }])
-  })
+  /** The example team with OpenAI taking public work only: Codex gets the public rendering. */
+  const PUBLIC_ONLY = EXAMPLE.replace('sites: [openai.com], private_work: allowed', 'sites: [openai.com], private_work: public_only')
 
   it('gives an app on a public-only route only the public skills, and a scoped skill only to its apps', async () => {
-    approve(withSkills('public: [alpha, beta]\nonly: {beta: [codex]}'))
-    expect(check().apps.map((app) => [app.harness, app.kind])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public']])
-    expect(states('opencode')).toEqual({ alpha: 'missing', beta: 'excluded', gamma: 'excluded' })
+    approve(withSkills('public: [alpha, beta]\nonly: {beta: [claude]}', PUBLIC_ONLY))
+    expect(check().apps.map((app) => [app.harness, app.kind])).toEqual([['claude', 'full'], ['codex', 'public']])
+    expect(states('codex')).toEqual({ alpha: 'missing', beta: 'excluded', gamma: 'excluded' })
     const result = await install()
-    expect(result.written.map((entry) => `${entry.harness}:${entry.skill}`)).toEqual(['codex:alpha', 'codex:beta', 'codex:gamma', 'opencode:alpha'])
-    expect(readdirSync(opencodeFolder())).toEqual(['alpha'])
+    expect(result.written.map((entry) => `${entry.harness}:${entry.skill}`)).toEqual(['codex:alpha'])
+    expect(readdirSync(codexFolder())).toEqual(['alpha'])
     expect(checkExit(check())).toBe(0)
-    expect(appStateWord(check().apps[2]!)).toBe('Linked')
+    expect(appStateWord(check().apps[1]!)).toBe('Linked')
   })
 
   it('removes BMN\'s entries when a scope narrows, a skill leaves the public list or the app\'s destination stops taking private work', async () => {
     approve(withSkills('public: [alpha, beta]'))
     await install()
-    expect(readdirSync(opencodeFolder())).toEqual(['alpha', 'beta'])
+    expect(readdirSync(codexFolder())).toEqual(['alpha', 'beta', 'gamma'])
     approve(withSkills('public: [alpha]\nonly: {gamma: [claude]}'))
-    expect(states('opencode')).toEqual({ alpha: 'current', beta: 'exposed', gamma: 'excluded' })
     expect(states('codex')).toEqual({ alpha: 'current', beta: 'current', gamma: 'exposed' })
     expect(checkExit(check())).toBe(1)
-    expect(appStateWord(check().apps[2]!)).toBe('Exposed')
+    expect(appStateWord(check().apps[1]!)).toBe('Exposed')
     const narrowed = await install()
     expect(narrowed.written).toEqual([
-      { harness: 'codex', skill: 'gamma', path: join(codexFolder(), 'gamma'), action: 'remove' },
-      { harness: 'opencode', skill: 'beta', path: join(opencodeFolder(), 'beta'), action: 'remove' }
+      { harness: 'codex', skill: 'gamma', path: join(codexFolder(), 'gamma'), action: 'remove' }
     ])
     expect(checkExit(check())).toBe(0)
     // Codex's provider stops taking private work: only the public skill stays.
@@ -672,28 +609,27 @@ describe('which skills an app may have (60.11 AC2, AC3)', () => {
   })
 
   it('never removes an entry it did not write: it stays exposed, and no install reports success', async () => {
-    skill('gamma', { at: opencodeFolder() })
-    expect(states('opencode').gamma).toBe('exposed')
+    approve(withSkills('only: {gamma: [claude]}'))
+    skill('gamma', { at: codexFolder() })
+    expect(states('codex').gamma).toBe('exposed')
     const result = await install()
-    expect(result.exposed).toEqual([{ harness: 'opencode', skill: 'gamma', path: join(opencodeFolder(), 'gamma'), fix: `BMN did not write ${join(opencodeFolder(), 'gamma')}: remove it by hand, or let OpenCode have the skill` }])
-    expect(existsSync(join(opencodeFolder(), 'gamma/SKILL.md'))).toBe(true)
+    expect(result.exposed).toEqual([{ harness: 'codex', skill: 'gamma', path: join(codexFolder(), 'gamma'), fix: `BMN did not write ${join(codexFolder(), 'gamma')}: remove it by hand, or let Codex have the skill` }])
+    expect(existsSync(join(codexFolder(), 'gamma/SKILL.md'))).toBe(true)
     expect((await run(['skills', 'install', '--yes'])).code).toBe(1)
     expect(checkExit(check())).toBe(1)
   })
 
   it('reports an app that reads the skills folder itself as exposed for every skill it may not have', async () => {
-    tested('opencode', OPENCODE, [{ root: '.claude/skills', folder: true, link: true }])
     tested('claude', CLAUDE, [{ root: '.claude/skills', folder: true, link: true }])
     approve(withSkills('public: [alpha]\nonly: {beta: [codex]}'))
-    expect(states('opencode')).toEqual({ alpha: 'read-directly', beta: 'exposed', gamma: 'exposed' })
     expect(states('claude')).toEqual({ alpha: 'read-directly', beta: 'exposed', gamma: 'read-directly' })
     expect(appStateWord(check().apps[0]!)).toBe('Exposed')
     const plan = await planSkillsInstall([], { environment: env, versions: VERSIONS })
-    expect(plan.exposed.map((entry) => `${entry.harness}:${entry.skill}`)).toEqual(['claude:beta', 'opencode:beta', 'opencode:gamma'])
+    expect(plan.exposed.map((entry) => `${entry.harness}:${entry.skill}`)).toEqual(['claude:beta'])
     expect(plan.exposed[0]!.fix).toBe('Claude Code reads the skills folder itself: move beta out of it, or mark it public')
     approve(withSkills('public: [alpha, beta, gamma]'))
-    expect(states('opencode')).toEqual({ alpha: 'read-directly', beta: 'read-directly', gamma: 'read-directly' })
-    expect(appStateWord(check().apps[2]!)).toBe('Reads the source')
+    expect(states('claude')).toEqual({ alpha: 'read-directly', beta: 'read-directly', gamma: 'read-directly' })
+    expect(appStateWord(check().apps[0]!)).toBe('Reads the source')
   })
 })
 
@@ -715,9 +651,10 @@ describe('whether the app lists a skill placed there: a listing, never a loading
   })
 
   it('is not offered where the app may not receive private work, and says when the app did not show the skill', async () => {
-    tested('opencode', OPENCODE, [{ root: '.config/opencode/skills', folder: true, link: true }])
-    expect(await testSkillsListing('opencode', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable' })
-    expect(existsSync(opencodeFolder())).toBe(false)
+    approve(EXAMPLE.replace('sites: [openai.com], private_work: allowed', 'sites: [openai.com], private_work: public_only'))
+    expect(await testSkillsListing('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'unavailable' })
+    expect(existsSync(codexFolder())).toBe(false)
+    approve(EXAMPLE)
     // An app whose real folder is elsewhere than the test showed.
     lister('codex', CODEX, 'debug prompt-input', ['.nowhere'])
     expect(await testSkillsListing('codex', { environment: env, now: NOW })).toMatchObject({ outcome: 'fail', detail: `Codex did not list a test skill placed in ${codexFolder()}` })
@@ -955,19 +892,10 @@ if (${JSON.stringify(name)} === 'claude') {
   })
 
   it('sends no prompt where it could show nothing or may not: an app BMN cannot read that way, a public-only destination, an untested app', async () => {
-    tested('opencode', OPENCODE, [{ root: '.config/opencode/skills', folder: true, link: true }])
-    expect(await loading('opencode')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('a loading test sends a prompt to that provider') })
     expect(await loading('claude')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('skills not supported yet') })
-    expect(existsSync(opencodeFolder())).toBe(false)
-    expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
-    // OpenCode gets public work only, whatever its provider is allowed (owner decisions 2026-10-10 and 2026-10-14): no
-    // prompt goes there, even where its folder reads as OpenCode Go's own servers.
-    approve(EXAMPLE.replace('opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
-    mkdirSync(join(home, '.config/opencode'), { recursive: true })
-    writeFileSync(join(home, '.config/opencode/opencode.json'), '{ "model": "opencode-go/kimi-k3" }')
-    expect(await loading('opencode')).toMatchObject({ outcome: 'unavailable', detail: 'BMN does not check what OpenCode sends; a loading test sends a prompt to that provider' })
-    expect(existsSync(opencodeFolder())).toBe(false)
-    expect(existsSync(join(home, 'calls-opencode.log'))).toBe(false)
+    approve(EXAMPLE.replace('sites: [openai.com], private_work: allowed', 'sites: [openai.com], private_work: public_only'))
+    expect(await loading('codex')).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('a loading test sends a prompt to that provider') })
+    expect(existsSync(codexFolder())).toBe(false)
   })
 
   it('bmn skills test <app> --prompt runs the loading test; without it only the listing', async () => {

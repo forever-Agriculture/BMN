@@ -37,15 +37,8 @@ describe('repeat watch', () => {
     expect(next().repeat).toBe(2)
     expect(next({ incarnationId: 'two' }).repeat).toBe(1)
   })
-  it('counts OpenCode calls until its root run starts again; a subagent run starting never resets it (Story 92.2)', () => {
-    const next = counter()
-    const call = { agent: 'opencode' as const, event: 'tool.execute.after', toolName: 'read' }
-    next(call); next(call)
-    expect(next({ ...call, event: 'session.status', source: 'subagent', fingerprint: undefined }).closed).toBeNull()
-    expect(next(call).repeat).toBe(3)
-    expect(next({ ...call, event: 'session.status', fingerprint: undefined })).toMatchObject({ repeat: null,
-      closed: { agent: 'opencode', maxRepeat: 3, toolEvents: 3, toolName: 'read' } })
-    expect(next(call).repeat).toBe(1)
+  it('takes only a prompt the owner submitted as his turn', () => {
+    expect(ownerTurn({ agent: 'claude', event: 'UserPromptSubmit', source: null })).toBe(true)
     expect(ownerTurn({ agent: 'claude', event: 'session.status', source: null })).toBe(false)
   })
   it('evicts fingerprints beyond twenty events and emits no small segment', () => {

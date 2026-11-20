@@ -29,7 +29,8 @@ describe('bmn doctor by default (102.12)', () => {
   })
 
   it('names the app and the cause in plain words, counted once', () => {
-    expect(text).toContain('2 x OpenCode offers a tool BMN does not list. Review Tools in Health.')
+    // The fixture's findings were saved before OpenCode was retired (Epic 123, 123.1 AC3): they name it as retired.
+    expect(text).toContain('2 x OpenCode (retired) offers a tool BMN does not list. Review Tools in Health.')
     expect(text).not.toContain('Tool needs attention')
   })
 

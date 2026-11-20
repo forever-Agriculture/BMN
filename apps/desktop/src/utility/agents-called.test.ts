@@ -47,8 +47,8 @@ const JUDGE_ROLE_LINE = 'judge: {description: answers typed questions about a te
 /** The example team in the newest layout with a judge on it: who receives its request, who runs its model, the agent and the role. */
 function withJudge({ receives = 'allowed', runs = 'allowed', block = JEV_BLOCK, role = JUDGE_ROLE_LINE }: { receives?: string; runs?: string; block?: string; role?: string } = {}): string {
   let text = edit(EXAMPLE, 'schema_version: 2', 'schema_version: 3')
-  text = edit(text, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\n',
-    `opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}\ngateway: {name: Gateway, hosts: [gateway.example.test], private_work: ${receives}}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
+  text = edit(text, 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\n',
+    `zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\ngateway: {name: Gateway, hosts: [gateway.example.test], private_work: ${receives}}\nmaker: {name: Maker, hosts: [], private_work: ${runs}}\n`)
   text = edit(text, '## roles\n', `## jev\n\n\`\`\`yaml\n${block}\n\`\`\`\n\n## roles\n`)
   return edit(text, 'consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\n',
     `consultant: {candidates: [astra@medium|high, fable@medium|high], then: blocked}\n${role}\n`)
@@ -265,12 +265,12 @@ describe("BMN's first proposal for a judge (65.1 AC7)", () => {
   })
 
   it('keeps the answer of a provider the team already names for that host', () => {
-    const held = parseRoster(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [opencode.ai], private_work: public_only}')).data!
+    const held = parseRoster(edit(EXAMPLE, 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}', 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\nzen-held: {name: Zen Held, hosts: [opencode.ai], private_work: public_only}')).data!
     const proposed = judgeProposal(held)!
     expect(proposed.providers.map((provider) => provider.id)).not.toContain('opencode-zen')
     const jev = proposed.agents.at(-1)!
-    expect(jev.provider).toBe('opencode-go')
+    expect(jev.provider).toBe('zen-held')
     expect(privateWorkOf(proposed, jev)).toBe('public_only')
-    expect(calledParties(proposed, jev).reason).toBe('public work only: OpenCode Go gets public work only')
+    expect(calledParties(proposed, jev).reason).toBe('public work only: Zen Held gets public work only')
   })
 })

@@ -5,13 +5,12 @@ export { NEXT_STEP, Refusal, firstLine, listDirectory, namesWebTool, optionalNam
 
 /**
  * Harness versions whose destination precedence BMN's tests were written against (Epic 60 spike,
- * 2026-10-09; OpenCode 2.0.28 on 2026-10-14, whose `opencode debug config` read the model from the
- * same global file, and 2.0.29 the same day, on which the helper form was measured, Story 70.1). Any installed version is supported (owner decision 2026-10-10: the apps
+ * 2026-10-09). Any installed version is supported (owner decision 2026-10-10: the apps
  * update faster than BMN can test them); this list only decides the word a receipt and Integrations ›
  * Health carry beside the version. The destination itself is resolved and checked at every
- * dispatch, and for OpenCode at every inspection.
+ * dispatch.
  */
-export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'], opencode: ['2.0.28', '2.0.29', '2.0.32'] }
+export const TESTED_HARNESS_VERSIONS = { codex: ['0.161.0'], claude: ['2.1.295'] }
 /**
  * Codex versions on which a test showed that `exec resume` talks to the destination the current
  * configuration resolves, not one saved with the session (60.3 AC8). A resume on any other
@@ -24,7 +23,7 @@ export const RESUME_TESTED_VERSIONS = { codex: [] }
  * runs only on a version listed here. Codex is not listed by version here at all: its fence is shown
  * by the owner's test of exactly the installed version, kept on record (63.3, `fenceStanding`).
  */
-export const RESEARCH_FENCE_VERSIONS = { claude: [], codex: [], opencode: [] }
+export const RESEARCH_FENCE_VERSIONS = { claude: [], codex: [] }
 /** A visibility record older than this proves nothing (60.3 AC5). */
 export const VISIBILITY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /** A session is bound to its receipt only this soon after the check (60.3 AC8). */
@@ -55,9 +54,6 @@ const NEXT_STEP = {
   DATA_FORBIDDEN: 'move to the next candidate in the role\'s chain (`bmn roster role <role>`); this provider gets public work only',
   PACKET_INVALID: 'build a packet of files the public repository already serves and dispatch it through env -i claude -p --safe-mode --tools \'\''
 }
-
-/** What an OpenCode command refused for its form does next (70.2); the words for Codex and Claude Code stay as they are. */
-export const OPENCODE_NEXT_STEP = 'use the OpenCode form `bmn roster role <role> --json` gives (env -i with BMN\'s folders, then opencode run --standalone --format json --agent bmn-helper -m <model>#<effort> --title <title>, the prompt on standard input), exactly as documented'
 
 /** The one checked way to the web (64.1), in the words every hint uses. */
 const WEB_QUESTION_COMMAND = 'bmn research ask'

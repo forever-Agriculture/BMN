@@ -5,6 +5,7 @@ import {
   MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
   progressShowsStopped,
+  RETIRED_APP_LABELS,
   RETIRED_APP_NAMES,
   USAGE_NOTICE_PERCENT,
   usageClock,
@@ -78,8 +79,8 @@ export function sessionStatus(
 const AGENT_TAGS: Readonly<Record<string, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
-  opencode: 'OpenCode',
-  // Cursor was retired (Epic 71); an old session that ran it, or a saved set that still starts it, keeps its name.
+  // Cursor and OpenCode were retired (Epics 71 and 123); an old session that ran one, or a saved set that still starts it, keeps its name.
+  opencode: RETIRED_APP_LABELS.opencode,
   cursor: RETIRED_APP_NAMES.cursor,
   'cursor-agent': RETIRED_APP_NAMES.cursor,
   gemini: 'Gemini',
@@ -231,7 +232,6 @@ export function planUseMissingWords(usage: Pick<SessionUsage, 'agent' | 'reading
   switch (usage.agent) {
     case 'claude': return 'No reading yet. Run `bmn statusline install` once.'
     case 'codex': return 'No reading yet; Codex writes one after its first reply.'
-    case 'opencode': return 'Not reported by OpenCode'
     default: return 'No reading yet'
   }
 }
@@ -277,8 +277,8 @@ export function expiryText(expiresAt: string | null, now: number): string | null
 const ORIGIN_AGENT_NAMES: Readonly<Record<HookEventRecordAgent, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
-  opencode: 'OpenCode',
-  // A request saved before Cursor was retired still reads "from Cursor stop" (Epic 71).
+  // A request saved before Cursor or OpenCode was retired still reads "from Cursor stop" (Epics 71 and 123).
+  opencode: RETIRED_APP_LABELS.opencode,
   cursor: RETIRED_APP_NAMES.cursor,
   terminal: 'the terminal'
 })

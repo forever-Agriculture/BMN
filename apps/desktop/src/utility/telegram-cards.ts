@@ -1,6 +1,6 @@
 // MODULE: telegram-cards.ts - the Telegram card for a page: escaped HTML, the length rule, buttons and outcome lines (Story 30.3)
 import {
-  RETIRED_APP_NAMES,
+  RETIRED_APP_LABELS,
   stripFormatCharacters,
   type AttentionPermissionPrompt,
   type AttentionQuestionsPrompt,
@@ -51,8 +51,7 @@ export interface RenderedCard {
 const AGENT_NAMES: Readonly<Record<ModelOriginAgent | RosterRetiredHarness, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
-  opencode: 'OpenCode',
-  ...RETIRED_APP_NAMES
+  ...RETIRED_APP_LABELS
 })
 
 export function escapeHtml(text: string): string {
@@ -496,8 +495,7 @@ export const REFUSAL_WORDS: Readonly<Record<AnswerRefusal, string>> = Object.fre
   unsupported: 'Nothing was sent: this kind cannot be answered from Telegram.',
   'permissions-off': 'Nothing was sent: permission answers from Telegram are off.',
   claimed: 'Another answer is already on its way.',
-  'not-delivered': 'Nothing was sent: the agent did not pick up the answer.',
-  'api-refused': 'OpenCode rejected the answer; nothing was applied.'
+  'not-delivered': 'Nothing was sent: the agent did not pick up the answer.'
 })
 
 export function endingLine(ending: CardEnding): string {

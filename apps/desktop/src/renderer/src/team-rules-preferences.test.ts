@@ -91,8 +91,7 @@ const DATA: RosterDataShape = {
   exceptions: [],
   harness_routes: [
     { harness: 'claude', provider: 'anthropic', basis: 'observed-default' },
-    { harness: 'codex', provider: 'openai', basis: 'observed-default', accepted_versions: ['0.170.0'] },
-    { harness: 'opencode', provider: 'zai', basis: 'owner-declared' }
+    { harness: 'codex', provider: 'openai', basis: 'observed-default', accepted_versions: ['0.170.0'] }
   ]
 }
 
@@ -254,7 +253,7 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
   const state = team({ snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, data: OLD }, approved: { ...SNAPSHOT.approved!, data: OLD } }, data: OLD, base: OLD, approved: OLD })
 
   it('reads it, says Cursor was retired and proposes removing those lines in the one card; nothing changes until approved (Story 75.10)', () => {
-    const proposals = teamProposals(OLD, { lunaListed: false, researchers: null })
+    const proposals = teamProposals(OLD, { researchers: null })
     expect(proposals?.clauses[0]).toBe('Cursor was retired on 14 Oct 2026, so Composer, the Cursor route and the Cursor provider are taken out of the team file')
     const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: state, page: { name: 'agents' }, go: noop, proposals }))
     // A head line, then each proposal on a line of its own (docs/design.md W2).
@@ -270,7 +269,7 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
     expect(markup).toContain('<button type="button" class="switch" role="switch" aria-checked="false" aria-label="Composer on" disabled="">')
     expect(markup).toContain('aria-checked="true" aria-label="Sol on">')
     expect(pageMarkup({ name: 'agents' })).not.toContain('was retired')
-    expect(retiredAppClause({ agents: [], routes: [], providers: [], lists: true }))
+    expect(retiredAppClause({ agents: [], routes: [], providers: [], lists: true, apps: ['cursor'] }))
       .toBe('Cursor was retired on 14 Oct 2026, so Cursor from the apps a skill or tool is kept to is taken out of the team file')
   })
 
@@ -278,7 +277,7 @@ describe('Team › a team file that still names Cursor (Epic 71, 71.2 AC3)', () 
     const markup = pageMarkup({ name: 'agent', id: 'composer' }, state)
     const appRow = markup.slice(markup.indexOf('>Agent app<'), markup.indexOf('Pick an app'))
     expect([...appRow.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>([^<]+)</g)].map((match) => `${match[2]} ${match[1]}`))
-      .toEqual(['Claude Code false', 'Codex false', 'OpenCode false', 'Called by BMN false'])
+      .toEqual(['Claude Code false', 'Codex false', 'Called by BMN false'])
     expect(markup).toContain('<p class="preferences-help">Cursor was retired on 14 Oct 2026. Pick an app to keep Composer, or use the proposal on Team to remove it.</p>')
     // The page head agrees with the card, whose switch is off (Fable's 71.3 check).
     expect(words(markup).replace(/\s+/g, ' ')).toContain('Composer Retired app')
@@ -477,14 +476,14 @@ describe('the approval footer (60.5 AC7)', () => {
       hasStaged: true, preview,
       confirmation: {
         request: { kind: 'staged', data: DATA }, title: 'Approve these changes', action: 'Approve',
-        preview: { ...preview, teamUpdate: [{ harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', kind: 'full', diff: '-old\n+new', binding: 'b' }, { harness: 'opencode', path: '/home/synthetic/.config/opencode/AGENTS.md', kind: 'public', diff: '', binding: 'c' }] }
+        preview: { ...preview, teamUpdate: [{ harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', kind: 'full', diff: '-old\n+new', binding: 'b' }, { harness: 'codex', path: '/home/synthetic/.codex/AGENTS.md', kind: 'public', diff: '', binding: 'c' }] }
       }
     }))
     expect(markup).toContain('role="group" aria-label="Approve these changes"')
     expect(markup).toContain('<div class="consequence">Also updates the Team line in 2 rules files</div>')
     const path = (file: string): string => `<span class="target-path"><span class="path mono" title="/home/synthetic/${file}">~/${file}</span></span>`
     expect(markup).toContain(`<span>Claude Code</span> ${path('.claude/CLAUDE.md')} <span class="faint">Full rules</span>`)
-    expect(markup).toContain(`<span>OpenCode</span> ${path('.config/opencode/AGENTS.md')} <span class="faint">Public sections only</span>`)
+    expect(markup).toContain(`<span>Codex</span> ${path('.codex/AGENTS.md')} <span class="faint">Public sections only</span>`)
     expect(markup).toContain('<pre class="diff">-old\n+new</pre>')
     expect([...markup.matchAll(/>([A-Za-z]+)<\/button>/g)].map((match) => match[1])).toEqual(['Approve', 'Cancel'])
   })
@@ -606,21 +605,18 @@ const RULES: RulesSnapshot = {
   master: { exists: true, text: '# Rules\n<!-- bmn:public -->\nAnswer first.\n<!-- /bmn:public -->\nThe team: <!-- bmn:team -->.\n', hash: 'a'.repeat(64), bytes: 92, savedAt: '2026-10-09T21:50:00.000Z', errors: [] },
   renderings: [
     { harness: 'claude', text: 'FULL TEXT', bytes: 2048, kind: 'full', reason: '', teamForm: 'names by app' },
-    { harness: 'opencode', text: 'PUBLIC TEXT', bytes: 100, kind: 'public', reason: "BMN can't confirm where OpenCode sends data", teamForm: 'names by app' }
   ],
   health: {
     state: 'checked', checkedAt: '2026-10-09T22:13:00.000Z', ok: false,
     targets: [
       { harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', state: 'current', kind: 'full', reason: '' },
       { harness: 'codex', path: '/home/synthetic/.codex/AGENTS.md', state: 'stale', kind: 'full', reason: '' },
-      { harness: 'opencode', path: '/home/synthetic/.config/opencode/AGENTS.md', state: 'missing', kind: 'public', reason: "BMN can't confirm where OpenCode sends data" }
     ]
   },
   probes: [{ harness: 'claude', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', stale: true }, { harness: 'codex', outcome: null }],
   apps: [
     { harness: 'claude', version: '2.1.295', program: '/home/synthetic/.local/bin/claude', programTarget: '/home/synthetic/.local/share/claude/versions/2.1.295', basis: 'default', provider: 'anthropic', host: null, sources: [], versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' },
     { harness: 'codex', version: '0.171.0', program: '/home/synthetic/.npm-global/bin/codex', basis: 'default', provider: 'openai', host: null, sources: [], versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.' },
-    { harness: 'opencode', version: null, program: null, basis: 'unknown', provider: null, host: null, sources: [], versionState: 'unknown', versionNote: 'OpenCode is not installed, or its version cannot be read.' }
   ],
   context: [
     { harness: 'codex', path: '/home/synthetic/.codex/config.toml', exists: true, limit: 380000, compact: 342000, version: '0.171.0', limitProven: false, compactProven: false,
@@ -632,10 +628,10 @@ const RULES: RulesSnapshot = {
   autoTests: { running: null, stopped: [] },
   readOnlyRoles: { held: ['epic-reviewer'], proposed: [] },
   skills: {
-    source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], ownLeft: [], pending: 1, exposed: 1,
+    source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], ownLeft: [], pending: 1, exposed: 0,
     skills: [
-      { name: 'alpha', description: 'First synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'current', opencode: 'exposed' } },
-      { name: 'beta', description: 'Second synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'missing', opencode: 'read-directly' } },
+      { name: 'alpha', description: 'First synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'current' } },
+      { name: 'beta', description: 'Second synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'missing' } },
       { name: 'Bad_Name', description: '', readable: false, detail: 'the name must be lowercase letters, digits and hyphens', states: {} }
     ],
     apps: [
@@ -644,15 +640,13 @@ const RULES: RulesSnapshot = {
         loadTestable: true, listing: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code named a test skill', stale: true }, loading: null },
       { harness: 'codex', version: '0.171.0', supported: true, testable: true, location: '/home/synthetic/.agents/skills', format: 'link', readsSource: false, kind: 'full', kindReason: '', state: 'Missing',
         test: { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', outcome: 'pass', detail: 'Codex reads skills from ~/.agents/skills' }, loadTestable: true, listing: null, loading: null },
-      { harness: 'opencode', version: '1.18.32', supported: true, testable: true, location: null, format: null, readsSource: true, kind: 'public', kindReason: 'OpenCode Go gets public work only', state: 'Exposed',
-        test: { at: '2026-10-09T20:00:00.000Z', version: '1.18.32', outcome: 'pass', detail: 'OpenCode reads skills from ~/.claude/skills' }, loadTestable: false, listing: null, loading: null }
     ]
   },
   tools: {
-    pending: 2, exposed: 1, blocked: 1,
+    pending: 2, exposed: 0, blocked: 1,
     tools: [
-      { id: 'docs', states: { claude: 'current', codex: 'missing', opencode: 'excluded' }, details: {} },
-      { id: 'notes', states: { claude: 'edited-outside', codex: 'blocked', opencode: 'exposed' }, details: { codex: 'Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN' } },
+      { id: 'docs', states: { claude: 'current', codex: 'missing' }, details: {} },
+      { id: 'notes', states: { claude: 'edited-outside', codex: 'blocked' }, details: { codex: 'Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN' } },
       { id: 'browser', states: {}, details: {} }
     ],
     apps: [
@@ -660,8 +654,6 @@ const RULES: RulesSnapshot = {
         test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code listed the stand-in tool' }, unlisted: [{ id: 'old-search', state: 'unmanaged', managed: false }] },
       { harness: 'codex', version: '0.171.0', supported: true, path: '/home/synthetic/.codex/config.toml', readable: true, kind: 'full', kindReason: '', state: 'Missing', variable: false, isolation: false,
         test: { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', outcome: 'pass', detail: 'Codex listed the stand-in tool' }, unlisted: [] },
-      { harness: 'opencode', version: '1.18.32', supported: true, path: '/home/synthetic/.config/opencode/opencode.jsonc', readable: true, link: '/home/synthetic/dotfiles/opencode.jsonc', kind: 'public', kindReason: 'OpenCode Go gets public work only', state: 'Exposed', variable: true, isolation: false,
-        test: { at: '2026-10-09T20:00:00.000Z', version: '1.18.32', outcome: 'pass', detail: 'OpenCode listed the stand-in tool' }, unlisted: [{ id: 'old-search', state: 'exposed', managed: false }] }
     ]
   },
   transactions: [
@@ -676,7 +668,6 @@ const RULES: RulesSnapshot = {
     state: 'checked', checkedAt: '2026-10-09T21:31:00.000Z', apps: [
       { harness: 'claude', file: '/home/synthetic/.claude/settings.json', state: 'checked', placed: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: [], left: [] },
       { harness: 'codex', file: '/home/synthetic/.codex/hooks.json', state: 'installed', placed: ['PreToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: ['SessionStart', 'SessionEnd'], left: [{ event: 'PostToolUse', why: 'changed' }, { event: 'Interrupt', why: 'foreign' }] },
-      { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'not-set-up', placed: [], older: [], installed: [], left: [] }
     ]
   }
 }
@@ -696,7 +687,7 @@ describe('Integrations › Rules (60.6 AC1–AC3)', () => {
     renderings: [], changesMaster: true, planHash: 'p'.repeat(64), blocked: [],
     targets: [
       { harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', kind: 'updates BMN\'s file', change: 'stale', diff: '-old\n+new', rendering: 'full' },
-      { harness: 'opencode', path: '/home/synthetic/.config/opencode/AGENTS.md', kind: 'creates the file', change: 'missing', diff: '+new', rendering: 'public' }
+      { harness: 'codex', path: '/home/synthetic/.codex/AGENTS.md', kind: 'creates the file', change: 'missing', diff: '+new', rendering: 'public' }
     ]
   }
 
@@ -713,7 +704,7 @@ describe('Integrations › Rules (60.6 AC1–AC3)', () => {
     expect(sheet).toContain('<button type="button" class="primary">Save</button><button type="button">Cancel</button>')
     expect(words(sheet)).toContain('Each app&#x27;s file below is written at once. Undo, under Earlier versions, puts the rules and every file back.')
     expect(sheet).toMatch(/<summary><span>Claude Code<\/span>.*?<span class="muted">\+1 −1<\/span><\/span><span class="muted">Full rules<\/span><\/summary>/)
-    expect(sheet).toMatch(/<summary><span>OpenCode<\/span>.*?<span class="muted">New file<\/span><\/span><span class="muted">Public sections only<\/span><\/summary>/)
+    expect(sheet).toMatch(/<summary><span>Codex<\/span>.*?<span class="muted">New file<\/span><\/span><span class="muted">Public sections only<\/span><\/summary>/)
     expect(sheet).not.toContain('Install…')
     // An app whose destination no longer inspects as approved is named, and not written.
     const blocked = words(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...SAVE, blocked: [{ harness: 'codex', reason: 'it sends data to a custom host; set its destination again' }] } } })))
@@ -729,7 +720,7 @@ describe('Integrations › Rules (60.6 AC1–AC3)', () => {
   })
 
   it('heads the page with the save, a file BMN could not write first, and keeps Save… on while an app differs (Story 75.9)', () => {
-    expect(markup).toMatch(/<span class="faint"><span class="needs-dot"[^>]*><\/span>Saved [^<]+ · Codex and OpenCode not written<\/span>/)
+    expect(markup).toMatch(/<span class="faint"><span class="needs-dot"[^>]*><\/span>Saved [^<]+ · Codex not written<\/span>/)
     expect(markup).not.toContain('Install…')
     // A clean draft can still be saved: that writes the saved rules into the apps whose file differs.
     expect(markup).toContain('<button type="button" title="Writes the saved rules into the apps whose file differs">Save…</button>')
@@ -740,8 +731,8 @@ describe('Integrations › Rules (60.6 AC1–AC3)', () => {
   })
 
   it('says after a save where the rules went, a failure first, with a small Undo that opens its sheet there (Story 75.9)', () => {
-    const notice = rulesMarkup('editor', rules({ notice: { ok: true, text: 'Saved and installed to Claude Code, Codex and OpenCode', undo: 't5' } }))
-    expect(notice).toContain('<p class="preferences-success" role="status">Saved and installed to Claude Code, Codex and OpenCode · <button type="button" class="small">Undo</button></p>')
+    const notice = rulesMarkup('editor', rules({ notice: { ok: true, text: 'Saved and installed to Claude Code and Codex', undo: 't5' } }))
+    expect(notice).toContain('<p class="preferences-success" role="status">Saved and installed to Claude Code and Codex · <button type="button" class="small">Undo</button></p>')
     const undo: RulesPlan = {
       ok: true, code: 'OK', planHash: 'u'.repeat(64), master: { path: RULES.masterPath, becomes: 'its earlier bytes', diff: '-new\n+old' },
       targets: [{ harness: 'claude', path: '/home/synthetic/.claude/CLAUDE.md', kind: 'its earlier bytes', change: 'file', diff: '-new\n+old' }]
@@ -862,18 +853,17 @@ describe('Integrations › Health (60.6 AC4)', () => {
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
     // Story 96.6: the head says when Health was read, that this is past the Health rule's limit, and which sections hold the issues; only it is a live status.
-    expect(markup).toContain(`<span class="faint"><span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks</span></span>`)
+    expect(markup).toContain(`<span class="faint"><span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 8 need you: Rules files, Skills, Tools, Context limits, Hooks</span></span>`)
     // The skills' and tools' entry counts stay in their sections; the head keeps when Health was read and the issues.
-    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks</span>`)
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 }, tools: { ...RULES.tools, pending: 0, exposed: 0 } } }))).toContain(`<span role="status">Read ${shortDate('2026-10-09T22:13:00.000Z')} · stale · 8 need you: Rules files, Skills, Tools, Context limits, Hooks</span>`)
     // Story 75.7: Health, Skills and Tools read themselves again by Health's rule; no button asks for it.
     for (const page of [markup, rulesMarkup('skills'), rulesMarkup('tools')]) expect(page).not.toContain('Check now')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current<span class="muted"> · Full rules<\/span>/)
     // A loading test sends one prompt, and says so (Story 75.8 AC2).
     expect(markup).toContain(`<span class="faint">Rules test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale · one prompt sent</span>`)
     expect(markup).toMatch(/data-state="stale">.*?aria-label="Needs you".*?Differs from the rules · Save the rules to rewrite it<\/span><span class="faint">Rules test not run yet<\/span>/)
-    expect(markup).toMatch(/data-state="missing">.*?Missing · Save the rules to write it<\/span><span class="faint">No loading test<\/span>/)
     // A file that differs is a failure, listed first (Story 75.9).
-    expect([...markup.matchAll(/data-state="([a-z-]+)"/g)].map((match) => match[1])).toEqual(['stale', 'missing', 'current'])
+    expect([...markup.matchAll(/data-state="([a-z-]+)"/g)].map((match) => match[1])).toEqual(['stale', 'current'])
     expect(targetStateWords('edited-outside')).toBe('Differs · edited outside BMN · Save the rules to rewrite it')
     // Story 96.6: the line names its scope, the rules loading test, never the app's routing test.
     expect(testLine(undefined)).toBe('Rules test not run yet')
@@ -882,16 +872,15 @@ describe('Integrations › Health (60.6 AC4)', () => {
   })
 
   it('counts in its status each cause a row with the Needs-you dot shows, each decided the way its row decides it (Stories 75.10, 96.6)', () => {
-    // Nine rows carry the dot: two rules files, two apps' skills, three apps' tools, one context limit and one hook file.
-    expect(markup.split('<div class="health-row"').slice(1).filter((row) => row.includes('needs-dot'))).toHaveLength(9)
-    // They show twelve causes, one app × one area × one cause each (96 Astra recheck): rules stale and missing; skills
-    // missing (Codex) and exposed (OpenCode); tools edited outside (Claude Code), missing and blocked (Codex), exposed and an
-    // unlisted connection exposed (OpenCode); Sol's context limit; Codex's PostToolUse and Interrupt hooks.
-    expect(healthNeedsCount(RULES)).toBe(12)
-    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(8)
-    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Read [^·]+ · stale · 8 need you: Skills, Tools, Context limits\s/)
+    // Six rows carry the dot: one rules file, one app's skills, two apps' tools, one context limit and one hook file.
+    expect(markup.split('<div class="health-row"').slice(1).filter((row) => row.includes('needs-dot'))).toHaveLength(6)
+    // They show eight causes, one app × one area × one cause each (96 Astra recheck): rules stale; skills missing (Codex);
+    // tools edited outside (Claude Code), missing and blocked (Codex); Sol's context limit; Codex's PostToolUse and Interrupt hooks.
+    expect(healthNeedsCount(RULES)).toBe(8)
+    expect(healthNeedsCount({ ...RULES, health: { state: 'failed', checkedAt: 'x', reason: 'unreadable' }, hooks: null })).toBe(5)
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: { state: 'failed', checkedAt: '2026-10-09T22:13:00.000Z', reason: 'unreadable' }, hooks: null } })))).toMatch(/Read [^·]+ · stale · 5 need you: Skills, Tools, Context limits\s/)
     // Within each section those rows come first, the rest in their order.
-    expect([...markup.matchAll(/data-skills="([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Missing', 'Exposed', 'Reads the source'])
+    expect([...markup.matchAll(/data-skills="([A-Za-z ]+)"/g)].map((match) => match[1])).toEqual(['Missing', 'Reads the source'])
     expect(needsFirst([1, 2, 3, 4], (row) => row % 2 === 0)).toEqual([2, 4, 1, 3])
   })
 
@@ -932,30 +921,12 @@ describe('Integrations › Health (60.6 AC4)', () => {
 
   it('says what BMN found and did in each app\'s hook file at start, failure first, with no button (Story 75.9)', () => {
     expect(markup).toContain('<h4 class="group-head" id="health-hooks">Hooks<span class="caption">BMN&#x27;s entries in each app&#x27;s hook file, installed at start</span></h4>')
-    expect([...markup.matchAll(/data-hooks="([a-z-]+)"><span>([A-Za-z ]+)<\/span>/g)].map((match) => `${match[2]} ${match[1]}`)).toEqual(['Codex left', 'Claude Code in-place', 'OpenCode in-place'])
+    expect([...markup.matchAll(/data-hooks="([a-z-]+)"><span>([A-Za-z ]+)<\/span>/g)].map((match) => `${match[2]} ${match[1]}`)).toEqual(['Codex left', 'Claude Code in-place'])
     expect(markup).toMatch(/data-hooks="left">.*?<span><span class="needs-dot"[^>]*><\/span>5 entries in place · 2 left as they are<\/span><span class="muted">PostToolUse · changed<\/span><span class="muted">Interrupt · not BMN&#x27;s<\/span><span class="muted">Added at start: SessionStart, SessionEnd<\/span>/)
     expect(markup).toMatch(/data-hooks="in-place"><span>Claude Code<\/span>.*?<span class="muted">9 entries in place<\/span>/)
-    expect(markup).toContain('Not set up on this computer')
     expect(words(markup)).toMatch(/Checked at start, \d\d:\d\d\. BMN adds an entry only where an event has none of its own/)
     expect(markup).not.toContain('Check configured hooks')
     expect(hookRowWords({ harness: 'claude', file: 'f', state: 'left', placed: [], older: [], installed: [], left: [], why: 'unparsable' })).toEqual({ needs: true, head: 'The file · the file is not valid JSON · left as it is', lines: [] })
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin', 'cli.json'], older: ['plugin'], installed: [], left: [] }))
-      .toEqual({ needs: false, head: '2 entries in place', lines: ['OpenCode 1\'s plugin file is still there too · `bmn hooks install opencode` removes it'] })
-    // Story 96.6: an earlier plugin BMN could not replace cannot tell the owner's stop from a finished turn; never harmless older wording.
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }))
-      .toEqual({ needs: true, head: 'The file · could not be written · left as it is',
-        lines: ['Older plugin · stopped turns cannot be distinguished. Automatic wake is unavailable for this session until a qualified plugin is loaded.'] })
-    // OpenCode 1's file beside BMN's current plugin, with a cli.json BMN cannot add to, is no plugin without stop protection (96 review).
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: ['plugin'], installed: [], left: [], why: 'unparsable' }).lines)
-      .toEqual(['OpenCode 1\'s plugin file is still there too · `bmn hooks install opencode` removes it'])
-    // An unusable cli.json no longer keeps the earlier plugin: it is upgraded, and the row says so.
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'left', placed: ['plugin'], older: [], installed: [], upgraded: ['plugin'], left: [], why: 'numbers' }).lines)
-      .toEqual(['Upgraded at start: plugin · a running OpenCode is woken only once it reports the new plugin'])
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'checked', placed: ['plugin'], older: [], installed: [], left: [{ event: 'plugin', why: 'changed' }] }).lines)
-      .toEqual(['plugin · changed · Not BMN\'s · BMN leaves it'])
-    // An upgrade on disk is said as one, never as a loaded plugin.
-    expect(hookRowWords({ harness: 'opencode', file: 'f', state: 'installed', placed: ['plugin', 'cli.json'], older: [], installed: [], upgraded: ['plugin'], left: [] }))
-      .toEqual({ needs: false, head: '2 entries in place', lines: ['Upgraded at start: plugin · a running OpenCode is woken only once it reports the new plugin'] })
     expect(hookRowWords({ harness: 'claude', file: 'f', state: 'checked', placed: ['PreToolUse'], older: ['PreToolUse'], installed: [], left: [] }).lines)
       .toEqual(['PreToolUse · older compatible wording'])
     expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, hooks: null } })))).toContain('Not checked yet: BMN checks them each time it starts.')
@@ -965,12 +936,13 @@ describe('Integrations › Health (60.6 AC4)', () => {
   it('offers no Test…: Test again… only after a failure or once BMN stopped trying, and only where the app may receive private work (Story 75.8)', () => {
     expect(markup).not.toContain('Test…')
     expect(markup).not.toMatch(/aria-label="Test [A-Za-z ]+ again"/)
-    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p></details><p class="preferences-help">It is off for OpenCode, which gets only the public sections.</p>')
+    expect(markup).toContain('<p class="preferences-help">A loading test starts the app once with the rules in one prompt; BMN runs it by itself after updates and rules changes.</p></details>')
+    expect(markup).not.toContain('It is off for')
     const allPublic = RULES.health.state === 'checked' ? { ...RULES.health, targets: RULES.health.targets.map((target) => ({ ...target, kind: 'public' as const })) } : RULES.health
-    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: allPublic } })))).toContain('It is off for Claude Code, Codex and OpenCode, which get only the public sections.')
+    expect(words(rulesMarkup('health', rules({ snapshot: { ...RULES, health: allPublic } })))).toContain('It is off for Claude Code and Codex, which get only the public sections.')
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES,
       probes: [{ harness: 'claude', outcome: 'fail', at: '2026-10-09T20:00:00.000Z', version: '2.1.295' }, { harness: 'codex', outcome: 'inconclusive', at: '2026-10-09T20:00:00.000Z', version: '0.171.0', by: 'bmn' }],
-      autoTests: { running: null, stopped: [{ kind: 'rules', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }, { kind: 'rules', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } } }))
+      autoTests: { running: null, stopped: [{ kind: 'rules', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } } }))
     // A failed test puts a dot on a current file too, so all three need him and keep their order (Story 75.10).
     expect([...after.matchAll(/aria-label="Test ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
     expect(after).toContain('<span class="faint">BMN stopped after 3 tries on 0.171.0</span>')
@@ -981,18 +953,15 @@ describe('Integrations › Health (60.6 AC4)', () => {
   it('shows each agent app: version, whether it is tested, where it sends data and what is recorded', () => {
     expect(markup).toContain('<span class="mono">2.1.295</span> <span class="muted" title="BMN tested how this version picks where to send data.">· routing-tested</span>')
     expect(markup).toContain('<span class="mono">0.171.0</span> <span class="muted" title="Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.">· newer than routing-tested</span>')
-    // An app that is not there is said once, not as "not found · not checked".
-    expect(markup).toContain('<span class="health-state"><span class="mono" title="OpenCode is not installed, or its version cannot be read.">not found</span></span>')
     const unread = rulesMarkup('health', rules({ snapshot: { ...RULES, apps: RULES.apps.map((app) => (app.harness === 'codex' ? { ...app, version: null, versionState: 'unknown' as const, versionNote: 'Codex is not installed, or its version cannot be read.' } : app)) } }))
     expect(unread).toContain('<span class="mono" title="Codex is not installed, or its version cannot be read.">version not read</span><span class="path mono wrap" title="/home/synthetic/.npm-global/bin/codex">')
     expect(markup).toContain('<span>Sends data to Anthropic&#x27;s own servers</span><span class="faint">Recorded: Anthropic, as inspected</span>')
-    expect(markup).toContain('<span>Where it sends data is unknown</span><span class="faint">Recorded: Z.ai, on your word</span>')
     expect(destinationWords({ basis: 'explicit', provider: null, host: 'proxy.example.com' }, (id) => id)).toBe('Sends data to a custom host, proxy.example.com')
   })
 
   it('offers no Accept step: every installed version is supported; a list kept from the earlier rule can only be removed', () => {
     expect(markup).not.toContain('Accept version')
-    expect([...markup.matchAll(/aria-label="Set the destination of ([^"]+)"/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex', 'OpenCode'])
+    expect([...markup.matchAll(/aria-label="Set the destination of ([^"]+)"/g)].map((match) => match[1])).toEqual(['Claude Code', 'Codex'])
     expect(markup).toContain('Accepted earlier, no longer needed')
     expect(markup).toContain('aria-label="Remove accepted version 0.170.0 of Codex"')
     expect(markup).toContain('Every installed version is supported')
@@ -1001,7 +970,8 @@ describe('Integrations › Health (60.6 AC4)', () => {
 
 describe('Integrations › Health: Update… (60.6: the app\'s own updater, shown before anything runs)', () => {
   const markup = rulesMarkup('health')
-  const apps = RULES.apps
+  // A third, made-up row: Codex where BMN finds no program, as on a computer without it.
+  const apps = [...RULES.apps, { ...RULES.apps[1]!, version: null, program: null, versionState: 'unknown' as const, versionNote: 'Codex is not installed, or its version cannot be read.' }]
   const sheet = (index: number, extra: Partial<Parameters<typeof UpdateSheet>[0]> = {}): string =>
     renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCopied: noop, onClose: noop, ...extra }))
 
@@ -1015,16 +985,16 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
 
   it('offers Update… on every app, off where there is no program to update, and opens no sheet by itself', () => {
     expect([...markup.matchAll(/<button type="button" class="small"( disabled="")? (?:title="[^"]*" )?aria-label="Update ([^"]+)" aria-expanded="false"(?: title="([^"]*)")?>Update…<\/button>/g)].map((match) => [match[2], match[1] !== undefined, match[3]]))
-      .toEqual([['Claude Code', false, undefined], ['Codex', false, undefined], ['OpenCode', true, 'BMN finds no OpenCode program to update']])
+      .toEqual([['Claude Code', false, undefined], ['Codex', false, undefined]])
+    const none = rulesMarkup('health', rules({ snapshot: { ...RULES, apps: [RULES.apps[0]!, apps[2]!] } }))
+    expect(none).toContain('aria-label="Update Codex" aria-expanded="false" title="BMN finds no Codex program to update">Update…</button>')
     expect(markup).not.toContain('own updater does this')
   })
 
   it('the command is the program by its full path and the app\'s own update word, quoted for a shell', () => {
     expect(updateCommand({ harness: 'claude', program: '/home/synthetic/.local/bin/claude' })).toBe('/home/synthetic/.local/bin/claude update')
     expect(updateCommand({ harness: 'codex', program: '/home/synthetic/.npm-global/bin/codex' })).toBe('/home/synthetic/.npm-global/bin/codex update')
-    expect(updateCommand({ harness: 'opencode', program: '/usr/local/bin/opencode' })).toBe('/usr/local/bin/opencode upgrade')
     expect(updateCommand({ harness: 'codex', program: "/home/synthetic/My Apps/it's/codex" })).toBe("'/home/synthetic/My Apps/it'\\''s/codex' update")
-    expect(updateCommand({ harness: 'opencode', program: null })).toBeNull()
   })
 
   it('the sheet names the program, where a link leads, the exact command and what happens afterwards, and runs nothing', () => {
@@ -1113,7 +1083,8 @@ describe('Integrations › Health: Update… (60.6: the app\'s own updater, show
 
   it('with no program found the command cannot be copied; a check that is running is said by Health, not the sheet', () => {
     const missing = sheet(2, { busy: true })
-    expect(words(missing).replace(/\s+/g, ' ')).toContain('Installed version not read Program not found Command no program found')
+    expect(words(missing).replace(/\s+/g, ' ')).toContain('Installed version not read Program not found')
+    expect(words(missing).replace(/\s+/g, ' ')).toContain('Command no program found')
     expect(missing).toContain('<button type="button" class="primary" disabled="">Copy command</button>')
     expect(missing).not.toContain('Checking…')
     // Story 96.6: Refreshing… only while BMN re-reads the machine; an action the owner started leaves the head as it was.
@@ -1248,7 +1219,7 @@ describe('Health counts each issue once (Story 96.6)', () => {
   type Doctor = NonNullable<RulesSnapshot['doctor']>
   type Row = Doctor['rows'][number]
   const AT = Date.parse('2026-10-09T21:31:00.000Z')
-  const problem = (code: string, item: number, app?: 'claude' | 'codex' | 'opencode', extra: { count?: number; reason?: string; cause?: string } = {}) =>
+  const problem = (code: string, item: number, app?: 'claude' | 'codex', extra: { count?: number; reason?: string; cause?: string } = {}) =>
     ({ code, item, ...(app ? { app } : {}), ...(extra.count ? { count: extra.count } : {}), ...(extra.cause ? { cause: extra.cause } : {}), reason: extra.reason ?? `${code} reason`, fix: `${code} fix` })
   const doctorRow = (check: Row['check'], extra: Partial<Row> = {}): Row => ({ check, state: 'passed', problems: [], leftovers: [], checkedAt: AT, stale: false, ...extra })
   // The audit's 335 leftovers: synthetic numeric locations, in three groups.
@@ -1258,17 +1229,18 @@ describe('Health counts each issue once (Story 96.6)', () => {
   })
   const doctor = (rows: Row[]): Doctor => ({ schemaVersion: 1, locationHelp: 'Names are withheld.', running: false, cycleStartedAt: AT, attemptStartedAt: AT, retryUsed: false,
     retryAtNextStart: false, error: null, rows, problemCount: 0, allWell: false, exitCode: 1 })
-  // The audit: three tool connections and an earlier plugin in OpenCode, a limit not applied, Doctor's own view of both, one sign-in finding and the leftovers.
+  // The audit: three tool connections exposed and a hook entry missing in Codex, a limit not applied, Doctor's own view of both, one sign-in finding and the leftovers.
+  const exposed = (id: string) => ({ id, state: 'exposed' as const, managed: false })
   const AUDIT: RulesSnapshot = {
     ...RULES,
+    tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => app.harness === 'codex' ? { ...app, unlisted: [exposed('a'), exposed('b'), exposed('c')] } : app) },
     hooks: { state: 'checked', checkedAt: '2026-10-09T21:31:00.000Z', apps: [
       RULES.hooks!.state === 'checked' ? RULES.hooks!.apps[0]! : (undefined as never),
-      { harness: 'codex', file: '/home/synthetic/.codex/hooks.json', state: 'checked', placed: ['PreToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'], older: [], installed: [], left: [] },
-      { harness: 'opencode', file: '/home/synthetic/.config/opencode/bmn/tui.ts', state: 'failed', placed: [], older: [], installed: [], left: [], why: 'failed', earlier: ['plugin'] }
+      { harness: 'codex', file: '/home/synthetic/.codex/hooks.json', state: 'checked', placed: ['PreToolUse', 'UserPromptSubmit', 'SessionStart', 'SessionEnd'], older: [], installed: [], left: [{ event: 'Stop', why: 'changed' }] },
     ] },
     doctor: doctor([
-      doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'opencode', { cause: 'older-wording:plugin' })] }),
-      doctorRow('tools', { state: 'problems', problems: [1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })) }),
+      doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'codex', { cause: 'missing:Stop' })] }),
+      doctorRow('tools', { state: 'problems', problems: [1, 2, 3].map((item) => problem('tool-check', item, 'codex', { cause: 'unlisted-exposed' })) }),
       doctorRow('claude', { state: 'problems', problems: [problem('auth-check', 1, 'claude', { reason: 'Authentication needs attention' })] }),
       doctorRow('leftovers', { state: 'partial', problems: [problem('leftover-source-changed', 1, undefined, { count: 3, reason: '3 sources changed during the check' })], leftovers })
     ])
@@ -1277,9 +1249,9 @@ describe('Health counts each issue once (Story 96.6)', () => {
   it('counts a Doctor finding of the same app and area as its Health row once, there, and names the sections in the head', () => {
     const without = healthNeeds({ ...AUDIT, doctor: undefined })
     const audit = healthNeeds(AUDIT)
-    expect(without.keys).toContain('tools:opencode:unlisted-exposed')
-    expect(without.keys).toContain('hooks:opencode:older-wording:plugin')
-    // Only the sign-in finding is Doctor's own: the hook and the three tool findings are the OpenCode rows above, the coverage note no issue.
+    expect(without.keys).toContain('tools:codex:unlisted-exposed')
+    expect(without.keys).toContain('hooks:codex:missing:Stop')
+    // Only the sign-in finding is Doctor's own: the hook and the three tool findings are the Codex rows above, the coverage note no issue.
     expect(audit.count).toBe(without.count + 1)
     expect(audit.sections.at(-1)).toBe('Doctor')
     expect(audit.sections).toEqual([...without.sections, 'Doctor'])
@@ -1291,40 +1263,39 @@ describe('Health counts each issue once (Story 96.6)', () => {
     expect(doctorRows.filter((row) => row.includes('data-doctor-counted="tools"'))).toHaveLength(1)
     expect(html).toContain('Failed · tool-check reason · 3 findings')
     expect(html).toContain('The same issue as Hooks above, counted there.')
-    expect(html).toContain('Older plugin · stopped turns cannot be distinguished.')
   })
 
   it('never merges by matching words alone: another app, or a finding that names none, is an issue of its own', () => {
-    const other = { ...AUDIT, doctor: doctor([doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'codex', { reason: 'Hook is not wired', cause: 'older-wording:plugin' }),
-      problem('hook-check', 2, 'opencode', { reason: 'Hook is not wired', cause: 'older-wording:plugin' })] }),
+    const other = { ...AUDIT, doctor: doctor([doctorRow('hooks', { state: 'problems', problems: [problem('hook-check', 1, 'claude', { reason: 'Hook is not wired', cause: 'missing:Stop' }),
+      problem('hook-check', 2, 'codex', { reason: 'Hook is not wired', cause: 'missing:Stop' })] }),
       doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1)] })]) }
     expect(healthNeeds(other).count).toBe(healthNeeds({ ...AUDIT, doctor: undefined }).count + 2)
   })
 
   it('merges only the same cause: another cause of the same app and area, or a stale result Health no longer shows, counts by itself (96 Astra review)', () => {
     const without = healthNeeds({ ...AUDIT, doctor: undefined })
-    // OpenCode's Tools row shows three exposed connections; Doctor also finds a managed connection that left the list, and,
-    // from a stale result, an approved tool missing that Health now sees in place: two more issues, not the row's.
-    const managed = problem('tool-check', 4, 'opencode', { cause: 'unlisted-managed' })
-    const mixed = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [...[1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })), managed] }),
-      doctorRow('skills', { state: 'problems', stale: true, checkedAt: AT - 3 * 24 * 60 * 60 * 1000, problems: [problem('skill-check', 1, 'opencode', { cause: 'missing' })] })]) }
+    // Codex's Tools row shows three exposed connections; Doctor also finds a managed connection that left the list, and,
+    // from a stale result, a Claude Code skill missing that Health now sees in place: two more issues, not the row's.
+    const managed = problem('tool-check', 4, 'codex', { cause: 'unlisted-managed' })
+    const mixed = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [...[1, 2, 3].map((item) => problem('tool-check', item, 'codex', { cause: 'unlisted-exposed' })), managed] }),
+      doctorRow('skills', { state: 'problems', stale: true, checkedAt: AT - 3 * 24 * 60 * 60 * 1000, problems: [problem('skill-check', 1, 'claude', { cause: 'missing' })] })]) }
     expect(healthNeeds(mixed).count).toBe(without.count + 2)
     expect(doctorPlace(mixed.doctor.rows[0]!, managed, without.keys)).toBe('doctor')
     // The same three, stale, still show what Health shows now: counted there. A finding with no cause (an older result) is its own.
-    const stale = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', stale: true, problems: [1, 2, 3].map((item) => problem('tool-check', item, 'opencode', { cause: 'unlisted-exposed' })) })]) }
+    const stale = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', stale: true, problems: [1, 2, 3].map((item) => problem('tool-check', item, 'codex', { cause: 'unlisted-exposed' })) })]) }
     expect(healthNeeds(stale).count).toBe(without.count)
-    const older = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode')] })]) }
+    const older = { ...AUDIT, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'codex')] })]) }
     expect(healthNeeds(older).count).toBe(without.count + 1)
   })
 
   it('counts two causes of one Health row as two issues, and Doctor findings of both there (96 Astra recheck)', () => {
     const base = healthNeeds({ ...AUDIT, doctor: undefined })
-    // OpenCode's Tools row shows three exposed connections and, now, an approved tool missing: two causes, two fixes.
-    const twoCauses: RulesSnapshot = { ...AUDIT, doctor: undefined, tools: { ...AUDIT.tools, tools: [...AUDIT.tools.tools, { id: 'synthetic-missing', states: { opencode: 'missing' }, details: {} }] } }
+    // Codex's Tools row shows its causes and, now, an approved tool edited outside BMN: one more cause, one more fix.
+    const twoCauses: RulesSnapshot = { ...AUDIT, doctor: undefined, tools: { ...AUDIT.tools, tools: [...AUDIT.tools.tools, { id: 'synthetic-edited', states: { codex: 'edited-outside' }, details: {} }] } }
     const needs = healthNeeds(twoCauses)
     expect(needs.count).toBe(base.count + 1)
-    expect(needs.keys).toContain('tools:opencode:missing')
-    const withDoctor = healthNeeds({ ...twoCauses, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'opencode', { cause: 'missing' }), problem('tool-check', 2, 'opencode', { cause: 'unlisted-exposed' })] })]) })
+    expect(needs.keys).toContain('tools:codex:edited-outside')
+    const withDoctor = healthNeeds({ ...twoCauses, doctor: doctor([doctorRow('tools', { state: 'problems', problems: [problem('tool-check', 1, 'codex', { cause: 'edited-outside' }), problem('tool-check', 2, 'codex', { cause: 'unlisted-exposed' })] })]) })
     expect(withDoctor.count).toBe(needs.count)
   })
 
@@ -1360,9 +1331,9 @@ describe('Health counts each issue once (Story 96.6)', () => {
   })
 
   it('says what is available to an app, never that data went anywhere', () => {
-    expect(exposedWords({ tools: [] }, { harness: 'opencode', unlisted: [{ id: 'a', state: 'exposed', managed: false }, { id: 'b', state: 'exposed', managed: false }, { id: 'c', state: 'exposed', managed: false }] }))
+    expect(exposedWords({ tools: [] }, { harness: 'codex', unlisted: [{ id: 'a', state: 'exposed', managed: false }, { id: 'b', state: 'exposed', managed: false }, { id: 'c', state: 'exposed', managed: false }] }))
       .toBe('3 tool connections available · no approved destination recorded')
-    expect(exposedWords({ tools: [] }, { harness: 'opencode', unlisted: [{ id: 'a', state: 'exposed', managed: false }] })).toBe('One tool connection available · no approved destination recorded')
+    expect(exposedWords({ tools: [] }, { harness: 'codex', unlisted: [{ id: 'a', state: 'exposed', managed: false }] })).toBe('One tool connection available · no approved destination recorded')
   })
 
   it('says Refreshing… only while it reads, and the read, its staleness and the issues otherwise', () => {
@@ -1393,12 +1364,12 @@ describe('Health counts each issue once (Story 96.6)', () => {
   })
 
   it('merges a Doctor finding only with a Health row needing the owner for the same cause, never a failed test or an app doctor\'s own check (96 review)', () => {
-    // OpenCode's Tools row needs him only because its tools test failed: its state is set up, so Doctor's tool-check stays its own.
-    const tested: RulesSnapshot = { ...AUDIT, tools: { ...AUDIT.tools, apps: AUDIT.tools.apps.map((app) => app.harness === 'opencode'
-      ? { ...app, state: 'Set up', unlisted: [], test: { at: '2026-10-09T20:00:00.000Z', version: app.version ?? '2.0.29', outcome: 'fail', detail: 'synthetic' } } : app) } }
+    // Codex's Tools row needs him only because its tools test failed: its state is set up, so Doctor's tool-check stays its own.
+    const tested: RulesSnapshot = { ...AUDIT, tools: { ...AUDIT.tools, apps: AUDIT.tools.apps.map((app) => app.harness === 'codex'
+      ? { ...app, state: 'Set up', unlisted: [], test: { at: '2026-10-09T20:00:00.000Z', version: app.version ?? '0.171.0', outcome: 'fail', detail: 'synthetic' } } : app) } }
     const needs = healthNeeds(tested)
     expect(needs.sections).toContain('Tools')
-    expect([...needs.keys].some((key) => key.startsWith('tools:opencode:'))).toBe(false)
+    expect([...needs.keys].some((key) => key.startsWith('tools:codex:'))).toBe(false)
     // Codex's own doctor reports mcp.config as a tool-check: not BMN's Tools check, so never the Tools row's issue.
     const codexOwn = doctorRow('codex', { state: 'problems', problems: [problem('tool-check', 1, 'codex', { cause: 'missing' })] })
     expect(doctorPlace(codexOwn, codexOwn.problems[0]!, new Set(['tools:codex:missing']))).toBe('doctor')
@@ -1522,7 +1493,6 @@ describe('context limits (60.9 AC3, AC4)', () => {
   it('says what a limit does where the setting is tested, and where the app does not take the size', () => {
     expect(contextLimitHint({ harness: 'claude', context_limit: 200000 }, RULES.context)).toBe("Added to each run BMN or dev-auto starts with this agent, and checked before it leaves. Empty means the app's own default.")
     expect(contextLimitHint({ harness: 'claude', context_limit: 90000 }, RULES.context)).toBe('Claude Code takes 100 000 to 1 000 000 tokens; a run with this limit is refused.')
-    expect(contextLimitHint({ harness: 'opencode', context_limit: 90000 }, RULES.context)).toBe('Not supported yet: BMN has no context setting for OpenCode. The limit is kept but not applied.')
     expect(contextLimitHint({ harness: 'codex', context_limit: 90000 }, null)).toBe("Empty means the app's own default.")
     expect(compactHint({ harness: 'codex' }, RULES.context.map((row) => ({ ...row, compactProven: true })))).toBe('The app starts summarising the conversation here.')
   })
@@ -1535,13 +1505,12 @@ describe('skills (60.11 AC5)', () => {
     expect(page).toContain('<h3 class="page-title">Skills</h3><span class="faint">3 skills · 1 not installed yet</span>')
     expect(page).toContain('<span class="faint mono" title="/home/synthetic/.claude/skills">~/.claude/skills</span>')
     expect(page).toContain('<b class="mono">alpha</b><span class="faint" title="First synthetic skill.">First synthetic skill.</span>')
-    expect([...page.matchAll(/aria-label="alpha in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Reads it', 'Codex: Linked', 'OpenCode: Exposed'])
-    expect([...page.matchAll(/aria-label="beta in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => match[2])).toEqual(['Reads it', 'Missing', 'Reads it'])
+    expect([...page.matchAll(/aria-label="alpha in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Reads it', 'Codex: Linked'])
+    expect([...page.matchAll(/aria-label="beta in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => match[2])).toEqual(['Reads it', 'Missing'])
     expect(page).toContain('<span class="faint scope-word">All apps</span>')
     expect(page).toMatch(/role="switch" aria-checked="false" aria-label="alpha is public"/)
-    // The exposed skill carries the attention mark on its chip, and the page says what to do about it.
-    expect(page).toMatch(/aria-label="alpha in OpenCode: Exposed" title="OpenCode can see this skill but may not have it"><span class="needs-dot"[^>]*><\/span>OpenCode<span class="chip-state">Exposed<\/span>/)
-    expect(words(page)).toContain('One skill can be seen by an app that may not have it. Mark the skill Public, or move it out of the skills folder.')
+    // No skill is exposed here, so the page asks nothing about one.
+    expect(words(page)).not.toContain('can be seen by an app that may not have it')
   })
 
   it('offers no Install…: what is not installed yet is said in the head, and BMN installs it (Story 75.9); a skill it cannot read stays out of reach', () => {
@@ -1553,16 +1522,16 @@ describe('skills (60.11 AC5)', () => {
   })
 
   it('shows a staged scope as chips, and stages Public and scope changes for approval', () => {
-    const staged = { ...DATA, skills: [{ id: 'beta', public: true as const, only: ['codex' as const, 'opencode' as const] }] }
+    const staged = { ...DATA, skills: [{ id: 'beta', public: true as const, only: ['codex' as const] }] }
     const markup = rulesMarkup('skills', rules(), team({ data: staged, hasStaged: true }))
     expect(markup).toContain('<span class="faint scope-word">Only</span>')
-    expect([...markup.matchAll(/aria-pressed="(true|false)" aria-label="beta in/g)].map((match) => match[1])).toEqual(['false', 'true', 'true'])
+    expect([...markup.matchAll(/aria-pressed="(true|false)" aria-label="beta in/g)].map((match) => match[1])).toEqual(['false', 'true'])
     expect(markup).toMatch(/aria-pressed="false" aria-label="beta in Claude Code: Off" title="Not for Claude Code"/)
     expect(markup).toMatch(/role="switch" aria-checked="true" aria-label="beta is public"/)
     expect(setSkillPublic(DATA, 'alpha', true).skills).toEqual([{ id: 'alpha', public: true }])
     expect(Object.keys(setSkillPublic(setSkillPublic(DATA, 'alpha', true), 'alpha', false))).not.toContain('skills')
-    expect(toggleSkillApp(DATA, 'alpha', 'opencode').skills).toEqual([{ id: 'alpha', only: ['claude', 'codex'] }])
-    expect(skillMark(toggleSkillApp(toggleSkillApp(DATA, 'alpha', 'opencode'), 'alpha', 'opencode'), 'alpha')).toEqual({ id: 'alpha' })
+    expect(toggleSkillApp(DATA, 'alpha', 'codex').skills).toEqual([{ id: 'alpha', only: ['claude'] }])
+    expect(skillMark(toggleSkillApp(toggleSkillApp(DATA, 'alpha', 'codex'), 'alpha', 'codex'), 'alpha')).toEqual({ id: 'alpha' })
     const one = { ...DATA, skills: [{ id: 'alpha', only: ['codex' as const] }] }
     expect(toggleSkillApp(one, 'alpha', 'codex')).toBe(one)
     expect(rulesMarkup('skills', rules(), team({ data: one }))).toMatch(/aria-label="alpha in Codex: Linked" disabled="" title="A skill needs at least one app"/)
@@ -1570,17 +1539,17 @@ describe('skills (60.11 AC5)', () => {
 
   it('names in the approval which apps a change reaches', () => {
     const differences: RosterDiffShape[] = [
-      { scope: 'skills', id: 'alpha', field: null, kind: 'added', after: { present: true, value: { public: true, only: ['codex', 'opencode'] } } },
+      { scope: 'skills', id: 'alpha', field: null, kind: 'added', after: { present: true, value: { public: true, only: ['codex'] } } },
       { scope: 'skills', id: '.source', field: 'folder', kind: 'changed', before: { present: true, value: '/a' }, after: { present: true, value: '/srv/skills' } }
     ]
-    const { groups, general } = groupDifferences(differences, DATA, DATA, ['Skill alpha would reach OpenCode', 'Skill alpha would no longer reach Claude Code', 'Skills would come from another folder'])
+    const { groups, general } = groupDifferences(differences, DATA, DATA, ['Skill alpha would reach Codex', 'Skill alpha would no longer reach Claude Code', 'Skills would come from another folder'])
     expect(general).toEqual([])
     expect(groups).toHaveLength(1)
-    expect(groups[0]).toMatchObject({ key: 'skills', subject: 'Skills', consequences: ['Skill alpha would reach OpenCode', 'Skill alpha would no longer reach Claude Code', 'Skills would come from another folder'] })
+    expect(groups[0]).toMatchObject({ key: 'skills', subject: 'Skills', consequences: ['Skill alpha would reach Codex', 'Skill alpha would no longer reach Claude Code', 'Skills would come from another folder'] })
     expect(groups[0]!.lines).toEqual([
       { field: 'alpha', before: '—', after: 'added' },
       { field: 'alpha · public', before: '—', after: 'yes', detail: true },
-      { field: 'alpha · only in', before: '—', after: 'Codex, OpenCode', detail: true },
+      { field: 'alpha · only in', before: '—', after: 'Codex', detail: true },
       { field: 'Skills folder', before: '/a', after: '/srv/skills' }
     ])
   })
@@ -1595,24 +1564,22 @@ describe('skills (60.11 AC5)', () => {
   it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills</span></h4>')
-    expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
+    expect(words(health)).toMatch(/Read [^·]+ · stale · 8 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Listing test passed [^<]+ · stale · loading never tested<\/span>/)
     expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
-    expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
     // BMN tests by itself: no Test… and no Loading test… (Story 75.8).
     expect(health).not.toMatch(/aria-label="Skills test for|aria-label="Skill loading test for|Loading test…/)
     // An app BMN has no skills test for says so.
-    const untested = rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, apps: RULES.skills.apps.map((app) => (app.harness === 'opencode'
-      ? { ...app, supported: false, reason: 'no test has run on OpenCode 1.18.32', testable: false, readsSource: false, kind: 'public' as const, kindReason: '', state: 'Not supported yet', test: null }
+    const untested = rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, apps: RULES.skills.apps.map((app) => (app.harness === 'codex'
+      ? { ...app, supported: false, reason: 'no test has run on Codex 0.171.0', testable: false, readsSource: false, location: null, kind: 'public' as const, kindReason: '', state: 'Not supported yet', test: null }
       : app)) } } }))
-    expect(untested).toMatch(/data-skills="Not supported yet"><span>OpenCode<\/span><span class="health-state"><span class="faint">Not known yet<\/span><\/span><span class="health-state"><span title="no test has run on OpenCode 1.18.32">Not supported yet<\/span><span class="faint">BMN has no test for this app<\/span>/)
+    expect(untested).toMatch(/data-skills="Not supported yet"><span>Codex<\/span><span class="health-state"><span class="faint">Not known yet<\/span><\/span><span class="health-state"><span title="no test has run on Codex 0.171.0">Not supported yet<\/span><span class="faint">BMN has no test for this app<\/span>/)
     // Test again… follows a failure or a stop: the folders test for any app BMN can ask, the loading test only where the app may receive private work.
     const after = rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: null, stopped: [
-      { kind: 'skills', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' },
-      { kind: 'skills-loading', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' },
-      { kind: 'skills-loading', harness: 'opencode', version: '1.18.32', tries: 3, at: '2026-10-09T20:00:00.000Z' }
+      { kind: 'skills', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' },
+      { kind: 'skills-loading', harness: 'codex', version: '0.171.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }
     ] } } }))
-    expect([...after.matchAll(/aria-label="Test the skills of ([A-Za-z ]+) again"/g)].map((match) => match[1])).toEqual(['OpenCode'])
+    expect([...after.matchAll(/aria-label="Test the skills of ([A-Za-z ]+) again"/g)].map((match) => match[1])).toEqual(['Codex'])
     expect([...after.matchAll(/aria-label="Test skill loading in ([A-Za-z ]+) again"/g)].map((match) => match[1])).toEqual(['Codex'])
     expect(after).toMatch(/data-skills="Missing"><span>Codex<\/span>.*?<span class="faint" title="[^"]*">BMN stopped after 3 tries on 0.171.0<\/span>/)
     expect(rulesMarkup('health', rules({ snapshot: { ...RULES, autoTests: { running: { kind: 'skills-loading', harness: 'codex' }, stopped: [] } } }))).toContain('BMN is testing Codex now…')
@@ -1627,11 +1594,11 @@ describe('skills (60.11 AC5)', () => {
     expect(skillStateWords('exposed', app, false)).toBe('Exposed')
     expect(skillStateWords('unreadable', app, true)).toBe("Can't read")
     expect(skillStateWords(undefined, { supported: false, format: null }, true)).toBe('Not yet')
-    expect(skillStateHint('excluded', { ...app, kind: 'public' }, true, 'OpenCode')).toBe('OpenCode gets public skills only')
+    expect(skillStateHint('excluded', { ...app, kind: 'public' }, true, 'Codex')).toBe('Codex gets public skills only')
     expect(skillStateHint('missing', app, true, 'Codex')).toBe('Not in Codex yet: BMN adds it at its next start or approval')
     expect(skillStateHint('stale', app, true, 'Codex')).toBe('Codex has an older copy: BMN updates it at its next start or approval')
     expect(skillStateHint('unmanaged', app, true, 'Codex')).toBe('Codex holds something else under this name, which BMN leaves as it is: remove it there and BMN adds the skill')
-    expect(skillStateHint(undefined, { ...app, supported: false }, true, 'OpenCode')).toBe('Skills are not supported yet in OpenCode: Health says how BMN\'s test of it stands')
+    expect(skillStateHint(undefined, { ...app, supported: false }, true, 'Codex')).toBe('Skills are not supported yet in Codex: Health says how BMN\'s test of it stands')
     const base = { supported: false, version: '0.171.0', test: null, listing: null, loading: null, kind: 'full' as const, testable: true }
     expect(skillsTestLine({ ...base, version: null })).toBe('The app is not found')
     expect(skillsTestLine(base)).toBe('BMN tests 0.171.0 by itself')
@@ -1652,11 +1619,11 @@ describe('skills (60.11 AC5)', () => {
 describe('tools (60.12 AC6)', () => {
   it('offers the approved browser takeover without requiring unrelated unlisted entries (97.5)', () => {
     const browser: RosterDataShape = { ...DATA, tools: [{ id: 'playwright', name: 'Playwright', command: 'bmn', args: ['browser', 'server'], public: true }] }
-    const snapshot: RulesSnapshot = { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map(app => ({ ...app, unlisted: [] })), tools: [{ id: 'playwright', states: { claude: 'unmanaged', codex: 'edited-outside', opencode: 'current' }, details: {} }] } }
+    const snapshot: RulesSnapshot = { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map(app => ({ ...app, unlisted: [] })), tools: [{ id: 'playwright', states: { claude: 'unmanaged', codex: 'edited-outside' }, details: {} }] } }
     const state = team({ data: browser, base: browser, approved: browser })
     expect(rulesMarkup('tools', rules({ snapshot }), state)).toContain('Apply browser switch…')
     expect(rulesMarkup('tools', rules({ snapshot }), team({ data: browser, base: DATA, approved: DATA, hasStaged: true }))).not.toContain('Apply browser switch…')
-    const settled: RulesSnapshot = { ...snapshot, tools: { ...snapshot.tools, tools: [{ id: 'playwright', states: { claude: 'current', codex: 'current', opencode: 'current' }, details: {} }] } }
+    const settled: RulesSnapshot = { ...snapshot, tools: { ...snapshot.tools, tools: [{ id: 'playwright', states: { claude: 'current', codex: 'current' }, details: {} }] } }
     expect(rulesMarkup('tools', rules({ snapshot: settled }), state)).not.toContain('Apply browser switch…')
     const plan: ToolsPlan = { ok: true, code: 'OK', removeUnlisted: false, planHash: 'b'.repeat(64), targets: [{ harness: 'claude', tool: 'playwright', path: '/home/synthetic/.claude.json', action: 'set', words: 'takes over the browser', before: '{}', after: '{"command":"bmn"}' }], exposed: [], blocked: [] }
     const pending = rulesMarkup('tools', rules({ snapshot, pending: { kind: 'tools', plan } }), state)
@@ -1675,15 +1642,14 @@ describe('tools (60.12 AC6)', () => {
     expect(page).toContain('<h3 class="page-title">Tools</h3><span class="faint">3 tools · 2 not installed yet</span>')
     expect(page).toContain('<b>Docs</b><span class="faint mono" title="docs.example.test">docs.example.test</span>')
     expect(page).toContain('<b>Notes</b><span class="faint mono" title="notes-tool · needs NOTES_TOKEN">notes-tool · needs NOTES_TOKEN</span>')
-    expect([...page.matchAll(/aria-label="Docs in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Set up', 'Codex: Missing', 'OpenCode: Not public'])
-    expect([...page.matchAll(/aria-label="Notes in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => match[2])).toEqual(['Differs', 'Blocked', 'Exposed'])
-    expect([...page.matchAll(/aria-pressed="(true|false)" aria-label="Notes in/g)].map((match) => match[1])).toEqual(['true', 'true', 'false'])
+    expect([...page.matchAll(/aria-label="Docs in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Set up', 'Codex: Missing'])
+    expect([...page.matchAll(/aria-label="Notes in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => match[2])).toEqual(['Differs', 'Blocked'])
+    expect([...page.matchAll(/aria-pressed="(true|false)" aria-label="Notes in/g)].map((match) => match[1])).toEqual(['true', 'true'])
     expect(page).toMatch(/role="switch" aria-checked="true" aria-label="Docs is public"/)
     expect(page).toMatch(/role="switch" aria-checked="false" aria-label="Notes is public"/)
-    // Why Codex cannot take it is the chip's own hint; the exposed and the blocked chip carry the attention mark.
+    // Why Codex cannot take it is the chip's own hint; the blocked chip carries the attention mark.
     expect(page).toMatch(/aria-label="Notes in Codex: Blocked" title="Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN"><span class="needs-dot"[^>]*><\/span>Codex<span class="chip-state">Blocked<\/span>/)
-    expect(page).toMatch(/aria-label="Notes in OpenCode: Exposed" title="OpenCode holds this tool but may not have it"><span class="needs-dot"/)
-    expect(words(page)).toContain('One tool is in an app that may not have it. Mark the tool Public, or remove its entry in that app.')
+    expect(words(page)).not.toContain('is in an app that may not have it')
     // The reason is also said under the row, in words.
     expect(page).toMatch(/<p class="preferences-help tool-why"><span class="needs-dot"[^>]*><\/span>In Codex: Codex takes a variable only under its own name: NOTES_TOKEN is asked for as TOKEN<\/p>/)
     expect(count(page, 'tool-why')).toBe(1)
@@ -1709,7 +1675,7 @@ describe('tools (60.12 AC6)', () => {
   it('lists the entries the apps hold that are not on the list, each once, and offers to remove them', () => {
     expect(page).toContain('<h4 class="group-head">In your apps, not on your list<span class="caption">BMN did not write these and leaves them</span></h4>')
     expect(count(page, 'data-unlisted="old-search"')).toBe(1)
-    expect(words(page).replace(/\s+/g, ' ')).toContain('old-search Claude Code, OpenCode · in an app that gets public work only')
+    expect(words(page).replace(/\s+/g, ' ')).toContain('old-search Claude Code')
     expect(page).toContain('>Remove them from the apps…</button>')
     const settled = { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => ({ ...app, unlisted: [] })) } }
     expect(rulesMarkup('tools', rules({ snapshot: settled }), team({ data: WITH }))).not.toContain('not on your list')
@@ -1732,7 +1698,7 @@ describe('tools (60.12 AC6)', () => {
     const some = editor(draftFrom(TOOLS[2]!))
     expect(some).toContain('<textarea class="field wide mono" aria-label="Arguments" aria-invalid="false" rows="3">--token\n$NOTES_TOKEN</textarea>')
     expect(some).toContain('<textarea class="field wide mono" aria-label="Variables" aria-invalid="false" rows="2">TOKEN=NOTES_TOKEN</textarea>')
-    expect([...some.matchAll(/class="(chip on|chip)" aria-pressed="(?:true|false)">([^<]+)/g)].map((match) => `${match[2]}${match[1] === 'chip on' ? ' on' : ''}`)).toEqual(['Claude Code on', 'Codex on', 'OpenCode'])
+    expect([...some.matchAll(/class="(chip on|chip)" aria-pressed="(?:true|false)">([^<]+)/g)].map((match) => `${match[2]}${match[1] === 'chip on' ? ' on' : ''}`)).toEqual(['Claude Code on', 'Codex on'])
     const kept = editor(draftFrom(TOOLS[0]!))
     expect(words(kept)).toContain('Only these agents&#x27; runs get it. No app keeps it in its settings.')
     expect(kept).toMatch(/aria-label="Agents whose runs get it">.*<button type="button" class="chip on" aria-pressed="true">Luna<\/button>/)
@@ -1743,14 +1709,14 @@ describe('tools (60.12 AC6)', () => {
       { id: 'search', state: 'ready', apps: ['claude'], tool: { id: 'search', name: 'search', command: 'search-tool', apps: ['claude'] }, notes: [] },
       { id: 'mail', state: 'secret', apps: ['codex'], tool: { id: 'mail', name: 'mail', command: 'mail-tool', env: { MAIL_KEY: 'MAIL_KEY' }, apps: ['codex'] }, notes: ['MAIL_KEY held a value in Codex: it is left out; set the variable where the app starts'] },
       { id: 'docs', state: 'known', apps: ['claude'], notes: ['already on your list'] },
-      { id: 'maps', state: 'conflict', apps: ['claude', 'opencode'], notes: ['the apps define maps differently: keep one, or give each its own id'] }
+      { id: 'maps', state: 'conflict', apps: ['claude', 'codex'], notes: ['the apps define maps differently: keep one, or give each its own id'] }
     ]
     const sheet = renderToStaticMarkup(createElement(ToolProposals, { found, data: WITH, onAdd: noop, onCancel: noop }))
     expect(sheet).toContain('aria-label="Add 2 tools from your apps"')
     expect(words(sheet).replace(/\s+/g, ' ')).toContain('search Claude Code · will be added')
     expect(words(sheet).replace(/\s+/g, ' ')).toContain('mail Codex · will be added without the value it holds MAIL_KEY held a value in Codex: it is left out; set the variable where the app starts')
     expect(words(sheet).replace(/\s+/g, ' ')).toContain('docs Claude Code · already on your list')
-    expect(words(sheet).replace(/\s+/g, ' ')).toContain('maps Claude Code, OpenCode · the apps differ, so it is not added')
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('maps Claude Code, Codex · the apps differ, so it is not added')
     expect(count(sheet, 'already on your list')).toBe(1)
     const nothing = renderToStaticMarkup(createElement(ToolProposals, { found: found.slice(2), data: WITH, onAdd: noop, onCancel: noop }))
     expect(nothing).toMatch(/aria-label="Nothing new in your apps".*<button type="button" class="primary" disabled="">Add to your list<\/button>/s)
@@ -1764,7 +1730,7 @@ describe('tools (60.12 AC6)', () => {
         { harness: 'codex', tool: 'docs', path: '/home/synthetic/.codex/config.toml', action: 'set', words: 'adds the tool', before: null, after: '[mcp_servers.docs]\nurl = "https://docs.example.test/mcp"' },
         { harness: 'claude', tool: 'notes', path: '/home/synthetic/.claude.json', action: 'set', words: 'replaces an entry changed outside BMN', before: '{"command":"old","env":{"TOKEN":"•••"}}', after: '{"type":"stdio","command":"notes-tool"}' }
       ],
-      exposed: [{ harness: 'opencode', tool: 'notes', fix: 'remove notes from OpenCode, or mark it public' }],
+      exposed: [{ harness: 'codex', tool: 'notes', fix: 'remove notes from Codex, or mark it public' }],
       blocked: [{ harness: 'codex', tool: 'notes', fix: 'Codex takes a variable only under its own name' }]
     }
     const sheet = rulesMarkup('tools', rules({ pending: { kind: 'tools', plan } }), team({ data: WITH }))
@@ -1774,7 +1740,7 @@ describe('tools (60.12 AC6)', () => {
     expect(sheet).toContain('<pre class="diff">+[mcp_servers.docs]\n+url = &quot;https://docs.example.test/mcp&quot;</pre>')
     expect(sheet).toContain('<pre class="diff">-{&quot;command&quot;:&quot;old&quot;,&quot;env&quot;:{&quot;TOKEN&quot;:&quot;•••&quot;}}\n+{&quot;type&quot;:&quot;stdio&quot;,&quot;command&quot;:&quot;notes-tool&quot;}</pre>')
     expect(words(sheet)).toContain('One entry stays exposed whatever is installed:')
-    expect(sheet).toContain('<p class="preferences-help">notes: remove notes from OpenCode, or mark it public</p>')
+    expect(sheet).toContain('<p class="preferences-help">notes: remove notes from Codex, or mark it public</p>')
     expect(words(sheet)).toContain('One entry is not changed:')
     expect(sheet).toContain('<p class="preferences-help">Codex, notes: Codex takes a variable only under its own name</p>')
     const none = rulesMarkup('tools', rules({ pending: { kind: 'tools', plan: { ...plan, targets: [] } } }), team({ data: WITH }))
@@ -1789,18 +1755,17 @@ describe('tools (60.12 AC6)', () => {
   it('Health shows one row per app: its settings file, the state in words, Full or Public tools only and the last test', () => {
     const health = rulesMarkup('health')
     expect(health).toContain('<h4 class="group-head">Tools<span class="caption">where each app keeps its tools, and whether it has the ones it may have</span></h4>')
-    expect(words(health)).toMatch(/Read [^·]+ · stale · 12 need you: Rules files, Skills, Tools, Context limits, Hooks/)
+    expect(words(health)).toMatch(/Read [^·]+ · stale · 8 need you: Rules files, Skills, Tools, Context limits, Hooks/)
     expect(health).toMatch(/data-tools="Differs"><span>Claude Code<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.claude.json">~\/.claude.json<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Differs<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code listed the stand-in tool">Checked [^<]+ · passes variables · a run keeps to its own tools<\/span>/)
     expect(health).toMatch(/data-tools="Missing"><span>Codex<\/span>.*?Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Checked [^<]+ · variables not seen · no run seen kept to its tools<\/span>/)
-    expect(health).toMatch(/data-tools="Exposed"><span>OpenCode<\/span>.*?<span class="faint" title="\/home\/synthetic\/dotfiles\/opencode.jsonc">A link: BMN does not write through it<\/span>.*?2 tool connections available · no approved destination recorded<span class="muted"> · Public tools only<\/span><\/span><span class="faint">Names and Remove…: Tools tab › OpenCode<\/span>/)
     expect(health).not.toMatch(/aria-label="Tools test for|aria-label="Test the tools of/)
     const failed = rulesMarkup('health', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => (app.harness === 'codex'
       ? { ...app, test: { at: '2026-10-09T20:00:00.000Z', version: app.version, outcome: 'fail' as const, detail: 'd', by: 'bmn' as const } } : app)) } } }))
     expect([...failed.matchAll(/aria-label="Test the tools of ([A-Za-z ]+) again">Test again…/g)].map((match) => match[1])).toEqual(['Codex'])
-    const untested = rulesMarkup('health', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => (app.harness === 'opencode'
-      ? { ...app, supported: false, reason: 'no test has run on OpenCode 1.18.32', state: 'Not supported yet', variable: false, isolation: false, test: null }
+    const untested = rulesMarkup('health', rules({ snapshot: { ...RULES, tools: { ...RULES.tools, apps: RULES.tools.apps.map((app) => (app.harness === 'codex'
+      ? { ...app, supported: false, reason: 'no test has run on Codex 0.171.0', state: 'Not supported yet', variable: false, isolation: false, test: null }
       : app)) } } }))
-    expect(untested).toMatch(/data-tools="Not supported yet"><span>OpenCode<\/span>.*?<span title="no test has run on OpenCode 1.18.32">Not supported yet<\/span><span class="faint">BMN tests 1.18.32 by itself<\/span>/)
+    expect(untested).toMatch(/data-tools="Not supported yet"><span>Codex<\/span>.*?<span title="no test has run on Codex 0.171.0">Not supported yet<\/span><span class="faint">BMN tests 0.171.0 by itself<\/span>/)
     expect(health.indexOf('<h4 class="group-head">Skills')).toBeLessThan(health.indexOf('<h4 class="group-head">Tools'))
     expect(health.indexOf('<h4 class="group-head">Tools')).toBeLessThan(health.indexOf('<h4 class="group-head">Context limits'))
   })
@@ -1848,7 +1813,6 @@ describe('Agents › Models (60.10, first release)', () => {
       { id: 'sol', name: 'Sol', harness: 'codex', ok: true, fence: { tools: FENCE_TOOLS, compared: true } }, { id: 'fable', name: 'Fable', harness: 'claude', ok: true },
       { id: 'luna', name: 'Luna', harness: 'codex', ok: true, fence: { tools: FENCE_TOOLS, compared: true } },
       { id: 'glm', name: 'Glm', harness: 'claude', ok: false, why: 'its provider gets public work only', reason: 'synthetic reason with the word roster in it' },
-      { id: 'kimi', name: 'Kimi', harness: 'opencode', ok: false, why: 'the fence test has not run for this version of OpenCode yet', reason: 'synthetic' }
     ],
     researcher: 'fable', choice: { named: ['sol', 'fable', 'luna', 'glm', 'kimi'], proposed: [] }, dropped: null, fenceTest: { running: false, ended: null, last: [{ harness: 'codex', verdict: 'pass', version: '0.161.0', at: '2026-10-09T20:00:00.000Z' }] }, autoTests: { running: null, stopped: [] }, running: null, ended: null
   }
@@ -1880,7 +1844,7 @@ describe('Agents › Models (60.10, first release)', () => {
     // Each is offered with its class's piece before its name, as on the Team pages.
     expect(offered(page)).toEqual(['Knight Sol:false', 'Rook Fable:true', 'Pawn Luna:false'])
     // One line each: what the researcher gets, then each agent that cannot research and why (docs/design.md W2).
-    expect(page).toContain('<p class="preferences-help">Gets only your model names and the source list, never your files.</p><p class="preferences-help">Runs in an empty folder with web tools only.</p><p class="preferences-help">Glm cannot research: its provider gets public work only.</p><p class="preferences-help">Kimi cannot research: the fence test has not run for this version of OpenCode yet.</p>')
+    expect(page).toContain('<p class="preferences-help">Gets only your model names and the source list, never your files.</p><p class="preferences-help">Runs in an empty folder with web tools only.</p><p class="preferences-help">Glm cannot research: its provider gets public work only.</p>')
     expect(page).not.toContain('synthetic')
     expect(researcherHint({ harness: 'claude' })).toEqual(['Gets only your model names and the source list, never your files.', 'Runs in an empty folder with web tools only.'])
     expect(page).toContain('<ol class="sources"><li>Provider pages</li><li>Other sites</li></ol>')
@@ -1907,11 +1871,11 @@ describe('Agents › Models (60.10, first release)', () => {
       const waiting = withSnapshot({ choice: { named: null, proposed: ['sol', 'luna', 'gone'] } })
       expect(words(waiting)).toContain('You have not chosen who researches, so every agent that can research is offered; BMN&#x27;s proposal is on Team.')
       expect(waiting).not.toMatch(/Use proposal|<div class="page-note with-action"[^>]*><span class="needs-dot"[^>]*><\/span><span class="note-text">You have not chosen/)
-      const proposals = teamProposals(DATA, { lunaListed: false, researchers: { named: null, proposed: ['sol', 'luna', 'gone'] } })
+      const proposals = teamProposals(DATA, { researchers: { named: null, proposed: ['sol', 'luna', 'gone'] } })
       expect(proposals?.clauses).toContain('Sol and Luna as researchers, one agent per model')
       expect(namedResearchers(proposals!.data)).toEqual(['sol', 'luna'])
       // Once the approved team names its researchers, BMN proposes none.
-      expect(teamProposals(DATA, { lunaListed: false, researchers: { named: ['sol'], proposed: [] } })?.clauses ?? []).not.toContain('Sol and Luna as researchers, one agent per model')
+      expect(teamProposals(DATA, { researchers: { named: ['sol'], proposed: [] } })?.clauses ?? []).not.toContain('Sol and Luna as researchers, one agent per model')
       // The proposal is staged like any other change: the mark on each proposed agent, nothing else touched.
       const taken = nameResearchers(DATA, ['sol', 'luna'])
       expect(taken.agents.filter((entry) => entry.researcher === true).map((entry) => entry.id)).toEqual(['sol', 'luna'])
@@ -1940,7 +1904,7 @@ describe('Agents › Models (60.10, first release)', () => {
       const luna = none.agents.find((entry) => entry.id === 'luna')!
       expect(researcherWords(none, luna)).toEqual(['Your team names no researcher, so nobody researches: a research with Luna is refused.'])
       expect(researcherWords(one, one.agents.find((entry) => entry.id === 'sol')!)).toEqual(['Not offered on Models: a research with Sol is refused.'])
-      expect(noResearcherWords([])).toBe('Your team names no researcher, so nobody researches. Switch Researcher on on an agent\'s page: an active agent on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work.')
+      expect(noResearcherWords([])).toBe('Your team names no researcher, so nobody researches. Switch Researcher on on an agent\'s page: an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work.')
       const empty = withSnapshot({ researcher: null, researchers: [], choice: { named: [], proposed: [] } }, team({ base: none, data: none, approved: none }))
       expect(words(empty)).toContain('Your team names no researcher, so nobody researches.')
       expect(words(empty)).not.toContain('You have not chosen who researches')
@@ -1974,7 +1938,7 @@ describe('Agents › Models (60.10, first release)', () => {
       expect(fenceWords(RESEARCH.researchers.filter((entry) => entry.harness === 'codex'))).toEqual(['BMN runs it by itself when Codex or a researcher\'s model changes, against a stand-in with made-up files.',
         'No provider is called and none of your files is read.'])
       expect(fenceResultWords(undefined, shortDate)).toBe('Not tested yet')
-      expect(fenceResultWords({ harness: 'opencode', verdict: 'inconclusive', version: null, at: '2026-10-09T20:00:00.000Z' }, shortDate)).toBe(`Fence test showed nothing ${shortDate('2026-10-09T20:00:00.000Z')}`)
+      expect(fenceResultWords({ harness: 'codex', verdict: 'inconclusive', version: null, at: '2026-10-09T20:00:00.000Z' }, shortDate)).toBe(`Fence test showed nothing ${shortDate('2026-10-09T20:00:00.000Z')}`)
       const closed: ResearchSnapshot['researchers'] = RESEARCH.researchers.map((entry) => (entry.harness === 'codex'
         ? { id: entry.id, name: entry.name, harness: entry.harness, ok: false, why: 'the fence test has not run for this version of Codex yet', reason: 'synthetic' } : entry))
       const untested = withSnapshot({ researchers: closed })
@@ -1984,13 +1948,11 @@ describe('Agents › Models (60.10, first release)', () => {
       const failed = withSnapshot({ researchers: RESEARCH.researchers.map((entry) => (entry.harness === 'codex'
         ? { id: entry.id, name: entry.name, harness: entry.harness, ok: false, why: 'the fence test of codex 0.161.0 with gpt-6-luna did not pass, so no research runs there: pick another researcher', reason: 'synthetic' } : entry)) })
       expect(failed).toContain('<button type="button" class="small" aria-label="Test the Codex fence again">Test again</button>')
-      const stopped = withSnapshot({ autoTests: { running: null, stopped: [{ kind: 'fence', harness: 'opencode', version: '2.0.29', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } })
-      expect(words(stopped)).toContain('BMN stopped after 3 tries on 2.0.29')
-      expect(stopped).toContain('aria-label="Test the OpenCode fence again"')
-      // An OpenCode researcher gets a row of its own, from the same test (70.3); without one there is no row.
-      expect(words(page)).toContain('OpenCode fence test')
-      expect(words(page).replace(/\s+/g, ' ')).toContain('Kimi researches only where this test passed for exactly the installed OpenCode: the fence test has not run for this version of OpenCode yet. BMN runs it by itself when OpenCode')
-      expect(words(withSnapshot({ researchers: RESEARCH.researchers.filter((entry) => entry.harness !== 'opencode') }))).not.toContain('OpenCode fence test')
+      const stopped = withSnapshot({ autoTests: { running: null, stopped: [{ kind: 'fence', harness: 'codex', version: '0.161.0', tries: 3, at: '2026-10-09T20:00:00.000Z' }] } })
+      expect(words(stopped)).toContain('BMN stopped after 3 tries on 0.161.0')
+      expect(stopped).toContain('aria-label="Test the Codex fence again"')
+      // OpenCode was retired (Epic 123): no fence row of its own is left.
+      expect(words(page)).not.toContain('OpenCode')
       // Agents held back for one reason share one line (Fable's review of 80.5).
       expect(words(untested)).toContain('Sol and Luna cannot research: the fence test has not run for this version of Codex yet.')
       expect(offered(untested)).toEqual(['Rook Fable:true'])
@@ -2058,8 +2020,8 @@ describe('Agents › Models (60.10, first release)', () => {
     const none = modelsMarkup(research({ snapshot: { ...RESEARCH, last: null, previousAt: null, models: [], researcher: null, researchers: RESEARCH.researchers.filter((entry) => !entry.ok) } }))
     expect(none).toContain('<span class="faint">Not researched yet</span>')
     expect(none).toContain('<span class="muted">No agent on your team can research.</span>')
-    expect(words(none).replace(/\s+/g, ' ')).toContain('Research needs one of the researchers your team names: an active agent on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work. A price can still be written in the team file.')
-    expect(noResearcherWords(null)).toBe('Research needs an active agent on Claude Code, or on Codex or OpenCode where its fence test passed, whose provider may see private work.')
+    expect(words(none).replace(/\s+/g, ' ')).toContain('Research needs one of the researchers your team names: an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work. A price can still be written in the team file.')
+    expect(noResearcherWords(null)).toBe('Research needs an active agent on Claude Code, or on Codex where its fence test passed, whose provider may see private work.')
     expect(none).toContain('<button type="button" disabled="" title="No agent on your team can research">Research now</button>')
     expect(none).not.toContain('role="radio"')
     expect(lines(none)).toEqual(['model-sol', 'model-fable', 'model-luna', 'model-haiku', 'model-glm'])
@@ -2123,11 +2085,11 @@ describe('read-only roles on Team and Health (63.2 AC4)', () => {
     const page = words(roles(REVIEWED)).replace(/\s+/g, ' ')
     expect(page).toContain('No role is held to read-only yet; BMN&#x27;s proposal is on Team.')
     expect(page).not.toContain('Use proposal')
-    expect(teamProposals(REVIEWED, { lunaListed: false, researchers: null })?.clauses).toContain('Epic reviewer, Focused reviewer and Consultant held to read-only')
+    expect(teamProposals(REVIEWED, { researchers: null })?.clauses).toContain('Epic reviewer, Focused reviewer and Consultant held to read-only')
     expect(roles(REVIEWED)).not.toContain('class="role-mark"')
     // A team without such roles is offered nothing.
     expect(roles(DATA)).not.toContain('BMN&#x27;s proposal is on Team')
-    expect(teamProposals(DATA, { lunaListed: false, researchers: null })?.clauses ?? []).not.toContain('held to read-only')
+    expect(teamProposals(DATA, { researchers: null })?.clauses ?? []).not.toContain('held to read-only')
   })
 
   it('takes the proposal as a staged change, marks each held role, and leaves the choice to the owner from then on', () => {

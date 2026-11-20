@@ -12,7 +12,8 @@ import {
   sessionActivityState,
   type SessionActivityObservation,
   MAX_TERMINAL_CHUNK_BYTES,
-  RETIRED_APP_LINE,
+  isRetiredApp,
+  retiredAppLine,
   TERMINAL_UNDELIVERED_OUTPUT_BYTES,
   TERMINAL_SAVED_OUTPUT_BYTES,
   TERMINAL_SCROLLBACK_LINES,
@@ -93,10 +94,7 @@ import {
   conversationReferenceExists,
   codexResumeArguments,
   describeDroppedCodexArguments,
-  describeDroppedOpenCodeArguments,
-  isConversationReference,
   isLowercaseConversationReference,
-  opencodeResumeArguments,
   parseBoundBinding,
   parseClaudeHelpOptionGrammar,
   prepareConversationLaunch,
@@ -482,7 +480,7 @@ function announcesMirroredAgent(bytes: Uint8Array): boolean {
     const body = chunk.subarray(at + AGENT_STATE_REPORT.byteLength, at + REPORT_WINDOW).toString('latin1')
     const ends = [body.indexOf('\x07'), body.indexOf('\x1b')].filter((end) => end !== -1)
     const fields = (ends.length > 0 ? body.slice(0, Math.min(...ends)) : body).split(/[;:]/u)
-    if (fields.includes('app=codex') || fields.includes('app=claude') || fields.includes('app=opencode')) return true
+    if (fields.includes('app=codex') || fields.includes('app=claude')) return true
   }
   return false
 }
@@ -803,8 +801,8 @@ export class SessionManager {
       }
     }
     this.conversationBindings.set(sessionId, binding)
-    // Epic 71: BMN no longer looks for a retired app's conversation; its binding is shown as stored.
-    if (binding.status === 'unsupported' || this.sessions.has(sessionId) || binding.agentCli === 'cursor') return binding
+    // Epics 71 and 123: BMN no longer looks for a retired app's conversation; its binding is shown as stored.
+    if (binding.status === 'unsupported' || this.sessions.has(sessionId) || isRetiredApp(binding.agentCli)) return binding
     if (await this.referenceExists(binding)) return binding
     return {
       ...binding,
@@ -879,12 +877,8 @@ export class SessionManager {
     if (launched !== observation.agentCli) {
       return refuse(`the session was launched as ${launched}, not ${observation.agentCli}`)
     }
-    if (observation.agentCli === 'opencode'
-      ? !isConversationReference('opencode', observation.conversationReference)
-      : !isLowercaseConversationReference(observation.conversationReference)) {
-      return refuse(observation.agentCli === 'opencode'
-        ? 'the reported conversation reference is not an OpenCode session ID'
-        : 'the reported conversation reference is not a storable UUID')
+    if (!isLowercaseConversationReference(observation.conversationReference)) {
+      return refuse('the reported conversation reference is not a storable UUID')
     }
     // A harness can report before its own session record has been written: the process is spawned
     // and registered live before `createStarting` completes, so wait for the record it needs.
@@ -1435,8 +1429,8 @@ export class SessionManager {
     if (binding.status === 'unsupported') {
       return Promise.reject(new HostControlError(ERROR_CODES.invalidArgument, binding.detail))
     }
-    // Epic 71: a conversation of a retired app is shown, never resumed.
-    if (binding.agentCli === 'cursor') return Promise.reject(new HostControlError(ERROR_CODES.invalidArgument, RETIRED_APP_LINE))
+    // Epics 71 and 123: a conversation of a retired app is shown, never resumed.
+    if (isRetiredApp(binding.agentCli)) return Promise.reject(new HostControlError(ERROR_CODES.invalidArgument, retiredAppLine(binding.agentCli)))
     const bindingIdentity = conversationIdentity(binding)!
     let reservation: ConversationReservation
     let releaseLaunch: () => void
@@ -1517,14 +1511,12 @@ export class SessionManager {
         binding?.detail ?? 'No conversation binding was captured for this session'
       )
     }
-    // Epic 71: a conversation of a retired app is shown, never resumed.
-    if (binding.agentCli === 'cursor') throw new HostControlError(ERROR_CODES.invalidArgument, RETIRED_APP_LINE)
+    // Epics 71 and 123: a conversation of a retired app is shown, never resumed.
+    if (isRetiredApp(binding.agentCli)) throw new HostControlError(ERROR_CODES.invalidArgument, retiredAppLine(binding.agentCli))
     const { launch } = await this.prepareResumeLaunch(binding)
     const dropped = binding.agentCli === 'codex' && binding.captureRoute === 'hook-session-start'
       ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
-      : binding.agentCli === 'opencode'
-        ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
-        : undefined
+      : undefined
     return {
       sessionId,
       agentCli: binding.agentCli,
@@ -1567,7 +1559,7 @@ export class SessionManager {
       startedAt,
       stored,
       (record) => this.store.createResuming(record),
-      binding.agentCli === 'claude' ? ['--resume'] : binding.agentCli === 'opencode' ? ['--session'] : ['resume'],
+      binding.agentCli === 'claude' ? ['--resume'] : ['resume'],
       reservation
     )
     try {
@@ -2690,7 +2682,6 @@ export class SessionManager {
     if (session.mirror) session.mirror.write(bytes)
     // Codex reports its state on screen long before its first hook, and its start-up animation can outgrow the tail a
     // late mirror is seeded from, which then misses the prompt it drew once (Story 90.6): that report starts the mirror.
-    // BMN's OpenCode plugin reports OpenCode's start the same way, before OpenCode redraws its screen (Story 93.3).
     else {
       const seam = session.reportCarry.byteLength > 0 ? Buffer.concat([session.reportCarry, bytes.subarray(0, REPORT_WINDOW)]) : null
       if (announcesMirroredAgent(bytes) || (seam !== null && announcesMirroredAgent(seam))) {

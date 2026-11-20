@@ -1,24 +1,20 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
-import { execFile, spawn as spawnChild, spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { execFile, spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
-import { stripTypeScriptTypes } from 'node:module'
-import { runInNewContext } from 'node:vm'
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { timedBesideControl } from './test-fixtures/load-clock'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { CODEX_RULES, claudeDenyRows } from '../../bin/native-rules.mjs'
 import { AWAY_AGENT_TEXT, ERROR_CODES, HANDOFF_OUTLINE, pushPolicyStatus, readPushPolicy } from '@bmn/protocol'
 import { PUSH_POLICY_STILL_ASKS, type PushLevel, type PushPolicyStatus } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 import { readValidRoster } from '../../bin/agents-state.mjs'
-import { shippedPluginText } from './test-fixtures/earlier-opencode-plugins'
 import { approveRoster } from '../main/agents-approval'
 // Starts real processes or does much work: on a machine at twice its cores' load 5 s says nothing about it (Story 102.1).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })
@@ -374,6 +370,7 @@ const OBSERVED_REFERENCE = '01a0b657-21a8-7f00-addd-b73646828f5b'
 const QUIET = { code: 0, stdout: '', stderr: '' }
 /** What every command asked for Cursor says, since Epic 71 retired it. */
 const CURSOR_RETIRED = "Cursor was retired on 2026-10-14; BMN's support for it is kept at the git tag cursor-support-final"
+const OPENCODE_RETIRED = "OpenCode was retired on 2026-11-20; BMN's support for it is kept at the git tag opencode-support-final"
 
 async function runHook(
   fixture: Awaited<ReturnType<typeof cliFixture>>,
@@ -1364,7 +1361,7 @@ describe('bmn hook prompt guard (Story 60.8)', () => {
 
     expect(withTeam.stdout).toContain('  prompt guard: active, stops a prompt that would send private work to a provider that may not see it (measured on Claude Code 2.1.296)')
     expect(withTeam.stdout).not.toContain('Cursor')
-    expect(withTeam.stdout).toContain('  prompt guard: not available in OpenCode (it has no prompt event BMN can answer)')
+    expect(withTeam.stdout).not.toContain('OpenCode')
     expect(withoutTeam.stdout).toContain('  prompt guard: inactive (no team has been approved, so no prompt is checked)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.guard).toMatch(/^prompt guard: active, stops a prompt/)
   })
@@ -1782,7 +1779,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     for (const event of ['PreToolUse', 'Stop', 'PostCompact']) {
       expect(await runCli(['hook', 'codex'], { env, input: afterTool(codex, { hook_event_name: event }) }), event).toEqual(QUIET)
     }
-    expect(await runCli(['hook', 'opencode'], { env, input: afterTool(codex) })).toEqual(QUIET)
+    expect(await runCli(['hook', 'opencode'], { env, input: afterTool(codex) })).toEqual({ ...QUIET, stderr: `bmn: ${OPENCODE_RETIRED}\n` })
     expect(await runCli(['hook', 'cursor'], { env, input: afterTool(codex) })).toEqual({ ...QUIET, stderr: `bmn: ${CURSOR_RETIRED}\n` })
     expect(fixture.handlers.takeMessage).not.toHaveBeenCalled()
   })
@@ -1851,7 +1848,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
 
     expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Codex 0.166.0)')
     expect(withTeam.stdout).toContain('  messages: handed to a working agent by this hook after a tool call (measured on Claude Code 2.1.318)')
-    expect(withTeam.stdout).toContain('  messages: none; a message or handoff for OpenCode is refused to its sender')
+    expect(withTeam.stdout).not.toContain('OpenCode')
     expect(withoutTeam.stdout).toContain('  messages: not handed over until a team is approved (measured on Codex 0.166.0)')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.messages).toMatch(/^messages: handed to a working agent/)
     expect(asJson.agents.find((row) => row.agent === 'claude')?.messages).toMatch(/^messages: handed to a working agent/)
@@ -2249,8 +2246,7 @@ describe('bmn hook provenance and the hook event log', () => {
     ['claude', 'OPENAI_BASE_URL', 'https://api.openai.com/v1', undefined],
     ['codex', 'OPENAI_BASE_URL', 'https://api.openai.com/v1', 'api.openai.com'],
     ['codex', 'OPENAI_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3', 'ark.cn-beijing.volces.com'],
-    ['codex', 'ANTHROPIC_BASE_URL', 'https://api.z.ai/api/anthropic', undefined],
-    ['opencode', 'ANTHROPIC_BASE_URL', 'https://api.z.ai/api/anthropic', undefined]
+    ['codex', 'ANTHROPIC_BASE_URL', 'https://api.z.ai/api/anthropic', undefined]
   ])('forwards only the hostname of %s own base URL (%s=%s)', async (agent, variable, value, apiHost) => {
     const fixture = await cliFixture()
 
@@ -2292,8 +2288,8 @@ describe('bmn hook provenance and the hook event log', () => {
     expect(observed?.claudeConfigDir).toBe(expected.replace('<cwd>', workdir).replace('<home>', home))
   })
 
-  it('sends no claudeConfigDir from a Codex or OpenCode hook', async () => {
-    for (const agent of ['codex', 'opencode']) {
+  it('sends no claudeConfigDir from a Codex hook', async () => {
+    for (const agent of ['codex']) {
       const fixture = await cliFixture()
       await runHook(fixture, agent, { hook_event_name: 'Stop' }, HOLDS_TERMINAL, { CLAUDE_CONFIG_DIR: '/srv/glm' })
       const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
@@ -2322,15 +2318,7 @@ describe('bmn hook provenance and the hook event log', () => {
     ['claude', { hook_event_name: 'SessionStart', model: 'glm\u0007-5\u007f' }, 'glm-5'],
     ['claude', { hook_event_name: 'SessionStart', model: 42 }, undefined],
     ['claude', { hook_event_name: 'SessionStart' }, undefined],
-    ['claude', { hook_event_name: 'SessionStart', model: '  \t ' }, undefined],
-    [
-      'opencode',
-      // The shipped plugin spreads `properties`; `message.updated` carries `{ info: Message }`.
-      { hook_event_name: 'message.updated', info: { role: 'assistant', providerID: 'moonshotai', modelID: 'kimi-k2' } },
-      'kimi-k2'
-    ],
-    ['opencode', { hook_event_name: 'message.updated', info: { role: 'user' } }, undefined],
-    ['opencode', { hook_event_name: 'session.started' }, undefined]
+    ['claude', { hook_event_name: 'SessionStart', model: '  \t ' }, undefined]
   ])('carries the model %s payloads report, trimmed and bounded', async (agent, event, model) => {
     const fixture = await cliFixture()
 
@@ -2568,16 +2556,6 @@ async function hookFileFixture(contents?: unknown, name = 'settings.json'): Prom
   if (contents !== undefined) {
     await writeFile(path, typeof contents === 'string' ? contents : `${JSON.stringify(contents, null, 2)}\n`)
   }
-  return path
-}
-
-/** OpenCode's plugin path in a fresh config folder of its own: <root>/opencode/bmn/tui.ts, cli.json in <root>/opencode. */
-async function openCodeFixture(contents?: string): Promise<string> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-')))
-  createdRoots.add(root)
-  const path = join(root, 'opencode', 'bmn', 'tui.ts')
-  await mkdir(dirname(path), { recursive: true })
-  if (contents !== undefined) await writeFile(path, contents)
   return path
 }
 
@@ -3554,7 +3532,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
 
     // Both agents, each at its own default path, and the moved Codex directory is the one consulted.
     const report = JSON.parse(result.stdout)
-    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode'])
+    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex'])
     expect(report.agents[0].file).toBe(join(home.root, '.claude', 'settings.json'))
     expect(report.agents[1].file).toBe(join(codexHome, 'hooks.json'))
     expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
@@ -3695,28 +3673,8 @@ describe('bmn hooks install', () => {
     expect(await backupsOf(link)).toEqual([])
   })
 
-  it('shows the full OpenCode replacement and refuses a retargeted plugin link', async () => {
-    const link = await openCodeFixture()
-    const first = join(dirname(link), 'first.ts')
-    const second = join(dirname(link), 'second.ts')
-    await writeFile(first, '// existing plugin\n')
-    await writeFile(second, '// existing plugin\n')
-    await symlink(first, link)
-    const tty = ttyHooks(['install', 'opencode', '--file', link])
-    await tty.waitFor('Install these hooks? [y/N] ')
-    expect(tty.output()).toContain('Proposed full file:')
-    expect(tty.output()).toContain('id: "bmn"')
-    await rm(link)
-    await symlink(second, link)
-    tty.write('yes\r')
-    expect(await tty.finish).toBe(1)
-    expect(tty.output()).toContain('REVISION_CONFLICT')
-    expect(await readFile(first, 'utf8')).toBe('// existing plugin\n')
-    expect(await readFile(second, 'utf8')).toBe('// existing plugin\n')
-    expect(await backupsOf(link)).toEqual([])
-  })
-  it.each(['claude', 'codex', 'opencode'])('requires explicit approval before a non-interactive %s write', async (agent) => {
-    const path = agent === 'opencode' ? await openCodeFixture('// older plugin\n') : await hookFileFixture({}, agent === 'claude' ? 'settings.json' : 'hooks.json')
+  it.each(['claude', 'codex'])('requires explicit approval before a non-interactive %s write', async (agent) => {
+    const path = await hookFileFixture({}, agent === 'claude' ? 'settings.json' : 'hooks.json')
     const before = await readFile(path, 'utf8')
     for (const args of [['install', agent, '--file', path], ['install', agent, '--file', path, '--json']]) {
       const denied = await runHooks(args)
@@ -4194,627 +4152,6 @@ describe('the hook event lists check and hook share', () => {
   })
 })
 
-// Session shape observed from OpenCode 1.18.31 on 2026-09-22, kept by 2.0.28 (2026-10-14).
-const OPENCODE_SESSION = 'ses_0123456789abSyntheticTest0'
-const OPENCODE_FOREGROUND = { ...HOLDS_TERMINAL, comm: 'opencode' }
-
-interface PluginSpawnCall { command: string; args: string[]; env: Record<string, string>; input?: string }
-
-/** A stand-in for node:child_process spawn that records each bmn call and answers it with `answer`. */
-function fakePluginSpawn(answer: (call: PluginSpawnCall) => { code: number; stdout?: string } | Promise<{ code: number; stdout?: string }>) {
-  const calls: PluginSpawnCall[] = []
-  const spawn = (command: string, args: string[], options: { env: Record<string, string>; stdio: string[] }) => {
-    const call: PluginSpawnCall = { command, args: [...args], env: options.env }
-    calls.push(call)
-    const handlers: Record<string, (value: unknown) => void> = {}
-    let onData: ((chunk: string) => void) | undefined
-    const finish = () => {
-      void Promise.resolve(answer(call)).then(({ code, stdout = '' }) => {
-        if (stdout !== '') onData?.(stdout)
-        handlers.close?.(code)
-      })
-    }
-    const child = {
-      stdout: { on: (name: string, handler: (chunk: string) => void) => { if (name === 'data') onData = handler } },
-      stdin: options.stdio[0] === 'pipe' ? { on: () => undefined, end: (text: string) => { call.input = text; finish() } } : null,
-      on: (name: string, handler: (value: unknown) => void) => { handlers[name] = handler }
-    }
-    if (options.stdio[0] !== 'pipe') queueMicrotask(finish)
-    return child
-  }
-  return { spawn, calls }
-}
-
-/** An OpenCode 2 terminal as its plugin sees it: the route on screen, the sessions it loaded, its client and events. */
-function fakeOpenCodeTerminal() {
-  const listeners: Array<(input: unknown) => void> = []
-  const terminal = {
-    route: { type: 'home' } as Record<string, unknown>,
-    sessions: new Map<string, { parentID?: string; created?: number }>(),
-    replies: { permission: [] as unknown[], form: [] as unknown[] },
-    outcome: (): Promise<void> => Promise.resolve()
-  }
-  const context = {
-    data: {
-      listen: (handler: (input: unknown) => void) => {
-        listeners.push(handler)
-        return () => { listeners.splice(listeners.indexOf(handler), 1) }
-      },
-      session: {
-        root: (id: string) => {
-          let root = id
-          while (terminal.sessions.get(root)?.parentID) root = terminal.sessions.get(root)!.parentID!
-          return root
-        },
-        get: (id: string) => terminal.sessions.has(id) ? { id, time: { created: terminal.sessions.get(id)!.created ?? 0 } } : undefined
-      }
-    },
-    ui: { router: { current: () => terminal.route } },
-    client: {
-      permission: { reply: (input: unknown) => { terminal.replies.permission.push(input); return terminal.outcome() } },
-      session: { form: { reply: (input: unknown) => { terminal.replies.form.push(input); return terminal.outcome() } } }
-    }
-  }
-  const emit = (type: string, data: unknown) => {
-    for (const listener of [...listeners]) listener({ details: { id: 'evt_synthetic', created: 0, type, data } })
-  }
-  return { terminal, context, emit, listeners }
-}
-
-/** The printed OpenCode plugin, run in a fresh context with this process environment and spawn; what it writes to its terminal goes to `written`. */
-async function loadOpenCodePlugin(env: Record<string, string | undefined>, spawn: unknown, written: string[] = []) {
-  const printed = await runHooks(['print', 'opencode'])
-  expect(printed, printed.stderr).toMatchObject({ code: 0 })
-  const imports = 'import { spawn } from "node:child_process"'
-  expect(printed.stdout).toContain(imports)
-  const javascript = stripTypeScriptTypes(printed.stdout).replace(imports, '').replace('export default', 'const plugin =')
-  const stdout = { write: (text: string) => { written.push(text); return true } }
-  return runInNewContext(`${javascript}; plugin`, { process: { env, stdout }, spawn, setInterval, clearInterval, setTimeout }) as {
-    id: string
-    setup: (context: unknown) => (() => unknown) | undefined
-  }
-}
-
-describe('OpenCode hooks', () => {
-  it('tells BMN only what its own terminal session and its subagents do, in the shapes bmn hook opencode reads', async () => {
-    const OTHER = 'ses_0123456789abSyntheticOthr'
-    const CHILD = 'ses_0123456789abSyntheticChld'
-    const OLDER = 'ses_0123456789abSyntheticOldr'
-    const { spawn, calls } = fakePluginSpawn((call) => call.args.includes('take') ? new Promise(() => undefined) : { code: 0 })
-    const outside = fakeOpenCodeTerminal()
-    const written: string[] = []
-    const plugin = await loadOpenCodePlugin({}, spawn, written)
-    expect(plugin.id).toBe('bmn')
-    expect(plugin.setup(outside.context)).toBeUndefined()
-    expect(outside.listeners).toHaveLength(0)
-    expect(written).toEqual([])
-
-    const { terminal, context, emit, listeners } = fakeOpenCodeTerminal()
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn, written)).setup(context)
-    // Before OpenCode draws, the plugin tells BMN's terminal that OpenCode runs in it, so its screen mirror starts (Story 93.3).
-    expect(written).toEqual(['\x1b]7501;state=starting:app=opencode\x07'])
-    const hooks = () => calls.filter((call) => call.args.includes('hook'))
-      .map((call) => ({ ...JSON.parse(call.input ?? 'null'), pin: call.env.BMN_OPENCODE_SESSION_ID }))
-    // On the home screen nothing is this terminal's yet.
-    emit('session.created', { sessionID: OPENCODE_SESSION })
-    emit('session.execution.started', { sessionID: OPENCODE_SESSION })
-    expect(calls).toHaveLength(0)
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    emit('session.execution.started', { sessionID: OPENCODE_SESSION })
-    emit('permission.asked', { id: 'per_other', sessionID: OTHER, action: 'shell', resources: ['ls'] })
-    emit('session.created', { sessionID: CHILD, parentID: OPENCODE_SESSION })
-    emit('permission.asked', { id: 'per_child', sessionID: CHILD, action: 'edit', resources: ['src/a.ts'], save: ['src/*'] })
-    emit('permission.asked', { id: 'per_1', sessionID: OPENCODE_SESSION, action: 'shell', resources: ['echo made-up'], save: ['echo *'] })
-    emit('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_1', reply: 'once' })
-    emit('form.created', { form: { id: 'frm_1', sessionID: OPENCODE_SESSION, title: 'Questions', metadata: { kind: 'question' }, fields: [
-      { key: 'q0', title: 'Made-up pick', description: 'Which made-up option?', type: 'string', custom: false,
-        options: [{ value: 'a', label: 'Alpha', description: 'the first' }, { value: 'b', label: 'Beta' }] },
-      { key: 'q1', title: 'Several', description: 'Which ones?', type: 'multiselect', options: [{ value: 'x', label: 'Ex' }, { value: 'y', label: 'Why' }] }
-    ] } })
-    // A form that is not a question, such as a sign-in, is never sent.
-    emit('form.created', { form: { id: 'frm_key', sessionID: OPENCODE_SESSION, title: 'Sign in', metadata: { kind: 'integration' }, fields: [{ key: 'token', type: 'string' }] } })
-    emit('form.replied', { id: 'frm_1', sessionID: OPENCODE_SESSION, answer: { q0: 'a', q1: ['y', 'typed'] } })
-    emit('session.step.started', { sessionID: OPENCODE_SESSION, model: { id: 'made-up-model', providerID: 'made-up' } })
-    emit('session.step.started', { sessionID: OPENCODE_SESSION, model: { id: 'made-up-model', providerID: 'made-up' } })
-    emit('session.execution.interrupted', { sessionID: OPENCODE_SESSION, reason: 'superseded' })
-    emit('session.execution.failed', { sessionID: OPENCODE_SESSION, error: { type: 'provider', message: 'Provider unavailable' } })
-    emit('session.execution.interrupted', { sessionID: OPENCODE_SESSION, reason: 'user' })
-    emit('session.execution.succeeded', { sessionID: CHILD })
-    // OpenCode 2 ends a compaction with session.compaction.ended; BMN reads OpenCode 1's session.compacted.
-    emit('session.compaction.ended', { sessionID: CHILD, reason: 'auto', text: 'made-up summary', recent: 'msg_1' })
-    // Going to a session started earlier is a resume.
-    terminal.sessions.set(OLDER, { created: 1 })
-    terminal.route = { type: 'session', sessionID: OLDER }
-    emit('vcs.branch.updated', {})
-    emit('session.deleted', { sessionID: OLDER })
-    // So is coming back to one this terminal started, however recently.
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    emit('vcs.branch.updated', {})
-    // The home screen keeps the last session: its turn still reaches BMN.
-    terminal.route = { type: 'home' }
-    emit('session.execution.started', { sessionID: OPENCODE_SESSION })
-    // Every event carries the plugin's promise (Story 96.3).
-    const pinned = { pin: OPENCODE_SESSION, bmn_plugin: 1 }
-    await vi.waitFor(() => expect(hooks()).toHaveLength(16))
-    expect(hooks()).toEqual([
-      { hook_event_name: 'session.created', sessionID: OPENCODE_SESSION, info: { id: OPENCODE_SESSION }, ...pinned },
-      { hook_event_name: 'session.status', sessionID: OPENCODE_SESSION, status: { type: 'busy' }, ...pinned },
-      { hook_event_name: 'permission.asked', id: 'per_child', sessionID: CHILD, permission: 'edit', patterns: ['src/*'], metadata: {}, ...pinned },
-      { hook_event_name: 'permission.asked', id: 'per_1', sessionID: OPENCODE_SESSION, permission: 'shell', patterns: ['echo *'], metadata: { command: 'echo made-up' }, ...pinned },
-      { hook_event_name: 'permission.replied', sessionID: OPENCODE_SESSION, requestID: 'per_1', reply: 'once', ...pinned },
-      { hook_event_name: 'question.asked', id: 'frm_1', sessionID: OPENCODE_SESSION, questions: [
-        { question: 'Which made-up option?', header: 'Made-up pick', options: [{ label: 'Alpha', description: 'the first' }, { label: 'Beta' }], multiple: false, custom: false },
-        { question: 'Which ones?', header: 'Several', options: [{ label: 'Ex' }, { label: 'Why' }], multiple: true }
-      ], ...pinned },
-      { hook_event_name: 'question.replied', sessionID: OPENCODE_SESSION, requestID: 'frm_1', answers: [['Alpha'], ['Why', 'typed']], ...pinned },
-      { hook_event_name: 'message.updated', sessionID: OPENCODE_SESSION, info: { sessionID: OPENCODE_SESSION, role: 'assistant', modelID: 'made-up-model', providerID: 'made-up' }, ...pinned },
-      { hook_event_name: 'session.error', sessionID: OPENCODE_SESSION, error: { type: 'provider', message: 'Provider unavailable' }, ...pinned },
-      { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION, source: 'interrupted', ...pinned },
-      { hook_event_name: 'session.idle', sessionID: CHILD, ...pinned },
-      { hook_event_name: 'session.compacted', sessionID: CHILD, ...pinned },
-      { hook_event_name: 'tui.session.select', sessionID: OLDER, pin: OLDER, bmn_plugin: 1 },
-      { hook_event_name: 'session.deleted', sessionID: OLDER, pin: OLDER, bmn_plugin: 1 },
-      { hook_event_name: 'tui.session.select', sessionID: OPENCODE_SESSION, ...pinned },
-      { hook_event_name: 'session.status', sessionID: OPENCODE_SESSION, status: { type: 'busy' }, ...pinned }
-    ])
-    const first = calls.find((call) => call.args.includes('hook'))
-    expect([first?.command, ...first?.args ?? []]).toEqual(['timeout', '-s', 'KILL', '3s', 'bmn', 'hook', 'opencode'])
-    // OpenCode waits for the plugin as it quits: BMN hears the agent left, after every event already on its way.
-    await stop?.()
-    expect(listeners).toHaveLength(0)
-    expect(hooks().slice(16)).toEqual([{ hook_event_name: 'tui.exit', sessionID: OPENCODE_SESSION, ...pinned }])
-  })
-
-  it('tells BMN of a switch to another root only after the reports already on their way, so BMN may lag the screen by more than its 1 s look (Story 93.3, epic review)', async () => {
-    const OTHER = 'ses_0123456789abSyntheticOthr'
-    let release = (): void => undefined
-    const slow = new Promise<{ code: number }>((resolve) => { release = () => resolve({ code: 0 }) })
-    let first = true
-    const { spawn, calls } = fakePluginSpawn((call) => {
-      if (call.args.includes('take')) return new Promise(() => undefined)
-      if (!first) return { code: 0 }
-      first = false
-      return slow
-    })
-    const { terminal, context, emit } = fakeOpenCodeTerminal()
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
-    const told = () => calls.filter((call) => call.args.includes('hook')).map((call) => JSON.parse(call.input ?? 'null') as { hook_event_name: string; sessionID: string })
-    // The root's turn finishes while the first report (the root's selection) is still being delivered.
-    emit('session.execution.succeeded', { sessionID: OPENCODE_SESSION })
-    await vi.waitFor(() => expect(told()).toHaveLength(1))
-    // The owner switches to another root at the keyboard: the plugin sees it at its next look, within 1 s ...
-    terminal.route = { type: 'session', sessionID: OTHER }
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    // ... but BMN has heard nothing new: its latest event for this terminal is still the first root's.
-    expect(told().map((body) => [body.hook_event_name, body.sessionID])).toEqual([['tui.session.select', OPENCODE_SESSION]])
-    release()
-    await vi.waitFor(() => expect(told()).toHaveLength(3))
-    expect(told().map((body) => [body.hook_event_name, body.sessionID])).toEqual([
-      ['tui.session.select', OPENCODE_SESSION], ['session.idle', OPENCODE_SESSION], ['tui.session.select', OTHER]])
-    await stop?.()
-  })
-
-  it.each(['2.0.29', '2.0.32'])('replays the events recorded on OpenCode %s into BMN: the owner\'s interrupt stays his, a child\'s events are the subagent\'s (Story 93.3)', async (version) => {
-    // Story 93.1's provenance capture: a root turn, a pasted one, a child run while the root stays on screen, the owner's interrupt.
-    const recorded = (JSON.parse(readFileSync(join(dirname(CLI), '..', 'src', 'utility', 'test-fixtures', 'away-wake', 'opencode-states.json'), 'utf8')) as {
-      provenance: Record<string, { events: Array<{ type: string; data: Record<string, unknown> }>; hooks: Array<{ pinned: string; body: Record<string, unknown> }> }>
-    }).provenance[version]!
-    const { spawn, calls } = fakePluginSpawn((call) => call.args.includes('take') ? new Promise(() => undefined) : { code: 0 })
-    const { terminal, context, emit } = fakeOpenCodeTerminal()
-    terminal.sessions.set('ses_child', { parentID: 'ses_root' })
-    terminal.route = { type: 'session', sessionID: 'ses_root' }
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
-    for (const event of recorded.events) emit(event.type, event.data)
-    await stop?.()
-    const told = calls.filter((call) => call.args.includes('hook')).map((call) => ({ pin: call.env.BMN_OPENCODE_SESSION_ID!, body: JSON.parse(call.input ?? 'null') as Record<string, unknown> }))
-    // What the recorded plugin told BMN, but for the interrupt it now marks, the quit it now reports and the promise every
-    // event now carries (Story 96.3; 93.1 recorded model steps as message.updated; these events leave them out).
-    const expected = recorded.hooks.filter((hook) => hook.body.hook_event_name !== 'message.updated').map((hook) => ({ pin: hook.pinned, body: { ...hook.body, bmn_plugin: 1 } as Record<string, unknown> }))
-    expect(expected.at(-1)).toEqual({ pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root', bmn_plugin: 1 } })
-    expected[expected.length - 1] = { pin: 'ses_root', body: { hook_event_name: 'session.idle', sessionID: 'ses_root', source: 'interrupted', bmn_plugin: 1 } }
-    expect(told).toEqual([...expected, { pin: 'ses_root', body: { hook_event_name: 'tui.exit', sessionID: 'ses_root', bmn_plugin: 1 } }])
-
-    // Each body through bmn hook opencode, as the plugin runs it: what the service is told each event speaks for.
-    const fixture = await cliFixture()
-    for (const { pin, body } of told) {
-      expect((await runHook(fixture, 'opencode', body, OPENCODE_FOREGROUND, { BMN_OPENCODE_SESSION_ID: pin })).code).toBe(0)
-    }
-    const observed = fixture.handlers.observeHookEvent.mock.calls.map(([params]) => params as { event: string; source: string | null; plugin?: number })
-    expect(observed.map(({ event, source }) => [event, source])).toEqual([
-      ['session.created', null], ['session.status', null], ['session.idle', null], ['session.status', null], ['session.idle', null],
-      ['session.status', 'subagent'], ['session.idle', 'subagent'], ['session.status', null], ['session.idle', 'interrupted'], ['tui.exit', null]])
-    // The service hears the promise with each event, so the Away wake can tell this plugin from an earlier one (Story 96.3).
-    expect(observed.every((params) => params.plugin === 1)).toBe(true)
-    // A child's finished run opens no finished-turn notice of the root; the root's own turns and the owner's stop do.
-    expect(fixture.handlers.openAttention.mock.calls.filter(([params]) => (params as { requestKey: string }).requestKey === 'opencode:turn')).toHaveLength(3)
-  })
-
-  it('tells BMN each finished tool call of its session and subagents, with the name and input OpenCode gave earlier (Story 92.2)', async () => {
-    const CHILD = 'ses_0123456789abSyntheticChld'
-    const OTHER = 'ses_0123456789abSyntheticOthr'
-    const { spawn, calls } = fakePluginSpawn(() => ({ code: 0 }))
-    const { terminal, context, emit } = fakeOpenCodeTerminal()
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
-    const call = (sessionID: string, id: string, name: string, input: unknown) => {
-      emit('session.tool.input.started', { sessionID, assistantMessageID: 'msg_1', id, name })
-      emit('session.tool.called', { sessionID, assistantMessageID: 'msg_1', id, input, executed: true })
-    }
-    emit('session.created', { sessionID: CHILD, parentID: OPENCODE_SESSION })
-    call(OPENCODE_SESSION, 'call_1', 'read', { filePath: 'src/a.ts' })
-    emit('session.tool.success', { sessionID: OPENCODE_SESSION, assistantMessageID: 'msg_1', id: 'call_1', content: [{ type: 'text', text: 'made-up' }], executed: true })
-    call(CHILD, 'call_2', 'bash', { command: 'false' })
-    emit('session.tool.failed', { sessionID: CHILD, assistantMessageID: 'msg_1', id: 'call_2', error: { type: 'tool', message: 'exit 1' }, executed: true })
-    // Another terminal's call, and an end this plugin never saw start, are not sent.
-    call(OTHER, 'call_3', 'read', { filePath: 'x' })
-    emit('session.tool.success', { sessionID: OTHER, assistantMessageID: 'msg_1', id: 'call_3', content: [] })
-    emit('session.tool.success', { sessionID: OPENCODE_SESSION, assistantMessageID: 'msg_1', id: 'call_unknown', content: [] })
-    const hooks = () => calls.filter((spawned) => spawned.args.includes('hook')).map((spawned) => JSON.parse(spawned.input ?? 'null'))
-      .filter((event) => event.hook_event_name === 'tool.execute.after')
-    await vi.waitFor(() => expect(hooks()).toHaveLength(2))
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(hooks()).toEqual([
-      { hook_event_name: 'tool.execute.after', sessionID: OPENCODE_SESSION, tool_name: 'read', tool_input: { filePath: 'src/a.ts' }, tool_response: [{ type: 'text', text: 'made-up' }], bmn_plugin: 1 },
-      { hook_event_name: 'tool.execute.after', sessionID: CHILD, tool_name: 'bash', tool_input: { command: 'false' }, error: { type: 'tool', message: 'exit 1' }, bmn_plugin: 1 }
-    ])
-    stop?.()
-  })
-
-  it('sends no answer that arrives after OpenCode unloaded the plugin, or after the terminal moved to another session (Astra review)', async () => {
-    const answerNext: Array<(answers: unknown[]) => void> = []
-    const { spawn, calls } = fakePluginSpawn(async (call) => {
-      if (!call.args.includes('take')) return { code: 0 }
-      const answers = await new Promise<unknown[]>((resolve) => answerNext.push(resolve))
-      return { code: 0, stdout: JSON.stringify({ answers }) }
-    })
-    const OTHER = 'ses_0123456789abSyntheticOthr'
-    const { terminal, context, emit } = fakeOpenCodeTerminal()
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
-    emit('permission.asked', { id: 'per_1', sessionID: OPENCODE_SESSION, action: 'edit', resources: ['a'] })
-    await vi.waitFor(() => expect(answerNext).toHaveLength(1))
-    // The owner opens another session while BMN collects, and the answer comes back before any event or the
-    // plugin's next look at the route: it is not sent, and BMN hears of the move.
-    terminal.route = { type: 'session', sessionID: OTHER }
-    answerNext.shift()!([{ requestRef: 'per_1', kind: 'permission', reply: 'once' }])
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(terminal.replies.permission).toEqual([])
-    expect(calls.filter((call) => call.args.includes('hook')).map((call) => JSON.parse(call.input ?? 'null').hook_event_name))
-      .toContain('tui.session.select')
-
-    emit('permission.asked', { id: 'per_2', sessionID: OTHER, action: 'edit', resources: ['b'] })
-    await vi.waitFor(() => expect(answerNext).toHaveLength(1))
-    stop?.()
-    answerNext.shift()!([{ requestRef: 'per_2', kind: 'permission', reply: 'once' }])
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(terminal.replies.permission).toEqual([])
-  })
-
-  it('answers a tap through its own client, sends a Deny only for the one waiting permission, and reports what OpenCode said', async () => {
-    const takes: string[][] = []
-    const answerNext: Array<(answers: unknown[]) => void> = []
-    const { spawn } = fakePluginSpawn(async (call) => {
-      if (!call.args.includes('take')) return { code: 0 }
-      takes.push(call.args)
-      const answers = await new Promise<unknown[]>((resolve) => answerNext.push(resolve))
-      return { code: 0, stdout: JSON.stringify({ answers }) }
-    })
-    const { terminal, context, emit } = fakeOpenCodeTerminal()
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket' }, spawn)).setup(context)
-    const answer = async (answers: unknown[], expectedTakes: number) => {
-      await vi.waitFor(() => expect(answerNext).toHaveLength(1))
-      answerNext.shift()!(answers)
-      await vi.waitFor(() => expect(takes).toHaveLength(expectedTakes))
-    }
-    const waitLong = ['-s', 'KILL', '35s', 'bmn', 'answer', 'take', '--wait', '25', '--json']
-    const report = (outcome: string) => ['-s', 'KILL', '10s', 'bmn', 'answer', 'take', '--wait', '0', '--reported', outcome, '--json']
-    const permission = (requestID: string, decision: string) => ({ sessionID: OPENCODE_SESSION, requestID, decision })
-    emit('permission.asked', { id: 'per_1', sessionID: OPENCODE_SESSION, action: 'edit', resources: ['a'] })
-    emit('permission.asked', { id: 'per_2', sessionID: OPENCODE_SESSION, action: 'edit', resources: ['b'] })
-    await vi.waitFor(() => expect(takes).toHaveLength(1))
-    expect(takes[0]).toEqual(waitLong)
-    // Two permissions wait: the Deny is not sent, and nothing is reported.
-    await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 2)
-    expect(terminal.replies.permission).toEqual([])
-    expect(takes[1]).toEqual(waitLong)
-    await answer([{ requestRef: 'per_2', kind: 'permission', reply: 'once' }], 3)
-    expect(terminal.replies.permission).toEqual([permission('per_2', 'once')])
-    expect(takes[2]).toEqual(report('per_2=ok'))
-    emit('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_2', reply: 'once' })
-    await answer([], 4)
-    // A transport or decoding failure may still have applied the reply: nothing is reported, so BMN keeps it uncertain.
-    terminal.outcome = () => Promise.reject(Object.assign(new Error('connection lost'), { _tag: 'HttpClientError' }))
-    await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 5)
-    expect(terminal.replies.permission[1]).toEqual(permission('per_1', 'reject'))
-    expect(takes[4]).toEqual(waitLong)
-    // The server's own refusal, as 2.0.28 threw it for an answered permission, applied nothing.
-    terminal.outcome = () => Promise.reject(Object.assign(new Error('Permission request not found: per_1'), { _tag: 'PermissionNotFoundError', requestID: 'per_1' }))
-    await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 6)
-    expect(takes[5]).toEqual(report('per_1=failed'))
-    emit('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_1', reply: 'reject' })
-    terminal.outcome = () => Promise.resolve()
-    emit('form.created', { form: { id: 'frm_1', sessionID: OPENCODE_SESSION, title: 'Questions', metadata: { kind: 'question' }, fields: [
-      { key: 'q0', title: 'Pick', description: 'Which?', type: 'string', custom: false, options: [{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }] },
-      { key: 'q1', title: 'Several', description: 'Which ones?', type: 'multiselect', options: [{ value: 'x', label: 'Ex' }] }
-    ] } })
-    await answer([], 7)
-    // Typed text goes only where the question takes it.
-    await answer([{ requestRef: 'frm_1', kind: 'question', answers: [['Typed'], ['Ex']] }], 8)
-    expect(terminal.replies.form).toEqual([])
-    await answer([{ requestRef: 'frm_1', kind: 'question', answers: [['Beta'], ['Ex', 'typed too']] }], 9)
-    expect(terminal.replies.form).toEqual([{ sessionID: OPENCODE_SESSION, formID: 'frm_1', answer: { q0: 'b', q1: ['x', 'typed too'] } }])
-    expect(takes[8]).toEqual(report('frm_1=ok'))
-    emit('session.execution.succeeded', { sessionID: OPENCODE_SESSION })
-    answerNext.shift()!([])
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(takes).toHaveLength(9)
-    stop?.()
-  })
-
-  it('kills a stalled bmn within 3 seconds', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'bmn-plugin-deadline-'))
-    createdRoots.add(root)
-    const pidFile = join(root, 'pids')
-    await writeFile(join(root, 'bmn'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(${JSON.stringify(pidFile)}, process.pid + '\\n'); setInterval(() => {}, 1000)\n`)
-    await chmod(join(root, 'bmn'), 0o700)
-    const pids = async () => existsSync(pidFile) ? (await readFile(pidFile, 'utf8')).split('\n').filter(Boolean).map(Number) : []
-    const { terminal, context, emit } = fakeOpenCodeTerminal()
-    terminal.route = { type: 'session', sessionID: OPENCODE_SESSION }
-    const stop = (await loadOpenCodePlugin({ BMN_CONTROL_SOCKET: '/fixture/socket', PATH: `${root}:${process.env.PATH}` }, spawnChild)).setup(context)
-    const started = Date.now()
-    try {
-      emit('session.execution.succeeded', { sessionID: OPENCODE_SESSION })
-      await vi.waitFor(async () => expect(await pids()).toHaveLength(1))
-      const [pid] = await pids()
-      const gone = await timedBesideControl(() => vi.waitFor(() => expect(() => process.kill(pid!, 0)).toThrow(), { timeout: 15_000 }))
-      expect(Date.now() - started).toBeLessThan(4_200 + gone.late)
-    } finally {
-      stop?.()
-      await new Promise((resolve) => setTimeout(resolve, 200))
-      for (const pid of await pids()) {
-        try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
-      }
-    }
-  }, 9000)
-
-  it.each([
-    ['permission.asked', { permission: 'edit', patterns: ['src/**'] }, 'openAttention', { requestKey: 'opencode:permission', kind: 'permission', title: 'OpenCode asks to edit', body: 'src/**' }],
-    ['permission.replied', { reply: 'once' }, 'resolveAttention', { requestKey: 'opencode:permission', resolution: 'answered in the terminal' }],
-    ['permission.replied', { reply: 'always' }, 'resolveAttention', { requestKey: 'opencode:permission' }],
-    ['permission.replied', { reply: 'reject' }, 'withdrawAttention', { requestKey: 'opencode:permission' }],
-    ['session.status', { status: { type: 'busy' } }, 'resolveAttention', { requestKey: 'opencode:question' }],
-    ['session.idle', {}, 'openAttention', { requestKey: 'opencode:turn', title: 'OpenCode finished a turn', kind: 'notice' }],
-    ['session.error', { error: { data: { message: 'Provider unavailable' } } }, 'openAttention', { requestKey: 'opencode:error', body: 'Provider unavailable' }],
-    ['session.deleted', {}, 'withdrawAttention', { requestKey: 'opencode:error' }],
-    ['tui.exit', {}, 'withdrawAttention', { requestKey: 'opencode:turn' }],
-    ['question.asked', { questions: [{ question: 'Which one?', options: [{ label: 'First' }, { label: 'Second' }] }] }, 'openAttention', { requestKey: 'opencode:question', kind: 'question', body: '1. Which one?\n   First | Second' }],
-    ['question.replied', {}, 'resolveAttention', { requestKey: 'opencode:question' }],
-    ['question.rejected', {}, 'withdrawAttention', { requestKey: 'opencode:question' }]
-  ])('maps %s and records provenance', async (event, properties, handler, expected) => {
-    const fixture = await cliFixture()
-    expect(await runHook(fixture, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION, ...properties }, OPENCODE_FOREGROUND)).toEqual(QUIET)
-    const spy = fixture.handlers[handler as 'openAttention']
-    expect(spy.mock.calls.some(([params]) => {
-      try { expect(params).toMatchObject({ ...expected, origin: `hook:opencode:${event}` }); return true } catch { return false }
-    })).toBe(true)
-    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ agent: 'opencode', event, effects: expect.arrayContaining([handler === 'openAttention' ? 'opened' : handler === 'resolveAttention' ? 'answered' : 'withdrew']) }))
-  })
-
-  it.each([
-    ['permission.asked', { permission: 'edit', patterns: ['src/**', 'docs/**'] }, 'openAttention', { requestKey: 'opencode:subagent-permission', kind: 'permission', title: 'OpenCode subagent asks to edit', body: 'src/**\ndocs/**' }],
-    ['permission.replied', { reply: 'once' }, 'resolveAttention', { requestKey: 'opencode:subagent-permission', resolution: 'answered in the terminal' }],
-    ['permission.replied', { reply: 'always' }, 'resolveAttention', { requestKey: 'opencode:subagent-permission', resolution: 'answered in the terminal' }],
-    ['permission.replied', { reply: 'reject' }, 'withdrawAttention', { requestKey: 'opencode:subagent-permission' }],
-    ['question.asked', { questions: [{ question: 'Which one?', options: [{ label: 'First' }] }] }, 'openAttention', { requestKey: 'opencode:subagent-question', kind: 'question', title: 'OpenCode subagent asks: Which one?', body: '1. Which one?\n   First' }],
-    ['question.replied', {}, 'resolveAttention', { requestKey: 'opencode:subagent-question', resolution: 'answered in the terminal' }],
-    ['question.rejected', {}, 'withdrawAttention', { requestKey: 'opencode:subagent-question' }]
-  ])('maps child %s to its own slot', async (event, properties, handler, expected) => {
-    const fixture = await cliFixture()
-    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
-    expect(await runHook(bound, 'opencode', { hook_event_name: event, sessionID: 'ses_child', ...properties }, OPENCODE_FOREGROUND)).toEqual(QUIET)
-    expect(fixture.handlers[handler as 'openAttention']).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ...expected, origin: `hook:opencode:${event}` }))
-    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    { info: { id: 'ses_main', parentID: 'ses_parent' } },
-    { info: { id: 'ses_sibling' } },
-    { sessionID: 'ses_sibling' }
-  ])('routes parentID and sibling identities to child slots: %j', async (identity) => {
-    const fixture = await cliFixture()
-    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
-    await runHook(bound, 'opencode', { hook_event_name: 'permission.asked', permission: 'edit', ...identity }, OPENCODE_FOREGROUND)
-    expect(fixture.handlers.openAttention).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ requestKey: 'opencode:subagent-permission' }))
-  })
-
-  it.each(['session.status', 'session.idle', 'session.error', 'session.created', 'session.deleted', 'tui.session.select', 'unknown'])('ignores child %s', async (event) => {
-    const fixture = await cliFixture()
-    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
-    await runHook(bound, 'opencode', { hook_event_name: event, sessionID: 'ses_child', status: { type: 'busy' } }, OPENCODE_FOREGROUND)
-    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
-    expect(fixture.handlers.resolveAttention).not.toHaveBeenCalled()
-    expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
-    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
-    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ effects: [] }))
-  })
-
-  it.each(['session.idle', 'session.deleted', 'tui.session.select', 'session.status'])('handles child slots during main %s', async (event) => {
-    const fixture = await cliFixture()
-    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: OPENCODE_SESSION } }
-    const openKeys = new Set<string>()
-    fixture.handlers.openAttention.mockImplementation(async (params) => { openKeys.add(params.requestKey); return { opened: true } })
-    fixture.handlers.withdrawAttention.mockImplementation(async (params) => { openKeys.delete(params.requestKey); return { withdrawn: true } })
-    fixture.handlers.resolveAttention.mockImplementation(async (params) => { openKeys.delete(params.requestKey); return { resolved: true } })
-    for (const hook of ['permission.asked', 'question.asked']) {
-      await runHook(bound, 'opencode', { hook_event_name: hook, sessionID: 'ses_child' }, OPENCODE_FOREGROUND)
-    }
-    expect([...openKeys].sort()).toEqual(['opencode:subagent-permission', 'opencode:subagent-question'])
-    await runHook(bound, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION, status: { type: 'busy' } }, OPENCODE_FOREGROUND)
-    for (const key of ['opencode:subagent-permission', 'opencode:subagent-question']) {
-      expect(openKeys.has(key)).toBe(event === 'session.status')
-    }
-  })
-
-  it('drops an OpenCode session reference that the binding store would refuse', async () => {
-    const fixture = await cliFixture()
-    const malformed = 'ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV'
-    const methods: string[] = []
-    const socketPath = join(fixture.root, 'raw-hook.sock')
-    const rawServer = createServer((socket) => {
-      socket.setEncoding('utf8')
-      let buffer = ''
-      socket.on('data', (chunk: string) => {
-        buffer += chunk
-        let newline = buffer.indexOf('\n')
-        while (newline !== -1) {
-          const message = JSON.parse(buffer.slice(0, newline)) as { id: number; method: string }
-          buffer = buffer.slice(newline + 1)
-          methods.push(message.method)
-          socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { recorded: true } })}\n`)
-          newline = buffer.indexOf('\n')
-        }
-      })
-    })
-    await new Promise<void>((resolve, reject) => {
-      rawServer.once('error', reject)
-      rawServer.listen(socketPath, resolve)
-    })
-    try {
-      const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
-      const env = { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: socketPath, BMN_PROC_ROOT: proc }
-      expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
-        hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
-      }) })).toEqual(QUIET)
-      // A new conversation in the terminal withdraws the last one's six kinds of request.
-      const withdrawals = Array<string>(6).fill('attention.withdraw')
-      expect(methods).toEqual(['auth', ...withdrawals, 'hook.observe'])
-
-      methods.length = 0
-      expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
-        hook_event_name: 'session.created', sessionID: OPENCODE_SESSION, info: { id: OPENCODE_SESSION }
-      }) })).toEqual(QUIET)
-      expect(methods).toEqual(['auth', ...withdrawals, 'conversation.observe', 'hook.observe'])
-    } finally {
-      await new Promise<void>((resolve) => rawServer.close(() => resolve()))
-    }
-  })
-
-  it.each([['session.created', 'startup'], ['tui.session.select', 'resume']])('captures %s with the OpenCode reference', async (event, source) => {
-    const fixture = await cliFixture()
-    await runHook(fixture, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION }, OPENCODE_FOREGROUND)
-    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: OPENCODE_SESSION, source }), expect.any(Function))
-    if (source === 'resume') expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(6)
-  })
-
-  it('ignores child conversation bindings, malformed references and nested agent processes', async () => {
-    const fixture = await cliFixture()
-    await runHook(fixture, 'opencode', { hook_event_name: 'session.created', info: { id: OPENCODE_SESSION, parentID: 'parent' } }, OPENCODE_FOREGROUND)
-    await runHook(fixture, 'opencode', { hook_event_name: 'session.created', sessionID: OBSERVED_REFERENCE }, OPENCODE_FOREGROUND)
-    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
-    const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
-    await runCli(['hook', 'opencode'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, BMN_OPENCODE_SESSION_ID: 'ses_other' }, input: JSON.stringify({ hook_event_name: 'permission.asked', sessionID: OPENCODE_SESSION }) })
-    expect(fixture.handlers.openAttention).toHaveBeenCalledWith(expect.objectContaining({ requestKey: 'opencode:subagent-permission', title: 'OpenCode subagent asks to use a tool' }))
-    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'permission.asked', effects: ['opened'] }))
-    fixture.handlers.observeHookEvent.mockClear()
-    await runHook(fixture, 'opencode', { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION }, { ...OPENCODE_FOREGROUND, tty: 0 })
-    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
-  })
-
-  it('prints, installs, compares, backs up and repairs the exact shipped plugin and its cli.json entry', async () => {
-    const path = await openCodeFixture()
-    const entry = dirname(path)
-    const config = dirname(entry)
-    const cli = join(config, 'cli.json')
-    const printed = await runHooks(['print', 'opencode'])
-    expect(printed.code).toBe(0)
-    expect(printed.stdout).toContain('export default {')
-    expect(printed.stdout).toContain('"bmn", "hook", "opencode"')
-    await writeFile(cli, '{\n    "$schema": "https://opencode.ai/v2/cli.json",\n    "plugins": ["owner-plugin"]\n}\n')
-    // OpenCode 1's plugin of BMN's, byte for byte as a release shipped it, goes, with a copy kept where OpenCode does not
-    // load it; the owner's own stays, and so does a copy of BMN's someone edited (96 review: comments make no file BMN's).
-    const olderText = shippedPluginText('932625075f', 'apps/desktop/bin/bmn')
-    await mkdir(join(config, 'plugin'))
-    await mkdir(join(config, 'plugins'))
-    await writeFile(join(config, 'plugin', 'bmn.ts'), olderText)
-    await writeFile(join(config, 'plugins', 'bmn.ts'), `${olderText}// the owner's own line\n`)
-    const before = await runHooks(['check', 'opencode', '--file', path])
-    expect(before.code).toBe(1)
-    expect(before.stdout).toMatch(/plugin\s+missing\s+OpenCode 1's plugin is still at .*plugin\/bmn\.ts; install removes it/)
-    expect(before.stdout).toMatch(/cli\.json\s+missing/)
-    const install = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
-    expect(install).toMatchObject({ installed: ['plugin', 'cli.json', 'permission'], removed: [join(config, 'plugin', 'bmn.ts')], file: path })
-    expect(await readFile(path, 'utf8')).toBe(printed.stdout)
-    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', entry] })
-    expect((await readFile(cli, 'utf8')).split('\n')[1]).toBe('    "$schema": "https://opencode.ai/v2/cli.json",')
-    expect(existsSync(join(config, 'plugin', 'bmn.ts'))).toBe(false)
-    expect(await readFile(join(config, 'plugins', 'bmn.ts'), 'utf8')).toBe(`${olderText}// the owner's own line\n`)
-    const olderCopy = install.backups.find((file: string) => basename(file).startsWith('plugin-bmn.ts.bmn-backup-'))
-    expect(dirname(olderCopy)).toBe(entry)
-    expect(await readFile(olderCopy, 'utf8')).toBe(olderText)
-    expect(install.backups.some((file: string) => basename(file).startsWith('cli.json.bmn-backup-'))).toBe(true)
-    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
-    expect(JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout).installed).toEqual([])
-    // OpenCode 2 refuses OpenCode 1's plugin at every start: one left behind beside a correct install needs a repair.
-    await writeFile(join(config, 'plugin', 'bmn.ts'), olderText)
-    const leftover = await runHooks(['check', 'opencode', '--file', path])
-    expect(leftover.code).toBe(1)
-    expect(leftover.stdout).toMatch(/plugin\s+wired \(older wording\)\s+OpenCode 1's plugin is still at .*plugin\/bmn\.ts; install removes it/)
-    const cleared = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
-    expect(cleared.removed).toEqual([join(config, 'plugin', 'bmn.ts')])
-    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
-    await writeFile(path, '// unrelated plugin\n')
-    expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toMatch(/plugin\s+missing/)
-    // Story 96.3: BMN's comments are not BMN's bytes. A copy edited since is not counted as BMN's; one BMN shipped earlier is.
-    await writeFile(path, shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn'))
-    expect((await runHooks(['check', 'opencode', '--file', path])).stdout)
-      .toMatch(/plugin\s+wired \(older wording\)\s+an earlier release of BMN's plugin; BMN upgrades it at its next start/)
-    await writeFile(path, '// Shipped by BMN\n// bmn hook opencode\n')
-    expect((await runHooks(['check', 'opencode', '--file', path])).stdout)
-      .toMatch(/plugin\s+missing\s+a copy of BMN's plugin edited since BMN wrote it; BMN leaves it as it is, and install replaces it/)
-    const repair = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
-    expect(repair.installed).toEqual(['plugin'])
-    expect(await readFile(repair.backups[0], 'utf8')).toBe('// Shipped by BMN\n// bmn hook opencode\n')
-    expect(await readFile(path, 'utf8')).toBe(printed.stdout)
-  })
-
-  it('leaves a cli.json it cannot add to untouched and installs nothing', async () => {
-    const path = await openCodeFixture()
-    const cli = join(dirname(dirname(path)), 'cli.json')
-    for (const [text, reason] of [
-      ['{ "plugins": [ // a comment\n] }\n', /is not valid JSON/],
-      ['{ "plugins": "one" }\n', /"plugins" in .* is not a list/],
-      ['[]\n', /does not hold a JSON object/]
-    ] as const) {
-      await writeFile(cli, text)
-      const check = await runHooks(['check', 'opencode', '--file', path])
-      expect(check.stdout).toMatch(reason)
-      const install = await runHooks(['install', '--yes', 'opencode', '--file', path])
-      expect(install.code).toBe(1)
-      expect(install.stderr).toMatch(reason)
-      expect(await readFile(cli, 'utf8')).toBe(text)
-      expect(existsSync(path)).toBe(false)
-    }
-  })
-
-  it('puts the plugin folder beside the cli.json of the config folder OpenCode reads', async () => {
-    const fixture = await cliFixture()
-    const config = join(fixture.root, 'opencode')
-    const env = { OPENCODE_CONFIG_DIR: config }
-    const first = JSON.parse((await runHooks(['check', 'opencode', '--json'], env)).stdout)
-    expect(first.agents[0].file).toBe(join(config, 'bmn', 'tui.ts'))
-    const fresh = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
-    expect(fresh.file).toBe(join(config, 'bmn', 'tui.ts'))
-    expect(await readFile(fresh.file, 'utf8')).toContain('id: "bmn"')
-    // A new cli.json holds only the entry.
-    expect(JSON.parse(await readFile(join(config, 'cli.json'), 'utf8'))).toEqual({ plugins: [join(config, 'bmn')] })
-    const moved = join(fixture.root, 'xdg')
-    const xdg = JSON.parse((await runHooks(['check', 'opencode', '--json'], { XDG_CONFIG_HOME: moved })).stdout)
-    expect(xdg.agents[0].file).toBe(join(moved, 'opencode', 'bmn', 'tui.ts'))
-  })
-})
-
 /** One app's row of `hooks install --absent --json`. */
 interface AbsentReport {
   agent: string; file: string; state: string; placed: string[]; older: string[]; installed: string[]
@@ -5000,180 +4337,26 @@ describe('bmn hooks install --absent (Story 75.9 AC3)', () => {
     expect(after.PostCompact).toBeUndefined()
   })
 
-  it('adds OpenCode\'s plugin and its cli.json entry, leaves an edited copy of BMN\'s plugin, another plugin and its cli.json alone', async () => {
-    const path = await openCodeFixture()
-    const entry = dirname(path)
-    const cli = join(dirname(entry), 'cli.json')
-    const printed = (await runHooks(['print', 'opencode'])).stdout
-    const fresh = await installAbsent('opencode', path)
-    expect(fresh.code).toBe(0)
-    expect(fresh.report).toMatchObject({ state: 'installed', installed: ['plugin', 'cli.json'], placed: ['plugin', 'cli.json'] })
-    expect(await readFile(path, 'utf8')).toBe(printed)
-    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ plugins: [entry] })
-    expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
-
-    // BMN's comments with bytes BMN never shipped: someone's edit, kept and named (Story 96.3).
-    const edited = '// Shipped by BMN\n// bmn hook opencode\n'
-    await writeFile(path, edited)
-    expect(await installAbsent('opencode', path)).toMatchObject({ code: 1, report: { state: 'checked', left: [{ event: 'plugin', why: 'changed' }], installed: [] } })
-    expect(await readFile(path, 'utf8')).toBe(edited)
-    expect(await backupsOf(path)).toEqual([])
-
-    const foreign = await openCodeFixture('// the owner\'s own plugin\n')
-    const foreignCli = join(dirname(dirname(foreign)), 'cli.json')
-    const left = await installAbsent('opencode', foreign)
-    expect(left.code).toBe(1)
-    expect(left.report).toMatchObject({ state: 'checked', installed: [], left: [{ event: 'plugin', why: 'foreign' }] })
-    expect(await readFile(foreign, 'utf8')).toBe('// the owner\'s own plugin\n')
-    expect(existsSync(foreignCli)).toBe(false)
-  })
-
-  it('upgrades BMN\'s October 14 plugin byte for byte at start, with a copy, and keeps every other cli.json entry (Story 96.3)', async () => {
-    const path = await openCodeFixture()
-    const entry = dirname(path)
-    const cli = join(dirname(entry), 'cli.json')
-    const printed = (await runHooks(['print', 'opencode'])).stdout
-    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
-    await writeFile(path, october)
-    await writeFile(cli, `${JSON.stringify({ $schema: 'https://opencode.ai/v2/cli.json', plugins: ['owner-plugin', entry, './another'] }, null, 4)}\n`)
-    const cliBefore = await readFile(cli, 'utf8')
-    const upgraded = await installAbsent('opencode', path)
-    expect(upgraded.code).toBe(0)
-    expect(upgraded.report).toMatchObject({ state: 'installed', installed: [], upgraded: ['plugin'], placed: ['plugin', 'cli.json'], left: [] })
-    expect(await readFile(path, 'utf8')).toBe(printed)
-    const [copy, ...more] = await backupsOf(path)
-    expect(more).toEqual([])
-    expect(upgraded.report.backups).toEqual([join(entry, copy!)])
-    expect(await readFile(join(entry, copy!), 'utf8')).toBe(october)
-    // The registration was already BMN's: cli.json is not rewritten, and the owner's entries stay where they were.
-    expect(await readFile(cli, 'utf8')).toBe(cliBefore)
-    expect(await installAbsent('opencode', path)).toMatchObject({ code: 0, report: { state: 'checked', installed: [] } })
-    expect(await backupsOf(path)).toEqual([copy])
-    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
-
-    // Without BMN's entry: the plugin is upgraded first and the entry added after the owner's.
-    await writeFile(path, october)
-    await writeFile(cli, `${JSON.stringify({ plugins: ['owner-plugin'] })}\n`)
-    const both = await installAbsent('opencode', path)
-    expect(both.report).toMatchObject({ state: 'installed', installed: ['cli.json'], upgraded: ['plugin'] })
-    expect(JSON.parse(await readFile(cli, 'utf8'))).toEqual({ plugins: ['owner-plugin', entry] })
-    expect(await readFile(path, 'utf8')).toBe(printed)
-
-    // One byte more is an edit: left as it is, nothing copied.
-    const copies = (await backupsOf(path)).length
-    await writeFile(path, `${october}// mine\n`)
-    expect(await installAbsent('opencode', path)).toMatchObject({ code: 1, report: { left: [{ event: 'plugin', why: 'changed' }] } })
-    expect(await readFile(path, 'utf8')).toBe(`${october}// mine\n`)
-    expect(await backupsOf(path)).toHaveLength(copies)
-  })
-
-  it.each([
-    ['other bytes', async (path: string, october: string) => writeFile(path, `${october}// written meanwhile\n`)],
-    // The same bytes in another file put in its place: what was read is not the file that would be replaced.
-    ['the same bytes in another file', async (path: string, october: string) => {
-      await writeFile(`${path}.other`, october)
-      await rename(`${path}.other`, path)
-    }]
-  ] as const)('upgrades nothing when the plugin file becomes %s between BMN\'s read and its write (Story 96.3)', async (_name, change) => {
-    const path = await openCodeFixture()
-    const cli = join(dirname(dirname(path)), 'cli.json')
-    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
-    await writeFile(path, october)
-    await writeFile(cli, `${JSON.stringify({ plugins: [dirname(path)] })}\n`)
-    const gate = join(dirname(path), 'gate')
-    const installing = runHooks(['install', 'opencode', '--absent', '--yes', '--file', path, '--json'], { BMN_HOOKS_TEST_GATE: gate })
-    const deadline = Date.now() + 10_000
-    while (!existsSync(`${gate}.waiting`)) {
-      if (Date.now() > deadline) throw new Error('the start-up install never reached its check')
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
-    const identity = (await stat(path)).ino
-    await change(path, october)
-    await writeFile(gate, '')
-    const result = await installing
-    expect(result.code).toBe(1)
-    // The earlier plugin stays, and Health is told it cannot tell a stop from a finished turn (Story 96.6).
-    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', earlier: ['plugin'], detail: expect.stringContaining('changed while bmn was reading it') })
-    expect(await readFile(path, 'utf8')).not.toBe((await runHooks(['print', 'opencode'])).stdout)
-    if (_name === 'the same bytes in another file') expect((await stat(path)).ino).not.toBe(identity)
-    expect(await backupsOf(path)).toEqual([])
-    expect((await readdir(dirname(path))).filter((name) => name.endsWith('.tmp'))).toEqual([])
-  })
-
-  it('removes its copy when the plugin changes at the last check, after the copy was made (96 review)', async () => {
-    const path = await openCodeFixture()
-    const cli = join(dirname(dirname(path)), 'cli.json')
-    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
-    await writeFile(path, october)
-    await writeFile(cli, `${JSON.stringify({ plugins: [dirname(path)] })}\n`)
-    const gate = join(dirname(path), 'gate')
-    const waiting = async (what: string) => {
-      const deadline = Date.now() + 10_000
-      while (!existsSync(`${gate}.waiting`)) {
-        if (Date.now() > deadline) throw new Error(`the start-up install never reached ${what}`)
-        await new Promise((resolve) => setTimeout(resolve, 5))
-      }
-      await rm(`${gate}.waiting`)
-    }
-    const installing = runHooks(['install', 'opencode', '--absent', '--yes', '--file', path, '--json'], { BMN_HOOKS_TEST_GATE: gate })
-    // The first check passes and the copy is made; the second, just before the rename, sees the change.
-    await waiting('its first check')
-    await writeFile(`${gate}.again`, '')
-    await writeFile(gate, '')
-    await waiting('its last check')
-    expect(await backupsOf(path)).toHaveLength(1)
-    await writeFile(path, `${october}// written meanwhile\n`)
-    await writeFile(gate, '')
-    const result = await installing
-    expect(result.code).toBe(1)
-    expect(JSON.parse(result.stdout).agents[0]).toMatchObject({ state: 'failed', earlier: ['plugin'], detail: expect.stringContaining('changed while bmn was reading it') })
-    expect(await readFile(path, 'utf8')).toBe(`${october}// written meanwhile\n`)
-    expect(await backupsOf(path)).toEqual([])
-    expect((await readdir(dirname(path))).filter((name) => name.endsWith('.tmp'))).toEqual([])
-  })
-
-  it.each([
-    ['unparsable', '{ "plugins": [ // a comment\n] }\n'],
-    ['unusable', '{ "plugins": "one" }\n']
-  ] as const)('writes neither OpenCode file when cli.json cannot be added to: %s', async (why, text) => {
-    const path = await openCodeFixture()
-    const cli = join(dirname(dirname(path)), 'cli.json')
-    await writeFile(cli, text)
-    const result = await installAbsent('opencode', path)
-    expect(result.code).toBe(1)
-    expect(result.report).toMatchObject({ state: 'left', why, installed: [] })
-    expect(result.report.detail).not.toContain('BMN leaves it untouched')
-    expect(existsSync(path)).toBe(false)
-    expect(await readFile(cli, 'utf8')).toBe(text)
-    // BMN's October 14 plugin is upgraded all the same: cli.json decides only whether OpenCode loads it (96 review).
-    const october = shippedPluginText('033eb7d88f', 'apps/desktop/bin/bmn')
-    await writeFile(path, october)
-    const upgraded = await installAbsent('opencode', path)
-    expect(upgraded.code).toBe(1)
-    expect(upgraded.report).toMatchObject({ state: 'left', why, installed: [], older: [], upgraded: ['plugin'] })
-    expect(await readFile(path, 'utf8')).toBe((await runHooks(['print', 'opencode'])).stdout)
-    expect(await readFile(join(dirname(path), (await backupsOf(path))[0]!), 'utf8')).toBe(october)
-    expect(await readFile(cli, 'utf8')).toBe(text)
-  })
-
   it('reads every app\'s own place in a home: installs where the app is set up, skips the one that is not, and a second start changes nothing', async () => {
     const home = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-')))
     createdRoots.add(home)
     await mkdir(join(home, '.claude'))
+    // A folder an OpenCode once set up is no app's place any more (Epic 123): nothing is written there.
     await mkdir(join(home, '.config', 'opencode'), { recursive: true })
-    const env = { HOME: home, CODEX_HOME: '', OPENCODE_CONFIG_DIR: '', XDG_CONFIG_HOME: '' }
+    const env = { HOME: home, CODEX_HOME: '', XDG_CONFIG_HOME: '' }
     const run = async () => runHooks(['install', '--absent', '--yes', '--json'], env)
     const first = await run()
     expect(first.code).toBe(0)
     expect(JSON.parse(first.stdout).agents.map((each: { agent: string; state: string }) => [each.agent, each.state])).toEqual([
-      ['claude', 'installed'], ['codex', 'not-set-up'], ['opencode', 'installed']
+      ['claude', 'installed'], ['codex', 'not-set-up']
     ])
     expect(existsSync(join(home, '.codex'))).toBe(false)
-    const files = [join(home, '.claude', 'settings.json'), join(home, '.config', 'opencode', 'bmn', 'tui.ts'), join(home, '.config', 'opencode', 'cli.json')]
+    expect(await readdir(join(home, '.config', 'opencode'))).toEqual([])
+    const files = [join(home, '.claude', 'settings.json')]
     const texts = await Promise.all(files.map((file) => readFile(file, 'utf8')))
     const second = await run()
     expect(second.code).toBe(0)
-    expect(JSON.parse(second.stdout).agents.map((each: { state: string }) => each.state)).toEqual(['checked', 'not-set-up', 'checked'])
+    expect(JSON.parse(second.stdout).agents.map((each: { state: string }) => each.state)).toEqual(['checked', 'not-set-up'])
     expect(await Promise.all(files.map((file) => readFile(file, 'utf8')))).toEqual(texts)
     const words = await runHooks(['install', '--absent', '--yes'], env)
     expect(words.stdout).toContain('Codex: not set up on this computer; nothing written')
@@ -5416,31 +4599,6 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
     const fixture = await cliFixture()
     await runHook(fixture, 'codex', { hook_event_name: 'PermissionRequest', tool_name: 'shell', tool_input: { command: 'ls' } })
     expect(lastOpen(fixture)).not.toHaveProperty('prompt')
-  })
-
-  it('opens OpenCode questions and permissions with their request ids, command only from metadata', async () => {
-    const fixture = await cliFixture()
-    await runHook(fixture, 'opencode', await recorded('opencode/question.asked.json'), OPENCODE_FOREGROUND)
-    expect(lastOpen(fixture)).toMatchObject({
-      requestKey: 'opencode:question', prompt: { harness: 'opencode', shape: 'choice', requestRef: 'que_0e3488978001RROK6B1gVoiWiS' }
-    })
-    await runHook(fixture, 'opencode', await recorded('opencode/permission.asked.json'), OPENCODE_FOREGROUND)
-    expect(lastOpen(fixture)).toMatchObject({
-      requestKey: 'opencode:permission',
-      prompt: { tool: 'bash', command: 'touch oc-c.txt', requestRef: 'per_0e34a38370010edWsFz2o7GSqa', cwd: null }
-    })
-    const patternsOnly = { ...(await recorded('opencode/permission.asked.json')), metadata: {} }
-    await runHook(fixture, 'opencode', patternsOnly, OPENCODE_FOREGROUND)
-    expect(lastOpen(fixture).prompt).toMatchObject({ command: null })
-  })
-
-  it('marks OpenCode subagent prompts as their own shape', async () => {
-    const fixture = await cliFixture()
-    const env = { BMN_OPENCODE_SESSION_ID: 'ses_0123456789abSyntheticMain0' }
-    await runHook(fixture, 'opencode', await recorded('opencode/question.asked.json'), OPENCODE_FOREGROUND, env)
-    expect(lastOpen(fixture)).toMatchObject({ requestKey: 'opencode:subagent-question', prompt: { shape: 'subagent' } })
-    await runHook(fixture, 'opencode', await recorded('opencode/permission.asked.json'), OPENCODE_FOREGROUND, env)
-    expect(lastOpen(fixture)).toMatchObject({ requestKey: 'opencode:subagent-permission', prompt: { shape: 'subagent' } })
   })
 
   it('sends a dialog larger than the app stores as a plain request instead of a cut one', async () => {
@@ -5835,55 +4993,6 @@ describe('evidence of how a prompt ended, from the recorded hooks (Epic 30.2)', 
     expect(resolved(broken, 'codex:question')).toMatchObject({ evidence: { answers: null } })
   })
 
-  it('sends OpenCode\'s request id with the answers or the permission reply', async () => {
-    const fixture = await cliFixture()
-    await runHook(fixture, 'opencode', await recorded('opencode/question.replied.json'), OPENCODE_FOREGROUND)
-    expect(resolved(fixture, 'opencode:question')).toMatchObject({
-      evidence: { requestRef: 'que_0e3488978001RROK6B1gVoiWiS', answers: [['Session cookies']], permission: null }
-    })
-    await runHook(fixture, 'opencode', await recorded('opencode/permission.replied.once.json'), OPENCODE_FOREGROUND)
-    expect(resolved(fixture, 'opencode:permission')).toMatchObject({
-      evidence: { requestRef: 'per_0e34b1329001CyMk3xp8kIma9a', permission: 'allowed' }
-    })
-    await runHook(fixture, 'opencode', { ...(await recorded('opencode/permission.replied.once.json')), reply: 'reject' }, OPENCODE_FOREGROUND)
-    const withdrawn = fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
-      .find((params) => params.requestKey === 'opencode:permission')
-    expect(withdrawn).toMatchObject({ evidence: { requestRef: 'per_0e34b1329001CyMk3xp8kIma9a', permission: 'denied' } })
-  })
-
-  it('reads what BMN\'s plugin sent from a real OpenCode 2.0.28 terminal as requests, their answers and the turn', async () => {
-    // Recorded 2026-10-14: BMN's plugin installed by `bmn hooks install opencode`, a stand-in `bmn` answering
-    // the permission "once" and the question "Beta"; each line is the pinned session and the payload.
-    const lines = (await readFile(join(REMOTE_FIXTURES, 'opencode-2', 'live-run.jsonl'), 'utf8')).split('\n').filter(Boolean)
-    const run = lines.map((line) => JSON.parse(line) as { pin: string; payload: Record<string, unknown> })
-    const session = run[0]!.pin
-    const fixture = await cliFixture()
-    for (const { pin, payload } of run) {
-      const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: pin } }
-      expect(await runHook(bound, 'opencode', payload, OPENCODE_FOREGROUND)).toEqual(QUIET)
-    }
-    const opened = (requestKey: string) => fixture.handlers.openAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
-      .find((params) => params.requestKey === requestKey)
-    // The busy event before each request also resolves its row; the answer is the one its replied event made.
-    const answered = (event: string) => fixture.handlers.resolveAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
-      .find((params) => params.origin === `hook:opencode:${event}`)
-    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: session, source: 'startup' }), expect.any(Function))
-    expect(opened('opencode:permission')).toMatchObject({
-      kind: 'permission', title: 'OpenCode asks to shell', body: 'echo *',
-      prompt: { harness: 'opencode', command: 'echo probe-shell-ran', requestRef: 'per_139c07408001JpDHJ2zCSER6L3' }
-    })
-    expect(answered('permission.replied')).toMatchObject({ requestKey: 'opencode:permission', evidence: { requestRef: 'per_139c07408001JpDHJ2zCSER6L3', permission: 'allowed' } })
-    expect(opened('opencode:question')).toMatchObject({
-      kind: 'question',
-      prompt: { type: 'questions', harness: 'opencode', requestRef: 'frm_139c07583001TQMiNCWSr2dGYh', questions: [{
-        text: 'Which made-up option?', header: 'Made-up pick', multiSelect: false,
-        options: [{ label: 'Alpha', description: 'the first' }, { label: 'Beta', description: 'the second' }]
-      }] }
-    })
-    expect(answered('question.replied')).toMatchObject({ requestKey: 'opencode:question', evidence: { requestRef: 'frm_139c07583001TQMiNCWSr2dGYh', answers: [['Beta']] } })
-    expect(opened('opencode:turn')).toMatchObject({ kind: 'notice', title: 'OpenCode finished a turn' })
-    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ agent: 'opencode', event: 'message.updated', model: 'standin-model' }))
-  })
 })
 
 describe('multi-select and typed answers from the recorded hooks (Epic 31.4)', () => {
@@ -5905,27 +5014,6 @@ describe('multi-select and typed answers from the recorded hooks (Epic 31.4)', (
     })
   })
 
-  it('keeps OpenCode\'s multiple and custom flags, and every label it reports', async () => {
-    const fixture = await cliFixture()
-    await runHook(fixture, 'opencode', await recorded('opencode/question.asked.multiple.json'), OPENCODE_FOREGROUND)
-    expect(lastOpen(fixture).prompt).toMatchObject({
-      shape: 'multi-select',
-      questions: [{ header: 'Features', multiSelect: true }, { header: 'Auth', multiSelect: false }]
-    })
-    const questionsOf = (params: Record<string, unknown>): Array<Record<string, unknown>> =>
-      (params.prompt as { questions: Array<Record<string, unknown>> }).questions
-    expect(questionsOf(lastOpen(fixture))[0]).not.toHaveProperty('custom')
-    const noTyped = await cliFixture()
-    const asked = await recorded('opencode/question.asked.multiple.json')
-    const [first, ...rest] = asked.questions as Array<Record<string, unknown>>
-    await runHook(noTyped, 'opencode', { ...asked, questions: [{ ...first, custom: false }, ...rest] }, OPENCODE_FOREGROUND)
-    expect(questionsOf(lastOpen(noTyped))[0]).toMatchObject({ custom: false })
-    await runHook(fixture, 'opencode', await recorded('opencode/question.replied.multiple-typed.json'), OPENCODE_FOREGROUND)
-    expect(resolved(fixture, 'opencode:question')).toMatchObject({
-      evidence: { answers: [['SSO', 'Rate limiting'], ['Passkeys first, JWT as fallback']] }
-    })
-  })
-
   it('reports a 2,000-character typed answer whole', async () => {
     const post = await recorded('claude/ask-multiselect-typed.post-tool-use.json')
     const question = 'Which features should the first release include?'
@@ -5935,43 +5023,11 @@ describe('multi-select and typed answers from the recorded hooks (Epic 31.4)', (
   })
 })
 
-describe('bmn answer take (Epic 30.2)', () => {
-  it('collects this session\'s answers and waits as long as asked', async () => {
+describe('bmn answer take, gone with OpenCode (Epic 123)', () => {
+  it('is no command: only OpenCode\'s plugin ran it, and Claude Code\'s hook asks the app itself', async () => {
     const fixture = await cliFixture()
-    fixture.handlers.takeAnswers.mockResolvedValue({
-      answers: [{ requestRef: 'que_1', kind: 'question', answers: [['JWT']] }]
-    })
-    const result = await runCli(['answer', 'take', '--wait', '2', '--json'], { env: fixture.sessionEnv })
-    expect(result.code).toBe(0)
-    expect(JSON.parse(result.stdout)).toEqual({ answers: [{ requestRef: 'que_1', kind: 'question', answers: [['JWT']] }] })
-    expect(fixture.handlers.takeAnswers).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 2000, report: null })
-  })
-
-  it('passes on what OpenCode\'s server said to a posted reply', async () => {
-    const fixture = await cliFixture()
-    expect((await runCli(['answer', 'take', '--reported', 'per_1=ok', '--json'], { env: fixture.sessionEnv })).code).toBe(0)
-    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({
-      sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 0, report: { requestRef: 'per_1', delivered: true }
-    })
-    expect((await runCli(['answer', 'take', '--reported', 'per_1=failed'], { env: fixture.sessionEnv })).code).toBe(0)
-    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith(expect.objectContaining({ report: { requestRef: 'per_1', delivered: false } }))
-    for (const value of ['per_1', 'per_1=maybe', '=ok', 'per 1=ok']) {
-      expect((await runCli(['answer', 'take', '--reported', value], { env: fixture.sessionEnv })).code).toBe(2)
-    }
-    expect(fixture.handlers.takeAnswers).toHaveBeenCalledTimes(2)
-  })
-
-  it.each([['-1'], ['26'], ['1.5'], ['soon']])('refuses --wait %s as a usage error', async (wait) => {
-    const fixture = await cliFixture()
-    const result = await runCli(['answer', 'take', '--wait', wait], { env: fixture.sessionEnv })
-    expect(result.code).toBe(2)
-    expect(fixture.handlers.takeAnswers).not.toHaveBeenCalled()
-  })
-
-  it('offers no command that could send an answer', async () => {
-    const fixture = await cliFixture()
-    for (const action of ['give', 'send', 'allow']) {
-      expect((await runCli(['answer', action], { env: fixture.sessionEnv })).code).toBe(2)
+    for (const args of [['answer', 'take', '--wait', '2', '--json'], ['answer', 'take', '--reported', 'per_1=ok'], ['answer', 'give']]) {
+      expect((await runCli(args, { env: fixture.sessionEnv })).code, args.join(' ')).toBe(2)
     }
     expect(fixture.handlers.takeAnswers).not.toHaveBeenCalled()
   })
@@ -5981,7 +5037,7 @@ describe('Cursor, retired (Epic 71, 71.2 AC2)', () => {
   it('bmn hooks names Cursor nowhere, and asked for it says Cursor was retired and where its support is kept', async () => {
     const home = await cliFixture()
     const all = JSON.parse((await runHooks(['check', '--json'], { HOME: home.root })).stdout) as { agents: Array<{ agent: string }> }
-    expect(all.agents.map((row) => row.agent)).toEqual(['claude', 'codex', 'opencode'])
+    expect(all.agents.map((row) => row.agent)).toEqual(['claude', 'codex'])
     for (const args of [['check', 'cursor'], ['install', 'cursor', '--yes'], ['install', '--yes', 'cursor', '--file', join(home.root, 'hooks.json')]]) {
       const refused = await runHooks(args, { HOME: home.root })
       expect(refused, args.join(' ')).toMatchObject({ code: 2, stdout: '' })
@@ -6009,6 +5065,32 @@ describe('Cursor, retired (Epic 71, 71.2 AC2)', () => {
     const base = { conversation_id: 'c741bb07-352f-457b-8e7c-ee00517cd9ff', session_id: 'c741bb07-352f-457b-8e7c-ee00517cd9ff', cursor_version: '2026.09.26-dd393fe', workspace_roots: ['/repo'] }
     for (const event of [{ hook_event_name: 'stop', status: 'completed' }, { hook_event_name: 'sessionStart' }, { hook_event_name: 'postToolUse', tool_name: 'Shell' }, { hook_event_name: 'beforeSubmitPrompt', prompt: 'synthetic prompt' }]) {
       expect(await runHook(fixture, 'claude', { ...base, ...event }, foreground)).toEqual(QUIET)
+    }
+    for (const handler of [fixture.handlers.openAttention, fixture.handlers.withdrawAttention, fixture.handlers.resolveAttention]) expect(handler).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
+})
+
+describe('OpenCode, retired (Epic 123, 123.1 AC1, AC3)', () => {
+  it('bmn hooks names OpenCode nowhere, and asked for it says OpenCode was retired and where its support is kept', async () => {
+    const home = await cliFixture()
+    const all = await runHooks(['check'], { HOME: home.root })
+    expect(all.stdout).not.toContain('OpenCode')
+    for (const args of [['check', 'opencode'], ['install', 'opencode', '--yes'], ['install', '--yes', 'opencode', '--file', join(home.root, 'cli.json')]]) {
+      const refused = await runHooks(args, { HOME: home.root })
+      expect(refused, args.join(' ')).toMatchObject({ code: 2, stdout: '' })
+      expect(refused.stderr).toContain(OPENCODE_RETIRED)
+    }
+    expect(existsSync(join(home.root, '.config', 'opencode'))).toBe(false)
+    expect(existsSync(join(home.root, 'cli.json'))).toBe(false)
+  })
+
+  it('bmn hook opencode, run by a plugin loaded before, answers retired with success and starts nothing in BMN', async () => {
+    const fixture = await cliFixture()
+    for (const event of ['session.created', 'session.status', 'permission.asked', 'session.idle']) {
+      const input = JSON.stringify({ hook_event_name: event, sessionID: 'ses_0123456789abSyntheticTest0', status: { type: 'busy' } })
+      expect(await runCli(['hook', 'opencode'], { env: fixture.sessionEnv, input })).toEqual({ ...QUIET, stderr: `bmn: ${OPENCODE_RETIRED}\n` })
     }
     for (const handler of [fixture.handlers.openAttention, fixture.handlers.withdrawAttention, fixture.handlers.resolveAttention]) expect(handler).not.toHaveBeenCalled()
     expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
@@ -6045,37 +5127,6 @@ describe('compaction events (Story 36.1)', () => {
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       agent: 'codex', event: 'PostCompact', source: trigger, effects: []
     }))
-  })
-
-  it('logs the owner\'s OpenCode session.compacted plainly and a subagent\'s as the subagent\'s', async () => {
-    const fixture = await cliFixture()
-    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
-
-    await runHook(bound, 'opencode', { hook_event_name: 'session.compacted', sessionID: 'ses_main' }, OPENCODE_FOREGROUND)
-    await runHook(bound, 'opencode', { hook_event_name: 'session.compacted', sessionID: 'ses_child' }, OPENCODE_FOREGROUND)
-
-    const [owner, subagent] = fixture.handlers.observeHookEvent.mock.calls.map((call) => call[0])
-    expect(owner).toMatchObject({ agent: 'opencode', event: 'session.compacted', source: null, effects: [] })
-    expect(subagent).toMatchObject({ agent: 'opencode', event: 'session.compacted', source: 'subagent', effects: [] })
-    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
-  })
-
-  it('fingerprints a finished OpenCode tool call, and marks a subagent run starting as the subagent\'s (Story 92.2)', async () => {
-    const fixture = await cliFixture()
-    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
-    const tool = { hook_event_name: 'tool.execute.after', sessionID: 'ses_main', tool_name: 'read', tool_input: { filePath: 'a' }, tool_response: [] }
-    for (const event of [tool, tool, { ...tool, tool_input: { filePath: 'b' } }, { hook_event_name: 'session.status', sessionID: 'ses_child', status: { type: 'busy' } },
-      { hook_event_name: 'session.status', sessionID: 'ses_main', status: { type: 'busy' } }]) {
-      expect((await runHook(bound, 'opencode', event, OPENCODE_FOREGROUND)).code).toBe(0)
-    }
-    const observed = fixture.handlers.observeHookEvent.mock.calls.map(([params]) => params as { event: string; source?: string; toolName?: string; fingerprint?: string })
-    expect(observed.map(({ event, source, toolName }) => [event, source ?? null, toolName ?? null])).toEqual([
-      ['tool.execute.after', null, 'read'], ['tool.execute.after', null, 'read'], ['tool.execute.after', null, 'read'],
-      ['session.status', 'subagent', null], ['session.status', null, null]])
-    expect(observed[0]!.fingerprint).toMatch(/^[0-9a-f]{16}$/)
-    expect(observed[1]!.fingerprint).toBe(observed[0]!.fingerprint)
-    expect(observed[2]!.fingerprint).not.toBe(observed[0]!.fingerprint)
-    expect(observed[3]!.fingerprint).toBeUndefined()
   })
 
   it('never installs PostCompact: it is optional like PermissionRequest', async () => {
@@ -6528,7 +5579,7 @@ describe('bmn hook turn marks (Story 69.4)', () => {
 
     expect(text).toContain("  turn changes: recorded in every workspace that is not archived (waiting for the prompt hook measured on Claude Code 2.1.296)")
     expect(text).toContain("  turn changes: recorded in every workspace that is not archived (waiting for the prompt hook measured on Codex 0.162.1)")
-    expect(text).toContain('  turn changes: not recorded for OpenCode; it was not measured to wait for its prompt hook')
+    expect(text).not.toContain('OpenCode')
     expect(asJson.agents.find((row) => row.agent === 'codex')?.turnChanges).toMatch(/^turn changes: recorded/)
   })
 })

@@ -542,24 +542,6 @@ describe('outcomes', () => {
     expect(h.connector.lastEdit()?.text.endsWith('✓ <i>Sent: JWT</i>')).toBe(true)
   })
 
-  it('gives fresh buttons when OpenCode later refuses an unconfirmed answer, and a pending retry never overwrites them', async () => {
-    const h = setup({ answer: async () => ({ state: 'sent-unconfirmed', sent: ['JWT'] }), retryMs: [100, 100] })
-    await h.keeper.page(h.state.record!)
-    h.connector.failEdits = true
-    await h.keeper.tap(h.tap('tok-1'))
-    await settle()
-    h.connector.failEdits = false
-    h.keeper.lateOutcome('r1', { state: 'refused', reason: 'api-refused' })
-    await settle()
-    expect(h.connector.lastEdit()?.text).toContain('OpenCode rejected the answer; nothing was applied.')
-    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6'])
-    expect(h.connector.sends.at(-1)).toMatchObject({ options: { replyToMessageId: 100 } })
-    await new Promise((resolve) => setTimeout(resolve, 250))
-    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6'])
-    expect(h.connector.lastEdit()?.text).not.toContain('not confirmed')
-    expect(h.answers).toHaveLength(1)
-  })
-
   it('reports a partial answer and replies', async () => {
     const h = setup({ record: record(TWO), answer: async () => ({ state: 'partial', sent: ['JWT'], total: 2 }) })
     await h.keeper.page(h.state.record!)
@@ -820,16 +802,7 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
     expect(h.connector.sends.at(-1)?.text).toBe('Nothing was sent: the dialog changed on the laptop.')
   })
 
-  it('leaves replies to cards without Other… to their usual meaning', async () => {
-    const noTyped: AttentionPrompt = {
-      ...QUESTION, harness: 'opencode', requestRef: 'que_1',
-      questions: [{ ...(QUESTION as Extract<AttentionPrompt, { type: 'questions' }>).questions[0]!, custom: false }]
-    } as AttentionPrompt
-    const h = setup({ record: record(noTyped) })
-    await h.keeper.page(h.state.record!)
-    expect(h.connector.buttons()).toEqual(['tok-1', 'tok-2'])
-    await expect(h.keeper.typedReply(reply('Mine'))).resolves.toBe(false)
-    await expect(h.keeper.typedReply(reply('Mine', 999))).resolves.toBe(false)
+  it('leaves replies to a card BMN cannot answer to their usual meaning', async () => {
     const closed = setup({ answerability: { answerable: false, reason: 'unsupported' } })
     await closed.keeper.page(closed.state.record!)
     await expect(closed.keeper.typedReply(reply('Mine'))).resolves.toBe(false)

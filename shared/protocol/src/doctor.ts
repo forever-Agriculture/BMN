@@ -2,6 +2,7 @@
 export type DoctorCheck = 'hooks' | 'skills' | 'tools' | 'rules' | 'claude' | 'codex' | 'leftovers'
 export type DoctorState = 'passed' | 'problems' | 'partial' | 'failed' | 'timeout' | 'unsupported' | 'unqualified' | 'interrupted'
 /** `cause`: for BMN's own area checks, the entry's state word (`missing`, `unlisted-exposed`, `missing:Stop`), never a name or path. */
+/** `opencode` only in a result saved before OpenCode was retired (Epic 123). */
 export interface DoctorProblem { code: string; item: number; count?: number; app?: 'claude' | 'codex' | 'opencode'; cause?: string }
 export interface DoctorLocationStat { device: string; inode: string; size: string; modified: string; changed: string; mode: string; type: 'file' | 'directory' | 'link' | 'other' }
 export interface DoctorLocationSource {

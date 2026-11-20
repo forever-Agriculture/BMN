@@ -113,13 +113,12 @@ export function rulesUpdateWords(update: NonNullable<Extract<AgentsOutcome, { ok
   return parts.join(' · ')
 }
 
-/** What an approval that went through says: its message, the rules files it updated, the skills and tools it installed (75.9) and the OpenCode Go sign-in it copied (70.4). */
+/** What an approval that went through says: its message, the rules files it updated and the skills and tools it installed (75.9). */
 export function approvalNotice(result: Extract<AgentsOutcome, { ok: true }>): TeamNotice {
   const update = result.rulesUpdate
-  const signIn = result.openCodeSignIn
   return {
-    ok: update?.failed === undefined && signIn?.ok !== false,
-    text: [result.message, ...(update === undefined ? [] : [rulesUpdateWords(update)]), ...(result.installed ?? []), ...(signIn === undefined ? [] : [signIn.message])].join(' · '),
+    ok: update?.failed === undefined,
+    text: [result.message, ...(update === undefined ? [] : [rulesUpdateWords(update)]), ...(result.installed ?? [])].join(' · '),
     ...(update?.transaction ? { undo: update.transaction } : {})
   }
 }

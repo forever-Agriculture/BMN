@@ -1,7 +1,7 @@
 // MODULE: setup-readiness.ts - State-only sign-in projections and once-per-version qualification
 import { createHash } from 'node:crypto'
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { accessSync, constants, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { SETUP_APPS, type SetupApp, type SetupAppReadiness, type SetupAppsSnapshot } from '@bmn/protocol'
 import { writeAtomically } from '../../bin/safe-config-write.mjs'
@@ -12,11 +12,10 @@ import { qualifySetupProbe } from './setup-probe-qualification'
 
 export type SignInProjection = Pick<SetupAppReadiness, 'signIn' | 'method'>
 const UNKNOWN: SignInProjection = { signIn: 'unknown', method: null }
-const MEASURED: Readonly<Record<SetupApp, string>> = { claude: '2.1.303', codex: '0.163.0', opencode: '2.0.32' }
+const MEASURED: Readonly<Record<SetupApp, string>> = { claude: '2.1.303', codex: '0.163.0' }
 const VERSION_OUTPUT: Readonly<Record<SetupApp, RegExp>> = {
   claude: /^(?:claude(?: code)?\s+)?(\d+\.\d+\.\d+)(?:\s+\(Claude Code\))?$/i,
-  codex: /^(?:codex(?:-cli)?\s+)?(\d+\.\d+\.\d+)$/i,
-  opencode: /^(?:opencode\s+)?v?(\d+\.\d+\.\d+)$/i
+  codex: /^(?:codex(?:-cli)?\s+)?(\d+\.\d+\.\d+)$/i
 }
 const sha = (value: string): string => createHash('sha256').update(value).digest('hex')
 
@@ -42,34 +41,26 @@ export function projectSetupSignIn(app: SetupApp, run: SetupProcessResult): Sign
         if (method) return { signIn: 'ready', method }
       }
     }
-    if (app === 'opencode' && run.code === 0 && Array.isArray(value)) {
-      if (value.length === 0) return { signIn: 'signed-out', method: null }
-      const credentials = value.flatMap((row: unknown) => row && typeof row === 'object' &&
-        Array.isArray((row as { connections?: unknown }).connections) ? (row as { connections: unknown[] }).connections : [])
-        .filter((row: unknown) => row && typeof row === 'object' && (row as { type?: unknown }).type === 'credential')
-      if (credentials.length > 0) return { signIn: 'ready', method: 'other' }
-    }
   } catch { /* Unknown words never become a status detail. */ }
   return { ...UNKNOWN }
 }
 
 export function setupProbeArguments(app: SetupApp): string[] {
-  return app === 'claude' ? ['auth', 'status'] : app === 'codex' ? ['login', 'status'] : ['auth', 'list', '--standalone', '--format', 'json']
+  return app === 'claude' ? ['auth', 'status'] : ['login', 'status']
 }
 
 export function disposableSetupEnvironment(root: string, path: string | undefined): NodeJS.ProcessEnv {
   for (const folder of ['home', 'config', 'data', 'state', 'cache', 'work', 'markers']) mkdirSync(join(root, folder), { recursive: true, mode: 0o700 })
   return { HOME: join(root, 'home'), XDG_CONFIG_HOME: join(root, 'config'), XDG_DATA_HOME: join(root, 'data'),
     XDG_STATE_HOME: join(root, 'state'), XDG_CACHE_HOME: join(root, 'cache'), PATH: `${dirname(process.execPath)}:${path ?? '/usr/bin:/bin'}`,
-    TERM: 'dumb', LANG: 'C.UTF-8', NO_COLOR: '1', ELECTRON_RUN_AS_NODE: '1', DISABLE_AUTOUPDATER: '1',
-    OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }
+    TERM: 'dumb', LANG: 'C.UTF-8', NO_COLOR: '1', ELECTRON_RUN_AS_NODE: '1', DISABLE_AUTOUPDATER: '1' }
 }
 
 export function findSetupProgram(app: SetupApp, env: NodeJS.ProcessEnv, skip: string | null): { path: string; onPath: boolean } | null {
   const found = findAppProgram(app, env.PATH, skip)
   if (found) return { path: found.path, onPath: true }
   const home = env.HOME ?? homedir()
-  const path = join(home, app === 'opencode' ? '.opencode/bin/opencode' : `.local/bin/${app}`)
+  const path = join(home, `.local/bin/${app}`)
   try {
     if (!statSync(path).isFile()) return null
     accessSync(path, constants.X_OK)
@@ -147,20 +138,8 @@ export class SetupReadinessReader {
         if (this.confirmed(app, row.version, env)) row.signIn = 'confirmed'
         return row
       }
-      let result: SetupProcessResult
-      if (app === 'opencode') {
-        const root = mkdtempSync(join(tmpdir(), 'bmn-setup-status-'))
-        try {
-          const isolated = disposableSetupEnvironment(root, env.PATH)
-          isolated.XDG_DATA_HOME = env.XDG_DATA_HOME ?? join(env.HOME ?? homedir(), '.local/share')
-          result = await this.run(found.path, setupProbeArguments(app), { env: isolated, cwd: join(root, 'work') })
-        } finally { rmSync(root, { recursive: true, force: true }) }
-      } else result = await this.run(found.path, setupProbeArguments(app), { env: this.probeEnvironment(env), cwd: env.HOME ?? homedir() })
+      const result = await this.run(found.path, setupProbeArguments(app), { env: this.probeEnvironment(env), cwd: env.HOME ?? homedir() })
       Object.assign(row, projectSetupSignIn(app, result))
-      if (app === 'opencode' && row.signIn === 'signed-out' && (env.OPENCODE_CONFIG_CONTENT || env.OPENCODE_CONFIG || env.OPENCODE_CONFIG_DIR ||
-        env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || ['opencode.json', 'opencode.jsonc'].some(name =>
-          existsSync(join(env.XDG_CONFIG_HOME ?? join(env.HOME ?? homedir(), '.config'), 'opencode', name)) ||
-          existsSync(join('/etc/opencode', name))))) row.signIn = 'unknown'
       if (row.signIn === 'unknown' && this.confirmed(app, row.version, env)) row.signIn = 'confirmed'
       return row
       } catch { return { ...row, signIn: 'unknown', method: null } }
@@ -174,8 +153,7 @@ export class SetupReadinessReader {
   }
 
   private confirmationPath(app: SetupApp, version: string, env: NodeJS.ProcessEnv): string {
-    const profile = [env.HOME, env.CLAUDE_CONFIG_DIR, env.CODEX_HOME, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME,
-      env.OPENCODE_CONFIG_DIR, env.OPENCODE_CONFIG].map(value => value ?? null)
+    const profile = [env.HOME, env.CLAUDE_CONFIG_DIR, env.CODEX_HOME, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME].map(value => value ?? null)
     return join(this.directory(), `confirmed-${app}-${sha(JSON.stringify([version, profile]))}.json`)
   }
 

@@ -10,16 +10,9 @@ const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 it.each<[string, string, string | null]>([
-  ['opencode', 'opencode v2.0.29', '2.0.29'],
-  ['opencode', 'opencode v2.0.32', '2.0.32'],
-  ['opencode', 'opencode 2.0.29', '2.0.29'],
-  ['opencode', '2.0.32', '2.0.32'],
   ['claude', '2.1.308 (Claude Code)', '2.1.308'],
   ['claude', 'Claude Code 2.1.308', '2.1.308'],
   ['codex', 'codex-cli 0.163.0', '0.163.0'],
-  ['opencode', 'opencode v2.0.32junk', null],
-  ['opencode', 'opencode vtwo', null],
-  ['opencode', 'untrusted 2.0.32', null],
   ['claude', 'claude v2.1.308', null],
   ['codex', 'codex v0.163.0', null]
 ])('reads %s version output %s as %s', async (app, output, version) => {

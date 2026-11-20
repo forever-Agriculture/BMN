@@ -1,6 +1,6 @@
 // MODULE: web-questions.tsx - Story 64.3: Preferences › Agents › Models › Web questions: what was asked of the web and by whom, the owner's own Ask, the question under way, and the switch for agents
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ROSTER_APP_NAMES, WEB_QUESTION_MARKS, plural, thousandsWithCommas, type RosterHarness, type WebQuestionAsker, type WebQuestionClaim, type WebQuestionOutcome, type WebQuestionView, type WebQuestionsSnapshot } from '@bmn/protocol'
+import { WEB_QUESTION_MARKS, appDisplayName, plural, thousandsWithCommas, type WebQuestionAsker, type WebQuestionClaim, type WebQuestionOutcome, type WebQuestionView, type WebQuestionsSnapshot } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Row, Switch, shortDate } from './team-preferences'
 
@@ -23,7 +23,7 @@ export function askerName(by: WebQuestionAsker, sessionName: (id: string) => str
   if (by.kind === 'shell') return 'A shell'
   const name = sessionName(by.session) ?? 'A closed session'
   if (by.app === undefined) return `${name}'s shell`
-  return `${name} (${ROSTER_APP_NAMES[by.app as RosterHarness] ?? by.app})`
+  return `${name} (${appDisplayName(by.app)})`
 }
 
 /** A question's first line, or the words for a text BMN did not keep. */
