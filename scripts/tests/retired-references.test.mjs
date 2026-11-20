@@ -1,5 +1,5 @@
-// MODULE: retired-references.test.mjs - Epic 71 (71.2 AC5), Story 80.20: the retired app, and three more apps BMN no longer runs or
-// never ran, are named only where an allowlist says why
+// MODULE: retired-references.test.mjs - Epic 71 (71.2 AC5), Story 80.20, Epic 123: the retired apps, and three apps BMN no longer
+// runs or never ran, are named only where an allowlist says why
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -19,6 +19,8 @@ const ID = NAME.toLowerCase()
 const Z = ['g', 'lm'].join('')
 const GEM = ['gem', 'ini'].join('')
 const AID = ['ai', 'der'].join('')
+const OC = ['Open', 'Code'].join('')
+const oc = OC.toLowerCase()
 
 describe('the retired app named in the repository (Epic 71, 71.2 AC5)', () => {
   it('finds each way of naming it, and not a text cursor', async () => {
@@ -60,7 +62,7 @@ describe('the retired app named in the repository (Epic 71, 71.2 AC5)', () => {
   })
 })
 
-describe('three more apps named in the repository, each with its class (Story 80.20)', () => {
+describe('four more names in the repository, each with its class (Story 80.20; Epic 123, 123.1 AC3)', () => {
   it('finds each way of naming them, and not a word that only ends in one', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bmn-retired-references-'))
     try {
@@ -69,9 +71,10 @@ describe('three more apps named in the repository, each with its class (Story 80
       const lines = {
         [Z.toUpperCase()]: [`claude ${Z}`, `~/.claude-${Z}/settings.json`, `model: ${Z}-5.3`, `${Z.toUpperCase()}_ANSWER=1`, `{ word: 'chat${Z}' }`, `${Z}EnvKept: true`],
         [GEM[0].toUpperCase() + GEM.slice(1)]: [`~/.${GEM}`, `${GEM}: 'X'`, `${GEM}-3-pro`, `${GEM.toUpperCase()} CLI`],
-        [AID[0].toUpperCase() + AID.slice(1)]: [`${AID}: 'X'`, `run ${AID} --yes`]
+        [AID[0].toUpperCase() + AID.slice(1)]: [`${AID}: 'X'`, `run ${AID} --yes`],
+        [OC]: [`${OC} finished its turn`, `harness: '${oc}'`, `${oc.toUpperCase()}_CONFIG_DIR=/x`, `tag ${oc}-support-final`, `~/.config/${oc}/${oc}.json`, `${oc}Retired: true`]
       }
-      const plain = [`sig${Z}`, `x${GEM}`, `r${AID}`, `B${AID}s`, `2${Z}`]
+      const plain = [`sig${Z}`, `x${GEM}`, `r${AID}`, `B${AID}s`, `2${Z}`, `re${oc}`]
       for (const [name, named] of Object.entries(lines)) await writeFile(join(root, `src/${name}.ts`), `${named.join('\n')}\n`)
       await writeFile(join(root, 'src/plain.ts'), `${plain.join('\n')}\n`)
       execFileSync('git', ['add', '.'], { cwd: root })
