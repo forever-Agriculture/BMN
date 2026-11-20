@@ -2062,6 +2062,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       name: 'OpenCode retired', cwd: isolatedCwd, executable: openCodeExecutable,
       argv: ['--model', 'fixture/model'], cols: 80, rows: 24 }, true)
     await untilFileExists(join(openCodeDirectory, 'finished'), 'retired OpenCode hook calls')
+    // The renderer learns the sessions created here only through a recovery; the dormant sidebar phase below clicks
+    // one of them (the OpenCode acceptance this step replaced did the same recovery).
+    await host.recoverApplicationRenderer(host.applicationWindow)
     const openCodeHookRuns = JSON.parse(readFileSync(join(openCodeDirectory, 'finished'), 'utf8')) as Array<{ status: number | null; stdout: string; stderr: string }>
     const openCodeRequests = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
       .filter(row => row.sessionId === openCodeSession.session.sessionId)
@@ -3181,7 +3184,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // one live incarnation that the application restart below interrupts.
     // Epic 30.2's remote-answer stand-in adds one more incarnation, stopped before this check.
     // Story 32.3's armed shell adds one more, stopped after its reset.
-    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 18) {
+    // Epic 123 took OpenCode's Resume away: one incarnation fewer than the 18 counted before.
+    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 17) {
       throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
