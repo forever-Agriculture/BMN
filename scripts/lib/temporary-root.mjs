@@ -31,7 +31,8 @@ export const temporaryRootContracts = Object.freeze({
   }),
   packagedSmoke: Object.freeze({
     prefix: 'bmn-packaged-smoke-',
-    directories: Object.freeze(['config', 'data', 'state', 'runtime', 'cache'])
+    // `home` is the candidate's HOME, apart from its XDG roots (Story 134.2, D2).
+    directories: Object.freeze(['config', 'data', 'state', 'runtime', 'cache', 'home'])
   })
 })
 

@@ -66,7 +66,7 @@ All commands run from the repository root.
 | `node scripts/measure/calibration-environment.mjs --prove [--out RECEIPT.json]` | Story 96.4's isolation probe: a synthetic outside home with an approved sentinel team and tries file stands for yours, a separate approved synthetic team sits in the disposable home, and the build starts through the calibration's own launcher under `strace -f -e trace=%file` with a stand-in `codex --version` so BMN's own tests write their tries file. PASS only when that write lands in the disposable home, the trace names nothing in the outside home and its fingerprints are unchanged. Chromium is started with `--password-store=basic`, off the desktop keyring; the trace covers file calls only, so D-Bus (notifications) stays your session's |
 | `node scripts/audit/consumers.mjs [--json] [--exclude PATH]... TERM...` | Every place that may still use a name or a file before it is called dead: BMN's files and plan, dev-auto, the installed skills, names built from strings, packaging, each hit's blame and the term's Git history, and for a file the imports of a variable or template to read; exit 1 when a term has a hit |
 | `pnpm run install:desktop [-- --pin]` | Install the launcher and icons, `--pin` adds it to the GNOME dock |
-| `pnpm run update:desktop` | Queue a clean pushed `main` build; wait for BMN to exit, package into `linux-unpacked.next`, smoke-test it, swap it into `linux-unpacked` (the replaced build stays as `linux-unpacked.prev` until the next update), install and notify. A failed check leaves the live build as it was; a desktop start during the update waits for it |
+| `pnpm run update:desktop` | Queue a clean pushed `main` build. While BMN stays open it packages into `linux-unpacked.next`, smoke-tests it there and keeps the passed build in `linux-unpacked.ready`; only then BMN offers **Restart for the update…** and a notification says it is ready. A newer clean push before BMN exits withdraws the offer until that one passed too. When BMN exits, the newest passed build is swapped into `linux-unpacked` (the replaced one stays as `linux-unpacked.prev` until the next swap), installed and announced; a newer commit still building waits for the next restart. A failed check leaves the live build as it was and is reported before any restart. A desktop start waits only during the swap. Each attempt keeps its own log (below) |
 
 `make test`, `make lint`, `make typecheck` and `make build` wrap the same commands.
 
@@ -76,11 +76,18 @@ All commands run from the repository root.
   `pnpm run package` has produced one, and it checks the native binaries for the platform you are
   on: `scripts/lib/packaged-app.mjs` is the single place that knows where a packaged build lands.
 - The Electron self-test and the packaged smoke test run with temporary `XDG_*` folders. Your real
-  BMN data is not touched.
+  BMN data is not touched. The packaged smoke also gets a `HOME` of its own, apart from those
+  folders, so it runs while your BMN is open; it fails if the build writes BMN folders into that home.
 - `pnpm run package` in the main checkout refuses while packaged BMN is open, since packaging replaces
   the binary it runs from (a linked worktree and the updater run as usual). `update:desktop` packages
-  beside it instead and swaps only after BMN has exited, and never if a tracked file changed or HEAD
-  moved since the build started: the old build stays live, and `latest.json` and its log say why.
+  beside it instead and swaps only after BMN has exited. A build whose source changed (a tracked file
+  written or HEAD moved) is never kept: the newest clean commit is built instead, or, with no clean
+  commit, the update stops and the old build stays live.
+- Update logs live in `~/.local/state/bmn/source-update/`: `attempts/<UTC start>-<commit>.log`, one per
+  attempt with its commit and, on failure, the step it failed at (the last 20 are kept); `latest.log`
+  links to the newest; `latest.json` is what the launcher and BMN read (phase, commit, the passed
+  build waiting as `staged`, the build this update put live as `installed`). A refusal before
+  queueing (dirty tree, unpushed `main`) is only printed and changes none of these files.
 - "Every test passes" means on a quiet machine: no load loops and no other test run (another
   checkout's vitest or pytest). Timing runs use a stated load instead: one Node busy loop per two
   logical cores (`node -e 'for (;;) {}'`) while `vitest run --maxWorkers=50% --sequence.shuffle`
@@ -94,7 +101,8 @@ All commands run from the repository root.
   limit with `vi.setConfig`, a timing bound reads thread CPU or a control timer
   (`test-fixtures/load-clock.ts`), and the suite's default limit stays 5 s.
 - `BMN_SMOKE_FORCE_FAILURE=1` makes `smoke:packaged` fail at once, for proving what a failed update
-  leaves behind; nothing else reads it.
+  leaves behind; `update:desktop` hands it to its worker when it is set at queue time. Nothing else
+  reads it.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox
   appears anywhere in `apps`, `shared` or `scripts`.
 - The unit suite rejects native selects and source files over 2,000 lines through

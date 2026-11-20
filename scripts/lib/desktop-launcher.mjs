@@ -33,9 +33,11 @@ function shellQuote(value) {
 }
 
 /**
- * A POSIX shell launcher, so a desktop start never depends on the node that built it. While the
- * update unit is active it waits, except when the update is still waiting for a running BMN to exit:
- * then the start is forwarded to that instance, whose single-instance lock focuses it.
+ * A POSIX shell launcher, so a desktop start never depends on the node that built it. An update is built
+ * and tested while BMN is open (Story 134.2), so a start waits only while a passed build is about to be
+ * swapped in: `waiting-for-exit`, a `preparing` newer build while a passed one is `staged`, and the swap
+ * itself (`installing`). While BMN runs, a start is forwarded to it, whose single-instance lock focuses it;
+ * while a candidate is still being built and nothing passed yet, the current build opens at once.
  *
  * A held start shows a progress window that names the phase it is waiting on, because a desktop with
  * nothing on it cannot be told apart from a start that failed. The window is informational: nothing
@@ -79,6 +81,20 @@ phase() {
   sed -n 's/.*"phase": *"\\([^"]*\\)".*/\\1/p' "$status" 2>/dev/null | tail -n 1
 }
 
+staged() {
+  sed -n 's/.*"staged": *"\\([^"]*\\)".*/\\1/p' "$status" 2>/dev/null | tail -n 1
+}
+
+# Whether an active update holds a start: only while a passed build is about to go live. A build still being made
+# or tested leaves the current one to open; a status of an older updater (\`building\`) still waits.
+holds() {
+  case $(phase) in
+    queued|preparing) [ -n "$(staged)" ] ;;
+    complete) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 live_build() {
   sed -n 's/.*"liveBuild": *"\\([^"]*\\)".*/\\1/p' "$status" 2>/dev/null | tail -n 1
 }
@@ -101,13 +117,13 @@ step() {
 
 describe() {
   case $(phase) in
-    queued|waiting-for-exit) echo 'Getting the update ready…' ;;
-    building)
+    queued|preparing|waiting-for-exit) echo 'Putting the checked build in place…' ;;
+    installing|building)
       case $(step) in
         package) echo 'Packaging the new build. This usually takes 1-3 minutes.' ;;
         'packaged smoke test') echo 'Checking the new build…' ;;
         'desktop install') echo 'Finishing the install…' ;;
-        *) echo 'Packaging the new build…' ;;
+        *) echo 'Putting the checked build in place…' ;;
       esac ;;
     complete) echo 'Update complete. Opening BMN…' ;;
     *) echo 'Updating BMN…' ;;
@@ -117,7 +133,7 @@ describe() {
 # Feeds zenity: "#text" retitles the bar, and the closing 100 ends the window when the update does.
 feed() {
   last=
-  while updating; do
+  while updating && holds; do
     text=$(describe)
     if [ "$text" != "$last" ]; then
       printf '#%s\\n' "$text"
@@ -130,7 +146,7 @@ feed() {
 
 window() {
   feed | zenity --progress --pulsate --auto-close --width 380 \\
-    --title 'BMN is updating' --text 'Getting the update ready…' \\
+    --title 'BMN is updating' --text 'Putting the checked build in place…' \\
     --cancel-label "Don't wait" 2>/dev/null
 }
 
@@ -160,16 +176,18 @@ unset BMN_RESTART_WAIT_PID BMN_RESTART_WAIT_TICKS BMN_RESTART_ACK BMN_RESTART_AU
 waited=$restart_waited
 if updating; then
   case $(phase) in
-    queued|waiting-for-exit) [ -z "$restart_waited" ] && running && exec "$binary" "$@" ;;
+    queued|preparing|waiting-for-exit) [ -z "$restart_waited" ] && running && exec "$binary" "$@" ;;
   esac
-  waited=yes
-  if command -v zenity >/dev/null 2>&1; then
-    window
-    # Dismissed, or the window could not be shown: never start a half-replaced build.
-    updating && exit 0
-  else
-    notify-send 'BMN is updating' 'BMN opens when the update finishes.' 2>/dev/null
-    while updating; do sleep 1; done
+  if holds; then
+    waited=yes
+    if command -v zenity >/dev/null 2>&1; then
+      window
+      # Dismissed, or the window could not be shown: never start a half-replaced build.
+      updating && holds && exit 0
+    else
+      notify-send 'BMN is updating' 'BMN opens when the update finishes.' 2>/dev/null
+      while updating && holds; do sleep 1; done
+    fi
   fi
 fi
 

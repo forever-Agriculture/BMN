@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildFolders, liveBuildState, packageSmokeAndSwap, prepareBuildFolders, swapInStagedBuild } from '../lib/staged-build.mjs'
+import { buildFolders, keepPassedBuild, liveBuildState, packageAndSmoke, prepareBuildFolders, swapInReadyBuild } from '../lib/staged-build.mjs'
 
 const roots = []
 afterEach(() => {
@@ -61,98 +61,77 @@ describe('staged desktop update', () => {
     expect(profile).toMatch(new RegExp(`profile bmn-electron-packaged-next "${staged}/bmn" flags=\\(unconfined\\) \\{\\s+userns,`, 'u'))
   })
 
-  it('smokes the staged build and only then swaps it in, keeping the replaced one as prev', async () => {
+  it('packages and smokes in next while the live build stays as it is, then keeps the passed build as ready (134.2)', async () => {
     const folders = release()
     writeBuild(folders.live, 'old')
     const oldBuild = fingerprint(folders.live)
     const fake = steps(folders, { smokePasses: true })
-    const states = []
-    let waited = 0
+    const logged = []
 
-    await packageSmokeAndSwap({
-      folders, step: fake.step, waitForExit: async () => { waited += 1 }, log: () => undefined, onLiveBuild: (state) => states.push(state)
-    })
+    await packageAndSmoke({ folders, step: async (label, args) => fake.step(label, args), log: (line) => logged.push(line) })
 
     expect(fake.ran).toEqual([
       ['package', ['run', 'package', `--config.directories.output=${folders.staging}`]],
       ['packaged smoke test', ['run', 'smoke:packaged', '--root', folders.next]]
     ])
-    expect(waited).toBe(1)
-    expect(states).toEqual(['new'])
-    expect(readFileSync(join(folders.live, 'bmn'), 'utf8')).toContain('echo new')
-    expect(fingerprint(folders.prev)).toBe(oldBuild)
-    expect(existsSync(folders.next)).toBe(false)
+    expect(logged).toEqual([`STAGED ${folders.next}`])
+    expect(fingerprint(folders.live)).toBe(oldBuild)
     expect(existsSync(folders.staging)).toBe(false)
+    keepPassedBuild(folders)
+    expect(readFileSync(join(folders.ready, 'bmn'), 'utf8')).toContain('echo new')
+    expect(existsSync(folders.next)).toBe(false)
+    expect(fingerprint(folders.live)).toBe(oldBuild)
   })
 
-  it('leaves the live build byte for byte and the staged one for inspection when the smoke fails', async () => {
+  it('leaves the live build byte for byte and the tested one in next for inspection when the smoke fails', async () => {
     const folders = release()
     writeBuild(folders.live, 'old')
-    const oldBuild = fingerprint(folders.live)
+    writeBuild(folders.ready, 'passed-earlier')
+    const oldBuild = fingerprint(folders.live), passed = fingerprint(folders.ready)
     const fake = steps(folders, { smokePasses: false })
-    const states = []
 
-    await expect(packageSmokeAndSwap({
-      folders, step: fake.step, waitForExit: async () => undefined, log: () => undefined, onLiveBuild: (state) => states.push(state)
-    })).rejects.toThrow('packaged smoke test failed')
+    await expect(packageAndSmoke({ folders, step: async (label, args) => fake.step(label, args), log: () => undefined }))
+      .rejects.toThrow('packaged smoke test failed')
 
     expect(fingerprint(folders.live)).toBe(oldBuild)
+    expect(fingerprint(folders.ready)).toBe(passed)
     expect(readFileSync(join(folders.next, 'bmn'), 'utf8')).toContain('echo new')
     expect(existsSync(folders.prev)).toBe(false)
-    expect(states).toEqual([])
   })
 
-  it('never puts a build live whose source changed while it was built, and swaps on unchanged source (102.9)', async () => {
+  it('swaps the ready build in, keeping the replaced one as prev and removing an older prev', () => {
     const folders = release()
     writeBuild(folders.live, 'old')
+    writeBuild(folders.prev, 'two-updates-ago')
+    writeBuild(folders.ready, 'new')
     const oldBuild = fingerprint(folders.live)
-    const states = []
-    await expect(packageSmokeAndSwap({
-      folders, step: steps(folders, { smokePasses: true }).step, waitForExit: async () => undefined, log: () => undefined, onLiveBuild: (state) => states.push(state),
-      sourceChange: () => 'working tree is not clean'
-    })).rejects.toThrow('source changed during the build, so the old build stays live: working tree is not clean')
-    expect(fingerprint(folders.live)).toBe(oldBuild)
-    expect(states).toEqual([])
-    expect(existsSync(folders.prev)).toBe(false)
 
-    const clean = release()
-    writeBuild(clean.live, 'old')
-    await packageSmokeAndSwap({
-      folders: clean, step: steps(clean, { smokePasses: true }).step, waitForExit: async () => undefined, log: () => undefined, onLiveBuild: (state) => states.push(state),
-      sourceChange: () => null
-    })
-    expect(states).toEqual(['new'])
-    expect(readFileSync(join(clean.live, 'bmn'), 'utf8')).toContain('echo new')
+    expect(swapInReadyBuild(folders)).toEqual({ liveBuild: 'new' })
+    expect(readFileSync(join(folders.live, 'bmn'), 'utf8')).toContain('echo new')
+    expect(fingerprint(folders.prev)).toBe(oldBuild)
+    expect(existsSync(folders.ready)).toBe(false)
   })
 
-  it('never swaps while BMN is still running from the live build', async () => {
+  it('a newer passed build replaces the older ready one', () => {
     const folders = release()
-    writeBuild(folders.live, 'old')
-    const fake = steps(folders, { smokePasses: true })
-    const order = []
-
-    await packageSmokeAndSwap({
-      folders,
-      step: (label, args) => { order.push(label); fake.step(label, args) },
-      waitForExit: async () => { order.push(`wait (live still old: ${readFileSync(join(folders.live, 'bmn'), 'utf8').includes('old')})`) },
-      log: () => undefined,
-      onLiveBuild: (state) => order.push(`swap ${state}`)
-    })
-
-    expect(order).toEqual(['package', 'packaged smoke test', 'wait (live still old: true)', 'swap new'])
+    writeBuild(folders.ready, 'a')
+    writeBuild(folders.next, 'b')
+    keepPassedBuild(folders)
+    expect(readFileSync(join(folders.ready, 'bmn'), 'utf8')).toContain('echo b')
+    expect(existsSync(folders.next)).toBe(false)
   })
 
   it('puts the live build back when the second rename fails', () => {
     const folders = release()
     writeBuild(folders.live, 'old')
-    writeBuild(folders.next, 'new')
+    writeBuild(folders.ready, 'new')
     const oldBuild = fingerprint(folders.live)
     const failing = { ...nodeFs, renameSync: (from, to) => {
-      if (from === folders.next) throw new Error('EXDEV: cross-device link not permitted')
+      if (from === folders.ready) throw new Error('EXDEV: cross-device link not permitted')
       renameSync(from, to)
     } }
 
-    const result = swapInStagedBuild(folders, failing)
+    const result = swapInReadyBuild(folders, failing)
 
     expect(result.liveBuild).toBe('previous')
     expect(result.error.message).toContain('EXDEV')
@@ -162,20 +141,20 @@ describe('staged desktop update', () => {
   it('reports no live build when the rollback fails too', () => {
     const folders = release()
     writeBuild(folders.live, 'old')
-    writeBuild(folders.next, 'new')
+    writeBuild(folders.ready, 'new')
     const failing = { ...nodeFs, renameSync: (from, to) => {
       if (from === folders.live) return renameSync(from, to)
       throw new Error('EIO')
     } }
 
-    expect(swapInStagedBuild(folders, failing).liveBuild).toBe('none')
+    expect(swapInReadyBuild(folders, failing).liveBuild).toBe('none')
     expect(liveBuildState(folders)).toBe('half-swapped')
   })
 
   it('detects a stop between the two renames and restores the previous build at the next update', () => {
     const folders = release()
     writeBuild(folders.live, 'old')
-    writeBuild(folders.next, 'new')
+    writeBuild(folders.ready, 'new')
     const oldBuild = fingerprint(folders.live)
     // The worker died right after live -> prev.
     renameSync(folders.live, folders.prev)
@@ -184,7 +163,7 @@ describe('staged desktop update', () => {
     expect(prepareBuildFolders(folders)).toEqual({ restored: true })
     expect(fingerprint(folders.live)).toBe(oldBuild)
     expect(existsSync(folders.prev)).toBe(false)
-    expect(existsSync(folders.next)).toBe(false)
+    expect(existsSync(folders.ready)).toBe(false)
   })
 
   it('removes the previous generation and old staging at the start, so an update holds at most three builds', async () => {
@@ -192,18 +171,16 @@ describe('staged desktop update', () => {
     writeBuild(folders.live, 'live')
     writeBuild(folders.prev, 'two-updates-ago')
     writeBuild(folders.next, 'failed-last-time')
+    writeBuild(folders.ready, 'passed-but-never-swapped')
     writeBuild(join(folders.staging, 'linux-unpacked'), 'half-packaged')
     let most = 0
-    const count = () => { most = Math.max(most, [folders.live, folders.next, folders.prev, join(folders.staging, 'linux-unpacked')].filter(existsSync).length) }
+    const count = () => { most = Math.max(most, [folders.live, folders.next, folders.ready, folders.prev, join(folders.staging, 'linux-unpacked')].filter(existsSync).length) }
     const fake = steps(folders, { smokePasses: true })
 
-    await packageSmokeAndSwap({
-      folders,
-      step: (label, args) => { count(); fake.step(label, args); count() },
-      waitForExit: async () => count(),
-      log: () => undefined,
-      onLiveBuild: () => count()
-    })
+    expect(prepareBuildFolders(folders)).toEqual({ restored: false })
+    await packageAndSmoke({ folders, step: async (label, args) => { count(); fake.step(label, args); count() }, log: () => undefined })
+    keepPassedBuild(folders); count()
+    swapInReadyBuild(folders); count()
 
     expect(most).toBeLessThanOrEqual(3)
     expect(readFileSync(join(folders.prev, 'bmn'), 'utf8')).toContain('echo live')

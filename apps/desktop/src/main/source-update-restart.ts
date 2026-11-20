@@ -37,6 +37,8 @@ export function openedSourceBuild(path = sourceUpdatePath()): string {
     if (result === 'previous') return 'Update failed · previous build opened'
     if (result === 'new') return 'Update failed · new build opened'
     if (status.phase === 'complete' && typeof status.commit === 'string') return status.commit
+    // Story 134.2: after the swap the worker may already build a newer push; `installed` names the build he got.
+    if (typeof status.installed === 'string') return status.installed
     return 'unknown build'
   } catch { return 'unknown build' }
 }

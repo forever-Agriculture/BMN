@@ -9,8 +9,11 @@ import {
   queueCommand,
   recordWorkerFailure,
   repositoryReadiness,
-  runningAppPids
+  runningAppPids,
+  workerUnitArguments
 } from '../install/update-desktop.mjs'
+import { assertHomeUntouched, homeBmnFolders, isolatedEnvironment } from '../smoke/packaged.mjs'
+import { temporaryRootContracts } from '../lib/temporary-root.mjs'
 import { KEPT_ATTEMPTS, attemptLogs, startAttempt } from '../lib/update-attempts.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -193,5 +196,42 @@ describe('desktop source update', () => {
       expect(snapshot(directory)).toEqual(before)
       expect(existsSync(join(directory, 'attempts'))).toBe(false)
     }))
+  })
+
+  describe('built and tested while BMN stays open (Story 134.2)', () => {
+    it('hands the forced smoke failure to the worker only when it was set at queue time (AC3)', () => {
+      const forced = workerUnitArguments({ PATH: '/usr/bin', BMN_SMOKE_FORCE_FAILURE: '1', BMN_TOKEN: 'never-forwarded' })
+      expect(forced).toContain('--setenv=BMN_SMOKE_FORCE_FAILURE=1')
+      expect(forced).toContain('--setenv=PATH=/usr/bin')
+      expect(forced.join(' ')).not.toContain('BMN_TOKEN')
+      expect(forced.at(-1)).toBe('--worker')
+      expect(workerUnitArguments({ PATH: '/usr/bin' }).join(' ')).not.toContain('BMN_SMOKE_FORCE_FAILURE')
+    })
+
+    it('gives the smoke a HOME of its own, apart from its XDG roots, and none of the live session (D2)', () => {
+      expect(temporaryRootContracts.packagedSmoke.directories).toContain('home')
+      const roots = { home: '/t/home', config: '/t/config', data: '/t/data', state: '/t/state', cache: '/t/cache', runtime: '/t/runtime' }
+      const environment = isolatedEnvironment(roots, { HOME: '/home/owner', PATH: '/usr/bin', BMN_SESSION_ID: 's', BMN_TOKEN: 't', BMN_CONTROL_SOCKET: '/run/bmn.sock', BMN_CLI_BIN_DIR: '/x' })
+      expect(environment).toMatchObject({ HOME: '/t/home', XDG_CONFIG_HOME: '/t/config', XDG_DATA_HOME: '/t/data', XDG_STATE_HOME: '/t/state', XDG_CACHE_HOME: '/t/cache', XDG_RUNTIME_DIR: '/t/runtime', PATH: '/usr/bin' })
+      for (const name of ['BMN_SESSION_ID', 'BMN_TOKEN', 'BMN_CONTROL_SOCKET', 'BMN_CLI_BIN_DIR']) expect(environment).not.toHaveProperty(name)
+      for (const xdg of [roots.config, roots.data, roots.state, roots.cache, roots.runtime]) expect(xdg.startsWith(roots.home)).toBe(false)
+    })
+
+    it("fails the smoke when the candidate wrote into its HOME's BMN folders instead of its XDG roots (D2)", () => {
+      const home = mkdtempSync(join(tmpdir(), 'bmn-smoke-home-'))
+      try {
+        // Other tools may leave their own folders in HOME; only BMN's count.
+        mkdirSync(join(home, '.claude'), { recursive: true })
+        expect(() => assertHomeUntouched(home)).not.toThrow()
+        for (const leak of homeBmnFolders(home)) {
+          mkdirSync(leak, { recursive: true })
+          expect(() => assertHomeUntouched(home)).toThrow(`the packaged build wrote into HOME instead of its XDG roots: ${leak}`)
+          rmSync(leak, { recursive: true })
+        }
+        expect(homeBmnFolders(home)).toContain(join(home, '.local/state/bmn'))
+      } finally {
+        rmSync(home, { recursive: true, force: true })
+      }
+    })
   })
 })

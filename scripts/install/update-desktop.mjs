@@ -1,8 +1,7 @@
-// MODULE: update-desktop.mjs - queues a source build that installs only after packaged BMN exits
-import { spawnSync } from 'node:child_process'
+// MODULE: update-desktop.mjs - queues a source update that is built and tested while BMN is open and swapped in after it exits
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -22,8 +21,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { UPDATE_UNIT, desktopEntryReturnsBrain, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
-import { buildFolders, packageSmokeAndSwap } from '../lib/staged-build.mjs'
+import { buildFolders, keepPassedBuild, packageAndSmoke, prepareBuildFolders, swapInReadyBuild } from '../lib/staged-build.mjs'
 import { startAttempt } from '../lib/update-attempts.mjs'
+import { SourceMoved, stepFailure, superviseUpdate } from '../lib/update-supervisor.mjs'
 import { brainFileHash, brainResourcesHash, brainCutoverStateRoot, brainDeliveryCommit, brainContainsDelivery } from '../lib/brain-provenance.mjs'
 
 import { installBrainCutoverService } from './brain-cutover-service.mjs'
@@ -37,10 +37,12 @@ let liveBuild = 'previous'
 const stateDirectory = updateStateDirectory()
 const statusPath = join(stateDirectory, 'latest.json')
 const logPath = join(stateDirectory, 'latest.log')
-/** This worker's attempt (Story 134.1): its own log under `attempts/`, which later attempts never rewrite. */
+/** The worker's current attempt (Story 134.1): its own log under `attempts/`, which later attempts never rewrite. */
 let attempt = null
 /** The step the worker is in, so a failure names where it stopped. */
 let currentStep = 'start'
+/** The variables a queued update hands its worker besides PATH: the test-only forced smoke failure (Story 134.2 AC3). */
+export const FORWARDED_TO_WORKER = ['BMN_SMOKE_FORCE_FAILURE']
 const desktopEntry = join(
   process.env.XDG_DATA_HOME || join(homedir(), '.local/share'),
   'applications',
@@ -119,8 +121,8 @@ export function desktopEntryRunsLauncher(entry, launcherFile) {
   return entry.split(/\r?\n/u).includes(`Exec="${launcherFile}"`)
 }
 
-function capture(command, args) {
-  const result = spawnSync(command, args, { cwd: repoRoot, encoding: 'utf8' })
+function capture(command, args, cwd = repoRoot) {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8' })
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || result.error?.message || '').trim()
     throw new Error(`${command} ${args.join(' ')} failed${detail ? `: ${detail}` : ''}`)
@@ -151,10 +153,6 @@ function writeStatus(value) {
 
 function log(message) {
   if (attempt) attempt.log(message)
-  else {
-    mkdirSync(stateDirectory, { recursive: true })
-    appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`)
-  }
 }
 
 export function brainUpdateNotice(commit,state=brainCutoverStateRoot()) {
@@ -168,40 +166,45 @@ function notify(summary, body, urgency = 'normal') {
   spawnSync('notify-send', ['--urgency', urgency, summary, body], { stdio: 'ignore' })
 }
 
-function runStep(label, args) {
+/**
+ * Runs one pnpm step into the attempt's log. The step runs in its own process group, so an aborted build (BMN exited
+ * while a passed build waits) stops with everything it started, smoke display included.
+ */
+function runStep(label, args, { signal } = {}) {
   currentStep = label
   log(`START ${label}: pnpm ${args.join(' ')}`)
-  const output = openSync(attempt?.path ?? logPath, 'a')
-  const result = spawnSync('pnpm', args, {
-    cwd: repoRoot,
-    // The step builds into staging, never over the live build: `package-preflight.mjs` lets it run while BMN is open.
-    env: { ...process.env, BMN_PACKAGE_STAGED: '1' },
-    stdio: ['ignore', output, output]
-  })
-  closeSync(output)
-  if (result.status !== 0) {
-    throw new Error(`${label} failed with ${result.signal ? `signal ${result.signal}` : `exit ${result.status}`}`)
-  }
-  log(`PASS ${label}`)
-}
-
-async function waitForPackagedAppToExit() {
-  let announced = false
-  for (;;) {
-    const pids = runningAppPids(binary)
-    if (pids.length > 0) {
-      if (!announced) {
-        log(`WAIT packaged BMN is running (${pids.join(', ')})`)
-        announced = true
-      }
-      await delay(1_000)
-      continue
+  return new Promise((resolvePromise, reject) => {
+    const output = openSync(attempt.path, 'a')
+    let child
+    try {
+      child = spawn('pnpm', args, {
+        cwd: repoRoot,
+        // The step builds into staging, never over the live build: `package-preflight.mjs` lets it run while BMN is open.
+        env: { ...process.env, BMN_PACKAGE_STAGED: '1' },
+        stdio: ['ignore', output, output],
+        detached: true
+      })
+    } finally {
+      closeSync(output)
     }
-    // A quiet window prevents an immediate desktop relaunch from racing the replacement.
-    await delay(3_000)
-    if (runningAppPids(binary).length === 0) return
-    announced = false
-  }
+    let killer
+    const stop = () => {
+      const group = (name) => { try { process.kill(-child.pid, name) } catch { /* already gone */ } }
+      group('SIGTERM')
+      killer = setTimeout(() => group('SIGKILL'), 5_000)
+    }
+    if (signal?.aborted) stop()
+    else signal?.addEventListener('abort', stop, { once: true })
+    child.once('error', (error) => reject(stepFailure(label, error)))
+    child.once('close', (code, killedBy) => {
+      clearTimeout(killer)
+      signal?.removeEventListener('abort', stop)
+      if (signal?.aborted) return reject(stepFailure(label, new Error(`${label} stopped: BMN exited`)))
+      if (code !== 0) return reject(stepFailure(label, new Error(`${label} failed with ${killedBy ? `signal ${killedBy}` : `exit ${code}`}`)))
+      log(`PASS ${label}`)
+      resolvePromise()
+    })
+  })
 }
 
 /** Called only from the clean canonical main checkout, never from an implementation worktree. */
@@ -225,38 +228,59 @@ export function prepareBrainDelivery({project=repoRoot,commit,state=stateDirecto
   return delivered
 }
 
-async function runWorker() {
-  mkdirSync(stateDirectory, { recursive: true })
-  const queuedState = gitState()
-  attempt = startAttempt({ stateDirectory, commit: queuedState.head })
-  writeStatus({ phase: 'waiting-for-exit', commit: queuedState.head, updatedAt: new Date().toISOString(), logPath: attempt.path })
-  log(`QUEUED commit ${queuedState.head}`)
-  currentStep = 'wait for BMN to exit'
-  await waitForPackagedAppToExit()
-  currentStep = 'source check'
+/** Where a checkout stands: a clean pushed main, or why not. Cheap enough to poll; the build reads `gitState()`. */
+export function checkoutSource(root = repoRoot) {
+  const git = (...args) => capture('git', args, root)
+  const state = { branch: git('branch', '--show-current'), head: git('rev-parse', 'HEAD'), originHead: git('rev-parse', 'origin/main'), status: '' }
+  if (state.branch === 'main' && state.head === state.originHead) state.status = git('status', '--porcelain')
+  return { head: state.head, problem: repositoryReadiness(state) }
+}
 
-  const buildingState = gitState()
-  const readiness = repositoryReadiness(buildingState)
-  if (readiness) throw new Error(readiness)
-  const brainDelivered=prepareBrainDelivery({commit:buildingState.head})
-  writeStatus({ phase: 'building', commit: buildingState.head, updatedAt: new Date().toISOString(), logPath })
-
-  // The live build is not touched until the new one has passed its smoke test in a folder beside it.
-  await packageSmokeAndSwap({
-    folders,
-    step: runStep,
-    waitForExit: waitForPackagedAppToExit,
-    log,
-    onLiveBuild: (state) => { liveBuild = state },
-    sourceChange: () => sourceChangeSince(buildingState, gitState())
+/** Packages and smokes one commit while BMN may be open; a passed build moves to `ready`, where it waits for BMN to exit. */
+function buildCandidate(commit, options) {
+  return buildCandidateSteps(commit, options).catch((error) => {
+    throw error instanceof SourceMoved ? error : stepFailure(currentStep, error)
   })
-  runStep('desktop install', ['run', 'install:desktop'])
-  currentStep = 'install check'
+}
 
-  const completedState = gitState()
-  const completedReadiness = repositoryReadiness(completedState)
-  if (completedReadiness) throw new Error(`source changed during the update: ${completedReadiness}`)
-  if (completedState.head !== buildingState.head) throw new Error('source commit changed during the update')
+async function buildCandidateSteps(commit, { attempt: started, signal }) {
+  attempt = started
+  currentStep = 'source check'
+  const buildingState = gitState()
+  if (buildingState.head !== commit) throw new SourceMoved(`HEAD moved from ${commit} to ${buildingState.head} before the build started`)
+  const readiness = repositoryReadiness(buildingState)
+  if (readiness) throw new SourceMoved(readiness)
+  currentStep = 'brain delivery'
+  prepareBrainDelivery({ commit })
+  await packageAndSmoke({ folders, step: (label, args) => runStep(label, args, { signal }), log })
+  currentStep = 'source check'
+  const changed = sourceChangeSince(buildingState, gitState())
+  if (changed !== null) throw new SourceMoved(`source changed during the build: ${changed}`)
+  keepPassedBuild(folders)
+}
+
+/** The installed brain helper must be the commit's own: read from Git, so a newer checkout cannot make a false mismatch. */
+function committedFileHash(commit, path) {
+  const shown = spawnSync('git', ['show', `${commit}:${path}`], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 })
+  if (shown.status !== 0) throw new Error(`git show ${commit}:${path} failed`)
+  return createHash('sha256').update(shown.stdout).digest('hex')
+}
+
+/** BMN is closed: swap the waiting build in, refresh the desktop entry and launcher, check them and record the build. */
+function installReadyBuild(commit, started) {
+  return installReadyBuildSteps(commit, started).catch((error) => { throw stepFailure(currentStep, error) })
+}
+
+async function installReadyBuildSteps(commit, started) {
+  attempt = started
+  currentStep = 'swap'
+  const brainDelivered = prepareBrainDelivery({ commit })
+  const swap = swapInReadyBuild(folders)
+  liveBuild = swap.liveBuild
+  if (swap.error) throw new Error(`could not put the new build in place: ${swap.error.message}`)
+  log(`SWAPPED ${commit} into ${folders.live}; the one it replaced is ${folders.prev}`)
+  await runStep('desktop install', ['run', 'install:desktop'])
+  currentStep = 'install check'
   if (!existsSync(binary) || !existsSync(archive)) throw new Error('packaged BMN artifact is missing after install')
   if (!desktopEntryRunsLauncher(readFileSync(desktopEntry, 'utf8'), launcher)) {
     throw new Error('desktop entry does not run the BMN launcher')
@@ -268,44 +292,67 @@ async function runWorker() {
     throw new Error('BMN launcher does not start the packaged BMN binary')
   }
 
-  if(brainDeliveryCommit(repoRoot,completedState.head)!==brainDelivered||!brainContainsDelivery(repoRoot,brainDelivered,completedState.head))throw new Error('Packaged build no longer contains brain delivery')
+  if(brainDeliveryCommit(repoRoot,commit)!==brainDelivered||!brainContainsDelivery(repoRoot,brainDelivered,commit))throw new Error('Packaged build no longer contains brain delivery')
   for(const name of ['brain-cutover-service.py','brain-cutover-peer.py']){
-    const installed=join(dirname(archive),'bin',name),source=join(repoRoot,'apps/desktop/bin',name)
-    if(!lstatSync(installed).isFile()||lstatSync(installed).isSymbolicLink()||brainFileHash(installed)!==brainFileHash(source))throw new Error('Installed brain helper provenance failed')
+    const installed=join(dirname(archive),'bin',name)
+    if(!lstatSync(installed).isFile()||lstatSync(installed).isSymbolicLink()||brainFileHash(installed)!==committedFileHash(commit,`apps/desktop/bin/${name}`))throw new Error('Installed brain helper provenance failed')
   }
   // Verify the held unit again after packaging, without starting or enabling it.
-  prepareBrainDelivery({commit:completedState.head})
+  prepareBrainDelivery({commit})
   const completedAt = new Date().toISOString()
   const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex')
-  const completed = { phase: 'complete', commit: completedState.head, brainDeliveryCommit:brainDelivered, completedAt, logPath, binary, archive,
+  const completed = { phase: 'complete', commit, installed: commit, brainDeliveryCommit:brainDelivered, completedAt, logPath: started.path, binary, archive,
     binaryHash: digest(binary), archiveHash: digest(archive), resourcesHash:brainResourcesHash(dirname(archive)),
     preparedHash:existsSync(join(brainCutoverStateRoot(),'brain-cutover-prepared.json'))?brainFileHash(join(brainCutoverStateRoot(),'brain-cutover-prepared.json')):null, brainVersion: 126, liveBuild }
   // latest.json is replaced at queue time. Keep completed provenance independently of later attempts.
   const history = join(stateDirectory, 'completed')
   mkdirSync(history, { recursive: true, mode: 0o700 })
-  const record = join(history, completedState.head + '.json'), temporary = record + '.tmp'
+  const record = join(history, commit + '.json'), temporary = record + '.tmp'
   const completedFile=openSync(temporary,'w',0o600)
   try{writeFileSync(completedFile,JSON.stringify(completed)+'\n');fsyncSync(completedFile)}finally{closeSync(completedFile)}
   renameSync(temporary, record)
   for(const path of [history,stateDirectory]){const directory=openSync(path,'r');try{fsyncSync(directory)}finally{closeSync(directory)}}
   if (readFileSync(record, 'utf8') !== JSON.stringify(completed) + '\n') throw new Error('Completed build record read-back failed')
   writeStatus(completed)
-  log(`COMPLETE commit ${completedState.head}`)
-  notify('BMN updated', brainUpdateNotice(completedState.head))
+  log(`COMPLETE commit ${commit}`)
+  // A later failed attempt of this worker leaves this build live, unchanged.
+  liveBuild = 'previous'
+  notify('BMN updated', brainUpdateNotice(commit))
 }
 
-function startUnit() {
-  return spawnSync('systemd-run', [
+async function runWorker() {
+  mkdirSync(stateDirectory, { recursive: true })
+  if (prepareBuildFolders(folders).restored) console.error(`RESTORED ${folders.live} from ${folders.prev}; an earlier update stopped between its renames`)
+  await superviseUpdate({
+    source: () => checkoutSource(),
+    build: buildCandidate,
+    install: installReadyBuild,
+    appOpen: () => runningAppPids(binary).length > 0,
+    startAttempt: (commit) => (attempt = startAttempt({ stateDirectory, commit })),
+    status: writeStatus,
+    notify,
+    delay: (ms) => delay(ms)
+  })
+}
+
+/** The systemd-run arguments of the worker unit: PATH, and the forced smoke failure when set at queue time (134.2 AC3). */
+export function workerUnitArguments(environment = process.env) {
+  return [
     '--user',
     `--unit=${unit.replace(/\.service$/u, '')}`,
     '--collect',
     '--property=Type=exec',
     `--property=WorkingDirectory=${repoRoot}`,
-    `--setenv=PATH=${process.env.PATH || ''}`,
+    `--setenv=PATH=${environment.PATH || ''}`,
+    ...FORWARDED_TO_WORKER.filter((name) => environment[name] !== undefined).map((name) => `--setenv=${name}=${environment[name]}`),
     process.execPath,
     workerPath,
     '--worker'
-  ], { encoding: 'utf8' })
+  ]
+}
+
+function startUnit() {
+  return spawnSync('systemd-run', workerUnitArguments(), { encoding: 'utf8' })
 }
 
 /**
@@ -316,7 +363,6 @@ export function recordWorkerFailure({ directory, attempt: failed, step, error, l
   const message = error instanceof Error ? error.message : String(error)
   writeStatusIn(directory, { phase: 'failed', commit: failed?.commit ?? null, failedStep: step, error: message, liveBuild: live, updatedAt: new Date().toISOString(), logPath: failed?.path ?? join(directory, 'latest.log') })
   if (failed) failed.log(`FAILED at ${step}: ${message}`)
-  else appendFileSync(join(directory, 'latest.log'), `${new Date().toISOString()} FAILED at ${step}: ${message}\n`)
   return message
 }
 
@@ -342,7 +388,7 @@ export function queueCommand({
     if (readiness) throw new Error(readiness)
     prepareBrain(current.head)
     if (queued()) {
-      print(`BMN update is already queued; it will package the latest clean origin/main after BMN exits.\nLog: ${join(directory, 'latest.log')}`)
+      print(`BMN update is already queued; it builds and tests the newest clean origin/main while BMN is open and offers the restart once that passed.\nLog: ${join(directory, 'latest.log')}`)
       return 0
     }
     const before = existsSync(statusFile) ? readFileSync(statusFile) : null
@@ -354,7 +400,7 @@ export function queueCommand({
       else { const temporary = `${statusFile}.tmp-${process.pid}`; writeFileSync(temporary, before, { mode: 0o600 }); renameSync(temporary, statusFile) }
       throw new Error(`could not queue BMN update: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`)
     }
-    print(`Queued BMN ${current.head.slice(0, 7)} update. Close BMN; opening it from the desktop waits until the update finishes.\nLog: ${join(directory, 'latest.log')}`)
+    print(`Queued BMN ${current.head.slice(0, 7)} update. It is built and tested while BMN stays open; BMN offers the restart once it passed.\nLog: ${join(directory, 'latest.log')}`)
     return 0
   } catch (error) {
     printError(`BMN update not queued: ${error instanceof Error ? error.message : String(error)}`)
@@ -366,9 +412,10 @@ const directlyInvoked = process.argv[1] && resolve(process.argv[1]) === workerPa
 if (directlyInvoked && !process.argv.includes('--worker')) process.exitCode = queueCommand()
 else if (directlyInvoked) {
   runWorker().catch((error) => {
-    const message = recordWorkerFailure({ directory: stateDirectory, attempt, step: currentStep, error, liveBuild })
-    notify('BMN update failed', `Failed at ${currentStep}. See ${attempt?.path ?? logPath}`, 'critical')
-    console.error(`BMN update failed at ${currentStep}: ${message}`)
+    const failedAttempt = error?.attempt ?? attempt, step = error?.step ?? currentStep
+    const message = recordWorkerFailure({ directory: stateDirectory, attempt: failedAttempt, step, error, liveBuild })
+    notify('BMN update failed', `${failedAttempt ? failedAttempt.commit.slice(0, 7) : 'The update'} failed at ${step}; BMN was not restarted. Log: ${failedAttempt?.path ?? logPath}`, 'critical')
+    console.error(`BMN update failed at ${step}: ${message}`)
     process.exitCode = 1
   })
 }

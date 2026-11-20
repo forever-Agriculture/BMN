@@ -115,6 +115,7 @@ Passing checks cover 775 affected tests plus typecheck, lint and build; source,
 isolated connector/PTY, native consumer, installed build and owner-phone evidence
 remain separate gates.
 
-Use `pnpm run update:desktop` after the pushed change. It builds the latest clean
-`origin/main` after packaged BMN exits; a queued update is not an installed update.
+Use `pnpm run update:desktop` after the pushed change. It builds and tests the newest
+clean `origin/main` while BMN is open and swaps it in when BMN exits; a queued update is
+not an installed update.
 Do not package over an open BMN or force-close unrelated sessions for a test.

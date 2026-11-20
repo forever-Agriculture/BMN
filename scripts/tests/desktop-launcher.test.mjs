@@ -34,7 +34,7 @@ function linkSystemTools(bin) {
 }
 
 /** A launcher wired to a fake systemctl that reports the update unit active for `activeChecks` calls. */
-function fixture({ phase, activeChecks, binary, zenity, log, liveBuild }) {
+function fixture({ phase, activeChecks, binary, zenity, log, liveBuild, staged }) {
   const root = mkdtempSync(join(tmpdir(), 'bmn-launcher-'))
   roots.push(root)
   const bin = join(root, 'bin')
@@ -49,7 +49,7 @@ echo check >> '${checks}'
   executable(join(bin, 'xdg-open'), `#!/bin/sh\necho "$@" >> '${join(root, 'opened')}'\n`)
   if (zenity) executable(join(bin, 'zenity'), zenity.replaceAll('{root}', root))
   const statusPath = join(root, 'latest.json')
-  writeFileSync(statusPath, `${JSON.stringify({ phase, commit: 'abc', ...(liveBuild ? { liveBuild } : {}) }, null, 2)}\n`)
+  writeFileSync(statusPath, `${JSON.stringify({ phase, commit: 'abc', ...(liveBuild ? { liveBuild } : {}), ...(staged !== undefined ? { staged } : {}) }, null, 2)}\n`)
   if (log !== undefined) writeFileSync(join(root, 'latest.log'), log)
   const packaged = binary ?? join(root, 'bmn')
   if (!binary) executable(packaged, `#!/bin/sh\necho "started $* after $(wc -l < '${checks}') checks" > '${join(root, 'started')}'\n`)
@@ -110,7 +110,30 @@ describe('desktop launcher', { timeout: 2 * LAUNCHER_LIMIT + 10_000 }, () => {
     expect(run.read('zenity-args')).toBeNull()
   })
 
-  it.each(['waiting-for-exit', 'building'])('holds a start while the update is %s and BMN is closed', (phase) => {
+  // Story 134.2: the update is built and tested while BMN is open, so only the swap of a passed build holds a start.
+  it.each([
+    ['queued', undefined], ['preparing', null], ['complete', undefined]
+  ])('opens the current build at once while the update is %s with nothing passed to swap in', (phase, staged) => {
+    const run = fixture({ phase, staged, activeChecks: 1_000, zenity: fakeZenity() })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
+
+    expect(result.status).toBe(0)
+    expect(run.read('started')).not.toBeNull()
+    expect(run.read('zenity-args')).toBeNull()
+    expect(run.read('notified')).toBeNull()
+  })
+
+  it('holds a start while a newer build is tested but a passed one is about to be swapped in', () => {
+    const run = fixture({ phase: 'preparing', staged: 'abc', activeChecks: 3, zenity: fakeZenity() })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
+
+    expect(result.status).toBe(0)
+    expect(run.read('zenity-args')).toContain('BMN is updating')
+    expect(run.read('zenity-input')).toContain('#Putting the checked build in place…')
+    expect(run.read('started')).not.toBeNull()
+  })
+
+  it.each(['waiting-for-exit', 'installing', 'building'])('holds a start while the update is %s and BMN is closed', (phase) => {
     const run = fixture({ phase, activeChecks: 3, zenity: fakeZenity() })
     const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
 

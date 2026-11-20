@@ -1,14 +1,16 @@
-// MODULE: staged-build.mjs - an update packages beside the live build and swaps it in only after the smoke passes
+// MODULE: staged-build.mjs - an update packages and smoke-tests beside the live build while BMN is open; only a passed build is swapped in
 import { existsSync, renameSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 /**
  * The folders an update uses, siblings of the live one so every move is a rename on one file system:
- * the live build, the staged new one, the build it replaced (kept for one update), and the output
- * folder electron-builder packages into before its unpacked build moves to `next`.
+ * the live build; `staging`, where electron-builder packages; `next`, where the packaged build is smoke-tested (the
+ * AppArmor profile `scripts/sandbox/bmn-electron` lets Chromium sandbox itself only there); `ready`, the build that
+ * passed and waits for BMN to exit (Story 134.2), so a newer commit can be tested in `next` meanwhile; and `prev`,
+ * the build the last swap replaced.
  */
 export function buildFolders(live) {
-  return { live, next: `${live}.next`, prev: `${live}.prev`, staging: `${live}.staging` }
+  return { live, next: `${live}.next`, ready: `${live}.ready`, prev: `${live}.prev`, staging: `${live}.staging` }
 }
 
 const defaultFs = { existsSync, renameSync, rmSync }
@@ -19,38 +21,53 @@ const defaultFs = { existsSync, renameSync, rmSync }
  */
 export function liveBuildState(folders, fs = defaultFs) {
   if (fs.existsSync(folders.live)) return 'whole'
-  return fs.existsSync(folders.prev) || fs.existsSync(folders.next) ? 'half-swapped' : 'missing'
+  return [folders.prev, folders.ready, folders.next].some((path) => fs.existsSync(path)) ? 'half-swapped' : 'missing'
 }
 
 /**
  * Starts an update with at most the live build on disk: a build an earlier stop left half swapped is put
- * back first, then the previous generation and any earlier staging are removed.
+ * back first, then the previous generation and anything an earlier worker staged are removed.
  */
 export function prepareBuildFolders(folders, fs = defaultFs) {
   const restored = liveBuildState(folders, fs) === 'half-swapped' && fs.existsSync(folders.prev)
   if (restored) fs.renameSync(folders.prev, folders.live)
-  for (const path of [folders.prev, folders.next, folders.staging]) fs.rmSync(path, { recursive: true, force: true })
+  for (const path of [folders.prev, folders.next, folders.ready, folders.staging]) fs.rmSync(path, { recursive: true, force: true })
   return { restored }
 }
 
-/** Moves the unpacked build electron-builder wrote under `staging` to the `next` folder. */
-function stageBuiltFolder(folders, unpackedName, fs = defaultFs) {
-  const built = join(folders.staging, unpackedName)
+/**
+ * Packages into `staging`, moves the unpacked build to `next` and smoke-tests it there; never touches the live build,
+ * so it runs while BMN is open (Story 134.2). `step(label, args)` runs one pnpm step and rejects on failure. A failed
+ * smoke leaves `next` for inspection until the next attempt.
+ */
+export async function packageAndSmoke({ folders, step, log, fs = defaultFs }) {
+  for (const path of [folders.next, folders.staging]) fs.rmSync(path, { recursive: true, force: true })
+  await step('package', ['run', 'package', `--config.directories.output=${folders.staging}`])
+  const built = join(folders.staging, basename(folders.live))
   if (!fs.existsSync(built)) throw new Error(`package left no build at ${built}`)
   fs.renameSync(built, folders.next)
   fs.rmSync(folders.staging, { recursive: true, force: true })
+  log(`STAGED ${folders.next}`)
+  await step('packaged smoke test', ['run', 'smoke:packaged', '--root', folders.next])
+}
+
+/** The smoked `next` build becomes the one that waits for BMN to exit, replacing an older passed one. */
+export function keepPassedBuild(folders, fs = defaultFs) {
+  fs.rmSync(folders.ready, { recursive: true, force: true })
+  fs.renameSync(folders.next, folders.ready)
 }
 
 /**
- * Puts the smoked `next` build in place: live → prev, then next → live. If the second rename fails the
+ * Puts the passed `ready` build in place: live → prev, then ready → live. If the second rename fails the
  * first is undone. The result says which build the live path holds: `new`, `previous` (rolled back) or
  * `none` (the rollback failed too; `prev` still holds the old build).
  */
-export function swapInStagedBuild(folders, fs = defaultFs) {
+export function swapInReadyBuild(folders, fs = defaultFs) {
+  fs.rmSync(folders.prev, { recursive: true, force: true })
   const hadLive = fs.existsSync(folders.live)
   if (hadLive) fs.renameSync(folders.live, folders.prev)
   try {
-    fs.renameSync(folders.next, folders.live)
+    fs.renameSync(folders.ready, folders.live)
     return { liveBuild: 'new' }
   } catch (error) {
     if (!hadLive) return { liveBuild: 'none', error }
@@ -61,27 +78,4 @@ export function swapInStagedBuild(folders, fs = defaultFs) {
       return { liveBuild: 'none', error }
     }
   }
-}
-
-/**
- * The whole staged update: package into staging, move it to `next`, smoke `next`, wait until BMN is
- * closed, swap. `step(label, args)` runs one pnpm step and throws on failure; the live build is touched
- * only by the swap. `onLiveBuild` hears which build the live path holds as soon as that changes.
- * `sourceChange()` says why the source is no longer what the build started from, or null: a build of
- * changed source never goes live (Story 102.9).
- */
-export async function packageSmokeAndSwap({ folders, step, waitForExit, log, onLiveBuild, sourceChange = () => null, fs = defaultFs }) {
-  if (prepareBuildFolders(folders, fs).restored) log(`RESTORED ${folders.live} from ${folders.prev}; an earlier update stopped between its renames`)
-  step('package', ['run', 'package', `--config.directories.output=${folders.staging}`])
-  stageBuiltFolder(folders, basename(folders.live), fs)
-  log(`STAGED ${folders.next}`)
-  step('packaged smoke test', ['run', 'smoke:packaged', '--root', folders.next])
-  // BMN may have been started straight from its binary while the new build was checked.
-  await waitForExit()
-  const changed = sourceChange()
-  if (changed !== null) throw new Error(`source changed during the build, so the old build stays live: ${changed}`)
-  const swap = swapInStagedBuild(folders, fs)
-  onLiveBuild(swap.liveBuild)
-  if (swap.error) throw new Error(`could not put the new build in place: ${swap.error.message}`)
-  log(`SWAPPED the new build into ${folders.live}; the one it replaced is ${folders.prev}`)
 }

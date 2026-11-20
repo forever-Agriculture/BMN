@@ -170,7 +170,7 @@ your desktop looks for applications:
 ```bash
 apps/desktop/release/linux-unpacked/bmn
 pnpm run install:desktop -- --pin     # launcher and icons; --pin adds it to the GNOME dock
-pnpm run update:desktop               # later: wait for BMN to close, then rebuild and install
+pnpm run update:desktop               # later: build and test while BMN is open, install when it closes
 ```
 
 On Ubuntu 24.04 and later, AppArmor blocks the user namespaces that Chromium's sandbox needs. If
