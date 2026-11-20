@@ -1157,8 +1157,11 @@ What it holds, in the shell commands of the text:
 - BMN's own owner keys (Epic 137): the same readers and redirects naming `owner.token` (beside the control socket, outside
   the home folder) or `telegram-bot.token` by file name wherever they sit, a wildcard in their own folder (`…/control/*`,
   `~/.config/bmn/*.token`), and those folders whole for `cp tar zip` and the like; and a `bmn` call with `--owner`,
-  `--token-file X` or `--token-file=X` before any `--`, as `bmn`, a full path or `node …/bmn`, and `bmn publish` naming a
-  file of the secret list or a key (BMN reads that file itself, outside any sandbox). The owner token can answer
+  `--token-file X` or `--token-file=X` as the CLI's own parser reads them (a `--` an option takes as its value starts no
+  literal text; the subcommands with a parser of their own, such as `grant`, read them anywhere), as `bmn`, a full path or
+  `node …/bmn`; a `bmn` call with `--socket` or `BMN_CONTROL_SOCKET=` set on the line; and `bmn publish FILE` or
+  `bmn grant ask --card-file FILE` naming a file of the secret list or a key (BMN reads that file itself, outside any
+  sandbox). The owner token can answer
   for him, so an agent's own use waits for him, a test instance's `--owner` too. This is a tripwire, not a wall: a read
   through another program (`grep`, `python3`, `node -e`), a copied token or an environment variable already set passes, and
   a broken guard holds nothing (it fails open by his choice, Epic 102 D3). Other programs' `--owner` (`gh search prs
@@ -1205,18 +1208,22 @@ only: `docker --context x system prune` and a full path are the guard's.
   between their `BMN floor` comment marks, as his file's own `deny` rows.
 
 **Codex runs the agents' `bmn` commands (Epic 137).** Codex's default sandbox refuses BMN's control socket (`EPERM`, measured
-on 0.171), and its per-socket allow list is not enforced on Linux, so the same file `bmn-guard.rules` also holds two `allow`
-rows: `bmn` followed by `tell`, `peers`, `handoff`, `publish`, `progress`, `ask`, `withdraw`, `resolve`, `resume-command`,
-`now`, `policy`, `grant`, `away`, `back`, `decision` or `help`, and `bmn plan status|check`. These are what BMN's brief and
-`bmn help agents` tell agents to use, and each only talks to BMN with the caller's own token, prints text or (`plan check`)
-takes the plan's lock. An allowed command runs with no prompt and outside the sandbox. Not allowed, so Codex's sandbox and
-approval still apply: `bmn` as a whole, `team` (it runs a teammate as him; `team ask --interact` runs browser scripts),
-`send`, `research`, `judge`, `run`, `plan set|go|allow|publish|sync`, `hooks` and anything not listed; `roster`, `brain`
-reads and `plan status` work inside the sandbox anyway. Codex applies a row only to a plain command: `bmn tell s --text T
---key K` matches, while a pipe, a heredoc or a `&&` keeps the whole line in the sandbox (measured on 0.171), so the `EPERM` message
-says to run `bmn` as one plain command with its text in `--text` before escalating. BMN's hook still runs
-first and holds `--owner` and `--token-file` (the command guard above). Deleting the file, or `bmn hooks install` from an
-older BMN, removes the rows and Codex returns to escalating.
+on 0.171), and its per-socket allow list is not enforced on Linux, so the same file `bmn-guard.rules` also holds one `allow`
+row: `bmn` followed by `tell`, `peers`, `handoff`, `publish`, `progress`, `ask`, `withdraw`, `resolve`, `resume-command`,
+`now`, `grant`, `away`, `back` or `decision`. These are what BMN's brief and `bmn help agents` tell agents to use, and their
+CLI only talks to BMN over the control socket with the caller's own token. An allowed command runs with no prompt and
+outside the sandbox. Not allowed, so Codex's sandbox and approval still apply: `bmn` as a whole, `team` (it runs a teammate
+as him; `team ask --interact` runs browser scripts), `send`, `research`, `judge`, `run`, `policy` (it runs `gh`, which reaches
+GitHub with his accounts), `plan` (its check can recover and sync boards), `hooks` and anything not listed; `help`,
+`roster`, `brain` reads and `plan status` work inside the sandbox anyway. Codex applies the row only to a plain command:
+`bmn tell s --text T --key K` and `bmn grant ask --run R --card-file card.json` match, while a pipe, a heredoc or a `&&`
+keeps the whole line in the sandbox (measured on 0.171), so the `EPERM` message says to run `bmn` as one plain command,
+text in `--text`, a card in a file, before escalating. The CLI connects only to an absolute socket path, never a TCP port,
+and BMN's hook runs first and holds `--owner`, `--token-file`, `--socket` and a listed file given to `publish` or a card
+(the command guard above). That hook is a tripwire: with it broken, an allowed `bmn` could be pointed at another Unix
+socket of his. The rows and the guard come from the same BMN: an older BMN's `bmn hooks install`, or its start, rewrites the
+file without them (BMN owns it whole) and Codex returns to escalating; deleting the file does the same. The native test
+profiles are shared, so two checkouts' live runs rewrite each other's rows: run them one at a time.
 
 BMN also names, in `bmn doctor`, an allow row that can run any program (Story 102.14), because an allow row runs outside the
 app's limits with no prompt.
@@ -1295,8 +1302,8 @@ ends when he is back. With no grant, everything behaves as Epic 83 leaves it.
   lost after its commit asks once more with the same key and still replies once.
   Sessions without a dev-auto run answer under their session's name. The list shows asking, lines, needs nothing
   with its scope, no answer after 3 minutes from delivery, or not told with the reason. Late answers still arrive.
-- **The card.** `bmn grant ask --run ID --card-file -` takes the card as JSON on standard input (`bmn grant --help`
-  shows it): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
+- **The card.** `bmn grant ask --run ID --card-file FILE` takes the card as JSON from a file, or piped with `-`, at most
+  32 KB (`bmn grant --help` shows it; Epic 137: the file form is one plain command, which Codex runs outside its sandbox): a title, the remaining scope and terms, each with its reason. A term is extra repair rounds per
   boundary (2, 3 or 4) or one of three named actions with its target: merge a pull request (this PR at a head SHA,
   or up to N of this run's PRs when their required checks are green), push a branch to the default branch, or open
   or update a pull request in another repository (from a named branch, or a named PR). `--nothing --reason TEXT` says why the run needs nothing. Read the run's facts and remaining plan before deciding

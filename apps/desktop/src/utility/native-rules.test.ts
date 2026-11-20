@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CODEX_ALLOWED_BMN, CODEX_ALLOWED_BMN_PLAN, CODEX_RULES, NEVER_COMMANDS, claudeDenyRows, missingClaudeRows, privateKeyNames, secretPaths, withClaudeRows } from '../../bin/native-rules.mjs'
+import { CODEX_ALLOWED_BMN, CODEX_RULES, NEVER_COMMANDS, claudeDenyRows, missingClaudeRows, privateKeyNames, secretPaths, withClaudeRows } from '../../bin/native-rules.mjs'
 
 const homes: string[] = []
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
@@ -84,10 +84,11 @@ describe('Codex\'s rules (Story 102.3)', () => {
     writeFileSync(rules, CODEX_RULES)
     if (check(rules, 'true') === 'no codex') return
     for (const verb of CODEX_ALLOWED_BMN) expect(check(rules, 'bmn', verb, '--key', 'k'), verb).toBe('allow')
-    for (const verb of CODEX_ALLOWED_BMN_PLAN) expect(check(rules, 'bmn', 'plan', verb), `plan ${verb}`).toBe('allow')
     expect(check(rules, 'bmn', 'ask', 'k', 'Pick one', '--option', 'a')).toBe('allow')
     expect(check(rules, 'bmn', 'tell', 'status')).toBe('allow')
+    expect(check(rules, 'bmn', 'grant', 'ask', '--run', 'r', '--card-file', 'card.json')).toBe('allow')
     for (const command of ['bmn', 'bmn team ask --role r --key k', 'bmn send x', 'bmn research ask', 'bmn judge ask', 'bmn run dispatch',
+      'bmn policy --repo o/n', 'bmn help agents', 'bmn plan status', 'bmn plan check',
       'bmn plan set epic-1 done', 'bmn plan go 1', 'bmn plan allow 1', 'bmn hooks install', 'bmn --owner tell s', 'bmn --json ask k t',
       'node bmn tell s', 'xbmn tell s']) {
       expect(check(rules, ...command.split(' ')), command).toBe('nothing')
@@ -96,13 +97,12 @@ describe('Codex\'s rules (Story 102.3)', () => {
 
   it('allows exactly the inventory docs/agent-control.md lists (Story 137.2)', () => {
     expect(CODEX_ALLOWED_BMN).toEqual(['tell', 'peers', 'handoff', 'publish', 'progress', 'ask', 'withdraw', 'resolve', 'resume-command', 'now',
-      'policy', 'grant', 'away', 'back', 'decision', 'help'])
-    expect(CODEX_RULES).toContain('prefix_rule(pattern=["bmn", "plan", ["status", "check"]], decision="allow")')
+      'grant', 'away', 'back', 'decision'])
+    expect(CODEX_RULES.match(/decision="allow"/g)).toHaveLength(1)
   })
 
   it('keeps bmn team, send and bmn as a whole out of the allow rows (the allowance\'s stays_out)', () => {
-    for (const verb of ['team', 'send', 'research', 'judge', 'run', 'hooks', 'hook', 'brain', 'roster']) expect(CODEX_ALLOWED_BMN).not.toContain(verb)
-    expect(CODEX_ALLOWED_BMN_PLAN).toEqual(['status', 'check'])
+    for (const verb of ['team', 'send', 'research', 'judge', 'run', 'hooks', 'hook', 'brain', 'roster', 'policy', 'plan', 'help']) expect(CODEX_ALLOWED_BMN).not.toContain(verb)
     expect(CODEX_RULES).not.toMatch(/pattern=\["bmn"\], decision="allow"/)
   })
 })

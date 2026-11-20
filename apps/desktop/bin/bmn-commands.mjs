@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { ConfigWriteError } from './safe-config-write.mjs'
 import { isObject } from './shared-helpers.mjs'
 import { ATTENTION_KINDS, FLAG_OPTIONS, LIST_OPTIONS, PROGRESS_STATES, TIMEOUT_MS, USAGE, VALUE_OPTIONS } from './bmn-words.mjs'
@@ -325,6 +325,8 @@ function parseArguments(argv) {
 function readCredentials(options) {
   const socketPath = options.socket ?? process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
   if (!socketPath) throw new UsageError('no control socket: set BMN_CONTROL_SOCKET or pass --socket')
+  // Epic 137: a path, never a TCP port (Node reads a bare number as one), since Codex may run this outside its sandbox.
+  if (!isAbsolute(socketPath)) throw new UsageError('the control socket must be an absolute path')
   if (options.owner && options['token-file'] !== undefined) {
     throw new UsageError('use either --owner or --token-file, not both')
   }
@@ -424,7 +426,7 @@ function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
       // A sandboxed shell tool (Codex's, measured on 0.162.1) may not open a socket outside its sandbox. Epic 137: BMN's Codex
       // rules let the agents' bmn subcommands out, but only as one plain command (measured on 0.171: a pipe, heredoc or && keeps it in).
       const sandboxed = error.code === 'EPERM' || error.code === 'EACCES'
-        ? '. A sandbox may be keeping this command from BMN: run bmn as one plain command of its own, text in --text T (no pipe, heredoc or &&); if it still fails, ask to run it outside the sandbox'
+        ? '. A sandbox may be keeping this command from BMN: run bmn as one plain command of its own (no pipe, heredoc or &&): text in --text T, a grant card in --card-file FILE; if it still fails, ask to run it outside the sandbox'
         : ''
       finish(new CliError('IO_ERROR', `cannot reach control socket ${socketPath} (${error.code ?? error.message})${sandboxed}`))
     })

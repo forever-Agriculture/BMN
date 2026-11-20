@@ -1,6 +1,7 @@
 // MODULE: command-guard-owner-key.test.ts - Story 137.1: BMN's own owner keys (owner.token, the Telegram bot token, bmn --owner/--token-file) held for the owner in both apps
 import { describe, expect, it } from 'vitest'
 import { guardAnswer, heldCommand } from '../../bin/command-guard.mjs'
+import { epicCommandTarget } from '../../bin/grant-command.mjs'
 import { namesBmnKey } from '../../bin/secret-list.mjs'
 
 /** A command the guard holds, and a word of what it says it holds. */
@@ -33,7 +34,20 @@ const HELD: Array<[string, string]> = [
   ['echo x | bmn tell s --text-file - --owner', 'owner credential'],
   ['bmn publish /run/user/1000/bmn/control/owner.token --key k', 'credential'],
   ['bmn publish ~/.codex/auth.json', 'credential'],
-  ['bmn publish --key k ~/.ssh/id_ed25519', 'credential']
+  ['bmn publish --key k ~/.ssh/id_ed25519', 'credential'],
+  ['bmn --json publish ~/.netrc', 'credential'],
+  // Review F1: a value option takes the next word, `--` included, so a later --owner is the CLI's own option.
+  ['bmn tell s --text -- --owner --key k', 'owner credential'],
+  ['bmn tell s --key -- --token-file=/tmp/t --text x', 'owner credential'],
+  ['bmn grant ask --run r --nothing --reason x -- --owner', 'owner credential'],
+  ['bmn grant --json --owner', 'owner credential'],
+  ['bmn grant ask --run r --card-file ~/.codex/auth.json', 'credential'],
+  ['bmn grant ask --run r --card-file=/run/user/1000/bmn/control/owner.token', 'credential'],
+  // Review F2: another socket, by option or on the line.
+  ['bmn now --socket /run/user/1000/bus', 'another control socket'],
+  ['bmn tell s --socket=4000 --text x --key k', 'another control socket'],
+  ['BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
+  ['bmn grant --socket /tmp/x.sock', 'another control socket']
 ]
 
 /** Neighbours that stay free: other programs' --owner, bmn without the owner credential, and other token files. */
@@ -53,7 +67,11 @@ const FREE = [
   'cat ~/code/BMN/README.md',
   'cp -r ~/code/BMN-137 /tmp/x',
   'bmn publish report.html --key k',
-  'bmn tell s --text "owner.token is held" --key k'
+  'bmn tell s --text "owner.token is held" --key k',
+  'bmn tell s -- a literal text that says --owner',
+  'bmn publish report.html --name owner.token --key k',
+  'bmn grant ask --run r --card-file card.json',
+  'bmn ask k "Use --socket?"'
 ]
 
 describe('BMN\'s own owner keys are held (Story 137.1)', () => {
@@ -70,6 +88,12 @@ describe('BMN\'s own owner keys are held (Story 137.1)', () => {
     expect(namesBmnKey('owner.*')).toBe(true)
     expect(namesBmnKey('/run/user/1000/bmn/control/turn-marks/*')).toBe(false)
     expect(namesBmnKey('/tmp/*')).toBe(false)
+  })
+
+  it('keeps a key out of a night card\'s exact command too: the same list feeds the card check (review, d1)', () => {
+    for (const command of ['cat /run/user/1000/bmn/control/owner.token', 'cp /home/someone/.config/bmn/telegram-bot.token /tmp/t']) {
+      expect(epicCommandTarget({ command, folder: '/tmp' } as never)).toEqual({ problem: 'credentials and secrets can never be approved' })
+    }
   })
 
   it('holds the owner credential in Claude Code and in Codex', () => {

@@ -1,5 +1,6 @@
 // MODULE: native-rules.d.mts - types for the native rules (Story 102.3)
 export declare const NEVER_COMMANDS: string[]
+export declare const CODEX_ALLOWED_BMN: string[]
 export declare const CODEX_RULES: string
 export declare const CODEX_RULES_FILE: string
 export declare const CODEX_ASK_PROFILE: string

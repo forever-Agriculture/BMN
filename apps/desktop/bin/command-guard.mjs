@@ -7,6 +7,7 @@
 // heredoc data. Expansions, explicit shell code and the listed wrappers and package runners are inspected too. This is not
 // a shell interpreter or a sandbox: launchers outside that list, encoded code, arbitrary program languages and scripts read
 // from disk are outside it; GitHub's rules are the hard guard there.
+import { FLAG_OPTIONS, LIST_OPTIONS, VALUE_OPTIONS } from './bmn-words.mjs'
 import { namesFolderOfSecret, namesSecretFile, underHome } from './secret-list.mjs'
 
 /** The shell tool each app's PreToolUse names, as Story 83.1 measured it (Claude Code 2.1.302, codex-cli 0.162.1). */
@@ -459,20 +460,50 @@ function secretHold(name, args, reads) {
   return named ? 'reading or sending a credential file' : null
 }
 
+/** `bmn` subcommands with a parser of their own (bin/bmn): each reads `--owner`, `--token-file` and `--socket` wherever they stand. */
+const OWN_PARSERS = /^(hook|hooks|statusline|setup-defaults|policy|grant|plan|run|brain|qa|browser|doctor|team|roster|rules|context|skills|tools|research|judge)$/
+const CREDENTIAL_OPTION = /^--(owner|token-file)(=|$)/
+
 /**
- * Epic 137: a `bmn` call with BMN's owner credential (`--owner`, or `--token-file` in either form) before any `--`, run as
- * `bmn` or through Node, and `bmn publish` of a listed file or key. The owner token can answer for him, so an agent's own use
- * waits for him.
+ * The options and operands of a `bmn` call as the main parser reads them (bmn-commands.mjs parseArguments): a value option
+ * takes the next word whatever it is, `--` included, and only a `--` that no option took starts the literal text.
  */
-function ownerCredentialHold(words) {
+function bmnParsed(after) {
+  const options = []
+  const positionals = []
+  for (let index = 0; index < after.length; index += 1) {
+    const word = after[index]
+    if (word === '--') { positionals.push(...after.slice(index + 1)); break }
+    if (!word.startsWith('--')) { positionals.push(word); continue }
+    const equals = word.indexOf('=')
+    const name = word.slice(2, equals === -1 ? undefined : equals)
+    options.push(name)
+    if (equals === -1 && (VALUE_OPTIONS.has(name) || LIST_OPTIONS.has(name)) && !FLAG_OPTIONS.has(name)) index += 1
+  }
+  return { options, positionals }
+}
+
+/**
+ * Epic 137: a `bmn` call, run as `bmn` or through Node, that uses BMN's owner credential (`--owner`, `--token-file` in either
+ * form), names another control socket (`--socket`, or BMN_CONTROL_SOCKET set on the line), or has BMN read a listed file or
+ * key (`bmn publish FILE`, `bmn grant ask --card-file FILE`). The owner token can answer for him; Codex runs the agents'
+ * `bmn` subcommands outside its sandbox, where BMN reads the files it is given and the CLI connects where it is told.
+ */
+function bmnHold(words, raw) {
   const script = nameOf(words[0]) === 'node' ? words.findIndex((word, index) => index > 0 && !word.startsWith('-')) : 0
   if (script === -1 || nameOf(words[script]) !== 'bmn') return null
   const after = words.slice(script + 1)
-  const options = after.includes('--') ? after.slice(0, after.indexOf('--')) : after
-  if (options.some((word) => /^--(owner|token-file)(=|$)/.test(word))) return 'a bmn call with the owner credential (--owner or --token-file)'
-  // BMN itself reads the file `bmn publish` names, outside any sandbox, and keeps a copy the owner's surfaces show.
-  if (after[0] === 'publish' && after.slice(1).some((word) => namesSecretFile(word))) return 'reading or sending a credential file'
-  return null
+  const own = OWN_PARSERS.test(after.find((word) => !word.startsWith('-')) ?? '')
+  const { options, positionals } = own ? { options: [], positionals: [] } : bmnParsed(after)
+  if (own ? after.some((word) => CREDENTIAL_OPTION.test(word)) : options.some((name) => name === 'owner' || name === 'token-file')) {
+    return 'a bmn call with the owner credential (--owner or --token-file)'
+  }
+  if ((own ? after.some((word) => /^--socket(=|$)/.test(word)) : options.includes('socket')) ||
+    raw.some((word) => /^(BMN|AITERM)_CONTROL_SOCKET=/.test(word))) return 'a bmn call to another control socket (--socket)'
+  const read = own
+    ? after.flatMap((word, index) => (word === '--card-file' ? [after[index + 1] ?? ''] : word.startsWith('--card-file=') ? [word.slice(12)] : []))
+    : positionals[0] === 'publish' ? positionals.slice(1, 2) : []
+  return read.some((word) => namesSecretFile(word)) ? 'reading or sending a credential file' : null
 }
 
 /** Whether an `iommu=soft` this command names, or the text piped or redirected into it, goes into a file: never `echo` or `grep` by themselves. */
@@ -528,7 +559,7 @@ export function heldCommand(command, depth = 0, inheritedSelector = false, cwd =
     if (/^(docker|podman|docker-compose)$/.test(name)) { const held = dockerHold(name, words); if (held !== null) return held }
     if (name === 'prime-select' && args.includes('nvidia')) return 'prime-select nvidia, which must stay on-demand on this laptop'
     if (name === 'rm') { const held = removeHold(args); if (held !== null) return held }
-    const held = secretHold(name, args, reads) ?? ownerCredentialHold(words) ?? iommuHold(entry, name, args) ?? cloudHold(name, args)
+    const held = secretHold(name, args, reads) ?? bmnHold(words, raw) ?? iommuHold(entry, name, args) ?? cloudHold(name, args)
     if (held !== null) return held
     if (['npm', 'pnpm', 'yarn'].includes(name)) {
       const [verb, action] = subcommand(words, PACKAGE_VALUES)

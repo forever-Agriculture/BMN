@@ -1530,7 +1530,7 @@ describe('bmn peers and bmn tell (Story 66.2)', () => {
     try {
       const result = await runCli(['peers'], { env: fixture.sessionEnv })
       expect(result.code).toBe(1)
-      expect(result.stderr).toBe(`bmn: IO_ERROR: cannot reach control socket ${fixture.socketPath} (EACCES). A sandbox may be keeping this command from BMN: run bmn as one plain command of its own, text in --text T (no pipe, heredoc or &&); if it still fails, ask to run it outside the sandbox\n`)
+      expect(result.stderr).toBe(`bmn: IO_ERROR: cannot reach control socket ${fixture.socketPath} (EACCES). A sandbox may be keeping this command from BMN: run bmn as one plain command of its own (no pipe, heredoc or &&): text in --text T, a grant card in --card-file FILE; if it still fails, ask to run it outside the sandbox\n`)
     } finally {
       await chmod(dirname(fixture.socketPath), 0o700)
     }
@@ -5745,6 +5745,33 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
     const nothing = await runCli(['grant', 'ask', '--run', 'dev-auto-81', '--nothing', '--reason', 'No unmet prerequisites'], { env: fixture.sessionEnv })
     expect(nothing.stdout).toBe('Recorded: run dev-auto-81 needs nothing for the night.\n')
     expect(fixture.handlers.askGrant).toHaveBeenLastCalledWith(expect.objectContaining({ card: { title: 'dev-auto-81', scope: 'Needs nothing for the night', nothing: true, terms: [] } }))
+  })
+
+  it('asks a card given as a file, the plain command Codex runs outside its sandbox (Epic 137)', async () => {
+    const fixture = await cliFixture()
+    const card = join(fixture.root, 'card.json')
+    await writeFile(card, JSON.stringify(CARD))
+    const asked = await runCli(['grant', 'ask', '--run', 'dev-auto-82', '--card-file', card, '--key', 'card-2'], { env: fixture.sessionEnv })
+    expect(asked.stderr).toBe('')
+    expect(asked.code).toBe(0)
+    expect(fixture.handlers.askGrant).toHaveBeenLastCalledWith(expect.objectContaining({ runId: 'dev-auto-82', card: expect.objectContaining({ terms: [expect.objectContaining({ id: 'rounds' })] }) }))
+    const large = join(fixture.root, 'large.json')
+    await writeFile(large, ' '.repeat(40_000))
+    const tooLarge = await runCli(['grant', 'ask', '--run', 'r', '--card-file', large], { env: fixture.sessionEnv })
+    expect(tooLarge.code).toBe(2)
+    expect(tooLarge.stderr).toContain('the card in the card file must be at most')
+    const folder = await runCli(['grant', 'ask', '--run', 'r', '--card-file', fixture.root], { env: fixture.sessionEnv })
+    expect(folder.stderr).toContain('the card file is not a regular file')
+    expect(fixture.handlers.askGrant).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a control socket that is not an absolute path, so a bare number never becomes a TCP port (Epic 137)', async () => {
+    const fixture = await cliFixture()
+    for (const socket of ['4000', 'control.sock']) {
+      const result = await runCli(['list', '--socket', socket], { env: fixture.sessionEnv })
+      expect(result.code, socket).toBe(2)
+      expect(result.stderr).toContain('the control socket must be an absolute path')
+    }
   })
 
   it('refuses a malformed card, a never-on-a-card term and bad usage before or at BMN', async () => {

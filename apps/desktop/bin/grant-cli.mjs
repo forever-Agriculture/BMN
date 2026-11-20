@@ -1,5 +1,6 @@
 // MODULE: grant-cli.mjs - `bmn grant`: a run's card before the owner leaves, the grant he answered, each use of it, and what each step did (Epic 84, Stories 84.3, 84.7)
 //
+import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 // Everything is decided in BMN through the control socket: the card is checked there, only the owner's own surfaces
@@ -7,7 +8,7 @@ import { resolve } from 'node:path'
 
 const GRANT_USAGE = `Usage: bmn grant [--run ID] [--json]
        bmn grant facts --run ID --epic N [--project P] [--json]
-       bmn grant ask --run ID --card-file - [--key K] [--json]
+       bmn grant ask --run ID --card-file FILE|- [--key K] [--json]
        bmn grant ask --run ID --nothing --reason T [--despite FACT]... [--title T] [--scope S] [--key K] [--json]
        bmn grant apply --run ID --use-id U --item I [--json]
        bmn grant use --run ID --use-id U (--boundary B | --item I) [--json]
@@ -23,7 +24,7 @@ every grant ends when he is back.
 grant        The run's grant in force, or "No grant" and why. Read it right before each step that
              uses it; a grant never comes from a handoff. Without --run: the runs this session asked.
 grant facts  Checked run limits, open pull requests, push policy and Prepared needs. An unreadable part is unknown.
-grant ask    The run's card for this departure, as JSON on standard input, for example:
+grant ask    The run's card for this departure, as JSON in a file (--card-file FILE) or piped (-), for example:
                {"title": "Epic 80 · clean up ai slop", "scope": "Stories 80.2-80.6, then Epic 81",
                 "terms": [
                  {"kind": "rounds", "proposed": 3, "reason": "two review boundaries are ahead"},
@@ -79,18 +80,28 @@ function usage(message) {
   return 2
 }
 
-async function readCard() {
-  if (process.stdin.isTTY) throw new Error('--card-file - needs piped input, not a terminal')
+/** The card as JSON, piped (`-`) or from a file: Epic 137, a plain `bmn grant ask` is what Codex runs outside its sandbox. */
+async function readCard(source) {
+  const where = source === '-' ? 'on standard input' : 'in the card file'
   const chunks = []
-  let size = 0
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk)
-    size += chunk.length
-    if (size > CARD_LIMIT_BYTES) throw new Error(`the card on standard input must be at most ${CARD_LIMIT_BYTES} bytes`)
+  if (source === '-') {
+    if (process.stdin.isTTY) throw new Error('--card-file - needs piped input, not a terminal')
+    let size = 0
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk)
+      size += chunk.length
+      if (size > CARD_LIMIT_BYTES) throw new Error(`the card ${where} must be at most ${CARD_LIMIT_BYTES} bytes`)
+    }
+  } else {
+    let file
+    try { file = statSync(source) } catch { throw new Error('the card file cannot be read') }
+    if (!file.isFile()) throw new Error('the card file is not a regular file')
+    if (file.size > CARD_LIMIT_BYTES) throw new Error(`the card ${where} must be at most ${CARD_LIMIT_BYTES} bytes`)
+    try { chunks.push(readFileSync(source)) } catch { throw new Error('the card file cannot be read') }
   }
   let text
-  try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) } catch { throw new Error('the card on standard input is not valid UTF-8') }
-  try { return JSON.parse(text) } catch { throw new Error('the card on standard input is not valid JSON') }
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) } catch { throw new Error(`the card ${where} is not valid UTF-8`) }
+  try { return JSON.parse(text) } catch { throw new Error(`the card ${where} is not valid JSON`) }
 }
 
 /** What `grant ask` prints for the host's answer. */
@@ -174,13 +185,13 @@ export async function runGrantCommand(argv, { readCredentials, call }) {
   let params
   if (action === 'ask') {
     if (options.run === undefined) return usage('grant ask needs --run, your run\'s id')
-    if ((options['card-file'] === undefined) === (options.nothing !== true)) return usage('grant ask takes either --card-file - or --nothing')
-    if (options['card-file'] !== undefined && options['card-file'] !== '-') return usage('--card-file takes - (pipe the card as JSON)')
+    if ((options['card-file'] === undefined) === (options.nothing !== true)) return usage('grant ask takes either --card-file FILE|- or --nothing')
+    if (options['card-file'] === '') return usage('--card-file takes a file or - (pipe the card as JSON)')
     if (options.nothing !== true && (options.title !== undefined || options.scope !== undefined || options.reason !== undefined)) return usage('--title, --scope and --reason go with --nothing; a card carries its own')
     if (options.nothing === true && (!options.reason?.trim() || [...options.reason.trim()].length > 300)) return usage('--nothing needs --reason of 1 to 300 characters')
     let card
     try {
-      card = options.nothing === true ? { title: options.title ?? options.run, scope: options.scope ?? 'Needs nothing for the night', nothing: true } : await readCard()
+      card = options.nothing === true ? { title: options.title ?? options.run, scope: options.scope ?? 'Needs nothing for the night', nothing: true } : await readCard(options['card-file'])
     } catch (error) {
       return usage(error.message)
     }

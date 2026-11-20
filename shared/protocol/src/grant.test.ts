@@ -218,7 +218,8 @@ describe('the departure lifecycle (84.3 AC1; Decisions, departure lifecycle)', (
   it('hands a departure notice only while leaving or away', () => {
     const notice = grantDepartureNotice({ state: 'leaving', startedAt: T0 }, new Date(T0))
     expect(notice).toContain('[BMN state: the owner is leaving since')
-    expect(notice).toContain('bmn grant ask --run <run id> --card-file -')
+    expect(notice).toContain('bmn grant ask --run <run id> --card-file FILE')
+    expect(notice).toContain('`-` pipes it')
     expect(grantDepartureNotice({ state: 'ended', startedAt: T0 })).toBeNull()
   })
 })

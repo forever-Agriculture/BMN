@@ -60,13 +60,13 @@ export function withClaudeRows(data, rows) {
 /**
  * Epic 137: the `bmn` subcommands a Codex session runs with no prompt, outside its sandbox, so they reach BMN's control socket
  * (the default sandbox refuses it with EPERM; measured on 0.171). Each is one BMN's brief or `bmn help agents` tells agents
- * to use and only talks to BMN with the caller's own token or prints text. Never `bmn` as a whole: what runs a program, a
- * teammate or a model as him (`team`, `send`, `research`, `judge`, `run`), writes his plan (`plan set|go|allow|publish`) or
- * changes his setup (`hooks`) keeps Codex's approval. `roster`, `brain` reads and `plan status` work inside the sandbox.
+ * to use, and its CLI only talks to BMN over the control socket with the caller's own token. Never `bmn` as a whole: what
+ * runs a program, a teammate or a model as him (`team`, `send`, `research`, `judge`, `run`), reaches the network (`policy`
+ * runs `gh`), writes his plan (`plan`, whose check can recover and sync boards) or changes his setup (`hooks`) keeps Codex's
+ * sandbox and approval; `help`, `roster`, `brain` reads and `plan status` work inside the sandbox.
  */
 export const CODEX_ALLOWED_BMN = ['tell', 'peers', 'handoff', 'publish', 'progress', 'ask', 'withdraw', 'resolve', 'resume-command',
-  'now', 'policy', 'grant', 'away', 'back', 'decision', 'help']
-export const CODEX_ALLOWED_BMN_PLAN = ['status', 'check']
+  'now', 'grant', 'away', 'back', 'decision']
 
 /** Codex's rules file BMN owns whole: removing the file removes the rules. */
 export const CODEX_RULES_FILE = 'bmn-guard.rules'
@@ -82,7 +82,6 @@ export const CODEX_RULES = [
   }),
   '# Epic 137: these bmn subcommands run with no prompt, outside the sandbox, so they reach BMN; BMN\'s hook still holds --owner.',
   `prefix_rule(pattern=["bmn", ${list(CODEX_ALLOWED_BMN)}], decision="allow")`,
-  `prefix_rule(pattern=["bmn", "plan", ${list(CODEX_ALLOWED_BMN_PLAN)}], decision="allow")`,
   ''
 ].join('\n')
 
