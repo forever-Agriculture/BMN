@@ -2,7 +2,7 @@
 import type { DatabaseConnection } from './database-initialization'
 import type { BrainGraph, BrainGraphNode, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
 import { SECRET_MASK, secretRanges } from '@bmn/protocol'
-import { GFM, parser as markdownParser } from '@lezer/markdown'
+import { parser as markdown } from '@lezer/markdown'
 import { BrainError, brainLinkResolver } from './brain-store'
 export type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
 
@@ -22,7 +22,8 @@ const PROVENANCE = /^Source:(?:\s|$)/u
 /** A filed note's own summary line ("Summary: …", Epic 127): the best one line of what it says. */
 const SUMMARY = /^Summary:\s*/u
 
-const markdown = markdownParser.configure(GFM)
+
+/* Comments, code and HTML blocks are CommonMark: the plain parser finds them at less than half GFM's cost. */
 
 /**
  * The comments in raw HTML: a `<!--` outside any tag opens one, to its `-->` or the end; inside a tag, quoted values
@@ -34,6 +35,8 @@ function htmlComments(html: string): [number, number][] {
   while (at < html.length) {
     const open = html.indexOf('<', at)
     if (open === -1) break
+    // `1 < 2` is text: only a letter, `/` or `!` after `<` opens a tag (recheck 2).
+    if (!/[A-Za-z/!]/u.test(html[open + 1] ?? '')) { at = open + 1; continue }
     if (html.startsWith('<!--', open)) {
       const close = html.indexOf('-->', open + 4)
       const end = close === -1 ? html.length : close + 3
@@ -71,11 +74,12 @@ export function withoutComments(text: string): string {
         return false
       }
       if (node.name !== 'CommentBlock') return undefined
-      // The block opens with a comment; what follows it on its line is Markdown again (``<!-- x --> Use `<!--` ``).
+      // The block opens with comments; what follows them on its line is Markdown again (``<!-- x --> Use `<!--` ``).
+      // All leading comments go in one pass, so the rest is read once (5,000 in a row, recheck 2).
       const block = text.slice(node.from, node.to)
       const open = block.indexOf('<!--')
-      const close = block.indexOf('-->', open + 4)
-      const rest = close === -1 ? '' : withoutComments(block.slice(close + 3))
+      const leading = /^(?:[ \t]*<!--[\s\S]*?(?:-->|$))+/u.exec(block.slice(open))![0]
+      const rest = withoutComments(block.slice(open + leading.length))
       if (!(block.slice(0, open) + rest).trim()) edits.push([text.lastIndexOf('\n', node.from - 1) + 1, text[node.to] === '\n' ? node.to + 1 : node.to, ''])
       else edits.push([node.from, node.to, block.slice(0, open) + rest])
       return false
@@ -99,8 +103,11 @@ const LINE_OPENING = /^[\s#>*+\-\d.)[\]`_|"'(“‘]*$/u
 /** What may stand before a word that opens a sentence, quoted or not. */
 const SENTENCE_OPENING = /[.!?:]["')\]*_”’]*\s+["'([*_“‘]*$/u
 
-/** How the text spells each word of a file-name title: its own spelling when the text never writes it in lower case. */
-function spellings(title: string, prose: string): string[] {
+/**
+ * How the text spells each word of a file-name title: its own spelling when the text never writes it in lower case.
+ * `spelled` says whether the text holds any spelling to choose from at all.
+ */
+function spellings(title: string, prose: string): { words: string[]; spelled: boolean } {
   const wanted = new Set(title.split('-'))
   const forms = new Map<string, Map<string, number>>()
   const lower = new Set<string>()
@@ -118,11 +125,12 @@ function spellings(title: string, prose: string): string[] {
       forms.set(key, counts)
     }
   }
-  return title.split('-').map((word) => {
+  const words = title.split('-').map((word) => {
     if (lower.has(word)) return word
     const counts = [...(forms.get(word) ?? new Map<string, number>()).entries()]
     return counts.length ? counts.reduce((best, each) => (each[1] > best[1] ? each : best))[0] : word
   })
+  return { words, spelled: forms.size > 0 }
 }
 
 /**
@@ -136,19 +144,19 @@ function spellings(title: string, prose: string): string[] {
 export function readableTitle(title: string, markdown: string): string {
   if (!SLUG.test(title)) return title
   const plain = title.split('-')
+  const kept = (prose: string): boolean => prose.includes(title) && [...prose.matchAll(HYPHENATED)].some((match) => match[0] === title)
   const read = (prose: string): string => {
-    if (prose.includes(title) && [...prose.matchAll(HYPHENATED)].some((match) => match[0] === title)) return title
-    const words = spellings(title, prose)
+    if (kept(prose)) return title
+    const { words } = spellings(title, prose)
     const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
     return words[0] === plain[0] ? text[0]!.toUpperCase() + text.slice(1) : text
   }
-  // A quick first look, comments cut roughly: a title that owes nothing to the text is done, and reveals nothing.
-  const own = read('')
-  const text = markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown
-  if (read(text.replace(/<!--[\s\S]*?(?:-->|$)/gu, ' ')) === own) return own
-  // One that does is read in the text the page draws (withoutComments) with hidden values blanked, so a masked
-  // value never lends a spelling or keeps a title as written (review 2026-11-20).
-  const prose = withoutComments(text)
+  // Always the text the page shows: comments out (withoutComments), hidden values blanked, so a masked value never
+  // lends, removes or keeps a spelling (recheck 2). The reader caches the answer per title and text.
+  const prose = withoutComments(markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown)
+  // Exact shortcut: blanking only removes text, so with no spelling to choose and no title kept as written the answer
+  // is the plain title either way, and the hidden-value scan is skipped.
+  if (!kept(prose) && !spellings(title, prose).spelled) return read('')
   let blanked = ''
   let at = 0
   for (const [start, end] of secretRanges('/brain/note.md', prose)) { blanked += prose.slice(at, Math.max(at, start)) + ' '.repeat(Math.max(0, end - Math.max(at, start))); at = Math.max(at, end) }

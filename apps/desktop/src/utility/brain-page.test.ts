@@ -126,6 +126,10 @@ describe('Brain page list and search', () => {
     expect(withoutComments('<!-- real --> Use `<!--` here.')).toBe(' Use `<!--` here.')
     expect(withoutComments('<!-- one\ntwo --> tail')).toBe(' tail')
     expect(withoutComments('a\n\n<!-- open to the end')).toBe('a\n\n')
+    // `1 < 2` opens no tag, so the comment after it still goes; thousands of comments in a row end quickly (recheck 2).
+    expect(withoutComments('<div>1 < 2 <!-- hidden --> tail</div>')).toBe('<div>1 < 2  tail</div>')
+    expect(withoutComments('<!--x-->'.repeat(5000))).toBe('')
+    expect(withoutComments('<!--x-->'.repeat(5000) + ' kept')).toBe(' kept')
   })
 
   it('summarises a filed note by its Summary line, never its provenance line, and masks hidden values (review 2026-11-20)', () => {
@@ -246,6 +250,11 @@ describe('Brain page note, links and history', () => {
     expect(readableTitle('about-hunter2hunter2secret', 'pass<!--x-->word = HuNtEr2HuNtEr2Secret\nAbout it.')).toBe('About hunter2hunter2secret')
     expect(readableTitle('about-hunter2', 'password = about-hunter2\nnotes')).toBe('About hunter2')
     expect(readableTitle('github-push', 'Push to GitHub. password = GiThUb')).toBe('GitHub push')
+    // A hidden value neither lends nor removes a spelling (the page hides `hunter2hunter2secret` there); a value the
+    // page shows is text like any other (`password = github` is not hidden); a comment inside a word reads as shown.
+    expect(readableTitle('hunter2hunter2secret-notes', 'HUNTER2HUNTER2SECRET is the codename.\npassword = hunter2hunter2secret')).toBe('HUNTER2HUNTER2SECRET notes')
+    expect(readableTitle('github-push', 'Use GitHub. password = github')).toBe('Github push')
+    expect(readableTitle('github-push', 'Push to Git<!--x-->Hub.')).toBe('GitHub push')
     const b = brain([note('ai-direction', 'AI comes first.\n\nSee [[Plain]].'), note('Plain', 'Back to [[ai-direction]].')])
     try {
       const read = b.page.read(b.id('ai-direction'))
