@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { updateRestartWords, type UpdateRestartMember, type UpdateRestartRecord, type UpdateRestartSnapshot } from '@bmn/protocol'
-import { UpdateRestartDialog, updateRestartTitle } from './update-restart-dialog'
+import { UpdateRestartDialog, updateRestartOfferWithdrawn, updateRestartTitle } from './update-restart-dialog'
 
 const member = (name: string, over: Partial<UpdateRestartMember> = {}): UpdateRestartMember => ({
   sessionId: name, incarnationId: `${name}-run`, name, workspace: 'BMN', agent: 'claude', conversation: `conversation-${name}`, atPress: 'working', ready: false,
@@ -118,5 +118,20 @@ describe('after reopening (125.5 AC2 to AC6, D7)', () => {
     expect(updateRestartTitle(record('complete', [], { openedBuild: 'Update failed · previous build opened' }), 'after')).toBe('Update failed · previous build opened')
     const html = draw({ run: record('complete', [resumed({ atClose: 'ready', tell: 'told' })], { openedBuild: '02c0120aaaa' }) })
     expect(html).toContain('Restarted on 02c0120'); expect(html).toContain('Resumed · told to continue'); expect(html).toContain('>Close</button>')
+  })
+})
+
+describe('a withdrawn offer (Story 134.2)', () => {
+  const snapshot = (over: Partial<UpdateRestartSnapshot>): UpdateRestartSnapshot => ({ waitingBuild: null, show: false, run: null, sessions: [], reportedCohort: null, ...over })
+  it('closes an open offer once a newer push withdrew it, before Restart was pressed', () => {
+    expect(updateRestartOfferWithdrawn(snapshot({ waitingBuild: 'a'.repeat(40) }))).toBe(false)
+    expect(updateRestartOfferWithdrawn(snapshot({}))).toBe(true)
+    expect(updateRestartOfferWithdrawn(null)).toBe(false)
+  })
+  it('never closes a restart already pressed, cancelled or reopened', () => {
+    for (const phase of ['waiting', 'cancelled', 'complete'] as const) {
+      expect(updateRestartOfferWithdrawn(snapshot({ run: { phase } as UpdateRestartRecord }))).toBe(false)
+    }
+    expect(updateRestartOfferWithdrawn(snapshot({ run: { phase: 'complete', dismissed: true } as UpdateRestartRecord }))).toBe(true)
   })
 })

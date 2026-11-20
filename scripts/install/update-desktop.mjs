@@ -12,7 +12,6 @@ import {
   readdirSync,
   readlinkSync,
   renameSync,
-  rmSync,
   writeFileSync
 } from 'node:fs'
 import { homedir } from 'node:os'
@@ -21,7 +20,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { UPDATE_UNIT, desktopEntryReturnsBrain, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
-import { buildFolders, keepPassedBuild, packageAndSmoke, prepareBuildFolders, swapInReadyBuild } from '../lib/staged-build.mjs'
+import { buildFolders, keepPassedBuild, packageAndSmoke, prepareBuildFolders, swapInReadyBuild, undoSwap } from '../lib/staged-build.mjs'
 import { startAttempt } from '../lib/update-attempts.mjs'
 import { SourceMoved, stepFailure, superviseUpdate } from '../lib/update-supervisor.mjs'
 import { brainFileHash, brainResourcesHash, brainCutoverStateRoot, brainDeliveryCommit, brainContainsDelivery } from '../lib/brain-provenance.mjs'
@@ -166,9 +165,22 @@ function notify(summary, body, urgency = 'normal') {
   spawnSync('notify-send', ['--urgency', urgency, summary, body], { stdio: 'ignore' })
 }
 
+/** Waits until no process of a group is left, killing what remains; true when it emptied within the bound. */
+export async function settleProcessGroup(group, { kill = process.kill.bind(process), wait = delay, boundMs = 15_000 } = {}) {
+  const alive = () => { try { kill(-group, 0); return true } catch { return false } }
+  if (!alive()) return true
+  try { kill(-group, 'SIGKILL') } catch { /* emptied meanwhile */ }
+  for (let waited = 0; waited < boundMs; waited += 100) {
+    if (!alive()) return true
+    await wait(100)
+  }
+  return !alive()
+}
+
 /**
  * Runs one pnpm step into the attempt's log. The step runs in its own process group, so an aborted build (BMN exited
- * while a passed build waits) stops with everything it started, smoke display included.
+ * while a passed build waits) stops with everything it started, smoke display included; the step ends only once that
+ * group is empty, so nothing it started still writes when a build is swapped in or the next one starts (review F3).
  */
 function runStep(label, args, { signal } = {}) {
   currentStep = label
@@ -196,9 +208,11 @@ function runStep(label, args, { signal } = {}) {
     if (signal?.aborted) stop()
     else signal?.addEventListener('abort', stop, { once: true })
     child.once('error', (error) => reject(stepFailure(label, error)))
-    child.once('close', (code, killedBy) => {
-      clearTimeout(killer)
+    child.once('close', async (code, killedBy) => {
       signal?.removeEventListener('abort', stop)
+      const emptied = await settleProcessGroup(child.pid)
+      clearTimeout(killer)
+      if (!emptied) return reject(stepFailure(label, new Error(`${label} left processes that would not stop (group ${child.pid})`)))
       if (signal?.aborted) return reject(stepFailure(label, new Error(`${label} stopped: BMN exited`)))
       if (code !== 0) return reject(stepFailure(label, new Error(`${label} failed with ${killedBy ? `signal ${killedBy}` : `exit ${code}`}`)))
       log(`PASS ${label}`)
@@ -236,7 +250,7 @@ export function checkoutSource(root = repoRoot) {
   return { head: state.head, problem: repositoryReadiness(state) }
 }
 
-/** Packages and smokes one commit while BMN may be open; a passed build moves to `ready`, where it waits for BMN to exit. */
+/** Packages and smokes one commit while BMN may be open; the supervisor then keeps it in `ready`, where it waits for BMN to exit. */
 function buildCandidate(commit, options) {
   return buildCandidateSteps(commit, options).catch((error) => {
     throw error instanceof SourceMoved ? error : stepFailure(currentStep, error)
@@ -256,7 +270,6 @@ async function buildCandidateSteps(commit, { attempt: started, signal }) {
   currentStep = 'source check'
   const changed = sourceChangeSince(buildingState, gitState())
   if (changed !== null) throw new SourceMoved(`source changed during the build: ${changed}`)
-  keepPassedBuild(folders)
 }
 
 /** The installed brain helper must be the commit's own: read from Git, so a newer checkout cannot make a false mismatch. */
@@ -266,9 +279,31 @@ function committedFileHash(commit, path) {
   return createHash('sha256').update(shown.stdout).digest('hex')
 }
 
-/** BMN is closed: swap the waiting build in, refresh the desktop entry and launcher, check them and record the build. */
+/**
+ * Writes the launcher this worker's statuses are made for: the queue writes it before the worker starts (review F7), and
+ * the install writes it again after the checkout's installer, whose generator may be a newer commit's (review F2).
+ */
+function writeLauncher() {
+  const temporary = `${launcher}.tmp-${process.pid}`
+  writeFileSync(temporary, launcherScript({ binary, statusPath }), { mode: 0o755 })
+  renameSync(temporary, launcher)
+}
+
+/**
+ * BMN is closed: swap the waiting build in, refresh the desktop entry and launcher, check them and record the build.
+ * Any failure after the swap puts the previous build back (R134-NFR1), so a failed update never leaves a half-installed
+ * build live.
+ */
 function installReadyBuild(commit, started) {
-  return installReadyBuildSteps(commit, started).catch((error) => { throw stepFailure(currentStep, error) })
+  return installReadyBuildSteps(commit, started).catch((error) => {
+    const failure = stepFailure(currentStep, error)
+    if (liveBuild === 'new') {
+      const undone = undoSwap(folders)
+      liveBuild = undone.liveBuild
+      log(undone.error ? `ROLLBACK failed: ${undone.error.message}; ${folders.prev} holds the previous build` : `ROLLED BACK ${folders.live} to the previous build; ${commit} is in ${folders.ready}`)
+    }
+    throw failure
+  })
 }
 
 async function installReadyBuildSteps(commit, started) {
@@ -281,6 +316,7 @@ async function installReadyBuildSteps(commit, started) {
   log(`SWAPPED ${commit} into ${folders.live}; the one it replaced is ${folders.prev}`)
   await runStep('desktop install', ['run', 'install:desktop'])
   currentStep = 'install check'
+  writeLauncher()
   if (!existsSync(binary) || !existsSync(archive)) throw new Error('packaged BMN artifact is missing after install')
   if (!desktopEntryRunsLauncher(readFileSync(desktopEntry, 'utf8'), launcher)) {
     throw new Error('desktop entry does not run the BMN launcher')
@@ -327,8 +363,9 @@ async function runWorker() {
     source: () => checkoutSource(),
     build: buildCandidate,
     install: installReadyBuild,
+    keep: () => keepPassedBuild(folders),
     appOpen: () => runningAppPids(binary).length > 0,
-    startAttempt: (commit) => (attempt = startAttempt({ stateDirectory, commit })),
+    startAttempt: (commit, { protect = [] } = {}) => (attempt = startAttempt({ stateDirectory, commit, protect })),
     status: writeStatus,
     notify,
     delay: (ms) => delay(ms)
@@ -362,23 +399,24 @@ function startUnit() {
 export function recordWorkerFailure({ directory, attempt: failed, step, error, liveBuild: live }) {
   const message = error instanceof Error ? error.message : String(error)
   writeStatusIn(directory, { phase: 'failed', commit: failed?.commit ?? null, failedStep: step, error: message, liveBuild: live, updatedAt: new Date().toISOString(), logPath: failed?.path ?? join(directory, 'latest.log') })
-  if (failed) failed.log(`FAILED at ${step}: ${message}`)
+  if (failed && !error?.logged) failed.log(`FAILED at ${step}: ${message}`)
   return message
 }
 
 const unitActive = () => spawnSync('systemctl', ['--user', 'is-active', '--quiet', unit]).status === 0
 
 /**
- * `pnpm run update:desktop` without `--worker`: queues the worker, or refuses. A refusal (wrong platform, dirty tree,
- * unpushed main, brain delivery, a unit that would not start) is printed and leaves `latest.json`, the attempt logs and
- * the completed records exactly as they were (Story 134.1, Epic 111 F6): it writes nothing a launcher reads.
- * The options exist for the tests; the command uses the defaults. Returns the exit code.
+ * `pnpm run update:desktop` without `--worker`: queues the worker, or refuses. It never writes `latest.json`: the worker
+ * alone publishes the update's status, so a refusal (wrong platform, dirty tree, unpushed main, brain delivery, a unit
+ * that would not start) or an overlapping request leaves it, the attempt logs and the completed records exactly as they
+ * were (Story 134.1, Epic 111 F6, review F9). Before starting the worker it puts in place the launcher made for that
+ * worker's statuses, where one is installed (review F7). The options exist for the tests. Returns the exit code.
  */
 export function queueCommand({
   platform = process.platform, state = gitState, prepareBrain = (commit) => prepareBrainDelivery({ commit }),
-  queued = unitActive, start = startUnit, directory = stateDirectory, print = console.log, printError = console.error
+  queued = unitActive, start = startUnit, refreshLauncher = () => { if (existsSync(launcher)) writeLauncher() },
+  directory = stateDirectory, print = console.log, printError = console.error
 } = {}) {
-  const statusFile = join(directory, 'latest.json')
   try {
     if (platform !== 'linux') {
       throw new Error('automatic update-after-exit currently requires Linux systemd; close BMN and run package/install manually')
@@ -391,15 +429,9 @@ export function queueCommand({
       print(`BMN update is already queued; it builds and tests the newest clean origin/main while BMN is open and offers the restart once that passed.\nLog: ${join(directory, 'latest.log')}`)
       return 0
     }
-    const before = existsSync(statusFile) ? readFileSync(statusFile) : null
-    writeStatusIn(directory, { phase: 'queued', commit: current.head, updatedAt: new Date().toISOString(), logPath: join(directory, 'latest.log') })
+    refreshLauncher()
     const result = start()
-    if (result.status !== 0) {
-      // Nothing was queued: put back what the launcher read before.
-      if (before === null) rmSync(statusFile, { force: true })
-      else { const temporary = `${statusFile}.tmp-${process.pid}`; writeFileSync(temporary, before, { mode: 0o600 }); renameSync(temporary, statusFile) }
-      throw new Error(`could not queue BMN update: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`)
-    }
+    if (result.status !== 0) throw new Error(`could not queue BMN update: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`)
     print(`Queued BMN ${current.head.slice(0, 7)} update. It is built and tested while BMN stays open; BMN offers the restart once it passed.\nLog: ${join(directory, 'latest.log')}`)
     return 0
   } catch (error) {
@@ -412,6 +444,12 @@ const directlyInvoked = process.argv[1] && resolve(process.argv[1]) === workerPa
 if (directlyInvoked && !process.argv.includes('--worker')) process.exitCode = queueCommand()
 else if (directlyInvoked) {
   runWorker().catch((error) => {
+    // A failure before any attempt started (folder preparation, the first source read) still gets its own log.
+    if (!error?.attempt && !attempt) {
+      let head = '0000000'
+      try { head = capture('git', ['rev-parse', 'HEAD']) } catch { /* the log says the commit could not be read */ }
+      attempt = startAttempt({ stateDirectory, commit: head })
+    }
     const failedAttempt = error?.attempt ?? attempt, step = error?.step ?? currentStep
     const message = recordWorkerFailure({ directory: stateDirectory, attempt: failedAttempt, step, error, liveBuild })
     notify('BMN update failed', `${failedAttempt ? failedAttempt.commit.slice(0, 7) : 'The update'} failed at ${step}; BMN was not restarted. Log: ${failedAttempt?.path ?? logPath}`, 'critical')

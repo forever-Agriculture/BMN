@@ -64,8 +64,9 @@ const until = async (check, what) => {
  * commits in `failing`. Like the worker's build, a build whose source moved meanwhile is SourceMoved.
  */
 function harness(repo, { failing = new Set() } = {}) {
-  const statuses = [], notices = [], gates = new Map(), built = []
-  const app = { open: true }
+  const statuses = [], notices = [], gates = new Map(), built = [], events = []
+  // `script` is consumed first, one value per check, then `open` answers.
+  const app = { open: true, script: [] }
   const gateFor = (commit) => { if (!gates.has(commit)) gates.set(commit, gate()); return gates.get(commit) }
   const io = {
     source: () => checkoutSource(repo.checkout),
@@ -88,18 +89,18 @@ function harness(repo, { failing = new Set() } = {}) {
       const now = checkoutSource(repo.checkout)
       if (now.head !== commit) throw new SourceMoved(`HEAD moved from ${commit} to ${now.head}`)
       if (now.problem !== null) throw new SourceMoved(now.problem)
-      keepPassedBuild(repo.folders)
     },
+    keep: (commit) => { events.push(`keep ${commit}`); keepPassedBuild(repo.folders) },
     install: async (commit, attempt) => {
       const swap = swapInReadyBuild(repo.folders)
       if (swap.error) throw swap.error
       attempt.log(`SWAPPED ${commit}`)
       statuses.push({ phase: 'complete', commit, installed: commit })
     },
-    appOpen: () => app.open,
+    appOpen: () => (app.script.length ? app.script.shift() : app.open),
     startAttempt: (commit) => startAttempt({ stateDirectory: repo.state, commit }),
-    status: (value) => statuses.push(value),
-    notify: (summary, body) => notices.push(`${summary}: ${body}`),
+    status: (value) => { statuses.push(value); events.push(`status ${value.phase} ${value.commit}`) },
+    notify: (summary, body) => { notices.push(`${summary}: ${body}`); events.push(`notify ${summary}`) },
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     quietMs: 20,
     pollMs: 5
@@ -107,7 +108,7 @@ function harness(repo, { failing = new Set() } = {}) {
   const live = () => readFileSync(join(repo.folders.live, 'bmn'), 'utf8').trim()
   const phase = () => statuses.at(-1)
   const offered = () => statuses.filter((value) => value.phase === 'waiting-for-exit').map((value) => value.commit)
-  return { io, app, statuses, notices, built, live, phase, offered, open: (commit) => gateFor(commit).open() }
+  return { io, app, statuses, notices, built, events, live, phase, offered, open: (commit) => gateFor(commit).open() }
 }
 
 const logOf = (repo, commit) => attemptLogs(repo.state).map((name) => readFileSync(join(repo.state, 'attempts', name), 'utf8'))
@@ -195,6 +196,78 @@ describe('a queued update while BMN stays open (Story 134.2)', { timeout: 30_000
     expect(await done).toEqual({ installed: b })
     expect(run.live()).toBe(`build of ${b}`)
     expect(run.offered()).toEqual([a, b])
+  })
+
+  it('B passing inside the quiet window after BMN closed never replaces A: A goes live, B is built again (review F1)', async () => {
+    const repo = repository()
+    const a = repo.push('A')
+    const run = harness(repo)
+    run.io.quietMs = 2_000
+    run.open(a)
+    const done = superviseUpdate(run.io)
+    await until(() => run.offered().includes(a), 'A to be offered')
+    const b = repo.push('B')
+    await until(() => run.phase()?.commit === b && run.phase().phase === 'preparing', 'B to build')
+    run.app.open = false
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // B passes while the worker is still making sure BMN stays closed.
+    run.open(b)
+    await until(() => run.statuses.some((value) => value.phase === 'complete' && value.commit === a), 'A to go live')
+    expect(run.events.indexOf(`keep ${b}`) === -1 || run.events.indexOf(`keep ${b}`) > run.events.findIndex((event) => event === `status complete ${a}`)).toBe(true)
+    expect(logOf(repo, b)[0]).toMatch(/PASSED .* after BMN exited|STOPPED BMN exited/u)
+    expect(await done).toEqual({ installed: b })
+    expect(run.built.filter((commit) => commit === b)).toHaveLength(2)
+  })
+
+  it('never swaps when BMN is back by the time of the swap; the build keeps waiting (review F1)', async () => {
+    const repo = repository()
+    const a = repo.push('A')
+    const run = harness(repo)
+    run.open(a)
+    const done = superviseUpdate(run.io)
+    await until(() => run.offered().includes(a), 'A to be offered')
+    // Closed for the quiet check (two reads), open again at the swap's own check, then open for a while.
+    run.app.script.push(false, false, true)
+    await until(() => run.app.script.length === 0, 'the scripted checks to be read')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(run.statuses.some((value) => value.phase === 'installing')).toBe(false)
+    expect(run.live()).toBe('build of the installed commit')
+    run.app.open = false
+    expect(await done).toEqual({ installed: a })
+  })
+
+  it('a failed first build does not drop a newer clean push made meanwhile (review F6)', async () => {
+    const repo = repository()
+    const a = repo.push('A')
+    const run = harness(repo, { failing: new Set([a]) })
+    run.app.open = true
+    const done = superviseUpdate(run.io)
+    await until(() => run.phase()?.commit === a, 'A to build')
+    const c = repo.push('C')
+    run.open(a)
+    await until(() => run.phase()?.commit === c, 'C to build after A failed')
+    expect(logOf(repo, a)[0]).toMatch(/FAILED at packaged smoke test/u)
+    expect(run.notices.at(-1)).toContain(`${a.slice(0, 7)} failed at packaged smoke test; building ${c.slice(0, 7)} instead`)
+    run.open(c)
+    await until(() => run.offered().includes(c), 'C to be offered')
+    run.app.open = false
+    expect(await done).toEqual({ installed: c })
+    expect(run.built).toEqual([a, c])
+  })
+
+  it('publishes the offer before telling him it is ready (review F8)', async () => {
+    const repo = repository()
+    const a = repo.push('A')
+    const run = harness(repo)
+    run.open(a)
+    const done = superviseUpdate(run.io)
+    await until(() => run.events.includes('notify BMN update ready'), 'the ready notice')
+    const offered = run.events.indexOf(`status waiting-for-exit ${a}`), told = run.events.indexOf('notify BMN update ready')
+    expect(offered).toBeGreaterThan(-1)
+    expect(offered).toBeLessThan(told)
+    expect(run.events.indexOf(`keep ${a}`)).toBeLessThan(offered)
+    run.app.open = false
+    await done
   })
 
   it('a failed B keeps its log and never goes live; A is offered again and goes live at exit', async () => {

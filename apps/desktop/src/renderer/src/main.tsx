@@ -152,7 +152,7 @@ import {
 } from './session-terminal'
 import { ConfirmDialog, ConversationReferenceDialog, ResumeDialog, WorkspaceDialog } from './shell-dialogs'
 import { CloseSessionsDialog } from './close-sessions-dialog'
-import { UpdateRestartDialog } from './update-restart-dialog'
+import { UpdateRestartDialog, updateRestartOfferWithdrawn } from './update-restart-dialog'
 import { updateRestartCancelListed, type UpdateRestartSnapshot, type UpdateRestartOperation } from '@bmn/protocol'
 import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from './terminal-history'
 import { createSpaceHold } from './space-hold'
@@ -322,6 +322,10 @@ function App(): React.JSX.Element {
     setRestartOpen(false)
     void window.aiTerminal.updateRestart('dismiss', updateRestart?.run?.id).then(setUpdateRestart).catch(fail('The restart dialog could not close'))
   }
+  // A newer push withdrew the offer while its dialog was open and before Restart was pressed (Story 134.2).
+  useEffect(() => {
+    if (restartOpen && updateRestartOfferWithdrawn(updateRestart)) setRestartOpen(false)
+  }, [updateRestart, restartOpen])
   // After Cancel the dialog stays only while it lists a session BMN could not tell (Epic 125 D4); a later result goes to Needs You.
   useEffect(() => {
     const run = updateRestart?.run

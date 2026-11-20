@@ -173,7 +173,7 @@ describe('desktop source update', () => {
       const code = queueCommand({
         platform: 'linux', directory,
         state: () => ({ branch: 'main', head: commitB, originHead: commitB, status: '', ...change }),
-        prepareBrain: () => { throw new Error('reached brain delivery') },
+        prepareBrain: () => { throw new Error('reached brain delivery') }, refreshLauncher: () => { throw new Error('reached the launcher') },
         queued: () => false, start: () => { started.push(true); return { status: 0 } },
         print: (line) => printed.push(line), printError: (line) => printed.push(line)
       })
@@ -183,18 +183,40 @@ describe('desktop source update', () => {
       expect(snapshot(directory)).toEqual(before)
     }))
 
-    it('puts latest.json back when the unit would not start', () => withState((directory) => {
+    it('never writes latest.json, so a unit that would not start or an overlapping request leaves the status alone (review F9)', () => withState((directory) => {
       writeFileSync(join(directory, 'latest.json'), JSON.stringify({ phase: 'complete', commit: commitA }) + '\n')
-      const before = snapshot(directory), printed = []
+      const before = snapshot(directory), printed = [], order = []
       const code = queueCommand({
         platform: 'linux', directory, state: () => ({ branch: 'main', head: commitB, originHead: commitB, status: '' }),
-        prepareBrain: () => {}, queued: () => false, start: () => ({ status: 1, stderr: 'Unit already exists' }),
+        prepareBrain: () => {}, queued: () => false, refreshLauncher: () => order.push('launcher'),
+        start: () => { order.push('start'); return { status: 1, stderr: 'Unit already exists' } },
         print: (line) => printed.push(line), printError: (line) => printed.push(line)
       })
       expect(code).toBe(1)
       expect(printed.join('\n')).toContain('could not queue BMN update: Unit already exists')
       expect(snapshot(directory)).toEqual(before)
       expect(existsSync(join(directory, 'attempts'))).toBe(false)
+      // The launcher made for the new worker's statuses is in place before that worker starts (review F7).
+      expect(order).toEqual(['launcher', 'start'])
+
+      // A winning worker's status survives a second request that finds the unit already running.
+      writeFileSync(join(directory, 'latest.json'), JSON.stringify({ phase: 'waiting-for-exit', commit: commitB }) + '\n')
+      const winning = snapshot(directory)
+      expect(queueCommand({ platform: 'linux', directory, state: () => ({ branch: 'main', head: commitB, originHead: commitB, status: '' }),
+        prepareBrain: () => {}, queued: () => true, refreshLauncher: () => { throw new Error('a queued update keeps its launcher') },
+        start: () => { throw new Error('never started twice') }, print: () => {}, printError: (line) => printed.push(line) })).toBe(0)
+      expect(snapshot(directory)).toEqual(winning)
+    }))
+
+    it('keeps a passed build that still waits out of the 20-log pruning, holding the cap at 20 (review F10)', () => withState((directory) => {
+      const waiting = startAttempt({ stateDirectory: directory, commit: commitA, now: new Date(Date.UTC(2026, 10, 20, 9, 0)) })
+      for (let minute = 0; minute < KEPT_ATTEMPTS + 5; minute += 1) {
+        startAttempt({ stateDirectory: directory, commit: commitB, now: new Date(Date.UTC(2026, 10, 20, 10, minute)), protect: [waiting.path] })
+      }
+      const logs = attemptLogs(directory)
+      expect(logs).toHaveLength(KEPT_ATTEMPTS)
+      expect(logs[0]).toBe(waiting.path.split('/').at(-1))
+      expect(readFileSync(waiting.path, 'utf8')).toContain(`ATTEMPT commit ${commitA}`)
     }))
   })
 
@@ -212,6 +234,9 @@ describe('desktop source update', () => {
       expect(temporaryRootContracts.packagedSmoke.directories).toContain('home')
       const roots = { home: '/t/home', config: '/t/config', data: '/t/data', state: '/t/state', cache: '/t/cache', runtime: '/t/runtime' }
       const environment = isolatedEnvironment(roots, { HOME: '/home/owner', PATH: '/usr/bin', BMN_SESSION_ID: 's', BMN_TOKEN: 't', BMN_CONTROL_SOCKET: '/run/bmn.sock', BMN_CLI_BIN_DIR: '/x' })
+      const legacy = isolatedEnvironment(roots, { PATH: '/usr/bin', AITERM_CONTROL_SOCKET: '/run/aiterm.sock', AITERM_TOKEN: 't', AITERM_SESSION_ID: 's', BMN_SMOKE_FORCE_FAILURE: '1' })
+      for (const name of ['AITERM_CONTROL_SOCKET', 'AITERM_TOKEN', 'AITERM_SESSION_ID']) expect(legacy).not.toHaveProperty(name)
+      expect(legacy.BMN_SMOKE_FORCE_FAILURE).toBe('1')
       expect(environment).toMatchObject({ HOME: '/t/home', XDG_CONFIG_HOME: '/t/config', XDG_DATA_HOME: '/t/data', XDG_STATE_HOME: '/t/state', XDG_CACHE_HOME: '/t/cache', XDG_RUNTIME_DIR: '/t/runtime', PATH: '/usr/bin' })
       for (const name of ['BMN_SESSION_ID', 'BMN_TOKEN', 'BMN_CONTROL_SOCKET', 'BMN_CLI_BIN_DIR']) expect(environment).not.toHaveProperty(name)
       for (const xdg of [roots.config, roots.data, roots.state, roots.cache, roots.runtime]) expect(xdg.startsWith(roots.home)).toBe(false)
@@ -240,7 +265,10 @@ describe('desktop source update', () => {
       try {
         const own = '/tmp/bmn-packaged-smoke-abc/config'
         const environ = { 41: `HOME=/x\0XDG_CONFIG_HOME=${own}\0`, 42: `XDG_CONFIG_HOME=${own}\0PATH=/bin`, 43: `XDG_CONFIG_HOME=${own}-other\0`, 44: 'XDG_CONFIG_HOME=/home/owner/.config\0', 45: `XDG_CONFIG_HOME=${own}\0` }
-        for (const [pid, text] of Object.entries(environ)) { mkdirSync(join(proc, pid)); writeFileSync(join(proc, pid, 'environ'), text) }
+        for (const [pid, text] of Object.entries(environ)) {
+          mkdirSync(join(proc, pid)); writeFileSync(join(proc, pid, 'environ'), text)
+          writeFileSync(join(proc, pid, 'stat'), `${pid} (bmn) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${1000 + Number(pid)} 0 0\n`)
+        }
         mkdirSync(join(proc, 'self'))
         const killed = []
         expect(stopSmokeLeftovers(own, { procRoot: proc, self: 45, kill: (pid, name) => killed.push([pid, name]) })).toEqual([41, 42])

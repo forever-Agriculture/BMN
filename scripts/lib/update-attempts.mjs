@@ -1,6 +1,6 @@
 // MODULE: update-attempts.mjs - Story 134.1: every desktop update attempt keeps its own log; latest.log points at the newest
 import { appendFileSync, mkdirSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 /** How many attempt logs stay; older ones are removed when a new attempt starts. */
 export const KEPT_ATTEMPTS = 20
@@ -19,10 +19,11 @@ export function attemptLogs(stateDirectory) {
 /**
  * Starts one attempt: `attempts/<UTC start>-<commit>.log` beside `latest.json`, its first line naming the commit;
  * `latest.log` becomes a link to it (by rename, so a reader sees the old or the new log, never none); attempts beyond
- * `keep` are removed, oldest first. Earlier attempts are never written again (2026-11-20: a failed update's log was
- * truncated by the next queued attempt before anyone read it).
+ * `keep` are removed, oldest first, never one named in `protect` (a passed build still waiting writes its swap into its
+ * own log), which counts toward `keep`. Earlier attempts are never written again (2026-11-20: a failed update's log
+ * was truncated by the next queued attempt before anyone read it).
  */
-export function startAttempt({ stateDirectory, commit, now = new Date(), keep = KEPT_ATTEMPTS }) {
+export function startAttempt({ stateDirectory, commit, now = new Date(), keep = KEPT_ATTEMPTS, protect = [] }) {
   const folder = join(stateDirectory, 'attempts')
   mkdirSync(folder, { recursive: true, mode: 0o700 })
   const stamp = now.toISOString().replace(/[-:.]/gu, '')
@@ -34,8 +35,10 @@ export function startAttempt({ stateDirectory, commit, now = new Date(), keep = 
   rmSync(temporary, { force: true })
   symlinkSync(join('attempts', name), temporary)
   renameSync(temporary, latest)
-  const logs = attemptLogs(stateDirectory)
-  for (const old of logs.slice(0, Math.max(0, logs.length - keep))) rmSync(join(folder, old), { force: true })
+  const kept = new Set(protect.map((protectedPath) => basename(protectedPath)))
+  const logs = attemptLogs(stateDirectory), prunable = logs.filter((old) => !kept.has(old))
+  const room = Math.max(0, keep - (logs.length - prunable.length))
+  for (const old of prunable.slice(0, Math.max(0, prunable.length - room))) rmSync(join(folder, old), { force: true })
   return {
     path,
     commit,

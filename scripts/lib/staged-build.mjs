@@ -31,7 +31,7 @@ export function liveBuildState(folders, fs = defaultFs) {
 export function prepareBuildFolders(folders, fs = defaultFs) {
   const restored = liveBuildState(folders, fs) === 'half-swapped' && fs.existsSync(folders.prev)
   if (restored) fs.renameSync(folders.prev, folders.live)
-  for (const path of [folders.prev, folders.next, folders.ready, folders.staging]) fs.rmSync(path, { recursive: true, force: true })
+  for (const path of [folders.prev, folders.next, folders.ready, `${folders.ready}.old`, folders.staging]) fs.rmSync(path, { recursive: true, force: true })
   return { restored }
 }
 
@@ -51,10 +51,23 @@ export async function packageAndSmoke({ folders, step, log, fs = defaultFs }) {
   await step('packaged smoke test', ['run', 'smoke:packaged', '--root', folders.next])
 }
 
-/** The smoked `next` build becomes the one that waits for BMN to exit, replacing an older passed one. */
+/**
+ * The smoked `next` build becomes the one that waits for BMN to exit, replacing an older passed one. The older one is
+ * moved aside first and removed only once the new one is in place; a failed rename puts it back, so a passed build
+ * that still waits is never lost.
+ */
 export function keepPassedBuild(folders, fs = defaultFs) {
-  fs.rmSync(folders.ready, { recursive: true, force: true })
-  fs.renameSync(folders.next, folders.ready)
+  const older = `${folders.ready}.old`
+  fs.rmSync(older, { recursive: true, force: true })
+  const hadOlder = fs.existsSync(folders.ready)
+  if (hadOlder) fs.renameSync(folders.ready, older)
+  try {
+    fs.renameSync(folders.next, folders.ready)
+  } catch (error) {
+    if (hadOlder) fs.renameSync(older, folders.ready)
+    throw error
+  }
+  fs.rmSync(older, { recursive: true, force: true })
 }
 
 /**
@@ -74,6 +87,27 @@ export function swapInReadyBuild(folders, fs = defaultFs) {
     try {
       fs.renameSync(folders.prev, folders.live)
       return { liveBuild: 'previous', error }
+    } catch {
+      return { liveBuild: 'none', error }
+    }
+  }
+}
+
+/**
+ * Puts the previous build back after a swap whose install failed: live → ready, then prev → live; if the second rename
+ * fails the first is undone. The result says which build the live path holds, as `swapInReadyBuild` does.
+ */
+export function undoSwap(folders, fs = defaultFs) {
+  if (!fs.existsSync(folders.prev)) return { liveBuild: 'new', error: new Error(`no previous build in ${folders.prev}`) }
+  fs.rmSync(folders.ready, { recursive: true, force: true })
+  fs.renameSync(folders.live, folders.ready)
+  try {
+    fs.renameSync(folders.prev, folders.live)
+    return { liveBuild: 'previous' }
+  } catch (error) {
+    try {
+      fs.renameSync(folders.ready, folders.live)
+      return { liveBuild: 'new', error }
     } catch {
       return { liveBuild: 'none', error }
     }

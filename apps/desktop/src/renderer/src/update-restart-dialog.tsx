@@ -14,6 +14,13 @@ export function updateRestartTitle(run: UpdateRestartRecord | null, stage: Updat
   }
   return run.openedBuild?.startsWith('Update failed') ? run.openedBuild : `Restarted on ${run.openedBuild?.slice(0, 7) ?? 'unknown build'}`
 }
+/**
+ * Story 134.2: the offer was withdrawn while its dialog was open and before he pressed Restart (a newer push is being
+ * tested); the dialog then closes instead of offering a restart BMN would refuse.
+ */
+export function updateRestartOfferWithdrawn(snapshot: UpdateRestartSnapshot | null): boolean {
+  return snapshot !== null && !snapshot.waitingBuild && (!snapshot.run || snapshot.run.dismissed === true)
+}
 export function UpdateRestartDialog(props: {
   snapshot: UpdateRestartSnapshot
   action(op: UpdateRestartOperation): Promise<void>

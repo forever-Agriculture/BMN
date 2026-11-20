@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { buildFolders, keepPassedBuild, liveBuildState, packageAndSmoke, prepareBuildFolders, swapInReadyBuild } from '../lib/staged-build.mjs'
+import { buildFolders, keepPassedBuild, liveBuildState, packageAndSmoke, prepareBuildFolders, swapInReadyBuild, undoSwap } from '../lib/staged-build.mjs'
 
 const roots = []
 afterEach(() => {
@@ -121,6 +121,32 @@ describe('staged desktop update', () => {
     expect(existsSync(folders.next)).toBe(false)
   })
 
+  it('keeps the waiting build when the newer one cannot be moved into place (review F5)', () => {
+    const folders = release()
+    writeBuild(folders.ready, 'a')
+    writeBuild(folders.next, 'b')
+    const waiting = fingerprint(folders.ready)
+    const failing = { ...nodeFs, renameSync: (from, to) => {
+      if (from === folders.next) throw new Error('ENOSPC: no space left on device')
+      renameSync(from, to)
+    } }
+    expect(() => keepPassedBuild(folders, failing)).toThrow(/ENOSPC/u)
+    expect(fingerprint(folders.ready)).toBe(waiting)
+    expect(existsSync(`${folders.ready}.old`)).toBe(false)
+  })
+
+  it('a failed install puts the previous build back live and keeps the new one ready (review F2)', () => {
+    const folders = release()
+    writeBuild(folders.live, 'old')
+    writeBuild(folders.ready, 'new')
+    const oldBuild = fingerprint(folders.live), newBuild = fingerprint(folders.ready)
+    expect(swapInReadyBuild(folders)).toEqual({ liveBuild: 'new' })
+    expect(undoSwap(folders)).toEqual({ liveBuild: 'previous' })
+    expect(fingerprint(folders.live)).toBe(oldBuild)
+    expect(fingerprint(folders.ready)).toBe(newBuild)
+    expect(existsSync(folders.prev)).toBe(false)
+  })
+
   it('puts the live build back when the second rename fails', () => {
     const folders = release()
     writeBuild(folders.live, 'old')
@@ -172,12 +198,14 @@ describe('staged desktop update', () => {
     writeBuild(folders.prev, 'two-updates-ago')
     writeBuild(folders.next, 'failed-last-time')
     writeBuild(folders.ready, 'passed-but-never-swapped')
+    writeBuild(`${folders.ready}.old`, 'interrupted-promotion')
     writeBuild(join(folders.staging, 'linux-unpacked'), 'half-packaged')
     let most = 0
     const count = () => { most = Math.max(most, [folders.live, folders.next, folders.ready, folders.prev, join(folders.staging, 'linux-unpacked')].filter(existsSync).length) }
     const fake = steps(folders, { smokePasses: true })
 
     expect(prepareBuildFolders(folders)).toEqual({ restored: false })
+    expect(existsSync(`${folders.ready}.old`)).toBe(false)
     await packageAndSmoke({ folders, step: async (label, args) => { count(); fake.step(label, args); count() }, log: () => undefined })
     keepPassedBuild(folders); count()
     swapInReadyBuild(folders); count()

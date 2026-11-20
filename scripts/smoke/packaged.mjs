@@ -1,5 +1,5 @@
 // MODULE: packaged.mjs - smoke-tests the packaged BMN build with its own HOME and XDG roots, so it runs while the owner's BMN is open
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -29,8 +29,12 @@ export function assertHomeUntouched(home, exists = existsSync) {
   if (written.length > 0) throw new Error(`the packaged build wrote into HOME instead of its XDG roots: ${written.join(', ')}`)
 }
 
-/** The live BMN session's own variables; a candidate under test must never reach the BMN the owner is using. */
+/**
+ * The live BMN session's own variables, in both namings (BMN gives sessions the older AITERM_ aliases too, and its CLI
+ * still reads them): a candidate under test must never reach the BMN the owner is using (review F4).
+ */
 const LIVE_SESSION_VARIABLES = ['BMN_SESSION_ID', 'BMN_TOKEN', 'BMN_CONTROL_SOCKET', 'BMN_CLI_BIN_DIR']
+const isLiveSessionVariable = (name) => LIVE_SESSION_VARIABLES.includes(name) || name.startsWith('AITERM_')
 
 /**
  * The owner's shell startup files. The self-test's "owner-sixel" shell runs `bash -i` on his own `.bashrc` to prove his
@@ -49,19 +53,22 @@ export function copyOwnerShellFiles(home, ownerHome = homedir()) {
 }
 
 /**
- * Stops every process still carrying this smoke's own config root in its environment: a timed-out self-test leaves
- * Electron's helpers and its display running when only `xvfb-run` is killed (2026-11-20: they held memory for 35
- * minutes). The root is a fresh temporary folder, so nothing else carries it. Returns the stopped process ids.
+ * The backstop after the self-test's process group is gone: stops every process still carrying this smoke's own config
+ * root in its environment, one that left the group included (2026-11-20: a timed-out self-test left Electron's helpers
+ * and its display running for 35 minutes). The root is a fresh temporary folder, so nothing else carries it; a process
+ * is signalled only if its start time read before and after its environment is the same, so a reused id is left alone.
  */
 export function stopSmokeLeftovers(configRoot, { procRoot = '/proc', kill = process.kill.bind(process), self = process.pid } = {}) {
   const marker = `\0XDG_CONFIG_HOME=${configRoot}\0`
+  const started = (name) => readFileSync(join(procRoot, name, 'stat'), 'latin1').split(') ').at(-1).trim().split(/\s+/u)[19]
   const stopped = []
   let entries
   try { entries = readdirSync(procRoot) } catch { return stopped }
   for (const name of entries) {
     if (!/^\d+$/u.test(name) || Number(name) === self) continue
     try {
-      if (!`\0${readFileSync(join(procRoot, name, 'environ'), 'latin1')}`.includes(marker)) continue
+      const before = started(name)
+      if (!`\0${readFileSync(join(procRoot, name, 'environ'), 'latin1')}`.includes(marker) || started(name) !== before) continue
       kill(Number(name), 'SIGKILL')
       stopped.push(Number(name))
     } catch {
@@ -69,6 +76,43 @@ export function stopSmokeLeftovers(configRoot, { procRoot = '/proc', kill = proc
     }
   }
   return stopped.sort((left, right) => left - right)
+}
+
+/**
+ * Runs the self-test in a process group of its own and ends only when that group is empty: on its bound, or when the
+ * smoke itself is stopped (an update whose build was stopped for BMN's exit), the whole group is killed, not only the
+ * leader (review F3). Its output is kept whole, without spawnSync's 1 MiB limit.
+ */
+export function runSelfTest(command, args, { env, timeoutMs, kill = process.kill.bind(process) }) {
+  return new Promise((resolvePromise) => {
+    const child = spawn(command, args, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const out = [], err = []
+    child.stdout.on('data', (chunk) => out.push(chunk))
+    child.stderr.on('data', (chunk) => err.push(chunk))
+    const group = (name) => { try { kill(-child.pid, name); return true } catch { return false } }
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; group('SIGKILL') }, timeoutMs)
+    const stopped = (name) => { group('SIGKILL'); process.exit(name === 'SIGINT' ? 130 : 143) }
+    process.once('SIGTERM', stopped)
+    process.once('SIGINT', stopped)
+    let spawnError = null
+    const closed = new Promise((settle) => child.once('close', settle))
+    const finish = async (status, signal) => {
+      clearTimeout(timer)
+      process.off('SIGTERM', stopped)
+      process.off('SIGINT', stopped)
+      // Electron's helpers and Xvfb may outlive the leader and hold its output open: the group is emptied when the
+      // leader exits, and only then is the output complete.
+      for (let tries = 0; tries < 150 && group(0); tries += 1) { group('SIGKILL'); await new Promise((settle) => setTimeout(settle, 100)) }
+      await closed
+      resolvePromise({
+        status, signal, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'),
+        error: spawnError ?? (timedOut ? new Error(`timed out after ${timeoutMs / 1_000} s`) : null)
+      })
+    }
+    child.once('error', (error) => { spawnError = error; void finish(null, null) })
+    child.once('exit', (status, signal) => void finish(status, signal))
+  })
 }
 
 /** The first failure BMN's self-test reported in its own words, never the display or audio noise around it. */
@@ -80,7 +124,7 @@ export function selfTestError(stderr = '') {
 /** The environment every candidate process gets: its own HOME and XDG roots, synthetic agent config folders. */
 export function isolatedEnvironment(roots, environment = process.env) {
   const isolated = { ...environment }
-  for (const name of LIVE_SESSION_VARIABLES) delete isolated[name]
+  for (const name of Object.keys(isolated)) if (isLiveSessionVariable(name)) delete isolated[name]
   return {
     ...isolated,
     HOME: roots.home,
@@ -184,12 +228,11 @@ async function smoke() {
       : [packagedBinary, ...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test']
     let result
     try {
-    result = spawnSync(selfTest[0], selfTest.slice(1), {
-      encoding: 'utf8',
+    result = await runSelfTest(selfTest[0], selfTest.slice(1), {
       // The self-test covers renderer and host restarts, remote answers and agent history; it took about two
       // minutes by Epic 31 and nearly five on a loaded machine (load 44 on 12 cores, 2026-11-20). The update runs
       // it while BMN stays open (Story 134.2), so a generous bound costs the owner no waiting.
-      timeout: 900_000,
+      timeoutMs: 900_000,
       env: {
         ...isolatedEnvironment(roots),
         // The synthetic session fixtures run on this Node, as in the source self-test.
