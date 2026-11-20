@@ -100,6 +100,29 @@ describe('desktop launcher', { timeout: 2 * LAUNCHER_LIMIT + 10_000 }, () => {
     expect(run.read('started')).not.toBeNull()
   })
 
+  // Story 134.2 handover: he pressed Restart on the offer of a passed build. The launcher waits for the old BMN, holds
+  // through the swap the worker makes once BMN stayed closed, then opens the new build marked as the update's result.
+  it('restart on a passed build holds through the swap and opens the new build marked complete', async () => {
+    const old = spawn('/bin/sleep', ['0.5'], { stdio: 'ignore' })
+    const ticks = readFileSync(`/proc/${old.pid}/stat`, 'utf8').split(') ').at(-1).trim().split(/\s+/u)[19]
+    const run = fixture({ phase: 'waiting-for-exit', staged: 'abc', activeChecks: 1_000_000, zenity: fakeZenity() })
+    executable(join(run.root, 'bmn'), `#!/bin/sh\necho "result=$BMN_UPDATE_RESTART_RESULT phase=$(sed -n 's/.*\"phase\": \"\\([a-z-]*\\)\".*/\\1/p' '${join(run.root, 'latest.json')}')" > '${join(run.root, 'started')}'\n`)
+    const status = (value) => writeFileSync(join(run.root, 'latest.json'), `${JSON.stringify(value, null, 2)}\n`)
+    const launched = spawn(run.launcher, [], { env: { ...run.env, BMN_RESTART_WAIT_PID: String(old.pid), BMN_RESTART_WAIT_TICKS: ticks }, stdio: 'ignore' })
+    const exited = new Promise((resolve) => launched.once('exit', resolve))
+    await new Promise((resolve) => old.once('exit', resolve))
+    // The worker sees BMN closed, waits its quiet window, then swaps and installs.
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    expect(run.read('started')).toBeNull()
+    status({ phase: 'installing', commit: 'abc', staged: 'abc' })
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    expect(run.read('started')).toBeNull()
+    status({ phase: 'complete', commit: 'abc', installed: 'abc' })
+    expect(await exited).toBe(0)
+    expect(run.read('started')).toBe('result=complete phase=complete\n')
+    expect(run.read('zenity-args')).toContain('BMN is updating')
+  })
+
   it('starts BMN at once when no update is queued', () => {
     const run = fixture({ phase: 'complete', activeChecks: 0, zenity: fakeZenity() })
     const result = spawnSync(run.launcher, ['--flag'], { env: run.env, encoding: 'utf8', timeout: LAUNCHER_LIMIT })
