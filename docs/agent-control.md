@@ -687,9 +687,13 @@ recorded payloads) is kept at the local git tag `opencode-support-final`; nothin
   Without that sign-in `bmn judge ask` answers `NO_KEY`. The `opencode` program and its sign-in are
   yours and stay.
 - Old records load as they were saved and are read only, named "OpenCode (retired)": a conversation
-  bound before is never resumed or looked for; saved hook log rows keep their own event words; a
-  saved question from OpenCode shows no answer; its Telegram card and turn changes name it so. No
-  OpenCode history is read and no OpenCode hook, plugin, rules file, skill or tool is written.
+  bound before is never resumed or looked for; a session saved to run OpenCode is never started
+  again (Start again is off, and the update's resume offer leaves it out); saved hook log rows read
+  as they did; a saved question or permission from OpenCode shows its words and command with no
+  answer; an old team ask shows what its OpenCode form could read; its Telegram card and turn
+  changes name it so. An OpenCode researcher is refused before anything is made or run. BMN's last
+  OpenCode history cleanup result is kept as saved and shown nowhere. No OpenCode history is read
+  and no OpenCode hook, plugin, rules file, skill or tool is written.
 - A setup default, rules, skills or tools install made before still lists OpenCode under Earlier
   installs. Its undo answers with the retirement line and success, and leaves each OpenCode file as
   it is: nothing under `~/.config/opencode` is written or removed by BMN. Epic 123 moved BMN's own
