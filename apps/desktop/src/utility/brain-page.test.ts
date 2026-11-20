@@ -130,6 +130,14 @@ describe('Brain page list and search', () => {
     expect(withoutComments('<div>1 < 2 <!-- hidden --> tail</div>')).toBe('<div>1 < 2  tail</div>')
     expect(withoutComments('<!--x-->'.repeat(5000))).toBe('')
     expect(withoutComments('<!--x-->'.repeat(5000) + ' kept')).toBe(' kept')
+    // Spaces between comments stay; four spaces make code, which stays whole; thousands spaced apart end too (recheck 3).
+    expect(withoutComments('<!--a--> <!--b-->tail')).toBe(' tail')
+    expect(withoutComments('<!--a-->    <!--b-->tail')).toBe('    <!--b-->tail')
+    expect(withoutComments('<!--x--> '.repeat(5000) + 'kept')).toBe(' '.repeat(5000) + 'kept')
+    // A table cell ends inline code at its `|`, as the page draws it, so the comment in the next cell goes.
+    const table = '| A | B |\n|---|---|\n| `draft | <!-- hidden --> ` |\n'
+    expect(withoutComments(table)).not.toContain('hidden')
+    expect(summaryLine(table, ['hidden'])).not.toContain('hidden')
   })
 
   it('summarises a filed note by its Summary line, never its provenance line, and masks hidden values (review 2026-11-20)', () => {

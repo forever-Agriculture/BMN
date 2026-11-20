@@ -2,7 +2,7 @@
 import type { DatabaseConnection } from './database-initialization'
 import type { BrainGraph, BrainGraphNode, BrainMap, BrainPageList, BrainPageNote, BrainPageNoteRef, BrainPageSearch, BrainPageSummary, BrainPageVersion, BrainPageStatus as BrainStatus } from '@bmn/protocol'
 import { SECRET_MASK, secretRanges } from '@bmn/protocol'
-import { parser as markdown } from '@lezer/markdown'
+import { GFM, parser as markdownParser } from '@lezer/markdown'
 import { BrainError, brainLinkResolver } from './brain-store'
 export type { BrainGraph, BrainMap, BrainPageList, BrainPageNote, BrainPageSearch, BrainPageVersion } from '@bmn/protocol'
 
@@ -23,7 +23,8 @@ const PROVENANCE = /^Source:(?:\s|$)/u
 const SUMMARY = /^Summary:\s*/u
 
 
-/* Comments, code and HTML blocks are CommonMark: the plain parser finds them at less than half GFM's cost. */
+/* GFM, as the page draws: a table cell ends inline code at its `|` (CommonMark would run it on, recheck 3). */
+const markdown = markdownParser.configure(GFM)
 
 /**
  * The comments in raw HTML: a `<!--` outside any tag opens one, to its `-->` or the end; inside a tag, quoted values
@@ -75,11 +76,20 @@ export function withoutComments(text: string): string {
       }
       if (node.name !== 'CommentBlock') return undefined
       // The block opens with comments; what follows them on its line is Markdown again (``<!-- x --> Use `<!--` ``).
-      // All leading comments go in one pass, so the rest is read once (5,000 in a row, recheck 2).
+      // Runs of comments go in a loop, keeping the up to 3 spaces before each (`<!--a--> <!--b-->tail` -> ` tail`);
+      // 4 spaces start code, which stays. The rest is then read once, so 5,000 comments never recurse (recheck 3).
       const block = text.slice(node.from, node.to)
       const open = block.indexOf('<!--')
-      const leading = /^(?:[ \t]*<!--[\s\S]*?(?:-->|$))+/u.exec(block.slice(open))![0]
-      const rest = withoutComments(block.slice(open + leading.length))
+      let spaces = ''
+      let tail = block.slice(open)
+      for (;;) {
+        tail = tail.slice(/^(?:<!--[\s\S]*?(?:-->|$))+/u.exec(tail)![0].length)
+        const next = /^ {0,3}(?=<!--)/u.exec(tail)
+        if (!next) break
+        spaces += next[0]
+        tail = tail.slice(next[0].length)
+      }
+      const rest = spaces + withoutComments(tail)
       if (!(block.slice(0, open) + rest).trim()) edits.push([text.lastIndexOf('\n', node.from - 1) + 1, text[node.to] === '\n' ? node.to + 1 : node.to, ''])
       else edits.push([node.from, node.to, block.slice(0, open) + rest])
       return false
@@ -151,11 +161,15 @@ export function readableTitle(title: string, markdown: string): string {
     const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
     return words[0] === plain[0] ? text[0]!.toUpperCase() + text.slice(1) : text
   }
-  // Always the text the page shows: comments out (withoutComments), hidden values blanked, so a masked value never
+  const text = markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown
+  // Shortcut: with every comment cut out by pattern (code too, so at most less text than the page shows), a text that
+  // offers no spelling and keeps no title as written gives the plain title, which says nothing about the text. A
+  // spelling written only inside a code comment is then missed; nothing is revealed.
+  const rough = text.includes('<!--') ? text.replace(/<!--[\s\S]*?(?:-->|$)/gu, '') : text
+  if (!kept(rough) && !spellings(title, rough).spelled) return read('')
+  // Otherwise the text the page shows: comments out (withoutComments), hidden values blanked, so a masked value never
   // lends, removes or keeps a spelling (recheck 2). The reader caches the answer per title and text.
-  const prose = withoutComments(markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown)
-  // Exact shortcut: blanking only removes text, so with no spelling to choose and no title kept as written the answer
-  // is the plain title either way, and the hidden-value scan is skipped.
+  const prose = withoutComments(text)
   if (!kept(prose) && !spellings(title, prose).spelled) return read('')
   let blanked = ''
   let at = 0
