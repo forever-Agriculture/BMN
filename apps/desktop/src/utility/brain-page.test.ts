@@ -105,6 +105,7 @@ describe('Brain page list and search', () => {
     // Words after a comment on its line stay; `<!--` inside code is text and cuts nothing short (review 2026-11-20).
     expect(summaryLine('<!-- editorial -->Keep this instruction.')).toBe('Keep this instruction.')
     expect(summaryLine('Write `<!--` to open a comment, then more.')).toBe('Write `<!--` to open a comment, then more.')
+    expect(summaryLine('<div title="<!--">Keep these words</div>')).toBe('<div title="<!--">Keep these words</div>')
   })
 
   it('drops only HTML comments from the text the page draws, never code or the words beside them (review 2026-11-20)', () => {
@@ -117,6 +118,14 @@ describe('Brain page list and search', () => {
     const code = 'Intro\n```\n<!-- kept -->\n```\nUse `<!-- x -->` here\n\n    <!-- indented code -->\n'
     expect(withoutComments(code)).toBe(code)
     expect(withoutComments('No comment here.')).toBe('No comment here.')
+    // A `<!--` inside a tag's quoted value is text, on one line or over several; a comment mid-line in HTML goes; a
+    // comment opening a line leaves the Markdown after it, code included (recheck 2026-11-20).
+    expect(withoutComments('<div title="<!--">Keep these words</div>')).toBe('<div title="<!--">Keep these words</div>')
+    expect(withoutComments('<div title="a\n<!-- b">\nKeep\n</div>')).toBe('<div title="a\n<!-- b">\nKeep\n</div>')
+    expect(withoutComments('<div>shown <!-- gone --> too</div>')).toBe('<div>shown  too</div>')
+    expect(withoutComments('<!-- real --> Use `<!--` here.')).toBe(' Use `<!--` here.')
+    expect(withoutComments('<!-- one\ntwo --> tail')).toBe(' tail')
+    expect(withoutComments('a\n\n<!-- open to the end')).toBe('a\n\n')
   })
 
   it('summarises a filed note by its Summary line, never its provenance line, and masks hidden values (review 2026-11-20)', () => {
@@ -133,6 +142,10 @@ describe('Brain page list and search', () => {
     expect(summaryLine(`The key is ${key}.`)).toBe('The key is [secret hidden].')
     expect(summaryLine(`Summary: "uses ${key}"`)).not.toContain(key)
     expect(summaryLine(`intro\r\nkey ${key} here`, ['key'])).toBe('key [secret hidden] here')
+    // Nothing but provenance shows nothing, with or without words after the colon, searched or not (recheck).
+    expect(summaryLine('Source: only')).toBe('')
+    expect(summaryLine('Source:   \n\n# Heading')).toBe('')
+    expect(summaryLine('Source: only', ['only'])).toBe('')
     // A fenced HTML example cannot shift what is hidden.
     expect(summaryLine('```html\n<!-- x\n```\npassword = Hunter2Hunter2Secret')).not.toContain('Hunter2')
   })
@@ -195,6 +208,20 @@ describe('Brain page note, links and history', () => {
     } finally { b.close() }
   })
 
+  it('keeps a link named __proto__ as a link in the note and in History, also after a structured clone (recheck)', () => {
+    const b = brain([note('Changing', 'See [[__proto__]].'), note('__proto__', 'Odd name.')])
+    try {
+      b.store.setWriteDoor(true)
+      const proto = b.id('__proto__')
+      const current = structuredClone(b.page.read(b.id('Changing')))
+      expect(Object.hasOwn(current.targets, '__proto__')).toBe(true)
+      expect(Object.entries(current.targets)).toEqual([['__proto__', proto]])
+      b.store.edit(b.id('Changing'), 1, { title: 'Changing', kind: 'fact', origin: 'agent', scope: 'all', markdown: 'No links now.' }, 'synthetic-session')
+      const first = structuredClone(b.page.history(b.id('Changing'))[1]!)
+      expect(Object.entries(first.targets)).toEqual([['__proto__', proto]])
+    } finally { b.close() }
+  })
+
   it('shows a file-name title as words spelled as the note spells them, and keeps the stored name', () => {
     expect(readableTitle('ai-direction', '# MODULE: ai-direction.md - standing direction\n\nAI is the primary goal. The direction holds.')).toBe('AI direction')
     expect(readableTitle('bmn-no-pr-push-main-directly', 'BMN pushes main directly, no PR. Never open a PR.')).toBe('BMN no PR push main directly')
@@ -215,6 +242,10 @@ describe('Brain page note, links and history', () => {
     expect(readableTitle('project-tool', 'Summary: "Tool for the project."')).toBe('Project tool')
     expect(readableTitle('hunter-notes', 'password = HuNtEr\nThe hunter notes.')).toBe('Hunter notes')
     expect(readableTitle('zebra-notes', 'token: zEbRa9xQ2mPfK7wLr4TnVb8Y\nnotes about ZEBRA')).toBe('ZEBRA notes')
+    // A comment splitting a word, or a hidden value written as the title, lends nothing (recheck 2026-11-20).
+    expect(readableTitle('about-hunter2hunter2secret', 'pass<!--x-->word = HuNtEr2HuNtEr2Secret\nAbout it.')).toBe('About hunter2hunter2secret')
+    expect(readableTitle('about-hunter2', 'password = about-hunter2\nnotes')).toBe('About hunter2')
+    expect(readableTitle('github-push', 'Push to GitHub. password = GiThUb')).toBe('GitHub push')
     const b = brain([note('ai-direction', 'AI comes first.\n\nSee [[Plain]].'), note('Plain', 'Back to [[ai-direction]].')])
     try {
       const read = b.page.read(b.id('ai-direction'))

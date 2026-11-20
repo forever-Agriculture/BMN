@@ -18,39 +18,72 @@ const HEAD = `FROM brain_note n JOIN brain_version v ON v.note=n.id AND v.revisi
 const NEWEST = 'ORDER BY julianday(v.source_time) DESC, v.recorded_at DESC, n.id'
 
 /** A filed note's provenance line ("Source: Claude memory …, sha256 …"): it says where a note came from, not what it says. */
-const PROVENANCE = /^Source:\s/u
+const PROVENANCE = /^Source:(?:\s|$)/u
 /** A filed note's own summary line ("Summary: …", Epic 127): the best one line of what it says. */
 const SUMMARY = /^Summary:\s*/u
 
-/** An HTML comment (`<!-- … -->`), or one left open to the end of its block. */
-const COMMENT = /<!--[\s\S]*?(?:-->|$)/gu
 const markdown = markdownParser.configure(GFM)
 
 /**
+ * The comments in raw HTML: a `<!--` outside any tag opens one, to its `-->` or the end; inside a tag, quoted values
+ * are skipped, so `<div title="<!--">` stays text (review 2026-11-20; no HTML parser is a dependency here).
+ */
+function htmlComments(html: string): [number, number][] {
+  const spans: [number, number][] = []
+  let at = 0
+  while (at < html.length) {
+    const open = html.indexOf('<', at)
+    if (open === -1) break
+    if (html.startsWith('<!--', open)) {
+      const close = html.indexOf('-->', open + 4)
+      const end = close === -1 ? html.length : close + 3
+      spans.push([open, end])
+      at = end
+      continue
+    }
+    // A tag: its end is the first `>` outside quotes.
+    let quote = ''
+    at = open + 1
+    while (at < html.length && (quote || html[at] !== '>')) {
+      if (quote) { if (html[at] === quote) quote = '' } else if (html[at] === '"' || html[at] === "'") quote = html[at]!
+      at += 1
+    }
+    at += 1
+  }
+  return spans
+}
+
+/**
  * The text without its HTML comments, as Markdown never shows one (owner, 2026-11-20). Only the `<!-- … -->` goes, so
- * words after it on its line stay; a line a comment block leaves blank goes with it. The parser finds them, so one
- * written inside code stays, and one inside a raw HTML block goes too. The page and the list both read this text.
+ * words beside it stay; a line a comment block leaves blank goes with it. The Markdown parser finds them, so one
+ * written inside code stays; one inside raw HTML goes, but not a `<!--` inside a tag's quoted value. The page, its
+ * History, the list rows and readable titles all read this one text.
  */
 export function withoutComments(text: string): string {
   if (!text.includes('<!--')) return text
-  const cuts: [number, number][] = []
+  const edits: [number, number, string][] = []
   markdown.parse(text).iterate({
     enter(node) {
       if (node.name === 'FencedCode' || node.name === 'CodeBlock' || node.name === 'InlineCode') return false
-      if (node.name === 'Comment') { cuts.push([node.from, node.to]); return false }
-      if (node.name !== 'CommentBlock' && node.name !== 'HTMLBlock') return undefined
+      if (node.name === 'Comment') { edits.push([node.from, node.to, '']); return false }
+      if (node.name === 'HTMLBlock') {
+        for (const [from, to] of htmlComments(text.slice(node.from, node.to))) edits.push([node.from + from, node.from + to, ''])
+        return false
+      }
+      if (node.name !== 'CommentBlock') return undefined
+      // The block opens with a comment; what follows it on its line is Markdown again (``<!-- x --> Use `<!--` ``).
       const block = text.slice(node.from, node.to)
-      const spans = [...block.matchAll(COMMENT)].map((match): [number, number] => [node.from + match.index, node.from + match.index + match[0].length])
-      if (spans.length && !block.replace(COMMENT, '').trim()) {
-        // The whole line or lines, with the line break after them.
-        cuts.push([text.lastIndexOf('\n', node.from - 1) + 1, text[node.to] === '\n' ? node.to + 1 : node.to])
-      } else cuts.push(...spans)
+      const open = block.indexOf('<!--')
+      const close = block.indexOf('-->', open + 4)
+      const rest = close === -1 ? '' : withoutComments(block.slice(close + 3))
+      if (!(block.slice(0, open) + rest).trim()) edits.push([text.lastIndexOf('\n', node.from - 1) + 1, text[node.to] === '\n' ? node.to + 1 : node.to, ''])
+      else edits.push([node.from, node.to, block.slice(0, open) + rest])
       return false
     }
   })
   let out = ''
   let at = 0
-  for (const [from, to] of cuts.sort((a, b) => a[0] - b[0])) { if (from >= at) { out += text.slice(at, from); at = to } }
+  for (const [from, to, put] of edits.sort((a, b) => a[0] - b[0])) { if (from >= at) { out += text.slice(at, from) + put; at = to } }
   return out + text.slice(at)
 }
 
@@ -102,20 +135,24 @@ function spellings(title: string, prose: string): string[] {
  */
 export function readableTitle(title: string, markdown: string): string {
   if (!SLUG.test(title)) return title
-  let prose = markdown.replace(COMMENT, ' ')
-  if (prose.includes(title) && [...prose.matchAll(HYPHENATED)].some((match) => match[0] === title)) return title
   const plain = title.split('-')
-  let words = spellings(title, prose)
-  if (words.some((word, at) => word !== plain[at])) {
-    // Learned from the text: learn again with hidden values blanked, so none lends its spelling (review 2026-11-20).
-    let blanked = ''
-    let at = 0
-    for (const [start, end] of secretRanges('/brain/note.md', prose)) { blanked += prose.slice(at, Math.max(at, start)) + ' '.repeat(Math.max(0, end - Math.max(at, start))); at = Math.max(at, end) }
-    prose = blanked + prose.slice(at)
-    words = spellings(title, prose)
+  const read = (prose: string): string => {
+    if (prose.includes(title) && [...prose.matchAll(HYPHENATED)].some((match) => match[0] === title)) return title
+    const words = spellings(title, prose)
+    const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
+    return words[0] === plain[0] ? text[0]!.toUpperCase() + text.slice(1) : text
   }
-  const text = words.reduce((joined, word, at) => joined + (at && /^\d+$/u.test(word) && /^\d+$/u.test(words[at - 1]!) ? '-' : at ? ' ' : '') + word, '')
-  return words[0] === plain[0] ? text[0]!.toUpperCase() + text.slice(1) : text
+  // A quick first look, comments cut roughly: a title that owes nothing to the text is done, and reveals nothing.
+  const own = read('')
+  const text = markdown.includes('\r') ? markdown.replace(/\r\n?/gu, '\n') : markdown
+  if (read(text.replace(/<!--[\s\S]*?(?:-->|$)/gu, ' ')) === own) return own
+  // One that does is read in the text the page draws (withoutComments) with hidden values blanked, so a masked
+  // value never lends a spelling or keeps a title as written (review 2026-11-20).
+  const prose = withoutComments(text)
+  let blanked = ''
+  let at = 0
+  for (const [start, end] of secretRanges('/brain/note.md', prose)) { blanked += prose.slice(at, Math.max(at, start)) + ' '.repeat(Math.max(0, end - Math.max(at, start))); at = Math.max(at, end) }
+  return read(blanked + prose.slice(at))
 }
 
 /**
@@ -139,7 +176,7 @@ export function summaryLine(markdown: string, words: readonly string[] = []): st
   // A quoted summary loses its quotes and reads its escaped quotes plain: Summary: "says \"no\"" -> says "no".
   const summary = said.find((line) => SUMMARY.test(line))?.replace(SUMMARY, '').replace(/^"(.*)"$/u, (_, inner: string) => inner.replaceAll('\\"', '"'))
   // A link reads as its words: [[Name|label]] shows "label", [[Name]] shows "Name".
-  return (hit ?? (summary || undefined) ?? said[0] ?? lines[0] ?? '').replace(/!?\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/gu, (_, name: string, label?: string) => (label ?? name).trim())
+  return (hit ?? (summary || undefined) ?? said[0] ?? '').replace(/!?\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/gu, (_, name: string, label?: string) => (label ?? name).trim())
     .replace(/\s+/gu, ' ').slice(0, 180)
 }
 
@@ -251,13 +288,14 @@ export class BrainPageReader {
     for (const match of row.markdown.matchAll(/\[\[([^\]|#]+)/gu)) { const name = match[1]!.trim(); if (!order.has(name)) order.set(name, order.size) }
     const byPlace = (a: { target: string }, b: { target: string }): number => (order.get(a.target) ?? 1e9) - (order.get(b.target) ?? 1e9)
     const noteLinks = links.filter((link) => link.kind === 'note').sort(byPlace)
-    const targets: Record<string, string | null> = {}
+    // A Map, then own properties: a link named `__proto__` is a name like any other (review 2026-11-20).
+    const targets = new Map<string, string | null>()
     const linksTo: BrainPageNoteRef[] = []
     const missing: string[] = []
     for (const link of noteLinks) {
       const target = link.resolved ? this.ref(link.resolved) : undefined
       const reachable = target && target.status !== 'withdrawn' ? target : undefined
-      targets[link.target] = reachable?.id ?? null
+      targets.set(link.target, reachable?.id ?? null)
       if (!reachable) missing.push(link.target)
       else if (!linksTo.some((each) => each.id === reachable.id)) linksTo.push(reachable)
     }
@@ -268,7 +306,7 @@ export class BrainPageReader {
     return {
       id: row.id, title: this.titleOf(row.title, row.checksum, () => row.markdown), name: row.title, kind: row.kind, status: row.status, origin: row.origin, scope: row.scope,
       changed: row.source_time, recorded: row.recorded_at, revision: row.revision, markdown: withoutComments(row.markdown),
-      linksTo, linkedFrom, projects: links.filter((link) => link.kind === 'project').map((link) => link.target), missing, targets
+      linksTo, linkedFrom, projects: links.filter((link) => link.kind === 'project').map((link) => link.target), missing, targets: Object.fromEntries(targets)
     }
   }
 
@@ -287,10 +325,10 @@ export class BrainPageReader {
       return reachable.get(name)!
     }
     return versions.map(({ checksum, ...version }) => {
-      // Own keys only: a link named `constructor` is a name like any other (review 2026-11-20).
-      const targets: Record<string, string | null> = {}
-      for (const match of version.markdown.matchAll(/\[\[([^\]|#]+)/gu)) { const name = match[1]!.trim(); if (!Object.hasOwn(targets, name)) targets[name] = target(name) }
-      return { ...version, title: this.titleOf(version.title, checksum, () => version.markdown), name: version.title, markdown: withoutComments(version.markdown), targets }
+      // A Map, then own properties: `constructor` or `__proto__` is a name like any other (review 2026-11-20).
+      const targets = new Map<string, string | null>()
+      for (const match of version.markdown.matchAll(/\[\[([^\]|#]+)/gu)) { const name = match[1]!.trim(); if (!targets.has(name)) targets.set(name, target(name)) }
+      return { ...version, title: this.titleOf(version.title, checksum, () => version.markdown), name: version.title, markdown: withoutComments(version.markdown), targets: Object.fromEntries(targets) }
     })
   }
 

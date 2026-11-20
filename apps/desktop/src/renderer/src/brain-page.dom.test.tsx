@@ -679,6 +679,17 @@ describe('Brain page after the post-delivery review (2026-11-20)', () => {
     } finally { NOTES.n2 = saved }
   })
 
+  it('a link named __proto__ opens its note (recheck 2026-11-20)', async () => {
+    const saved = NOTES.n1!
+    NOTES.n1 = { ...saved, markdown: 'See [[__proto__]].', targets: Object.fromEntries([['__proto__', 'n2']]) }
+    try {
+      await mount({ noteId: 'n1', archived: false })
+      await act(async () => { container!.querySelector<HTMLElement>('.b-text .ql-md-a[data-target="file"]')!.click() })
+      await flush()
+      expect(container!.querySelector('.b-title')!.textContent).toBe('Other')
+    } finally { NOTES.n1 = saved }
+  })
+
   it('a link in History opens the note page even from the graph, and a spaced [[ name ]] is a link', async () => {
     PAIRED = true
     HISTORY_TEXT = 'Second. See [[ Other ]].'
