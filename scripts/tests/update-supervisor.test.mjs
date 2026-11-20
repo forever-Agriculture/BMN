@@ -255,6 +255,28 @@ describe('a queued update while BMN stays open (Story 134.2)', { timeout: 30_000
     expect(run.built).toEqual([a, c])
   })
 
+  it('a failed promotion of B leaves A offered, and A still goes live at the exit (recheck F5)', async () => {
+    const repo = repository()
+    const a = repo.push('A')
+    const run = harness(repo)
+    const keep = run.io.keep
+    run.io.keep = (commit, attempt) => {
+      if (commit !== a) throw new Error('EXDEV: rename of the passed build failed')
+      keep(commit, attempt)
+    }
+    run.open(a)
+    const done = superviseUpdate(run.io)
+    await until(() => run.offered().includes(a), 'A to be offered')
+    const b = repo.push('B')
+    run.open(b)
+    await until(() => logOf(repo, b)[0]?.includes('FAILED at keep passed build'), 'B to fail its promotion')
+    await until(() => run.phase()?.phase === 'waiting-for-exit' && run.phase().commit === a, 'A to be offered again')
+    expect(run.notices.at(-1)).toContain(`${a.slice(0, 7)} still waits for your restart`)
+    run.app.open = false
+    expect(await done).toEqual({ installed: a })
+    expect(run.live()).toBe(`build of ${a}`)
+  })
+
   it('publishes the offer before telling him it is ready (review F8)', async () => {
     const repo = repository()
     const a = repo.push('A')

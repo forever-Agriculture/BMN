@@ -12,6 +12,8 @@ import {
   readdirSync,
   readlinkSync,
   renameSync,
+  rmSync,
+  statSync,
   writeFileSync
 } from 'node:fs'
 import { homedir } from 'node:os'
@@ -289,10 +291,26 @@ function writeLauncher() {
   renameSync(temporary, launcher)
 }
 
+/** The bytes and modes of files, `null` for one that is missing; `restoreFiles` puts them back exactly. */
+export function saveFiles(paths) {
+  return paths.map((path) => existsSync(path) ? { path, bytes: readFileSync(path), mode: statSync(path).mode & 0o7777 } : { path, bytes: null })
+}
+export function restoreFiles(saved) {
+  for (const { path, bytes, mode } of saved) {
+    if (bytes === null) { rmSync(path, { force: true }); continue }
+    const temporary = `${path}.tmp-${process.pid}`
+    writeFileSync(temporary, bytes, { mode })
+    renameSync(temporary, path)
+  }
+}
+
+/** The launch path as it was before this install's swap: the desktop entry and the launcher it runs (recheck F2). */
+let launchPathBefore = null
+
 /**
  * BMN is closed: swap the waiting build in, refresh the desktop entry and launcher, check them and record the build.
- * Any failure after the swap puts the previous build back (R134-NFR1), so a failed update never leaves a half-installed
- * build live.
+ * Any failure after the swap puts the previous build back with the desktop entry and launcher that started it
+ * (R134-NFR1), so a failed update never leaves a half-installed build or a launch path made for another build.
  */
 function installReadyBuild(commit, started) {
   return installReadyBuildSteps(commit, started).catch((error) => {
@@ -301,6 +319,14 @@ function installReadyBuild(commit, started) {
       const undone = undoSwap(folders)
       liveBuild = undone.liveBuild
       log(undone.error ? `ROLLBACK failed: ${undone.error.message}; ${folders.prev} holds the previous build` : `ROLLED BACK ${folders.live} to the previous build; ${commit} is in ${folders.ready}`)
+      if (!undone.error && launchPathBefore) {
+        try {
+          restoreFiles(launchPathBefore)
+          log(`RESTORED ${desktopEntry} and ${launcher} as they were before the swap`)
+        } catch (restoreError) {
+          log(`RESTORE of the desktop entry and launcher failed: ${restoreError.message}`)
+        }
+      }
     }
     throw failure
   })
@@ -310,6 +336,7 @@ async function installReadyBuildSteps(commit, started) {
   attempt = started
   currentStep = 'swap'
   const brainDelivered = prepareBrainDelivery({ commit })
+  launchPathBefore = saveFiles([desktopEntry, launcher])
   const swap = swapInReadyBuild(folders)
   liveBuild = swap.liveBuild
   if (swap.error) throw new Error(`could not put the new build in place: ${swap.error.message}`)

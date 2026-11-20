@@ -91,20 +91,30 @@ export function runSelfTest(command, args, { env, timeoutMs, kill = process.kill
     child.stderr.on('data', (chunk) => err.push(chunk))
     const group = (name) => { try { kill(-child.pid, name); return true } catch { return false } }
     let timedOut = false
-    const timer = setTimeout(() => { timedOut = true; group('SIGKILL') }, timeoutMs)
+    // The bound covers the whole run, output collection included: a helper that left the group and still holds the
+    // output open cannot stall the update past it (recheck F3). The smoke's leftover stopper then ends that helper.
+    let expire
+    const expired = new Promise((settle) => { expire = settle })
+    const timer = setTimeout(() => {
+      timedOut = true
+      group('SIGKILL')
+      child.stdout.destroy()
+      child.stderr.destroy()
+      expire()
+    }, timeoutMs)
     const stopped = (name) => { group('SIGKILL'); process.exit(name === 'SIGINT' ? 130 : 143) }
     process.once('SIGTERM', stopped)
     process.once('SIGINT', stopped)
     let spawnError = null
     const closed = new Promise((settle) => child.once('close', settle))
     const finish = async (status, signal) => {
-      clearTimeout(timer)
       process.off('SIGTERM', stopped)
       process.off('SIGINT', stopped)
       // Electron's helpers and Xvfb may outlive the leader and hold its output open: the group is emptied when the
       // leader exits, and only then is the output complete.
       for (let tries = 0; tries < 150 && group(0); tries += 1) { group('SIGKILL'); await new Promise((settle) => setTimeout(settle, 100)) }
-      await closed
+      await Promise.race([closed, expired])
+      clearTimeout(timer)
       resolvePromise({
         status, signal, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'),
         error: spawnError ?? (timedOut ? new Error(`timed out after ${timeoutMs / 1_000} s`) : null)

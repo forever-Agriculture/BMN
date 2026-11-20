@@ -87,28 +87,40 @@ export async function superviseUpdate(io) {
           await io.delay(pollMs)
         }
       })() : null
+      /**
+       * This build failed: a passed build that still waits stays offered, and a newer clean push made meanwhile is built
+       * rather than dropped; otherwise the update ends failed.
+       */
+      const buildFailed = (error, step) => {
+        const failure = Object.assign(stepFailure(step, error), { attempt, logged: true })
+        failed.add(commit)
+        attempt.log(`FAILED at ${failure.step}: ${failure.message}`)
+        const waiting = ready ? `${short(ready.commit)} still waits for your restart` : null
+        const later = waiting ? null : io.source(known())
+        if (!waiting && !newer(later)) throw failure
+        io.notify('BMN update failed', `${short(commit)} failed at ${failure.step}; ${waiting ?? `building ${short(later.head)} instead`}. Log: ${attempt.path}`, 'critical')
+      }
       try {
         await io.build(commit, { attempt, signal: controller.signal })
         passed = true
       } catch (error) {
         if (exited) attempt.log(`STOPPED BMN exited, so ${short(ready.commit)} goes live first; ${short(commit)} is built again after`)
         else if (error instanceof SourceMoved) attempt.log(`SUPERSEDED ${error.message}; the newest commit is built instead`)
-        else {
-          const failure = Object.assign(stepFailure('build', error), { attempt, logged: true })
-          failed.add(commit)
-          attempt.log(`FAILED at ${failure.step}: ${failure.message}`)
-          const waiting = ready ? `${short(ready.commit)} still waits for your restart` : null
-          // A newer clean push that arrived meanwhile is built rather than dropped with this failure.
-          const later = waiting ? null : io.source(known())
-          if (!waiting && !newer(later)) throw failure
-          io.notify('BMN update failed', `${short(commit)} failed at ${failure.step}; ${waiting ?? `building ${short(later.head)} instead`}. Log: ${attempt.path}`, 'critical')
-        }
+        else buildFailed(error, 'build')
       } finally {
         watching = false
         await watcher
       }
       if (passed && !exited) {
-        io.keep(commit, attempt)
+        // A promotion that fails leaves the waiting build where it was (`keep` restores it), still offered (recheck F5).
+        try {
+          io.keep(commit, attempt)
+        } catch (error) {
+          passed = false
+          buildFailed(error, 'keep passed build')
+        }
+      }
+      if (passed && !exited) {
         ready = { commit, attempt }
         attempt.log(`PASSED ${commit}; it waits for BMN to exit`)
         // The offer is published before he is told of it.
