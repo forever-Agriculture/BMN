@@ -179,6 +179,8 @@ export interface ControlHandlers {
     destination: { provider: string; host: string; basis: string; default: boolean }
     /** Story 136.2: the hook prints every message it is handed; without it, one at most, as before. */
     many?: boolean
+    /** Whether the hook that asked is still connected: one that gave up at its deadline is handed (and claims) nothing. */
+    listening?: () => boolean
   }): Promise<unknown>
   /** The hook's word that it printed what it took. */
   reportMessage(p: { sessionId: string; incarnationId: string; pid: number; messageId: string; claimId: string }): Promise<unknown>
@@ -1277,7 +1279,8 @@ export class ControlServer {
         const pid = requirePid(params)
         return handlers.takeMessage({
           sessionId: scope.sessionId, incarnationId: scope.incarnationId, pid, app, destination: messageDestination(params),
-          many: readBoolean(params, 'many') === true
+          many: readBoolean(params, 'many') === true,
+          listening: () => connection !== undefined && !connection.closing && !connection.socket.destroyed
         })
       }
       case 'message.destination': {

@@ -91,6 +91,27 @@ describe('D10 BMAD copy', () => {
     expect(readFileSync(f.target, 'utf8')).toContain('7-1-one: review # old note')
     expect(cli(['check']).value.findings.some(one => one.code?.startsWith('COPY_'))).toBe(false)
   })
+  it('keeps a conflict its own unfinished copy recorded: a crash after prepare never turns it into a pending sync (136.1 recheck)', async () => {
+    const module = new URL('../../apps/desktop/bin/plan-bmad-copy.mjs', import.meta.url).href, boardModule = new URL('../../apps/desktop/bin/plan-board.mjs', import.meta.url).href
+    const bmn = new URL('../../apps/desktop/bin/bmn', import.meta.url).pathname
+    const f = await fixture(), env = { ...process.env, XDG_STATE_HOME: join(f.root, 'state') }
+    writeFileSync(f.target, f.before.replace('optional # old note', 'done # independent target edit'))
+    const code = `import{setWithCopy}from ${JSON.stringify(module)};import{resolvePlan,rowToken}from ${JSON.stringify(boardModule)};
+await setWithCopy(await resolvePlan(${JSON.stringify(f.root)}),{key:'7-1-one',status:'review',expect:rowToken('7-1-one','backlog','old note'),environment:{XDG_STATE_HOME:${JSON.stringify(join(f.root, 'state'))}},seam:async phase=>{if(phase!=='prepared')return;console.log('held');await new Promise(()=>setInterval(()=>{},1000));}});`
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', code], { stdio: ['ignore', 'pipe', 'pipe'] })
+    await new Promise((resolve, reject) => {
+      let err = ''
+      child.stderr.on('data', bytes => { err += bytes.toString() })
+      child.stdout.on('data', bytes => { if (bytes.toString().includes('held')) resolve() })
+      child.once('exit', () => reject(new Error('copy exited before prepare: ' + err)))
+    })
+    const exited = once(child, 'exit')
+    child.kill('SIGKILL')
+    await exited
+
+    const check = JSON.parse(spawnSync(process.execPath, [bmn, 'plan', 'check', '--project', f.root, '--json'], { encoding: 'utf8', env }).stdout)
+    expect(check.findings).toContainEqual(expect.objectContaining({ code: 'COPY_CONFLICT', key: '7-1-one' }))
+  }, 30_000)
   it('uses real CLI recovery after SIGKILL at each copy write boundary', async () => {
     const module = new URL('../../apps/desktop/bin/plan-bmad-copy.mjs', import.meta.url).href, boardModule = new URL('../../apps/desktop/bin/plan-board.mjs', import.meta.url).href
     const bmn = new URL('../../apps/desktop/bin/bmn', import.meta.url).pathname

@@ -1604,7 +1604,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
     })
     // One take, with the whole destination the guard's resolver found and the agent's own process.
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
-    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'codex', destination: OPENAI, many: true })
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'codex', destination: OPENAI, many: true , listening: expect.any(Function) })
     expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, messageId: 'message-1', claimId: 'claim-1' })
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
@@ -1651,7 +1651,7 @@ describe('bmn hook hands a message to its own agent (Story 66.4)', () => {
       stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `${STAMP}\nhold any commit on local main\nI am about to merge` } })
     })
     expect(fixture.handlers.takeMessage).toHaveBeenCalledTimes(1)
-    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'claude', destination: ANTHROPIC, many: true })
+    expect(fixture.handlers.takeMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, app: 'claude', destination: ANTHROPIC, many: true , listening: expect.any(Function) })
     expect(fixture.handlers.reportMessage).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.reportMessage).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 7001, messageId: 'message-1', claimId: 'claim-1' })
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)

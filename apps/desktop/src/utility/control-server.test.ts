@@ -767,14 +767,19 @@ describe('messages between sessions over the socket (Epic 66)', () => {
     expect((await agent.request('message.take', take)).result).toEqual({ message: null })
 
     expect(fixture.handlers.takeMessage).toHaveBeenLastCalledWith({
-      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination, many: false
+      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination, many: false, listening: expect.any(Function)
     })
     // Story 136.2: a hook that prints every message it is handed says so; anything but a boolean is refused.
     await agent.request('message.take', { ...take, many: true })
     expect(fixture.handlers.takeMessage).toHaveBeenLastCalledWith({
-      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination, many: true
+      sessionId: 'session-1', incarnationId: 'incarnation-1', pid: 4242, app: 'codex', destination, many: true, listening: expect.any(Function)
     })
     expectError(await agent.request('message.take', { ...take, many: 'yes' }), ERROR_CODES.invalidArgument)
+    // 136.2 recheck: the take can tell whether the hook that asked is still connected, and so claims nothing for one that left.
+    const listening = fixture.handlers.takeMessage.mock.lastCall![0].listening as () => boolean
+    expect(listening()).toBe(true)
+    agent.destroy()
+    await vi.waitFor(() => expect(listening()).toBe(false))
   })
 
   it.each([

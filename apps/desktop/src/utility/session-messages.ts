@@ -352,6 +352,8 @@ export class SessionMessages {
     app: string
     destination: MessageDestination
     many?: boolean
+    /** Whether the asking hook is still connected; a hook that gave up at its deadline never gets a claim left unprinted. */
+    listening?: () => boolean
   }): Promise<{ message: SessionMessageTaken | null; messages?: SessionMessageTaken[]; expired?: string }> {
     if (SESSION_MESSAGE_HANDOVER[p.app] === undefined) return { message: null }
     if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return { message: null }
@@ -389,9 +391,12 @@ export class SessionMessages {
       }
       allowed.push(candidate)
     }
-    // The answers above took time.
-    if (this.options.liveIncarnationId(p.sessionId) !== p.incarnationId) return answer()
+    // The answers above took time: the process may be gone, or its hook may have given up at its deadline (136.2 recheck);
+    // either way nothing is claimed, so nothing stays "taken, not confirmed".
+    const away = (): boolean => this.options.liveIncarnationId(p.sessionId) !== p.incarnationId || p.listening?.() === false
+    if (away()) return answer()
     for (const candidate of allowed) {
+      if (away()) return await gone(taken)
       const claimId = randomUUID()
       const claim = await database.companion('claimMessageForHook', {
         messageId: candidate.messageId, receiverSessionId: p.sessionId, incarnationId: p.incarnationId,
@@ -409,6 +414,8 @@ export class SessionMessages {
       const stamp = sessionMessageStampAtDelivery(claim.record.stamp, claim.record.sentAt, this.options.now().getTime())
       taken.push({ messageId: claim.record.messageId, claimId, stamp, text: claim.record.text })
     }
+    // A hook that left while the store answered is not answered; what it would have been handed is given back.
+    if (p.listening?.() === false) return await gone(taken)
     return answer()
   }
 

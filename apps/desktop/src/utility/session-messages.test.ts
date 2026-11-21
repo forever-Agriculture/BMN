@@ -1121,8 +1121,9 @@ describe('the hook\'s take and report (66.4 AC2-AC5)', () => {
 })
 
 describe('one woken call takes every waiting message (136.2 AC2, Epic 111 F21)', () => {
-  const takeAll = (sessionId: string, overrides: { incarnationId?: string } = {}) => messages.take({
-    sessionId, incarnationId: overrides.incarnationId ?? live.get(sessionId)!, pid: 4242, app: 'codex', destination: OPENAI, many: true
+  const takeAll = (sessionId: string, overrides: { incarnationId?: string; listening?: () => boolean } = {}) => messages.take({
+    sessionId, incarnationId: overrides.incarnationId ?? live.get(sessionId)!, pid: 4242, app: 'codex', destination: OPENAI, many: true,
+    ...(overrides.listening ? { listening: overrides.listening } : {})
   })
 
   it('hands over every waiting message in one call, oldest first, each with its own claim and report', async () => {
@@ -1209,6 +1210,34 @@ describe('one woken call takes every waiting message (136.2 AC2, Epic 111 F21)',
     release()
 
     expect((await taking).messages!.map((message) => message.messageId)).toEqual(sent.map((message) => message.messageId))
+  })
+
+  it('claims nothing for a hook that gave up at its deadline while a provider answer was out (136.2 recheck)', async () => {
+    const second = repository(join(root, 'code/second'))
+    const sent = [await tell('a', 'b', 'from this folder'), await tell('c', 'b', 'from the second folder', second)]
+    let connected = true
+    allowed = (_destination, senderRoot) => {
+      if (senderRoot === second) connected = false
+      return { allowed: true, reason: 'OpenAI is allowed in this workspace' }
+    }
+
+    expect(await takeAll('b', { listening: () => connected })).toEqual({ message: null, messages: [] })
+    for (const message of sent) expect(stored(message.messageId)).toMatchObject({ state: 'waiting', claimedApp: null })
+    expect((await takeAll('b')).messages!.map((message) => message.messageId)).toEqual(sent.map((message) => message.messageId))
+  })
+
+  it('gives back what it claimed when the hook leaves while the store claims (136.2 recheck)', async () => {
+    const sent = [await tell('a', 'b', 'first'), await tell('c', 'b', 'second')]
+    let connected = true
+    const store = holdStore('claimMessageForHook')
+
+    const taking = takeAll('b', { listening: () => connected })
+    await store.asked
+    connected = false
+    store.answer()
+
+    expect(await taking).toEqual({ message: null, messages: [] })
+    for (const message of sent) expect(stored(message.messageId)).toMatchObject({ state: 'waiting', claimedApp: null })
   })
 
   it('hands nothing, and gives every claim back, when the terminal is given another process partway through a batch', async () => {

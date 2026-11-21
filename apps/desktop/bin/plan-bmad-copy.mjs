@@ -420,7 +420,8 @@ const journalFiles = loc => existsSync(loc.folder) ? readdirSync(loc.folder).fil
 function copyStateFindings(loc, meta, journals = new Map()) {
   const findings = [], targets = rows(loc.target), source = rows(loc.source)
   if (meta.active === false) return findings
-  const recovering = (key) => journals.has(key) && [journals.get(key).target_before, journals.get(key).target_after].some(value => token(key, value) === token(key, targets.get(key)))
+  // A journal that found the target already changed by its owner (target_conflict) retains it: that stays a conflict.
+  const recovering = (key) => journals.has(key) && journals.get(key).target_conflict !== true && [journals.get(key).target_before, journals.get(key).target_after].some(value => token(key, value) === token(key, targets.get(key)))
   for (const [key, entry] of Object.entries(meta.rows)) if (!same(targets.get(key), entry.last_copied) && !recovering(key)) findings.push({ code: 'COPY_CONFLICT', key, where: loc.target, reason: `COPY_CONFLICT ${key}: canonical ${JSON.stringify(source.get(key) ?? null)}, target ${JSON.stringify(targets.get(key) ?? null)}; explicit copy requires its fresh token`, canonical: source.get(key) ?? null, target: targets.get(key) ?? null, token: combinedToken(loc, key, meta) })
   for (const key of Object.keys(meta.unresolved)) findings.push({ code: 'COPY_PROVENANCE_REQUIRED', key, where: loc.record, reason: `${key} has unresolved move-time writer provenance` })
   return findings
