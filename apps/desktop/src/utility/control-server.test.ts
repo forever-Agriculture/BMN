@@ -776,7 +776,7 @@ describe('messages between sessions over the socket (Epic 66)', () => {
     })
     expectError(await agent.request('message.take', { ...take, many: 'yes' }), ERROR_CODES.invalidArgument)
     // 136.2 recheck: the take can tell whether the hook that asked is still connected, and so claims nothing for one that left.
-    const listening = fixture.handlers.takeMessage.mock.lastCall![0].listening as () => boolean
+    const listening = (vi.mocked(fixture.handlers.takeMessage).mock.lastCall as unknown as [{ listening: () => boolean }])[0].listening
     expect(listening()).toBe(true)
     agent.destroy()
     await vi.waitFor(() => expect(listening()).toBe(false))
