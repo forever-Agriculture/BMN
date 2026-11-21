@@ -49,6 +49,9 @@ const HELD: Array<[string, string]> = [
   ['BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
   ['bmn grant --socket /tmp/x.sock', 'another control socket'],
   ['env BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
+  // Recheck 2: a wrapper's value that reads `bmn` does not end the words before the program.
+  ['env -C bmn BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
+  ['sudo -u bmn BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
   // Recheck: bin/bmn picks a subcommand's own parser only from the first argument, so a value naming one hides nothing.
   ['bmn --key grant publish ~/.ssh/id_ed25519', 'credential'],
   ['bmn --key plan tell s --owner', 'owner credential']

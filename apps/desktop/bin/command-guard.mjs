@@ -484,6 +484,15 @@ function bmnParsed(after) {
 }
 
 /**
+ * What stands before the program in its own command: assignments and wrappers (`env -C bmn X=1 bmn now`). The program's
+ * words end the command, so they are its last words; anything else reads the whole command, which holds more, never less.
+ */
+function bmnPrefix(words, raw) {
+  const at = raw.length - words.length
+  return at >= 0 && words.every((word, index) => raw[at + index] === word) ? raw.slice(0, at) : raw
+}
+
+/**
  * Epic 137: a `bmn` call, run as `bmn` or through Node, that uses BMN's owner credential (`--owner`, `--token-file` in either
  * form), names another control socket (`--socket`, or BMN_CONTROL_SOCKET set on the line), or has BMN read a listed file or
  * key (`bmn publish FILE`, `bmn grant ask --card-file FILE`). The owner token can answer for him; Codex runs the agents'
@@ -500,7 +509,7 @@ function bmnHold(words, raw) {
     return 'a bmn call with the owner credential (--owner or --token-file)'
   }
   if ((own ? after.some((word) => /^--socket(=|$)/.test(word)) : options.includes('socket')) ||
-    raw.slice(0, Math.max(0, raw.indexOf(words[0]))).some((word) => /^(BMN|AITERM)_CONTROL_SOCKET=/.test(word))) {
+    bmnPrefix(words, raw).some((word) => /^(BMN|AITERM)_CONTROL_SOCKET=/.test(word))) {
     return 'a bmn call to another control socket (--socket)'
   }
   const read = own
