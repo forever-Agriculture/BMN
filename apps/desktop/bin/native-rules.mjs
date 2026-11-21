@@ -62,8 +62,8 @@ export function withClaudeRows(data, rows) {
  * (the default sandbox refuses it with EPERM; measured on 0.171). Each is one BMN's brief or `bmn help agents` tells agents
  * to use, and its CLI only talks to BMN over the control socket with the caller's own token. Never `bmn` as a whole: what
  * runs a program, a teammate or a model as him (`team`, `send`, `research`, `judge`, `run`), reaches the network (`policy`
- * runs `gh`), writes his plan (`plan`, whose check can recover and sync boards) or changes his setup (`hooks`) keeps Codex's
- * sandbox and approval; `help`, `roster`, `brain` reads and `plan status` work inside the sandbox.
+ * runs `gh`), writes his plan (`plan set`, `go`, `allow`, `sync`, `publish`) or changes his setup (`hooks`) keeps Codex's
+ * sandbox and approval; `help`, `roster`, `brain` reads, `plan status` and `plan check` (read-only) work inside the sandbox.
  */
 export const CODEX_ALLOWED_BMN = ['tell', 'peers', 'handoff', 'publish', 'progress', 'ask', 'withdraw', 'resolve', 'resume-command',
   'now', 'grant', 'away', 'back', 'decision']

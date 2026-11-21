@@ -1215,8 +1215,9 @@ row: `bmn` followed by `tell`, `peers`, `handoff`, `publish`, `progress`, `ask`,
 CLI only talks to BMN over the control socket with the caller's own token. An allowed command runs with no prompt and
 outside the sandbox. Not allowed, so Codex's sandbox and approval still apply: `bmn` as a whole, `team` (it runs a teammate
 as him; `team ask --interact` runs browser scripts), `send`, `research`, `judge`, `run`, `policy` (it runs `gh`, which reaches
-GitHub with his accounts), `plan` (its check can recover and sync boards), `hooks` and anything not listed; `help`,
-`roster`, `brain` reads and `plan status` work inside the sandbox anyway. Codex applies the row only to a plain command:
+GitHub with his accounts), `plan` (`set`, `go`, `allow`, `sync` and `publish` write his plan and boards), `hooks` and
+anything not listed; `help`, `roster`, `brain` reads, `plan status` and `plan check` (it only reads, Story 136.1) work
+inside the sandbox anyway. Codex applies the row only to a plain command:
 `bmn tell s --text T --key K` and `bmn grant ask --run R --card-file card.json` match, while a pipe, a heredoc or a `&&`
 keeps the whole line in the sandbox (measured on 0.171), so the `EPERM` message says to run `bmn` as one plain command,
 text in `--text`, a card in a file, before escalating. The CLI connects only to an absolute socket path, never a TCP port,
