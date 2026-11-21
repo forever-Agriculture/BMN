@@ -493,13 +493,16 @@ function bmnHold(words, raw) {
   const script = nameOf(words[0]) === 'node' ? words.findIndex((word, index) => index > 0 && !word.startsWith('-')) : 0
   if (script === -1 || nameOf(words[script]) !== 'bmn') return null
   const after = words.slice(script + 1)
-  const own = OWN_PARSERS.test(after.find((word) => !word.startsWith('-')) ?? '')
+  // bin/bmn hands the line to a subcommand's own parser only when that subcommand is the very first argument.
+  const own = OWN_PARSERS.test(after[0] ?? '')
   const { options, positionals } = own ? { options: [], positionals: [] } : bmnParsed(after)
   if (own ? after.some((word) => CREDENTIAL_OPTION.test(word)) : options.some((name) => name === 'owner' || name === 'token-file')) {
     return 'a bmn call with the owner credential (--owner or --token-file)'
   }
   if ((own ? after.some((word) => /^--socket(=|$)/.test(word)) : options.includes('socket')) ||
-    raw.some((word) => /^(BMN|AITERM)_CONTROL_SOCKET=/.test(word))) return 'a bmn call to another control socket (--socket)'
+    raw.slice(0, Math.max(0, raw.indexOf(words[0]))).some((word) => /^(BMN|AITERM)_CONTROL_SOCKET=/.test(word))) {
+    return 'a bmn call to another control socket (--socket)'
+  }
   const read = own
     ? after.flatMap((word, index) => (word === '--card-file' ? [after[index + 1] ?? ''] : word.startsWith('--card-file=') ? [word.slice(12)] : []))
     : positionals[0] === 'publish' ? positionals.slice(1, 2) : []

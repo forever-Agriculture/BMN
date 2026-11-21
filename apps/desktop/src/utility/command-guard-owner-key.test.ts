@@ -47,7 +47,11 @@ const HELD: Array<[string, string]> = [
   ['bmn now --socket /run/user/1000/bus', 'another control socket'],
   ['bmn tell s --socket=4000 --text x --key k', 'another control socket'],
   ['BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
-  ['bmn grant --socket /tmp/x.sock', 'another control socket']
+  ['bmn grant --socket /tmp/x.sock', 'another control socket'],
+  ['env BMN_CONTROL_SOCKET=/tmp/other.sock bmn now', 'another control socket'],
+  // Recheck: bin/bmn picks a subcommand's own parser only from the first argument, so a value naming one hides nothing.
+  ['bmn --key grant publish ~/.ssh/id_ed25519', 'credential'],
+  ['bmn --key plan tell s --owner', 'owner credential']
 ]
 
 /** Neighbours that stay free: other programs' --owner, bmn without the owner credential, and other token files. */
@@ -71,7 +75,9 @@ const FREE = [
   'bmn tell s -- a literal text that says --owner',
   'bmn publish report.html --name owner.token --key k',
   'bmn grant ask --run r --card-file card.json',
-  'bmn ask k "Use --socket?"'
+  'bmn ask k "Use --socket?"',
+  'bmn tell s --text BMN_CONTROL_SOCKET=/tmp/x --key k',
+  'bmn tell s BMN_CONTROL_SOCKET=/tmp/x'
 ]
 
 describe('BMN\'s own owner keys are held (Story 137.1)', () => {

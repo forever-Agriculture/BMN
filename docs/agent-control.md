@@ -1159,7 +1159,8 @@ What it holds, in the shell commands of the text:
   `~/.config/bmn/*.token`), and those folders whole for `cp tar zip` and the like; and a `bmn` call with `--owner`,
   `--token-file X` or `--token-file=X` as the CLI's own parser reads them (a `--` an option takes as its value starts no
   literal text; the subcommands with a parser of their own, such as `grant`, read them anywhere), as `bmn`, a full path or
-  `node …/bmn`; a `bmn` call with `--socket` or `BMN_CONTROL_SOCKET=` set on the line; and `bmn publish FILE` or
+  `node …/bmn`; a `bmn` call with `--socket`, or with `BMN_CONTROL_SOCKET=` set before `bmn` in the same command (a socket exported
+  by an earlier command is not seen; the hold is a tripwire); and `bmn publish FILE` or
   `bmn grant ask --card-file FILE` naming a file of the secret list or a key (BMN reads that file itself, outside any
   sandbox). The owner token can answer
   for him, so an agent's own use waits for him, a test instance's `--owner` too. This is a tripwire, not a wall: a read

@@ -1,6 +1,6 @@
 // MODULE: grant-cli.mjs - `bmn grant`: a run's card before the owner leaves, the grant he answered, each use of it, and what each step did (Epic 84, Stories 84.3, 84.7)
 //
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 // Everything is decided in BMN through the control socket: the card is checked there, only the owner's own surfaces
@@ -93,11 +93,22 @@ async function readCard(source) {
       if (size > CARD_LIMIT_BYTES) throw new Error(`the card ${where} must be at most ${CARD_LIMIT_BYTES} bytes`)
     }
   } else {
-    let file
-    try { file = statSync(source) } catch { throw new Error('the card file cannot be read') }
-    if (!file.isFile()) throw new Error('the card file is not a regular file')
-    if (file.size > CARD_LIMIT_BYTES) throw new Error(`the card ${where} must be at most ${CARD_LIMIT_BYTES} bytes`)
-    try { chunks.push(readFileSync(source)) } catch { throw new Error('the card file cannot be read') }
+    // One open, never blocking on a FIFO; the type and the size are those of what is read, at most the limit and one byte.
+    let descriptor
+    try { descriptor = openSync(source, constants.O_RDONLY | constants.O_NONBLOCK) } catch { throw new Error('the card file cannot be read') }
+    try {
+      if (!fstatSync(descriptor).isFile()) throw new Error('the card file is not a regular file')
+      const buffer = Buffer.alloc(CARD_LIMIT_BYTES + 1)
+      let size = 0
+      for (let read = -1; read !== 0 && size < buffer.length;) {
+        try { read = readSync(descriptor, buffer, size, buffer.length - size, null) } catch { throw new Error('the card file cannot be read') }
+        size += read
+      }
+      if (size > CARD_LIMIT_BYTES) throw new Error(`the card ${where} must be at most ${CARD_LIMIT_BYTES} bytes`)
+      chunks.push(buffer.subarray(0, size))
+    } finally {
+      closeSync(descriptor)
+    }
   }
   let text
   try { text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)) } catch { throw new Error(`the card ${where} is not valid UTF-8`) }

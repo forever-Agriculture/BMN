@@ -5762,6 +5762,11 @@ describe('bmn away --leaving and bmn grant (Story 84.3)', () => {
     expect(tooLarge.stderr).toContain('the card in the card file must be at most')
     const folder = await runCli(['grant', 'ask', '--run', 'r', '--card-file', fixture.root], { env: fixture.sessionEnv })
     expect(folder.stderr).toContain('the card file is not a regular file')
+    // A FIFO with no writer is refused at once, never waited on.
+    const fifo = join(fixture.root, 'card.fifo')
+    spawnSync('mkfifo', [fifo])
+    const piped = await runCli(['grant', 'ask', '--run', 'r', '--card-file', fifo], { env: fixture.sessionEnv })
+    expect(piped.stderr).toContain('the card file is not a regular file')
     expect(fixture.handlers.askGrant).toHaveBeenCalledTimes(1)
   })
 
